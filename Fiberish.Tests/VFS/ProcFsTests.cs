@@ -24,13 +24,14 @@ public class ProcFsTests
         {
             var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
+            var task = AttachTaskContext(runtime, 0, true);
 
-            var mountsBefore = ReadAll(sm.PathWalk("/proc/mounts"));
+            var mountsBefore = ReadAll(task, sm.PathWalk("/proc/mounts"));
             Assert.DoesNotContain(" /tests hostfs ", mountsBefore);
 
             sm.MountHostfs(hostMountDir, "/tests");
 
-            var mountsAfter = ReadAll(sm.PathWalk("/proc/mounts"));
+            var mountsAfter = ReadAll(task, sm.PathWalk("/proc/mounts"));
             Assert.Contains(" /tests hostfs ", mountsAfter);
             Assert.Contains(hostMountDir, mountsAfter);
         }
@@ -64,20 +65,20 @@ public class ProcFsTests
             Options = "rw,relatime"
         };
 
-        var pidDir = sb.Root.Inode!.Lookup("4242");
+        var pidDir = Lookup(ctx.Task, sb.Root, "4242");
         Assert.NotNull(pidDir);
         Assert.Equal(InodeType.Directory, pidDir!.Inode!.Type);
 
-        var status = pidDir.Inode.Lookup("status");
-        var stat = pidDir.Inode.Lookup("stat");
-        var cmdline = pidDir.Inode.Lookup("cmdline");
+        var status = Lookup(ctx.Task, pidDir, "status");
+        var stat = Lookup(ctx.Task, pidDir, "stat");
+        var cmdline = Lookup(ctx.Task, pidDir, "cmdline");
         Assert.NotNull(status);
         Assert.NotNull(stat);
         Assert.NotNull(cmdline);
 
-        var statusText = ReadAll(status!, mount);
-        var statText = ReadAll(stat!, mount);
-        var cmdlineText = ReadAll(cmdline!, mount);
+        var statusText = ReadAll(ctx.Task, status!, mount);
+        var statText = ReadAll(ctx.Task, stat!, mount);
+        var cmdlineText = ReadAll(ctx.Task, cmdline!, mount);
 
         Assert.Contains("Pid:\t4242", statusText);
         Assert.StartsWith("4242 (process) R 1 4242 4242", statText);
@@ -87,13 +88,10 @@ public class ProcFsTests
     [Fact]
     public void ProcSystemFiles_ShouldExposeStatUptimeLoadavgAndSysctl()
     {
-        var scheduler = new KernelScheduler();
-
-        var process = new Process(1001, null!, null!);
-        scheduler.RegisterProcess(process);
+        using var ctx = new ProcTestContext();
 
         var fs = new ProcFileSystem();
-        var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", null);
+        var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", ctx.SyscallManager);
         var mount = new Mount(sb, sb.Root)
         {
             Source = "proc",
@@ -101,15 +99,15 @@ public class ProcFsTests
             Options = "rw,relatime"
         };
 
-        Assert.Contains("btime ", ReadAll(sb.Root.Inode!.Lookup("stat")!, mount));
-        Assert.Contains("/", ReadAll(sb.Root.Inode!.Lookup("loadavg")!, mount));
-        Assert.Contains(" ", ReadAll(sb.Root.Inode!.Lookup("uptime")!, mount));
+        Assert.Contains("btime ", ReadAll(ctx.Task, Lookup(ctx.Task, sb.Root, "stat")!, mount));
+        Assert.Contains("/", ReadAll(ctx.Task, Lookup(ctx.Task, sb.Root, "loadavg")!, mount));
+        Assert.Contains(" ", ReadAll(ctx.Task, Lookup(ctx.Task, sb.Root, "uptime")!, mount));
 
-        var sys = sb.Root.Inode.Lookup("sys");
+        var sys = Lookup(ctx.Task, sb.Root, "sys");
         Assert.NotNull(sys);
-        var kernel = sys!.Inode!.Lookup("kernel");
+        var kernel = Lookup(ctx.Task, sys!, "kernel");
         Assert.NotNull(kernel);
-        Assert.Equal("x86emu\n", ReadAll(kernel!.Inode!.Lookup("hostname")!, mount));
+        Assert.Equal("x86emu\n", ReadAll(ctx.Task, Lookup(ctx.Task, kernel!, "hostname")!, mount));
     }
 
     [Fact]
@@ -123,12 +121,12 @@ public class ProcFsTests
         var fs = new ProcFileSystem();
         var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", ctx.SyscallManager);
 
-        var first = sb.Root.Inode!.Lookup("5555");
+        var first = Lookup(ctx.Task, sb.Root, "5555");
         Assert.NotNull(first);
 
         ctx.Scheduler.UnregisterProcess(5555);
 
-        var second = sb.Root.Inode!.Lookup("5555");
+        var second = Lookup(ctx.Task, sb.Root, "5555");
         Assert.Null(second);
     }
 
@@ -155,6 +153,11 @@ public class ProcFsTests
             Assert.NotNull(exeProp);
             exeProp!.SetValue(process, "/bin/test-app");
 
+            var stdinLoc = runtime.Syscalls.PathWalk("/");
+            Assert.True(stdinLoc.IsValid);
+            var stdinFile = new LinuxFile(stdinLoc.Dentry!, FileFlags.O_RDONLY, stdinLoc.Mount!);
+            process.Syscalls.AllocFD(stdinFile, 0);
+
             ctx.Scheduler.RegisterProcess(process);
 
             var fs = new ProcFileSystem();
@@ -166,32 +169,32 @@ public class ProcFsTests
                 Options = "rw,relatime"
             };
 
-            var pidDir = sb.Root.Inode!.Lookup("7777");
+            var pidDir = Lookup(ctx.Task, sb.Root, "7777");
             Assert.NotNull(pidDir);
 
-            var exe = pidDir!.Inode!.Lookup("exe");
-            var cwd = pidDir.Inode.Lookup("cwd");
-            var root = pidDir.Inode.Lookup("root");
+            var exe = Lookup(ctx.Task, pidDir!, "exe");
+            var cwd = Lookup(ctx.Task, pidDir, "cwd");
+            var root = Lookup(ctx.Task, pidDir, "root");
             Assert.NotNull(exe);
             Assert.NotNull(cwd);
             Assert.NotNull(root);
-            Assert.Equal("/bin/test-app", exe!.Inode!.Readlink());
-            Assert.Equal("/", cwd!.Inode!.Readlink());
-            Assert.Equal("/", root!.Inode!.Readlink());
+            Assert.Equal("/bin/test-app", Readlink(ctx.Task, exe!));
+            Assert.Equal("/", Readlink(ctx.Task, cwd!));
+            Assert.Equal("/", Readlink(ctx.Task, root!));
 
-            var fdDir = pidDir.Inode.Lookup("fd");
-            var fdInfoDir = pidDir.Inode.Lookup("fdinfo");
+            var fdDir = Lookup(ctx.Task, pidDir, "fd");
+            var fdInfoDir = Lookup(ctx.Task, pidDir, "fdinfo");
             Assert.NotNull(fdDir);
             Assert.NotNull(fdInfoDir);
 
-            var fd0 = fdDir!.Inode!.Lookup("0");
+            var fd0 = Lookup(ctx.Task, fdDir!, "0");
             Assert.NotNull(fd0);
-            var fd0Target = fd0!.Inode!.Readlink();
+            var fd0Target = Readlink(ctx.Task, fd0!);
             Assert.False(string.IsNullOrWhiteSpace(fd0Target));
 
-            var fdInfo0 = fdInfoDir!.Inode!.Lookup("0");
+            var fdInfo0 = Lookup(ctx.Task, fdInfoDir!, "0");
             Assert.NotNull(fdInfo0);
-            var infoText = ReadAll(fdInfo0!, mount);
+            var infoText = ReadAll(ctx.Task, fdInfo0!, mount);
             Assert.Contains("pos:\t", infoText);
             Assert.Contains("flags:\t0", infoText);
             Assert.Contains("mnt_id:\t", infoText);
@@ -200,6 +203,32 @@ public class ProcFsTests
         {
             if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
         }
+    }
+
+    [Fact]
+    public void ProcSelf_ShouldResolveToCurrentSchedulerTaskProcess()
+    {
+        using var ctx = new ProcTestContext();
+
+        var process2 = new Process(2, ctx.Memory, ctx.SyscallManager)
+        {
+            PPID = 1,
+            PGID = 2,
+            SID = 2
+        };
+        ctx.Scheduler.RegisterProcess(process2);
+
+        using var engine2 = new Engine();
+        var task2 = new FiberTask(2, process2, engine2, ctx.Scheduler);
+
+        var fs = new ProcFileSystem();
+        var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", ctx.SyscallManager);
+
+        var self = Lookup(ctx.Task, sb.Root, "self");
+        Assert.NotNull(self);
+
+        Assert.Equal("2", Readlink(task2, self!));
+        Assert.Equal("1", Readlink(ctx.Task, self));
     }
 
     [Fact]
@@ -260,10 +289,10 @@ public class ProcFsTests
         {
             var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, 0, true);
+            var task = AttachTaskContext(runtime, 0, true);
             var loc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(loc.IsValid);
-            Assert.Equal("0\n", ReadAll(loc));
+            Assert.Equal("0\n", ReadAll(task, loc));
 
             cache = new AddressSpace(AddressSpaceKind.File);
             GlobalAddressSpaceCacheManager.TrackAddressSpace(cache);
@@ -271,8 +300,8 @@ public class ProcFsTests
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.True(cache.PageCount > 0);
 
-            Assert.Equal(-(int)Errno.EINVAL, WriteAll(loc, "9\n"));
-            Assert.Equal(2, WriteAll(loc, "1\n"));
+            Assert.Equal(-(int)Errno.EINVAL, WriteAll(task, loc, "9\n"));
+            Assert.Equal(2, WriteAll(task, loc, "1\n"));
             Assert.Equal(0, cache.PageCount);
         }
         finally
@@ -292,7 +321,7 @@ public class ProcFsTests
         {
             var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, 0, true);
+            var task = AttachTaskContext(runtime, 0, true);
 
             var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(dropLoc.IsValid);
@@ -300,8 +329,9 @@ public class ProcFsTests
             // Warm proc dentry caches.
             var procRoot = sm.PathWalk("/proc");
             Assert.True(procRoot.IsValid);
-            Assert.NotNull(procRoot.Dentry!.Inode!.Lookup("sys"));
-            Assert.True(procRoot.Dentry.Children.ContainsKey("sys"));
+            var procRootDentry = procRoot.Dentry!;
+            Assert.NotNull(Lookup(task, procRootDentry, "sys"));
+            Assert.True(procRootDentry.Children.ContainsKey("sys"));
             var procSb = procRoot.Mount!.SB;
             var procTrackedBefore = procSb.Inodes.Count;
 
@@ -318,9 +348,9 @@ public class ProcFsTests
             shmDir.Inode!.Create(tmp, 0x1A4, 0, 0);
             shmDir.Inode.Unlink("drop_inode.tmp");
 
-            Assert.Equal(2, WriteAll(dropLoc, "2\n"));
+            Assert.Equal(2, WriteAll(task, dropLoc, "2\n"));
 
-            Assert.False(procRoot.Dentry.Children.ContainsKey("sys"));
+            Assert.False(procRootDentry.Children.ContainsKey("sys"));
             Assert.True(procSb.Inodes.Count <= procTrackedBefore);
 
             var rematerialized = sm.PathWalk("/proc/sys/vm");
@@ -344,15 +374,16 @@ public class ProcFsTests
         {
             var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, 0, true);
+            var task = AttachTaskContext(runtime, 0, true);
 
             var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(dropLoc.IsValid);
 
             var procRoot = sm.PathWalk("/proc");
             Assert.True(procRoot.IsValid);
-            Assert.NotNull(procRoot.Dentry!.Inode!.Lookup("sys"));
-            Assert.True(procRoot.Dentry.TryGetCachedChild("sys", out _));
+            var procRootDentry = procRoot.Dentry!;
+            Assert.NotNull(Lookup(task, procRootDentry, "sys"));
+            Assert.True(procRootDentry.TryGetCachedChild("sys", out _));
 
             cache = new AddressSpace(AddressSpaceKind.File);
             GlobalAddressSpaceCacheManager.TrackAddressSpace(cache);
@@ -373,10 +404,10 @@ public class ProcFsTests
             shmDir.Inode!.Create(tmp, 0x1A4, 0, 0);
             shmDir.Inode.Unlink("drop_mode3.tmp");
 
-            Assert.Equal(2, WriteAll(dropLoc, "3\n"));
+            Assert.Equal(2, WriteAll(task, dropLoc, "3\n"));
 
             Assert.Equal(0, cache.PageCount);
-            Assert.False(procRoot.Dentry.TryGetCachedChild("sys", out _));
+            Assert.False(procRootDentry.TryGetCachedChild("sys", out _));
         }
         finally
         {
@@ -395,7 +426,7 @@ public class ProcFsTests
         {
             var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, 0, true);
+            var task = AttachTaskContext(runtime, 0, true);
 
             var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(dropLoc.IsValid);
@@ -417,7 +448,7 @@ public class ProcFsTests
             Assert.Equal(payload.Length, fileDentry.Inode!.Write(file, payload, 0));
             file.Close();
 
-            Assert.Equal(2, WriteAll(dropLoc, "2\n"));
+            Assert.Equal(2, WriteAll(task, dropLoc, "2\n"));
 
             var rel = sm.PathWalk("/dev/shm/stable.tmp");
             Assert.True(rel.IsValid);
@@ -443,23 +474,23 @@ public class ProcFsTests
         {
             var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, 0, true);
+            var task = AttachTaskContext(runtime, 0, true);
 
             var root = sm.Root.Dentry!;
-            var hold = root.Inode!.Lookup("hold");
+            var hold = Lookup(task, root, "hold");
             if (hold == null)
             {
                 var holdDentry = new Dentry("hold", null, root, root.SuperBlock);
-                root.Inode.Mkdir(holdDentry, 0x1FF, 0, 0);
+                root.Inode!.Mkdir(holdDentry, 0x1FF, 0, 0);
                 root.Children["hold"] = holdDentry;
                 hold = holdDentry;
             }
 
-            var mnt = hold.Inode!.Lookup("mnt");
+            var mnt = Lookup(task, hold, "mnt");
             if (mnt == null)
             {
                 var mntDentry = new Dentry("mnt", null, hold, hold.SuperBlock);
-                hold.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                hold.Inode!.Mkdir(mntDentry, 0x1FF, 0, 0);
                 hold.Children["mnt"] = mntDentry;
             }
 
@@ -471,7 +502,7 @@ public class ProcFsTests
 
             var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(dropLoc.IsValid);
-            Assert.Equal(2, WriteAll(dropLoc, "2\n"));
+            Assert.Equal(2, WriteAll(task, dropLoc, "2\n"));
 
             var after = sm.PathWalkWithFlags("/hold/mnt/hello.txt", LookupFlags.FollowSymlink);
             Assert.True(after.IsValid);
@@ -497,23 +528,23 @@ public class ProcFsTests
         {
             var runtime = KernelRuntime.Bootstrap(rootDir, false, true);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, 0, true);
+            var task = AttachTaskContext(runtime, 0, true);
 
             var root = sm.Root.Dentry!;
-            var hold = root.Inode!.Lookup("hold");
+            var hold = Lookup(task, root, "hold");
             if (hold == null)
             {
                 var holdDentry = new Dentry("hold", null, root, root.SuperBlock);
-                root.Inode.Mkdir(holdDentry, 0x1FF, 0, 0);
+                root.Inode!.Mkdir(holdDentry, 0x1FF, 0, 0);
                 root.Children["hold"] = holdDentry;
                 hold = holdDentry;
             }
 
-            var mnt = hold.Inode!.Lookup("mnt");
+            var mnt = Lookup(task, hold, "mnt");
             if (mnt == null)
             {
                 var mntDentry = new Dentry("mnt", null, hold, hold.SuperBlock);
-                hold.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                hold.Inode!.Mkdir(mntDentry, 0x1FF, 0, 0);
                 hold.Children["mnt"] = mntDentry;
             }
 
@@ -525,7 +556,7 @@ public class ProcFsTests
 
             var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(dropLoc.IsValid);
-            Assert.Equal(2, WriteAll(dropLoc, "2\n"));
+            Assert.Equal(2, WriteAll(task, dropLoc, "2\n"));
 
             var after = sm.PathWalkWithFlags("/hold/mnt/hello.txt", LookupFlags.FollowSymlink);
             Assert.True(after.IsValid);
@@ -548,11 +579,11 @@ public class ProcFsTests
         {
             var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, 1000, false);
+            var task = AttachTaskContext(runtime, 1000, false);
 
             var loc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(loc.IsValid);
-            Assert.Equal(-(int)Errno.EPERM, WriteAll(loc, "1\n"));
+            Assert.Equal(-(int)Errno.EPERM, WriteAll(task, loc, "1\n"));
         }
         finally
         {
@@ -570,11 +601,11 @@ public class ProcFsTests
         {
             var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
             var sm = runtime.Syscalls;
-            AttachTaskContext(runtime, 1000, true);
+            var task = AttachTaskContext(runtime, 1000, true);
 
             var loc = sm.PathWalk("/proc/sys/vm/drop_caches");
             Assert.True(loc.IsValid);
-            Assert.Equal(2, WriteAll(loc, "1\n"));
+            Assert.Equal(2, WriteAll(task, loc, "1\n"));
         }
         finally
         {
@@ -582,10 +613,43 @@ public class ProcFsTests
         }
     }
 
+    private static string ReadAll(FiberTask task, PathLocation loc)
+    {
+        Assert.True(loc.IsValid);
+        return ReadAll(task, loc.Dentry!, loc.Mount!);
+    }
+
     private static string ReadAll(PathLocation loc)
     {
         Assert.True(loc.IsValid);
         return ReadAll(loc.Dentry!, loc.Mount!);
+    }
+
+    private static string ReadAll(FiberTask task, Dentry dentry, Mount mount)
+    {
+        var file = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
+        try
+        {
+            BindTaskContext(file, task);
+            var sb = new StringBuilder();
+            var buffer = new byte[256];
+            long offset = 0;
+            while (true)
+            {
+                var n = dentry.Inode!.Read(file, buffer, offset);
+                Assert.True(n >= 0);
+                if (n == 0) break;
+
+                sb.Append(Encoding.UTF8.GetString(buffer, 0, n));
+                offset += n;
+            }
+
+            return sb.ToString();
+        }
+        finally
+        {
+            file.Close();
+        }
     }
 
     private static string ReadAll(Dentry dentry, Mount mount)
@@ -625,12 +689,13 @@ public class ProcFsTests
         return value;
     }
 
-    private static int WriteAll(PathLocation loc, string text, long offset = 0)
+    private static int WriteAll(FiberTask task, PathLocation loc, string text, long offset = 0)
     {
         Assert.True(loc.IsValid);
         var file = new LinuxFile(loc.Dentry!, FileFlags.O_WRONLY, loc.Mount!);
         try
         {
+            BindTaskContext(file, task);
             return loc.Dentry!.Inode!.Write(file, Encoding.UTF8.GetBytes(text), offset);
         }
         finally
@@ -661,6 +726,26 @@ public class ProcFsTests
         var task = new FiberTask(process.TGID, process, runtime.Engine, scheduler);
         runtime.Engine.Owner = task;
         return task;
+    }
+
+    private static Dentry? Lookup(FiberTask task, Dentry parent, string name)
+    {
+        return parent.Inode is IContextualDirectoryInode contextual
+            ? contextual.Lookup(task, name)
+            : parent.Inode?.Lookup(name);
+    }
+
+    private static string Readlink(FiberTask task, Dentry dentry)
+    {
+        return dentry.Inode is IContextualSymlinkInode contextual
+            ? contextual.Readlink(task)
+            : dentry.Inode?.Readlink() ?? string.Empty;
+    }
+
+    private static void BindTaskContext(LinuxFile file, FiberTask task)
+    {
+        if (file.OpenedInode is ITaskContextBoundInode taskBoundInode)
+            taskBoundInode.BindTaskContext(file, task);
     }
 
     private sealed class ProcTestContext : IDisposable

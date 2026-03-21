@@ -1,5 +1,6 @@
 using Fiberish.Native;
 using Fiberish.VFS;
+using Fiberish.Core;
 
 namespace Fiberish.Syscalls;
 
@@ -214,6 +215,7 @@ public class PathWalker
     {
         var current = nd.Path.Dentry;
         var mount = nd.Path.Mount;
+        var currentTask = _sm.Engine.Owner as FiberTask;
 
         if (current == null || mount == null)
             return nd.SetError(-(int)Errno.ENOENT);
@@ -235,7 +237,9 @@ public class PathWalker
         Dentry? next = null;
         if (current.TryGetCachedChild(name, out var cached))
         {
-            var valid = current.Inode.RevalidateCachedChild(current, name, cached);
+            var valid = currentTask != null && current.Inode is IContextualDirectoryInode contextualDirectoryInode
+                ? contextualDirectoryInode.RevalidateCachedChild(currentTask, current, name, cached)
+                : current.Inode.RevalidateCachedChild(current, name, cached);
             if (!valid)
             {
                 _ = current.TryUncacheChild(name, "PathWalker.WalkComponent.revalidate-fail", out _);
@@ -249,7 +253,9 @@ public class PathWalker
 
         if (next == null)
         {
-            next = current.Inode.Lookup(name);
+            next = currentTask != null && current.Inode is IContextualDirectoryInode contextualDirectoryLookup
+                ? contextualDirectoryLookup.Lookup(currentTask, name)
+                : current.Inode.Lookup(name);
             if (next == null)
             {
                 var lookupError = current.Inode.ConsumeLookupFailureError(name);
@@ -313,6 +319,14 @@ public class PathWalker
                 }
 
                 // Try to resolve magic link
+                if ((shouldFollow || mustFollow) && currentTask != null &&
+                    next.Inode is IContextualMagicSymlinkInode contextualMagicLink &&
+                    contextualMagicLink.TryResolveLink(currentTask, out var contextualResolvedFile))
+                {
+                    nd.Path = new PathLocation(contextualResolvedFile.Dentry, contextualResolvedFile.Mount);
+                    return true;
+                }
+
                 if ((shouldFollow || mustFollow) && magicLink.TryResolveLink(out var resolvedFile))
                 {
                     nd.Path = new PathLocation(resolvedFile.Dentry, resolvedFile.Mount);
@@ -322,7 +336,7 @@ public class PathWalker
 
             if (shouldFollow || mustFollow)
             {
-                if (!FollowSymlink(nd, next, mount))
+                if (!FollowSymlink(nd, next, mount, currentTask))
                     return false;
                 return true;
             }
@@ -388,14 +402,16 @@ public class PathWalker
     /// <summary>
     ///     Follow a symbolic link. Equivalent to Linux follow_symlink().
     /// </summary>
-    public bool FollowSymlink(NameData nd, Dentry symlink, Mount? currentMount)
+    public bool FollowSymlink(NameData nd, Dentry symlink, Mount? currentMount, FiberTask? task = null)
     {
         // Check recursion limit
         if (nd.Depth >= NameData.MaxSymlinkDepth)
             return nd.SetError(-(int)Errno.ELOOP);
 
         // Read symlink target
-        var target = symlink.Inode?.Readlink();
+        var target = task != null && symlink.Inode is IContextualSymlinkInode contextualSymlink
+            ? contextualSymlink.Readlink(task)
+            : symlink.Inode?.Readlink();
         if (string.IsNullOrEmpty(target))
             return nd.SetError(-(int)Errno.ENOENT);
 

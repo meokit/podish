@@ -235,7 +235,10 @@ public partial class SyscallManager
         if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
 
         // Check if empty (only . and .. entries)
-        var entries = targetLoc.Dentry.Inode.GetEntries();
+        var task = engine.Owner as FiberTask;
+        var entries = task != null && targetLoc.Dentry.Inode is IContextualDirectoryInode contextualDirectory
+            ? contextualDirectory.GetEntries(task)
+            : targetLoc.Dentry.Inode.GetEntries();
         if (entries.Count > 2) return -(int)Errno.ENOTEMPTY; // Has more than . and ..
 
         try
@@ -620,7 +623,10 @@ public partial class SyscallManager
 
         try
         {
-            var entries = f.OpenedInode.GetEntries();
+            var task = engine.Owner as FiberTask;
+            var entries = task != null && f.OpenedInode is IContextualDirectoryInode contextualDirectory
+                ? contextualDirectory.GetEntries(task)
+                : f.OpenedInode.GetEntries();
             var startIdx = (int)f.Position;
             if (startIdx >= entries.Count) return 0;
 
@@ -1311,7 +1317,10 @@ public partial class SyscallManager
 
         try
         {
-            var entries = f.OpenedInode.GetEntries();
+            var task = engine.Owner as FiberTask;
+            var entries = task != null && f.OpenedInode is IContextualDirectoryInode contextualDirectory
+                ? contextualDirectory.GetEntries(task)
+                : f.OpenedInode.GetEntries();
 
             // Simplified logic: uses f.Position as index in entries list
             var startIdx = (int)f.Position;
@@ -1698,7 +1707,10 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (loc.Dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
 
-        var target = loc.Dentry.Inode.Readlink();
+        var task = engine.Owner as FiberTask;
+        var target = task != null && loc.Dentry.Inode is IContextualSymlinkInode contextualSymlink
+            ? contextualSymlink.Readlink(task)
+            : loc.Dentry.Inode.Readlink();
         var bytes = Encoding.UTF8.GetBytes(target);
         var len = Math.Min(bytes.Length, bufSize);
         if (!engine.CopyToUser(bufAddr, bytes.AsSpan(0, len))) return -(int)Errno.EFAULT;
@@ -1725,7 +1737,10 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (loc.Dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
 
-        var target = loc.Dentry.Inode.Readlink();
+        var task = engine.Owner as FiberTask;
+        var target = task != null && loc.Dentry.Inode is IContextualSymlinkInode contextualSymlink
+            ? contextualSymlink.Readlink(task)
+            : loc.Dentry.Inode.Readlink();
         var bytes = Encoding.UTF8.GetBytes(target);
         var len = Math.Min(bytes.Length, bufSize);
         if (!engine.CopyToUser(bufAddr, bytes.AsSpan(0, len))) return -(int)Errno.EFAULT;

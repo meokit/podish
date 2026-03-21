@@ -335,6 +335,7 @@ public partial class SyscallManager
         const uint O_TMPFILE_MASK = 0x400000;
         var createdHere = false;
         var noFollow = ((FileFlags)flags & FileFlags.O_NOFOLLOW) != 0;
+        var task = sm.Engine.Owner as FiberTask;
 
         // Use PathWalkWithMount to track mount information
         var loc = sm.PathWalk(path, startLoc.IsValid ? startLoc : null, !noFollow);
@@ -458,6 +459,8 @@ public partial class SyscallManager
                 : flags;
             if (dentry == null) return -(int)Errno.ENOENT;
             var f = new LinuxFile(dentry, (FileFlags)openFlags, mount ?? sm.RootMount!);
+            if (task != null && f.OpenedInode is ITaskContextBoundInode taskBoundInode)
+                taskBoundInode.BindTaskContext(f, task);
             return sm.AllocFD(f);
         }
         catch

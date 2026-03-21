@@ -1109,6 +1109,28 @@ public interface IMagicSymlinkInode
     bool TryResolveLink(out LinuxFile file);
 }
 
+public interface IContextualMagicSymlinkInode
+{
+    bool TryResolveLink(FiberTask task, out LinuxFile file);
+}
+
+public interface IContextualSymlinkInode
+{
+    string Readlink(FiberTask task);
+}
+
+public interface IContextualDirectoryInode
+{
+    Dentry? Lookup(FiberTask task, string name);
+    bool RevalidateCachedChild(FiberTask task, Dentry parent, string name, Dentry cached);
+    List<DirectoryEntry> GetEntries(FiberTask task);
+}
+
+public interface ITaskContextBoundInode
+{
+    void BindTaskContext(LinuxFile linuxFile, FiberTask task);
+}
+
 public class Dentry
 {
     private static long _nextId;
