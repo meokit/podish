@@ -179,38 +179,31 @@ public class EventFdInode : TmpfsInode
 
 public class TimerFdInode : TmpfsInode
 {
+    private readonly object _lock = new();
     private readonly List<Action> _waiters = [];
     private ulong _expirations;
 
     private long _intervalTicks;
+    private KernelScheduler? _scheduler;
     private Timer? _timer;
     private long _valueTicks; // Absolute expiration tick
 
-    private readonly KernelScheduler _scheduler;
-
-    public TimerFdInode(ulong ino, SuperBlock superBlock, KernelScheduler scheduler) : base(ino, superBlock)
+    public TimerFdInode(ulong ino, SuperBlock superBlock) : base(ino, superBlock)
     {
-        _scheduler = scheduler;
     }
 
-    private StateScope EnterStateScope([CallerMemberName] string? caller = null)
+    public void SetTime(FiberTask task, long intervalTicks, long valueTicks, bool isAbsolute)
     {
-        _scheduler.AssertSchedulerThread(caller);
-        return default;
-    }
-
-    public void SetTime(long intervalTicks, long valueTicks, bool isAbsolute)
-    {
-        using (EnterStateScope())
+        lock (_lock)
         {
             _timer?.Cancel();
             _timer = null;
-
+            var scheduler = task.CommonKernel;
+            _scheduler = scheduler;
             _intervalTicks = intervalTicks;
 
             if (valueTicks > 0)
             {
-                var scheduler = _scheduler;
                 _valueTicks = isAbsolute ? valueTicks : scheduler.CurrentTick + valueTicks;
 
                 var delay = Math.Max(0, _valueTicks - scheduler.CurrentTick);
@@ -223,34 +216,27 @@ public class TimerFdInode : TmpfsInode
         }
     }
 
-    public void GetTime(out long intervalTicks, out long valueTicks)
+    public void GetTime(FiberTask task, out long intervalTicks, out long valueTicks)
     {
-        using (EnterStateScope())
+        lock (_lock)
         {
             intervalTicks = _intervalTicks;
-            if (_valueTicks > 0)
-            {
-                var scheduler = _scheduler;
-                if (scheduler == null)
-                {
-                    valueTicks = 0;
-                }
-                else
-                {
-                    var remain = _valueTicks - scheduler.CurrentTick;
-                    valueTicks = remain < 0 ? 0 : remain;
-                }
-            }
-            else
+            if (_valueTicks <= 0)
             {
                 valueTicks = 0;
+                return;
             }
+
+            var scheduler = _scheduler ?? task.CommonKernel;
+            var remain = _valueTicks - scheduler.CurrentTick;
+            valueTicks = remain < 0 ? 0 : remain;
         }
     }
 
     private void TimerCallback()
     {
-        using (EnterStateScope())
+        List<Action> toWake;
+        lock (_lock)
         {
             _expirations++;
 
@@ -269,11 +255,7 @@ public class TimerFdInode : TmpfsInode
                 _valueTicks = 0;
                 _timer = null;
             }
-        }
 
-        List<Action> toWake;
-        using (EnterStateScope())
-        {
             toWake = [.._waiters];
             _waiters.Clear();
         }
@@ -285,7 +267,7 @@ public class TimerFdInode : TmpfsInode
     {
         if (buffer.Length < 8) return -(int)Errno.EINVAL;
 
-        using (EnterStateScope())
+        lock (_lock)
         {
             if (_expirations == 0)
             {
@@ -308,7 +290,7 @@ public class TimerFdInode : TmpfsInode
     public override short Poll(LinuxFile file, short events)
     {
         short revents = 0;
-        using (EnterStateScope())
+        lock (_lock)
         {
             if ((events & LinuxConstants.POLLIN) != 0 && _expirations > 0)
                 revents |= LinuxConstants.POLLIN;
@@ -319,7 +301,7 @@ public class TimerFdInode : TmpfsInode
 
     public override bool RegisterWait(LinuxFile file, Action callback, short events)
     {
-        using (EnterStateScope())
+        lock (_lock)
         {
             if ((events & LinuxConstants.POLLIN) != 0 && _expirations > 0)
                 // Already signaled
@@ -332,7 +314,7 @@ public class TimerFdInode : TmpfsInode
 
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
     {
-        using (EnterStateScope())
+        lock (_lock)
         {
             if ((events & LinuxConstants.POLLIN) != 0 && _expirations > 0)
                 return null;
@@ -340,13 +322,6 @@ public class TimerFdInode : TmpfsInode
         }
 
         return new CallbackRegistration(this, _waiters, callback);
-    }
-
-    private readonly struct StateScope : IDisposable
-    {
-        public void Dispose()
-        {
-        }
     }
 
     private sealed class CallbackRegistration : IDisposable
@@ -366,7 +341,7 @@ public class TimerFdInode : TmpfsInode
         {
             var waiters = Interlocked.Exchange(ref _waiters, null);
             if (waiters == null) return;
-            using (_owner.EnterStateScope())
+            lock (_owner._lock)
             {
                 waiters.Remove(_callback);
             }

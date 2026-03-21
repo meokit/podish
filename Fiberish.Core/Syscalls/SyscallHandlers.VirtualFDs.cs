@@ -42,7 +42,7 @@ public partial class SyscallManager
         if ((flags & LinuxConstants.TFD_NONBLOCK) != 0) eflags |= FileFlags.O_NONBLOCK;
         if ((flags & LinuxConstants.TFD_CLOEXEC) != 0) eflags |= FileFlags.O_CLOEXEC;
 
-        var inode = new TimerFdInode(0, MemfdSuperBlock, (engine.Owner as FiberTask)!.CommonKernel);
+        var inode = new TimerFdInode(0, MemfdSuperBlock);
         var dentry = new Dentry("anon_inode:[timerfd]", inode, null, MemfdSuperBlock);
         var file = new LinuxFile(dentry, eflags, AnonMount);
 
@@ -57,6 +57,7 @@ public partial class SyscallManager
     {
         if (!FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
             return -(int)Errno.EBADF;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         if (newValuePtr == 0) return -(int)Errno.EFAULT;
 
@@ -75,7 +76,7 @@ public partial class SyscallManager
         var intervalMs = (ulong)(intervalSec * 1000 + intervalNsec / 1000000);
         var valueMs = (ulong)(valueSec * 1000 + valueNsec / 1000000);
 
-        timerFd.SetTime((long)intervalMs, (long)valueMs, isAbsolute);
+        timerFd.SetTime(task, (long)intervalMs, (long)valueMs, isAbsolute);
 
         return 0;
     }
@@ -85,10 +86,11 @@ public partial class SyscallManager
     {
         if (!FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
             return -(int)Errno.EBADF;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         if (curValuePtr == 0) return -(int)Errno.EFAULT;
 
-        timerFd.GetTime(out var intervalMs, out var valueMs);
+        timerFd.GetTime(task, out var intervalMs, out var valueMs);
 
         var buf = new byte[16];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)(intervalMs / 1000));

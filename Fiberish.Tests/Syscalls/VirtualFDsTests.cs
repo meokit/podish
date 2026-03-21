@@ -76,12 +76,12 @@ public class VirtualFDsTests
     public void TimerFd_SetAndGetTime()
     {
         using var env = new TestEnv();
-        var inode = new TimerFdInode(0, env.MemfdSuperBlock, env.Scheduler);
+        var inode = new TimerFdInode(0, env.MemfdSuperBlock);
         var tfd = new LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 
-        inode.SetTime(2000, 5000, false);
-        inode.GetTime(out var interval, out var value);
+        inode.SetTime(env.Task, 2000, 5000, false);
+        inode.GetTime(env.Task, out var interval, out var value);
 
         Assert.Equal(2000L, interval);
         Assert.Equal(5000L, value);
@@ -91,7 +91,7 @@ public class VirtualFDsTests
     public void TimerFd_Expiration_Read()
     {
         using var env = new TestEnv();
-        var inode = new TimerFdInode(0, env.MemfdSuperBlock, env.Scheduler);
+        var inode = new TimerFdInode(0, env.MemfdSuperBlock);
         var tfd = new LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock),
             FileFlags.O_NONBLOCK, null!);
 
@@ -170,7 +170,8 @@ public class VirtualFDsTests
             FileFlags.O_NONBLOCK, null!);
 
         var fired = 0;
-        using var reg = inode.RegisterWaitHandle(env.Task, () => Interlocked.Increment(ref fired), LinuxConstants.POLLIN);
+        using var reg =
+            inode.RegisterWaitHandle(env.Task, () => Interlocked.Increment(ref fired), LinuxConstants.POLLIN);
 
         env.Task.PostSignalInfo(new SigInfo
         {
@@ -210,7 +211,6 @@ public class VirtualFDsTests
 
         public void Dispose()
         {
-            
         }
     }
 }

@@ -494,10 +494,11 @@ public partial class SyscallManager
     {
         if (!FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
             return -(int)Errno.EBADF;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         if (curValuePtr == 0) return -(int)Errno.EFAULT;
 
-        timerFd.GetTime(out var intervalMs, out var valueMs);
+        timerFd.GetTime(task, out var intervalMs, out var valueMs);
 
         var buf = new byte[32];
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), intervalMs / 1000);
@@ -515,6 +516,7 @@ public partial class SyscallManager
     {
         if (!FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
             return -(int)Errno.EBADF;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         if (newValuePtr == 0) return -(int)Errno.EFAULT;
 
@@ -533,7 +535,7 @@ public partial class SyscallManager
         var intervalMs = (ulong)(intervalSec * 1000 + intervalNsec / 1000000);
         var valueMs = (ulong)(valueSec * 1000 + valueNsec / 1000000);
 
-        timerFd.SetTime((long)intervalMs, (long)valueMs, isAbsolute);
+        timerFd.SetTime(task, (long)intervalMs, (long)valueMs, isAbsolute);
 
         return 0;
     }

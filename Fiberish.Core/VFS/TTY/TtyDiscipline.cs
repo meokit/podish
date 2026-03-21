@@ -169,7 +169,7 @@ public class TtyDiscipline
             "[TTY] Read: Called with buffer len={BufferLen}, flags={Flags}, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
             buffer.Length, flags, _inq.Count, _canonBuffer.Count);
 
-        ProcessPendingInput();
+        ProcessPendingInput(task);
 
         // Non-canonical mode requires special handling for VMIN and VTIME
         if ((_lflag & ICANON) == 0)
@@ -286,7 +286,7 @@ public class TtyDiscipline
                 // Ignore if process is ignoring SIGTTIN or blocking it, or in orphaned pgrp (simplification: just send it)
                 if (!task.IsSignalIgnoredOrBlocked(21)) // SIGTTIN = 21
                 {
-                    _broadcaster.SignalProcessGroup(process.PGID, 21);
+                    _broadcaster.SignalProcessGroup(task, process.PGID, 21);
                     return -(int)Errno.ERESTARTSYS; // Wait for signal to be handled
                 }
 
@@ -297,7 +297,7 @@ public class TtyDiscipline
             if ((_lflag & TOSTOP) != 0)
                 if (!task.IsSignalIgnoredOrBlocked(22)) // SIGTTOU = 22
                 {
-                    _broadcaster.SignalProcessGroup(process.PGID, 22);
+                    _broadcaster.SignalProcessGroup(task, process.PGID, 22);
                     return -(int)Errno.ERESTARTSYS;
                 }
         }
@@ -349,7 +349,7 @@ public class TtyDiscipline
             _rows = rows;
             _cols = cols;
             // Send SIGWINCH to foreground process group
-            _broadcaster.SignalProcessGroup(ForegroundPgrp, (int)Signal.SIGWINCH);
+            _broadcaster.SignalProcessGroup(null, ForegroundPgrp, (int)Signal.SIGWINCH);
         }
 
         return 0;
@@ -497,7 +497,7 @@ public class TtyDiscipline
     /// <summary>
     ///     Process pending input from the device. Called from scheduler thread.
     /// </summary>
-    public void ProcessPendingInput()
+    public void ProcessPendingInput(FiberTask? task = null)
     {
         _logger.LogInformation(
             "[TTY] ProcessPendingInput: Device.HasInterrupt={HasInterrupt}, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
@@ -509,7 +509,7 @@ public class TtyDiscipline
         {
             _logger.LogInformation("[TTY] ProcessPendingInput: Resize event detected {Rows}x{Cols}", resize.Value.Rows,
                 resize.Value.Cols);
-            HandleResize((ushort)resize.Value.Rows, (ushort)resize.Value.Cols);
+            HandleResize((ushort)resize.Value.Rows, (ushort)resize.Value.Cols, task);
         }
 
         // Handle Input Data
@@ -522,7 +522,7 @@ public class TtyDiscipline
             {
                 _logger.LogInformation("[TTY] ProcessPendingInput: Processing {Count} bytes: [{Data}]",
                     inputData.Length, string.Join(", ", inputData.Select(b => $"0x{b:X2}")));
-                foreach (var b in inputData) InputByte(b);
+                foreach (var b in inputData) InputByte(b, task);
             }
 
             _logger.LogInformation(
@@ -531,7 +531,7 @@ public class TtyDiscipline
         }
     }
 
-    private void HandleResize(ushort rows, ushort cols)
+    private void HandleResize(ushort rows, ushort cols, FiberTask? task)
     {
         if (_rows != rows || _cols != cols)
         {
@@ -540,11 +540,11 @@ public class TtyDiscipline
                 _rows, _cols, rows, cols);
             _rows = rows;
             _cols = cols;
-            SendSignal((int)Signal.SIGWINCH);
+            SendSignal((int)Signal.SIGWINCH, task);
         }
     }
 
-    private void InputByte(byte b)
+    private void InputByte(byte b, FiberTask? task)
     {
         _logger.LogInformation(
             "[TTY] InputByte: {Char} (0x{Hex}), _canonBuffer.Count={CanonCount}, _inq.Count={InqCount}",
@@ -611,19 +611,19 @@ public class TtyDiscipline
         {
             if (MatchCc(VINTR, b)) // Ctrl-C
             {
-                HandleSignalChar(2, "^C", b); // SIGINT
+                HandleSignalChar(2, "^C", b, task); // SIGINT
                 return;
             }
 
             if (MatchCc(VQUIT, b)) // Ctrl-\
             {
-                HandleSignalChar(3, "^\\", b); // SIGQUIT
+                HandleSignalChar(3, "^\\", b, task); // SIGQUIT
                 return;
             }
 
             if (MatchCc(VSUSP, b)) // Ctrl-Z
             {
-                HandleSignalChar(20, "^Z", b); // SIGTSTP
+                HandleSignalChar(20, "^Z", b, task); // SIGTSTP
                 return;
             }
         }
@@ -673,7 +673,7 @@ public class TtyDiscipline
         return b;
     }
 
-    private void HandleSignalChar(int signal, string echoStr, byte originalChar)
+    private void HandleSignalChar(int signal, string echoStr, byte originalChar, FiberTask? task)
     {
         // Echo the signal character if ECHO is enabled
         if ((_lflag & ECHO) != 0)
@@ -691,7 +691,7 @@ public class TtyDiscipline
             _inq.Clear();
         }
 
-        SendSignal(signal);
+        SendSignal(signal, task);
     }
 
     private void HandleReprint()
@@ -1014,7 +1014,7 @@ public class TtyDiscipline
         return written; // Approximate
     }
 
-    private void SendSignal(int sig)
+    private void SendSignal(int sig, FiberTask? task)
     {
         _logger.LogInformation(
             "[TTY] SendSignal: sig={Sig}, ForegroundPgrp={Pgrp}, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
@@ -1024,12 +1024,12 @@ public class TtyDiscipline
         {
             _logger.LogInformation("[TTY] SendSignal: Signaling process group {Pgrp} with signal {Sig}", ForegroundPgrp,
                 sig);
-            _broadcaster.SignalProcessGroup(ForegroundPgrp, sig);
+            _broadcaster.SignalProcessGroup(task, ForegroundPgrp, sig);
         }
         else
         {
             _logger.LogInformation("[TTY] SendSignal: Signaling foreground task with signal {Sig}", sig);
-            _broadcaster.SignalForegroundTask(sig);
+            _broadcaster.SignalForegroundTask(task, sig);
         }
 
         // Wake up read

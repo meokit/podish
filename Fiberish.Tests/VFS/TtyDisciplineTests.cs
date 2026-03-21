@@ -1062,13 +1062,13 @@ public class TtyDisciplineTests
         public int LastSignal { get; private set; }
         public bool SignalSent { get; private set; }
 
-        public void SignalProcessGroup(int pgid, int signal)
+        public void SignalProcessGroup(FiberTask? task, int pgid, int signal)
         {
             LastSignal = signal;
             SignalSent = true;
         }
 
-        public void SignalForegroundTask(int signal)
+        public void SignalForegroundTask(FiberTask? task, int signal)
         {
             LastSignal = signal;
             SignalSent = true;

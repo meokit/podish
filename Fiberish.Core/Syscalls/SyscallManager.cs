@@ -70,7 +70,7 @@ public partial class SyscallManager
             new FileSystemType { Name = "proc", Factory = devMgr => new ProcFileSystem(devMgr) });
 
         PtyManager = new PtyManager(Logger);
-        var signalBroadcaster = new SignalBroadcasterImpl(this);
+        var signalBroadcaster = new SignalBroadcasterImpl();
         _devptsFsType = CreateDevPtsFileSystemType(signalBroadcaster);
 
         // Default memfd superblock
@@ -121,7 +121,7 @@ public partial class SyscallManager
 
         // Share mount namespace
         _mountNamespace = mountNamespace;
-        _devptsFsType = CreateDevPtsFileSystemType(new SignalBroadcasterImpl(this));
+        _devptsFsType = CreateDevPtsFileSystemType(new SignalBroadcasterImpl());
 
         RegisterHandlers();
 
@@ -964,7 +964,7 @@ public partial class SyscallManager
         RegisterDev("null", nullDentry);
 
         // Create /dev/ptmx (PTY multiplexer)
-        var signalBroadcaster = new SignalBroadcasterImpl(this);
+        var signalBroadcaster = new SignalBroadcasterImpl();
         var ptmxInode = new PtmxInode(devSb, PtyManager, signalBroadcaster, Logger);
         ptmxInode.Rdev = PtyManager.GetPtmxRdev();
         var ptmxDentry = new Dentry("ptmx", ptmxInode, devRoot, devSb);
@@ -1487,16 +1487,9 @@ public partial class SyscallManager
 /// </summary>
 file class SignalBroadcasterImpl : ISignalBroadcaster
 {
-    private readonly SyscallManager _sm;
-
-    public SignalBroadcasterImpl(SyscallManager sm)
+    public void SignalProcessGroup(FiberTask? task, int pgid, int signal)
     {
-        _sm = sm;
-    }
-
-    public void SignalProcessGroup(int pgid, int signal)
-    {
-        var scheduler = ResolveScheduler();
+        var scheduler = ResolveScheduler(task);
         if (scheduler == null) return;
 
         if (scheduler.IsSchedulerThread)
@@ -1505,15 +1498,15 @@ file class SignalBroadcasterImpl : ISignalBroadcaster
             scheduler.ScheduleFromAnyThread(() => scheduler.SignalProcessGroup(pgid, signal));
     }
 
-    public void SignalForegroundTask(int signal)
+    public void SignalForegroundTask(FiberTask? task, int signal)
     {
-        var scheduler = ResolveScheduler();
+        var scheduler = ResolveScheduler(task);
         if (scheduler == null) return;
 
         void Deliver()
         {
-            var task = scheduler.CurrentTask ?? _sm.Engine.Owner as FiberTask;
-            task?.PostSignal(signal);
+            var targetTask = task ?? scheduler.CurrentTask;
+            targetTask?.PostSignal(signal);
         }
 
         if (scheduler.IsSchedulerThread)
@@ -1522,8 +1515,13 @@ file class SignalBroadcasterImpl : ISignalBroadcaster
             scheduler.ScheduleFromAnyThread(Deliver);
     }
 
-    private KernelScheduler? ResolveScheduler()
+    private static KernelScheduler? ResolveScheduler(FiberTask? task)
     {
-        return (_sm.Engine.Owner as FiberTask)?.CommonKernel;
+        if (task != null)
+            return task.CommonKernel;
+
+        return SynchronizationContext.Current is KernelSyncContext context
+            ? context.Scheduler
+            : null;
     }
 }

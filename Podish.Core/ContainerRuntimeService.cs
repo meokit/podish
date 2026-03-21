@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Linq;
 using System.Text;
 using System.Text.Json;
 using Fiberish.Core;
@@ -97,7 +96,7 @@ public sealed class ContainerRuntimeService
         if (isInteractive)
         {
             var tty = ttyDiag!;
-            stdinStream = new FileStream(new SafeFileHandle((IntPtr)0, ownsHandle: false), FileAccess.Read);
+            stdinStream = new FileStream(new SafeFileHandle(0, false), FileAccess.Read);
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) || RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
@@ -177,7 +176,8 @@ public sealed class ContainerRuntimeService
             if (request.MemoryQuotaBytes is { } quotaBytes &&
                 quotaBytes < ContainerMemoryLimits.MinimumMemoryQuotaBytes)
             {
-                var message = $"memory quota must be at least {ContainerMemoryLimits.MinimumMemoryQuotaBytes / (1024 * 1024)}M";
+                var message =
+                    $"memory quota must be at least {ContainerMemoryLimits.MinimumMemoryQuotaBytes / (1024 * 1024)}M";
                 Console.Error.WriteLine($"[Podish Error] {message}");
                 request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit",
                     request.ContainerId,
@@ -508,7 +508,8 @@ public sealed class ContainerRuntimeService
             if (cancelKeyPressHandler != null)
                 Console.CancelKeyPress -= cancelKeyPressHandler;
 
-            if (rawModeEnabled && (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) || RuntimeInformation.IsOSPlatform(OSPlatform.Linux)))
+            if (rawModeEnabled && (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ||
+                                   RuntimeInformation.IsOSPlatform(OSPlatform.Linux)))
             {
                 _logger.LogTrace("Container teardown disabling raw mode containerId={ContainerId}",
                     request.ContainerId);
@@ -884,6 +885,119 @@ public sealed class ContainerRuntimeService
         };
     }
 
+    private static bool ShouldPrintHandlerProfile()
+    {
+        var value = Environment.GetEnvironmentVariable("PODISH_HANDLER_PROFILE");
+        return !string.IsNullOrWhiteSpace(value) && value != "0";
+    }
+
+    private static bool ShouldPrintJccProfile()
+    {
+        var value = Environment.GetEnvironmentVariable("PODISH_JCC_PROFILE");
+        return !string.IsNullOrWhiteSpace(value) && value != "0";
+    }
+
+    private static void PrintHandlerProfile(Engine engine)
+    {
+        var stats = engine.GetHandlerProfileStats()
+            .Where(static x => x.ExecCount != 0)
+            .OrderByDescending(static x => x.ExecCount)
+            .ToArray();
+        var imageBase = engine.GetNativeImageBase();
+
+        Console.Error.WriteLine("[Podish.HandlerProfile.Begin]");
+        Console.Error.WriteLine($"base\t0x{imageBase.ToInt64():x}");
+        foreach (var stat in stats)
+            Console.Error.WriteLine($"{stat.ExecCount}\t0x{stat.Handler.ToInt64():x}");
+        Console.Error.WriteLine("[Podish.HandlerProfile.End]");
+    }
+
+    private static void PrintJccProfile(Engine engine)
+    {
+        var stats = engine.GetJccProfileStats()
+            .Where(static x => x.Taken != 0 || x.NotTaken != 0 || x.CacheHit != 0 || x.CacheMiss != 0)
+            .OrderByDescending(static x => x.Taken + x.NotTaken)
+            .ToArray();
+        var imageBase = engine.GetNativeImageBase();
+
+        Console.Error.WriteLine("[Podish.JccProfile.Begin]");
+        Console.Error.WriteLine($"base\t0x{imageBase.ToInt64():x}");
+        foreach (var stat in stats)
+            Console.Error.WriteLine(
+                $"{stat.Taken}\t{stat.NotTaken}\t{stat.CacheHit}\t{stat.CacheMiss}\t0x{stat.Handler.ToInt64():x}");
+
+        Console.Error.WriteLine("[Podish.JccProfile.End]");
+    }
+
+    private void TryExportGuestStats(Engine engine, ContainerRunRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.GuestStatsExportDir))
+            return;
+
+        try
+        {
+            var exportDir = Path.GetFullPath(request.GuestStatsExportDir);
+            Directory.CreateDirectory(exportDir);
+
+            var blocksPath = Path.Combine(exportDir, "blocks.bin");
+            var skipBlocksDump = Environment.GetEnvironmentVariable("PODISH_SKIP_BLOCKS_EXPORT") is
+                                     { Length: > 0 } value &&
+                                 value != "0";
+            if (!skipBlocksDump)
+            {
+                using var fs = File.Create(blocksPath);
+                engine.DumpBlocks(fs);
+            }
+
+            var nativeStats = engine.DumpStats();
+            var blockStats = engine.GetBlockStats();
+            var handlerProfile = engine.GetHandlerProfileStats()
+                .Where(static x => x.ExecCount != 0)
+                .OrderByDescending(static x => x.ExecCount)
+                .Select(static x => new GuestStatsHandlerProfileEntry(
+                    $"0x{x.Handler.ToInt64():x}",
+                    x.ExecCount))
+                .ToArray();
+            var jccProfile = engine.GetJccProfileStats()
+                .Where(static x => x.Taken != 0 || x.NotTaken != 0 || x.CacheHit != 0 || x.CacheMiss != 0)
+                .OrderByDescending(static x => x.Taken + x.NotTaken)
+                .Select(static x => new GuestStatsJccProfileEntry(
+                    $"0x{x.Handler.ToInt64():x}",
+                    x.Taken,
+                    x.NotTaken,
+                    x.CacheHit,
+                    x.CacheMiss))
+                .ToArray();
+
+            var summary = new GuestStatsSummary(
+                1,
+                DateTimeOffset.UtcNow,
+                request.ContainerId,
+                request.Image,
+                $"0x{engine.GetNativeImageBase().ToInt64():x}",
+                nativeStats,
+                GuestStatsBlockStats.FromSnapshot(blockStats),
+                handlerProfile,
+                jccProfile,
+                new GuestStatsFiles("blocks.bin"));
+
+            var summaryPath = Path.Combine(exportDir, "summary.json");
+            using (var stream = File.Create(summaryPath))
+            using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+            {
+                JsonSerializer.Serialize(writer, summary, PodishJsonContext.Default.GuestStatsSummary);
+            }
+
+            _logger.LogInformation("Exported guest stats for container {ContainerId} to {ExportDir}",
+                request.ContainerId, exportDir);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to export guest stats for container {ContainerId}",
+                request.ContainerId);
+        }
+    }
+
     private sealed class TarBlobLayerContentProvider : ILayerContentProvider, IDisposable
     {
         private readonly Dictionary<string, string> _digestToBlobPath;
@@ -1119,126 +1233,15 @@ public sealed class ContainerRuntimeService
             _scheduler = scheduler;
         }
 
-        public void SignalProcessGroup(int pgid, int signal)
+        public void SignalProcessGroup(FiberTask? task, int pgid, int signal)
         {
             _scheduler.ScheduleFromAnyThread(() => _scheduler.SignalProcessGroup(pgid, signal));
         }
 
-        public void SignalForegroundTask(int signal)
+        public void SignalForegroundTask(FiberTask? task, int signal)
         {
-        }
-    }
-
-    private static bool ShouldPrintHandlerProfile()
-    {
-        var value = Environment.GetEnvironmentVariable("PODISH_HANDLER_PROFILE");
-        return !string.IsNullOrWhiteSpace(value) && value != "0";
-    }
-
-    private static bool ShouldPrintJccProfile()
-    {
-        var value = Environment.GetEnvironmentVariable("PODISH_JCC_PROFILE");
-        return !string.IsNullOrWhiteSpace(value) && value != "0";
-    }
-
-    private static void PrintHandlerProfile(Engine engine)
-    {
-        var stats = engine.GetHandlerProfileStats()
-            .Where(static x => x.ExecCount != 0)
-            .OrderByDescending(static x => x.ExecCount)
-            .ToArray();
-        var imageBase = engine.GetNativeImageBase();
-
-        Console.Error.WriteLine("[Podish.HandlerProfile.Begin]");
-        Console.Error.WriteLine($"base\t0x{imageBase.ToInt64():x}");
-        foreach (var stat in stats)
-            Console.Error.WriteLine($"{stat.ExecCount}\t0x{stat.Handler.ToInt64():x}");
-        Console.Error.WriteLine("[Podish.HandlerProfile.End]");
-    }
-
-    private static void PrintJccProfile(Engine engine)
-    {
-        var stats = engine.GetJccProfileStats()
-            .Where(static x => x.Taken != 0 || x.NotTaken != 0 || x.CacheHit != 0 || x.CacheMiss != 0)
-            .OrderByDescending(static x => x.Taken + x.NotTaken)
-            .ToArray();
-        var imageBase = engine.GetNativeImageBase();
-
-        Console.Error.WriteLine("[Podish.JccProfile.Begin]");
-        Console.Error.WriteLine($"base\t0x{imageBase.ToInt64():x}");
-        foreach (var stat in stats)
-        {
-            Console.Error.WriteLine(
-                $"{stat.Taken}\t{stat.NotTaken}\t{stat.CacheHit}\t{stat.CacheMiss}\t0x{stat.Handler.ToInt64():x}");
-        }
-        Console.Error.WriteLine("[Podish.JccProfile.End]");
-    }
-
-    private void TryExportGuestStats(Engine engine, ContainerRunRequest request)
-    {
-        if (string.IsNullOrWhiteSpace(request.GuestStatsExportDir))
-            return;
-
-        try
-        {
-            var exportDir = Path.GetFullPath(request.GuestStatsExportDir);
-            Directory.CreateDirectory(exportDir);
-
-            var blocksPath = Path.Combine(exportDir, "blocks.bin");
-            var skipBlocksDump = Environment.GetEnvironmentVariable("PODISH_SKIP_BLOCKS_EXPORT") is { Length: > 0 } value &&
-                                 value != "0";
-            if (!skipBlocksDump)
-            {
-                using var fs = File.Create(blocksPath);
-                engine.DumpBlocks(fs);
-            }
-
-            var nativeStats = engine.DumpStats();
-            var blockStats = engine.GetBlockStats();
-            var handlerProfile = engine.GetHandlerProfileStats()
-                .Where(static x => x.ExecCount != 0)
-                .OrderByDescending(static x => x.ExecCount)
-                .Select(static x => new GuestStatsHandlerProfileEntry(
-                    $"0x{x.Handler.ToInt64():x}",
-                    x.ExecCount))
-                .ToArray();
-            var jccProfile = engine.GetJccProfileStats()
-                .Where(static x => x.Taken != 0 || x.NotTaken != 0 || x.CacheHit != 0 || x.CacheMiss != 0)
-                .OrderByDescending(static x => x.Taken + x.NotTaken)
-                .Select(static x => new GuestStatsJccProfileEntry(
-                    $"0x{x.Handler.ToInt64():x}",
-                    x.Taken,
-                    x.NotTaken,
-                    x.CacheHit,
-                    x.CacheMiss))
-                .ToArray();
-
-            var summary = new GuestStatsSummary(
-                1,
-                DateTimeOffset.UtcNow,
-                request.ContainerId,
-                request.Image,
-                $"0x{engine.GetNativeImageBase().ToInt64():x}",
-                nativeStats,
-                GuestStatsBlockStats.FromSnapshot(blockStats),
-                handlerProfile,
-                jccProfile,
-                new GuestStatsFiles("blocks.bin"));
-
-            var summaryPath = Path.Combine(exportDir, "summary.json");
-            using (var stream = File.Create(summaryPath))
-            using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
-            {
-                JsonSerializer.Serialize(writer, summary, PodishJsonContext.Default.GuestStatsSummary);
-            }
-
-            _logger.LogInformation("Exported guest stats for container {ContainerId} to {ExportDir}",
-                request.ContainerId, exportDir);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to export guest stats for container {ContainerId}",
-                request.ContainerId);
+            if (task != null)
+                _scheduler.ScheduleFromAnyThread(() => task.PostSignal(signal), task);
         }
     }
 }
