@@ -49,7 +49,7 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
         if (_enableSignalSafetyNet && _task != null && _waitToken != null)
         {
             Logger.LogTrace("[SaeaAwaitable] Arming signal safety net: task={TaskId}", _task.TID);
-            _task.ArmSignalSafetyNet(_waitToken, OnSignalSafetyNet);
+            _task.ArmInterruptingSignalSafetyNet(_waitToken, OnSignalSafetyNet);
         }
         else
         {

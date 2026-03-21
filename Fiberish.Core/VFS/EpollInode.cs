@@ -274,7 +274,7 @@ public class EpollInode : TmpfsInode
             DoPoll();
 
             if (!_completed)
-                _task.ArmSignalSafetyNet(_token, ScheduleRePoll);
+                _task.ArmInterruptingSignalSafetyNet(_token, ScheduleRePoll);
         }
 
         public int GetResult()
@@ -310,7 +310,7 @@ public class EpollInode : TmpfsInode
             _queueWaitRegistration?.Dispose();
             _queueWaitRegistration = null;
 
-            if (_task.HasUnblockedPendingSignal())
+            if (_task.HasInterruptingPendingSignal())
             {
                 _timer?.Cancel();
                 _result = -(int)Errno.ERESTARTSYS;

@@ -569,7 +569,7 @@ public partial class SyscallManager
             DoPoll();
 
             if (!_completed)
-                _task.ArmSignalSafetyNet(_token, ScheduleRePoll);
+                _task.ArmInterruptingSignalSafetyNet(_token, ScheduleRePoll);
         }
 
         public int GetResult()
@@ -602,7 +602,7 @@ public partial class SyscallManager
             if (_completed) return;
             ClearWaitRegistrations();
 
-            if (_task.HasUnblockedPendingSignal())
+            if (_task.HasInterruptingPendingSignal())
             {
                 _timer?.Cancel();
                 _result = -(int)Errno.ERESTARTSYS;
@@ -762,7 +762,7 @@ public partial class SyscallManager
             DoPoll();
 
             if (!_completed)
-                _task.ArmSignalSafetyNet(_token, ScheduleRePoll);
+                _task.ArmInterruptingSignalSafetyNet(_token, ScheduleRePoll);
         }
 
         public int GetResult()
@@ -795,7 +795,7 @@ public partial class SyscallManager
             if (_completed) return;
             ClearWaitRegistrations();
 
-            if (_task.HasUnblockedPendingSignal())
+            if (_task.HasInterruptingPendingSignal())
             {
                 _timer?.Cancel();
                 _result = -(int)Errno.ERESTARTSYS;

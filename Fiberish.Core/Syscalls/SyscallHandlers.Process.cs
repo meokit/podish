@@ -221,13 +221,8 @@ public partial class SyscallManager
             if (hang) return 0;
 
             await new ChildStateAwaitable(currentProc, fiberTask, pidVal, wantStopped, wantContinued);
-            if (fiberTask.HasUnblockedPendingSignal())
-            {
-                // Ignored/default-ignored signals (e.g. SIGCHLD/SIGWINCH) should wake wait*
-                // and let it re-scan children, not force EINTR.
-                if (!HasPendingInterruptingSignal(fiberTask)) continue;
+            if (fiberTask.HasInterruptingPendingSignal())
                 return -(int)Errno.ERESTARTSYS;
-            }
         }
     }
 
@@ -336,50 +331,9 @@ public partial class SyscallManager
             if (wnohang) return 0;
 
             await new ChildStateAwaitable(currentProc, fiberTask, (int)id);
-            if (fiberTask.HasUnblockedPendingSignal())
-            {
-                // Ignored/default-ignored signals (e.g. SIGCHLD/SIGWINCH) should wake wait*
-                // and let it re-scan children, not force EINTR.
-                if (!HasPendingInterruptingSignal(fiberTask)) continue;
+            if (fiberTask.HasInterruptingPendingSignal())
                 return -(int)Errno.ERESTARTSYS;
-            }
         }
-    }
-
-    private static bool HasPendingInterruptingSignal(FiberTask task)
-    {
-        var pending = task.PendingSignals;
-        var unblocked = pending & ~task.SignalMask;
-
-        // SIGKILL/SIGSTOP are unmaskable.
-        var unmaskable = (1UL << ((int)Signal.SIGKILL - 1)) | (1UL << ((int)Signal.SIGSTOP - 1));
-        unblocked |= pending & unmaskable;
-
-        if (unblocked == 0) return false;
-
-        for (var sig = 1; sig <= 64; sig++)
-        {
-            var mask = 1UL << (sig - 1);
-            if ((unblocked & mask) == 0) continue;
-
-            if (task.Process.SignalActions.TryGetValue(sig, out var action))
-            {
-                if (action.Handler == 1) continue; // SIG_IGN
-                if (action.Handler == 0 && IsDefaultIgnoredSignal(sig)) continue;
-                return true;
-            }
-
-            if (!IsDefaultIgnoredSignal(sig)) return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsDefaultIgnoredSignal(int sig)
-    {
-        return sig == (int)Signal.SIGCHLD ||
-               sig == (int)Signal.SIGURG ||
-               sig == (int)Signal.SIGWINCH;
     }
 
     private static int EncodeWaitExitStatus(Process childProc)

@@ -116,6 +116,51 @@ public class NetworkTests
     }
 
     [Fact]
+    public async Task UnixSocketInode_RecvMessageAsync_DefaultIgnoredSignal_MustNotInterruptWait()
+    {
+        using var env = new TestEnv();
+        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Dgram);
+        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Dgram);
+        sock1.ConnectPair(sock2);
+        sock2.ConnectPair(sock1);
+
+        var file2 = new LinuxFile(new Dentry("s2", sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
+
+        var pending = env.StartOnScheduler(() => sock2.RecvMessageAsync(file2, env.Task, new byte[8], 0));
+        await env.WaitForBackgroundSchedulerAsync();
+        Assert.False(pending.IsCompleted);
+
+        await env.PostSignalAsync((int)Signal.SIGWINCH);
+        Assert.False(pending.IsCompleted);
+
+        await env.InvokeOnSchedulerAsync(() => sock2.EnqueueMessage(new UnixMessage { Data = [0x7F] }));
+
+        var result = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, result.BytesRead);
+    }
+
+    [Fact]
+    public async Task UnixSocketInode_RecvMessageAsync_InterruptingSignal_MustReturnErestartsys()
+    {
+        using var env = new TestEnv();
+        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Dgram);
+        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Dgram);
+        sock1.ConnectPair(sock2);
+        sock2.ConnectPair(sock1);
+
+        var file2 = new LinuxFile(new Dentry("s2", sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
+
+        var pending = env.StartOnScheduler(() => sock2.RecvMessageAsync(file2, env.Task, new byte[8], 0));
+        await env.WaitForBackgroundSchedulerAsync();
+        Assert.False(pending.IsCompleted);
+
+        await env.PostSignalAsync((int)Signal.SIGUSR1);
+
+        var result = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(-(int)Errno.ERESTARTSYS, result.BytesRead);
+    }
+
+    [Fact]
     public void UnixSocketInode_Poll_FreshSocket_DoesNotReportHangup()
     {
         using var env = new TestEnv();
@@ -153,6 +198,74 @@ public class NetworkTests
         public void Dispose()
         {
             
+        }
+
+        public Task<T> StartOnScheduler<T>(Func<ValueTask<T>> action)
+        {
+            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            _ = System.Threading.Tasks.Task.Run(() =>
+            {
+                async void Entry()
+                {
+                    try
+                    {
+                        var result = await action();
+                        tcs.TrySetResult(result);
+                    }
+                    catch (Exception ex)
+                    {
+                        tcs.TrySetException(ex);
+                    }
+                    finally
+                    {
+                        Scheduler.Running = false;
+                        Scheduler.WakeUp();
+                    }
+                }
+
+                Task.Continuation = Entry;
+                Scheduler.Running = true;
+                Scheduler.Schedule(Task);
+                Scheduler.Run();
+            });
+
+            return tcs.Task;
+        }
+
+        public Task InvokeOnSchedulerAsync(Action action)
+        {
+            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            Scheduler.ScheduleFromAnyThread(() =>
+            {
+                try
+                {
+                    action();
+                    tcs.TrySetResult();
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            });
+
+            return tcs.Task;
+        }
+
+        public Task PostSignalAsync(int signal)
+        {
+            return InvokeOnSchedulerAsync(() => Task.PostSignal(signal));
+        }
+
+        public async Task WaitForBackgroundSchedulerAsync(int maxIterations = 50)
+        {
+            for (var i = 0; i < maxIterations && Scheduler.OwnerThreadId == 0; i++)
+                await System.Threading.Tasks.Task.Delay(5);
+
+            Assert.NotEqual(0, Scheduler.OwnerThreadId);
+
+            await InvokeOnSchedulerAsync(() => { });
         }
     }
 }

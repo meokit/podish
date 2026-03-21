@@ -514,12 +514,12 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
             if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
                 return (-(int)Errno.EAGAIN, null);
 
-            if (task.HasUnblockedPendingSignal())
+            if (task.HasInterruptingPendingSignal())
                 return (-(int)Errno.ERESTARTSYS, null);
 
-            await _readWaitQueue.WaitAsync(task);
+            await _readWaitQueue.WaitInterruptiblyAsync(task);
 
-            if (task.HasUnblockedPendingSignal())
+            if (task.HasInterruptingPendingSignal())
                 return (-(int)Errno.ERESTARTSYS, null);
         }
     }
@@ -777,11 +777,11 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
 
             if (nonBlocking) return (-(int)Errno.EAGAIN, null, null);
 
-            if (task.HasUnblockedPendingSignal()) return (-(int)Errno.ERESTARTSYS, null, null);
+            if (task.HasInterruptingPendingSignal()) return (-(int)Errno.ERESTARTSYS, null, null);
 
-            await _readWaitQueue.WaitAsync(task);
+            await _readWaitQueue.WaitInterruptiblyAsync(task);
 
-            if (task.HasUnblockedPendingSignal()) return (-(int)Errno.ERESTARTSYS, null, null);
+            if (task.HasInterruptingPendingSignal()) return (-(int)Errno.ERESTARTSYS, null, null);
         }
     }
 

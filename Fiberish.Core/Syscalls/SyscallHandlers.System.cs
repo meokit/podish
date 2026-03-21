@@ -301,7 +301,7 @@ public partial class SyscallManager
             var task = _task;
             var token = _token;
             task.Continuation = continuation;
-            task.ArmSignalSafetyNet(token, () =>
+            task.ArmInterruptingSignalSafetyNet(token, () =>
             {
                 task.Continuation = continuation;
                 task.CommonKernel.Schedule(task);

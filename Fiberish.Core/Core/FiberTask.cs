@@ -290,6 +290,13 @@ public class FiberTask
             TrySetWaitReason(token, WakeReason.Signal);
     }
 
+    public void ArmInterruptingSignalSafetyNet(WaitToken token, Action wakeAction)
+    {
+        SetWaitContinuation(token, wakeAction, WaitContinuationMode.RunAction);
+        if (HasInterruptingPendingSignal())
+            TrySetWaitReason(token, WakeReason.Signal);
+    }
+
     public void ArmSignalSafetyNet(WaitToken? token, Action wakeAction)
     {
         if (!token.HasValue)
@@ -299,6 +306,36 @@ public class FiberTask
         }
 
         ArmSignalSafetyNet(token.Value, wakeAction);
+    }
+
+    public void ArmInterruptingSignalSafetyNet(WaitToken? token, Action wakeAction)
+    {
+        if (!token.HasValue)
+        {
+            CommonKernel?.Schedule(wakeAction, this);
+            return;
+        }
+
+        ArmInterruptingSignalSafetyNet(token.Value, wakeAction);
+    }
+
+    public void ArmInterruptingSignalSafetyNetResumeTask(WaitToken token, Action continuation)
+    {
+        SetWaitContinuation(token, continuation, WaitContinuationMode.ResumeTask);
+        if (HasInterruptingPendingSignal())
+            TrySetWaitReason(token, WakeReason.Signal);
+    }
+
+    public void ArmInterruptingSignalSafetyNetResumeTask(WaitToken? token, Action continuation)
+    {
+        if (!token.HasValue)
+        {
+            Continuation = continuation;
+            CommonKernel?.Schedule(this);
+            return;
+        }
+
+        ArmInterruptingSignalSafetyNetResumeTask(token.Value, continuation);
     }
 
     public void ArmSignalSafetyNetResumeTask(WaitToken token, Action continuation)
@@ -643,6 +680,36 @@ public class FiberTask
         return unblocked != 0 || hasUnmaskable;
     }
 
+    public bool HasInterruptingPendingSignal()
+    {
+        using var scope = EnterTaskStateScope();
+        var pending = PendingSignals;
+        var unblocked = pending & ~SignalMask;
+
+        // SIGKILL/SIGSTOP are unmaskable.
+        var unmaskable = (1UL << ((int)Signal.SIGKILL - 1)) | (1UL << ((int)Signal.SIGSTOP - 1));
+        unblocked |= pending & unmaskable;
+
+        if (unblocked == 0) return false;
+
+        for (var sig = 1; sig <= 64; sig++)
+        {
+            var mask = 1UL << (sig - 1);
+            if ((unblocked & mask) == 0) continue;
+
+            if (Process.SignalActions.TryGetValue(sig, out var action))
+            {
+                if (action.Handler == 1) continue; // SIG_IGN
+                if (action.Handler == 0 && IsDefaultIgnoredSignal(sig)) continue;
+                return true;
+            }
+
+            if (!IsDefaultIgnoredSignal(sig)) return true;
+        }
+
+        return false;
+    }
+
     public bool IsSignalIgnoredOrBlocked(int sig)
     {
         if (sig < 1 || sig > 64) return false;
@@ -666,6 +733,13 @@ public class FiberTask
         }
 
         return false;
+    }
+
+    private static bool IsDefaultIgnoredSignal(int sig)
+    {
+        return sig == (int)Signal.SIGCHLD ||
+               sig == (int)Signal.SIGURG ||
+               sig == (int)Signal.SIGWINCH;
     }
 
     /// <summary>

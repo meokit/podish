@@ -43,7 +43,7 @@ public readonly struct SleepAwaitable
         {
             var wakeHandler = new SleepWakeHandler(_scheduler, _task, _token, continuation);
             wakeHandler.Register(_tickDuration);
-            _task.ArmSignalSafetyNet(_token, wakeHandler.OnSignal);
+            _task.ArmInterruptingSignalSafetyNet(_token, wakeHandler.OnSignal);
         }
     }
 

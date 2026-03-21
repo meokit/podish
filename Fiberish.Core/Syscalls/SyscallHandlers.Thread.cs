@@ -126,7 +126,7 @@ public partial class SyscallManager
             var handler = new FutexCompletionHandler(_task, _token, continuation);
             var waiterAwaiter = _waiter.Tcs.Task.GetAwaiter();
             waiterAwaiter.OnCompleted(handler.OnWaitCompleted);
-            _task.ArmSignalSafetyNet(_token, handler.OnSignal);
+            _task.ArmInterruptingSignalSafetyNet(_token, handler.OnSignal);
         }
 
         public AwaitResult GetResult()

@@ -67,7 +67,7 @@ public readonly struct SemWaitAwaiter : INotifyCompletion
     {
         var state = _state;
         state.Continuation = continuation;
-        state.Task.ArmSignalSafetyNet(state.Token, () => { state.Continuation?.Invoke(); });
+        state.Task.ArmInterruptingSignalSafetyNet(state.Token, () => { state.Continuation?.Invoke(); });
     }
 
     public AwaitResult GetResult()

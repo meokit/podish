@@ -63,7 +63,12 @@ public class AsyncWaitQueue
 
     public WaitQueueAwaitable WaitAsync(FiberTask currentTask)
     {
-        return new WaitQueueAwaitable(this, currentTask);
+        return new WaitQueueAwaitable(this, currentTask, interruptOnSignals: false);
+    }
+
+    public WaitQueueAwaitable WaitInterruptiblyAsync(FiberTask currentTask)
+    {
+        return new WaitQueueAwaitable(this, currentTask, interruptOnSignals: true);
     }
 
     // For compatibility with previous WaitHandle usage
@@ -211,16 +216,18 @@ public readonly struct WaitQueueAwaitable
 {
     private readonly AsyncWaitQueue _queue;
     private readonly FiberTask _currentTask;
+    private readonly bool _interruptOnSignals;
 
-    public WaitQueueAwaitable(AsyncWaitQueue queue, FiberTask currentTask)
+    public WaitQueueAwaitable(AsyncWaitQueue queue, FiberTask currentTask, bool interruptOnSignals)
     {
         _queue = queue;
         _currentTask = currentTask;
+        _interruptOnSignals = interruptOnSignals;
     }
 
     public WaitQueueAwaiter GetAwaiter()
     {
-        return new WaitQueueAwaiter(_queue, _currentTask);
+        return new WaitQueueAwaiter(_queue, _currentTask, _interruptOnSignals);
     }
 }
 
@@ -228,12 +235,14 @@ public struct WaitQueueAwaiter : INotifyCompletion
 {
     private readonly AsyncWaitQueue _queue;
     private readonly FiberTask _currentTask;
+    private readonly bool _interruptOnSignals;
     private FiberTask.WaitToken? _token;
 
-    public WaitQueueAwaiter(AsyncWaitQueue queue, FiberTask currentTask)
+    public WaitQueueAwaiter(AsyncWaitQueue queue, FiberTask currentTask, bool interruptOnSignals)
     {
         _queue = queue;
         _currentTask = currentTask;
+        _interruptOnSignals = interruptOnSignals;
     }
 
     public bool IsCompleted => _queue.IsSignaled;
@@ -243,7 +252,10 @@ public struct WaitQueueAwaiter : INotifyCompletion
         var currentTask = _currentTask;
         _token = currentTask.BeginWaitToken();
         _queue.Register(continuation, currentTask, _token);
-        currentTask.ArmSignalSafetyNetResumeTask(_token, continuation);
+        if (_interruptOnSignals)
+            currentTask.ArmInterruptingSignalSafetyNetResumeTask(_token, continuation);
+        else
+            currentTask.ArmSignalSafetyNetResumeTask(_token, continuation);
     }
 
     public AwaitResult GetResult()
@@ -422,8 +434,10 @@ public readonly struct ChildStateAwaitable
                 return; // already scheduled, no need for safety net
             }
 
-            // ArmSignalSafetyNet: re-check for signals that arrived before BeginWaitToken.
-            _task.ArmSignalSafetyNet(_token, continuation);
+            // wait4/waitid should only be interrupted by signals that would actually
+            // break the wait. Default-ignored signals like SIGCHLD/SIGWINCH should
+            // not wake the wait just to force a rescan.
+            _task.ArmInterruptingSignalSafetyNet(_token, continuation);
         }
 
         public AwaitResult GetResult()

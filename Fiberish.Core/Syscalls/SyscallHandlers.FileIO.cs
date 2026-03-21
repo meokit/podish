@@ -1304,7 +1304,7 @@ public partial class SyscallManager
             // ArmSignalSafetyNet: registers the continuation AND atomically re-checks for
             // signals that arrived before BeginWaitToken was called (TOCTOU-safe).
             Logger.LogTrace("[IOAwaiter] RegisterWait armed forRead={ForRead}, arming safety net", forRead);
-            task.ArmSignalSafetyNetResumeTask(token, continuation);
+            task.ArmInterruptingSignalSafetyNetResumeTask(token, continuation);
         }
 
         public AwaitResult GetResult()

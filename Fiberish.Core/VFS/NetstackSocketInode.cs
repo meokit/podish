@@ -495,7 +495,7 @@ public sealed class NetstackSocketInode : Inode, ISocketEndpointOps, ISocketData
             if (ready())
                 return true;
 
-            if (currentTask.HasUnblockedPendingSignal())
+            if (currentTask.HasInterruptingPendingSignal())
                 return false;
 
             var delay = Math.Max(1, _namespace.Poll(Environment.TickCount64));

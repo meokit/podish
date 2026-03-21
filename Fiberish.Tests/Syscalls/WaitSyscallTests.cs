@@ -20,12 +20,6 @@ public class WaitSyscallTests
         return env.Invoke(methodName, a1, a2, a3, a4, a5, a6);
     }
 
-    private static Task<int> StartInvoke(TestEnv env, string methodName, uint a1, uint a2, uint a3, uint a4, uint a5,
-        uint a6)
-    {
-        return Task.Run(async () => await env.Invoke(methodName, a1, a2, a3, a4, a5, a6));
-    }
-
     [Fact]
     public async Task Pselect6_ZeroTimeout_NoFds_ReturnsZero()
     {
@@ -130,15 +124,15 @@ public class WaitSyscallTests
         BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(4, 4), 0);
         env.Write(tsPtr, ts);
 
-        var pending = StartInvoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0);
+        var pending = env.StartOnScheduler(() => env.Invoke("SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0));
         Assert.False(pending.IsCompleted);
 
         var payload = new byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(payload, 1);
-        Assert.Equal(8, eventFd.Write(file, payload, 0));
-        env.DrainEvents();
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.InvokeOnSchedulerAsync(() => Assert.Equal(8, eventFd.Write(file, payload, 0)));
 
-        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(1));
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, rc);
 
         var pfd = env.ReadStruct<PollFd>(pollfdPtr);
@@ -184,6 +178,130 @@ public class WaitSyscallTests
     }
 
     [Fact]
+    public async Task Pause_DefaultIgnoredSignal_MustNotReturnUntilInterruptingSignalArrives()
+    {
+        using var env = new TestEnv();
+
+        var pending = env.StartOnScheduler(() => env.Invoke("SysPause", 0, 0, 0, 0, 0, 0));
+        Assert.False(pending.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.PostSignalAsync((int)Signal.SIGWINCH);
+        Assert.False(pending.IsCompleted);
+
+        await env.PostSignalAsync((int)Signal.SIGUSR1);
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(-(int)Errno.ERESTARTSYS, rc);
+    }
+
+    [Fact]
+    public async Task Ppoll_DefaultIgnoredSignal_MustNotInterruptWait()
+    {
+        using var env = new TestEnv();
+        const uint pollfdPtr = 0x23000;
+        const uint tsPtr = 0x24000;
+        env.MapUserPage(pollfdPtr);
+        env.MapUserPage(tsPtr);
+
+        var eventFd = new EventFdInode(12, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLIN, Revents = 0 });
+        WriteTimespecSec(env, tsPtr, 1);
+
+        var pending = env.StartOnScheduler(() => env.Invoke("SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0));
+        Assert.False(pending.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.PostSignalAsync((int)Signal.SIGWINCH);
+        Assert.False(pending.IsCompleted);
+
+        var payload = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(payload, 1);
+        await env.InvokeOnSchedulerAsync(() => Assert.Equal(8, eventFd.Write(file, payload, 0)));
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, rc);
+    }
+
+    [Fact]
+    public async Task Ppoll_InterruptingSignal_MustReturnErestartsys()
+    {
+        using var env = new TestEnv();
+        const uint pollfdPtr = 0x25000;
+        const uint tsPtr = 0x26000;
+        env.MapUserPage(pollfdPtr);
+        env.MapUserPage(tsPtr);
+
+        var eventFd = new EventFdInode(13, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLIN, Revents = 0 });
+        WriteTimespecSec(env, tsPtr, 1);
+
+        var pending = env.StartOnScheduler(() => env.Invoke("SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0));
+        Assert.False(pending.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.PostSignalAsync((int)Signal.SIGUSR1);
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(-(int)Errno.ERESTARTSYS, rc);
+    }
+
+    [Fact]
+    public async Task EpollPwait2_DefaultIgnoredSignal_MustNotInterruptWait()
+    {
+        using var env = new TestEnv();
+        const uint eventsPtr = 0x27000;
+        const uint epollEventPtr = 0x28000;
+        const uint ts64Ptr = 0x29000;
+        env.MapUserPage(eventsPtr);
+        env.MapUserPage(epollEventPtr);
+        env.MapUserPage(ts64Ptr);
+
+        var epfd = await Invoke(env, "SysEpollCreate1", 0, 0, 0, 0, 0, 0);
+        Assert.True(epfd >= 0);
+
+        var eventFd = new EventFdInode(14, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        var epollEvent = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(epollEvent.AsSpan(0, 4), LinuxConstants.EPOLLIN);
+        BinaryPrimitives.WriteUInt64LittleEndian(epollEvent.AsSpan(4, 8), 0x9988776655443322UL);
+        env.Write(epollEventPtr, epollEvent);
+
+        Assert.Equal(0, await Invoke(env, "SysEpollCtl", (uint)epfd, LinuxConstants.EPOLL_CTL_ADD, (uint)fd,
+            epollEventPtr, 0, 0));
+
+        var ts = new byte[16];
+        BinaryPrimitives.WriteInt64LittleEndian(ts.AsSpan(0, 8), 1);
+        BinaryPrimitives.WriteInt64LittleEndian(ts.AsSpan(8, 8), 0);
+        env.Write(ts64Ptr, ts);
+
+        var pending = env.StartOnScheduler(() => env.Invoke("SysEpollPwait2", (uint)epfd, eventsPtr, 1, ts64Ptr, 0, 0));
+        Assert.False(pending.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.PostSignalAsync((int)Signal.SIGWINCH);
+        Assert.False(pending.IsCompleted);
+
+        var payload = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(payload, 1);
+        await env.InvokeOnSchedulerAsync(() => Assert.Equal(8, eventFd.Write(file, payload, 0)));
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, rc);
+    }
+
+    [Fact]
     public async Task Ppoll_HostListeningSocket_WakesOnIncomingConnection()
     {
         using var env = new TestEnv();
@@ -205,14 +323,13 @@ public class WaitSyscallTests
         env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLIN, Revents = 0 });
         WriteTimespecSec(env, tsPtr, 1);
 
-        var pending = StartInvoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0);
+        var pending = env.StartOnScheduler(() => env.Invoke("SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0));
         Assert.False(pending.IsCompleted);
 
         using var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         client.Connect(listenEp);
 
-        await DrainUntilCompleted(env, pending);
-        var rc = await pending;
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, rc);
         var pfd = env.ReadStruct<PollFd>(pollfdPtr);
         Assert.True((pfd.Revents & LinuxConstants.POLLIN) != 0);
@@ -245,14 +362,13 @@ public class WaitSyscallTests
         env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLIN, Revents = 0 });
         WriteTimespecSec(env, tsPtr, 1);
 
-        var pending = StartInvoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0);
+        var pending = env.StartOnScheduler(() => env.Invoke("SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0));
         Assert.False(pending.IsCompleted);
 
         var payload = new byte[] { 0x41 };
         _ = client.Send(payload);
 
-        await DrainUntilCompleted(env, pending);
-        var rc = await pending;
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, rc);
         var pfd = env.ReadStruct<PollFd>(pollfdPtr);
         Assert.True((pfd.Revents & LinuxConstants.POLLIN) != 0);
@@ -291,10 +407,9 @@ public class WaitSyscallTests
         env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLOUT, Revents = 0 });
         WriteTimespecSec(env, tsPtr, 1);
 
-        var pending = StartInvoke(env, "SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0);
+        var pending = env.StartOnScheduler(() => env.Invoke("SysPpoll", pollfdPtr, 1, tsPtr, 0, 0, 0));
 
-        await DrainUntilCompleted(env, pending);
-        var rc = await pending;
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, rc);
 
         var pfd = env.ReadStruct<PollFd>(pollfdPtr);
@@ -310,15 +425,6 @@ public class WaitSyscallTests
         env.Write(tsPtr, ts);
     }
 
-    private static async Task DrainUntilCompleted(TestEnv env, Task task, int maxIterations = 200)
-    {
-        for (var i = 0; i < maxIterations && !task.IsCompleted; i++)
-        {
-            env.DrainEvents();
-            await Task.Delay(5);
-        }
-    }
-
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     private struct PollFd
     {
@@ -329,9 +435,6 @@ public class WaitSyscallTests
 
     private sealed class TestEnv : IDisposable
     {
-        private static readonly MethodInfo DrainEventsMethod =
-            typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic)!;
-
         private static readonly FieldInfo OwnerThreadIdField =
             typeof(KernelScheduler).GetField("_ownerThreadId", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
@@ -394,7 +497,7 @@ public class WaitSyscallTests
             Scheduler.Running = true;
             Scheduler.Schedule(Task);
             Scheduler.Run();
-            OwnerThreadIdField.SetValue(Scheduler, 0);
+            ResetSchedulerThreadBinding();
             return new ValueTask<int>(tcs.Task);
         }
 
@@ -449,9 +552,80 @@ public class WaitSyscallTests
             }
         }
 
-        public void DrainEvents()
+        public Task<T> StartOnScheduler<T>(Func<ValueTask<T>> action)
         {
-            _ = (bool)DrainEventsMethod.Invoke(Scheduler, null)!;
+            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            _ = System.Threading.Tasks.Task.Run(() =>
+            {
+                ResetSchedulerThreadBinding();
+
+                async void Entry()
+                {
+                    try
+                    {
+                        var result = await action();
+                        tcs.TrySetResult(result);
+                    }
+                    catch (Exception ex)
+                    {
+                        tcs.TrySetException(ex);
+                    }
+                    finally
+                    {
+                        Scheduler.Running = false;
+                        Scheduler.WakeUp();
+                    }
+                }
+
+                Task.Continuation = Entry;
+                Scheduler.Running = true;
+                Scheduler.Schedule(Task);
+                Scheduler.Run();
+                ResetSchedulerThreadBinding();
+            });
+
+            return tcs.Task;
+        }
+
+        public Task InvokeOnSchedulerAsync(Action action)
+        {
+            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            Scheduler.ScheduleFromAnyThread(() =>
+            {
+                try
+                {
+                    action();
+                    tcs.TrySetResult();
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            });
+
+            return tcs.Task;
+        }
+
+        public Task PostSignalAsync(int signal)
+        {
+            return InvokeOnSchedulerAsync(() => Task.PostSignal(signal));
+        }
+
+        public async Task WaitForBackgroundSchedulerAsync(int maxIterations = 50)
+        {
+            for (var i = 0; i < maxIterations && Scheduler.OwnerThreadId == 0; i++)
+                await System.Threading.Tasks.Task.Delay(5);
+
+            Assert.NotEqual(0, Scheduler.OwnerThreadId);
+
+            await InvokeOnSchedulerAsync(() => { });
+        }
+
+        private void ResetSchedulerThreadBinding()
+        {
+            OwnerThreadIdField.SetValue(Scheduler, 0);
         }
     }
 }

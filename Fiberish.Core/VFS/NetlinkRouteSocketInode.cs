@@ -66,10 +66,10 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
             if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
                 return -(int)Errno.EAGAIN;
 
-            if (task.HasUnblockedPendingSignal())
+            if (task.HasInterruptingPendingSignal())
                 return -(int)Errno.ERESTARTSYS;
 
-            var result = await (waitQueue ?? _readWaitQueue).WaitAsync(task);
+            var result = await (waitQueue ?? _readWaitQueue).WaitInterruptiblyAsync(task);
             if (result == AwaitResult.Interrupted)
                 return -(int)Errno.ERESTARTSYS;
         }

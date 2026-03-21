@@ -24,7 +24,7 @@ internal sealed class ReadinessWaiter
             if ((_poll(file, events) & events) != 0)
                 return true;
 
-            if (task.HasUnblockedPendingSignal())
+            if (task.HasInterruptingPendingSignal())
                 return false;
 
             var waitQueue = RentWaitQueue();
@@ -43,7 +43,7 @@ internal sealed class ReadinessWaiter
                     continue;
                 }
 
-                var result = await waitQueue.WaitAsync(task);
+                var result = await waitQueue.WaitInterruptiblyAsync(task);
                 if (result == AwaitResult.Interrupted)
                     return false;
             }

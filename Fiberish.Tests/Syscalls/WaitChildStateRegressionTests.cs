@@ -1,6 +1,7 @@
 using System.Reflection;
 using Fiberish.Core;
 using Fiberish.Memory;
+using Fiberish.Native;
 using Fiberish.Syscalls;
 using Xunit;
 
@@ -71,6 +72,94 @@ public class WaitChildStateRegressionTests
 
         Assert.True(pending.IsCompleted);
         Assert.Equal(0, await pending);
+    }
+
+    [Fact]
+    public async Task Wait4_DefaultIgnoredSignal_MustNotWakeUntilChildChangesState()
+    {
+        using var env = new WaitEnv();
+
+        var pending = InvokeSys(env.ParentSys, env.ParentEngine, "SysWait4", (uint)env.Child.TGID, 0, 0, 0, 0, 0)
+            .AsTask();
+        Assert.False(pending.IsCompleted);
+
+        env.ParentTask.PostSignal((int)Signal.SIGWINCH);
+
+        for (var i = 0; i < 5; i++)
+        {
+            env.DrainEvents();
+            await Task.Delay(1);
+        }
+
+        Assert.False(pending.IsCompleted);
+
+        env.Child.State = ProcessState.Zombie;
+        env.Child.ExitStatus = 11;
+        env.Child.StateChangeEvent.Set();
+
+        for (var i = 0; i < 20 && !pending.IsCompleted; i++)
+        {
+            env.DrainEvents();
+            await Task.Delay(1);
+        }
+
+        Assert.True(pending.IsCompleted);
+        Assert.Equal(env.Child.TGID, await pending);
+    }
+
+    [Fact]
+    public async Task WaitId_DefaultIgnoredSignal_MustNotWakeUntilChildChangesState()
+    {
+        using var env = new WaitEnv();
+
+        var pending = InvokeSys(env.ParentSys, env.ParentEngine, "SysWaitId", (uint)IdType.P_PID,
+                (uint)env.Child.TGID, 0, 4, 0, 0)
+            .AsTask();
+        Assert.False(pending.IsCompleted);
+
+        env.ParentTask.PostSignal((int)Signal.SIGWINCH);
+
+        for (var i = 0; i < 5; i++)
+        {
+            env.DrainEvents();
+            await Task.Delay(1);
+        }
+
+        Assert.False(pending.IsCompleted);
+
+        env.Child.State = ProcessState.Zombie;
+        env.Child.ExitStatus = 13;
+        env.Child.StateChangeEvent.Set();
+
+        for (var i = 0; i < 20 && !pending.IsCompleted; i++)
+        {
+            env.DrainEvents();
+            await Task.Delay(1);
+        }
+
+        Assert.True(pending.IsCompleted);
+        Assert.Equal(0, await pending);
+    }
+
+    [Fact]
+    public async Task Wait4_InterruptingSignal_MustReturnErestartsys()
+    {
+        using var env = new WaitEnv();
+
+        var pending = InvokeSys(env.ParentSys, env.ParentEngine, "SysWait4", (uint)env.Child.TGID, 0, 0, 0, 0, 0)
+            .AsTask();
+        Assert.False(pending.IsCompleted);
+
+        env.ParentTask.PostSignal((int)Signal.SIGUSR1);
+
+        for (var i = 0; i < 20 && !pending.IsCompleted; i++)
+        {
+            env.DrainEvents();
+            await Task.Delay(1);
+        }
+
+        Assert.True(pending.IsCompleted);
+        Assert.Equal(-(int)Errno.ERESTARTSYS, await pending);
     }
 
     private static ValueTask<int> InvokeSys(SyscallManager sm, Engine engine, string methodName, uint a1, uint a2,
