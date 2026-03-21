@@ -613,6 +613,49 @@ public class ProcFsTests
         }
     }
 
+    [Fact]
+    public async Task ProcSysVmDropCaches_OpenWithTrunc_ShouldSucceedAndKeepReadValueAtZero()
+    {
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(rootDir);
+        AddressSpace? cache = null;
+
+        try
+        {
+            var runtime = KernelRuntime.Bootstrap(rootDir, false, false);
+            var sm = runtime.Syscalls;
+            var task = AttachTaskContext(runtime, 0, true);
+
+            const uint pathAddr = 0x10000;
+            const uint writeAddr = 0x11000;
+            MapUserPage(runtime, pathAddr);
+            MapUserPage(runtime, writeAddr);
+            WriteCString(runtime, pathAddr, "/proc/sys/vm/drop_caches");
+            Assert.True(runtime.Engine.CopyToUser(writeAddr, Encoding.UTF8.GetBytes("1\n")));
+
+            cache = new AddressSpace(AddressSpaceKind.File);
+            GlobalAddressSpaceCacheManager.TrackAddressSpace(cache);
+            _ = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
+            Assert.True(cache.PageCount > 0);
+
+            var fd = await CallSyscall(sm, "SysOpen", pathAddr, (uint)(FileFlags.O_WRONLY | FileFlags.O_TRUNC));
+            Assert.True(fd >= 0);
+            Assert.Equal(2, await CallSyscall(sm, "SysWrite", (uint)fd, writeAddr, 2u));
+            Assert.Equal(0, await CallSyscall(sm, "SysClose", (uint)fd));
+            Assert.Equal(0, cache.PageCount);
+
+            var loc = sm.PathWalk("/proc/sys/vm/drop_caches");
+            Assert.True(loc.IsValid);
+            Assert.Equal("0\n", ReadAll(task, loc));
+        }
+        finally
+        {
+            cache?.Release();
+            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+        }
+    }
+
     private static string ReadAll(FiberTask task, PathLocation loc)
     {
         Assert.True(loc.IsValid);
@@ -702,6 +745,29 @@ public class ProcFsTests
         {
             file.Close();
         }
+    }
+
+    private static void MapUserPage(KernelRuntime runtime, uint addr)
+    {
+        runtime.Memory.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[test]", runtime.Engine);
+        Assert.True(runtime.Memory.HandleFault(addr, true, runtime.Engine));
+    }
+
+    private static void WriteCString(KernelRuntime runtime, uint addr, string value)
+    {
+        Assert.True(runtime.Engine.CopyToUser(addr, Encoding.UTF8.GetBytes(value + '\0')));
+    }
+
+    private static ValueTask<int> CallSyscall(SyscallManager syscallManager, string name, params object[] args)
+    {
+        var method = typeof(SyscallManager).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(method);
+        var parameters = new object[7];
+        parameters[0] = syscallManager.Engine;
+        for (var i = 0; i < args.Length; i++) parameters[i + 1] = args[i];
+        for (var i = args.Length + 1; i < parameters.Length; i++) parameters[i] = 0u;
+        return (ValueTask<int>)method!.Invoke(syscallManager, parameters)!;
     }
 
     private static FiberTask AttachTaskContext(KernelRuntime runtime, int uid, bool grantCapSysAdmin)

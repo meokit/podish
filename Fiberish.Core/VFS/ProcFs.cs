@@ -945,6 +945,7 @@ file sealed class ProcDynamicFileInode : Inode, ITaskContextBoundInode
 
     public override int Truncate(long length)
     {
+        if (_writeHandler != null && length == 0) return 0;
         return -(int)Errno.EPERM;
     }
 }
