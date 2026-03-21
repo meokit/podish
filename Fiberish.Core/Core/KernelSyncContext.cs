@@ -13,43 +13,15 @@ internal sealed class KernelSyncContext : SynchronizationContext
 
     public override void Post(SendOrPostCallback d, object? state)
     {
-        _scheduler.Schedule(() => d(state), _taskContext);
+        _scheduler.PostSynchronizationContext(d, state, _taskContext);
     }
 
     public override void Send(SendOrPostCallback d, object? state)
     {
-        if (_scheduler.IsSchedulerThread && _scheduler.CurrentTask == _taskContext)
-        {
-            d(state);
-            return;
-        }
-
-        using var gate = new ManualResetEventSlim(false);
-        Exception? thrown = null;
-        _scheduler.Schedule(() =>
-        {
-            try
-            {
-                d(state);
-            }
-            catch (Exception ex)
-            {
-                thrown = ex;
-            }
-            finally
-            {
-                gate.Set();
-            }
-        }, _taskContext);
-        gate.Wait();
-        if (thrown != null) throw thrown;
-    }
-
-    public KernelSyncContext WithTaskContext(FiberTask? task)
-    {
-        if (ReferenceEquals(task, _taskContext)) return this;
-        return new KernelSyncContext(_scheduler, task);
+        _scheduler.SendSynchronizationContext(d, state, _taskContext);
     }
 
     internal KernelScheduler Scheduler => _scheduler;
+
+    internal FiberTask? TaskContext => _taskContext;
 }

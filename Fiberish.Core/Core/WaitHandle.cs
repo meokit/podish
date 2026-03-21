@@ -9,12 +9,9 @@ namespace Fiberish.Core;
 /// </summary>
 public class AsyncWaitQueue
 {
-    // List of continuations to resume when Signaled.
-    // Each entry stores the continuation Action, FiberTask context, and the KernelScheduler reference.
-    // Signal/Reset/Register are scheduler-thread-only; callers must hop to the owner scheduler first.
-    private readonly List<(long Id, Action Continuation, FiberTask? Context, FiberTask.WaitToken? Token, KernelScheduler
-            Scheduler)>
-        _waiters = new();
+    private readonly object _gate = new();
+    private List<WaiterEntry> _drainBuffer = new();
+    private List<WaiterEntry> _waiters = new();
 
     private bool _isSignaled;
     private long _nextWaiterId;
@@ -25,36 +22,43 @@ public class AsyncWaitQueue
         get
         {
             AssertSchedulerThread();
-            return _isSignaled;
+            lock (_gate)
+            {
+                return _isSignaled;
+            }
         }
     }
 
     public void Signal()
     {
         AssertSchedulerThread();
+        List<WaiterEntry>? toWake = null;
+        lock (_gate)
+        {
+            if (_isSignaled) return;
+            _isSignaled = true;
+            if (_waiters.Count == 0) return;
 
-        List<(long Id, Action Continuation, FiberTask? Context, FiberTask.WaitToken? Token, KernelScheduler Scheduler)>
-            toWake;
-        if (_isSignaled) return;
-        _isSignaled = true;
-        if (_waiters.Count == 0) return;
-        toWake =
-            new List<(long Id, Action Continuation, FiberTask? Context, FiberTask.WaitToken? Token, KernelScheduler
-                Scheduler)>(
-                _waiters);
-        _waiters.Clear();
+            toWake = _drainBuffer;
+            toWake.Clear();
+            toWake.AddRange(_waiters);
+            _waiters.Clear();
+        }
 
-        // Resume all waiters after queue state has been updated.
-        // Use the captured scheduler reference (not (KernelScheduler?)null) for explicit ownership.
-        foreach (var (_, continuation, context, token, scheduler) in toWake)
-            ScheduleContinuationWithWaitReason(scheduler, continuation, context, token);
+        foreach (var waiter in toWake)
+            waiter.Schedule();
+
+        toWake.Clear();
     }
 
     public void Reset()
     {
         AssertSchedulerThread();
-        _isSignaled = false;
-        _waiters.Clear();
+        lock (_gate)
+        {
+            _isSignaled = false;
+            _waiters.Clear();
+        }
     }
 
     public WaitQueueAwaitable WaitAsync(FiberTask currentTask)
@@ -92,20 +96,21 @@ public class AsyncWaitQueue
     private IDisposable? RegisterCancelable(Action continuation, FiberTask? context, FiberTask.WaitToken? token,
         KernelScheduler scheduler)
     {
-        var effectiveContext = context;
-        var effectiveScheduler = scheduler;
-        AssertSchedulerThread(effectiveScheduler);
-
-        if (_isSignaled)
+        AssertSchedulerThread(scheduler);
+        lock (_gate)
         {
-            // If already signaled, schedule immediately
-            ScheduleContinuationWithWaitReason(effectiveScheduler, continuation, effectiveContext, token);
-            return NoopRegistration.Instance;
-        }
+            AssertSchedulerOwnership(scheduler);
 
-        var id = ++_nextWaiterId;
-        _waiters.Add((id, continuation, effectiveContext, token, effectiveScheduler));
-        return new WaitRegistration(this, id);
+            if (_isSignaled)
+            {
+                ScheduleContinuationWithWaitReason(scheduler, continuation, context, token);
+                return NoopRegistration.Instance;
+            }
+
+            var id = ++_nextWaiterId;
+            _waiters.Add(new WaiterEntry(id, continuation, context, token, scheduler));
+            return new WaitRegistration(this, id);
+        }
     }
 
     private static void ScheduleContinuationWithWaitReason(
@@ -114,48 +119,39 @@ public class AsyncWaitQueue
         FiberTask? context,
         FiberTask.WaitToken? token)
     {
-        if (context == null || token == null)
+        if (context == null || token == null || token.Value.Owner == null)
         {
             scheduler.Schedule(continuation, context);
             return;
         }
 
-        // Fast-path for already-signaled queues on scheduler thread:
-        // publish Event wake-reason synchronously so signal safety-net cannot
-        // race and overwrite the completion into Interrupted.
-        if (scheduler.IsSchedulerThread)
-        {
-            context.TrySetWaitReason(token, WakeReason.Event);
-            scheduler.Schedule(continuation, context);
-            return;
-        }
-
-        scheduler.Schedule(() =>
-        {
-            context.TrySetWaitReason(token, WakeReason.Event);
-            continuation();
-        }, context);
+        scheduler.ScheduleWaitContinuation(context, token.Value, WakeReason.Event, continuation);
     }
 
     private void Unregister(long id)
     {
         AssertSchedulerThread();
-        var idx = _waiters.FindIndex(x => x.Id == id);
-        if (idx >= 0) _waiters.RemoveAt(idx);
+        lock (_gate)
+        {
+            var idx = _waiters.FindIndex(x => x.Id == id);
+            if (idx >= 0) _waiters.RemoveAt(idx);
+        }
     }
 
     private void AssertSchedulerThread(KernelScheduler? schedulerHint = null, [CallerMemberName] string? caller = null)
     {
         var scheduler = schedulerHint ?? _ownerScheduler;
         if (scheduler == null) return;
-
-        if (_ownerScheduler == null)
-            _ownerScheduler = scheduler;
-        else if (!ReferenceEquals(_ownerScheduler, scheduler))
-            throw new InvalidOperationException(
-                $"AsyncWaitQueue.{caller ?? "<unknown>"} is bound to a different KernelScheduler instance.");
-
         scheduler.AssertSchedulerThread(caller);
+    }
+
+    private void AssertSchedulerOwnership(KernelScheduler schedulerHint)
+    {
+        if (_ownerScheduler == null)
+            _ownerScheduler = schedulerHint;
+        else if (!ReferenceEquals(_ownerScheduler, schedulerHint))
+            throw new InvalidOperationException(
+                "AsyncWaitQueue is bound to a different KernelScheduler instance.");
     }
 
     // Support for GetAwaiter directly on the instance (like Task)
@@ -183,6 +179,30 @@ public class AsyncWaitQueue
         {
             var owner = Interlocked.Exchange(ref _owner, null);
             owner?.Unregister(_id);
+        }
+    }
+
+    private readonly struct WaiterEntry
+    {
+        public WaiterEntry(long id, Action continuation, FiberTask? context, FiberTask.WaitToken? token,
+            KernelScheduler scheduler)
+        {
+            Id = id;
+            Continuation = continuation;
+            Context = context;
+            Token = token;
+            Scheduler = scheduler;
+        }
+
+        public long Id { get; }
+        public Action Continuation { get; }
+        public FiberTask? Context { get; }
+        public FiberTask.WaitToken? Token { get; }
+        public KernelScheduler Scheduler { get; }
+
+        public void Schedule()
+        {
+            ScheduleContinuationWithWaitReason(Scheduler, Continuation, Context, Token);
         }
     }
 }
@@ -222,21 +242,8 @@ public struct WaitQueueAwaiter : INotifyCompletion
     {
         var currentTask = _currentTask;
         _token = currentTask.BeginWaitToken();
-        var called = 0;
-
-        void RunOnce()
-        {
-            if (Interlocked.Exchange(ref called, 1) != 0) return;
-            continuation();
-        }
-
-        _queue.Register(RunOnce, currentTask, _token);
-        currentTask.ArmSignalSafetyNet(_token, () =>
-        {
-            if (Interlocked.Exchange(ref called, 1) != 0) return;
-            currentTask.Continuation = continuation;
-            currentTask.CommonKernel.Schedule(currentTask);
-        });
+        _queue.Register(continuation, currentTask, _token);
+        currentTask.ArmSignalSafetyNetResumeTask(_token, continuation);
     }
 
     public AwaitResult GetResult()
@@ -301,11 +308,9 @@ public struct SelectAwaiter : INotifyCompletion
     public void OnCompleted(Action continuation)
     {
         var currentTask = _currentTask;
-        var runOnce = new RunOnceAction(continuation);
-        var action = runOnce.Invoke;
         _token = currentTask.BeginWaitToken();
-        foreach (var q in _queues) q.Register(action, currentTask, _token);
-        currentTask.ArmSignalSafetyNet(_token, () => runOnce.Invoke());
+        foreach (var q in _queues) q.Register(continuation, currentTask, _token);
+        currentTask.ArmSignalSafetyNetResumeTask(_token, continuation);
     }
 
     public AwaitResult GetResult()
@@ -315,16 +320,6 @@ public struct SelectAwaiter : INotifyCompletion
         var reason = task.CompleteWaitToken(_token);
         if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
         return AwaitResult.Completed;
-    }
-
-    private sealed class RunOnceAction(Action action)
-    {
-        private int _called;
-
-        public void Invoke()
-        {
-            if (Interlocked.Exchange(ref _called, 1) == 0) action();
-        }
     }
 }
 
@@ -404,7 +399,6 @@ public readonly struct ChildStateAwaitable
 
             // Register on all matching children's StateChangeEvent queues
             // Only register on events that are NOT yet signaled to avoid duplicate scheduling
-            var runOnce = new RunOnceAction(continuation);
             var registered = false;
 
             foreach (var childPid in _parent.Children)
@@ -416,20 +410,20 @@ public readonly struct ChildStateAwaitable
                 // Child state notifications are edge-triggered in wait* semantics.
                 // Clear stale sticky state so we can register for the next transition.
                 if (childProc.StateChangeEvent.IsSignaled) childProc.StateChangeEvent.Reset();
-                childProc.StateChangeEvent.Register(runOnce.Invoke, _task, _token);
+                childProc.StateChangeEvent.Register(continuation, _task, _token);
                 registered = true;
             }
 
             // If no registrations happened (all events already signaled), schedule immediately
             if (!registered)
             {
-                if (_token != null) _task.TrySetWaitReason(_token, WakeReason.Event);
-                _scheduler.Schedule(continuation, _task);
+                if (_token != null) _scheduler.ScheduleWaitContinuation(_task, _token.Value, WakeReason.Event,
+                    continuation);
                 return; // already scheduled, no need for safety net
             }
 
             // ArmSignalSafetyNet: re-check for signals that arrived before BeginWaitToken.
-            _task.ArmSignalSafetyNet(_token, () => runOnce.Invoke());
+            _task.ArmSignalSafetyNet(_token, continuation);
         }
 
         public AwaitResult GetResult()
@@ -447,16 +441,6 @@ public readonly struct ChildStateAwaitable
             if (_targetPid > 0) return childPid == _targetPid;
             if (_targetPid == 0) return childProc.PGID == _parent.PGID;
             return childProc.PGID == -_targetPid;
-        }
-
-        private class RunOnceAction(Action action)
-        {
-            private int _called;
-
-            public void Invoke()
-            {
-                if (Interlocked.Exchange(ref _called, 1) == 0) action();
-            }
         }
     }
 }

@@ -41,26 +41,44 @@ public readonly struct SleepAwaitable
 
         public void OnCompleted(Action continuation)
         {
-            var scheduler = _scheduler;
-            var task = _task;
-            var token = _token;
+            var wakeHandler = new SleepWakeHandler(_scheduler, _task, _token, continuation);
+            wakeHandler.Register(_tickDuration);
+            _task.ArmSignalSafetyNet(_token, wakeHandler.OnSignal);
+        }
+    }
 
-            // Register timer callback: when timer fires, schedule the task back to run queue.
-            var timer = scheduler.ScheduleTimer(_tickDuration, () =>
-            {
-                if (!task.TrySetWaitReason(token, WakeReason.Timer)) return;
-                task.Continuation = continuation;
-                scheduler.Schedule(task);
-            });
+    private sealed class SleepWakeHandler
+    {
+        private readonly Action _continuation;
+        private readonly KernelScheduler _scheduler;
+        private readonly FiberTask _task;
+        private readonly FiberTask.WaitToken _token;
+        private Timer? _timer;
 
-            // ArmSignalSafetyNet: register wake continuation and re-check for signals that
-            // arrived before BeginWaitToken was called — TOCTOU-safe.
-            task.ArmSignalSafetyNet(token, () =>
-            {
-                timer.Cancel();
-                task.Continuation = continuation;
-                scheduler.Schedule(task);
-            });
+        public SleepWakeHandler(KernelScheduler scheduler, FiberTask task, FiberTask.WaitToken token,
+            Action continuation)
+        {
+            _scheduler = scheduler;
+            _task = task;
+            _token = token;
+            _continuation = continuation;
+        }
+
+        public void Register(long tickDuration)
+        {
+            _timer = _scheduler.ScheduleTimer(tickDuration, OnTimerFired);
+        }
+
+        private void OnTimerFired()
+        {
+            if (!_task.TrySetWaitReason(_token, WakeReason.Timer, scheduleStoredContinuation: false)) return;
+            _scheduler.ScheduleContinuation(_continuation, _task, WaitContinuationMode.ResumeTask);
+        }
+
+        public void OnSignal()
+        {
+            _timer?.Cancel();
+            _scheduler.ScheduleContinuation(_continuation, _task, WaitContinuationMode.ResumeTask);
         }
     }
 }

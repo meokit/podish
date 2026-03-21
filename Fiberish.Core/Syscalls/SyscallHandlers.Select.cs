@@ -563,19 +563,13 @@ public partial class SyscallManager
         {
             _continuation = continuation;
             _token = _task.BeginWaitToken();
-            var scheduler = _task.CommonKernel;
-
             if (_timeoutMs > 0)
-                _timer = scheduler.ScheduleTimer(_timeoutMs, () =>
-                {
-                    _hasTimedOut = true;
-                    ScheduleRePoll();
-                });
+                _timer = _task.CommonKernel.ScheduleTimer(_timeoutMs, OnTimeout);
 
             DoPoll();
 
             if (!_completed)
-                _task.ArmSignalSafetyNet(_token, () => ScheduleRePoll());
+                _task.ArmSignalSafetyNet(_token, ScheduleRePoll);
         }
 
         public int GetResult()
@@ -588,11 +582,19 @@ public partial class SyscallManager
         private void ScheduleRePoll()
         {
             if (Interlocked.Exchange(ref _reschedulePending, 1) == 0)
-                _task.CommonKernel.Schedule(() =>
-                {
-                    _reschedulePending = 0;
-                    DoPoll();
-                }, _task);
+                _task.CommonKernel.Schedule(OnRePollScheduled, _task);
+        }
+
+        private void OnTimeout()
+        {
+            _hasTimedOut = true;
+            ScheduleRePoll();
+        }
+
+        private void OnRePollScheduled()
+        {
+            _reschedulePending = 0;
+            DoPoll();
         }
 
         private void DoPoll()
@@ -754,19 +756,13 @@ public partial class SyscallManager
         {
             _continuation = continuation;
             _token = _task.BeginWaitToken();
-            var scheduler = _task.CommonKernel;
-
             if (_timeoutMs > 0)
-                _timer = scheduler.ScheduleTimer(_timeoutMs, () =>
-                {
-                    _hasTimedOut = true;
-                    ScheduleRePoll();
-                });
+                _timer = _task.CommonKernel.ScheduleTimer(_timeoutMs, OnTimeout);
 
             DoPoll();
 
             if (!_completed)
-                _task.ArmSignalSafetyNet(_token, () => ScheduleRePoll());
+                _task.ArmSignalSafetyNet(_token, ScheduleRePoll);
         }
 
         public int GetResult()
@@ -779,11 +775,19 @@ public partial class SyscallManager
         private void ScheduleRePoll()
         {
             if (Interlocked.Exchange(ref _reschedulePending, 1) == 0)
-                _task.CommonKernel.Schedule(() =>
-                {
-                    _reschedulePending = 0;
-                    DoPoll();
-                }, _task);
+                _task.CommonKernel.Schedule(OnRePollScheduled, _task);
+        }
+
+        private void OnTimeout()
+        {
+            _hasTimedOut = true;
+            ScheduleRePoll();
+        }
+
+        private void OnRePollScheduled()
+        {
+            _reschedulePending = 0;
+            DoPoll();
         }
 
         private void DoPoll()

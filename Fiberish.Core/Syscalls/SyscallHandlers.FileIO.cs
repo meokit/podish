@@ -1287,34 +1287,24 @@ public partial class SyscallManager
             Logger.LogTrace("[IOAwaiter] OnCompleted fd wait start forRead={ForRead} flags=0x{Flags:X}", forRead,
                 (int)file.Flags);
 
-            var runOnce = new RunOnceAction(continuation, task);
+            var wakeHandler = new IoWakeHandler(task, token, continuation, forRead);
             var inode = file.OpenedInode!;
             var registered = inode is ITaskWaitSource taskWaitSource
-                ? taskWaitSource.RegisterWait(file, task, () =>
-                {
-                    if (!task.TrySetWaitReason(token, WakeReason.IO)) return;
-                    Logger.LogTrace("[IOAwaiter] RegisterWait callback fired forRead={ForRead}", forRead);
-                    runOnce.Invoke();
-                }, (short)(forRead ? 0x0001 : 0x0004))
-                : inode.RegisterWait(file, () =>
-                {
-                    if (!task.TrySetWaitReason(token, WakeReason.IO)) return;
-                    Logger.LogTrace("[IOAwaiter] RegisterWait callback fired forRead={ForRead}", forRead);
-                    runOnce.Invoke();
-                }, (short)(forRead ? 0x0001 : 0x0004));
+                ? taskWaitSource.RegisterWait(file, task, wakeHandler.OnIoReady, (short)(forRead ? 0x0001 : 0x0004))
+                : inode.RegisterWait(file, wakeHandler.OnIoReady, (short)(forRead ? 0x0001 : 0x0004));
 
             if (!registered)
             {
-                task.TrySetWaitReason(token, WakeReason.IO);
                 Logger.LogTrace("[IOAwaiter] RegisterWait returned false; invoking continuation now");
-                runOnce.Invoke();
+                task.CommonKernel.ScheduleWaitContinuation(task, token, WakeReason.IO, continuation,
+                    WaitContinuationMode.ResumeTask);
                 return;
             }
 
             // ArmSignalSafetyNet: registers the continuation AND atomically re-checks for
             // signals that arrived before BeginWaitToken was called (TOCTOU-safe).
             Logger.LogTrace("[IOAwaiter] RegisterWait armed forRead={ForRead}, arming safety net", forRead);
-            task.ArmSignalSafetyNet(token, () => runOnce.Invoke());
+            task.ArmSignalSafetyNetResumeTask(token, continuation);
         }
 
         public AwaitResult GetResult()
@@ -1325,16 +1315,26 @@ public partial class SyscallManager
             return AwaitResult.Completed;
         }
 
-        private sealed class RunOnceAction(Action action, FiberTask task)
+        private sealed class IoWakeHandler
         {
-            private int _called;
+            private readonly Action _continuation;
+            private readonly bool _forRead;
+            private readonly FiberTask _task;
+            private readonly FiberTask.WaitToken _token;
 
-            public void Invoke()
+            public IoWakeHandler(FiberTask task, FiberTask.WaitToken token, Action continuation, bool forRead)
             {
-                if (Interlocked.Exchange(ref _called, 1) == 0)
-                    // Post continuation as a scheduler event to avoid racing with the
-                    // current RunSlice transition to Waiting.
-                    task.CommonKernel.Schedule(action, task);
+                _task = task;
+                _token = token;
+                _continuation = continuation;
+                _forRead = forRead;
+            }
+
+            public void OnIoReady()
+            {
+                Logger.LogTrace("[IOAwaiter] RegisterWait callback fired forRead={ForRead}", _forRead);
+                _task.CommonKernel.ScheduleWaitContinuation(_task, _token, WakeReason.IO, _continuation,
+                    WaitContinuationMode.ResumeTask);
             }
         }
     }

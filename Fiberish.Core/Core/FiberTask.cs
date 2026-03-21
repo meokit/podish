@@ -45,8 +45,12 @@ public enum WakeReason
 public class FiberTask
 {
     private static int _tidCounter;
+    private readonly object _waitStateGate = new();
+    private KernelSyncContext? _synchronizationContext;
     private Action? _activeWaitContinuation;
-    private WaitToken? _activeWaitToken;
+    private WaitContinuationMode _activeWaitContinuationMode;
+    private long _activeWaitId;
+    private WakeReason _activeWaitReason;
     private long _nextWaitTokenId;
     private int _pageFaultDepth;
 
@@ -122,13 +126,17 @@ public class FiberTask
     {
         get
         {
-            using var scope = EnterTaskStateScope();
-            return _activeWaitToken?.Reason ?? WakeReason.None;
+            lock (_waitStateGate)
+            {
+                return _activeWaitReason;
+            }
         }
         set
         {
-            using var scope = EnterTaskStateScope();
-            if (_activeWaitToken != null) _activeWaitToken.Reason = value;
+            lock (_waitStateGate)
+            {
+                if (_activeWaitId != 0) _activeWaitReason = value;
+            }
         }
     }
 
@@ -155,70 +163,111 @@ public class FiberTask
 
     public WaitToken BeginWaitToken()
     {
-        using var scope = EnterTaskStateScope();
-        var token = new WaitToken(++_nextWaitTokenId);
-        _activeWaitToken = token;
-        return token;
+        lock (_waitStateGate)
+        {
+            var waitId = ++_nextWaitTokenId;
+            _activeWaitId = waitId;
+            _activeWaitReason = WakeReason.None;
+            _activeWaitContinuation = null;
+            _activeWaitContinuationMode = WaitContinuationMode.RunAction;
+            return new WaitToken(this, waitId);
+        }
+    }
+
+    public WaitToken BeginWait()
+    {
+        return BeginWaitToken();
+    }
+
+    internal KernelSyncContext GetOrCreateSynchronizationContext()
+    {
+        return _synchronizationContext ??= new KernelSyncContext(CommonKernel, this);
     }
 
     public bool TrySetWaitReason(WaitToken token, WakeReason reason)
     {
-        using var scope = EnterTaskStateScope();
-        Action? continuationToRun = null;
-        if (!ReferenceEquals(_activeWaitToken, token)) return false;
-        if (token.Reason != WakeReason.None) return false;
+        return TrySetWaitReason(token, reason, scheduleStoredContinuation: true);
+    }
 
-        token.Reason = reason;
-        if (_activeWaitContinuation != null)
+    internal bool TrySetWaitReason(WaitToken token, WakeReason reason, bool scheduleStoredContinuation)
+    {
+        Action? continuationToRun = null;
+        var continuationMode = WaitContinuationMode.RunAction;
+        lock (_waitStateGate)
         {
-            continuationToRun = _activeWaitContinuation;
-            _activeWaitContinuation = null;
+            if (!token.Matches(this, _activeWaitId)) return false;
+            if (_activeWaitReason != WakeReason.None) return false;
+
+            _activeWaitReason = reason;
+            if (_activeWaitContinuation != null)
+            {
+                continuationToRun = _activeWaitContinuation;
+                continuationMode = _activeWaitContinuationMode;
+                _activeWaitContinuation = null;
+                _activeWaitContinuationMode = WaitContinuationMode.RunAction;
+            }
         }
 
-        if (continuationToRun != null) CommonKernel?.Schedule(continuationToRun, this);
+        if (scheduleStoredContinuation && continuationToRun != null)
+            CommonKernel?.ScheduleContinuation(continuationToRun, this, continuationMode);
 
         return true;
+    }
+
+    public bool TrySetWaitReason(WaitToken? token, WakeReason reason)
+    {
+        return token.HasValue && TrySetWaitReason(token.Value, reason);
     }
 
     public bool TrySetActiveWaitReason(WakeReason reason)
     {
-        using var scope = EnterTaskStateScope();
         Action? continuationToRun = null;
-        if (_activeWaitToken == null) return false;
-        if (_activeWaitToken.Reason != WakeReason.None) return false;
-
-        _activeWaitToken.Reason = reason;
-        if (_activeWaitContinuation != null)
+        var continuationMode = WaitContinuationMode.RunAction;
+        lock (_waitStateGate)
         {
-            continuationToRun = _activeWaitContinuation;
-            _activeWaitContinuation = null;
+            if (_activeWaitId == 0) return false;
+            if (_activeWaitReason != WakeReason.None) return false;
+
+            _activeWaitReason = reason;
+            if (_activeWaitContinuation != null)
+            {
+                continuationToRun = _activeWaitContinuation;
+                continuationMode = _activeWaitContinuationMode;
+                _activeWaitContinuation = null;
+                _activeWaitContinuationMode = WaitContinuationMode.RunAction;
+            }
         }
 
-        if (continuationToRun != null) CommonKernel?.Schedule(continuationToRun, this);
+        if (continuationToRun != null) CommonKernel?.ScheduleContinuation(continuationToRun, this, continuationMode);
 
         return true;
     }
 
-    private void SetWaitContinuation(WaitToken token, Action continuation)
+    private void SetWaitContinuation(WaitToken token, Action continuation, WaitContinuationMode mode)
     {
-        using var scope = EnterTaskStateScope();
         Action? runNow = null;
-        if (ReferenceEquals(_activeWaitToken, token))
+        lock (_waitStateGate)
         {
-            if (token.Reason != WakeReason.None)
-                // Already completed or interrupted, run immediately
-                runNow = continuation;
+            if (token.Matches(this, _activeWaitId))
+            {
+                if (_activeWaitReason != WakeReason.None)
+                    // Already completed or interrupted, run immediately
+                    runNow = continuation;
+                else
+                {
+                    // Still waiting
+                    _activeWaitContinuation = continuation;
+                    _activeWaitContinuationMode = mode;
+                }
+            }
             else
-                // Still waiting
-                _activeWaitContinuation = continuation;
-        }
-        else
-        {
-            // Token already inactive/completed
-            runNow = continuation;
+            {
+                // Token already inactive/completed
+                runNow = continuation;
+            }
         }
 
-        if (runNow != null) CommonKernel?.Schedule(runNow, this);
+        if (runNow != null) CommonKernel?.ScheduleContinuation(runNow, this, mode);
     }
 
     /// <summary>
@@ -233,7 +282,7 @@ public class FiberTask
     /// </summary>
     public void ArmSignalSafetyNet(WaitToken token, Action wakeAction)
     {
-        SetWaitContinuation(token, wakeAction);
+        SetWaitContinuation(token, wakeAction, WaitContinuationMode.RunAction);
         // Re-check in case a signal arrived before BeginWaitToken was called
         // (e.g. SIGWINCH sent by TTY driver during syscall entry, or SIGPIPE).
         // TrySetWaitReason is idempotent — if the token was already woken it's a no-op.
@@ -241,20 +290,71 @@ public class FiberTask
             TrySetWaitReason(token, WakeReason.Signal);
     }
 
+    public void ArmSignalSafetyNet(WaitToken? token, Action wakeAction)
+    {
+        if (!token.HasValue)
+        {
+            CommonKernel?.Schedule(wakeAction, this);
+            return;
+        }
+
+        ArmSignalSafetyNet(token.Value, wakeAction);
+    }
+
+    public void ArmSignalSafetyNetResumeTask(WaitToken token, Action continuation)
+    {
+        SetWaitContinuation(token, continuation, WaitContinuationMode.ResumeTask);
+        if (HasUnblockedPendingSignal())
+            TrySetWaitReason(token, WakeReason.Signal);
+    }
+
+    public void ArmSignalSafetyNetResumeTask(WaitToken? token, Action continuation)
+    {
+        if (!token.HasValue)
+        {
+            Continuation = continuation;
+            CommonKernel?.Schedule(this);
+            return;
+        }
+
+        ArmSignalSafetyNetResumeTask(token.Value, continuation);
+    }
+
     public WakeReason GetWaitReason(WaitToken token)
     {
-        using var scope = EnterTaskStateScope();
-        return ReferenceEquals(_activeWaitToken, token) ? token.Reason : WakeReason.None;
+        lock (_waitStateGate)
+        {
+            return token.Matches(this, _activeWaitId) ? _activeWaitReason : WakeReason.None;
+        }
+    }
+
+    public WakeReason GetWaitReason(WaitToken? token)
+    {
+        return token.HasValue ? GetWaitReason(token.Value) : WakeReason.None;
     }
 
     public WakeReason CompleteWaitToken(WaitToken token)
     {
-        using var scope = EnterTaskStateScope();
-        if (!ReferenceEquals(_activeWaitToken, token)) return WakeReason.None;
-        var reason = token.Reason;
-        _activeWaitContinuation = null;
-        _activeWaitToken = null;
-        return reason;
+        lock (_waitStateGate)
+        {
+            if (!token.Matches(this, _activeWaitId)) return WakeReason.None;
+            var reason = _activeWaitReason;
+            _activeWaitContinuation = null;
+            _activeWaitContinuationMode = WaitContinuationMode.RunAction;
+            _activeWaitReason = WakeReason.None;
+            _activeWaitId = 0;
+            return reason;
+        }
+    }
+
+    public WakeReason CompleteWaitToken(WaitToken? token)
+    {
+        return token.HasValue ? CompleteWaitToken(token.Value) : WakeReason.None;
+    }
+
+    public WakeReason CompleteWait(WaitToken token)
+    {
+        return CompleteWaitToken(token);
     }
 
 
@@ -1280,15 +1380,21 @@ public class FiberTask
         return false;
     }
 
-    public sealed class WaitToken
+    public readonly struct WaitToken
     {
-        internal WaitToken(long id)
+        internal WaitToken(FiberTask owner, long id)
         {
+            Owner = owner;
             Id = id;
         }
 
+        public FiberTask? Owner { get; }
         public long Id { get; }
-        internal WakeReason Reason { get; set; } = WakeReason.None;
+
+        internal bool Matches(FiberTask task, long activeWaitId)
+        {
+            return ReferenceEquals(Owner, task) && Id != 0 && Id == activeWaitId;
+        }
     }
 
     private enum DefaultSignalAction
@@ -1581,7 +1687,7 @@ public class FiberTask
             error = ex;
         }
 
-        CommonKernel.Schedule(() => FinalizeAsyncSyscall(result, error), this);
+        CommonKernel.Schedule(SchedulerWorkItem.FinalizeAsyncSyscall(this, result, error));
     }
 
     // Runs on scheduler thread; all mutable task/signal/cpu state transitions happen here.
@@ -1732,6 +1838,11 @@ public class FiberTask
                 TID, PendingSyscall != null, Status);
             _handlingAsyncSyscall = false;
         }
+    }
+
+    internal void FinalizeAsyncSyscallFromScheduler(int result, Exception? error)
+    {
+        FinalizeAsyncSyscall(result, error);
     }
 
     public void ExitRobustList()

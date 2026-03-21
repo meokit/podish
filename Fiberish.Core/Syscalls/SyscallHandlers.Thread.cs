@@ -123,19 +123,10 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
-            var task = _task;
-            var token = _token;
-            var runOnce = new RunOnceAction(continuation, _task);
-
+            var handler = new FutexCompletionHandler(_task, _token, continuation);
             var waiterAwaiter = _waiter.Tcs.Task.GetAwaiter();
-            waiterAwaiter.OnCompleted(() =>
-            {
-                if (task.GetWaitReason(token) == WakeReason.None) task.TrySetWaitReason(token, WakeReason.Event);
-
-                runOnce.Invoke();
-            });
-
-            task.ArmSignalSafetyNet(token, () => runOnce.Invoke());
+            waiterAwaiter.OnCompleted(handler.OnWaitCompleted);
+            _task.ArmSignalSafetyNet(_token, handler.OnSignal);
         }
 
         public AwaitResult GetResult()
@@ -152,25 +143,35 @@ public partial class SyscallManager
             return AwaitResult.Completed;
         }
 
-        private sealed class RunOnceAction
+        private sealed class FutexCompletionHandler
         {
-            private readonly Action _action;
+            private readonly Action _continuation;
             private readonly FiberTask _task;
+            private readonly FiberTask.WaitToken _token;
             private int _called;
 
-            public RunOnceAction(Action action, FiberTask task)
+            public FutexCompletionHandler(FiberTask task, FiberTask.WaitToken token, Action continuation)
             {
-                _action = action;
                 _task = task;
+                _token = token;
+                _continuation = continuation;
             }
 
-            public void Invoke()
+            public void OnWaitCompleted()
             {
                 if (Interlocked.Exchange(ref _called, 1) == 0)
                 {
-                    _task.Continuation = _action;
-                    _task.CommonKernel.Schedule(_task);
+                    if (_task.GetWaitReason(_token) == WakeReason.None)
+                        _task.TrySetWaitReason(_token, WakeReason.Event);
+
+                    _task.CommonKernel.ScheduleContinuation(_continuation, _task, WaitContinuationMode.ResumeTask);
                 }
+            }
+
+            public void OnSignal()
+            {
+                if (Interlocked.Exchange(ref _called, 1) == 0)
+                    _task.CommonKernel.ScheduleContinuation(_continuation, _task, WaitContinuationMode.ResumeTask);
             }
         }
     }

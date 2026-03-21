@@ -19,8 +19,8 @@ public class KernelScheduler
     // public static KernelScheduler Instance { get; set; } = new();
 
 
-    private readonly Channel<(Action, FiberTask?)> _events =
-        Channel.CreateUnbounded<(Action, FiberTask?)>(new UnboundedChannelOptions
+    private readonly Channel<SchedulerWorkItem> _events =
+        Channel.CreateUnbounded<SchedulerWorkItem>(new UnboundedChannelOptions
         {
             SingleReader = true,
             SingleWriter = false
@@ -30,6 +30,7 @@ public class KernelScheduler
     private readonly Dictionary<int, Process> _processes = [];
 
     private readonly Queue<FiberTask> _runQueue = new();
+    private readonly KernelSyncContext _synchronizationContext;
     private readonly Stopwatch _sw = Stopwatch.StartNew();
     private readonly Dictionary<int, FiberTask> _tasks = [];
     private readonly TimeWheel _timerSystem = new();
@@ -62,6 +63,11 @@ public class KernelScheduler
     public FiberTask? CurrentTask { get; internal set; }
     public int InitPid => Volatile.Read(ref _initPid);
     public bool EngineInitReaperEnabled => Volatile.Read(ref _engineInitReaperEnabled) != 0;
+
+    public KernelScheduler()
+    {
+        _synchronizationContext = new KernelSyncContext(this);
+    }
 
 
     public int OwnerThreadId => Volatile.Read(ref _ownerThreadId);
@@ -291,7 +297,6 @@ public class KernelScheduler
     {
         AssertSchedulerThread();
         if (task.Status == FiberTaskStatus.Terminated) return;
-        // Logger.LogDebug("[Scheduler] Schedule task TID={TID} (from {OldStatus})", task.TID, task.Status);
 
         task.Status = FiberTaskStatus.Ready;
         _runQueue.Enqueue(task);
@@ -313,7 +318,7 @@ public class KernelScheduler
             return;
         }
 
-        EnqueueContinuation(() => EnqueueTask(task), task);
+        EnqueueWorkItem(SchedulerWorkItem.ResumeTask(task));
     }
 
     public void Schedule(FiberTask task)
@@ -324,10 +329,15 @@ public class KernelScheduler
             ScheduleFromAnyThread(task);
     }
 
+    private void EnqueueWorkItem(SchedulerWorkItem item)
+    {
+        _events.Writer.TryWrite(item);
+        EnqueueWake();
+    }
+
     private void EnqueueContinuation(Action continuation, FiberTask? context)
     {
-        _events.Writer.TryWrite((continuation, context));
-        EnqueueWake();
+        EnqueueWorkItem(SchedulerWorkItem.RunAction(continuation, context));
     }
 
     public void ScheduleLocal(Action continuation, FiberTask? context = null)
@@ -338,7 +348,7 @@ public class KernelScheduler
 
     public void ScheduleFromAnyThread(Action continuation, FiberTask? context = null)
     {
-        EnqueueContinuation(continuation, context);
+        EnqueueWorkItem(SchedulerWorkItem.RunAction(continuation, context));
     }
 
     public void Schedule(Action continuation, FiberTask? context = null)
@@ -347,6 +357,68 @@ public class KernelScheduler
             ScheduleLocal(continuation, context);
         else
             ScheduleFromAnyThread(continuation, context);
+    }
+
+    internal void Schedule(SchedulerWorkItem item)
+    {
+        if (IsSchedulerThread && item.Kind == SchedulerWorkItemKind.ResumeTask && item.Task != null)
+            EnqueueTask(item.Task);
+        else
+            EnqueueWorkItem(item);
+    }
+
+    internal void ScheduleWaitContinuation(FiberTask task, FiberTask.WaitToken token, WakeReason reason,
+        Action continuation, WaitContinuationMode mode = WaitContinuationMode.RunAction)
+    {
+        if (IsSchedulerThread)
+        {
+            if (task.TrySetWaitReason(token, reason, scheduleStoredContinuation: false))
+                ScheduleContinuation(continuation, task, mode);
+            return;
+        }
+
+        Schedule(SchedulerWorkItem.SetWaitReasonAndRunContinuation(task, token, reason, continuation, mode));
+    }
+
+    internal void ScheduleContinuation(Action continuation, FiberTask task, WaitContinuationMode mode)
+    {
+        if (mode == WaitContinuationMode.ResumeTask)
+        {
+            task.Continuation = continuation;
+            Schedule(task);
+            return;
+        }
+
+        Schedule(continuation, task);
+    }
+
+    internal void PostSynchronizationContext(SendOrPostCallback callback, object? state, FiberTask? context)
+    {
+        Schedule(SchedulerWorkItem.DispatchSyncContextPost(context, callback, state));
+    }
+
+    internal void SendSynchronizationContext(SendOrPostCallback callback, object? state, FiberTask? context)
+    {
+        if (IsSchedulerThread && CurrentTask == context)
+        {
+            callback(state);
+            return;
+        }
+
+        using var request = new SyncContextSendRequest();
+        Schedule(SchedulerWorkItem.DispatchSyncContextSend(context, callback, state, request));
+        request.Wait();
+        if (request.Thrown != null) throw request.Thrown;
+    }
+
+    internal FiberTask? CaptureCurrentTaskContext()
+    {
+        return CurrentTask;
+    }
+
+    private SynchronizationContext GetSynchronizationContextFor(FiberTask? task)
+    {
+        return task?.GetOrCreateSynchronizationContext() ?? _synchronizationContext;
     }
 
     public Timer ScheduleTimer(long delayMs, Action callback)
@@ -376,8 +448,7 @@ public class KernelScheduler
     {
         BindOwnerThreadIfNeeded();
         var previousSyncContext = SynchronizationContext.Current;
-        var schedulerSyncContext = new KernelSyncContext(this);
-        SynchronizationContext.SetSynchronizationContext(schedulerSyncContext);
+        SynchronizationContext.SetSynchronizationContext(_synchronizationContext);
         Logger.LogInformation("KernelScheduler started.");
         var exitReason = "running=false";
 
@@ -466,7 +537,9 @@ public class KernelScheduler
                     // Execute a slice
                     // We advance time based on how much work the task did
                     var previous = SynchronizationContext.Current;
-                    SynchronizationContext.SetSynchronizationContext(schedulerSyncContext.WithTaskContext(task));
+                    var previousTask = CurrentTask;
+                    CurrentTask = task;
+                    SynchronizationContext.SetSynchronizationContext(GetSynchronizationContextFor(task));
                     try
                     {
                         task.RunSlice();
@@ -474,6 +547,7 @@ public class KernelScheduler
                     finally
                     {
                         SynchronizationContext.SetSynchronizationContext(previous);
+                        CurrentTask = previousTask;
                     }
 
                     // Time accounting (simplified)
@@ -524,16 +598,57 @@ public class KernelScheduler
         _wakeEvent.Reset();
     }
 
-    private void ExecuteEvent((Action, FiberTask?) item)
+    private void ExecuteEvent(SchedulerWorkItem item)
     {
-        var (cont, ctx) = item;
         var oldTask = CurrentTask;
-        CurrentTask = ctx;
+        CurrentTask = item.Context;
         var previousSyncContext = SynchronizationContext.Current;
-        SynchronizationContext.SetSynchronizationContext(new KernelSyncContext(this, ctx));
+        SynchronizationContext.SetSynchronizationContext(GetSynchronizationContextFor(item.Context));
         try
         {
-            cont();
+            switch (item.Kind)
+            {
+                case SchedulerWorkItemKind.ResumeTask:
+                    if (item.Task != null) EnqueueTask(item.Task);
+                    break;
+                case SchedulerWorkItemKind.RunAction:
+                    item.Action?.Invoke();
+                    break;
+                case SchedulerWorkItemKind.WakeScheduler:
+                    _wakePending = 0;
+                    break;
+                case SchedulerWorkItemKind.DispatchSyncContextPost:
+                    item.Callback?.Invoke(item.State);
+                    break;
+                case SchedulerWorkItemKind.DispatchSyncContextSend:
+                    try
+                    {
+                        item.Callback?.Invoke(item.State);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (item.SendRequest != null) item.SendRequest.Thrown = ex;
+                    }
+                    finally
+                    {
+                        item.SendRequest?.SetCompleted();
+                    }
+                    break;
+                case SchedulerWorkItemKind.SetWaitReasonAndRunContinuation:
+                    if (item.Task != null && item.Action != null)
+                    {
+                        if (item.Task.TrySetWaitReason(item.WaitToken, item.WaitReason,
+                                scheduleStoredContinuation: false))
+                            ScheduleContinuation(item.Action, item.Task, item.ContinuationMode);
+                    }
+                    break;
+                case SchedulerWorkItemKind.FinalizeAsyncSyscall:
+                    if (item.Task != null)
+                        item.Task.FinalizeAsyncSyscallFromScheduler(item.AsyncResult, item.State as Exception);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unsupported work item kind {item.Kind}.");
+            }
         }
         catch (Exception ex)
         {
@@ -552,7 +667,7 @@ public class KernelScheduler
         _wakeEvent.Set();
 
         if (Interlocked.Exchange(ref _wakePending, 1) != 0) return;
-        _events.Writer.TryWrite((() => { _wakePending = 0; }, null));
+        _events.Writer.TryWrite(SchedulerWorkItem.WakeScheduler());
     }
 
     private bool TryProcessPendingInput()

@@ -269,16 +269,12 @@ public class EpollInode : TmpfsInode
             _token = _task.BeginWaitToken();
 
             if (_timeoutMs > 0)
-                _timer = _scheduler.ScheduleTimer(_timeoutMs, () =>
-                {
-                    _hasTimedOut = true;
-                    ScheduleRePoll();
-                });
+                _timer = _scheduler.ScheduleTimer(_timeoutMs, OnTimeout);
 
             DoPoll();
 
             if (!_completed)
-                _task.ArmSignalSafetyNet(_token, () => ScheduleRePoll());
+                _task.ArmSignalSafetyNet(_token, ScheduleRePoll);
         }
 
         public int GetResult()
@@ -292,11 +288,19 @@ public class EpollInode : TmpfsInode
         private void ScheduleRePoll()
         {
             if (Interlocked.Exchange(ref _reschedulePending, 1) == 0)
-                _scheduler.ScheduleFromAnyThread(() =>
-                {
-                    _reschedulePending = 0;
-                    DoPoll();
-                });
+                _scheduler.ScheduleFromAnyThread(OnRePollScheduled);
+        }
+
+        private void OnTimeout()
+        {
+            _hasTimedOut = true;
+            ScheduleRePoll();
+        }
+
+        private void OnRePollScheduled()
+        {
+            _reschedulePending = 0;
+            DoPoll();
         }
 
         private void DoPoll()

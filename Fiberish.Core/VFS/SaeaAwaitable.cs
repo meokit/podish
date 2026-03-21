@@ -49,13 +49,7 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
         if (_enableSignalSafetyNet && _task != null && _waitToken != null)
         {
             Logger.LogTrace("[SaeaAwaitable] Arming signal safety net: task={TaskId}", _task.TID);
-            _task.ArmSignalSafetyNet(_waitToken, () =>
-            {
-                // Atomically steal the continuation so only one path (signal or SAEA completion) wins.
-                var c = Interlocked.Exchange(ref _continuation, CompletedSentinel);
-                if (c != null && !ReferenceEquals(c, CompletedSentinel))
-                    _scheduler?.Schedule(c, _task);
-            });
+            _task.ArmSignalSafetyNet(_waitToken, OnSignalSafetyNet);
         }
         else
         {
@@ -87,11 +81,12 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
             {
                 var task = _task;
                 if (task != null)
-                    _scheduler.Schedule(() =>
-                    {
-                        task.TrySetActiveWaitReason(WakeReason.IO);
-                        c();
-                    }, task);
+                {
+                    if (_waitToken != null)
+                        _scheduler.ScheduleWaitContinuation(task, _waitToken.Value, WakeReason.IO, c);
+                    else
+                        _scheduler.Schedule(c, task);
+                }
                 else
                     _scheduler.Schedule(c);
 
@@ -136,6 +131,13 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
         RemoteEndPoint = null;
         SocketFlags = SocketFlags.None;
         UserToken = null;
+    }
+
+    private void OnSignalSafetyNet()
+    {
+        var c = Interlocked.Exchange(ref _continuation, CompletedSentinel);
+        if (c != null && !ReferenceEquals(c, CompletedSentinel) && _scheduler != null && _task != null)
+            _scheduler.ScheduleContinuation(c, _task, WaitContinuationMode.RunAction);
     }
 }
 
