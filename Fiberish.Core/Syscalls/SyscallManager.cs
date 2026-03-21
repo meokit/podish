@@ -1313,8 +1313,8 @@ public partial class SyscallManager
     {
         private readonly Dictionary<UnixSocketInode, string> _abstractKeysBySocket = [];
         private readonly Dictionary<string, UnixSocketInode> _abstractSockets = new(StringComparer.Ordinal);
-        private readonly Dictionary<UnixSocketInode, Inode> _pathInodesBySocket = [];
-        private readonly Dictionary<Inode, UnixSocketInode> _pathSocketsByInode = [];
+        private readonly Dictionary<UnixSocketInode, (uint Dev, ulong Ino)> _pathInodesBySocket = [];
+        private readonly Dictionary<(uint Dev, ulong Ino), UnixSocketInode> _pathSocketsByInode = [];
         private int _refCount = 1;
 
         private NamespaceScope EnterNamespaceScope([CallerMemberName] string? caller = null)
@@ -1337,10 +1337,11 @@ public partial class SyscallManager
         {
             using (EnterNamespaceScope())
             {
-                if (_pathSocketsByInode.ContainsKey(pathInode)) return false;
+                var key = (pathInode.Dev, pathInode.Ino);
+                if (_pathSocketsByInode.ContainsKey(key)) return false;
                 if (_pathInodesBySocket.ContainsKey(socketInode)) return false;
-                _pathSocketsByInode[pathInode] = socketInode;
-                _pathInodesBySocket[socketInode] = pathInode;
+                _pathSocketsByInode[key] = socketInode;
+                _pathInodesBySocket[socketInode] = key;
                 return true;
             }
         }
@@ -1361,7 +1362,7 @@ public partial class SyscallManager
         {
             using (EnterNamespaceScope())
             {
-                return _pathSocketsByInode.GetValueOrDefault(pathInode);
+                return _pathSocketsByInode.GetValueOrDefault((pathInode.Dev, pathInode.Ino));
             }
         }
 
@@ -1377,8 +1378,8 @@ public partial class SyscallManager
         {
             using (EnterNamespaceScope())
             {
-                if (_pathInodesBySocket.Remove(inode, out var pathInode))
-                    _pathSocketsByInode.Remove(pathInode);
+                if (_pathInodesBySocket.Remove(inode, out var key))
+                    _pathSocketsByInode.Remove(key);
 
                 if (_abstractKeysBySocket.Remove(inode, out var abstractKey))
                     _abstractSockets.Remove(abstractKey);
