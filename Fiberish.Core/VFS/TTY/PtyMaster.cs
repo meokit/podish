@@ -14,12 +14,12 @@ public class PtyMaster
     private readonly ILogger _logger;
     private readonly PtyPair _pair;
 
-    public PtyMaster(PtyPair pair, ILogger logger)
+    public PtyMaster(PtyPair pair, ILogger logger, KernelScheduler scheduler)
     {
         _pair = pair;
         _logger = logger;
-        OutputBuffer = new PtyBuffer();
-        InputBuffer = new PtyBuffer();
+        OutputBuffer = new PtyBuffer(scheduler);
+        InputBuffer = new PtyBuffer(scheduler);
     }
 
     /// <summary>
@@ -149,13 +149,13 @@ public class PtySlave
     /// <summary>
     ///     Gets or creates the TTY discipline for this slave.
     /// </summary>
-    public TtyDiscipline GetOrCreateDiscipline(ISignalBroadcaster broadcaster, ILogger logger)
+    public TtyDiscipline GetOrCreateDiscipline(ISignalBroadcaster broadcaster, ILogger logger, KernelScheduler scheduler)
     {
         if (Discipline != null) return Discipline;
 
         // Create a PTY driver that connects to the master
         var driver = new PtySlaveDriver(_pair.Master, logger);
-        Discipline = new TtyDiscipline(driver, broadcaster, logger);
+        Discipline = new TtyDiscipline(driver, broadcaster, logger, scheduler);
         return Discipline;
     }
 

@@ -17,6 +17,11 @@ public class AsyncWaitQueue
     private long _nextWaiterId;
     private KernelScheduler? _ownerScheduler;
 
+    public AsyncWaitQueue(KernelScheduler ownerScheduler)
+    {
+        _ownerScheduler = ownerScheduler;
+    }
+
     public bool IsSignaled
     {
         get
@@ -56,6 +61,17 @@ public class AsyncWaitQueue
         AssertSchedulerThread();
         lock (_gate)
         {
+            _isSignaled = false;
+            _waiters.Clear();
+        }
+    }
+
+    internal void ResetForReuse(KernelScheduler ownerScheduler)
+    {
+        ownerScheduler.AssertSchedulerThread();
+        lock (_gate)
+        {
+            _ownerScheduler = ownerScheduler;
             _isSignaled = false;
             _waiters.Clear();
         }
@@ -487,8 +503,7 @@ public readonly struct ChildStateAwaitable
                 // Child state notifications are edge-triggered in wait* semantics.
                 // Clear stale sticky state so we can register for the next transition.
                 if (childProc.StateChangeEvent.IsSignaled) childProc.StateChangeEvent.Reset();
-                state.TryRegister(childProc.StateChangeEvent.RegisterCancelable(state.OnChildStateChanged, _task,
-                    _token));
+                state.TryRegister(childProc.StateChangeEvent.RegisterCancelable(state.OnChildStateChanged, _scheduler));
                 registered = true;
             }
 
@@ -529,7 +544,7 @@ public readonly struct ChildStateAwaitable
             public ChildStateOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
             {
                 _operation = operation;
-                _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
+                _operation.TryInitialize(continuation, WaitContinuationMode.RunAction);
             }
 
             public void TryRegister(IDisposable? registration)

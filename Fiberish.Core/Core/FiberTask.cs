@@ -27,6 +27,7 @@ public enum AwaitResult
 public enum TaskExecutionMode
 {
     RunningGuest,
+    HostService,
     WaitingAsyncSyscall,
     WaitingContinuation,
     Stopped,
@@ -72,6 +73,7 @@ public class FiberTask
         CommonKernel = kernel;
         kernel.AssertSchedulerThread();
         Process.Threads.Add(this);
+        Process.Syscalls?.PtyManager.BindScheduler(kernel);
 
         CPU = cpu;
         CPU.Owner = this;
@@ -1665,7 +1667,7 @@ public class FiberTask
                 // vfork semantics: parent is suspended until child calls exec or exit.
                 // The child shares the parent's address space (CLONE_VM), so the parent
                 // MUST NOT run until the child replaces the memory (exec) or exits.
-                var vforkEvent = new AsyncWaitQueue();
+                var vforkEvent = new AsyncWaitQueue(CommonKernel);
                 child.VforkDoneEvent = vforkEvent;
                 child.VforkParent = this;
                 Logger.LogInformation(

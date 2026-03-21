@@ -14,8 +14,8 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
     private readonly byte[] _buffer;
 
     // Notification handles
-    private readonly WaitHandle _readHandle = new();
-    private readonly WaitHandle _writeHandle = new();
+    private readonly WaitHandle _readHandle;
+    private readonly WaitHandle _writeHandle;
     private int _count;
     private int _head; // Write position
     private int _readerCount;
@@ -24,8 +24,10 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
     private int _writerCount;
     private bool _writersClosed;
 
-    public PipeInode()
+    public PipeInode(KernelScheduler scheduler)
     {
+        _readHandle = new WaitHandle(scheduler);
+        _writeHandle = new WaitHandle(scheduler);
         Type = InodeType.Fifo;
         Mode = 0x1000 | 0x1FF; // FIFO + 777
         _buffer = new byte[BufferSize];

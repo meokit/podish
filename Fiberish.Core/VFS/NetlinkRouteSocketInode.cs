@@ -12,14 +12,16 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
 {
     private readonly Queue<byte[]> _responses = new();
     private readonly Func<NetDeviceSetSnapshot> _snapshotProvider;
-    private AsyncWaitQueue _readWaitQueue = new();
+    private readonly AsyncWaitQueue _readWaitQueue;
 
-    public NetlinkRouteSocketInode(ulong ino, SuperBlock sb, Func<NetDeviceSetSnapshot> snapshotProvider)
+    public NetlinkRouteSocketInode(ulong ino, SuperBlock sb, KernelScheduler scheduler,
+        Func<NetDeviceSetSnapshot> snapshotProvider)
     {
         Ino = ino;
         SuperBlock = sb;
         Type = InodeType.Socket;
         Mode = 0x1ED;
+        _readWaitQueue = new AsyncWaitQueue(scheduler);
         _snapshotProvider = snapshotProvider;
     }
 
@@ -48,7 +50,7 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
                 {
                     message = _responses.Dequeue();
                     if (_responses.Count == 0)
-                        _readWaitQueue = new AsyncWaitQueue();
+                        _readWaitQueue.Reset();
                 }
                 else
                 {
@@ -89,7 +91,7 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
 
             var message = _responses.Dequeue();
             if (_responses.Count == 0)
-                _readWaitQueue = new AsyncWaitQueue();
+                _readWaitQueue.Reset();
 
             var copyLen = Math.Min(buffer.Length, message.Length);
             message.AsSpan(0, copyLen).CopyTo(buffer);

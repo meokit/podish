@@ -178,7 +178,7 @@ public partial class SyscallManager
 
         try
         {
-            var pipe = new PipeInode();
+            var pipe = new PipeInode(((FiberTask)engine.Owner!).CommonKernel);
             pipe.SuperBlock = MemfdSuperBlock;
 
             // Reader
@@ -235,7 +235,7 @@ public partial class SyscallManager
 
         try
         {
-            var pipe = new PipeInode();
+            var pipe = new PipeInode(((FiberTask)engine.Owner!).CommonKernel);
             pipe.SuperBlock = MemfdSuperBlock;
 
             // Build file flags for reader and writer

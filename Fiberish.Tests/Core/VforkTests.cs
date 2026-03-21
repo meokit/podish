@@ -30,7 +30,7 @@ public class VforkTests
         var child = new FiberTask(102, CreateMockProcess(100), new MockEngine(), kernel);
 
         // Simulate vfork: set up the event on the child
-        var vforkEvent = new AsyncWaitQueue();
+        var vforkEvent = new AsyncWaitQueue(kernel);
         child.VforkDoneEvent = vforkEvent;
         child.VforkParent = parent;
 
@@ -80,7 +80,7 @@ public class VforkTests
 
         var parent = new FiberTask(101, CreateMockProcess(100), new MockEngine(), kernel);
 
-        var vforkEvent = new AsyncWaitQueue();
+        var vforkEvent = new AsyncWaitQueue(kernel);
         vforkEvent.Set(); // Pre-signal
 
         async void RunParent()
@@ -126,7 +126,7 @@ public class VforkTests
         var parent = new FiberTask(101, CreateMockProcess(100), new MockEngine(), kernel);
         var child = new FiberTask(102, CreateMockProcess(100), new MockEngine(), kernel);
 
-        var vforkEvent = new AsyncWaitQueue();
+        var vforkEvent = new AsyncWaitQueue(kernel);
         child.VforkDoneEvent = vforkEvent;
         child.VforkParent = parent;
 
@@ -152,11 +152,11 @@ public class VforkTests
         // Keep this test focused on vfork wait ordering rather than signal interruption behavior.
         parent.SignalMask = ulong.MaxValue;
 
-        var event1 = new AsyncWaitQueue();
+        var event1 = new AsyncWaitQueue(kernel);
         child1.VforkDoneEvent = event1;
         child1.VforkParent = parent;
 
-        var event2 = new AsyncWaitQueue();
+        var event2 = new AsyncWaitQueue(kernel);
         child2.VforkDoneEvent = event2;
         child2.VforkParent = parent;
 

@@ -14,7 +14,7 @@ public class AsyncWaitQueueTests
         var process = new Process(100, null!, null!);
         scheduler.RegisterProcess(process);
 
-        var queue = new AsyncWaitQueue();
+        var queue = new AsyncWaitQueue(scheduler);
         var fired = 0;
         var task = new FiberTask(101, process, new MockEngine(), scheduler);
 
@@ -44,7 +44,7 @@ public class AsyncWaitQueueTests
         var process = new Process(200, null!, null!);
         scheduler.RegisterProcess(process);
 
-        var queue = new AsyncWaitQueue();
+        var queue = new AsyncWaitQueue(scheduler);
         var firedA = 0;
         var firedB = 0;
         var task = new FiberTask(201, process, new MockEngine(), scheduler);
@@ -80,7 +80,7 @@ public class AsyncWaitQueueTests
         var process = new Process(300, null!, null!);
         scheduler.RegisterProcess(process);
 
-        var queue = new AsyncWaitQueue();
+        var queue = new AsyncWaitQueue(scheduler);
         var resumed = false;
         var task = new FiberTask(301, process, new MockEngine(), scheduler);
 
@@ -112,7 +112,7 @@ public class AsyncWaitQueueTests
         var process = new Process(400, null!, null!);
         scheduler.RegisterProcess(process);
 
-        var queue = new AsyncWaitQueue();
+        var queue = new AsyncWaitQueue(scheduler);
         var result = AwaitResult.Interrupted;
         var resumed = false;
         var task = new FiberTask(401, process, new MockEngine(), scheduler);
@@ -150,7 +150,7 @@ public class AsyncWaitQueueTests
         var process = new Process(500, null!, null!);
         scheduler.RegisterProcess(process);
 
-        var queue = new AsyncWaitQueue();
+        var queue = new AsyncWaitQueue(scheduler);
         var task = new FiberTask(501, process, new MockEngine(), scheduler);
         Exception? captured = null;
 

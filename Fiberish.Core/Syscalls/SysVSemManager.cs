@@ -34,7 +34,12 @@ public sealed class SemWaitState
     public FiberTask.WaitToken Token { get; }
     public int SemNum { get; }
     public short Op { get; }
-    public Action? Continuation { get; set; }
+    internal TaskAsyncOperationHandle? Operation { get; set; }
+
+    public bool TryWake(WakeReason reason)
+    {
+        return Operation?.TryComplete(reason) ?? false;
+    }
 }
 
 public readonly struct SemWaitAwaitable
@@ -69,7 +74,7 @@ public readonly struct SemWaitAwaiter : INotifyCompletion
         if (!state.Task.TryEnterAsyncOperation(state.Token, out var operation) || operation == null)
             return;
 
-        state.Continuation = continuation;
+        state.Operation = operation;
         var asyncState = new SemWaitOperation(state.Task, continuation, operation);
         state.Task.ArmInterruptingSignalSafetyNet(state.Token, asyncState.OnSignal);
     }
@@ -88,7 +93,7 @@ public readonly struct SemWaitAwaiter : INotifyCompletion
         public SemWaitOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
         {
             _operation = operation;
-            _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
+            _operation.TryInitialize(continuation, WaitContinuationMode.RunAction);
         }
 
         public void OnSignal()
@@ -224,7 +229,7 @@ public class SysVSemManager
                     if ((op < 0 && currentVal >= -op) || (op == 0 && currentVal == 0))
                     {
                         set.Waiters.Remove(waiter);
-                        waiter.Continuation?.Invoke();
+                        waiter.TryWake(WakeReason.Event);
                     }
                 }
 
@@ -262,9 +267,7 @@ public class SysVSemManager
                 // Wake up all waiters with EIDRM
                 foreach (var waiter in set.Waiters.ToList())
                 {
-                    waiter.Task.TrySetWaitReason(waiter.Token,
-                        WakeReason.Event); // Special wake, let them fail with EIDRM loop
-                    waiter.Continuation?.Invoke();
+                    waiter.TryWake(WakeReason.Event); // let them fail with EIDRM loop
                 }
 
                 /* WakeUp needed */
@@ -293,8 +296,7 @@ public class SysVSemManager
                 // Wake up all waiters since state changed
                 foreach (var waiter in set.Waiters.ToList())
                 {
-                    waiter.Task.TrySetWaitReason(waiter.Token, WakeReason.Event);
-                    waiter.Continuation?.Invoke();
+                    waiter.TryWake(WakeReason.Event);
                 }
 
                 /* WakeUp needed */

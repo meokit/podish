@@ -20,11 +20,12 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
     // Backpressure: track queued bytes to limit memory usage
     private const int MaxSendBuffer = 262144; // 256KB
     private readonly Queue<UnixSocketInode> _pendingConnections = new();
-    private readonly AsyncWaitQueue _readWaitQueue = new();
+    private readonly AsyncWaitQueue _readWaitQueue;
 
     // For AF_UNIX
     private readonly Queue<UnixMessage> _receiveQueue = new();
-    private readonly AsyncWaitQueue _writeWaitQueue = new();
+    private readonly AsyncWaitQueue _writeWaitQueue;
+    private readonly KernelScheduler _scheduler;
     private bool _lifecycleClosed;
     private int _listenBacklog = 1;
     private bool _listening;
@@ -41,13 +42,16 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
     private bool _shutDownRead;
     private bool _shutDownWrite;
 
-    public UnixSocketInode(ulong ino, SuperBlock sb, SocketType type)
+    public UnixSocketInode(ulong ino, SuperBlock sb, SocketType type, KernelScheduler scheduler)
     {
         Ino = ino;
         SuperBlock = sb;
         Type = InodeType.Socket;
         Mode = 0x1ED;
         UnixSocketType = type;
+        _scheduler = scheduler;
+        _readWaitQueue = new AsyncWaitQueue(scheduler);
+        _writeWaitQueue = new AsyncWaitQueue(scheduler);
         _writeWaitQueue.Set(); // Initially writable
     }
 
@@ -342,7 +346,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         if (IsConnected) return -(int)Errno.EISCONN;
         if (!target.IsListening) return -(int)Errno.ECONNREFUSED;
 
-        var serverConn = new UnixSocketInode(0, SuperBlock, UnixSocketType);
+        var serverConn = new UnixSocketInode(0, SuperBlock, UnixSocketType, _scheduler);
         ConnectPair(serverConn);
         serverConn.ConnectPair(this);
         SetPeerSunPathRaw(target.GetLocalSunPathRaw());

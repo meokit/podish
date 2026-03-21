@@ -1,3 +1,4 @@
+using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -8,6 +9,7 @@ namespace Fiberish.Tests.VFS;
 public class PtyTests
 {
     private readonly ILogger _logger = NullLogger.Instance;
+    private static KernelScheduler NewScheduler() => new();
 
     [Fact]
     public void PtyManager_EncodeRdev_CorrectEncoding()
@@ -68,7 +70,7 @@ public class PtyTests
     [Fact]
     public void PtyManager_AllocatePty_ReturnsNonNull()
     {
-        var manager = new PtyManager(_logger);
+        var manager = new PtyManager(_logger, NewScheduler());
         var pair = manager.AllocatePty();
 
         Assert.NotNull(pair);
@@ -80,7 +82,7 @@ public class PtyTests
     [Fact]
     public void PtyManager_AllocateMultiplePtys_IncrementsIndex()
     {
-        var manager = new PtyManager(_logger);
+        var manager = new PtyManager(_logger, NewScheduler());
 
         var pair1 = manager.AllocatePty();
         var pair2 = manager.AllocatePty();
@@ -98,7 +100,7 @@ public class PtyTests
     [Fact]
     public void PtyManager_GetPty_ReturnsCorrectPair()
     {
-        var manager = new PtyManager(_logger);
+        var manager = new PtyManager(_logger, NewScheduler());
         var pair = manager.AllocatePty();
 
         var retrieved = manager.GetPty(0);
@@ -108,7 +110,7 @@ public class PtyTests
     [Fact]
     public void PtyManager_PtyExists_ReturnsTrueForAllocated()
     {
-        var manager = new PtyManager(_logger);
+        var manager = new PtyManager(_logger, NewScheduler());
 
         Assert.False(manager.PtyExists(0));
 
@@ -120,7 +122,7 @@ public class PtyTests
     [Fact]
     public void PtyBuffer_WriteAndRead_WorksCorrectly()
     {
-        var buffer = new PtyBuffer(1024);
+        var buffer = new PtyBuffer(NewScheduler(), 1024);
         var data = new byte[] { 1, 2, 3, 4, 5 };
 
         var written = buffer.Write(data);
@@ -138,7 +140,7 @@ public class PtyTests
     [Fact]
     public void PtyBuffer_WriteBeyondCapacity_Truncates()
     {
-        var buffer = new PtyBuffer(10);
+        var buffer = new PtyBuffer(NewScheduler(), 10);
         var data = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 };
 
         var written = buffer.Write(data);
@@ -152,7 +154,7 @@ public class PtyTests
     [Fact]
     public void PtyBuffer_ReadPartial_ReturnsAvailable()
     {
-        var buffer = new PtyBuffer(1024);
+        var buffer = new PtyBuffer(NewScheduler(), 1024);
         buffer.Write(new byte[] { 1, 2, 3, 4, 5 });
 
         var readBuffer = new byte[3];
@@ -171,7 +173,7 @@ public class PtyTests
     [Fact]
     public void PtyPair_Unlock_SetsIsLockedToFalse()
     {
-        var manager = new PtyManager(_logger);
+        var manager = new PtyManager(_logger, NewScheduler());
         var pair = manager.AllocatePty();
 
         // Default is unlocked (modern behavior)
@@ -185,7 +187,7 @@ public class PtyTests
     [Fact]
     public void PtyMaster_ReadWrite_WorksCorrectly()
     {
-        var manager = new PtyManager(_logger);
+        var manager = new PtyManager(_logger, NewScheduler());
         var pair = manager.AllocatePty();
 
         // Write from master (goes to slave's input)
@@ -202,7 +204,7 @@ public class PtyTests
     [Fact]
     public void PtyMaster_HasDataAvailable_ReflectsBufferState()
     {
-        var manager = new PtyManager(_logger);
+        var manager = new PtyManager(_logger, NewScheduler());
         var pair = manager.AllocatePty();
 
         Assert.False(pair!.Master.HasDataAvailable);

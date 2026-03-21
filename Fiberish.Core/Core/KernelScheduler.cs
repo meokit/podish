@@ -28,6 +28,7 @@ public class KernelScheduler
 
     // Process Management
     private readonly Dictionary<int, Process> _processes = [];
+    private readonly Stack<AsyncWaitQueue> _asyncWaitQueuePool = new();
 
     private readonly Queue<FiberTask> _runQueue = new();
     private readonly Stopwatch _sw = Stopwatch.StartNew();
@@ -107,6 +108,7 @@ public class KernelScheduler
     public void RegisterProcess(Process p)
     {
         AssertSchedulerThread();
+        p.BindScheduler(this);
         _processes[p.TGID] = p;
     }
 
@@ -218,6 +220,26 @@ public class KernelScheduler
         AssertSchedulerThread();
         if (pid <= 0) return;
         Interlocked.CompareExchange(ref _initPid, pid, 0);
+    }
+
+    internal AsyncWaitQueue RentAsyncWaitQueue()
+    {
+        AssertSchedulerThread();
+        if (_asyncWaitQueuePool.Count > 0)
+        {
+            var queue = _asyncWaitQueuePool.Pop();
+            queue.ResetForReuse(this);
+            return queue;
+        }
+
+        return new AsyncWaitQueue(this);
+    }
+
+    internal void ReturnAsyncWaitQueue(AsyncWaitQueue queue)
+    {
+        AssertSchedulerThread();
+        queue.ResetForReuse(this);
+        _asyncWaitQueuePool.Push(queue);
     }
 
     public void SetEngineInitReaperEnabled(bool enabled)

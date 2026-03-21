@@ -30,13 +30,20 @@ public class PtyManager
     public const int MAX_PTYS = 1024;
 
     private readonly ILogger _logger;
+    private KernelScheduler? _scheduler;
 
     private readonly ConcurrentDictionary<int, PtyPair> _ptyPairs = new();
     private int _nextPtyIndex;
 
-    public PtyManager(ILogger logger)
+    public PtyManager(ILogger logger, KernelScheduler? scheduler = null)
     {
         _logger = logger;
+        _scheduler = scheduler;
+    }
+
+    public void BindScheduler(KernelScheduler scheduler)
+    {
+        _scheduler ??= scheduler;
     }
 
     /// <summary>
@@ -95,7 +102,9 @@ public class PtyManager
             return null;
         }
 
-        var pair = new PtyPair(index, this, _logger);
+        var scheduler = _scheduler ?? throw new InvalidOperationException(
+            "PtyManager must be bound to a KernelScheduler before allocating PTYs.");
+        var pair = new PtyPair(index, this, _logger, scheduler);
         _ptyPairs[index] = pair;
 
         _logger.LogInformation("[PtyManager] Allocated PTY index={Index}", index);
@@ -144,13 +153,13 @@ public class PtyPair
     private readonly ILogger _logger;
     private readonly PtyManager _manager;
 
-    public PtyPair(int index, PtyManager manager, ILogger logger)
+    public PtyPair(int index, PtyManager manager, ILogger logger, KernelScheduler scheduler)
     {
         Index = index;
         _manager = manager;
         _logger = logger;
 
-        Master = new PtyMaster(this, logger);
+        Master = new PtyMaster(this, logger, scheduler);
         Slave = new PtySlave(this, logger);
     }
 
@@ -210,12 +219,13 @@ public class PtyBuffer
     private readonly object _lock = new();
     private readonly int _maxSize;
 
-    public PtyBuffer(int maxSize = 65536)
+    public PtyBuffer(KernelScheduler scheduler, int maxSize = 65536)
     {
         _maxSize = maxSize;
+        DataAvailable = new AsyncWaitQueue(scheduler);
     }
 
-    public AsyncWaitQueue DataAvailable { get; } = new();
+    public AsyncWaitQueue DataAvailable { get; }
 
     /// <summary>
     ///     Checks if data is available to read.

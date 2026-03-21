@@ -35,7 +35,7 @@ public partial class SyscallManager
             if (protocol != LinuxConstants.NETLINK_ROUTE)
                 return -(int)Errno.EPROTONOSUPPORT;
 
-            var inode = new NetlinkRouteSocketInode(0, MemfdSuperBlock,
+            var inode = new NetlinkRouteSocketInode(0, MemfdSuperBlock, task.CommonKernel,
                 () => NetDeviceSnapshotProvider.Capture(NetworkMode,
                     TryGetPrivateNetNamespace()));
             var fileFlags = FileFlags.O_RDWR;
@@ -57,7 +57,7 @@ public partial class SyscallManager
             else if (realType == LinuxConstants.SOCK_SEQPACKET) sockType = SocketType.Seqpacket;
             else return -(int)Errno.EINVAL;
 
-            var inode = new UnixSocketInode(0, MemfdSuperBlock, sockType);
+            var inode = new UnixSocketInode(0, MemfdSuperBlock, sockType, task.CommonKernel);
             var fileFlags = FileFlags.O_RDWR;
             if ((type & LinuxConstants.SOCK_NONBLOCK) != 0) fileFlags |= FileFlags.O_NONBLOCK;
             if ((type & LinuxConstants.SOCK_CLOEXEC) != 0) fileFlags |= FileFlags.O_CLOEXEC;
@@ -601,8 +601,8 @@ public partial class SyscallManager
         if ((type & LinuxConstants.SOCK_NONBLOCK) != 0) fileFlags |= FileFlags.O_NONBLOCK;
         if ((type & LinuxConstants.SOCK_CLOEXEC) != 0) fileFlags |= FileFlags.O_CLOEXEC;
 
-        var inode1 = new UnixSocketInode(0, MemfdSuperBlock, sockType);
-        var inode2 = new UnixSocketInode(0, MemfdSuperBlock, sockType);
+        var inode1 = new UnixSocketInode(0, MemfdSuperBlock, sockType, task.CommonKernel);
+        var inode2 = new UnixSocketInode(0, MemfdSuperBlock, sockType, task.CommonKernel);
         inode1.ConnectPair(inode2);
         inode2.ConnectPair(inode1);
 

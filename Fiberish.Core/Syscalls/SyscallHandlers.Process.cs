@@ -329,7 +329,15 @@ public partial class SyscallManager
             if (!hasChildren) return -(int)Errno.ECHILD;
             if (wnohang) return 0;
 
-            await new ChildStateAwaitable(currentProc, fiberTask, (int)id);
+            var targetPid = (IdType)idtype switch
+            {
+                IdType.P_ALL => -1,
+                IdType.P_PID => (int)id,
+                IdType.P_PGID => -(int)id,
+                _ => -1
+            };
+
+            await new ChildStateAwaitable(currentProc, fiberTask, targetPid, wstopped, wcontinued);
             if (fiberTask.HasInterruptingPendingSignal())
                 return -(int)Errno.ERESTARTSYS;
         }

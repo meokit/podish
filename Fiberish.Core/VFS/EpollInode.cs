@@ -20,11 +20,12 @@ internal sealed class EpollItem
 public class EpollInode : TmpfsInode
 {
     private readonly List<EpollItem> _readyList = new();
-    private readonly AsyncWaitQueue _waitQueue = new();
+    private readonly AsyncWaitQueue _waitQueue;
     private readonly Dictionary<LinuxFile, EpollItem> _watches = new();
 
-    public EpollInode(ulong ino, SuperBlock sb) : base(ino, sb)
+    public EpollInode(ulong ino, SuperBlock sb, KernelScheduler scheduler) : base(ino, sb)
     {
+        _waitQueue = new AsyncWaitQueue(scheduler);
         Type = InodeType.Fifo;
         Mode = 0x1A4; // pseudo device mode, like pipe
     }

@@ -17,7 +17,7 @@ public partial class SyscallManager
         var size = (int)a1;
         if (size <= 0) return -(int)Errno.EINVAL;
 
-        var inode = new EpollInode(0, MemfdSuperBlock);
+        var inode = new EpollInode(0, MemfdSuperBlock, task.CommonKernel);
         var dentry = new Dentry("[epoll]", inode, null, MemfdSuperBlock);
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, AnonMount);
 
@@ -32,7 +32,7 @@ public partial class SyscallManager
 
         var flags = (int)a1;
 
-        var inode = new EpollInode(0, MemfdSuperBlock);
+        var inode = new EpollInode(0, MemfdSuperBlock, task.CommonKernel);
         var fileFlags = FileFlags.O_RDWR;
         if ((flags & (int)FileFlags.O_CLOEXEC) != 0) fileFlags |= FileFlags.O_CLOEXEC;
 

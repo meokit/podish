@@ -84,7 +84,7 @@ public class TtyDiscipline
     private readonly List<byte> _canonBuffer = new();
     private readonly byte[] _cc = new byte[32];
     private readonly ITtyDriver _driver;
-    private readonly TtyInputQueue _inq = new();
+    private readonly TtyInputQueue _inq;
     private readonly object _lock = new();
     private readonly ILogger _logger;
     private uint _cflag = 0xbf; // CS8 | CREAD | ...
@@ -104,11 +104,13 @@ public class TtyDiscipline
     // Window Size state
     private ushort _rows = 24;
 
-    public TtyDiscipline(ITtyDriver driver, ISignalBroadcaster broadcaster, ILogger logger)
+    public TtyDiscipline(ITtyDriver driver, ISignalBroadcaster broadcaster, ILogger logger,
+        KernelScheduler scheduler)
     {
         _driver = driver;
         _broadcaster = broadcaster;
         _logger = logger;
+        _inq = new TtyInputQueue(scheduler);
         Device = new TtyDevice();
         InitializeDefaults();
     }
@@ -1044,6 +1046,11 @@ internal sealed class TtyInputQueue
     private readonly Queue<byte> _queue = new();
     private bool _hasCanonicalLine;
 
+    public TtyInputQueue(KernelScheduler scheduler)
+    {
+        DataAvailable = new AsyncWaitQueue(scheduler);
+    }
+
     public int Count
     {
         get
@@ -1055,7 +1062,7 @@ internal sealed class TtyInputQueue
         }
     }
 
-    public AsyncWaitQueue DataAvailable { get; } = new();
+    public AsyncWaitQueue DataAvailable { get; }
 
     public void Clear()
     {

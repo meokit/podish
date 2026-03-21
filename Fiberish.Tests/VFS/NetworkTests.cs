@@ -16,7 +16,7 @@ public class NetworkTests
     public void EpollInode_ShouldRegisterAndTriggerEvents()
     {
         using var env = new TestEnv();
-        var epoll = new EpollInode(1, env.MemfdSuperBlock);
+        var epoll = new EpollInode(1, env.MemfdSuperBlock, env.Scheduler);
 
         // Dummy eventfd as the target
         var eventFd = new EventFdInode(2, env.MemfdSuperBlock, 0, FileFlags.O_RDWR);
@@ -55,8 +55,8 @@ public class NetworkTests
     public async Task UnixSocketInode_ShouldPassDataAndFds()
     {
         using var env = new TestEnv();
-        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Dgram);
-        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Dgram);
+        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Dgram, env.Scheduler);
+        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Dgram, env.Scheduler);
         sock1.ConnectPair(sock2);
         sock2.ConnectPair(sock1);
 
@@ -89,8 +89,8 @@ public class NetworkTests
     public async Task UnixSocketInode_RecvMessageAsync_ShouldResetReadWaitQueueWhenDrained()
     {
         using var env = new TestEnv();
-        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Dgram);
-        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Dgram);
+        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Dgram, env.Scheduler);
+        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Dgram, env.Scheduler);
         sock1.ConnectPair(sock2);
         sock2.ConnectPair(sock1);
 
@@ -119,8 +119,8 @@ public class NetworkTests
     public async Task UnixSocketInode_RecvMessageAsync_DefaultIgnoredSignal_MustNotInterruptWait()
     {
         using var env = new TestEnv();
-        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Dgram);
-        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Dgram);
+        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Dgram, env.Scheduler);
+        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Dgram, env.Scheduler);
         sock1.ConnectPair(sock2);
         sock2.ConnectPair(sock1);
 
@@ -143,8 +143,8 @@ public class NetworkTests
     public async Task UnixSocketInode_RecvMessageAsync_InterruptingSignal_MustReturnErestartsys()
     {
         using var env = new TestEnv();
-        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Dgram);
-        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Dgram);
+        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Dgram, env.Scheduler);
+        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Dgram, env.Scheduler);
         sock1.ConnectPair(sock2);
         sock2.ConnectPair(sock1);
 
@@ -164,7 +164,7 @@ public class NetworkTests
     public void UnixSocketInode_Poll_FreshSocket_DoesNotReportHangup()
     {
         using var env = new TestEnv();
-        var sock = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Stream);
+        var sock = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Stream, env.Scheduler);
         var file = new LinuxFile(new Dentry("s", sock, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 

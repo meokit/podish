@@ -26,6 +26,12 @@ public enum ProcessState
     Dead // Reaped by parent
 }
 
+public enum ProcessKind
+{
+    Normal,
+    VirtualDaemon
+}
+
 public class UTSNamespace
 {
     public string SysName { get; set; } = "Linux";
@@ -109,6 +115,8 @@ public class Process
     public int PPID { get; set; } = 0; // Parent Process ID
     public List<int> Children { get; } = []; // Child Process IDs
     public ProcessState State { get; set; } = ProcessState.Running;
+    public ProcessKind Kind { get; set; } = ProcessKind.Normal;
+    public string? VirtualDaemonName { get; set; }
     public int ExitStatus { get; set; } = 0;
     public bool ExitedBySignal { get; set; }
     public int TermSignal { get; set; }
@@ -131,7 +139,15 @@ public class Process
 
     // Event signaled when process state changes (exit, stop, continue)
     // Used by parent's wait4() to avoid busy-polling
-    public AsyncWaitQueue StateChangeEvent { get; } = new();
+    private AsyncWaitQueue? _stateChangeEvent;
+    public AsyncWaitQueue StateChangeEvent => _stateChangeEvent
+                                              ?? throw new InvalidOperationException(
+                                                  $"Process {TGID} state-change queue is not bound to a scheduler.");
+
+    internal void BindScheduler(KernelScheduler scheduler)
+    {
+        _stateChangeEvent ??= new AsyncWaitQueue(scheduler);
+    }
 
     public Dictionary<int, SigAction> SignalActions { get; } = [];
 

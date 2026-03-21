@@ -1,11 +1,9 @@
-using System.Collections.Concurrent;
 using Fiberish.Core;
 
 namespace Fiberish.VFS;
 
 internal sealed class ReadinessWaiter
 {
-    private static readonly ConcurrentBag<AsyncWaitQueue> WaitQueuePool = new();
     private readonly Func<LinuxFile, short, short> _poll;
     private readonly Func<LinuxFile, IReadyDispatcher, Action, short, IDisposable?> _registerWaitHandle;
 
@@ -27,7 +25,7 @@ internal sealed class ReadinessWaiter
             if (task.HasInterruptingPendingSignal())
                 return false;
 
-            var waitQueue = RentWaitQueue();
+            var waitQueue = task.CommonKernel.RentAsyncWaitQueue();
             IDisposable? registration = null;
             try
             {
@@ -50,22 +48,9 @@ internal sealed class ReadinessWaiter
             finally
             {
                 registration?.Dispose();
-                RecycleWaitQueue(waitQueue);
+                task.CommonKernel.ReturnAsyncWaitQueue(waitQueue);
             }
         }
-    }
-
-    private static AsyncWaitQueue RentWaitQueue()
-    {
-        if (WaitQueuePool.TryTake(out var queue))
-            return queue;
-        return new AsyncWaitQueue();
-    }
-
-    private static void RecycleWaitQueue(AsyncWaitQueue queue)
-    {
-        queue.Reset();
-        WaitQueuePool.Add(queue);
     }
 
     private static void DispatchSignal(AsyncWaitQueue queue, IReadyDispatcher dispatcher)

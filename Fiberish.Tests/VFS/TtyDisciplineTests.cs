@@ -23,7 +23,7 @@ public class TtyDisciplineTests
         _taskContext = new TtyTaskContext();
         _driver = new MockTtyDriver();
         _broadcaster = new MockSignalBroadcaster();
-        _tty = new TtyDiscipline(_driver, _broadcaster, NullLogger.Instance);
+        _tty = new TtyDiscipline(_driver, _broadcaster, NullLogger.Instance, _taskContext.Scheduler);
         _task = _taskContext.Task;
     }
 
@@ -417,9 +417,10 @@ public class TtyDisciplineTests
     [Fact]
     public void ConsolePoll_processes_VINTR_and_broadcasts_SIGINT_without_read()
     {
+        using var taskContext = new TtyTaskContext();
         var driver = new MockTtyDriver();
         var broadcaster = new MockSignalBroadcaster();
-        var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance);
+        var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance, taskContext.Scheduler);
         var sb = new TestSuperBlock();
         var inode = new ConsoleInode(sb, true, tty);
         var file = new LinuxFile(new Dentry("stdin", inode, null, sb), FileFlags.O_RDONLY, null!);
@@ -444,9 +445,10 @@ public class TtyDisciplineTests
     [Fact]
     public void ConsolePoll_output_reflects_tty_writability()
     {
+        using var taskContext = new TtyTaskContext();
         var driver = new ControlledWriteTtyDriver();
         var broadcaster = new MockSignalBroadcaster();
-        var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance);
+        var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance, taskContext.Scheduler);
         var sb = new TestSuperBlock();
         var inode = new ConsoleInode(sb, false, tty);
         var file = new LinuxFile(new Dentry("stdout", inode, null, sb), FileFlags.O_WRONLY, null!);
@@ -469,10 +471,10 @@ public class TtyDisciplineTests
     [Fact]
     public void ConsoleRegisterWait_output_wakes_when_writable()
     {
+        using var taskContext = new TtyTaskContext();
         var driver = new ControlledWriteTtyDriver();
         var broadcaster = new MockSignalBroadcaster();
-        var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance);
-        using var taskContext = new TtyTaskContext();
+        var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance, taskContext.Scheduler);
 
         driver.SetWritable(false);
         var fired = false;
@@ -566,9 +568,10 @@ public class TtyDisciplineTests
     public void LNEXT_does_not_trigger_signal()
     {
         // Create a fresh TTY to avoid signal state from other tests
+        using var taskContext = new TtyTaskContext();
         var driver = new MockTtyDriver();
         var broadcaster = new MockSignalBroadcaster();
-        var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance);
+        var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance, taskContext.Scheduler);
 
         // Ctrl-V (22) followed by Ctrl-C (3) should NOT send signal
         tty.Input(new byte[] { 22, 3 });
