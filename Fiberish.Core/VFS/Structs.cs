@@ -296,6 +296,14 @@ public abstract class Inode : IAddressSpaceOperations
     public virtual DateTime ATime { get; set; } = DateTime.Now;
     public virtual DateTime CTime { get; set; } = DateTime.Now;
 
+    public virtual int UpdateTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
+    {
+        if (atime.HasValue) ATime = atime.Value;
+        if (mtime.HasValue) MTime = mtime.Value;
+        if (ctime.HasValue) CTime = ctime.Value;
+        return 0;
+    }
+
     /// <summary>
     ///     Device ID for this inode. Defaults to the owning superblock's Dev.
     /// </summary>

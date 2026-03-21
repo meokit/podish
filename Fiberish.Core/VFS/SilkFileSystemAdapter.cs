@@ -30,6 +30,22 @@ public sealed class SilkFileSystem : FileSystem
 
 public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDropper
 {
+    internal static long ToUnixNanoseconds(DateTime value)
+    {
+        var utc = value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
+        var offset = new DateTimeOffset(utc);
+        var seconds = offset.ToUnixTimeSeconds();
+        var nanos = (utc.Ticks % TimeSpan.TicksPerSecond) * 100;
+        return checked(seconds * 1_000_000_000L + nanos);
+    }
+
+    internal static DateTime FromUnixNanoseconds(long nanoseconds)
+    {
+        var seconds = nanoseconds / 1_000_000_000L;
+        var nanosRemainder = nanoseconds % 1_000_000_000L;
+        return DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime.AddTicks(nanosRemainder / 100);
+    }
+
     public SilkSuperBlock(FileSystemType type, SilkRepository repository, DeviceNumberManager devManager) : base(type,
         devManager)
     {
@@ -76,7 +92,10 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
             Uid = rec.Value.Uid,
             Gid = rec.Value.Gid,
             Rdev = (uint)rec.Value.Rdev,
-            Size = (ulong)Math.Max(0, rec.Value.Size)
+            Size = (ulong)Math.Max(0, rec.Value.Size),
+            ATime = FromUnixNanoseconds(rec.Value.ATimeNs),
+            MTime = FromUnixNanoseconds(rec.Value.MTimeNs),
+            CTime = FromUnixNanoseconds(rec.Value.CTimeNs)
         };
         var persistedNlink = (int)Math.Max(0, rec.Value.Nlink);
         if (rec.Value.Ino == SilkMetadataStore.RootInode && loaded.Type == InodeType.Directory && persistedNlink < 2)
@@ -240,7 +259,18 @@ public sealed class SilkInode : IndexedMemoryInode
             Gid,
             LinkCount,
             Rdev,
-            (long)Size);
+            (long)Size,
+            SilkSuperBlock.ToUnixNanoseconds(ATime),
+            SilkSuperBlock.ToUnixNanoseconds(MTime),
+            SilkSuperBlock.ToUnixNanoseconds(CTime));
+    }
+
+    public override int UpdateTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
+    {
+        var rc = base.UpdateTimes(atime, mtime, ctime);
+        if (rc == 0)
+            SyncSelf();
+        return rc;
     }
 
     protected override int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
@@ -407,7 +437,10 @@ public sealed class SilkInode : IndexedMemoryInode
             inode.Gid,
             inode.LinkCount,
             inode.Rdev,
-            (long)inode.Size);
+            (long)inode.Size,
+            SilkSuperBlock.ToUnixNanoseconds(inode.ATime),
+            SilkSuperBlock.ToUnixNanoseconds(inode.MTime),
+            SilkSuperBlock.ToUnixNanoseconds(inode.CTime));
     }
 
     private static void UpsertInodeMetadataIfLive(SilkMetadataStore.SilkMetadataTransaction tx, Inode? inode)

@@ -683,6 +683,8 @@ internal sealed class HostfsMetadataStore
             InitializeV2Store();
     }
 
+    public bool IsEnabled => _enabled;
+
     public bool IsMetaDirPath(string path)
     {
         if (!_enabled) return false;
@@ -707,6 +709,14 @@ internal sealed class HostfsMetadataStore
                 inode.Type = meta.NodeType.Value;
                 inode.Rdev = meta.Rdev ?? 0;
             }
+
+            inode.SetProjectedTimes(
+                meta.ATimeNs.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(meta.ATimeNs.Value / 1_000_000).UtcDateTime
+                    .AddTicks((meta.ATimeNs.Value % 1_000_000) / 100) : null,
+                meta.MTimeNs.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(meta.MTimeNs.Value / 1_000_000).UtcDateTime
+                    .AddTicks((meta.MTimeNs.Value % 1_000_000) / 100) : null,
+                meta.CTimeNs.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(meta.CTimeNs.Value / 1_000_000).UtcDateTime
+                    .AddTicks((meta.CTimeNs.Value % 1_000_000) / 100) : null);
         }
     }
 
@@ -765,6 +775,25 @@ internal sealed class HostfsMetadataStore
             {
                 NodeType = type,
                 Rdev = rdev
+            });
+        }
+    }
+
+    public void SaveTimes(HostInode inode, string hostPath, DateTime? atime, DateTime? mtime, DateTime? ctime)
+    {
+        if (!_enabled) return;
+        var normalizedPath = NormalizeHostPath(hostPath);
+        lock (_lock)
+        {
+            var objectId = EnsureObjectIdForInodeNoLock(inode, normalizedPath);
+            var baseRecord = TryLoadObjectNoLock(objectId, out var existing)
+                ? existing
+                : new HostfsObjectRecord(objectId);
+            SaveObjectNoLock(baseRecord with
+            {
+                ATimeNs = atime.HasValue ? ToUnixNanoseconds(atime.Value) : baseRecord.ATimeNs,
+                MTimeNs = mtime.HasValue ? ToUnixNanoseconds(mtime.Value) : baseRecord.MTimeNs,
+                CTimeNs = ctime.HasValue ? ToUnixNanoseconds(ctime.Value) : baseRecord.CTimeNs
             });
         }
     }
@@ -1039,6 +1068,15 @@ internal sealed class HostfsMetadataStore
         return Path.GetFullPath(hostPath);
     }
 
+    private static long ToUnixNanoseconds(DateTime value)
+    {
+        var utc = value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
+        var offset = new DateTimeOffset(utc);
+        var seconds = offset.ToUnixTimeSeconds();
+        var nanos = (utc.Ticks % TimeSpan.TicksPerSecond) * 100;
+        return checked(seconds * 1_000_000_000L + nanos);
+    }
+
     private static string CanonicalizePathKey(string hostPath)
     {
         var full = NormalizeHostPath(hostPath);
@@ -1099,7 +1137,10 @@ internal sealed record HostfsObjectRecord(
     string ObjectId,
     InodeType? NodeType = null,
     uint? Rdev = null,
-    Dictionary<string, string>? XAttrs = null);
+    Dictionary<string, string>? XAttrs = null,
+    long? ATimeNs = null,
+    long? MTimeNs = null,
+    long? CTimeNs = null);
 
 internal static partial class HostfsOwnershipMapper
 {
@@ -1225,6 +1266,9 @@ public partial class HostInode : Inode
     private readonly object _xattrLock = new();
     private string _hostPath;
     private MappedFilePageCache? _mappedPageCache;
+    private DateTime? _projectedATime;
+    private DateTime? _projectedCTime;
+    private DateTime? _projectedMTime;
 
     private Dictionary<string, byte[]>? _xattrs;
 
@@ -1299,9 +1343,10 @@ public partial class HostInode : Inode
     {
         get
         {
+            if (_projectedMTime.HasValue) return _projectedMTime.Value;
             try
             {
-                return File.GetLastWriteTime(HostPath);
+                return File.GetLastWriteTimeUtc(HostPath);
             }
             catch
             {
@@ -1315,9 +1360,10 @@ public partial class HostInode : Inode
     {
         get
         {
+            if (_projectedATime.HasValue) return _projectedATime.Value;
             try
             {
-                return File.GetLastAccessTime(HostPath);
+                return File.GetLastAccessTimeUtc(HostPath);
             }
             catch
             {
@@ -1331,9 +1377,10 @@ public partial class HostInode : Inode
     {
         get
         {
+            if (_projectedCTime.HasValue) return _projectedCTime.Value;
             try
             {
-                return File.GetCreationTime(HostPath);
+                return File.GetCreationTimeUtc(HostPath);
             }
             catch
             {
@@ -1341,6 +1388,76 @@ public partial class HostInode : Inode
             }
         }
         set => base.CTime = value;
+    }
+
+    internal void SetProjectedTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
+    {
+        _projectedATime = atime;
+        _projectedMTime = mtime;
+        _projectedCTime = ctime;
+        if (atime.HasValue) base.ATime = atime.Value;
+        if (mtime.HasValue) base.MTime = mtime.Value;
+        if (ctime.HasValue) base.CTime = ctime.Value;
+    }
+
+    private static DateTime NormalizeUtc(DateTime value)
+    {
+        return value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
+    }
+
+    private void ApplyHostTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
+    {
+        var hostPath = ResolveHostPath();
+        if (Type == InodeType.Directory)
+        {
+            if (atime.HasValue) Directory.SetLastAccessTimeUtc(hostPath, NormalizeUtc(atime.Value));
+            if (mtime.HasValue) Directory.SetLastWriteTimeUtc(hostPath, NormalizeUtc(mtime.Value));
+            if (ctime.HasValue) Directory.SetCreationTimeUtc(hostPath, NormalizeUtc(ctime.Value));
+            return;
+        }
+
+        if (atime.HasValue) File.SetLastAccessTimeUtc(hostPath, NormalizeUtc(atime.Value));
+        if (mtime.HasValue) File.SetLastWriteTimeUtc(hostPath, NormalizeUtc(mtime.Value));
+        if (ctime.HasValue) File.SetCreationTimeUtc(hostPath, NormalizeUtc(ctime.Value));
+    }
+
+    public override int UpdateTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
+    {
+        try
+        {
+            ApplyHostTimes(atime, mtime, ctime);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return -(int)Errno.EPERM;
+        }
+        catch (IOException)
+        {
+            return -(int)Errno.EIO;
+        }
+        catch (NotSupportedException)
+        {
+            return -(int)Errno.EOPNOTSUPP;
+        }
+
+        var metadataStore = ((HostSuperBlock)SuperBlock).MetadataStore;
+        if (metadataStore.IsEnabled)
+        {
+            SetProjectedTimes(
+                atime ?? _projectedATime,
+                mtime ?? _projectedMTime,
+                ctime ?? _projectedCTime);
+            metadataStore.SaveTimes(this, ResolveHostPath(), atime, mtime, ctime);
+        }
+        else
+        {
+            SetProjectedTimes(null, null, null);
+            if (atime.HasValue) base.ATime = NormalizeUtc(atime.Value);
+            if (mtime.HasValue) base.MTime = NormalizeUtc(mtime.Value);
+            if (ctime.HasValue) base.CTime = NormalizeUtc(ctime.Value);
+        }
+
+        return 0;
     }
 
     public void RefreshProjectedMetadata(int queryUid, int queryGid)

@@ -22,7 +22,10 @@ public readonly record struct SilkInodeRecord(
     int Gid,
     long Nlink,
     long Rdev,
-    long Size);
+    long Size,
+    long ATimeNs,
+    long MTimeNs,
+    long CTimeNs);
 
 public readonly record struct SilkDentryRecord(
     long ParentIno,
@@ -165,9 +168,9 @@ public sealed class SilkMetadataStore
     }
 
     public void UpsertInode(long ino, SilkInodeKind kind, int mode, int uid, int gid, int nlink = 1, uint rdev = 0,
-        long size = 0)
+        long size = 0, long? atimeNs = null, long? mtimeNs = null, long? ctimeNs = null)
     {
-        ExecuteTransaction(tx => tx.UpsertInode(ino, kind, mode, uid, gid, nlink, rdev, size));
+        ExecuteTransaction(tx => tx.UpsertInode(ino, kind, mode, uid, gid, nlink, rdev, size, atimeNs, mtimeNs, ctimeNs));
     }
 
     public bool InodeExists(long ino)
@@ -183,7 +186,7 @@ public sealed class SilkMetadataStore
     {
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT ino, kind, mode, uid, gid, nlink, rdev, size FROM inodes WHERE ino = @ino;";
+        cmd.CommandText = "SELECT ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns FROM inodes WHERE ino = @ino;";
         cmd.Parameters.AddWithValue("@ino", ino);
         using var reader = cmd.ExecuteReader();
         if (!reader.Read()) return null;
@@ -195,14 +198,17 @@ public sealed class SilkMetadataStore
             reader.GetInt32(4),
             reader.GetInt64(5),
             reader.GetInt64(6),
-            reader.GetInt64(7));
+            reader.GetInt64(7),
+            reader.GetInt64(8),
+            reader.GetInt64(9),
+            reader.GetInt64(10));
     }
 
     public List<SilkInodeRecord> ListInodes()
     {
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT ino, kind, mode, uid, gid, nlink, rdev, size FROM inodes ORDER BY ino ASC;";
+        cmd.CommandText = "SELECT ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns FROM inodes ORDER BY ino ASC;";
         using var reader = cmd.ExecuteReader();
         var result = new List<SilkInodeRecord>();
         while (reader.Read())
@@ -214,7 +220,10 @@ public sealed class SilkMetadataStore
                 reader.GetInt32(4),
                 reader.GetInt64(5),
                 reader.GetInt64(6),
-                reader.GetInt64(7)));
+                reader.GetInt64(7),
+                reader.GetInt64(8),
+                reader.GetInt64(9),
+                reader.GetInt64(10)));
 
         return result;
     }
@@ -416,7 +425,8 @@ public sealed class SilkMetadataStore
 
     private static void UpsertInodeCore(SqliteConnection conn, SqliteTransaction tx, long ino, SilkInodeKind kind,
         int mode,
-        int uid, int gid, int nlink, uint rdev, long size)
+        int uid, int gid, int nlink, uint rdev, long size, long? atimeNs = null, long? mtimeNs = null,
+        long? ctimeNs = null)
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000;
         using var cmd = conn.CreateCommand();
@@ -520,12 +530,15 @@ public sealed class SilkMetadataStore
         }
 
         public void UpsertInode(long ino, SilkInodeKind kind, int mode, int uid, int gid, int nlink = 1, uint rdev = 0,
-            long size = 0)
+            long size = 0, long? atimeNs = null, long? mtimeNs = null, long? ctimeNs = null)
         {
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000;
+            var effectiveAtime = atimeNs ?? now;
+            var effectiveMtime = mtimeNs ?? now;
+            var effectiveCtime = ctimeNs ?? now;
             _upsertInodeCmd ??= PrepareCommand("""
                                               INSERT INTO inodes(ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns)
-                                              VALUES (@ino, @kind, @mode, @uid, @gid, @nlink, @rdev, @size, @now, @now, @now)
+                                              VALUES (@ino, @kind, @mode, @uid, @gid, @nlink, @rdev, @size, @atime, @mtime, @ctime)
                                               ON CONFLICT(ino) DO UPDATE SET
                                                 kind = excluded.kind,
                                                 mode = excluded.mode,
@@ -534,6 +547,7 @@ public sealed class SilkMetadataStore
                                                 nlink = excluded.nlink,
                                                 rdev = excluded.rdev,
                                                 size = excluded.size,
+                                                atime_ns = excluded.atime_ns,
                                                 mtime_ns = excluded.mtime_ns,
                                                 ctime_ns = excluded.ctime_ns;
                                               """,
@@ -547,7 +561,9 @@ public sealed class SilkMetadataStore
                     cmd.Parameters.Add("@nlink", SqliteType.Integer);
                     cmd.Parameters.Add("@rdev", SqliteType.Integer);
                     cmd.Parameters.Add("@size", SqliteType.Integer);
-                    cmd.Parameters.Add("@now", SqliteType.Integer);
+                    cmd.Parameters.Add("@atime", SqliteType.Integer);
+                    cmd.Parameters.Add("@mtime", SqliteType.Integer);
+                    cmd.Parameters.Add("@ctime", SqliteType.Integer);
                 });
             _upsertInodeCmd.Parameters["@ino"].Value = ino;
             _upsertInodeCmd.Parameters["@kind"].Value = (int)kind;
@@ -557,7 +573,9 @@ public sealed class SilkMetadataStore
             _upsertInodeCmd.Parameters["@nlink"].Value = nlink;
             _upsertInodeCmd.Parameters["@rdev"].Value = (long)rdev;
             _upsertInodeCmd.Parameters["@size"].Value = size;
-            _upsertInodeCmd.Parameters["@now"].Value = now;
+            _upsertInodeCmd.Parameters["@atime"].Value = effectiveAtime;
+            _upsertInodeCmd.Parameters["@mtime"].Value = effectiveMtime;
+            _upsertInodeCmd.Parameters["@ctime"].Value = effectiveCtime;
             _upsertInodeCmd.ExecuteNonQuery();
         }
 

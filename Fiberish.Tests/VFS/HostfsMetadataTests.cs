@@ -92,6 +92,83 @@ public class HostfsMetadataTests
     }
 
     [Fact]
+    public void Hostfs_Timestamps_PersistViaSidecar()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tempRoot, "f"), "x");
+
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw,metadata=1");
+            var sb = new HostSuperBlock(fsType, tempRoot, opts);
+            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            var inode = Assert.IsType<HostInode>(sb.Root.Inode!.Lookup("f")!.Inode!);
+
+            var atime = DateTimeOffset.FromUnixTimeSeconds(1_700_000_000).UtcDateTime;
+            var mtime = DateTimeOffset.FromUnixTimeSeconds(1_700_000_100).UtcDateTime;
+            var ctime = DateTimeOffset.FromUnixTimeSeconds(1_700_000_200).UtcDateTime;
+
+            Assert.Equal(0, inode.UpdateTimes(atime, mtime, ctime));
+
+            var sb2 = new HostSuperBlock(fsType, tempRoot, opts);
+            sb2.Root = sb2.GetDentry(tempRoot, "/", null)!;
+            var inode2 = Assert.IsType<HostInode>(sb2.Root.Inode!.Lookup("f")!.Inode!);
+
+            Assert.Equal(1_700_000_000L, new DateTimeOffset(inode2.ATime).ToUnixTimeSeconds());
+            Assert.Equal(1_700_000_100L, new DateTimeOffset(inode2.MTime).ToUnixTimeSeconds());
+            Assert.Equal(1_700_000_200L, new DateTimeOffset(inode2.CTime).ToUnixTimeSeconds());
+
+            Assert.Equal(1_700_000_000L, new DateTimeOffset(File.GetLastAccessTimeUtc(Path.Combine(tempRoot, "f"))).ToUnixTimeSeconds());
+            Assert.Equal(1_700_000_100L, new DateTimeOffset(File.GetLastWriteTimeUtc(Path.Combine(tempRoot, "f"))).ToUnixTimeSeconds());
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Hostfs_MetadataLess_TimestampsUpdateHostFileWithoutSidecar()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var filePath = Path.Combine(tempRoot, "f");
+            File.WriteAllText(filePath, "x");
+
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw,metadata=0");
+            var sb = new HostSuperBlock(fsType, tempRoot, opts);
+            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            var inode = Assert.IsType<HostInode>(sb.Root.Inode!.Lookup("f")!.Inode!);
+
+            var atime = DateTimeOffset.FromUnixTimeSeconds(1_700_001_000).UtcDateTime;
+            var mtime = DateTimeOffset.FromUnixTimeSeconds(1_700_001_100).UtcDateTime;
+
+            Assert.Equal(0, inode.UpdateTimes(atime, mtime, null));
+
+            Assert.Equal(1_700_001_000L, new DateTimeOffset(File.GetLastAccessTimeUtc(filePath)).ToUnixTimeSeconds());
+            Assert.Equal(1_700_001_100L, new DateTimeOffset(File.GetLastWriteTimeUtc(filePath)).ToUnixTimeSeconds());
+            Assert.False(Directory.Exists(Path.Combine(tempRoot, ".fiberish_meta")));
+
+            var sb2 = new HostSuperBlock(fsType, tempRoot, opts);
+            sb2.Root = sb2.GetDentry(tempRoot, "/", null)!;
+            var inode2 = Assert.IsType<HostInode>(sb2.Root.Inode!.Lookup("f")!.Inode!);
+            Assert.Equal(1_700_001_000L, new DateTimeOffset(inode2.ATime).ToUnixTimeSeconds());
+            Assert.Equal(1_700_001_100L, new DateTimeOffset(inode2.MTime).ToUnixTimeSeconds());
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
+
+    [Fact]
     public void Hostfs_Hides_FiberishMetaDirectory()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());

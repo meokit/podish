@@ -712,17 +712,63 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysUtimensAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var path = ReadString(a2);
+        var dirfd = (int)a1;
         var timesAddr = a3;
-        var loc = PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        var flags = a4;
+        var knownFlags = LinuxConstants.AT_EMPTY_PATH | LinuxConstants.AT_SYMLINK_NOFOLLOW;
+        if ((flags & ~knownFlags) != 0) return -(int)Errno.EINVAL;
+
+        PathLocation loc;
+        if ((flags & LinuxConstants.AT_EMPTY_PATH) != 0 && (a2 == 0 || ReadString(a2).Length == 0))
+        {
+            var file = GetFD(dirfd);
+            if (file == null) return -(int)Errno.EBADF;
+            loc = new PathLocation(file.Dentry, file.Mount);
+        }
+        else
+        {
+            if (a2 == 0) return -(int)Errno.EFAULT;
+            var path = ReadString(a2);
+            PathLocation startLoc = default;
+            if (dirfd != -100 && !path.StartsWith("/"))
+            {
+                var fdir = GetFD(dirfd);
+                if (fdir == null) return -(int)Errno.EBADF;
+                startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+            }
+
+            var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
+            loc = PathWalkWithFlags(path, startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
+                followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+        }
+
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
+        if (loc.Mount != null && loc.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
         if (timesAddr == 0)
-            loc.Dentry.Inode.ATime = loc.Dentry.Inode.MTime = DateTime.Now;
-        else
-            // TODO: Read timespec from memory
-            loc.Dentry.Inode.ATime = loc.Dentry.Inode.MTime = DateTime.Now;
-        return 0;
+        {
+            var resolved = ResolveRequestedTimes(loc.Dentry.Inode.ATime, loc.Dentry.Inode.MTime, true);
+            return loc.Dentry.Inode.UpdateTimes(resolved.Atime, resolved.Mtime, resolved.Ctime);
+        }
+
+        var buf = new byte[16];
+        if (!engine.CopyFromUser(timesAddr, buf)) return -(int)Errno.EFAULT;
+        var atimeSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
+        var atimeNsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+        if (!engine.CopyFromUser(timesAddr + 8, buf.AsSpan(0, 8))) return -(int)Errno.EFAULT;
+        var mtimeSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
+        var mtimeNsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+
+        var requested = ResolveRequestedTimes(
+            loc.Dentry.Inode.ATime,
+            loc.Dentry.Inode.MTime,
+            false,
+            atimeSec,
+            atimeNsec,
+            mtimeSec,
+            mtimeNsec);
+        if (requested.Error.HasValue) return requested.Error.Value;
+        return loc.Dentry.Inode.UpdateTimes(requested.Atime, requested.Mtime, requested.Ctime);
     }
 
     private async ValueTask<int> SysFchownAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
