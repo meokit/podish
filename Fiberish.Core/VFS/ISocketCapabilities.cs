@@ -1,15 +1,17 @@
 using System.Net;
+using System.Net.Sockets;
 using Fiberish.Core;
 using Fiberish.Syscalls;
 
 namespace Fiberish.VFS;
 
 public record AcceptedSocketResult(int Rc, Inode? Inode, EndPoint? PeerEndPoint = null, byte[]? PeerUnixAddressRaw = null);
-public record SocketAddressResult(EndPoint? EndPoint = null, byte[]? UnixAddressRaw = null);
+public record SocketAddressResult(EndPoint? EndPoint = null, byte[]? UnixAddressRaw = null, int Rc = 0);
 public record RecvMessageResult(int BytesRead, List<LinuxFile>? Fds = null, EndPoint? SourceEndPoint = null, byte[]? SourceSunPathRaw = null);
 
 public interface ISocketEndpointOps
 {
+    AddressFamily SocketAddressFamily { get; }
     int Bind(LinuxFile file, FiberTask task, object endpoint);
     ValueTask<int> ConnectAsync(LinuxFile file, FiberTask task, object endpoint);
     int Listen(LinuxFile file, FiberTask task, int backlog);

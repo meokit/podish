@@ -234,6 +234,8 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
 
 
     // --- Capability Methods ---
+    public AddressFamily SocketAddressFamily => AddressFamily.Unix;
+
     public int Bind(LinuxFile file, FiberTask task, object endpoint)
     {
         if (endpoint is not UnixSockaddrInfo unixAddr) return -(int)Errno.EAFNOSUPPORT;
@@ -376,7 +378,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
 
     public SocketAddressResult GetPeerName(LinuxFile file, FiberTask task)
     {
-        if (!IsConnected) return new SocketAddressResult();
+        if (!IsConnected) return new SocketAddressResult(Rc: -(int)Errno.ENOTCONN);
         return new SocketAddressResult(null, GetPeerSunPathRaw());
     }
 

@@ -46,6 +46,7 @@ public sealed class NetstackSocketInode : Inode, ISocketEndpointOps, ISocketData
 
     public bool IsListener => _listener != null;
     public bool IsStream => _stream != null;
+    public AddressFamily SocketAddressFamily => AddressFamily.InterNetwork;
 
     public IPEndPoint? LocalEndPoint =>
         _stream?.LocalEndPoint ??
@@ -225,7 +226,9 @@ public sealed class NetstackSocketInode : Inode, ISocketEndpointOps, ISocketData
 
     public SocketAddressResult GetPeerName(LinuxFile file, FiberTask task)
     {
-        return new SocketAddressResult(RemoteEndPoint);
+        var ep = RemoteEndPoint;
+        if (ep == null) return new SocketAddressResult(Rc: -(int)Errno.ENOTCONN);
+        return new SocketAddressResult(ep);
     }
 
     public int Shutdown(LinuxFile file, FiberTask task, int how)

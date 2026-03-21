@@ -596,7 +596,7 @@ public partial class SyscallManager
             return await DoReadVSignalFd(sm, f, signalfd, iovs, iovCnt, flags);
         }
 
-        if (f.OpenedInode is HostSocketInode or NetstackSocketInode or NetlinkRouteSocketInode or UnixSocketInode)
+        if (f.TryGetSocketDataOps(out _) || f.OpenedInode is NetlinkRouteSocketInode)
         {
             if (offset != -1) return -(int)Errno.ESPIPE;
             return await DoReadVSocket(sm, f, iovs, iovCnt, flags);
@@ -676,7 +676,7 @@ public partial class SyscallManager
             return await DoWriteVTty(sm, f, consoleWrite, iovs, iovCnt, flags);
         }
 
-        if (f.OpenedInode is HostSocketInode or NetstackSocketInode or NetlinkRouteSocketInode or UnixSocketInode)
+        if (f.TryGetSocketDataOps(out _) || f.OpenedInode is NetlinkRouteSocketInode)
         {
             if (offset != -1) return -(int)Errno.ESPIPE;
             return await DoWriteVSocket(sm, f, iovs, iovCnt, flags);

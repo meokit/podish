@@ -285,11 +285,7 @@ public partial class SyscallManager
         if (file.TryGetSocketEndpointOps(out var ops))
         {
             var res = ops.GetPeerName(file, engine.Owner as FiberTask ?? throw new InvalidOperationException());
-            if (res.EndPoint == null && res.UnixAddressRaw == null && file.OpenedInode is not UnixSocketInode)
-                return -(int)Errno.ENOTCONN;
-            if (res.EndPoint == null && res.UnixAddressRaw == null && file.OpenedInode is UnixSocketInode ui &&
-                !ui.IsConnected)
-                return -(int)Errno.ENOTCONN;
+            if (res.Rc < 0) return res.Rc;
             WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, res);
             return 0;
         }
@@ -686,7 +682,8 @@ public partial class SyscallManager
         int addrLen)
     {
         if (addrPtr == 0) return (null, 0); // valid for some calls
-        if (file.OpenedInode is UnixSocketInode || file.OpenedInode is NetlinkRouteSocketInode)
+        if ((file.TryGetSocketEndpointOps(out var ops) && ops.SocketAddressFamily == System.Net.Sockets.AddressFamily.Unix) || 
+            file.OpenedInode is NetlinkRouteSocketInode)
         {
             var res = ReadUnixSockaddr(engine, addrPtr, addrLen);
             return (res.Address, res.Error);
@@ -701,7 +698,8 @@ public partial class SyscallManager
         SocketAddressResult res)
     {
         if (addrPtr == 0 || addrLenPtr == 0) return;
-        if (res.UnixAddressRaw != null || file.OpenedInode is UnixSocketInode ||
+        if (res.UnixAddressRaw != null || 
+            (file.TryGetSocketEndpointOps(out var ops) && ops.SocketAddressFamily == System.Net.Sockets.AddressFamily.Unix) ||
             file.OpenedInode is NetlinkRouteSocketInode)
             WriteSockaddrUnix(engine, addrPtr, addrLenPtr, res.UnixAddressRaw);
         else if (res.EndPoint != null) WriteSockaddr(engine, addrPtr, addrLenPtr, res.EndPoint);

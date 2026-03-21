@@ -53,6 +53,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
     public AddressFamily HostAddressFamily => NativeSocket.AddressFamily;
     public ProtocolType HostProtocolType => NativeSocket.ProtocolType;
     public SocketType HostSocketType => NativeSocket.SocketType;
+    public AddressFamily SocketAddressFamily => HostAddressFamily;
 
     bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
         short events)
@@ -411,17 +412,23 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
 
     public SocketAddressResult GetPeerName(LinuxFile file, FiberTask task)
     {
-        EndPoint? ep;
         try
         {
-            ep = NativeSocket!.RemoteEndPoint;
+            var ep = NativeSocket!.RemoteEndPoint;
+            return new SocketAddressResult(ep);
+        }
+        catch (SocketException ex)
+        {
+            return new SocketAddressResult(Rc: MapSocketError(ex.SocketErrorCode));
+        }
+        catch (ObjectDisposedException)
+        {
+            return new SocketAddressResult(Rc: -(int)Errno.ENOTCONN);
         }
         catch
         {
-            ep = null;
+            return new SocketAddressResult(Rc: -(int)Errno.EINVAL);
         }
-
-        return new SocketAddressResult(ep);
     }
 
     public int Shutdown(LinuxFile file, FiberTask task, int how)
