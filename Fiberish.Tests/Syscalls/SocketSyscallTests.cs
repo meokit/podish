@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
@@ -651,6 +652,32 @@ public class SocketSyscallTests
         Assert.Equal(0, await CallSysIoctl(env, (uint)fd, LinuxConstants.SIOCGIFTXQLEN, 0x3B000));
         var qlen = BinaryPrimitives.ReadInt32LittleEndian(env.ReadBytes(0x3B010, 4));
         Assert.Equal(1000, qlen);
+    }
+
+    [Fact]
+    public async Task Socket_HostUdp_SendTo_WithMsgNosignal_SendsPacket()
+    {
+        using var server = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        server.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        server.ReceiveTimeout = 2000;
+        var port = ((IPEndPoint)server.LocalEndPoint!).Port;
+
+        using var env = new TestEnv();
+        env.MapUserPage(0x3C000);
+        env.MapUserPage(0x3D000);
+        env.WriteBytes(0x3C000, Encoding.ASCII.GetBytes("dns-probe"));
+        WriteSockaddrIn(env, 0x3D000, 0x7F000001u, (ushort)port);
+
+        var fd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        Assert.True(fd >= 0);
+
+        var rc = await CallSysSendTo(env, (uint)fd, 0x3C000, 9, LinuxConstants.MSG_NOSIGNAL, 0x3D000, 16);
+        Assert.Equal(9, rc);
+
+        var receiveBuffer = new byte[64];
+        EndPoint remote = new IPEndPoint(IPAddress.Any, 0);
+        var received = server.ReceiveFrom(receiveBuffer, 0, receiveBuffer.Length, SocketFlags.None, ref remote);
+        Assert.Equal("dns-probe", Encoding.ASCII.GetString(receiveBuffer, 0, received));
     }
 
     [Fact]

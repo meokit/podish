@@ -71,6 +71,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
     {
         var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
         if (recvLen <= 0) return 0;
+        var hostFlags = TranslateRecvFlags(flags);
         Logger.LogTrace(
             "Host socket recv enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
             Ino, recvLen, flags, (int)file.Flags, NativeSocket.Connected);
@@ -78,7 +79,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
         while (true)
             try
             {
-                var n = NativeSocket.Receive(buffer, 0, recvLen, (SocketFlags)flags);
+                var n = NativeSocket.Receive(buffer, 0, recvLen, hostFlags);
                 if (n > 0)
                     ClearReadyBits(PollEvents.POLLIN);
                 Logger.LogTrace("Host socket recv done ino={Ino} bytes={Bytes}", Ino, n);
@@ -88,7 +89,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
                                              ex.SocketErrorCode == SocketError.IOPending)
             {
                 ClearReadyBits(PollEvents.POLLIN);
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                if (IsNonBlocking(file, flags))
                 {
                     Logger.LogDebug("Host socket recv would block (ino={Ino}, flags={Flags:X})", Ino, (int)file.Flags);
                     return -(int)Errno.EAGAIN;
@@ -113,6 +114,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
     {
         var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
         if (recvLen <= 0) return new RecvMessageResult(0);
+        var hostFlags = TranslateRecvFlags(flags);
         var remoteEpTemplate = HostAddressFamily == AddressFamily.InterNetworkV6
             ? (EndPoint)new IPEndPoint(IPAddress.IPv6Any, 0)
             : new IPEndPoint(IPAddress.Any, 0);
@@ -120,7 +122,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
             try
             {
                 var remoteEp = remoteEpTemplate;
-                var n = NativeSocket.ReceiveFrom(buffer, 0, recvLen, (SocketFlags)flags, ref remoteEp);
+                var n = NativeSocket.ReceiveFrom(buffer, 0, recvLen, hostFlags, ref remoteEp);
                 if (n > 0)
                     ClearReadyBits(PollEvents.POLLIN);
                 return new RecvMessageResult(n, null, remoteEp);
@@ -129,7 +131,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
                                              ex.SocketErrorCode == SocketError.IOPending)
             {
                 ClearReadyBits(PollEvents.POLLIN);
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                if (IsNonBlocking(file, flags))
                 {
                     Logger.LogDebug("Host socket recvfrom would block (ino={Ino}, flags={Flags:X})", Ino,
                         (int)file.Flags);
@@ -152,6 +154,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
 
     public async ValueTask<int> SendAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags)
     {
+        var hostFlags = TranslateSendFlags(flags);
         byte[]? rented = null;
         ArraySegment<byte> segment;
         if (!MemoryMarshal.TryGetArray(buffer, out segment))
@@ -170,7 +173,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
             while (true)
                 try
                 {
-                    var n = NativeSocket.Send(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags);
+                    var n = NativeSocket.Send(segment.Array!, segment.Offset, segment.Count, hostFlags);
                     if (n > 0)
                         ClearReadyBits(PollEvents.POLLOUT);
                     Logger.LogTrace("Host socket send done ino={Ino} bytes={Bytes}", Ino, n);
@@ -180,7 +183,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
                                                  ex.SocketErrorCode == SocketError.IOPending)
                 {
                     ClearReadyBits(PollEvents.POLLOUT);
-                    if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                    if (IsNonBlocking(file, flags))
                     {
                         Logger.LogDebug("Host socket send would block (ino={Ino}, flags={Flags:X})", Ino,
                             (int)file.Flags);
@@ -211,6 +214,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
         object remoteEpObj)
     {
         if (remoteEpObj is not EndPoint remoteEp) return -(int)Errno.EAFNOSUPPORT;
+        var hostFlags = TranslateSendFlags(flags);
         byte[]? rented = null;
         ArraySegment<byte> segment;
         if (!MemoryMarshal.TryGetArray(buffer, out segment))
@@ -225,7 +229,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
             while (true)
                 try
                 {
-                    var n = NativeSocket.SendTo(segment.Array!, segment.Offset, segment.Count, (SocketFlags)flags,
+                    var n = NativeSocket.SendTo(segment.Array!, segment.Offset, segment.Count, hostFlags,
                         remoteEp);
                     if (n > 0)
                         ClearReadyBits(PollEvents.POLLOUT);
@@ -235,7 +239,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
                                                  ex.SocketErrorCode == SocketError.IOPending)
                 {
                     ClearReadyBits(PollEvents.POLLOUT);
-                    if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                    if (IsNonBlocking(file, flags))
                     {
                         Logger.LogDebug("Host socket sendto would block (ino={Ino}, flags={Flags:X})", Ino,
                             (int)file.Flags);
@@ -818,6 +822,26 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
     internal int ConsumeCachedSocketError()
     {
         return Interlocked.Exchange(ref _cachedSocketError, 0);
+    }
+
+    private static bool IsNonBlocking(LinuxFile file, int flags)
+    {
+        return (file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & LinuxConstants.MSG_DONTWAIT) != 0;
+    }
+
+    private static SocketFlags TranslateSendFlags(int linuxFlags)
+    {
+        var hostFlags = SocketFlags.None;
+        if ((linuxFlags & LinuxConstants.MSG_OOB) != 0) hostFlags |= SocketFlags.OutOfBand;
+        if ((linuxFlags & LinuxConstants.MSG_DONTROUTE) != 0) hostFlags |= SocketFlags.DontRoute;
+        return hostFlags;
+    }
+
+    private static SocketFlags TranslateRecvFlags(int linuxFlags)
+    {
+        var hostFlags = TranslateSendFlags(linuxFlags);
+        if ((linuxFlags & LinuxConstants.MSG_PEEK) != 0) hostFlags |= SocketFlags.Peek;
+        return hostFlags;
     }
 
     private void TraceIo(string op, ReadOnlySpan<byte> data, int bytes)
