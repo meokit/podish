@@ -15,6 +15,7 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
     private Action? _continuation;
     private bool _enableSignalSafetyNet;
     private volatile bool _isCompleted;
+    private TaskAsyncOperationHandle? _operationHandle;
     private KernelScheduler? _scheduler;
     private FiberTask? _task;
     private FiberTask.WaitToken? _waitToken;
@@ -28,19 +29,21 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
 
     public void OnCompleted(Action continuation)
     {
-        if (_task == null && _scheduler == null) 
-            throw new InvalidOperationException("SaeaOperation requires BeginWait to be called with a FiberTask before awaiting.");
+        if (_task == null && _scheduler == null)
+            throw new InvalidOperationException(
+                "SaeaOperation requires BeginWait to be called with a FiberTask before awaiting.");
         Logger.LogTrace(
             "[SaeaAwaitable] OnCompleted register: task={TaskId} scheduler={HasScheduler} isCompleted={IsCompleted} bytes={Bytes} error={Error}",
             _task?.TID, _scheduler != null, _isCompleted, BytesTransferred, SocketError);
 
         var prev = Interlocked.CompareExchange(ref _continuation, continuation, null);
+        _operationHandle?.TryInitialize(continuation, WaitContinuationMode.RunAction);
         if (ReferenceEquals(prev, CompletedSentinel))
         {
             Logger.LogTrace(
                 "[SaeaAwaitable] OnCompleted saw CompletedSentinel, scheduling continuation immediately: task={TaskId}",
                 _task?.TID);
-            _scheduler?.Schedule(continuation, _task);
+            _operationHandle?.TryComplete(_waitToken != null ? WakeReason.IO : null);
             return;
         }
 
@@ -76,31 +79,11 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
             BytesTransferred, SocketError, (int)SocketFlags, RemoteEndPoint?.ToString());
         var c = Interlocked.Exchange(ref _continuation, CompletedSentinel);
         if (c != null && !ReferenceEquals(c, CompletedSentinel))
-        {
-            if (_scheduler != null)
-            {
-                var task = _task;
-                if (task != null)
-                {
-                    if (_waitToken != null)
-                        _scheduler.ScheduleWaitContinuation(task, _waitToken.Value, WakeReason.IO, c);
-                    else
-                        _scheduler.Schedule(c, task);
-                }
-                else
-                    _scheduler.Schedule(c);
-
-                Logger.LogTrace(
-                    "[SaeaAwaitable] Completed scheduling continuation: task={TaskId} scheduler={HasScheduler}",
-                    _task?.TID, true);
-            }
-        }
+            _operationHandle?.TryComplete(_waitToken != null ? WakeReason.IO : null);
         else
-        {
             Logger.LogTrace(
                 "[SaeaAwaitable] Completed without continuation yet (or already consumed): hasContinuation={HasCont}",
                 c != null);
-        }
     }
 
     /// <summary>
@@ -112,8 +95,12 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
         _task = task;
         _scheduler = task.CommonKernel;
         _enableSignalSafetyNet = enableSignalSafetyNet;
+        if (!task.TryEnterAsyncOperation(enableSignalSafetyNet ? task.BeginWaitToken() : null, out var operation) ||
+            operation == null)
+            throw new InvalidOperationException("Task is retiring and cannot begin a new socket async wait.");
+        _operationHandle = operation;
         if (enableSignalSafetyNet)
-            _waitToken = task.BeginWaitToken();
+            _waitToken = operation.Token;
         else
             _waitToken = null;
     }
@@ -125,6 +112,7 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
         _scheduler = null;
         _task = null;
         _waitToken = null;
+        _operationHandle = null;
         _enableSignalSafetyNet = false;
         SetBuffer(null, 0, 0);
         AcceptSocket = null;
@@ -136,8 +124,8 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
     private void OnSignalSafetyNet()
     {
         var c = Interlocked.Exchange(ref _continuation, CompletedSentinel);
-        if (c != null && !ReferenceEquals(c, CompletedSentinel) && _scheduler != null && _task != null)
-            _scheduler.ScheduleContinuation(c, _task, WaitContinuationMode.RunAction);
+        if (c != null && !ReferenceEquals(c, CompletedSentinel))
+            _operationHandle?.TryComplete(WakeReason.Signal);
     }
 }
 

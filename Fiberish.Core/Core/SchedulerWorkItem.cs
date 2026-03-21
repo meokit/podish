@@ -1,5 +1,3 @@
-using System.Threading;
-
 namespace Fiberish.Core;
 
 internal enum SchedulerWorkItemKind
@@ -10,7 +8,8 @@ internal enum SchedulerWorkItemKind
     DispatchSyncContextPost,
     DispatchSyncContextSend,
     SetWaitReasonAndRunContinuation,
-    FinalizeAsyncSyscall
+    FinalizeAsyncSyscall,
+    FinalizeTaskRetirement
 }
 
 internal enum WaitContinuationMode
@@ -126,6 +125,14 @@ internal readonly struct SchedulerWorkItem
             state: error,
             asyncResult: result);
     }
+
+    public static SchedulerWorkItem FinalizeTaskRetirement(FiberTask task)
+    {
+        return new SchedulerWorkItem(
+            SchedulerWorkItemKind.FinalizeTaskRetirement,
+            task,
+            task);
+    }
 }
 
 internal sealed class SyncContextSendRequest : IDisposable
@@ -133,6 +140,11 @@ internal sealed class SyncContextSendRequest : IDisposable
     private readonly ManualResetEventSlim _gate = new(false);
 
     public Exception? Thrown { get; set; }
+
+    public void Dispose()
+    {
+        _gate.Dispose();
+    }
 
     public void SetCompleted()
     {
@@ -142,10 +154,5 @@ internal sealed class SyncContextSendRequest : IDisposable
     public void Wait()
     {
         _gate.Wait();
-    }
-
-    public void Dispose()
-    {
-        _gate.Dispose();
     }
 }

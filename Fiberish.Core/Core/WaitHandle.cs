@@ -9,9 +9,9 @@ namespace Fiberish.Core;
 /// </summary>
 public class AsyncWaitQueue
 {
+    private readonly List<WaiterEntry> _drainBuffer = new();
     private readonly object _gate = new();
-    private List<WaiterEntry> _drainBuffer = new();
-    private List<WaiterEntry> _waiters = new();
+    private readonly List<WaiterEntry> _waiters = new();
 
     private bool _isSignaled;
     private long _nextWaiterId;
@@ -63,12 +63,12 @@ public class AsyncWaitQueue
 
     public WaitQueueAwaitable WaitAsync(FiberTask currentTask)
     {
-        return new WaitQueueAwaitable(this, currentTask, interruptOnSignals: false);
+        return new WaitQueueAwaitable(this, currentTask, false);
     }
 
     public WaitQueueAwaitable WaitInterruptiblyAsync(FiberTask currentTask)
     {
-        return new WaitQueueAwaitable(this, currentTask, interruptOnSignals: true);
+        return new WaitQueueAwaitable(this, currentTask, true);
     }
 
     // For compatibility with previous WaitHandle usage
@@ -251,11 +251,15 @@ public struct WaitQueueAwaiter : INotifyCompletion
     {
         var currentTask = _currentTask;
         _token = currentTask.BeginWaitToken();
-        _queue.Register(continuation, currentTask, _token);
+        if (!currentTask.TryEnterAsyncOperation(_token, out var operation) || operation == null)
+            return;
+
+        var state = new QueueWaitOperation(currentTask, continuation, operation);
+        state.TryRegister(_queue.RegisterCancelable(state.OnQueueSignaled, currentTask, _token));
         if (_interruptOnSignals)
-            currentTask.ArmInterruptingSignalSafetyNetResumeTask(_token, continuation);
+            currentTask.ArmInterruptingSignalSafetyNet(_token, state.OnSignal);
         else
-            currentTask.ArmSignalSafetyNetResumeTask(_token, continuation);
+            currentTask.ArmSignalSafetyNet(_token, state.OnSignal);
     }
 
     public AwaitResult GetResult()
@@ -266,6 +270,32 @@ public struct WaitQueueAwaiter : INotifyCompletion
         var reason = task.CompleteWaitToken(_token);
         if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
         return AwaitResult.Completed;
+    }
+
+    private sealed class QueueWaitOperation
+    {
+        private readonly TaskAsyncOperationHandle _operation;
+
+        public QueueWaitOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
+        {
+            _operation = operation;
+            _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
+        }
+
+        public void TryRegister(IDisposable? registration)
+        {
+            _operation.TryAddRegistration(TaskAsyncRegistration.From(registration));
+        }
+
+        public void OnQueueSignaled()
+        {
+            _operation.TryComplete(WakeReason.Event);
+        }
+
+        public void OnSignal()
+        {
+            _operation.TryComplete(WakeReason.Signal);
+        }
     }
 }
 
@@ -321,8 +351,13 @@ public struct SelectAwaiter : INotifyCompletion
     {
         var currentTask = _currentTask;
         _token = currentTask.BeginWaitToken();
-        foreach (var q in _queues) q.Register(continuation, currentTask, _token);
-        currentTask.ArmSignalSafetyNetResumeTask(_token, continuation);
+        if (!currentTask.TryEnterAsyncOperation(_token, out var operation) || operation == null)
+            return;
+
+        var state = new SelectWaitOperation(currentTask, continuation, operation);
+        foreach (var q in _queues)
+            state.TryRegister(q.RegisterCancelable(state.OnQueueSignaled, currentTask, _token));
+        currentTask.ArmSignalSafetyNet(_token, state.OnSignal);
     }
 
     public AwaitResult GetResult()
@@ -332,6 +367,32 @@ public struct SelectAwaiter : INotifyCompletion
         var reason = task.CompleteWaitToken(_token);
         if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
         return AwaitResult.Completed;
+    }
+
+    private sealed class SelectWaitOperation
+    {
+        private readonly TaskAsyncOperationHandle _operation;
+
+        public SelectWaitOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
+        {
+            _operation = operation;
+            _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
+        }
+
+        public void TryRegister(IDisposable? registration)
+        {
+            _operation.TryAddRegistration(TaskAsyncRegistration.From(registration));
+        }
+
+        public void OnQueueSignaled()
+        {
+            _operation.TryComplete(WakeReason.Event);
+        }
+
+        public void OnSignal()
+        {
+            _operation.TryComplete(WakeReason.Signal);
+        }
     }
 }
 
@@ -408,6 +469,10 @@ public readonly struct ChildStateAwaitable
         public void OnCompleted(Action continuation)
         {
             _token = _task.BeginWaitToken();
+            if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
+                return;
+
+            var state = new ChildStateOperation(_task, continuation, operation);
 
             // Register on all matching children's StateChangeEvent queues
             // Only register on events that are NOT yet signaled to avoid duplicate scheduling
@@ -422,22 +487,22 @@ public readonly struct ChildStateAwaitable
                 // Child state notifications are edge-triggered in wait* semantics.
                 // Clear stale sticky state so we can register for the next transition.
                 if (childProc.StateChangeEvent.IsSignaled) childProc.StateChangeEvent.Reset();
-                childProc.StateChangeEvent.Register(continuation, _task, _token);
+                state.TryRegister(childProc.StateChangeEvent.RegisterCancelable(state.OnChildStateChanged, _task,
+                    _token));
                 registered = true;
             }
 
             // If no registrations happened (all events already signaled), schedule immediately
             if (!registered)
             {
-                if (_token != null) _scheduler.ScheduleWaitContinuation(_task, _token.Value, WakeReason.Event,
-                    continuation);
+                state.OnChildStateChanged();
                 return; // already scheduled, no need for safety net
             }
 
             // wait4/waitid should only be interrupted by signals that would actually
             // break the wait. Default-ignored signals like SIGCHLD/SIGWINCH should
             // not wake the wait just to force a rescan.
-            _task.ArmInterruptingSignalSafetyNet(_token, continuation);
+            _task.ArmInterruptingSignalSafetyNet(_token, state.OnSignal);
         }
 
         public AwaitResult GetResult()
@@ -455,6 +520,32 @@ public readonly struct ChildStateAwaitable
             if (_targetPid > 0) return childPid == _targetPid;
             if (_targetPid == 0) return childProc.PGID == _parent.PGID;
             return childProc.PGID == -_targetPid;
+        }
+
+        private sealed class ChildStateOperation
+        {
+            private readonly TaskAsyncOperationHandle _operation;
+
+            public ChildStateOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
+            {
+                _operation = operation;
+                _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
+            }
+
+            public void TryRegister(IDisposable? registration)
+            {
+                _operation.TryAddRegistration(TaskAsyncRegistration.From(registration));
+            }
+
+            public void OnChildStateChanged()
+            {
+                _operation.TryComplete(WakeReason.Event);
+            }
+
+            public void OnSignal()
+            {
+                _operation.TryComplete(WakeReason.Signal);
+            }
         }
     }
 }

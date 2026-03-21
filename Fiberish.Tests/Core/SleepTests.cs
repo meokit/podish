@@ -53,11 +53,34 @@ public class SleepTests
         Assert.True(end - start >= 5, $"Expected at least 5 ticks to elapse, but got {end - start}. Result: {result}");
     }
 
+    [Fact(Timeout = 5000)]
+    public void Sleep_PendingWait_TaskRetiresWithoutResuming_AndDisposesEngineOnce()
+    {
+        var kernel = new KernelScheduler();
+        var engine = new MockEngine();
+
+        var p = CreateMockProcess(100);
+        kernel.RegisterProcess(p);
+
+        var task = new FiberTask(101, p, engine, kernel);
+        var awaiter = new SleepAwaitable(5, task).GetAwaiter();
+        var resumed = 0;
+
+        awaiter.OnCompleted(() => Interlocked.Increment(ref resumed));
+        kernel.DetachTask(task);
+        kernel.Run(20);
+
+        Assert.Equal(0, Volatile.Read(ref resumed));
+        Assert.Equal(1, engine.DisposeCount);
+    }
+
     private class MockEngine : Engine
     {
         public MockEngine() : base(true)
         {
         }
+
+        public int DisposeCount { get; private set; }
 
         public override EmuStatus Status => EmuStatus.Running;
         public override uint Eip { get; set; }
@@ -65,6 +88,7 @@ public class SleepTests
 
         protected override void Dispose(bool disposing)
         {
+            DisposeCount++;
         }
 
         public override void Run(uint endEip = 0, ulong maxInsts = 0)

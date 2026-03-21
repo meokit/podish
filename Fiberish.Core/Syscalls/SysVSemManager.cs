@@ -66,8 +66,12 @@ public readonly struct SemWaitAwaiter : INotifyCompletion
     public void OnCompleted(Action continuation)
     {
         var state = _state;
+        if (!state.Task.TryEnterAsyncOperation(state.Token, out var operation) || operation == null)
+            return;
+
         state.Continuation = continuation;
-        state.Task.ArmInterruptingSignalSafetyNet(state.Token, () => { state.Continuation?.Invoke(); });
+        var asyncState = new SemWaitOperation(state.Task, continuation, operation);
+        state.Task.ArmInterruptingSignalSafetyNet(state.Token, asyncState.OnSignal);
     }
 
     public AwaitResult GetResult()
@@ -75,6 +79,22 @@ public readonly struct SemWaitAwaiter : INotifyCompletion
         var reason = _state.Task.CompleteWaitToken(_state.Token);
         if (reason != WakeReason.None && reason != WakeReason.Event) return AwaitResult.Interrupted;
         return AwaitResult.Completed;
+    }
+
+    private sealed class SemWaitOperation
+    {
+        private readonly TaskAsyncOperationHandle _operation;
+
+        public SemWaitOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
+        {
+            _operation = operation;
+            _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
+        }
+
+        public void OnSignal()
+        {
+            _operation.TryComplete(WakeReason.Signal);
+        }
     }
 }
 

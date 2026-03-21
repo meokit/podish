@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -24,7 +23,7 @@ public class Engine : IDisposable
     private bool _disposed;
     private GCHandle _gcHandle;
 
-    public unsafe Engine()
+    public Engine()
         : this(null)
     {
     }
@@ -115,9 +114,7 @@ public class Engine : IDisposable
 
     public void Dispose()
     {
-        Console.WriteLine($"[Engine 0x{State:x}] Disposing... \n{Environment.StackTrace}");
         Dispose(true);
-        Console.WriteLine("[Engine] Disposed.");
         GC.SuppressFinalize(this);
     }
 
@@ -127,8 +124,24 @@ public class Engine : IDisposable
             task.CommonKernel.AssertSchedulerThread(caller);
     }
 
+    private void AssertNotDisposed([CallerMemberName] string? caller = null)
+    {
+        if (!_disposed && State != IntPtr.Zero) return;
+
+        var ownerDetails = Owner switch
+        {
+            FiberTask ownerTask =>
+                $"ownerTid={ownerTask.TID} ownerPid={ownerTask.PID} ownerStatus={ownerTask.Status} ownerMode={ownerTask.ExecutionMode} ownerExited={ownerTask.Exited}",
+            null => "owner=<null>",
+            _ => $"ownerType={Owner.GetType().Name}"
+        };
+        throw new ObjectDisposedException(nameof(Engine),
+            $"Engine accessed after disposal in {caller}. state=0x{State.ToInt64():X} disposed={_disposed} {ownerDetails}");
+    }
+
     private void EnsureAddressSpaceSynchronized()
     {
+        AssertNotDisposed();
         AssertSchedulerThread();
         if (Owner is not FiberTask task) return;
         ProcessAddressSpaceSync.SyncEngineBeforeRun(task.Process.Mem, this, task.Process);
@@ -587,51 +600,61 @@ public class Engine : IDisposable
 
     public virtual uint RegRead(Reg reg)
     {
+        AssertNotDisposed();
         return X86Native.RegRead(State, (int)reg);
     }
 
     public virtual void RegWrite(Reg reg, uint val)
     {
+        AssertNotDisposed();
         X86Native.RegWrite(State, (int)reg, val);
     }
 
     public void SetSegBase(Seg seg, uint baseAddr)
     {
+        AssertNotDisposed();
         X86Native.SegBaseWrite(State, (int)seg, baseAddr);
     }
 
     public uint GetSegBase(Seg seg)
     {
+        AssertNotDisposed();
         return X86Native.SegBaseRead(State, (int)seg);
     }
 
     public virtual void Run(uint endEip = 0, ulong maxInsts = 0)
     {
+        AssertNotDisposed();
         X86Native.Run(State, endEip, maxInsts);
     }
 
     public virtual void Stop()
     {
+        AssertNotDisposed();
         X86Native.EmuStop(State);
     }
 
     public virtual void SetStatusFault()
     {
+        AssertNotDisposed();
         X86Native.EmuFault(State);
     }
 
     public virtual void Yield()
     {
+        AssertNotDisposed();
         X86Native.EmuYield(State);
     }
 
     public virtual int Step()
     {
+        AssertNotDisposed();
         return X86Native.Step(State);
     }
 
     public virtual bool IsDirty(uint addr)
     {
+        AssertNotDisposed();
         return X86Native.IsDirty(State, addr) != 0;
     }
 
@@ -653,21 +676,25 @@ public class Engine : IDisposable
 
     public void ResetCodeCacheByRange(uint addr, uint size)
     {
+        AssertNotDisposed();
         X86Native.ResetCodeCacheByRange(State, addr, size);
     }
 
     public void FlushMmuTlbOnly()
     {
+        AssertNotDisposed();
         X86Native.FlushMmuTlb(State);
     }
 
     public void ReprotectMappedRange(uint addr, uint size, byte perms)
     {
+        AssertNotDisposed();
         X86Native.ReprotectMappedRange(State, addr, size, perms);
     }
 
     public void ResetAllCodeCache()
     {
+        AssertNotDisposed();
         X86Native.ResetAllCodeCache(State);
     }
 
@@ -677,6 +704,7 @@ public class Engine : IDisposable
     /// </summary>
     public void ResetMemory()
     {
+        AssertNotDisposed();
         X86Native.ResetMemory(State);
     }
 
@@ -706,11 +734,9 @@ public class Engine : IDisposable
 
         var result = new HandlerProfileStat[buffer.Length];
         for (var i = 0; i < buffer.Length; i++)
-        {
             result[i] = new HandlerProfileStat(
                 buffer[i].Handler,
                 buffer[i].ExecCount);
-        }
 
         return result;
     }
@@ -730,14 +756,12 @@ public class Engine : IDisposable
 
         var result = new JccProfileStat[buffer.Length];
         for (var i = 0; i < buffer.Length; i++)
-        {
             result[i] = new JccProfileStat(
                 buffer[i].Handler,
                 buffer[i].Taken,
                 buffer[i].NotTaken,
                 buffer[i].CacheHit,
                 buffer[i].CacheMiss);
-        }
 
         return result;
     }
@@ -773,7 +797,7 @@ public class Engine : IDisposable
             native.JitCompileFailure);
     }
 
-    public unsafe int GetBlockCount()
+    public int GetBlockCount()
     {
         return X86Native.GetBlockCount(State);
     }
@@ -798,7 +822,7 @@ public class Engine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(output);
 
-        using var writer = new BinaryWriter(output, Encoding.UTF8, leaveOpen: true);
+        using var writer = new BinaryWriter(output, Encoding.UTF8, true);
         var imageBase = GetNativeImageBase().ToInt64();
         writer.Write((ulong)imageBase);
 
@@ -904,7 +928,14 @@ public class Engine : IDisposable
 }
 
 public readonly record struct HandlerProfileStat(IntPtr Handler, ulong ExecCount);
-public readonly record struct JccProfileStat(IntPtr Handler, ulong Taken, ulong NotTaken, ulong CacheHit, ulong CacheMiss);
+
+public readonly record struct JccProfileStat(
+    IntPtr Handler,
+    ulong Taken,
+    ulong NotTaken,
+    ulong CacheHit,
+    ulong CacheMiss);
+
 public readonly record struct BlockStatsSnapshot(
     ulong BlockCount,
     ulong TotalBlockInsts,

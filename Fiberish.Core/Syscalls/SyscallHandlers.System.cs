@@ -298,14 +298,11 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
-            var task = _task;
-            var token = _token;
-            task.Continuation = continuation;
-            task.ArmInterruptingSignalSafetyNet(token, () =>
-            {
-                task.Continuation = continuation;
-                task.CommonKernel.Schedule(task);
-            });
+            if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
+                return;
+
+            var state = new PauseOperation(_task, continuation, operation);
+            _task.ArmInterruptingSignalSafetyNet(_token, state.OnSignal);
         }
 
         public AwaitResult GetResult()
@@ -314,6 +311,22 @@ public partial class SyscallManager
             if (reason != WakeReason.None) return AwaitResult.Interrupted;
 
             return AwaitResult.Completed;
+        }
+
+        private sealed class PauseOperation
+        {
+            private readonly TaskAsyncOperationHandle _operation;
+
+            public PauseOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
+            {
+                _operation = operation;
+                _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
+            }
+
+            public void OnSignal()
+            {
+                _operation.TryComplete(WakeReason.Signal);
+            }
         }
     }
 

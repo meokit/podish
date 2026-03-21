@@ -123,7 +123,10 @@ public partial class SyscallManager
 
         public void OnCompleted(Action continuation)
         {
-            var handler = new FutexCompletionHandler(_task, _token, continuation);
+            if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
+                return;
+
+            var handler = new FutexCompletionHandler(_task, _token, continuation, operation);
             var waiterAwaiter = _waiter.Tcs.Task.GetAwaiter();
             waiterAwaiter.OnCompleted(handler.OnWaitCompleted);
             _task.ArmInterruptingSignalSafetyNet(_token, handler.OnSignal);
@@ -145,33 +148,30 @@ public partial class SyscallManager
 
         private sealed class FutexCompletionHandler
         {
-            private readonly Action _continuation;
+            private readonly TaskAsyncOperationHandle _operation;
             private readonly FiberTask _task;
             private readonly FiberTask.WaitToken _token;
-            private int _called;
 
-            public FutexCompletionHandler(FiberTask task, FiberTask.WaitToken token, Action continuation)
+            public FutexCompletionHandler(FiberTask task, FiberTask.WaitToken token, Action continuation,
+                TaskAsyncOperationHandle operation)
             {
                 _task = task;
                 _token = token;
-                _continuation = continuation;
+                _operation = operation;
+                _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
             }
 
             public void OnWaitCompleted()
             {
-                if (Interlocked.Exchange(ref _called, 1) == 0)
-                {
-                    if (_task.GetWaitReason(_token) == WakeReason.None)
-                        _task.TrySetWaitReason(_token, WakeReason.Event);
+                if (_task.GetWaitReason(_token) == WakeReason.None)
+                    _task.TrySetWaitReason(_token, WakeReason.Event);
 
-                    _task.CommonKernel.ScheduleContinuation(_continuation, _task, WaitContinuationMode.ResumeTask);
-                }
+                _operation.TryComplete(WakeReason.Event);
             }
 
             public void OnSignal()
             {
-                if (Interlocked.Exchange(ref _called, 1) == 0)
-                    _task.CommonKernel.ScheduleContinuation(_continuation, _task, WaitContinuationMode.ResumeTask);
+                _operation.TryComplete(WakeReason.Signal);
             }
         }
     }

@@ -37,7 +37,8 @@ public class EpollInode : TmpfsInode
         {
             if (_watches.ContainsKey(targetFile)) return -(int)Errno.EEXIST;
 
-            var item = new EpollItem { Fd = fd, File = targetFile, Events = events, Data = data, Dispatcher = dispatcher };
+            var item = new EpollItem
+                { Fd = fd, File = targetFile, Events = events, Data = data, Dispatcher = dispatcher };
             _watches[targetFile] = item;
 
             // Add initial poll and callback registration
@@ -241,15 +242,16 @@ public class EpollInode : TmpfsInode
         private readonly byte[] _buffer;
         private readonly EpollInode _inode;
         private readonly int _maxEvents;
+        private readonly KernelScheduler _scheduler = null!;
+        private readonly FiberTask _task = null!;
         private readonly int _timeoutMs;
         private bool _completed;
         private Action? _continuation;
         private bool _hasTimedOut;
+        private TaskAsyncOperationHandle? _operation;
         private IDisposable? _queueWaitRegistration;
         private int _reschedulePending;
         private int _result;
-        private KernelScheduler _scheduler = null!;
-        private FiberTask _task = null!;
         private Timer? _timer;
         private FiberTask.WaitToken? _token;
 
@@ -267,14 +269,21 @@ public class EpollInode : TmpfsInode
         {
             _continuation = continuation;
             _token = _task.BeginWaitToken();
+            if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
+                return;
+            _operation = operation;
+            _operation.TryInitialize(continuation, WaitContinuationMode.RunAction);
 
             if (_timeoutMs > 0)
+            {
                 _timer = _scheduler.ScheduleTimer(_timeoutMs, OnTimeout);
+                _operation.TryAddRegistration(TaskAsyncRegistration.From(_timer));
+            }
 
             DoPoll();
 
             if (!_completed)
-                _task.ArmInterruptingSignalSafetyNet(_token, ScheduleRePoll);
+                _task.ArmInterruptingSignalSafetyNet(_token, OnSignal);
         }
 
         public int GetResult()
@@ -297,6 +306,13 @@ public class EpollInode : TmpfsInode
             ScheduleRePoll();
         }
 
+        private void OnSignal()
+        {
+            _result = -(int)Errno.ERESTARTSYS;
+            _completed = true;
+            _operation?.TryComplete(WakeReason.Signal);
+        }
+
         private void OnRePollScheduled()
         {
             _reschedulePending = 0;
@@ -315,7 +331,7 @@ public class EpollInode : TmpfsInode
                 _timer?.Cancel();
                 _result = -(int)Errno.ERESTARTSYS;
                 _completed = true;
-                _continuation?.Invoke();
+                _operation?.TryComplete(WakeReason.Signal);
                 return;
             }
 
@@ -328,7 +344,7 @@ public class EpollInode : TmpfsInode
                 _timer?.Cancel();
                 _result = ready;
                 _completed = true;
-                _continuation?.Invoke();
+                _operation?.TryComplete(WakeReason.Event);
                 return;
             }
 
@@ -336,11 +352,12 @@ public class EpollInode : TmpfsInode
             {
                 _result = 0;
                 _completed = true;
-                _continuation?.Invoke();
+                _operation?.TryComplete(WakeReason.Timer);
                 return;
             }
 
             _queueWaitRegistration = _inode._waitQueue.RegisterCancelable(ScheduleRePoll, _task, _token);
+            _operation?.TryAddRegistration(TaskAsyncRegistration.From(_queueWaitRegistration));
         }
     }
 }

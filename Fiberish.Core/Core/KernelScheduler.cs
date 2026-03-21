@@ -30,8 +30,8 @@ public class KernelScheduler
     private readonly Dictionary<int, Process> _processes = [];
 
     private readonly Queue<FiberTask> _runQueue = new();
-    private readonly KernelSyncContext _synchronizationContext;
     private readonly Stopwatch _sw = Stopwatch.StartNew();
+    private readonly KernelSyncContext _synchronizationContext;
     private readonly Dictionary<int, FiberTask> _tasks = [];
     private readonly TimeWheel _timerSystem = new();
     private readonly ManualResetEventSlim _wakeEvent = new(false);
@@ -42,6 +42,11 @@ public class KernelScheduler
 
     private TtyDiscipline? _tty;
     private int _wakePending;
+
+    public KernelScheduler()
+    {
+        _synchronizationContext = new KernelSyncContext(this);
+    }
 
     // TTY reference for checking pending input
     public TtyDiscipline? Tty
@@ -63,11 +68,6 @@ public class KernelScheduler
     public FiberTask? CurrentTask { get; internal set; }
     public int InitPid => Volatile.Read(ref _initPid);
     public bool EngineInitReaperEnabled => Volatile.Read(ref _engineInitReaperEnabled) != 0;
-
-    public KernelScheduler()
-    {
-        _synchronizationContext = new KernelSyncContext(this);
-    }
 
 
     public int OwnerThreadId => Volatile.Read(ref _ownerThreadId);
@@ -140,7 +140,7 @@ public class KernelScheduler
     {
         AssertSchedulerThread();
         var mem = process.Mem;
-        var engine = process.Syscalls?.Engine;
+        var engine = process.Syscalls?.CurrentSyscallEngine;
         if (mem != null && engine != null)
             TryReleaseProcessMemory(process, engine);
         else
@@ -180,13 +180,7 @@ public class KernelScheduler
         var tasksToRemove = _tasks.Values.Where(t => t.PID == pid).ToList();
         foreach (var task in tasksToRemove) _tasks.Remove(task.TID);
 
-        foreach (var task in tasksToRemove)
-        {
-            task.Process.Syscalls.UnregisterEngine(task.CPU);
-            task.Status = FiberTaskStatus.Terminated;
-            task.ExecutionMode = TaskExecutionMode.Terminated;
-            task.Process.Threads.Remove(task);
-        }
+        foreach (var task in tasksToRemove) ReleaseDetachedTask(task);
     }
 
     public int DetachTask(FiberTask task)
@@ -194,12 +188,17 @@ public class KernelScheduler
         AssertSchedulerThread();
         _tasks.Remove(task.TID);
 
-        task.Process.Syscalls.UnregisterEngine(task.CPU);
+        ReleaseDetachedTask(task);
+        return task.Process.Threads.Count;
+    }
+
+    private void ReleaseDetachedTask(FiberTask task)
+    {
+        task.BeginTaskRetirement();
+        task.Process.Syscalls?.UnregisterEngine(task.CPU);
         task.Status = FiberTaskStatus.Terminated;
         task.ExecutionMode = TaskExecutionMode.Terminated;
-
         task.Process.Threads.Remove(task);
-        return task.Process.Threads.Count;
     }
 
     public FiberTask? GetTask(int tid)
@@ -297,6 +296,7 @@ public class KernelScheduler
     {
         AssertSchedulerThread();
         if (task.Status == FiberTaskStatus.Terminated) return;
+        if (task.IsRetiring) return;
 
         task.Status = FiberTaskStatus.Ready;
         _runQueue.Enqueue(task);
@@ -372,7 +372,7 @@ public class KernelScheduler
     {
         if (IsSchedulerThread)
         {
-            if (task.TrySetWaitReason(token, reason, scheduleStoredContinuation: false))
+            if (task.TrySetWaitReason(token, reason, false))
                 ScheduleContinuation(continuation, task, mode);
             return;
         }
@@ -382,6 +382,7 @@ public class KernelScheduler
 
     internal void ScheduleContinuation(Action continuation, FiberTask task, WaitContinuationMode mode)
     {
+        if (task.IsRetiring) return;
         if (mode == WaitContinuationMode.ResumeTask)
         {
             task.Continuation = continuation;
@@ -609,21 +610,24 @@ public class KernelScheduler
             switch (item.Kind)
             {
                 case SchedulerWorkItemKind.ResumeTask:
-                    if (item.Task != null) EnqueueTask(item.Task);
+                    if (item.Task != null && !item.Task.IsRetiring) EnqueueTask(item.Task);
                     break;
                 case SchedulerWorkItemKind.RunAction:
-                    item.Action?.Invoke();
+                    if (item.Context == null || !item.Context.IsRetiring)
+                        item.Action?.Invoke();
                     break;
                 case SchedulerWorkItemKind.WakeScheduler:
                     _wakePending = 0;
                     break;
                 case SchedulerWorkItemKind.DispatchSyncContextPost:
-                    item.Callback?.Invoke(item.State);
+                    if (item.Context == null || !item.Context.IsRetiring)
+                        item.Callback?.Invoke(item.State);
                     break;
                 case SchedulerWorkItemKind.DispatchSyncContextSend:
                     try
                     {
-                        item.Callback?.Invoke(item.State);
+                        if (item.Context == null || !item.Context.IsRetiring)
+                            item.Callback?.Invoke(item.State);
                     }
                     catch (Exception ex)
                     {
@@ -633,18 +637,24 @@ public class KernelScheduler
                     {
                         item.SendRequest?.SetCompleted();
                     }
+
                     break;
                 case SchedulerWorkItemKind.SetWaitReasonAndRunContinuation:
                     if (item.Task != null && item.Action != null)
                     {
+                        if (item.Task.IsRetiring) break;
                         if (item.Task.TrySetWaitReason(item.WaitToken, item.WaitReason,
-                                scheduleStoredContinuation: false))
+                                false))
                             ScheduleContinuation(item.Action, item.Task, item.ContinuationMode);
                     }
+
                     break;
                 case SchedulerWorkItemKind.FinalizeAsyncSyscall:
-                    if (item.Task != null)
+                    if (item.Task != null && !item.Task.IsRetiring)
                         item.Task.FinalizeAsyncSyscallFromScheduler(item.AsyncResult, item.State as Exception);
+                    break;
+                case SchedulerWorkItemKind.FinalizeTaskRetirement:
+                    item.Task?.TryFinalizeTaskRetirement();
                     break;
                 default:
                     throw new InvalidOperationException($"Unsupported work item kind {item.Kind}.");
@@ -902,6 +912,7 @@ public class KernelScheduler
 
         return false;
     }
+
     public readonly struct TimerAwaiter(long ticks, KernelScheduler scheduler) : INotifyCompletion
     {
         private readonly long _ticks = ticks;

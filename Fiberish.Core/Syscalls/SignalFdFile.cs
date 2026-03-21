@@ -234,7 +234,6 @@ public struct SignalFdAwaiter : INotifyCompletion
     private readonly SignalFdInode _inode;
     private readonly FiberTask _task;
     private FiberTask.WaitToken? _token;
-    private IDisposable? _registration;
 
     public SignalFdAwaiter(SignalFdInode inode, FiberTask task)
     {
@@ -247,31 +246,39 @@ public struct SignalFdAwaiter : INotifyCompletion
     public void OnCompleted(Action continuation)
     {
         _token = _task.BeginWaitToken();
-        var task = _task;
-        var token = _token;
-        var called = 0;
-        IDisposable? registration = null;
+        if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
+            return;
 
-        void RunOnce()
-        {
-            if (Interlocked.Exchange(ref called, 1) != 0)
-                return;
-            registration?.Dispose();
-            if (token != null)
-                task.TrySetWaitReason(token, WakeReason.IO);
-            task.CommonKernel.Schedule(continuation, task);
-        }
-
-        registration = _inode.RegisterWaitHandle(task, RunOnce, LinuxConstants.POLLIN);
-        _registration = registration;
+        var state = new SignalFdWaitOperation(_task, continuation, operation);
+        state.TryRegister(_inode.RegisterWaitHandle(_task, state.OnReadable, LinuxConstants.POLLIN));
     }
 
     public AwaitResult GetResult()
     {
-        _registration?.Dispose();
         if (_token == null) return AwaitResult.Completed;
 
         _task.CompleteWaitToken(_token);
         return AwaitResult.Completed;
+    }
+
+    private sealed class SignalFdWaitOperation
+    {
+        private readonly TaskAsyncOperationHandle _operation;
+
+        public SignalFdWaitOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
+        {
+            _operation = operation;
+            _operation.TryInitialize(continuation, WaitContinuationMode.RunAction);
+        }
+
+        public void TryRegister(IDisposable? registration)
+        {
+            _operation.TryAddRegistration(TaskAsyncRegistration.From(registration));
+        }
+
+        public void OnReadable()
+        {
+            _operation.TryComplete(WakeReason.IO);
+        }
     }
 }

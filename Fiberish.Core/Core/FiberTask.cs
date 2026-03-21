@@ -46,15 +46,16 @@ public class FiberTask
 {
     private static int _tidCounter;
     private readonly object _waitStateGate = new();
-    private KernelSyncContext? _synchronizationContext;
     private Action? _activeWaitContinuation;
     private WaitContinuationMode _activeWaitContinuationMode;
     private long _activeWaitId;
     private WakeReason _activeWaitReason;
+    private int _engineDisposed;
     private long _nextWaitTokenId;
     private int _pageFaultDepth;
 
     private bool _pendingFaultFromInterrupt;
+    private KernelSyncContext? _synchronizationContext;
 
     public uint SyscallArg1;
     public uint SyscallArg2;
@@ -74,6 +75,7 @@ public class FiberTask
 
         CPU = cpu;
         CPU.Owner = this;
+        AsyncScope = new FiberTaskAsyncScope(this);
 
         Logger = kernel.LoggerFactory.CreateLogger($"Fiberish.Task.{TID}");
         CPU.LogHandler = EngineLogHandler;
@@ -91,6 +93,8 @@ public class FiberTask
     public Engine CPU { get; }
     public KernelScheduler CommonKernel { get; }
     public Action? Continuation { get; set; }
+    internal FiberTaskAsyncScope AsyncScope { get; }
+    public bool IsRetiring => AsyncScope.IsClosing;
 
     public FiberTaskStatus Status { get; set; } = FiberTaskStatus.Ready;
 
@@ -179,6 +183,31 @@ public class FiberTask
         return BeginWaitToken();
     }
 
+    internal bool TryEnterAsyncOperation(WaitToken? token, out TaskAsyncOperationHandle? operation)
+    {
+        return AsyncScope.TryEnter(token, out operation);
+    }
+
+    public void BeginTaskRetirement()
+    {
+        AsyncScope.Close();
+    }
+
+    public bool TryFinalizeTaskRetirement()
+    {
+        if (!AsyncScope.TryFinalizeTaskRetirement())
+            return false;
+        if (PendingSyscall != null || _handlingAsyncSyscall || Continuation != null)
+            throw new InvalidOperationException(
+                $"Task TID={TID} finalized retirement too early: pendingSyscall={PendingSyscall != null}, " +
+                $"handlingAsyncSyscall={_handlingAsyncSyscall}, continuation={Continuation != null}, " +
+                $"status={Status}, mode={ExecutionMode}, exited={Exited}");
+        if (Interlocked.Exchange(ref _engineDisposed, 1) != 0)
+            return false;
+        CPU.Dispose();
+        return true;
+    }
+
     internal KernelSyncContext GetOrCreateSynchronizationContext()
     {
         return _synchronizationContext ??= new KernelSyncContext(CommonKernel, this);
@@ -186,7 +215,7 @@ public class FiberTask
 
     public bool TrySetWaitReason(WaitToken token, WakeReason reason)
     {
-        return TrySetWaitReason(token, reason, scheduleStoredContinuation: true);
+        return TrySetWaitReason(token, reason, true);
     }
 
     internal bool TrySetWaitReason(WaitToken token, WakeReason reason, bool scheduleStoredContinuation)
@@ -252,7 +281,9 @@ public class FiberTask
             {
                 if (_activeWaitReason != WakeReason.None)
                     // Already completed or interrupted, run immediately
+                {
                     runNow = continuation;
+                }
                 else
                 {
                     // Still waiting
