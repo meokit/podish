@@ -17,6 +17,9 @@ namespace Podish.Core;
 
 public sealed class ContainerRunRequest
 {
+    public const string TestVirtualEchoSocketPath = "/podish-test-echo.sock";
+    public const string TestVirtualEchoSocketEnvVar = "PODISH_TEST_VIRT_ECHO_SOCK";
+
     public required string RootfsPath { get; init; }
     public string Hostname { get; init; } = string.Empty;
     public string? ContainerName { get; init; }
@@ -41,6 +44,8 @@ public sealed class ContainerRunRequest
     public bool UseEngineInit { get; init; }
     public long? MemoryQuotaBytes { get; init; }
     public string? GuestStatsExportDir { get; init; }
+    public bool EnableTestVirtualEchoServer { get; init; }
+    public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
 }
 
 public sealed class ContainerRuntimeService
@@ -82,10 +87,10 @@ public sealed class ContainerRuntimeService
         if (request.UseTty)
         {
             driver = request.TerminalBridge != null
-                ? new BridgeTtyDriver(request.TerminalBridge, logSink)
+                ? new BridgeTtyDriver(request.TerminalBridge, logSink, scheduler)
                 : new ConsoleTtyDriver(logSink);
             var broadcaster = new SchedulerSignalBroadcaster(scheduler);
-            ttyDiag = new TtyDiscipline(driver, broadcaster, _loggerFactory.CreateLogger<TtyDiscipline>());
+            ttyDiag = new TtyDiscipline(driver, broadcaster, _loggerFactory.CreateLogger<TtyDiscipline>(), scheduler);
             if (driver is ConsoleTtyDriver consoleDriver)
                 consoleDriver.BindTty(ttyDiag);
             if (request.TerminalBridge != null)
@@ -335,6 +340,8 @@ public sealed class ContainerRuntimeService
                 finalEnvs.Add("TERM=xterm");
             foreach (var env in request.GuestEnvs)
                 finalEnvs.Add(env);
+            if (request.EnableTestVirtualEchoServer)
+                finalEnvs.Add($"{ContainerRunRequest.TestVirtualEchoSocketEnvVar}={ContainerRunRequest.TestVirtualEchoSocketPath}");
 
             startupPhase = "resolve-init";
             var (loc, guestPathResolved) = runtime.Syscalls.ResolvePath(actualExe, true);
@@ -357,6 +364,11 @@ public sealed class ContainerRuntimeService
             var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs,
                 finalEnvs.ToArray(),
                 scheduler, ttyDiag, loc.Mount!, uts, engineInitProc?.TGID ?? 0);
+            if (request.EnableTestVirtualEchoServer)
+            {
+                var daemonParentPid = engineInitProc?.TGID ?? mainTask.Process.TGID;
+                request.ConfigureVirtualDaemons?.Invoke(runtime, scheduler, uts, daemonParentPid);
+            }
             initProcessStarted = true;
             startupPhase = "running";
             request.ProcessController?.BindRuntimeControl(() =>
@@ -1117,13 +1129,15 @@ public sealed class ContainerRuntimeService
         private readonly object _lock = new();
         private readonly Task _pumpTask;
         private readonly Queue<(TtyEndpointKind Kind, byte[] Data)> _queue = new();
-        private readonly AsyncWaitQueue _writeReady = new();
+        private readonly AsyncWaitQueue _writeReady;
         private int _queuedBytes;
 
-        public BridgeTtyDriver(PodishTerminalBridge bridge, IContainerLogSink containerLogSink)
+        public BridgeTtyDriver(PodishTerminalBridge bridge, IContainerLogSink containerLogSink,
+            KernelScheduler scheduler)
         {
             _bridge = bridge;
             _containerLogSink = containerLogSink;
+            _writeReady = new AsyncWaitQueue(scheduler);
             _pumpTask = Task.Run(PumpLoop);
         }
 

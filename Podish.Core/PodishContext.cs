@@ -29,6 +29,7 @@ public sealed class PodishRunSpec
     public bool Tty { get; init; }
     public bool Strace { get; init; }
     public bool Init { get; init; }
+    public bool TestVirtualEchoServer { get; init; }
     public long? MemoryQuotaBytes { get; init; }
     public string LogDriver { get; init; } = "json-file";
     public IReadOnlyList<PublishedPortSpec> PublishedPorts { get; init; } = Array.Empty<PublishedPortSpec>();

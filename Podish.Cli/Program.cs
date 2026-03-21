@@ -1,7 +1,9 @@
 ﻿using System.CommandLine;
 using System.Text.Json;
+using Fiberish.Core;
 using Fiberish.Core.Net;
 using Fiberish.Diagnostics;
+using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Core;
@@ -96,6 +98,9 @@ internal class Program
             new[] { "--guest-stats-dir" },
             () => null,
             "Export guest stats before teardown into this directory");
+        var testVirtEchoOption = new Option<bool>(
+            new[] { "--test-virt-echo" },
+            "Enable a test-only virtual echo server inside the guest at /podish-test-echo.sock");
         var runArgsArgument = new Argument<string[]>(
             "run-args",
             () => Array.Empty<string>(),
@@ -120,6 +125,7 @@ internal class Program
         runCommand.AddOption(networkOption);
         runCommand.AddOption(publishOption);
         runCommand.AddOption(guestStatsExportDirOption);
+        runCommand.AddOption(testVirtEchoOption);
         runCommand.AddArgument(runArgsArgument);
 
         runCommand.SetHandler(async context =>
@@ -140,6 +146,7 @@ internal class Program
             var networkRaw = context.ParseResult.GetValueForOption(networkOption) ?? "host";
             var publishRaw = context.ParseResult.GetValueForOption(publishOption) ?? Array.Empty<string>();
             var guestStatsExportDir = context.ParseResult.GetValueForOption(guestStatsExportDirOption);
+            var enableTestVirtEcho = context.ParseResult.GetValueForOption(testVirtEchoOption);
             var runArgs = context.ParseResult.GetValueForArgument(runArgsArgument) ?? Array.Empty<string>();
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
             string? image = null;
@@ -337,6 +344,7 @@ internal class Program
                 Tty = tty,
                 Strace = strace,
                 Init = useInit,
+                TestVirtualEchoServer = enableTestVirtEcho,
                 MemoryQuotaBytes = memoryQuotaBytes,
                 LogDriver = containerLogDriver.ToCliValue(),
                 PublishedPorts = publishedPorts
@@ -383,7 +391,8 @@ internal class Program
                 eventStore,
                 publishedPorts,
                 guestStatsExportDir,
-                memoryQuotaBytes);
+                memoryQuotaBytes,
+                enableTestVirtEcho);
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -536,7 +545,8 @@ internal class Program
                 eventStore,
                 spec.PublishedPorts,
                 guestStatsExportDir,
-                spec.MemoryQuotaBytes);
+                spec.MemoryQuotaBytes,
+                spec.TestVirtualEchoServer);
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -1317,7 +1327,7 @@ internal class Program
         string containerId, string? containerName, string hostname, NetworkMode networkMode, string image,
         string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts, string? guestStatsExportDir,
-        long? memoryQuotaBytes)
+        long? memoryQuotaBytes, bool enableTestVirtEcho)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
         var service = new ContainerRuntimeService(Logger, ProgramLoggerFactory);
@@ -1343,8 +1353,52 @@ internal class Program
             EventStore = eventStore,
             PublishedPorts = publishedPorts,
             GuestStatsExportDir = guestStatsExportDir,
-            MemoryQuotaBytes = memoryQuotaBytes
+            MemoryQuotaBytes = memoryQuotaBytes,
+            EnableTestVirtualEchoServer = enableTestVirtEcho,
+            ConfigureVirtualDaemons = enableTestVirtEcho
+                ? (runtime, scheduler, uts, parentPid) =>
+                    RegisterTestVirtualDaemons(rootfsPath, runtime, scheduler, uts, parentPid)
+                : null
         });
+    }
+
+    private static void RegisterTestVirtualDaemons(string rootfsPath, KernelRuntime runtime, KernelScheduler scheduler,
+        UTSNamespace? uts, int parentPid)
+    {
+        var hostSocketPath = Path.Combine(rootfsPath, ContainerRunRequest.TestVirtualEchoSocketPath.TrimStart('/'));
+        try
+        {
+            if (File.Exists(hostSocketPath))
+                File.Delete(hostSocketPath);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Failed to delete stale host socket path {Path}", hostSocketPath);
+        }
+
+        var existing = runtime.Syscalls.PathWalk(ContainerRunRequest.TestVirtualEchoSocketPath);
+        if (existing.IsValid && existing.Dentry?.Inode?.Type == InodeType.Socket)
+        {
+            var (parentLoc, name, err) = runtime.Syscalls.PathWalkForCreate(ContainerRunRequest.TestVirtualEchoSocketPath);
+            if (err == 0 && parentLoc.Dentry?.Inode != null && !string.IsNullOrEmpty(name))
+            {
+                try
+                {
+                    parentLoc.Dentry.Inode.Unlink(name);
+                    _ = parentLoc.Dentry.TryUncacheChild(name, "Podish.RegisterTestVirtualDaemons.cleanup", out _);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        var registry = new VirtualDaemonRegistry(runtime.Syscalls, scheduler);
+        var daemon = new PodishTestVirtualEchoDaemon(ContainerRunRequest.TestVirtualEchoSocketPath,
+            ProgramLoggerFactory.CreateLogger<PodishTestVirtualEchoDaemon>());
+        var daemonRuntime = registry.Spawn(daemon, parentPid: parentPid, uts: uts);
+        Logger.LogInformation("Registered Podish test virtual echo daemon pid={Pid} path={Path}",
+            daemonRuntime.Process.TGID, daemon.UnixPath);
     }
 }
 

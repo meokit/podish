@@ -1,4 +1,5 @@
 using Fiberish.Core.VFS.TTY;
+using Fiberish.Memory;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
 
@@ -81,5 +82,48 @@ public static class ProcessFactory
             scheduler.UnregisterProcess(proc.TGID);
             throw;
         }
+    }
+
+    public static FiberTask CreateVirtualDaemonProcess(SyscallManager templateSyscalls, KernelScheduler scheduler,
+        string name, UTSNamespace? uts = null, int parentPid = 0)
+    {
+        scheduler.AssertSchedulerThread();
+
+        var pid = scheduler.AllocateTaskId();
+        var mem = new VMAManager(templateSyscalls.Mem.Backings);
+        var engine = new Engine();
+        var syscalls = templateSyscalls.Clone(mem, false, true);
+        syscalls.CurrentSyscallEngine = engine;
+        syscalls.RegisterEngine(engine);
+        engine.CurrentSyscallManager = syscalls;
+
+        var proc = new Process(pid, mem, syscalls, uts)
+        {
+            PGID = pid,
+            SID = pid,
+            PPID = parentPid,
+            Kind = ProcessKind.VirtualDaemon,
+            VirtualDaemonName = name,
+            Name = name
+        };
+
+        scheduler.RegisterProcess(proc);
+        ProcFsManager.OnProcessStart(syscalls, proc);
+
+        var task = new FiberTask(proc.TGID, proc, engine, scheduler)
+        {
+            ExecutionMode = TaskExecutionMode.HostService,
+            Status = FiberTaskStatus.Waiting
+        };
+        engine.Owner = task;
+
+        if (parentPid > 0)
+        {
+            var parent = scheduler.GetProcess(parentPid);
+            if (parent != null && !parent.Children.Contains(proc.TGID))
+                parent.Children.Add(proc.TGID);
+        }
+
+        return task;
     }
 }
