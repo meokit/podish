@@ -633,7 +633,7 @@ public class OverlayTests
 
             Assert.Null(rootInode.Lookup("ghost"));
             Assert.Equal(before - 1, rootInode.GetLinkCountForStat());
-            Assert.Contains("ghost", overlaySb.GetWhiteouts("/"));
+            Assert.Contains("ghost", overlaySb.GetWhiteouts(new InodeKey(rootInode.Dev, rootInode.Ino)));
         }
         finally
         {
@@ -673,7 +673,7 @@ public class OverlayTests
             rootInode.Rename("src.txt", rootInode, "dst.txt");
 
             Assert.Null(rootInode.Lookup("src.txt"));
-            Assert.Contains("src.txt", overlaySb.GetWhiteouts("/"));
+            Assert.Contains("src.txt", overlaySb.GetWhiteouts(new InodeKey(rootInode.Dev, rootInode.Ino)));
 
             var dst = rootInode.Lookup("dst.txt");
             Assert.NotNull(dst);

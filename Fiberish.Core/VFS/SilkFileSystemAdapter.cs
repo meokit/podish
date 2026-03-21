@@ -186,6 +186,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
     private readonly SilkRepository _repository;
     private readonly HashSet<long> _dirtyPageIndexes = [];
     private MappedFilePageCache? _mappedPageCache;
+    private List<DirectoryEntry>? _cachedEntries;
 
     public SilkInode(ulong ino, IndexedMemorySuperBlock sb, SilkRepository repository) : base(ino, sb)
     {
@@ -247,6 +248,14 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
         SymlinkData = data.Length == 0 ? Array.Empty<byte>() : [.. data];
         Size = (ulong)SymlinkData.Length;
+    }
+
+    private void InvalidateEntriesCache()
+    {
+        lock (Lock)
+        {
+            _cachedEntries = null;
+        }
     }
 
     private void SyncSelf()
@@ -364,36 +373,43 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (Type != InodeType.Directory)
             return base.GetEntries();
 
-        var entries = new List<DirectoryEntry>
+        lock (Lock)
         {
-            new() { Name = ".", Ino = Ino, Type = InodeType.Directory },
-            new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
-        };
+            if (_cachedEntries != null)
+                return _cachedEntries;
 
-        foreach (var rec in _metadata.ListDentriesByParent((long)Ino))
-        {
-            InodeType childType;
-            var key = new DCacheKey(Ino, rec.Name);
-            if (IndexedSb.Dentries.TryGetValue(key, out var cached) && cached.Inode != null)
+            var entries = new List<DirectoryEntry>
             {
-                childType = cached.Inode.Type;
-            }
-            else
+                new() { Name = ".", Ino = Ino, Type = InodeType.Directory },
+                new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
+            };
+
+            foreach (var rec in _metadata.ListDentriesByParent((long)Ino))
             {
-                var childRec = _metadata.GetInode(rec.Ino);
-                if (childRec == null) continue;
-                childType = MapInodeType(childRec.Value.Kind);
+                InodeType childType;
+                var key = new DCacheKey(Ino, rec.Name);
+                if (IndexedSb.Dentries.TryGetValue(key, out var cached) && cached.Inode != null)
+                {
+                    childType = cached.Inode.Type;
+                }
+                else
+                {
+                    var childRec = _metadata.GetInode(rec.Ino);
+                    if (childRec == null) continue;
+                    childType = MapInodeType(childRec.Value.Kind);
+                }
+
+                entries.Add(new DirectoryEntry
+                {
+                    Name = rec.Name,
+                    Ino = (ulong)rec.Ino,
+                    Type = childType
+                });
             }
 
-            entries.Add(new DirectoryEntry
-            {
-                Name = rec.Name,
-                Ino = (ulong)rec.Ino,
-                Type = childType
-            });
+            _cachedEntries = entries;
+            return entries;
         }
-
-        return entries;
     }
 
     private bool TryHydrateChildDentry(Dentry parent, string name, Dentry childDentry)
@@ -466,6 +482,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             else if (child.Type == InodeType.File)
                 child.EnsureRegularFileBackingExists();
         }
+        InvalidateEntriesCache();
         return created;
     }
 
@@ -479,6 +496,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             tx.UpsertDentry((long)Ino, created.Name, (long)created.Inode!.Ino);
             tx.ClearWhiteout((long)Ino, created.Name);
         });
+        InvalidateEntriesCache();
         return created;
     }
 
@@ -499,6 +517,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
                     tx.MarkWhiteout(parentIno, dentry.Name[4..]);
             }
         });
+        InvalidateEntriesCache();
         return created;
     }
 
@@ -513,6 +532,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         });
         if (created.Inode is SilkInode child)
             child.PersistSymlinkData();
+        InvalidateEntriesCache();
         return created;
     }
 
@@ -525,6 +545,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             tx.UpsertDentry((long)Ino, created.Name, (long)oldInode.Ino);
             tx.ClearWhiteout((long)Ino, created.Name);
         });
+        InvalidateEntriesCache();
         return created;
     }
 
@@ -574,6 +595,8 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             tx.ClearWhiteout((long)Ino, name);
             UpsertInodeMetadataIfLive(tx, victim);
         });
+
+        InvalidateEntriesCache();
     }
 
     public override void Rmdir(string name)
@@ -590,6 +613,8 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             tx.ClearWhiteout((long)Ino, name);
             UpsertInodeMetadataIfLive(tx, victim);
         });
+
+        InvalidateEntriesCache();
     }
 
     public override void Rename(string oldName, Inode newParent, string newName)
@@ -619,6 +644,10 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             if (!ReferenceEquals(overwrittenInode, movedInode))
                 UpsertInodeMetadataIfLive(tx, overwrittenInode);
         });
+
+        InvalidateEntriesCache();
+        if (newParent is SilkInode parentSilk)
+            parentSilk.InvalidateEntriesCache();
     }
 
     public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
