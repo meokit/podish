@@ -42,6 +42,11 @@ internal sealed class MappedFilePageCache : IDisposable
         _backend.Truncate(size);
     }
 
+    public long Trim(bool aggressive)
+    {
+        return _backend.Trim(aggressive);
+    }
+
     public FilePageBackendDiagnostics GetDiagnostics()
     {
         return _backend.GetDiagnostics();

@@ -11,5 +11,6 @@ internal interface IFilePageBackend : IDisposable
     bool TryAcquirePageHandle(long filePageIndex, long fileSize, bool writable, out IPageHandle? handle);
     bool TryFlushPage(long filePageIndex);
     void Truncate(long size);
+    long Trim(bool aggressive);
     FilePageBackendDiagnostics GetDiagnostics();
 }

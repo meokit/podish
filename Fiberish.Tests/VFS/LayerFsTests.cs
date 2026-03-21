@@ -412,7 +412,7 @@ public class LayerFsTests
             VfsShrinkMode.PageCache | VfsShrinkMode.DentryCache | VfsShrinkMode.InodeCache);
         Assert.True(secondShrink.DentriesDropped > 0);
         Assert.True(secondShrink.InodesEvicted > 0);
-        Assert.True(secondShrink.PageCacheBytesReclaimed >= LinuxConstants.PageSize);
+        Assert.True(secondShrink.GuestPageCacheBytesReclaimed >= LinuxConstants.PageSize);
         Assert.True(firstInode.IsCacheEvicted);
 
         var secondLoc = sm.PathWalkWithFlags("/mnt/e2e.txt", LookupFlags.FollowSymlink);

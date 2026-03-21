@@ -24,6 +24,11 @@ internal sealed class BufferedPageBackend : IFilePageBackend
     {
     }
 
+    public long Trim(bool aggressive)
+    {
+        return 0;
+    }
+
     public FilePageBackendDiagnostics GetDiagnostics()
     {
         return default;

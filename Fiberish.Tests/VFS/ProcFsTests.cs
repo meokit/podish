@@ -246,6 +246,7 @@ public class ProcFsTests
             var free = ParseMemInfoKiB(text, "MemFree");
             var available = ParseMemInfoKiB(text, "MemAvailable");
             var mapped = ParseMemInfoKiB(text, "Mapped");
+            var hostMapped = ParseMemInfoKiB(text, "HostMapped");
             var shmem = ParseMemInfoKiB(text, "Shmem");
             var writeback = ParseMemInfoKiB(text, "Writeback");
             var committed = ParseMemInfoKiB(text, "Committed_AS");
@@ -260,6 +261,7 @@ public class ProcFsTests
             Assert.InRange(free, 0, total);
             Assert.InRange(available, 0, total);
             Assert.True(mapped > 0);
+            Assert.True(hostMapped >= 0);
             Assert.True(shmem >= 0);
             Assert.True(writeback >= 0);
             Assert.True(committed >= 0);
@@ -413,6 +415,198 @@ public class ProcFsTests
         {
             cache?.Release();
             if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+        }
+    }
+
+    [Fact]
+    public void ProcSysVmDropCaches_Mode1_ShouldTrimHostfsMappedWindows_WhenInactive()
+    {
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        var hostRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(hostRoot);
+        File.WriteAllBytes(Path.Combine(hostRoot, "data.bin"), new byte[LinuxConstants.PageSize * 2]);
+
+        try
+        {
+            var runtime = KernelRuntime.Bootstrap(hostRoot, false, false);
+            var sm = runtime.Syscalls;
+            var task = AttachTaskContext(runtime, 0, true);
+            MountHostfsAt(sm, hostRoot, "/mnt");
+
+            var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
+            var loc = sm.PathWalkWithFlags("/mnt/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
+            loc.Dentry!.Inode!.Open(file);
+            const uint mapAddr = 0x4A000000;
+            runtime.Memory.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "HOSTFS_DROP_INACTIVE", runtime.Engine);
+            Assert.True(runtime.Memory.HandleFault(mapAddr, true, runtime.Engine));
+            runtime.Memory.Munmap(mapAddr, LinuxConstants.PageSize, runtime.Engine);
+
+            var inode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
+            var cache = Assert.IsType<AddressSpace>(inode.Mapping);
+            Assert.True(cache.PageCount > 0);
+            Assert.True(inode.GetMappedPageCacheDiagnostics().WindowBytes > 0);
+
+            var before = MemoryStatsSnapshot.Capture(sm);
+            Assert.True(before.HostMappedWindowBytes > 0);
+
+            Assert.Equal(2, WriteAll(task, dropLoc, "1\n"));
+
+            Assert.Equal(0, cache.PageCount);
+            Assert.Equal(0, inode.GetMappedPageCacheDiagnostics().WindowBytes);
+            var after = MemoryStatsSnapshot.Capture(sm);
+            Assert.Equal(0, after.HostMappedWindowBytes);
+        }
+        finally
+        {
+            if (Directory.Exists(hostRoot)) Directory.Delete(hostRoot, true);
+        }
+    }
+
+    [Fact]
+    public void ProcSysVmDropCaches_Mode1_ShouldPreserveHostfsMappedWindows_WhenActive()
+    {
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        var hostRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(hostRoot);
+        File.WriteAllBytes(Path.Combine(hostRoot, "data.bin"), new byte[LinuxConstants.PageSize * 2]);
+
+        try
+        {
+            var runtime = KernelRuntime.Bootstrap(hostRoot, false, false);
+            var sm = runtime.Syscalls;
+            var task = AttachTaskContext(runtime, 0, true);
+            MountHostfsAt(sm, hostRoot, "/mnt");
+
+            var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
+            var loc = sm.PathWalkWithFlags("/mnt/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
+            loc.Dentry!.Inode!.Open(file);
+            const uint mapAddr = 0x4A100000;
+            runtime.Memory.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "HOSTFS_DROP_ACTIVE", runtime.Engine);
+            Assert.True(runtime.Memory.HandleFault(mapAddr, true, runtime.Engine));
+
+            var inode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
+            var beforeDiag = inode.GetMappedPageCacheDiagnostics();
+            Assert.True(beforeDiag.WindowBytes > 0);
+
+            Assert.Equal(2, WriteAll(task, dropLoc, "1\n"));
+
+            var afterDiag = inode.GetMappedPageCacheDiagnostics();
+            Assert.Equal(beforeDiag.WindowBytes, afterDiag.WindowBytes);
+            Assert.True(runtime.Engine.CopyToUser(mapAddr, "AB"u8.ToArray()));
+
+            runtime.Memory.Munmap(mapAddr, LinuxConstants.PageSize, runtime.Engine);
+        }
+        finally
+        {
+            if (Directory.Exists(hostRoot)) Directory.Delete(hostRoot, true);
+        }
+    }
+
+    [Fact]
+    public void ProcSysVmDropCaches_Mode1_ShouldTrimSilkMappedWindows_WhenInactive()
+    {
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-drop-{Guid.NewGuid():N}");
+
+        try
+        {
+            var runtime = CreateTmpfsProcRuntime();
+            var sm = runtime.Syscalls;
+            var task = AttachTaskContext(runtime, 0, true);
+            MountSilkfsAt(sm, silkRoot, "/mnt");
+
+            var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
+            var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+
+            var file = new Dentry("data.bin", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
+            var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
+            Assert.Equal(LinuxConstants.PageSize * 2, file.Inode!.Write(wf, new byte[LinuxConstants.PageSize * 2], 0));
+            wf.Close();
+
+            var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
+            file.Inode!.Open(mappedFile);
+            const uint mapAddr = 0x4A200000;
+            runtime.Memory.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, "SILKFS_DROP_INACTIVE", runtime.Engine);
+            Assert.True(runtime.Memory.HandleFault(mapAddr, true, runtime.Engine));
+            runtime.Memory.Munmap(mapAddr, LinuxConstants.PageSize, runtime.Engine);
+
+            var inode = Assert.IsType<SilkInode>(file.Inode);
+            var cache = Assert.IsType<AddressSpace>(inode.Mapping);
+            Assert.True(cache.PageCount > 0);
+            Assert.True(inode.GetMappedPageCacheDiagnostics().WindowBytes > 0);
+
+            var before = MemoryStatsSnapshot.Capture(sm);
+            Assert.True(before.HostMappedWindowBytes > 0);
+
+            Assert.Equal(2, WriteAll(task, dropLoc, "1\n"));
+
+            Assert.Equal(0, cache.PageCount);
+            Assert.Equal(0, inode.GetMappedPageCacheDiagnostics().WindowBytes);
+            var after = MemoryStatsSnapshot.Capture(sm);
+            Assert.Equal(0, after.HostMappedWindowBytes);
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
+    public void ProcSysVmDropCaches_Mode1_ShouldPreserveSilkMappedWindows_WhenActive()
+    {
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-drop-{Guid.NewGuid():N}");
+
+        try
+        {
+            var runtime = CreateTmpfsProcRuntime();
+            var sm = runtime.Syscalls;
+            var task = AttachTaskContext(runtime, 0, true);
+            MountSilkfsAt(sm, silkRoot, "/mnt");
+
+            var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
+            var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+
+            var file = new Dentry("active.bin", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
+            var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
+            Assert.Equal(LinuxConstants.PageSize * 2, file.Inode!.Write(wf, new byte[LinuxConstants.PageSize * 2], 0));
+            wf.Close();
+
+            var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
+            file.Inode!.Open(mappedFile);
+            const uint mapAddr = 0x4A300000;
+            runtime.Memory.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, "SILKFS_DROP_ACTIVE", runtime.Engine);
+            Assert.True(runtime.Memory.HandleFault(mapAddr, true, runtime.Engine));
+
+            var inode = Assert.IsType<SilkInode>(file.Inode);
+            var beforeDiag = inode.GetMappedPageCacheDiagnostics();
+            Assert.True(beforeDiag.WindowBytes > 0);
+
+            Assert.Equal(2, WriteAll(task, dropLoc, "1\n"));
+
+            var afterDiag = inode.GetMappedPageCacheDiagnostics();
+            Assert.Equal(beforeDiag.WindowBytes, afterDiag.WindowBytes);
+            Assert.True(runtime.Engine.CopyToUser(mapAddr, "CD"u8.ToArray()));
+
+            runtime.Memory.Munmap(mapAddr, LinuxConstants.PageSize, runtime.Engine);
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
         }
     }
 
@@ -757,6 +951,55 @@ public class ProcFsTests
     private static void WriteCString(KernelRuntime runtime, uint addr, string value)
     {
         Assert.True(runtime.Engine.CopyToUser(addr, Encoding.UTF8.GetBytes(value + '\0')));
+    }
+
+    private static KernelRuntime CreateTmpfsProcRuntime()
+    {
+        return KernelRuntime.BootstrapWithRoot(false, sys =>
+        {
+            var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "proc-test-root", null);
+            var rootMount = new Mount(rootSb, rootSb.Root)
+            {
+                Source = "tmpfs",
+                FsType = "tmpfs",
+                Options = "rw"
+            };
+            sys.InitializeRoot(rootSb.Root, rootMount);
+            sys.MountStandardProc();
+        });
+    }
+
+    private static void EnsureDirectory(SyscallManager sm, string guestPath)
+    {
+        var loc = sm.PathWalkWithFlags(guestPath, LookupFlags.FollowSymlink);
+        if (loc.IsValid)
+            return;
+
+        var parentPath = Path.GetDirectoryName(guestPath.Replace('\\', '/'))?.Replace('\\', '/');
+        if (string.IsNullOrEmpty(parentPath))
+            parentPath = "/";
+        var name = Path.GetFileName(guestPath);
+        var parent = sm.PathWalkWithFlags(parentPath, LookupFlags.FollowSymlink);
+        Assert.True(parent.IsValid);
+        var dentry = new Dentry(name, null, parent.Dentry, parent.Dentry!.SuperBlock);
+        parent.Dentry.Inode!.Mkdir(dentry, 0x1FF, 0, 0);
+        parent.Dentry.Children[name] = dentry;
+    }
+
+    private static void MountHostfsAt(SyscallManager sm, string hostPath, string guestPath)
+    {
+        sm.MountHostfs(hostPath, guestPath);
+    }
+
+    private static void MountSilkfsAt(SyscallManager sm, string silkRoot, string guestPath)
+    {
+        EnsureDirectory(sm, guestPath);
+        var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+        Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+        var target = sm.PathWalkWithFlags(guestPath, LookupFlags.FollowSymlink);
+        Assert.True(target.IsValid);
+        Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
     }
 
     private static ValueTask<int> CallSyscall(SyscallManager syscallManager, string name, params object[] args)

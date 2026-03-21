@@ -177,7 +177,7 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
     }
 }
 
-public sealed class SilkInode : IndexedMemoryInode
+public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 {
     private static readonly AsyncLocal<int> NamespaceMutationDepth = new();
     private readonly object _dirtyPageLock = new();
@@ -902,6 +902,19 @@ public sealed class SilkInode : IndexedMemoryInode
         lock (_mappedCacheLock)
         {
             return _mappedPageCache?.GetDiagnostics() ?? default;
+        }
+    }
+
+    FilePageBackendDiagnostics IHostMappedCacheDropper.GetMappedCacheDiagnostics()
+    {
+        return GetMappedPageCacheDiagnostics();
+    }
+
+    long IHostMappedCacheDropper.TrimMappedCache(bool aggressive)
+    {
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.Trim(aggressive) ?? 0;
         }
     }
 

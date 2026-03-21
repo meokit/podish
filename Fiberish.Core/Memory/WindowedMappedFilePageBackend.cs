@@ -121,6 +121,24 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
         DisposeWindows(disposeNow);
     }
 
+    public long Trim(bool aggressive)
+    {
+        List<Window> disposeNow;
+        lock (_lock)
+        {
+            disposeNow = TrimWindowsLocked(aggressive);
+        }
+
+        long reclaimedBytes = 0;
+        foreach (var window in disposeNow)
+        {
+            reclaimedBytes += window.Length;
+            window.Dispose();
+        }
+
+        return reclaimedBytes;
+    }
+
     public FilePageBackendDiagnostics GetDiagnostics()
     {
         lock (_lock)
@@ -233,6 +251,31 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
                 window.Retired = true;
 
         _windows.Clear();
+        return disposeNow;
+    }
+
+    private List<Window> TrimWindowsLocked(bool aggressive)
+    {
+        var disposeNow = new List<Window>();
+        var startsToRemove = new List<long>();
+        foreach (var (start, window) in _windows)
+        {
+            if (window.Retired)
+                continue;
+
+            if (!aggressive && window.RefCount > 0)
+                continue;
+
+            startsToRemove.Add(start);
+            if (window.RefCount == 0)
+                disposeNow.Add(window);
+            else
+                window.Retired = true;
+        }
+
+        foreach (var start in startsToRemove)
+            _windows.Remove(start);
+
         return disposeNow;
     }
 

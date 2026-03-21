@@ -21,7 +21,8 @@ public enum VfsShrinkMode
 }
 
 public readonly record struct VfsShrinkStats(
-    long PageCacheBytesReclaimed,
+    long GuestPageCacheBytesReclaimed,
+    long HostMappedCacheBytesTrimmed,
     long DentriesDropped,
     long InodesEvicted,
     long SuperblocksScanned);
@@ -31,16 +32,20 @@ public static class VfsShrinker
     public static VfsShrinkStats Shrink(SyscallManager? syscallManager, VfsShrinkMode mode)
     {
         if (syscallManager == null || mode == VfsShrinkMode.None)
-            return new VfsShrinkStats(0, 0, 0, 0);
+            return new VfsShrinkStats(0, 0, 0, 0, 0);
 
         var superblocks = new HashSet<SuperBlock>();
         foreach (var mount in syscallManager.Mounts)
             if (mount?.SB != null)
                 superblocks.Add(mount.SB);
 
-        long pageCacheBytesReclaimed = 0;
+        long guestPageCacheBytesReclaimed = 0;
+        long hostMappedCacheBytesTrimmed = 0;
         if ((mode & VfsShrinkMode.PageCache) != 0)
-            pageCacheBytesReclaimed = GlobalAddressSpaceCacheManager.TryReclaimBytes(long.MaxValue);
+        {
+            guestPageCacheBytesReclaimed = GlobalAddressSpaceCacheManager.TryReclaimBytes(long.MaxValue);
+            hostMappedCacheBytesTrimmed = TrimHostMappedCaches(superblocks, false);
+        }
 
         long dentriesDropped = 0;
         if ((mode & VfsShrinkMode.DentryCache) != 0)
@@ -56,7 +61,37 @@ public static class VfsShrinker
             foreach (var sb in superblocks)
                 inodesEvicted += EvictUnusedInodes(sb);
 
-        return new VfsShrinkStats(pageCacheBytesReclaimed, dentriesDropped, inodesEvicted, superblocks.Count);
+        return new VfsShrinkStats(
+            guestPageCacheBytesReclaimed,
+            hostMappedCacheBytesTrimmed,
+            dentriesDropped,
+            inodesEvicted,
+            superblocks.Count);
+    }
+
+    internal static long TrimHostMappedCaches(IEnumerable<SuperBlock> superblocks, bool aggressive)
+    {
+        var seen = new HashSet<Inode>();
+        long trimmed = 0;
+        foreach (var sb in superblocks)
+        {
+            List<Inode> inodes;
+            lock (sb.Lock)
+            {
+                inodes = sb.Inodes.ToList();
+            }
+
+            foreach (var inode in inodes)
+            {
+                if (!seen.Add(inode))
+                    continue;
+                if (inode is not IHostMappedCacheDropper dropper)
+                    continue;
+                trimmed += dropper.TrimMappedCache(aggressive);
+            }
+        }
+
+        return trimmed;
     }
 
     internal static long DropDentryCache(SuperBlock sb)

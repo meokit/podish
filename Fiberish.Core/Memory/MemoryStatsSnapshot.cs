@@ -1,6 +1,7 @@
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.Syscalls;
+using Fiberish.VFS;
 
 namespace Fiberish.Memory;
 
@@ -31,7 +32,10 @@ public readonly record struct MemoryStatsSnapshot(
     long ActivePrivateFileBytes,
     long InactivePrivateFileBytes,
     long ActiveFileBytes,
-    long InactiveFileBytes)
+    long InactiveFileBytes,
+    long HostMappedWindowBytes,
+    int HostMappedWindowCount,
+    int HostMappedGuestPageCount)
 {
     private static readonly long ActiveThresholdTicks = TimeSpan.FromSeconds(30).Ticks;
 
@@ -40,6 +44,7 @@ public readonly record struct MemoryStatsSnapshot(
         var allocated = ExternalPageManager.GetAllocatedBytes();
         var cache = GlobalAddressSpaceCacheManager.GetAddressSpaceStats();
         var cacheStates = GlobalAddressSpaceCacheManager.GetAddressSpacePageStatesSnapshot();
+        var hostMapped = AggregateHostMappedCacheStats(sm);
         var cachedBytes = cache.TotalPages * LinuxConstants.PageSize;
         var dirtyBytes = cache.DirtyPages * LinuxConstants.PageSize;
         var reclaimable = cache.CleanPages * LinuxConstants.PageSize;
@@ -95,7 +100,49 @@ public readonly record struct MemoryStatsSnapshot(
             privateBreakdown.ActiveFilePrivate,
             privateBreakdown.InactiveFilePrivate,
             activeFile + activeShmem,
-            inactiveFile + inactiveShmem);
+            inactiveFile + inactiveShmem,
+            hostMapped.WindowBytes,
+            hostMapped.WindowCount,
+            hostMapped.GuestPageCount);
+    }
+
+    private static FilePageBackendDiagnostics AggregateHostMappedCacheStats(SyscallManager? sm)
+    {
+        if (sm == null)
+            return default;
+
+        var superblocks = new HashSet<SuperBlock>();
+        foreach (var mount in sm.Mounts)
+            if (mount?.SB != null)
+                superblocks.Add(mount.SB);
+
+        var seen = new HashSet<Inode>();
+        long windowBytes = 0;
+        var windowCount = 0;
+        var guestPageCount = 0;
+        foreach (var sb in superblocks)
+        {
+            List<Inode> inodes;
+            lock (sb.Lock)
+            {
+                inodes = sb.Inodes.ToList();
+            }
+
+            foreach (var inode in inodes)
+            {
+                if (!seen.Add(inode))
+                    continue;
+                if (inode is not IHostMappedCacheDropper mappedCacheDropper)
+                    continue;
+
+                var diagnostics = mappedCacheDropper.GetMappedCacheDiagnostics();
+                windowBytes += diagnostics.WindowBytes;
+                windowCount += diagnostics.WindowCount;
+                guestPageCount += diagnostics.GuestPageCount;
+            }
+        }
+
+        return new FilePageBackendDiagnostics(windowCount, windowBytes, guestPageCount);
     }
 
     private static long EstimateSysVShmBytes(SyscallManager? sm)

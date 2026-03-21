@@ -18,6 +18,12 @@ internal interface IDispatcherWaitSource
     IDisposable? RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback, short events);
 }
 
+internal interface IHostMappedCacheDropper
+{
+    FilePageBackendDiagnostics GetMappedCacheDiagnostics();
+    long TrimMappedCache(bool aggressive);
+}
+
 public readonly record struct PageIoRequest(long PageIndex, long FileOffset, int Length);
 
 public readonly record struct ReadaheadRequest(long StartPageIndex, int PageCount);

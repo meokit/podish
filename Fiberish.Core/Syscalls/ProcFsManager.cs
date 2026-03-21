@@ -119,6 +119,7 @@ public static class ProcFsManager
         var anonKb = ToKiB(snapshot.AnonPagesBytes);
         var mappedKb = ToKiB(snapshot.MappedBytes);
         var shmemKb = ToKiB(snapshot.ShmemBytes);
+        var hostMappedKb = ToKiB(snapshot.HostMappedWindowBytes);
         var reclaimableKb = ToKiB(snapshot.ReclaimableBytes);
         var activeKb = ToKiB(snapshot.ActiveBytes);
         var inactiveKb = ToKiB(snapshot.InactiveBytes);
@@ -152,6 +153,7 @@ public static class ProcFsManager
             $"Writeback:{Fmt(writebackKb)} kB\n" +
             $"AnonPages:{Fmt(anonKb)} kB\n" +
             $"Mapped:{Fmt(mappedKb)} kB\n" +
+            $"HostMapped:{Fmt(hostMappedKb)} kB\n" +
             $"Shmem:{Fmt(shmemKb)} kB\n" +
             "Slab:                0 kB\n" +
             "SReclaimable:         0 kB\n" +

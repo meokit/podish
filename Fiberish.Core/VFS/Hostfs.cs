@@ -1254,7 +1254,7 @@ internal static partial class HostfsOwnershipMapper
     }
 }
 
-public partial class HostInode : Inode
+public partial class HostInode : Inode, IHostMappedCacheDropper
 {
     private readonly HashSet<string> _aliasPaths = new(OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
@@ -2088,6 +2088,19 @@ public partial class HostInode : Inode
         lock (_mappedCacheLock)
         {
             return _mappedPageCache?.GetDiagnostics() ?? default;
+        }
+    }
+
+    FilePageBackendDiagnostics IHostMappedCacheDropper.GetMappedCacheDiagnostics()
+    {
+        return GetMappedPageCacheDiagnostics();
+    }
+
+    long IHostMappedCacheDropper.TrimMappedCache(bool aggressive)
+    {
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.Trim(aggressive) ?? 0;
         }
     }
 
