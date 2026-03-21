@@ -15,6 +15,16 @@ public class SignalFdInode : TmpfsInode, ITaskWaitSource
         _sigMask = sigMask;
     }
 
+    bool ITaskWaitSource.RegisterWait(LinuxFile file, FiberTask task, Action callback, short events)
+    {
+        return RegisterWait(task, callback, events);
+    }
+
+    IDisposable? ITaskWaitSource.RegisterWaitHandle(LinuxFile file, FiberTask task, Action callback, short events)
+    {
+        return RegisterWaitHandle(task, callback, events);
+    }
+
     private StateScope EnterStateScope([CallerMemberName] string? caller = null)
     {
         return default;
@@ -118,16 +128,6 @@ public class SignalFdInode : TmpfsInode, ITaskWaitSource
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
     {
         return null;
-    }
-
-    bool ITaskWaitSource.RegisterWait(LinuxFile file, FiberTask task, Action callback, short events)
-    {
-        return RegisterWait(task, callback, events);
-    }
-
-    IDisposable? ITaskWaitSource.RegisterWaitHandle(LinuxFile file, FiberTask task, Action callback, short events)
-    {
-        return RegisterWaitHandle(task, callback, events);
     }
 
     private ulong GetMask()
@@ -264,7 +264,6 @@ public struct SignalFdAwaiter : INotifyCompletion
 
         registration = _inode.RegisterWaitHandle(task, RunOnce, LinuxConstants.POLLIN);
         _registration = registration;
-        task.ArmSignalSafetyNet(token, RunOnce);
     }
 
     public AwaitResult GetResult()
@@ -272,7 +271,7 @@ public struct SignalFdAwaiter : INotifyCompletion
         _registration?.Dispose();
         if (_token == null) return AwaitResult.Completed;
 
-        var reason = _task.CompleteWaitToken(_token);
-        return reason == WakeReason.None || reason == WakeReason.IO ? AwaitResult.Completed : AwaitResult.Interrupted;
+        _task.CompleteWaitToken(_token);
+        return AwaitResult.Completed;
     }
 }

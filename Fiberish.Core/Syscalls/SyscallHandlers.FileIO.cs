@@ -795,8 +795,7 @@ public partial class SyscallManager
                         if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0)
                             return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
 
-                        if (await inode.WaitAsync(task) == AwaitResult.Interrupted)
-                            return totalRead > 0 ? totalRead : -(int)Errno.ERESTARTSYS;
+                        await inode.WaitAsync(task);
                         continue;
                     }
 
