@@ -1,6 +1,6 @@
+using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
-using Fiberish.Core;
 
 namespace Fiberish.Syscalls;
 
@@ -215,7 +215,7 @@ public class PathWalker
     {
         var current = nd.Path.Dentry;
         var mount = nd.Path.Mount;
-        var currentTask = _sm.Engine.Owner as FiberTask;
+        var currentTask = _sm.CurrentTask;
 
         if (current == null || mount == null)
             return nd.SetError(-(int)Errno.ENOENT);

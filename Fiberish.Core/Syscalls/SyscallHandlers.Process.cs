@@ -24,7 +24,6 @@ public partial class SyscallManager
 
             task.Exited = true;
             task.ExitStatus = exitCode;
-            UnregisterEngine(task.CPU);
             var remainingThreads = task.CommonKernel.DetachTask(task);
             if (remainingThreads == 0)
                 FinalizeProcessExit(task, exitCode, false, 0, false);
@@ -274,7 +273,7 @@ public partial class SyscallManager
                         {
                             var info = BuildSigchldInfoForExit(childProc);
 
-                            if (!WriteSigInfo(this, infop, info)) return -(int)Errno.EFAULT;
+                            if (!WriteSigInfo(engine, infop, info)) return -(int)Errno.EFAULT;
                         }
 
                         if (!wnowait)
@@ -300,7 +299,7 @@ public partial class SyscallManager
                                 Status = childProc.StopSignal,
                                 Code = 5 // CLD_STOPPED
                             };
-                            if (!WriteSigInfo(this, infop, info)) return -(int)Errno.EFAULT;
+                            if (!WriteSigInfo(engine, infop, info)) return -(int)Errno.EFAULT;
                         }
 
                         if (!wnowait) childProc.HasWaitableStop = false;
@@ -318,7 +317,7 @@ public partial class SyscallManager
                                 Status = (int)Signal.SIGCONT,
                                 Code = 6 // CLD_CONTINUED
                             };
-                            if (!WriteSigInfo(this, infop, info)) return -(int)Errno.EFAULT;
+                            if (!WriteSigInfo(engine, infop, info)) return -(int)Errno.EFAULT;
                         }
 
                         if (!wnowait) childProc.HasWaitableContinue = false;
@@ -373,7 +372,7 @@ public partial class SyscallManager
         };
     }
 
-    private static bool WriteSigInfo(SyscallManager sm, uint addr, SigInfo info)
+    private static bool WriteSigInfo(Engine engine, uint addr, SigInfo info)
     {
         var buf = new byte[128];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), info.Signo);
@@ -382,7 +381,7 @@ public partial class SyscallManager
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), info.Pid);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(16, 4), info.Uid);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(20, 4), info.Status);
-        return sm.Engine.CopyToUser(addr, buf);
+        return engine.CopyToUser(addr, buf);
     }
 
     internal static void FinalizeProcessExit(FiberTask task, int exitStatus, bool exitedBySignal, int termSignal,

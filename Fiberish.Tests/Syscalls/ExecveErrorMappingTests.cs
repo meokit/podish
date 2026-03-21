@@ -77,16 +77,16 @@ public class ExecveErrorMappingTests
     {
         var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(method);
-        var previous = sm.Engine.CurrentSyscallManager;
-        sm.Engine.CurrentSyscallManager = sm;
+        var previous = sm.CurrentSyscallEngine.CurrentSyscallManager;
+        sm.CurrentSyscallEngine.CurrentSyscallManager = sm;
         try
         {
-            var task = (ValueTask<int>)method!.Invoke(sm, [sm.Engine, a1, a2, a3, a4, a5, a6])!;
+            var task = (ValueTask<int>)method!.Invoke(sm, [sm.CurrentSyscallEngine, a1, a2, a3, a4, a5, a6])!;
             return await task;
         }
         finally
         {
-            sm.Engine.CurrentSyscallManager = previous;
+            sm.CurrentSyscallEngine.CurrentSyscallManager = previous;
         }
     }
 

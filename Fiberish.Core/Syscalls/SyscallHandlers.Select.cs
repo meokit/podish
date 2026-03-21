@@ -23,7 +23,7 @@ public partial class SyscallManager
         var nfds = a2;
         var timeout = (int)a3; // milliseconds
 
-        return await DoPoll(this, fdsAddr, nfds, timeout);
+        return await DoPoll(this, engine, fdsAddr, nfds, timeout);
     }
 
     private async ValueTask<int> SysSelect(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -40,26 +40,26 @@ public partial class SyscallManager
         var exp = BitConverter.ToUInt32(args, 12);
         var tvp = BitConverter.ToUInt32(args, 16);
 
-        return await DoSelect(this, n, inp, outp, exp, tvp);
+        return await DoSelect(this, engine, n, inp, outp, exp, tvp);
     }
 
     private async ValueTask<int> SysNewSelect(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        return await DoSelect(this, (int)a1, a2, a3, a4, a5);
+        return await DoSelect(this, engine, (int)a1, a2, a3, a4, a5);
     }
 
     private async ValueTask<int> SysPselect6(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
-        if (!TryReadTimespec32TimeoutMs(this, a5, out var timeoutMs, out var tsErr)) return tsErr;
-        if (!TryReadPselectSigmask(this, a6, out var hasMask, out var newMask, out var maskErr)) return maskErr;
+        if (!TryReadTimespec32TimeoutMs(engine, a5, out var timeoutMs, out var tsErr)) return tsErr;
+        if (!TryReadPselectSigmask(engine, a6, out var hasMask, out var newMask, out var maskErr)) return maskErr;
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
         try
         {
-            return await DoSelectWithTimeout(this, (int)a1, a2, a3, a4, timeoutMs);
+            return await DoSelectWithTimeout(this, engine, (int)a1, a2, a3, a4, timeoutMs);
         }
         finally
         {
@@ -71,14 +71,14 @@ public partial class SyscallManager
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
-        if (!TryReadTimespec32TimeoutMs(this, a3, out var timeoutMs, out var tsErr)) return tsErr;
-        if (!TryReadDirectSigmask(this, a4, a5, out var hasMask, out var newMask, out var maskErr)) return maskErr;
+        if (!TryReadTimespec32TimeoutMs(engine, a3, out var timeoutMs, out var tsErr)) return tsErr;
+        if (!TryReadDirectSigmask(engine, a4, a5, out var hasMask, out var newMask, out var maskErr)) return maskErr;
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
         try
         {
-            return await DoPoll(this, a1, a2, timeoutMs);
+            return await DoPoll(this, engine, a1, a2, timeoutMs);
         }
         finally
         {
@@ -91,14 +91,14 @@ public partial class SyscallManager
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
-        if (!TryReadTimespec64TimeoutMs(this, a5, out var timeoutMs, out var tsErr)) return tsErr;
-        if (!TryReadPselectSigmask(this, a6, out var hasMask, out var newMask, out var maskErr)) return maskErr;
+        if (!TryReadTimespec64TimeoutMs(engine, a5, out var timeoutMs, out var tsErr)) return tsErr;
+        if (!TryReadPselectSigmask(engine, a6, out var hasMask, out var newMask, out var maskErr)) return maskErr;
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
         try
         {
-            return await DoSelectWithTimeout(this, (int)a1, a2, a3, a4, timeoutMs);
+            return await DoSelectWithTimeout(this, engine, (int)a1, a2, a3, a4, timeoutMs);
         }
         finally
         {
@@ -111,14 +111,14 @@ public partial class SyscallManager
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
-        if (!TryReadTimespec64TimeoutMs(this, a3, out var timeoutMs, out var tsErr)) return tsErr;
-        if (!TryReadDirectSigmask(this, a4, a5, out var hasMask, out var newMask, out var maskErr)) return maskErr;
+        if (!TryReadTimespec64TimeoutMs(engine, a3, out var timeoutMs, out var tsErr)) return tsErr;
+        if (!TryReadDirectSigmask(engine, a4, a5, out var hasMask, out var newMask, out var maskErr)) return maskErr;
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
         try
         {
-            return await DoPoll(this, a1, a2, timeoutMs);
+            return await DoPoll(this, engine, a1, a2, timeoutMs);
         }
         finally
         {
@@ -126,36 +126,38 @@ public partial class SyscallManager
         }
     }
 
-    private static async ValueTask<int> DoSelect(SyscallManager sm, int n, uint inp, uint outp, uint exp, uint tvp)
+    private static async ValueTask<int> DoSelect(SyscallManager sm, Engine engine, int n, uint inp, uint outp,
+        uint exp, uint tvp)
     {
         if (n < 0 || n > 1024) return -(int)Errno.EINVAL;
 
         long timeoutMs = -1;
         if (tvp != 0)
         {
-            var tv = ReadStruct<Timeval>(sm.Engine, tvp);
+            var tv = ReadStruct<Timeval>(engine, tvp);
             timeoutMs = tv.TvSec * 1000 + tv.TvUsec / 1000;
         }
 
-        return await DoSelectWithTimeout(sm, n, inp, outp, exp, timeoutMs);
+        return await DoSelectWithTimeout(sm, engine, n, inp, outp, exp, timeoutMs);
     }
 
-    private static async ValueTask<int> DoSelectWithTimeout(SyscallManager sm, int n, uint inp, uint outp, uint exp,
-        long timeoutMs)
+    private static async ValueTask<int> DoSelectWithTimeout(SyscallManager sm, Engine engine, int n, uint inp,
+        uint outp, uint exp, long timeoutMs)
     {
         // 1. Scan
-        var ready = ScanSelect(sm, n, inp, outp, exp, sm.Engine.Owner as FiberTask, out var resIn, out var resOut,
+        var ready = ScanSelect(sm, engine, n, inp, outp, exp, engine.Owner as FiberTask, out var resIn,
+            out var resOut,
             out var resEx);
         if (ready > 0)
         {
-            WriteSelectResults(sm, inp, outp, exp, resIn, resOut, resEx);
+            WriteSelectResults(engine, inp, outp, exp, resIn, resOut, resEx);
             return ready;
         }
 
         if (timeoutMs == 0) return 0;
 
         // 2. Await
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         try
@@ -169,9 +171,9 @@ public partial class SyscallManager
             // Re-scan to populate sets
             if (ret >= 0)
             {
-                ready = ScanSelect(sm, n, inp, outp, exp, sm.Engine.Owner as FiberTask, out resIn, out resOut,
+                ready = ScanSelect(sm, engine, n, inp, outp, exp, engine.Owner as FiberTask, out resIn, out resOut,
                     out resEx);
-                WriteSelectResults(sm, inp, outp, exp, resIn, resOut, resEx);
+                WriteSelectResults(engine, inp, outp, exp, resIn, resOut, resEx);
                 return ready;
             }
 
@@ -183,19 +185,20 @@ public partial class SyscallManager
         }
     }
 
-    private static async ValueTask<int> DoPoll(SyscallManager sm, uint fdsAddr, uint nfds, int timeoutMs)
+    private static async ValueTask<int> DoPoll(SyscallManager sm, Engine engine, uint fdsAddr, uint nfds,
+        int timeoutMs)
     {
         // 1. Scan
-        var ready = ScanPoll(sm, fdsAddr, nfds, sm.Engine.Owner as FiberTask);
+        var ready = ScanPoll(sm, engine, fdsAddr, nfds, engine.Owner as FiberTask);
         if (ready > 0 || timeoutMs == 0) return ready;
 
         // 2. Await
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
         return await new PollAwaitable(task, sm.FDs, fdsAddr, nfds, timeoutMs);
     }
 
-    private static bool TryReadPselectSigmask(SyscallManager sm, uint sigArgPtr, out bool hasMask, out ulong mask,
+    private static bool TryReadPselectSigmask(Engine engine, uint sigArgPtr, out bool hasMask, out ulong mask,
         out int err)
     {
         hasMask = false;
@@ -204,7 +207,7 @@ public partial class SyscallManager
         if (sigArgPtr == 0) return true;
 
         var argBuf = new byte[8];
-        if (!sm.Engine.CopyFromUser(sigArgPtr, argBuf))
+        if (!engine.CopyFromUser(sigArgPtr, argBuf))
         {
             err = -(int)Errno.EFAULT;
             return false;
@@ -212,10 +215,10 @@ public partial class SyscallManager
 
         var sigmaskPtr = BinaryPrimitives.ReadUInt32LittleEndian(argBuf.AsSpan(0, 4));
         var sigsetsize = BinaryPrimitives.ReadUInt32LittleEndian(argBuf.AsSpan(4, 4));
-        return TryReadDirectSigmask(sm, sigmaskPtr, sigsetsize, out hasMask, out mask, out err);
+        return TryReadDirectSigmask(engine, sigmaskPtr, sigsetsize, out hasMask, out mask, out err);
     }
 
-    private static bool TryReadDirectSigmask(SyscallManager sm, uint sigmaskPtr, uint sigsetsize, out bool hasMask,
+    private static bool TryReadDirectSigmask(Engine engine, uint sigmaskPtr, uint sigsetsize, out bool hasMask,
         out ulong mask, out int err)
     {
         hasMask = false;
@@ -229,7 +232,7 @@ public partial class SyscallManager
         }
 
         var maskBuf = new byte[8];
-        if (!sm.Engine.CopyFromUser(sigmaskPtr, maskBuf))
+        if (!engine.CopyFromUser(sigmaskPtr, maskBuf))
         {
             err = -(int)Errno.EFAULT;
             return false;
@@ -242,14 +245,14 @@ public partial class SyscallManager
         return true;
     }
 
-    private static bool TryReadTimespec32TimeoutMs(SyscallManager sm, uint timespecPtr, out int timeoutMs, out int err)
+    private static bool TryReadTimespec32TimeoutMs(Engine engine, uint timespecPtr, out int timeoutMs, out int err)
     {
         timeoutMs = -1;
         err = 0;
         if (timespecPtr == 0) return true;
 
         var buf = new byte[8];
-        if (!sm.Engine.CopyFromUser(timespecPtr, buf))
+        if (!engine.CopyFromUser(timespecPtr, buf))
         {
             err = -(int)Errno.EFAULT;
             return false;
@@ -260,14 +263,14 @@ public partial class SyscallManager
         return TryConvertTimespecToTimeoutMs(sec, nsec, out timeoutMs, out err);
     }
 
-    private static bool TryReadTimespec64TimeoutMs(SyscallManager sm, uint timespecPtr, out int timeoutMs, out int err)
+    private static bool TryReadTimespec64TimeoutMs(Engine engine, uint timespecPtr, out int timeoutMs, out int err)
     {
         timeoutMs = -1;
         err = 0;
         if (timespecPtr == 0) return true;
 
         var buf = new byte[16];
-        if (!sm.Engine.CopyFromUser(timespecPtr, buf))
+        if (!engine.CopyFromUser(timespecPtr, buf))
         {
             err = -(int)Errno.EFAULT;
             return false;
@@ -307,11 +310,11 @@ public partial class SyscallManager
         return true;
     }
 
-    private static int ScanSelect(SyscallManager sm, int n, uint inp, uint outp, uint exp,
+    private static int ScanSelect(SyscallManager sm, Engine engine, int n, uint inp, uint outp, uint exp,
         FiberTask? task,
         out uint[] resIn, out uint[] resOut, out uint[] resEx)
     {
-        return ScanSelect(sm.Engine, sm.FDs, n, inp, outp, exp, task, out resIn, out resOut, out resEx);
+        return ScanSelect(engine, sm.FDs, n, inp, outp, exp, task, out resIn, out resOut, out resEx);
     }
 
     private static int ScanSelect(Engine engine, Dictionary<int, LinuxFile> fds, int n, uint inp, uint outp, uint exp,
@@ -378,17 +381,17 @@ public partial class SyscallManager
         return ready;
     }
 
-    private static void WriteSelectResults(SyscallManager sm, uint inp, uint outp, uint exp,
+    private static void WriteSelectResults(Engine engine, uint inp, uint outp, uint exp,
         uint[] resIn, uint[] resOut, uint[] resEx)
     {
-        if (inp != 0) WriteSpan(sm.Engine, inp, resIn);
-        if (outp != 0) WriteSpan(sm.Engine, outp, resOut);
-        if (exp != 0) WriteSpan(sm.Engine, exp, resEx);
+        if (inp != 0) WriteSpan(engine, inp, resIn);
+        if (outp != 0) WriteSpan(engine, outp, resOut);
+        if (exp != 0) WriteSpan(engine, exp, resEx);
     }
 
-    private static int ScanPoll(SyscallManager sm, uint fdsAddr, uint nfds, FiberTask? task)
+    private static int ScanPoll(SyscallManager sm, Engine engine, uint fdsAddr, uint nfds, FiberTask? task)
     {
-        return ScanPoll(sm.Engine, sm.FDs, fdsAddr, nfds, task);
+        return ScanPoll(engine, sm.FDs, fdsAddr, nfds, task);
     }
 
     private static int ScanPoll(Engine engine, Dictionary<int, LinuxFile> fds, uint fdsAddr, uint nfds,
@@ -542,6 +545,7 @@ public partial class SyscallManager
         private bool _completed;
         private Action? _continuation;
         private bool _hasTimedOut;
+        private TaskAsyncOperationHandle? _operation;
         private int _reschedulePending;
         private int _result;
         private Timer? _timer;
@@ -563,13 +567,20 @@ public partial class SyscallManager
         {
             _continuation = continuation;
             _token = _task.BeginWaitToken();
+            if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
+                return;
+            _operation = operation;
+            _operation.TryInitialize(continuation, WaitContinuationMode.RunAction);
             if (_timeoutMs > 0)
+            {
                 _timer = _task.CommonKernel.ScheduleTimer(_timeoutMs, OnTimeout);
+                _operation.TryAddRegistration(TaskAsyncRegistration.From(_timer));
+            }
 
             DoPoll();
 
             if (!_completed)
-                _task.ArmInterruptingSignalSafetyNet(_token, ScheduleRePoll);
+                _task.ArmInterruptingSignalSafetyNet(_token, OnSignal);
         }
 
         public int GetResult()
@@ -591,6 +602,13 @@ public partial class SyscallManager
             ScheduleRePoll();
         }
 
+        private void OnSignal()
+        {
+            _result = -(int)Errno.ERESTARTSYS;
+            _completed = true;
+            _operation?.TryComplete(WakeReason.Signal);
+        }
+
         private void OnRePollScheduled()
         {
             _reschedulePending = 0;
@@ -607,7 +625,7 @@ public partial class SyscallManager
                 _timer?.Cancel();
                 _result = -(int)Errno.ERESTARTSYS;
                 _completed = true;
-                _continuation?.Invoke();
+                _operation?.TryComplete(WakeReason.Signal);
                 return;
             }
 
@@ -617,7 +635,7 @@ public partial class SyscallManager
                 _timer?.Cancel();
                 _result = ready;
                 _completed = true;
-                _continuation?.Invoke();
+                _operation?.TryComplete(WakeReason.Event);
                 return;
             }
 
@@ -625,7 +643,7 @@ public partial class SyscallManager
             {
                 _result = 0; // Timeout
                 _completed = true;
-                _continuation?.Invoke();
+                _operation?.TryComplete(WakeReason.Timer);
                 return;
             }
 
@@ -676,7 +694,11 @@ public partial class SyscallManager
                                 dispatcherWaitSource.RegisterWaitHandle(file, dispatcher, ScheduleRePoll, events);
                         else
                             registration = file.OpenedInode!.RegisterWaitHandle(file, ScheduleRePoll, events);
-                        if (registration != null) _waitRegistrations.Add(registration);
+                        if (registration != null)
+                        {
+                            _waitRegistrations.Add(registration);
+                            _operation?.TryAddRegistration(TaskAsyncRegistration.From(registration));
+                        }
                     }
                 }
             }
@@ -738,6 +760,7 @@ public partial class SyscallManager
         private bool _completed;
         private Action? _continuation;
         private bool _hasTimedOut;
+        private TaskAsyncOperationHandle? _operation;
         private int _reschedulePending;
         private int _result;
         private Timer? _timer;
@@ -756,13 +779,20 @@ public partial class SyscallManager
         {
             _continuation = continuation;
             _token = _task.BeginWaitToken();
+            if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
+                return;
+            _operation = operation;
+            _operation.TryInitialize(continuation, WaitContinuationMode.RunAction);
             if (_timeoutMs > 0)
+            {
                 _timer = _task.CommonKernel.ScheduleTimer(_timeoutMs, OnTimeout);
+                _operation.TryAddRegistration(TaskAsyncRegistration.From(_timer));
+            }
 
             DoPoll();
 
             if (!_completed)
-                _task.ArmInterruptingSignalSafetyNet(_token, ScheduleRePoll);
+                _task.ArmInterruptingSignalSafetyNet(_token, OnSignal);
         }
 
         public int GetResult()
@@ -784,6 +814,13 @@ public partial class SyscallManager
             ScheduleRePoll();
         }
 
+        private void OnSignal()
+        {
+            _result = -(int)Errno.ERESTARTSYS;
+            _completed = true;
+            _operation?.TryComplete(WakeReason.Signal);
+        }
+
         private void OnRePollScheduled()
         {
             _reschedulePending = 0;
@@ -800,7 +837,7 @@ public partial class SyscallManager
                 _timer?.Cancel();
                 _result = -(int)Errno.ERESTARTSYS;
                 _completed = true;
-                _continuation?.Invoke();
+                _operation?.TryComplete(WakeReason.Signal);
                 return;
             }
 
@@ -810,7 +847,7 @@ public partial class SyscallManager
                 _timer?.Cancel();
                 _result = ready;
                 _completed = true;
-                _continuation?.Invoke();
+                _operation?.TryComplete(WakeReason.Event);
                 return;
             }
 
@@ -818,7 +855,7 @@ public partial class SyscallManager
             {
                 _result = 0;
                 _completed = true;
-                _continuation?.Invoke();
+                _operation?.TryComplete(WakeReason.Timer);
                 return;
             }
 
@@ -844,7 +881,11 @@ public partial class SyscallManager
                             pfd.Events);
                     else
                         registration = file.OpenedInode!.RegisterWaitHandle(file, ScheduleRePoll, pfd.Events);
-                    if (registration != null) _waitRegistrations.Add(registration);
+                    if (registration != null)
+                    {
+                        _waitRegistrations.Add(registration);
+                        _operation?.TryAddRegistration(TaskAsyncRegistration.From(registration));
+                    }
                 }
             }
         }

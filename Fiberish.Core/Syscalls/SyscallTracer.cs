@@ -580,7 +580,7 @@ public static class SyscallTracer
         try
         {
             // Read string from memory, limit to 256 chars
-            var str = sys.Engine.ReadStringSafe(addr, 256) ?? string.Empty;
+            var str = sys.CurrentSyscallEngine.ReadStringSafe(addr, 256) ?? string.Empty;
             return JsonSerializer.Serialize(str, SyscallTracerJsonContext.Default.String);
         }
         catch
@@ -599,7 +599,7 @@ public static class SyscallTracer
             // Limit to 64 bytes for display
             var displayLen = Math.Min(len, 64);
             var buffer = new byte[displayLen];
-            if (!sys.Engine.CopyFromUser(addr, buffer)) return $"0x{addr:X}";
+            if (!sys.CurrentSyscallEngine.CopyFromUser(addr, buffer)) return $"0x{addr:X}";
 
             // Check if it looks like a string (printable chars)
             var isPrintable = true;

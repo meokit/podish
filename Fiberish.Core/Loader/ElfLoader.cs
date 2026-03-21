@@ -31,7 +31,7 @@ public class ElfLoader
         string[] envs, Mount mount)
     {
         var mm = sys.Mem;
-        var engine = sys.Engine;
+        var engine = sys.CurrentSyscallEngine;
 
         // Open the main ELF via VFS
         var mainFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
@@ -196,7 +196,7 @@ public class ElfLoader
 
         PushUint32((uint)args.Length);
 
-        sys.Engine.ResetAllCodeCache();
+        sys.CurrentSyscallEngine.ResetAllCodeCache();
 
         // If there's an interpreter, start execution at interpreter's entry point; 
         // otherwise at the main binary's entry point.

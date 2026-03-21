@@ -17,13 +17,13 @@ public partial class SyscallManager
         return remaining > 0 ? remaining : 0;
     }
 
-    private static bool TryReadItimerval32(SyscallManager sm, uint ptr, out long intervalMs, out long valueMs)
+    private static bool TryReadItimerval32(Engine engine, uint ptr, out long intervalMs, out long valueMs)
     {
         intervalMs = 0;
         valueMs = 0;
 
         var buf = new byte[16];
-        if (!sm.Engine.CopyFromUser(ptr, buf)) return false;
+        if (!engine.CopyFromUser(ptr, buf)) return false;
 
         var intervalSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
         var intervalUsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
@@ -38,7 +38,7 @@ public partial class SyscallManager
         return true;
     }
 
-    private static bool WriteItimerval32(SyscallManager sm, uint ptr, long intervalMs, long valueMs)
+    private static bool WriteItimerval32(Engine engine, uint ptr, long intervalMs, long valueMs)
     {
         var intervalSec = intervalMs / 1000;
         var intervalUsec = intervalMs % 1000 * 1000;
@@ -50,7 +50,7 @@ public partial class SyscallManager
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)intervalUsec);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), (int)valueSec);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), (int)valueUsec);
-        return sm.Engine.CopyToUser(ptr, buf);
+        return engine.CopyToUser(ptr, buf);
     }
 
     private static void ArmItimerReal(Process proc, KernelScheduler scheduler, long firstMs, long intervalMs)
@@ -119,11 +119,11 @@ public partial class SyscallManager
         if (oldValuePtr != 0)
         {
             var oldRemainingMs = GetRemainingMs(proc.AlarmTimer, scheduler);
-            if (!WriteItimerval32(this, oldValuePtr, proc.ItimerRealIntervalMs, oldRemainingMs))
+            if (!WriteItimerval32(engine, oldValuePtr, proc.ItimerRealIntervalMs, oldRemainingMs))
                 return -(int)Errno.EFAULT;
         }
 
-        if (!TryReadItimerval32(this, newValuePtr, out var newIntervalMs, out var newValueMs))
+        if (!TryReadItimerval32(engine, newValuePtr, out var newIntervalMs, out var newValueMs))
             return -(int)Errno.EINVAL;
 
         ArmItimerReal(proc, scheduler, newValueMs, newIntervalMs);
@@ -142,7 +142,7 @@ public partial class SyscallManager
 
         var proc = task.Process;
         var remainingMs = GetRemainingMs(proc.AlarmTimer, scheduler);
-        if (!WriteItimerval32(this, currValuePtr, proc.ItimerRealIntervalMs, remainingMs))
+        if (!WriteItimerval32(engine, currValuePtr, proc.ItimerRealIntervalMs, remainingMs))
             return -(int)Errno.EFAULT;
         return 0;
     }

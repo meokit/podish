@@ -177,7 +177,7 @@ public class Process
         Syscalls.BrkAddr = res.BrkAddr;
 
         // Setup CPU State
-        var engine = Syscalls.Engine;
+        var engine = Syscalls.CurrentSyscallEngine;
         engine.Eip = res.Entry;
         engine.RegWrite(Reg.ESP, res.SP);
         engine.Eflags = 0x202;
@@ -198,7 +198,7 @@ public class Process
     internal void Exec(Dentry dentry, string guestPath, string[] args, string[] envs, Mount mount)
     {
         var oldMem = Mem;
-        var oldEngine = Syscalls.Engine;
+        var oldEngine = Syscalls.CurrentSyscallEngine;
         var hadSharedAddressSpace = oldMem.GetSharedRefCount() > 1;
         var shouldDetachSysVShm = oldMem.GetSharedRefCount() == 1;
 
@@ -222,13 +222,13 @@ public class Process
         // Detach first so exec's ResetMemory + new mappings don't clobber the parent's live mappings.
         if (hadSharedAddressSpace)
         {
-            using var detachedSharedCore = Syscalls.Engine.DetachMmu();
+            using var detachedSharedCore = Syscalls.CurrentSyscallEngine.DetachMmu();
         }
 
         // Clear old native MMU page tables + JIT cache.
         // ResetAllCodeCache only clears JIT; ResetMemory also resets the native page directory
         // so the new binary's pages are demand-faulted fresh (not stale from old image).
-        Syscalls.Engine.ResetMemory();
+        Syscalls.CurrentSyscallEngine.ResetMemory();
 
         // 1.1 Linux exec semantics: handlers set to user function are reset to SIG_DFL.
         // Dispositions explicitly set to SIG_IGN stay ignored.

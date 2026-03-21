@@ -38,12 +38,12 @@ public partial class SyscallManager
         var ret = op switch
         {
             LinuxConstants.SHMGET => DoShmGet(this, (int)first, second, (int)third, uid, gid, pid),
-            LinuxConstants.SHMAT => DoShmAt(this, (int)first, ptr, (int)second, third, pid),
-            LinuxConstants.SHMDT => DoShmDt(this, ptr, pid),
-            LinuxConstants.SHMCTL => DoShmCtl(this, (int)first, (int)second, ptr, uid, gid, pid, version),
+            LinuxConstants.SHMAT => DoShmAt(this, engine, (int)first, ptr, (int)second, third, pid),
+            LinuxConstants.SHMDT => DoShmDt(this, engine, ptr, pid),
+            LinuxConstants.SHMCTL => DoShmCtl(this, engine, (int)first, (int)second, ptr, uid, gid, pid, version),
 
             LinuxConstants.SEMGET => SysVSem.SemGet((int)first, (int)second, (int)third, uid, gid),
-            LinuxConstants.SEMCTL => DoSemCtlFromIpc(this, (int)first, (int)second, third, ptr, uid, gid),
+            LinuxConstants.SEMCTL => DoSemCtlFromIpc(engine, this, (int)first, (int)second, third, ptr, uid, gid),
 
             _ => -(int)Errno.ENOSYS
         };
@@ -75,10 +75,11 @@ public partial class SyscallManager
     ///     returns: 0 on success (address written to *ptr), negative errno on failure
     ///     Note: The actual return address is written to the pointer in 'ptr' on i386.
     /// </summary>
-    private static int DoShmAt(SyscallManager sm, int shmid, uint shmaddr, int shmflg, uint ptr, int pid)
+    private static int DoShmAt(SyscallManager sm, Engine engine, int shmid, uint shmaddr, int shmflg, uint ptr,
+        int pid)
     {
-        var process = (sm.Engine.Owner as FiberTask)?.Process;
-        var result = sm.SysVShm.ShmAt(shmid, shmaddr, shmflg, pid, sm.Mem, sm.Engine, process);
+        var process = sm.CurrentProcess;
+        var result = sm.SysVShm.ShmAt(shmid, shmaddr, shmflg, pid, sm.Mem, engine, process);
 
         if (result < 0)
             return (int)result;
@@ -88,10 +89,10 @@ public partial class SyscallManager
         if (ptr != 0)
         {
             var addrBytes = BitConverter.GetBytes((uint)result);
-            if (!sm.Engine.CopyToUser(ptr, addrBytes))
+            if (!engine.CopyToUser(ptr, addrBytes))
             {
                 // [P2] Rollback the mapping on EFAULT - detaching cleans up the VMA
-                sm.SysVShm.ShmDt((uint)result, pid, sm.Mem, sm.Engine, process);
+                sm.SysVShm.ShmDt((uint)result, pid, sm.Mem, engine, process);
                 return -(int)Errno.EFAULT;
             }
 
@@ -107,10 +108,10 @@ public partial class SyscallManager
     ///     args: shmaddr
     ///     returns: 0 on success, negative errno on failure
     /// </summary>
-    private static int DoShmDt(SyscallManager sm, uint shmaddr, int pid)
+    private static int DoShmDt(SyscallManager sm, Engine engine, uint shmaddr, int pid)
     {
-        var process = (sm.Engine.Owner as FiberTask)?.Process;
-        return sm.SysVShm.ShmDt(shmaddr, pid, sm.Mem, sm.Engine, process);
+        var process = sm.CurrentProcess;
+        return sm.SysVShm.ShmDt(shmaddr, pid, sm.Mem, engine, process);
     }
 
     /// <summary>
@@ -119,7 +120,8 @@ public partial class SyscallManager
     ///     returns: 0 on success, negative errno on failure
     ///     Note: cmd may have IPC_64 flag set (0x0100) on i386 glibc.
     /// </summary>
-    private static int DoShmCtl(SyscallManager sm, int shmid, int cmd, uint buf, int uid, int gid, int pid, int version)
+    private static int DoShmCtl(SyscallManager sm, Engine engine, int shmid, int cmd, uint buf, int uid, int gid,
+        int pid, int version)
     {
         // Handle IPC_64 flag - strip it from cmd and pass to ShmCtl
         // Modern glibc on i386 always sets IPC_64 in the version field
@@ -127,10 +129,11 @@ public partial class SyscallManager
         if ((version & (LinuxConstants.IPC_64 >> 8)) != 0 || (cmd & LinuxConstants.IPC_64) != 0)
             actualCmd = cmd & ~LinuxConstants.IPC_64;
 
-        return sm.SysVShm.ShmCtl(shmid, actualCmd, buf, sm.Engine, uid, gid, pid);
+        return sm.SysVShm.ShmCtl(shmid, actualCmd, buf, engine, uid, gid, pid);
     }
 
-    private static int DoSemCtlFromIpc(SyscallManager sm, int first, int second, uint third, uint ptr, int uid, int gid)
+    private static int DoSemCtlFromIpc(Engine engine, SyscallManager sm, int first, int second, uint third, uint ptr,
+        int uid, int gid)
     {
         // In sys_ipc on i386, the 4th arg (ptr) is a pointer to the union semun.
         // We must dereference it to get the actual value for SETVAL/IPC_STAT.
@@ -138,10 +141,10 @@ public partial class SyscallManager
         if (ptr != 0)
         {
             Span<byte> buf = stackalloc byte[4];
-            if (sm.Engine.CopyFromUser(ptr, buf)) argVal = BitConverter.ToUInt32(buf);
+            if (engine.CopyFromUser(ptr, buf)) argVal = BitConverter.ToUInt32(buf);
         }
 
-        return sm.SysVSem.SemCtl(first, second, (int)third, argVal, sm.Engine, uid, gid);
+        return sm.SysVSem.SemCtl(first, second, (int)third, argVal, engine, uid, gid);
     }
 
     private ValueTask<int> SysSemGet(Engine engine, uint key, uint nsems, uint semflg, uint _4, uint _5, uint _6)

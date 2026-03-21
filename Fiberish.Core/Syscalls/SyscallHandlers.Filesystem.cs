@@ -160,7 +160,7 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysTruncate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        return await DoTruncate(this, a1, a2);
+        return await DoTruncate(this, engine, a1, a2);
     }
 
     private async ValueTask<int> SysTruncate64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -168,10 +168,10 @@ public partial class SyscallManager
     {
         // 32-bit truncate64 has padding if we use 64-bit length. a2 and a3 are the split 64 bit integer
         var length = (long)(((ulong)a3 << 32) | a2);
-        return await DoTruncate(this, a1, length);
+        return await DoTruncate(this, engine, a1, length);
     }
 
-    private static ValueTask<int> DoTruncate(SyscallManager sm, uint pathPtr, long length)
+    private static ValueTask<int> DoTruncate(SyscallManager sm, Engine engine, uint pathPtr, long length)
     {
         var path = sm.ReadString(pathPtr);
 
@@ -186,7 +186,7 @@ public partial class SyscallManager
         var inode = loc.Dentry.Inode;
         var rc = inode.Truncate(length);
         if (rc == 0)
-            ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, sm.Engine, inode, length);
+            ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, engine, inode, length);
         return new ValueTask<int>(rc);
     }
 
@@ -369,7 +369,7 @@ public partial class SyscallManager
         var f = GetFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
-        var readErr = ReadUserBuffer(this, a3, (int)a4, out var valueBytes);
+        var readErr = ReadUserBuffer(engine, a3, (int)a4, out var valueBytes);
         if (readErr != 0) return readErr;
         return f.OpenedInode.SetXAttr(name, valueBytes, (int)a5);
     }
@@ -395,7 +395,7 @@ public partial class SyscallManager
 
         var f = GetFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
-        return CopyXAttrToUser(this, f.OpenedInode, name, valueAddr, size);
+        return CopyXAttrToUser(engine, f.OpenedInode, name, valueAddr, size);
     }
 
     private async ValueTask<int> SysListXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -419,7 +419,7 @@ public partial class SyscallManager
 
         var f = GetFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
-        return CopyXAttrListToUser(this, f.OpenedInode, listAddr, size);
+        return CopyXAttrListToUser(engine, f.OpenedInode, listAddr, size);
     }
 
     private async ValueTask<int> SysRemoveXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -459,7 +459,7 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry?.Inode == null) return new ValueTask<int>(-(int)Errno.ENOENT);
         if (loc.Mount != null && loc.Mount.IsReadOnly) return new ValueTask<int>(-(int)Errno.EROFS);
 
-        var readErr = ReadUserBuffer(sm, valuePtr, (int)sizeRaw, out var valueBytes);
+        var readErr = ReadUserBuffer(sm.CurrentSyscallEngine, valuePtr, (int)sizeRaw, out var valueBytes);
         if (readErr != 0) return new ValueTask<int>(readErr);
         return new ValueTask<int>(loc.Dentry.Inode.SetXAttr(name, valueBytes, (int)flags));
     }
@@ -475,7 +475,8 @@ public partial class SyscallManager
 
         var loc = sm.PathWalkWithFlags(path, lookupFlags);
         if (!loc.IsValid || loc.Dentry?.Inode == null) return new ValueTask<int>(-(int)Errno.ENOENT);
-        return new ValueTask<int>(CopyXAttrToUser(sm, loc.Dentry.Inode, name, valuePtr, (int)sizeRaw));
+        return new ValueTask<int>(CopyXAttrToUser(sm.CurrentSyscallEngine, loc.Dentry.Inode, name, valuePtr,
+            (int)sizeRaw));
     }
 
     private static ValueTask<int> ListXAttrPath(SyscallManager sm, uint pathPtr, uint listPtr, uint sizeRaw,
@@ -486,7 +487,8 @@ public partial class SyscallManager
 
         var loc = sm.PathWalkWithFlags(path, lookupFlags);
         if (!loc.IsValid || loc.Dentry?.Inode == null) return new ValueTask<int>(-(int)Errno.ENOENT);
-        return new ValueTask<int>(CopyXAttrListToUser(sm, loc.Dentry.Inode, listPtr, (int)sizeRaw));
+        return new ValueTask<int>(CopyXAttrListToUser(sm.CurrentSyscallEngine, loc.Dentry.Inode, listPtr,
+            (int)sizeRaw));
     }
 
     private static ValueTask<int> RemoveXAttrPath(SyscallManager sm, uint pathPtr, uint namePtr,
@@ -502,7 +504,7 @@ public partial class SyscallManager
         return new ValueTask<int>(loc.Dentry.Inode.RemoveXAttr(name));
     }
 
-    private static int CopyXAttrToUser(SyscallManager sm, Inode inode, string name, uint valueAddr, int size)
+    private static int CopyXAttrToUser(Engine engine, Inode inode, string name, uint valueAddr, int size)
     {
         Span<byte> probe = stackalloc byte[0];
         var needed = inode.GetXAttr(name, probe);
@@ -514,11 +516,11 @@ public partial class SyscallManager
         var rc = inode.GetXAttr(name, buf);
         if (rc < 0) return rc;
         if (rc > size) return -(int)Errno.ERANGE;
-        if (!sm.Engine.CopyToUser(valueAddr, buf.AsSpan(0, rc))) return -(int)Errno.EFAULT;
+        if (!engine.CopyToUser(valueAddr, buf.AsSpan(0, rc))) return -(int)Errno.EFAULT;
         return rc;
     }
 
-    private static int CopyXAttrListToUser(SyscallManager sm, Inode inode, uint listAddr, int size)
+    private static int CopyXAttrListToUser(Engine engine, Inode inode, uint listAddr, int size)
     {
         Span<byte> probe = stackalloc byte[0];
         var needed = inode.ListXAttr(probe);
@@ -530,7 +532,7 @@ public partial class SyscallManager
         var rc = inode.ListXAttr(buf);
         if (rc < 0) return rc;
         if (rc > size) return -(int)Errno.ERANGE;
-        if (!sm.Engine.CopyToUser(listAddr, buf.AsSpan(0, rc))) return -(int)Errno.EFAULT;
+        if (!engine.CopyToUser(listAddr, buf.AsSpan(0, rc))) return -(int)Errno.EFAULT;
         return rc;
     }
 
@@ -546,7 +548,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static int ReadUserBuffer(SyscallManager sm, uint addr, int size, out byte[] valueBytes)
+    private static int ReadUserBuffer(Engine engine, uint addr, int size, out byte[] valueBytes)
     {
         valueBytes = [];
         if (size < 0) return -(int)Errno.EINVAL;
@@ -554,7 +556,7 @@ public partial class SyscallManager
         if (addr == 0) return -(int)Errno.EFAULT;
 
         valueBytes = new byte[size];
-        if (!sm.Engine.CopyFromUser(addr, valueBytes)) return -(int)Errno.EFAULT;
+        if (!engine.CopyFromUser(addr, valueBytes)) return -(int)Errno.EFAULT;
         return 0;
     }
 
@@ -706,7 +708,7 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
-        WriteStat64(this, statAddr, loc.Dentry.Inode);
+        WriteStat64(engine, statAddr, loc.Dentry.Inode);
         return 0;
     }
 
@@ -1121,7 +1123,7 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
-        WriteStat(this, a2, loc.Dentry.Inode);
+        WriteStat(engine, a2, loc.Dentry.Inode);
         return 0;
     }
 
@@ -1132,7 +1134,7 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
-        WriteStat(this, a2, loc.Dentry.Inode);
+        WriteStat(engine, a2, loc.Dentry.Inode);
         return 0;
     }
 
@@ -1143,7 +1145,7 @@ public partial class SyscallManager
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
         RefreshHostfsProjectionForCaller(this, f.OpenedInode);
-        WriteStat(this, a2, f.OpenedInode);
+        WriteStat(engine, a2, f.OpenedInode);
         return 0;
     }
 
@@ -1160,7 +1162,7 @@ public partial class SyscallManager
             var f = GetFD(dirfd);
             if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
             RefreshHostfsProjectionForCaller(this, f.OpenedInode);
-            WriteStatx(this, statxAddr, f.OpenedInode, mask);
+            WriteStatx(engine, statxAddr, f.OpenedInode, mask);
             return 0;
         }
 
@@ -1178,7 +1180,7 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
-        WriteStatx(this, statxAddr, loc.Dentry.Inode, mask);
+        WriteStatx(engine, statxAddr, loc.Dentry.Inode, mask);
         return 0;
     }
 
@@ -1412,7 +1414,7 @@ public partial class SyscallManager
     private static void RefreshHostfsProjectionForCaller(SyscallManager sm, Inode inode)
     {
         if (inode is not HostInode hostInode) return;
-        var task = sm.Engine.Owner as FiberTask;
+        var task = sm.CurrentTask;
         var uid = task?.Process.EUID ?? 0;
         var gid = task?.Process.EGID ?? 0;
         hostInode.RefreshProjectedMetadata(uid, gid);
@@ -1450,7 +1452,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static void WriteStat64(SyscallManager sm, uint addr, Inode inode)
+    private static void WriteStat64(Engine engine, uint addr, Inode inode)
     {
         var buf = new byte[96];
 
@@ -1481,10 +1483,10 @@ public partial class SyscallManager
             (uint)new DateTimeOffset(inode.CTime).ToUnixTimeSeconds());
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(88), inode.Ino);
 
-        if (!sm.Engine.CopyToUser(addr, buf)) return;
+        if (!engine.CopyToUser(addr, buf)) return;
     }
 
-    private static void WriteStat(SyscallManager sm, uint addr, Inode inode)
+    private static void WriteStat(Engine engine, uint addr, Inode inode)
     {
         var buf = new byte[64];
 
@@ -1512,10 +1514,10 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(48),
             (uint)new DateTimeOffset(inode.CTime).ToUnixTimeSeconds());
 
-        if (!sm.Engine.CopyToUser(addr, buf)) return;
+        if (!engine.CopyToUser(addr, buf)) return;
     }
 
-    private static void WriteStatx(SyscallManager sm, uint addr, Inode inode, uint mask)
+    private static void WriteStatx(Engine engine, uint addr, Inode inode, uint mask)
     {
         var buf = new byte[256];
 
@@ -1554,7 +1556,7 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x88), (inode.Dev >> 8) & 0xFF); // dev_major
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x8C), inode.Dev & 0xFF); // dev_minor
 
-        if (!sm.Engine.CopyToUser(addr, buf)) return;
+        if (!engine.CopyToUser(addr, buf)) return;
     }
 
     private static int GetFsMagic(Dentry dentry)
@@ -1571,7 +1573,7 @@ public partial class SyscallManager
         };
     }
 
-    private static void WriteStatfs32(SyscallManager sm, uint addr, Dentry dentry)
+    private static void WriteStatfs32(Engine engine, uint addr, Dentry dentry)
     {
         const int blockSize = 4096;
         const int totalBlocks = 256 * 1024 * 1024 / blockSize; // 256 MiB synthetic capacity
@@ -1596,10 +1598,10 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(44), 0); // f_flags
         // f_spare[4] at [48..63] left as zero
 
-        sm.Engine.CopyToUser(addr, buf);
+        engine.CopyToUser(addr, buf);
     }
 
-    private static void WriteStatfs64(SyscallManager sm, uint addr, Dentry dentry)
+    private static void WriteStatfs64(Engine engine, uint addr, Dentry dentry)
     {
         const int blockSize = 4096;
         const ulong totalBlocks = 256UL * 1024UL * 1024UL / blockSize; // 256 MiB synthetic capacity
@@ -1625,7 +1627,7 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(64), 0); // f_flags
         // f_spare[4] at [68..83] left as zero
 
-        sm.Engine.CopyToUser(addr, buf);
+        engine.CopyToUser(addr, buf);
     }
 
     private async ValueTask<int> SysStatfs(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1635,7 +1637,7 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
 
         if (!engine.CopyToUser(a2, new byte[64])) return -(int)Errno.EFAULT;
-        WriteStatfs32(this, a2, loc.Dentry);
+        WriteStatfs32(engine, a2, loc.Dentry);
         return 0;
     }
 
@@ -1646,7 +1648,7 @@ public partial class SyscallManager
         if (file?.OpenedInode == null) return -(int)Errno.EBADF;
 
         if (!engine.CopyToUser(a2, new byte[64])) return -(int)Errno.EFAULT;
-        WriteStatfs32(this, a2, file.Dentry);
+        WriteStatfs32(engine, a2, file.Dentry);
         return 0;
     }
 
@@ -1660,7 +1662,7 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
 
         if (!engine.CopyToUser(a3, new byte[84])) return -(int)Errno.EFAULT;
-        WriteStatfs64(this, a3, loc.Dentry);
+        WriteStatfs64(engine, a3, loc.Dentry);
         return 0;
     }
 
@@ -1675,7 +1677,7 @@ public partial class SyscallManager
         if (file?.OpenedInode == null) return -(int)Errno.EBADF;
 
         if (!engine.CopyToUser(a3, new byte[84])) return -(int)Errno.EFAULT;
-        WriteStatfs64(this, a3, file.Dentry);
+        WriteStatfs64(engine, a3, file.Dentry);
         return 0;
     }
 
@@ -1703,7 +1705,7 @@ public partial class SyscallManager
         }
 
         RefreshHostfsProjectionForCaller(sm, loc.Dentry.Inode);
-        WriteStat64(sm, ptrStat, loc.Dentry.Inode);
+        WriteStat64(engine, ptrStat, loc.Dentry.Inode);
         return 0;
     }
 
@@ -1714,7 +1716,7 @@ public partial class SyscallManager
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
         RefreshHostfsProjectionForCaller(this, f.OpenedInode);
-        WriteStat64(this, a2, f.OpenedInode);
+        WriteStat64(engine, a2, f.OpenedInode);
         return 0;
     }
 

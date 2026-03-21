@@ -79,7 +79,7 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysEpollWait(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        return await DoEpollWait(this, a1, a2, a3, (int)a4);
+        return await DoEpollWait(this, engine, a1, a2, a3, (int)a4);
     }
 
     private async ValueTask<int> SysEpollPwait(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -89,14 +89,14 @@ public partial class SyscallManager
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        if (!TryReadDirectSigmask(this, a5, a6, out var hasMask, out var newMask, out var maskErr)) return maskErr;
+        if (!TryReadDirectSigmask(engine, a5, a6, out var hasMask, out var newMask, out var maskErr)) return maskErr;
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
         int result;
         try
         {
-            result = await DoEpollWait(this, a1, a2, a3, (int)a4);
+            result = await DoEpollWait(this, engine, a1, a2, a3, (int)a4);
         }
         finally
         {
@@ -113,14 +113,14 @@ public partial class SyscallManager
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        if (!TryReadTimespec64TimeoutMs(this, a4, out var timeoutMs, out var tsErr)) return tsErr;
-        if (!TryReadDirectSigmask(this, a5, a6, out var hasMask, out var newMask, out var maskErr)) return maskErr;
+        if (!TryReadTimespec64TimeoutMs(engine, a4, out var timeoutMs, out var tsErr)) return tsErr;
+        if (!TryReadDirectSigmask(engine, a5, a6, out var hasMask, out var newMask, out var maskErr)) return maskErr;
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
         try
         {
-            return await DoEpollWait(this, a1, a2, a3, timeoutMs);
+            return await DoEpollWait(this, engine, a1, a2, a3, timeoutMs);
         }
         finally
         {
@@ -128,10 +128,10 @@ public partial class SyscallManager
         }
     }
 
-    private static async ValueTask<int> DoEpollWait(SyscallManager sm, uint epfdArg, uint eventsPtr, uint maxeventsArg,
-        int timeoutMs)
+    private static async ValueTask<int> DoEpollWait(SyscallManager sm, Engine engine, uint epfdArg, uint eventsPtr,
+        uint maxeventsArg, int timeoutMs)
     {
-        var task = sm.Engine.Owner as FiberTask;
+        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
         var epfd = (int)epfdArg;

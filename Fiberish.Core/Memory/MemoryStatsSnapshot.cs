@@ -153,7 +153,7 @@ public readonly record struct MemoryStatsSnapshot(
 
     private static IReadOnlyList<Process> ResolveProcesses(SyscallManager? sm)
     {
-        var ownerTask = sm?.Engine?.Owner as FiberTask;
+        var ownerTask = sm?.CurrentTask;
         var scheduler = ownerTask?.CommonKernel;
         if (scheduler == null) return Array.Empty<Process>();
         return scheduler.GetProcessesSnapshot();

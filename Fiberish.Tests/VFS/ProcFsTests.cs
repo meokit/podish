@@ -156,7 +156,7 @@ public class ProcFsTests
             var stdinLoc = runtime.Syscalls.PathWalk("/");
             Assert.True(stdinLoc.IsValid);
             var stdinFile = new LinuxFile(stdinLoc.Dentry!, FileFlags.O_RDONLY, stdinLoc.Mount!);
-            process.Syscalls.AllocFD(stdinFile, 0);
+            process.Syscalls.AllocFD(stdinFile);
 
             ctx.Scheduler.RegisterProcess(process);
 
@@ -1007,7 +1007,7 @@ public class ProcFsTests
         var method = typeof(SyscallManager).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(method);
         var parameters = new object[7];
-        parameters[0] = syscallManager.Engine;
+        parameters[0] = syscallManager.CurrentSyscallEngine;
         for (var i = 0; i < args.Length; i++) parameters[i + 1] = args[i];
         for (var i = args.Length + 1; i < parameters.Length; i++) parameters[i] = 0u;
         return (ValueTask<int>)method!.Invoke(syscallManager, parameters)!;

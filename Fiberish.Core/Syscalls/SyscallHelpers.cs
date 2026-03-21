@@ -53,7 +53,7 @@ public partial class SyscallManager
         var buf = new byte[1];
         while (true)
         {
-            if (!Engine.CopyFromUser(current++, buf)) break;
+            if (!CurrentSyscallEngine.CopyFromUser(current++, buf)) break;
             if (buf[0] == 0) break;
             sb.Append((char)buf[0]);
             if (sb.Length > 4096) break; // Safety limit
@@ -200,7 +200,7 @@ public partial class SyscallManager
     /// </summary>
     public void SyncContainerPageCache()
     {
-        var scheduler = (Engine.Owner as FiberTask)?.CommonKernel ;
+        var scheduler = CurrentTask?.CommonKernel;
         var managers = new HashSet<SyscallManager>();
         var mmTargets = new Dictionary<VMAManager, (Engine Engine, Process? Process)>();
         if (scheduler != null)
@@ -211,7 +211,7 @@ public partial class SyscallManager
                     managers.Add(manager);
                     var syncEngine = process.Threads
                         .Select(static t => t.CPU)
-                        .FirstOrDefault(static cpu => cpu.State != IntPtr.Zero) ?? manager.Engine;
+                        .FirstOrDefault(static cpu => cpu.State != IntPtr.Zero) ?? manager.CurrentSyscallEngine;
                     if (!mmTargets.ContainsKey(manager.Mem))
                         mmTargets[manager.Mem] = (syncEngine, process);
                 }
@@ -219,10 +219,10 @@ public partial class SyscallManager
         if (managers.Count == 0)
         {
             managers.Add(this);
-            var fallbackProcess = (Engine.Owner as FiberTask)?.Process;
+            var fallbackProcess = CurrentProcess;
             var fallbackEngine = fallbackProcess?.Threads
                 .Select(static t => t.CPU)
-                .FirstOrDefault(static cpu => cpu.State != IntPtr.Zero) ?? Engine;
+                .FirstOrDefault(static cpu => cpu.State != IntPtr.Zero) ?? CurrentSyscallEngine;
             mmTargets[Mem] = (fallbackEngine, fallbackProcess);
         }
 
