@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Cli.Pulse;
 using Podish.Pulse.Protocol;
 using Podish.Pulse.Protocol.Commands;
+using System.Buffers.Binary;
 using Xunit;
 
 namespace Podish.Pulse.Tests;
@@ -152,20 +153,15 @@ public class PlaybackCommandTests
 public class PlaybackStreamStateTests
 {
     [Fact]
-    public void AppendAndCopyIntoConsumesBufferedBytes()
+    public void AppendIncreasesBufferedBytesAndOutputEstimate()
     {
         var stream = CreateStream();
 
-        int buffered = stream.Append(new byte[] { 1, 2, 3, 4, 5 });
-        Assert.Equal(5, buffered);
-        Assert.Equal(5, stream.BufferedBytes);
-
-        Span<byte> destination = stackalloc byte[3];
-        int copied = stream.CopyInto(destination);
-
-        Assert.Equal(3, copied);
-        Assert.Equal(new byte[] { 1, 2, 3 }, destination.ToArray());
-        Assert.Equal(2, stream.BufferedBytes);
+        int buffered = stream.Append(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 });
+        Assert.Equal(8, buffered);
+        Assert.Equal(8, stream.BufferedBytes);
+        Assert.True(stream.QueuedOutputEstimateBytes > 0);
+        Assert.True(stream.HasPendingOutput);
     }
 
     [Fact]
@@ -183,41 +179,28 @@ public class PlaybackStreamStateTests
     }
 
     [Fact]
-    public void ShouldRequestMoreDependsOnCorkStateAndQueuedBytes()
+    public void ShouldRequestMoreDependsOnCorkStateAndOutputEstimate()
     {
         var stream = CreateStream();
-        Assert.True(stream.ShouldRequestMore(0));
+        Assert.True(stream.ShouldRequestMore());
 
         stream.SetCorked(true);
-        Assert.False(stream.ShouldRequestMore(0));
+        Assert.False(stream.ShouldRequestMore());
 
         stream.SetCorked(false);
         stream.Append(new byte[stream.TargetBytesHint]);
-        Assert.False(stream.ShouldRequestMore(0));
+        Assert.False(stream.ShouldRequestMore());
     }
 
     [Fact]
-    public void AppendAndCopyIntoWrapsRingBufferAndClearsPendingRequestBytes()
+    public void AppendClearsPendingRequestBytes()
     {
         var stream = CreateStream();
         stream.RecordRequest(64);
 
-        byte[] first = Enumerable.Range(0, 48).Select(static x => (byte)x).ToArray();
-        byte[] second = Enumerable.Range(48, 32).Select(static x => (byte)x).ToArray();
-
-        Assert.Equal(48, stream.Append(first));
-
-        Span<byte> prefix = stackalloc byte[32];
-        Assert.Equal(32, stream.CopyInto(prefix));
-        Assert.Equal(first.AsSpan(0, 32).ToArray(), prefix.ToArray());
-
-        Assert.Equal(48, stream.Append(second));
+        byte[] payload = Enumerable.Range(0, 64).Select(static x => (byte)x).ToArray();
+        Assert.Equal(64, stream.Append(payload));
         Assert.Equal(0, stream.PendingRequestedBytes);
-
-        byte[] drained = new byte[48];
-        Assert.Equal(48, stream.CopyInto(drained));
-        Assert.Equal(first.AsSpan(32, 16).ToArray().Concat(second).ToArray(), drained);
-        Assert.Equal(0, stream.BufferedBytes);
     }
 
     private static PlaybackStreamState CreateStream()
@@ -245,6 +228,92 @@ public class PlaybackStreamStateTests
     }
 }
 
+public class PolyfillAudioStreamTests
+{
+    [Fact]
+    public void PutDataTracksQueuedInputBytes()
+    {
+        var stream = CreateAudioStream(new SampleSpec(SampleFormat.S16Le, 2, 48000));
+        byte[] data = Enumerable.Range(0, 16).Select(static x => (byte)x).ToArray();
+
+        int written = stream.PutData(data);
+
+        Assert.Equal(16, written);
+        Assert.Equal(16, stream.QueuedInputBytes);
+        Assert.True(stream.QueuedOutputEstimateBytes > 0);
+    }
+
+    [Fact]
+    public void MixIntoPassesThroughStereoFramesAtNativeRate()
+    {
+        var stream = CreateAudioStream(new SampleSpec(SampleFormat.S16Le, 2, 48000));
+        stream.PutData(CreateStereoS16Frames((short.MaxValue, 0), (0, short.MaxValue)));
+
+        float[] mix = new float[4];
+        int mixedFrames = stream.MixInto(mix, 2);
+
+        Assert.Equal(2, mixedFrames);
+        Assert.True(mix[0] > 0.99f);
+        Assert.Equal(0, mix[1], 3);
+        Assert.Equal(0, mix[2], 3);
+        Assert.True(mix[3] > 0.99f);
+    }
+
+    [Fact]
+    public void MixIntoResamplesMono44100To48000()
+    {
+        var stream = CreateAudioStream(new SampleSpec(SampleFormat.S16Le, 1, 44100));
+        stream.PutData(CreateMonoS16Frames(short.MaxValue, short.MaxValue, short.MaxValue, short.MaxValue));
+
+        float[] mix = new float[10];
+        int mixedFrames = stream.MixInto(mix, 5);
+
+        Assert.Equal(5, mixedFrames);
+        Assert.True(mix[0] > 0.99f);
+        Assert.True(mix[1] > 0.99f);
+        Assert.True(stream.QueuedInputBytes < 8);
+    }
+
+    [Fact]
+    public void FloatToS16ClampsMixedOutput()
+    {
+        Span<byte> destination = stackalloc byte[4];
+        float[] mix = [1.5f, -1.5f];
+
+        PolyfillAudioMixer.WriteS16LeStereo(destination, mix, 1);
+
+        Assert.Equal(short.MaxValue, BinaryPrimitives.ReadInt16LittleEndian(destination[..2]));
+        Assert.Equal(short.MinValue, BinaryPrimitives.ReadInt16LittleEndian(destination[2..4]));
+    }
+
+    private static PolyfillAudioStream CreateAudioStream(SampleSpec inputSpec)
+    {
+        return new PolyfillAudioStream(1, inputSpec,
+            inputSpec.Channels == 1 ? ChannelMap.Mono() : ChannelMap.Stereo(),
+            4096, 1.0f, paused: false);
+    }
+
+    private static byte[] CreateStereoS16Frames(params (short Left, short Right)[] frames)
+    {
+        byte[] bytes = new byte[frames.Length * sizeof(short) * 2];
+        for (int i = 0; i < frames.Length; i++)
+        {
+            BitConverter.TryWriteBytes(bytes.AsSpan(i * 4, 2), frames[i].Left);
+            BitConverter.TryWriteBytes(bytes.AsSpan((i * 4) + 2, 2), frames[i].Right);
+        }
+
+        return bytes;
+    }
+
+    private static byte[] CreateMonoS16Frames(params short[] frames)
+    {
+        byte[] bytes = new byte[frames.Length * sizeof(short)];
+        for (int i = 0; i < frames.Length; i++)
+            BitConverter.TryWriteBytes(bytes.AsSpan(i * 2, 2), frames[i]);
+        return bytes;
+    }
+}
+
 public class PulseServerStateTests
 {
     [Fact]
@@ -265,7 +334,7 @@ public class PulseServerStateTests
     }
 
     [Fact]
-    public void CreatePlaybackStreamAllowsOnlyOneActiveStream()
+    public void CreatePlaybackStreamAllowsMultipleStreams()
     {
         using var state = new PulseServerState(NullLoggerFactory.Instance);
         var parameters = new CreatePlaybackStreamParams
@@ -280,8 +349,9 @@ public class PulseServerStateTests
         Assert.True(ok1);
         Assert.NotNull(stream1);
         Assert.Null(error1);
-        Assert.False(ok2);
-        Assert.Null(stream2);
-        Assert.Equal(PulseError.Busy, error2);
+        Assert.True(ok2);
+        Assert.NotNull(stream2);
+        Assert.Null(error2);
+        Assert.NotEqual(stream1!.ChannelIndex, stream2!.ChannelIndex);
     }
 }

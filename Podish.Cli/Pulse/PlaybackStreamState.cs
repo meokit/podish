@@ -6,12 +6,9 @@ namespace Podish.Cli.Pulse;
 internal sealed class PlaybackStreamState
 {
     private readonly object _gate = new();
-    private readonly byte[] _ringBuffer;
-    private int _readOffset;
-    private int _writeOffset;
-    private int _bufferedBytes;
     private int _pendingRequestedBytes;
     private ulong _receivedBytesTotal;
+    private int _requestInFlight;
 
     public PlaybackStreamState(uint channelIndex, CreatePlaybackStreamParams parameters, string? clientName)
     {
@@ -26,9 +23,16 @@ internal sealed class PlaybackStreamState
         Props = parameters.Props ?? new Props();
         Volume = parameters.Volume ?? ChannelVolume.Norm(parameters.SampleSpec.Channels);
         ClientName = clientName ?? "unknown";
-        _ringBuffer = new byte[ComputeRingCapacity(normalizedBufferAttr, parameters.SampleSpec)];
         Corked = parameters.Flags.HasFlag(PlaybackStreamFlags.StartCorked) ||
                  parameters.Flags.HasFlag(PlaybackStreamFlags.StartPaused);
+
+        AudioStream = new PolyfillAudioStream(
+            channelIndex,
+            parameters.SampleSpec,
+            ChannelMap,
+            ComputeRingCapacity(normalizedBufferAttr, parameters.SampleSpec),
+            ComputeAverageGain(Volume),
+            Corked);
     }
 
     public uint ChannelIndex { get; }
@@ -40,20 +44,16 @@ internal sealed class PlaybackStreamState
     public Props Props { get; }
     public ChannelVolume Volume { get; }
     public string ClientName { get; }
+    public PolyfillAudioStream AudioStream { get; }
     public string? StreamName { get; private set; }
     public bool Corked { get; private set; }
     public bool Triggered { get; private set; }
     public uint? PendingDrainSequence { get; private set; }
     public bool StartedNotified { get; private set; }
-    public int Capacity => _ringBuffer.Length;
-    public int BufferedBytes
-    {
-        get
-        {
-            lock (_gate)
-                return _bufferedBytes;
-        }
-    }
+    public int Capacity => AudioStream.Capacity;
+    public int BufferedBytes => AudioStream.QueuedInputBytes;
+    public int QueuedOutputEstimateBytes => AudioStream.QueuedOutputEstimateBytes;
+    public bool HasPendingOutput => AudioStream.HasPendingOutput;
 
     public int PendingRequestedBytes
     {
@@ -98,12 +98,14 @@ internal sealed class PlaybackStreamState
     public void SetCorked(bool corked)
     {
         Corked = corked;
+        AudioStream.SetPaused(corked);
     }
 
     public void Trigger()
     {
         Triggered = true;
         Corked = false;
+        AudioStream.SetPaused(false);
     }
 
     public void QueueDrain(uint sequence)
@@ -121,25 +123,14 @@ internal sealed class PlaybackStreamState
         if (data.IsEmpty)
             return BufferedBytes;
 
+        int written = AudioStream.PutData(data);
         lock (_gate)
         {
-            int writable = Math.Min(data.Length, _ringBuffer.Length - _bufferedBytes);
-            if (writable > 0)
-            {
-                int first = Math.Min(writable, _ringBuffer.Length - _writeOffset);
-                data[..first].CopyTo(_ringBuffer.AsSpan(_writeOffset, first));
-                int remaining = writable - first;
-                if (remaining > 0)
-                    data.Slice(first, remaining).CopyTo(_ringBuffer.AsSpan(0, remaining));
-
-                _writeOffset = (_writeOffset + writable) % _ringBuffer.Length;
-                _bufferedBytes += writable;
-            }
-
-            _pendingRequestedBytes = Math.Max(0, _pendingRequestedBytes - data.Length);
-            _receivedBytesTotal += (ulong)data.Length;
-            return _bufferedBytes;
+            _pendingRequestedBytes = Math.Max(0, _pendingRequestedBytes - written);
+            _receivedBytesTotal += (ulong)written;
         }
+
+        return AudioStream.QueuedInputBytes;
     }
 
     public bool TryMarkStarted()
@@ -169,45 +160,44 @@ internal sealed class PlaybackStreamState
         }
     }
 
-    public int CopyInto(Span<byte> destination)
+    public bool TryBeginRequest()
     {
-        lock (_gate)
-        {
-            int written = Math.Min(destination.Length, _bufferedBytes);
-            if (written <= 0)
-                return 0;
+        return Interlocked.CompareExchange(ref _requestInFlight, 1, 0) == 0;
+    }
 
-            int first = Math.Min(written, _ringBuffer.Length - _readOffset);
-            _ringBuffer.AsSpan(_readOffset, first).CopyTo(destination[..first]);
-            int remaining = written - first;
-            if (remaining > 0)
-                _ringBuffer.AsSpan(0, remaining).CopyTo(destination.Slice(first, remaining));
-
-            _readOffset = (_readOffset + written) % _ringBuffer.Length;
-            _bufferedBytes -= written;
-            return written;
-        }
+    public void EndRequest()
+    {
+        Interlocked.Exchange(ref _requestInFlight, 0);
     }
 
     public void Clear()
     {
         lock (_gate)
         {
-            _readOffset = 0;
-            _writeOffset = 0;
-            _bufferedBytes = 0;
             _pendingRequestedBytes = 0;
         }
 
         PendingDrainSequence = null;
+        AudioStream.Clear();
     }
 
-    public bool ShouldRequestMore(int backendQueuedBytes)
+    public bool ShouldRequestMore()
     {
         if (Corked)
             return false;
 
-        return BufferedBytes + backendQueuedBytes + PendingRequestedBytes < TargetBytesHint;
+        return QueuedOutputEstimateBytes + PendingRequestedBytes < TargetBytesHint;
+    }
+
+    private static float ComputeAverageGain(ChannelVolume volume)
+    {
+        if (volume.Channels == 0)
+            return 1.0f;
+
+        float total = 0;
+        for (int i = 0; i < volume.Channels; i++)
+            total += volume[i].ToLinear();
+        return total / volume.Channels;
     }
 
     private static PlaybackBufferAttr CreateDefaultBufferAttr(SampleSpec sampleSpec)

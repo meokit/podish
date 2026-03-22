@@ -220,7 +220,6 @@ internal sealed class PulseCommandDispatcher
             return;
 
         stream.Clear();
-        _state.AudioSink.Clear();
         session.NotifyPlaybackStateChanged();
         await session.SendAckAsync(message.Sequence);
     }
@@ -254,9 +253,9 @@ internal sealed class PulseCommandDispatcher
             return;
 
         stream.Clear();
-        _state.AudioSink.Clear();
         _state.RemovePlaybackStream(stream.ChannelIndex);
         session.DetachPlaybackStream(stream.ChannelIndex);
+        session.NotifyPlaybackStateChanged();
         await session.SendAckAsync(message.Sequence);
     }
 

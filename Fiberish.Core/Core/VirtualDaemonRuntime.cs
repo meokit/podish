@@ -42,6 +42,8 @@ public sealed class VirtualDaemonRuntime
 
         if (ListenFile != null) return ListenFile;
 
+        EnsureParentDirectories(Daemon.UnixPath);
+
         var inode = new UnixSocketInode(0, Syscalls.MemfdSuperBlock, System.Net.Sockets.SocketType.Stream, Scheduler);
         var dentry = new Dentry($"socket:[{inode.Ino}]", inode, null, Syscalls.MemfdSuperBlock);
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, Syscalls.AnonMount);
@@ -67,6 +69,47 @@ public sealed class VirtualDaemonRuntime
 
         _listenInode = inode;
         return file;
+    }
+
+    private void EnsureParentDirectories(string unixPath)
+    {
+        if (string.IsNullOrWhiteSpace(unixPath) || unixPath[0] != '/')
+            return;
+
+        int slash = unixPath.LastIndexOf('/');
+        if (slash <= 0)
+            return;
+
+        string directoryPath = unixPath[..slash];
+        string[] parts = directoryPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0)
+            return;
+
+        PathLocation current = Syscalls.Root;
+        foreach (string part in parts)
+            current = EnsureDirectory(current, part);
+    }
+
+    private static PathLocation EnsureDirectory(PathLocation parent, string name)
+    {
+        Dentry parentDentry = parent.Dentry ?? throw new InvalidOperationException("Parent dentry is missing");
+
+        if (parentDentry.TryGetCachedChild(name, out Dentry? cached))
+            return new PathLocation(cached, parent.Mount);
+
+        Dentry? dentry = parentDentry.Inode!.Lookup(name);
+        if (dentry == null)
+        {
+            dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
+            parentDentry.Inode.Mkdir(dentry, 0x1FF, 0, 0);
+        }
+        else if (dentry.Inode?.Type != InodeType.Directory)
+        {
+            throw new InvalidOperationException($"Path component '{name}' exists but is not a directory");
+        }
+
+        parentDentry.CacheChild(dentry, "VirtualDaemonRuntime.EnsureDirectory");
+        return new PathLocation(dentry, parent.Mount);
     }
 
     public void Schedule(Action<VirtualDaemonContext> action, FiberTask? task = null)

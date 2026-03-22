@@ -4,6 +4,7 @@ using Podish.Pulse.Protocol.Commands;
 using Fiberish.Core;
 using Fiberish.Native;
 using System.Threading;
+using System.Linq;
 using Fiberish.VFS;
 
 namespace Podish.Cli.Pulse;
@@ -16,13 +17,13 @@ internal sealed class PulseServerSession
     private readonly PulseCommandDispatcher _dispatcher;
     private readonly ILogger _logger;
     private readonly PulseServerState _state;
+    private readonly object _playbackGate = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly CancellationTokenSource _cts = new();
     private readonly byte[] _descriptorBuffer = new byte[DescriptorSize];
     private byte[] _payloadBuffer = Array.Empty<byte>();
     private byte[] _recvScratch = new byte[64 * 1024];
-    private PlaybackStreamState? _playbackStream;
-    private int _requestInFlight;
+    private readonly Dictionary<uint, PlaybackStreamState> _playbackStreams = new();
     private int _playbackPumpScheduled;
 
     public PulseServerSession(VirtualDaemonConnection connection, PulseServerState state, ILogger logger)
@@ -113,8 +114,8 @@ internal sealed class PulseServerSession
 
     public void AttachPlaybackStream(PlaybackStreamState stream)
     {
-        _playbackStream = stream;
-        _requestInFlight = 0;
+        lock (_playbackGate)
+            _playbackStreams[stream.ChannelIndex] = stream;
         _state.AudioSink.AttachStream(stream, NotifyPlaybackProgress);
         if (stream.InitialRequestedBytes > 0)
             stream.RecordRequest((int)stream.InitialRequestedBytes);
@@ -123,17 +124,22 @@ internal sealed class PulseServerSession
 
     public void DetachPlaybackStream(uint channelIndex)
     {
-        if (_playbackStream?.ChannelIndex == channelIndex)
-        {
-            _state.AudioSink.DetachStream(channelIndex);
-            _playbackStream = null;
-            _requestInFlight = 0;
-        }
+        lock (_playbackGate)
+            _playbackStreams.Remove(channelIndex);
+        _state.AudioSink.DetachStream(channelIndex);
     }
 
     public StatReply CreateStatReply()
     {
-        int buffered = _playbackStream?.BufferedBytes ?? 0;
+        PlaybackStreamState[] snapshot = GetPlaybackStreamsSnapshot();
+        int buffered = 0;
+        int outputBuffered = 0;
+        foreach (PlaybackStreamState stream in snapshot)
+        {
+            buffered += stream.BufferedBytes;
+            outputBuffered += stream.QueuedOutputEstimateBytes;
+        }
+
         return new StatReply
         {
             MemblockTotal = (ulong)buffered,
@@ -145,9 +151,9 @@ internal sealed class PulseServerSession
             MemblockPoolSize = 1,
             MemblockPoolUsed = (uint)buffered,
             MemblockPoolAllocated = (uint)buffered,
-            SamplesTotal = (uint)(_playbackStream?.SampleSpec.SampleRate ?? 0),
+            SamplesTotal = (uint)snapshot.Sum(static stream => (long)stream.SampleSpec.SampleRate),
             InputBytesTotal = (ulong)buffered,
-            OutputBytesTotal = (ulong)_state.AudioSink.QueuedBytes,
+            OutputBytesTotal = (ulong)outputBuffered,
         };
     }
 
@@ -168,36 +174,37 @@ internal sealed class PulseServerSession
 
     public async ValueTask MaybeSendPlaybackRequestAsync(PlaybackStreamState stream)
     {
-        if (_playbackStream?.ChannelIndex != stream.ChannelIndex)
+        if (!IsAttachedPlaybackStream(stream.ChannelIndex))
             return;
 
-        if (Interlocked.CompareExchange(ref _requestInFlight, 1, 0) != 0)
+        if (!stream.TryBeginRequest())
             return;
 
         try
         {
-            if (!stream.ShouldRequestMore(_state.AudioSink.QueuedBytes))
+            if (!stream.ShouldRequestMore())
                 return;
 
             if (stream.PendingRequestedBytes >= stream.RequestBytesHint)
             {
                 _logger.LogTrace(
-                    "{Prefix} suppress request stream={ChannelIndex} queued={Queued} buffered={Buffered} pending={Pending} hint={Hint}",
+                    "{Prefix} suppress request stream={ChannelIndex} outputEstimate={OutputEstimate} buffered={Buffered} pending={Pending} hint={Hint}",
                     PulseServerLogging.Stream,
                     stream.ChannelIndex,
-                    _state.AudioSink.QueuedBytes,
+                    stream.QueuedOutputEstimateBytes,
                     stream.BufferedBytes,
                     stream.PendingRequestedBytes,
                     stream.RequestBytesHint);
                 return;
             }
 
-            int bytesNeeded = stream.TargetBytesHint - (stream.BufferedBytes + _state.AudioSink.QueuedBytes + stream.PendingRequestedBytes);
+            int bytesNeeded = stream.TargetBytesHint - (stream.QueuedOutputEstimateBytes + stream.PendingRequestedBytes);
             int requestBytes = Math.Max(stream.RequestBytesHint, bytesNeeded);
             stream.RecordRequest(requestBytes);
-            _logger.LogDebug("{Prefix} request stream={ChannelIndex} requestBytes={RequestBytes} buffered={Buffered} queued={Queued} pending={Pending}",
+            _logger.LogDebug(
+                "{Prefix} request stream={ChannelIndex} requestBytes={RequestBytes} buffered={Buffered} outputEstimate={OutputEstimate} pending={Pending}",
                 PulseServerLogging.Stream, stream.ChannelIndex, requestBytes, stream.BufferedBytes,
-                _state.AudioSink.QueuedBytes, stream.PendingRequestedBytes);
+                stream.QueuedOutputEstimateBytes, stream.PendingRequestedBytes);
             var request = ProtocolMessage.Create(CommandTag.Request, uint.MaxValue, writer =>
                 {
                     writer.WriteU32(stream.ChannelIndex);
@@ -208,7 +215,7 @@ internal sealed class PulseServerSession
         }
         finally
         {
-            Interlocked.Exchange(ref _requestInFlight, 0);
+            stream.EndRequest();
         }
     }
 
@@ -217,7 +224,7 @@ internal sealed class PulseServerSession
         if (stream.PendingDrainSequence == null)
             return;
 
-        if (stream.BufferedBytes > 0 || _state.AudioSink.QueuedBytes > 0)
+        if (stream.HasPendingOutput)
             return;
 
         uint seq = stream.PendingDrainSequence.Value;
@@ -233,27 +240,28 @@ internal sealed class PulseServerSession
 
     private async Task HandleStreamPacketAsync(Descriptor descriptor, byte[] payload, int payloadLength)
     {
-        if (_playbackStream == null || _playbackStream.ChannelIndex != descriptor.Channel)
+        PlaybackStreamState? stream = GetPlaybackStream(descriptor.Channel);
+        if (stream == null)
         {
             _logger.LogWarning("{Prefix} dropping packet for unknown channel={Channel}", PulseServerLogging.Stream,
                 descriptor.Channel);
             return;
         }
 
-        int buffered = _playbackStream.Append(payload.AsSpan(0, payloadLength));
+        int buffered = stream.Append(payload.AsSpan(0, payloadLength));
         _logger.LogDebug("{Prefix} stream={ChannelIndex} appended={Bytes} buffered={Buffered}",
             PulseServerLogging.Stream, descriptor.Channel, payloadLength, buffered);
 
-        if (_playbackStream.TryMarkStarted())
+        if (stream.TryMarkStarted())
         {
             var started = ProtocolMessage.Create(CommandTag.Started, uint.MaxValue,
-                writer => writer.WriteU32(_playbackStream.ChannelIndex), ClientProtocolVersion);
+                writer => writer.WriteU32(stream.ChannelIndex), ClientProtocolVersion);
             await SendRawAsync(ProtocolMessageIO.Encode(started, ClientProtocolVersion));
         }
 
         NotifyPlaybackStateChanged();
-        await TryCompleteDrainAsync(_playbackStream);
-        await MaybeSendPlaybackRequestAsync(_playbackStream);
+        await TryCompleteDrainAsync(stream);
+        await MaybeSendPlaybackRequestAsync(stream);
     }
 
     private async Task<int> ReadExactAsync(byte[] buffer, int bytesNeeded)
@@ -306,12 +314,11 @@ internal sealed class PulseServerSession
 
     private async ValueTask PumpPlaybackAsync()
     {
-        var stream = _playbackStream;
-        if (stream == null)
-            return;
-
-        await TryCompleteDrainAsync(stream);
-        await MaybeSendPlaybackRequestAsync(stream);
+        foreach (PlaybackStreamState stream in GetPlaybackStreamsSnapshot())
+        {
+            await TryCompleteDrainAsync(stream);
+            await MaybeSendPlaybackRequestAsync(stream);
+        }
     }
 
     private void NotifyPlaybackProgress()
@@ -324,6 +331,9 @@ internal sealed class PulseServerSession
     private void RequestPlaybackPump()
     {
         if (_cts.IsCancellationRequested)
+            return;
+
+        if (!CanSchedulePlaybackPump())
             return;
 
         if (Interlocked.Exchange(ref _playbackPumpScheduled, 1) == 0)
@@ -339,8 +349,7 @@ internal sealed class PulseServerSession
     {
         try
         {
-            var stream = _playbackStream;
-            if (stream == null || _cts.IsCancellationRequested)
+            if (_cts.IsCancellationRequested || !CanSchedulePlaybackPump())
                 return;
 
             await PumpPlaybackAsync();
@@ -420,5 +429,35 @@ internal sealed class PulseServerSession
 
         int newSize = Math.Max(requiredBytes, _recvScratch.Length * 2);
         _recvScratch = new byte[newSize];
+    }
+
+    private PlaybackStreamState? GetPlaybackStream(uint channelIndex)
+    {
+        lock (_playbackGate)
+        {
+            _playbackStreams.TryGetValue(channelIndex, out PlaybackStreamState? stream);
+            return stream;
+        }
+    }
+
+    private PlaybackStreamState[] GetPlaybackStreamsSnapshot()
+    {
+        lock (_playbackGate)
+            return _playbackStreams.Values.ToArray();
+    }
+
+    private bool IsAttachedPlaybackStream(uint channelIndex)
+    {
+        lock (_playbackGate)
+            return _playbackStreams.ContainsKey(channelIndex);
+    }
+
+    private bool CanSchedulePlaybackPump()
+    {
+        FiberTask task = _connection.Task;
+        return !task.IsRetiring &&
+               !task.Exited &&
+               task.Status != FiberTaskStatus.Terminated &&
+               task.Status != FiberTaskStatus.Zombie;
     }
 }

@@ -7,16 +7,17 @@ namespace Podish.Cli.Pulse;
 
 internal sealed unsafe class Sdl3AudioSink : IDisposable
 {
+    private sealed record StreamRegistration(PlaybackStreamState State, Action ProgressCallback);
+
     private readonly ILogger _logger;
     private readonly object _gate = new();
     private readonly Sdl _sdl;
     private readonly AudioCallback _audioCallback;
+    private readonly Dictionary<uint, StreamRegistration> _streams = new();
     private GCHandle _selfHandle;
     private bool _initialized;
     private uint _deviceId;
-    private SampleSpec _openedSpec;
-    private PlaybackStreamState? _activeStream;
-    private Action? _playbackProgressCallback;
+    private float[] _mixScratch = Array.Empty<float>();
 
     public Sdl3AudioSink(ILogger logger)
     {
@@ -24,29 +25,18 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
         _sdl = Sdl.GetApi();
         _audioCallback = OnAudioCallback;
         DefaultSampleSpec = new SampleSpec(SampleFormat.S16Le, 2, 48000);
-        _openedSpec = DefaultSampleSpec;
     }
 
     public SampleSpec DefaultSampleSpec { get; }
 
-    public int QueuedBytes
-    {
-        get { return 0; }
-    }
-
     public void EnsureFormat(SampleSpec sampleSpec)
     {
+        if (!PulseServerState.IsSupported(sampleSpec))
+            throw new InvalidOperationException(
+                $"Unsupported playback format for SDL sink: {sampleSpec.Format}/{sampleSpec.Channels}/{sampleSpec.SampleRate}");
+
         lock (_gate)
         {
-            if (_deviceId != 0 &&
-                _openedSpec.Format == sampleSpec.Format &&
-                _openedSpec.Channels == sampleSpec.Channels &&
-                _openedSpec.SampleRate == sampleSpec.SampleRate)
-            {
-                UpdateDevicePausedLocked();
-                return;
-            }
-
             if (!_initialized)
             {
                 if (_sdl.Init(Sdl.InitAudio) != 0)
@@ -58,34 +48,29 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
             if (!_selfHandle.IsAllocated)
                 _selfHandle = GCHandle.Alloc(this);
 
-            if (_deviceId != 0)
+            if (_deviceId == 0)
             {
-                _logger.LogDebug("{Prefix} reopening audio device for format={Format} channels={Channels} rate={Rate}",
-                    PulseServerLogging.Audio, sampleSpec.Format, sampleSpec.Channels, sampleSpec.SampleRate);
-                _sdl.CloseAudioDevice(_deviceId);
-                _deviceId = 0;
+                AudioSpec desired = default;
+                desired.Freq = (int)DefaultSampleSpec.SampleRate;
+                desired.Format = Sdl.AudioS16Lsb;
+                desired.Channels = DefaultSampleSpec.Channels;
+                desired.Samples = 1024;
+                desired.Callback = _audioCallback;
+                desired.Userdata = (void*)GCHandle.ToIntPtr(_selfHandle);
+
+                AudioSpec obtained = default;
+                _deviceId = _sdl.OpenAudioDevice((byte*)0, 0, &desired, &obtained, 0);
+                if (_deviceId == 0)
+                    throw new InvalidOperationException(
+                        $"SDL open audio device failed: {Marshal.PtrToStringUTF8((nint)_sdl.GetError())}");
+
+                _logger.LogInformation(
+                    "{Prefix} opened SDL audio device id={DeviceId} format={Format} channels={Channels} rate={Rate} samples={Samples}",
+                    PulseServerLogging.Audio, _deviceId, DefaultSampleSpec.Format, DefaultSampleSpec.Channels,
+                    DefaultSampleSpec.SampleRate, obtained.Samples);
             }
 
-            AudioSpec desired = default;
-            desired.Freq = (int)sampleSpec.SampleRate;
-            desired.Format = Sdl.AudioS16Lsb;
-            desired.Channels = sampleSpec.Channels;
-            desired.Samples = 1024;
-            desired.Callback = _audioCallback;
-            desired.Userdata = (void*)GCHandle.ToIntPtr(_selfHandle);
-
-            AudioSpec obtained = default;
-            _deviceId = _sdl.OpenAudioDevice((byte*)0, 0, &desired, &obtained, 0);
-            if (_deviceId == 0)
-                throw new InvalidOperationException(
-                    $"SDL open audio device failed: {Marshal.PtrToStringUTF8((nint)_sdl.GetError())}");
-
-            _openedSpec = new SampleSpec(SampleFormat.S16Le, obtained.Channels, (uint)obtained.Freq);
             UpdateDevicePausedLocked();
-            _logger.LogInformation(
-                "{Prefix} opened SDL audio device id={DeviceId} format={Format} channels={Channels} rate={Rate} samples={Samples}",
-                PulseServerLogging.Audio, _deviceId, _openedSpec.Format, _openedSpec.Channels, _openedSpec.SampleRate,
-                obtained.Samples);
         }
     }
 
@@ -93,8 +78,7 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
     {
         lock (_gate)
         {
-            _activeStream = stream;
-            _playbackProgressCallback = playbackProgressCallback;
+            _streams[stream.ChannelIndex] = new StreamRegistration(stream, playbackProgressCallback);
             UpdateDevicePausedLocked();
         }
     }
@@ -103,11 +87,7 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
     {
         lock (_gate)
         {
-            if (_activeStream?.ChannelIndex != channelIndex)
-                return;
-
-            _activeStream = null;
-            _playbackProgressCallback = null;
+            _streams.Remove(channelIndex);
             UpdateDevicePausedLocked();
         }
     }
@@ -115,17 +95,7 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
     public void NotifyStreamStateChanged()
     {
         lock (_gate)
-        {
             UpdateDevicePausedLocked();
-        }
-    }
-
-    public void Clear()
-    {
-        lock (_gate)
-        {
-            UpdateDevicePausedLocked();
-        }
     }
 
     public void Dispose()
@@ -154,7 +124,16 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
         if (_deviceId == 0)
             return;
 
-        bool shouldPause = _activeStream == null || _activeStream.Corked;
+        bool shouldPause = true;
+        foreach (StreamRegistration registration in _streams.Values)
+        {
+            if (!registration.State.Corked && registration.State.HasPendingOutput)
+            {
+                shouldPause = false;
+                break;
+            }
+        }
+
         _sdl.PauseAudioDevice(_deviceId, shouldPause ? 1 : 0);
     }
 
@@ -174,22 +153,37 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
     {
         destination.Clear();
 
-        PlaybackStreamState? stream;
-        Action? callback;
         lock (_gate)
         {
-            stream = _activeStream;
-            callback = _playbackProgressCallback;
-        }
+            if (_streams.Count == 0)
+                return;
 
-        if (stream == null || stream.Corked)
-            return;
+            int frames = destination.Length / (DefaultSampleSpec.Channels * sizeof(short));
+            int sampleCount = frames * DefaultSampleSpec.Channels;
+            if (_mixScratch.Length < sampleCount)
+                _mixScratch = new float[sampleCount];
 
-        int copied = stream.CopyInto(destination);
-        if (callback != null &&
-            (copied > 0 || stream.PendingDrainSequence != null || stream.ShouldRequestMore(0)))
-        {
-            callback();
+            Span<float> mix = _mixScratch.AsSpan(0, sampleCount);
+            mix.Clear();
+
+            bool anyMixed = false;
+            foreach (StreamRegistration registration in _streams.Values)
+            {
+                int mixedFrames = registration.State.AudioStream.MixInto(mix, frames);
+                if (mixedFrames > 0)
+                    anyMixed = true;
+            }
+
+            if (anyMixed)
+                PolyfillAudioMixer.WriteS16LeStereo(destination, mix, frames);
+
+            foreach (StreamRegistration registration in _streams.Values)
+            {
+                if (anyMixed || registration.State.PendingDrainSequence != null || registration.State.ShouldRequestMore())
+                    registration.ProgressCallback();
+            }
+
+            UpdateDevicePausedLocked();
         }
     }
 }
