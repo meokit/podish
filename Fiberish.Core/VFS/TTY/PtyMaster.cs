@@ -45,7 +45,7 @@ public class PtyMaster
     /// <summary>
     ///     Reads data from the slave (output from the slave's perspective).
     /// </summary>
-    public int Read(Span<byte> buffer, FileFlags flags)
+    public int Read(FiberTask? task, Span<byte> buffer, FileFlags flags)
     {
         if ((flags & FileFlags.O_NONBLOCK) != 0 && !OutputBuffer.HasData)
             return -(int)Errno.EAGAIN;
@@ -53,13 +53,18 @@ public class PtyMaster
         return OutputBuffer.Read(buffer);
     }
 
+    public int Read(Span<byte> buffer, FileFlags flags) => Read(null, buffer, flags);
+
     /// <summary>
     ///     Writes data to the slave (input from the slave's perspective).
     /// </summary>
-    public int Write(ReadOnlySpan<byte> buffer)
+    public int Write(FiberTask? task, ReadOnlySpan<byte> buffer)
     {
+        _ = task;
         return InputBuffer.Write(buffer);
     }
+
+    public int Write(ReadOnlySpan<byte> buffer) => Write(null, buffer);
 
     /// <summary>
     ///     Handles ioctl requests for the master side.
@@ -162,26 +167,30 @@ public class PtySlave
     /// <summary>
     ///     Reads data from the PTY (input from master).
     /// </summary>
-    public int Read(Span<byte> buffer, FileFlags flags)
+    public int Read(FiberTask? task, Span<byte> buffer, FileFlags flags)
     {
         if (Discipline != null)
-            return Discipline.Read(null, buffer, flags);
+            return Discipline.Read(task, buffer, flags);
 
         // Direct read from master's input buffer
         return _pair.Master.InputBuffer.Read(buffer);
     }
 
+    public int Read(Span<byte> buffer, FileFlags flags) => Read(null, buffer, flags);
+
     /// <summary>
     ///     Writes data to the PTY (output to master).
     /// </summary>
-    public int Write(ReadOnlySpan<byte> buffer)
+    public int Write(FiberTask? task, ReadOnlySpan<byte> buffer)
     {
         if (Discipline != null)
-            return Discipline.Write(null, buffer);
+            return Discipline.Write(task, buffer);
 
         // Direct write to master's output buffer
         return _pair.Master.OutputBuffer.Write(buffer);
     }
+
+    public int Write(ReadOnlySpan<byte> buffer) => Write(null, buffer);
 }
 
 /// <summary>

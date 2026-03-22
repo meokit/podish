@@ -47,19 +47,12 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         throw new InvalidOperationException("Cannot link in /dev");
     }
 
-    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    public override int Read(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         if (!_isInput) return 0;
 
-        if (_discipline != null) return Read(null, linuxFile, buffer, offset);
-
-        return _stdin.Read(buffer);
-    }
-
-    internal int Read(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
-    {
-        if (!_isInput) return 0;
         if (_discipline != null) return _discipline.Read(task, buffer, linuxFile.Flags);
+
         return _stdin.Read(buffer);
     }
 
@@ -76,21 +69,12 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         _discipline.DataAvailable.Reset();
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    public override int Write(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (_isInput) return 0;
 
-        if (_discipline != null) return Write(null, linuxFile, buffer, offset);
-
-        _stdout.Write(buffer);
-        _stdout.Flush();
-        return buffer.Length;
-    }
-
-    internal int Write(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
-    {
-        if (_isInput) return 0;
         if (_discipline != null) return _discipline.Write(task, buffer);
+
         _stdout.Write(buffer);
         _stdout.Flush();
         return buffer.Length;

@@ -766,9 +766,19 @@ public abstract class Inode : IAddressSpaceOperations
         throw new NotSupportedException();
     }
 
+    public virtual int Read(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
+    {
+        return Read(linuxFile, buffer, offset);
+    }
+
     public virtual int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         return 0;
+    }
+
+    public virtual int Write(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        return Write(linuxFile, buffer, offset);
     }
 
     public virtual int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)

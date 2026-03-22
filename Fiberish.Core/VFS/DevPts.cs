@@ -67,9 +67,9 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         return null;
     }
 
-    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    public override int Read(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
-        return PtyPair.Slave.Read(buffer, linuxFile.Flags);
+        return PtyPair.Slave.Read(task, buffer, linuxFile.Flags);
     }
 
     public override async ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
@@ -79,9 +79,9 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         PtyPair.Slave.DataAvailable.Reset();
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    public override int Write(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
-        return PtyPair.Slave.Write(buffer);
+        return PtyPair.Slave.Write(task, buffer);
     }
 
     public override short Poll(LinuxFile linuxFile, short events)
@@ -219,13 +219,13 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         return _ptyManager.AllocatePty();
     }
 
-    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    public override int Read(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         // Get the PTY pair from the file's private data
         if (linuxFile.PrivateData is not PtyPair pair)
             return -(int)Errno.EBADF;
 
-        return pair.Master.Read(buffer, linuxFile.Flags);
+        return pair.Master.Read(task, buffer, linuxFile.Flags);
     }
 
     public override async ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
@@ -237,12 +237,12 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         pair.Master.DataAvailable.Reset();
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    public override int Write(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (linuxFile.PrivateData is not PtyPair pair)
             return -(int)Errno.EBADF;
 
-        return pair.Master.Write(buffer);
+        return pair.Master.Write(task, buffer);
     }
 
     public override short Poll(LinuxFile linuxFile, short events)

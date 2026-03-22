@@ -73,6 +73,7 @@ public partial class SyscallManager
         if (!sm.FDs.TryGetValue(inFd, out var inFile) || !sm.FDs.TryGetValue(outFd, out var outFile))
             return (-(int)Errno.EBADF, null);
         if (inFile == null || outFile == null) return (-(int)Errno.EBADF, null);
+        var task = engine.Owner as FiberTask;
 
         // Verify modes
         const int O_ACCMODE = 3;
@@ -92,7 +93,7 @@ public partial class SyscallManager
             while (remaining > 0)
             {
                 var toRead = Math.Min(remaining, bufLen);
-                var bytesRead = inFile.OpenedInode!.Read(inFile, buffer.AsSpan(0, toRead), readOffset);
+                var bytesRead = inFile.OpenedInode!.Read(task, inFile, buffer.AsSpan(0, toRead), readOffset);
 
                 if (bytesRead <= 0)
                 {
@@ -102,8 +103,8 @@ public partial class SyscallManager
                     {
                         if (totalWritten > 0) break;
                         if ((inFile.Flags & FileFlags.O_NONBLOCK) != 0) return (-(int)Errno.EAGAIN, null);
-                        if (engine.Owner is not FiberTask fiberTask) return (-(int)Errno.EAGAIN, null);
-                        if (await new IOAwaitable(inFile, true, fiberTask) == AwaitResult.Interrupted)
+                        if (task == null) return (-(int)Errno.EAGAIN, null);
+                        if (await new IOAwaitable(inFile, true, task) == AwaitResult.Interrupted)
                             return (-(int)Errno.ERESTARTSYS, null);
                         continue;
                     }
@@ -116,7 +117,8 @@ public partial class SyscallManager
                 if (!offset.HasValue) inFile.Position += bytesRead;
 
                 // Write to out_fd
-                var bytesWritten = outFile.OpenedInode!.Write(outFile, buffer.AsSpan(0, bytesRead), outFile.Position);
+                var bytesWritten =
+                    outFile.OpenedInode!.Write(task, outFile, buffer.AsSpan(0, bytesRead), outFile.Position);
 
                 if (bytesWritten < 0)
                 {
@@ -124,9 +126,9 @@ public partial class SyscallManager
                     {
                         if (totalWritten > 0) break;
                         if ((outFile.Flags & FileFlags.O_NONBLOCK) != 0) return (-(int)Errno.EAGAIN, null);
-                        if (engine.Owner is FiberTask fiberTask)
+                        if (task != null)
                         {
-                            if (await new IOAwaitable(outFile, false, fiberTask) == AwaitResult.Interrupted)
+                            if (await new IOAwaitable(outFile, false, task) == AwaitResult.Interrupted)
                                 // We read data but were interrupted before writing.
                                 // If we don't handle this perfectly, bytes are technically lost. For now, return ERESTARTSYS.
                                 return (-(int)Errno.ERESTARTSYS, null);
@@ -584,14 +586,10 @@ public partial class SyscallManager
     {
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
+        var task = engine.Owner as FiberTask;
         const int O_ACCMODE = 3;
         if (((int)f.Flags & O_ACCMODE) == (int)FileFlags.O_WRONLY)
             return -(int)Errno.EBADF;
-        if (f.OpenedInode is ConsoleInode consoleRead && consoleRead.IsTty)
-        {
-            if (offset != -1) return -(int)Errno.ESPIPE;
-            return await DoReadVTty(sm, engine, f, consoleRead, iovs, iovCnt, flags);
-        }
 
         if (f.OpenedInode is SignalFdInode signalfd)
         {
@@ -619,17 +617,17 @@ public partial class SyscallManager
             {
                 while (true)
                 {
-                    var n = f.OpenedInode!.Read(f, buf.AsSpan(0, (int)iov.Len), currentOffset);
+                    var n = f.OpenedInode!.Read(task, f, buf.AsSpan(0, (int)iov.Len), currentOffset);
 
                     if (n == -(int)Errno.EAGAIN)
                     {
                         if ((f.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0 /* RWF_NOWAIT */)
                             return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
 
-                        if (engine.Owner is not FiberTask fiberTask)
+                        if (task == null)
                             return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
 
-                        if (await new IOAwaitable(f, true, fiberTask) == AwaitResult.Interrupted)
+                        if (await new IOAwaitable(f, true, task) == AwaitResult.Interrupted)
                             return totalRead > 0 ? totalRead : -(int)Errno.ERESTARTSYS;
                         continue;
                     }
@@ -673,11 +671,7 @@ public partial class SyscallManager
     {
         var f = sm.GetFD(fd);
         if (f == null) return -(int)Errno.EBADF;
-        if (f.OpenedInode is ConsoleInode consoleWrite && consoleWrite.IsTty)
-        {
-            if (offset != -1) return -(int)Errno.ESPIPE;
-            return await DoWriteVTty(sm, engine, f, consoleWrite, iovs, iovCnt, flags);
-        }
+        var task = engine.Owner as FiberTask;
 
         if (f.TryGetSocketDataOps(out _) || f.OpenedInode is NetlinkRouteSocketInode)
         {
@@ -722,11 +716,11 @@ public partial class SyscallManager
 
                 while (true)
                 {
-                    var n = f.OpenedInode!.Write(f, data.AsSpan(0, (int)iov.Len), currentOffset);
+                    var n = f.OpenedInode!.Write(task, f, data.AsSpan(0, (int)iov.Len), currentOffset);
 
                     if (n == -(int)Errno.EPIPE)
                     {
-                        if (engine.Owner is FiberTask fiberTask) fiberTask.PostSignal((int)Signal.SIGPIPE);
+                        task?.PostSignal((int)Signal.SIGPIPE);
                         return FinalizeWriteResult(n);
                     }
 
@@ -735,10 +729,10 @@ public partial class SyscallManager
                         if ((f.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0 /* RWF_NOWAIT */)
                             return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN);
 
-                        if (engine.Owner is not FiberTask fiberTask)
+                        if (task == null)
                             return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN);
 
-                        if (await new IOAwaitable(f, false, fiberTask) == AwaitResult.Interrupted)
+                        if (await new IOAwaitable(f, false, task) == AwaitResult.Interrupted)
                             return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.ERESTARTSYS);
                         continue;
                     }
@@ -817,56 +811,6 @@ public partial class SyscallManager
         return totalRead;
     }
 
-    private static async ValueTask<int> DoReadVTty(SyscallManager sm, Engine engine, LinuxFile file,
-        ConsoleInode inode, Iovec[] iovs, int iovCnt, int flags)
-    {
-        var task = engine.Owner as FiberTask;
-        if (task == null) return -(int)Errno.EPERM;
-
-        var totalRead = 0;
-        for (var i = 0; i < iovCnt; i++)
-        {
-            var iov = iovs[i];
-            if (iov.Len == 0) continue;
-
-            var buf = ArrayPool<byte>.Shared.Rent((int)iov.Len);
-            try
-            {
-                while (true)
-                {
-                    var n = inode.Read(task, file, buf.AsSpan(0, (int)iov.Len), 0);
-
-                    if (n == -(int)Errno.EAGAIN)
-                    {
-                        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0)
-                            return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
-
-                        if (await new IOAwaitable(file, true, task) == AwaitResult.Interrupted)
-                            return totalRead > 0 ? totalRead : -(int)Errno.ERESTARTSYS;
-                        continue;
-                    }
-
-                    if (n > 0)
-                    {
-                        if (!engine.CopyToUser(iov.BaseAddr, buf.AsSpan(0, n))) return -(int)Errno.EFAULT;
-                        totalRead += n;
-                        if (n < iov.Len)
-                            return totalRead;
-                        break;
-                    }
-
-                    return n == 0 ? totalRead : totalRead > 0 ? totalRead : n;
-                }
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buf);
-            }
-        }
-
-        return totalRead;
-    }
-
     private static async ValueTask<int> DoWriteVSocket(SyscallManager sm, Engine engine, LinuxFile file,
         Iovec[] iovs, int iovCnt, int flags)
     {
@@ -899,58 +843,6 @@ public partial class SyscallManager
                 totalWritten += n;
                 if (n < iov.Len)
                     return totalWritten;
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(data);
-            }
-        }
-
-        return totalWritten;
-    }
-
-    private static async ValueTask<int> DoWriteVTty(SyscallManager sm, Engine engine, LinuxFile file,
-        ConsoleInode inode, Iovec[] iovs, int iovCnt, int flags)
-    {
-        var task = engine.Owner as FiberTask;
-        if (task == null) return -(int)Errno.EPERM;
-
-        var totalWritten = 0;
-        for (var i = 0; i < iovCnt; i++)
-        {
-            var iov = iovs[i];
-            if (iov.Len == 0) continue;
-
-            var data = ArrayPool<byte>.Shared.Rent((int)iov.Len);
-            try
-            {
-                if (!engine.CopyFromUser(iov.BaseAddr, data.AsSpan(0, (int)iov.Len)))
-                    return -(int)Errno.EFAULT;
-
-                while (true)
-                {
-                    var n = inode.Write(task, file, data.AsSpan(0, (int)iov.Len), 0);
-
-                    if (n == -(int)Errno.EAGAIN)
-                    {
-                        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0)
-                            return totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN;
-
-                        if (await new IOAwaitable(file, false, task) == AwaitResult.Interrupted)
-                            return totalWritten > 0 ? totalWritten : -(int)Errno.ERESTARTSYS;
-                        continue;
-                    }
-
-                    if (n > 0)
-                    {
-                        totalWritten += n;
-                        if (n < iov.Len)
-                            return totalWritten;
-                        break;
-                    }
-
-                    return totalWritten > 0 ? totalWritten : n;
-                }
             }
             finally
             {
