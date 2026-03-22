@@ -3,6 +3,7 @@ using Fiberish.Diagnostics;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
+using System.Buffers.Binary;
 
 namespace Fiberish.Syscalls;
 
@@ -44,10 +45,17 @@ public partial class SyscallManager
         const uint F_SETFD = 2;
         const uint F_GETFL = 3;
         const uint F_SETFL = 4;
+        const uint F_GETLK = 5;
+        const uint F_SETLK = 6;
+        const uint F_SETLKW = 7;
+        const uint F_GETLK64 = 12;
+        const uint F_SETLK64 = 13;
+        const uint F_SETLKW64 = 14;
         const uint F_DUPFD_CLOEXEC = 1030;
 
         const uint FD_CLOEXEC = 1;
         const int O_ASYNC = 0x2000;
+        const short F_UNLCK = 2;
 
         return cmd switch
         {
@@ -56,6 +64,12 @@ public partial class SyscallManager
             F_SETFD => SetFdFlags(this, targetFd, arg),
             F_GETFL => (int)(file.Flags & ~FileFlags.O_CLOEXEC),
             F_SETFL => SetStatusFlags(file, arg),
+            F_GETLK => WriteUnlockedFlock(engine, arg, false),
+            F_SETLK => 0,
+            F_SETLKW => 0,
+            F_GETLK64 => WriteUnlockedFlock(engine, arg, true),
+            F_SETLK64 => 0,
+            F_SETLKW64 => 0,
             F_DUPFD_CLOEXEC => DupFD(targetFd, (int)arg, true),
             _ => -(int)Errno.EINVAL
         };
@@ -73,6 +87,15 @@ public partial class SyscallManager
             var newStatusBits = (FileFlags)(int)arg & settableMask;
             file.Flags = (file.Flags & ~settableMask) | newStatusBits;
             return 0;
+        }
+
+        static int WriteUnlockedFlock(Engine engine, uint arg, bool is64)
+        {
+            if (arg == 0) return -(int)Errno.EFAULT;
+
+            Span<byte> flock = stackalloc byte[is64 ? 24 : 16];
+            BinaryPrimitives.WriteInt16LittleEndian(flock, F_UNLCK);
+            return engine.CopyToUser(arg, flock) ? 0 : -(int)Errno.EFAULT;
         }
     }
 }

@@ -178,7 +178,10 @@ public static class SampleSpecExtensions
             ? (SampleFormat)formatByte
             : throw new InvalidProtocolMessageException($"Invalid sample format {formatByte}");
         
-        uint sampleRate = reader.ReadU32();
+        reader.EnsureBytes(4);
+        uint sampleRate = (uint)(reader.Remaining[0] << 24 | reader.Remaining[1] << 16 |
+                                 reader.Remaining[2] << 8 | reader.Remaining[3]);
+        reader._position += 4;
         
         return new SampleSpec(format, channels, sampleRate);
     }
@@ -193,6 +196,9 @@ public static class SampleSpecExtensions
         writer.WriteTag(Tag.SampleSpec);
         writer.Stream.WriteByte((byte)spec.Format);
         writer.Stream.WriteByte(spec.Channels);
-        writer.WriteU32(spec.SampleRate);
+        writer.Stream.WriteByte((byte)(spec.SampleRate >> 24));
+        writer.Stream.WriteByte((byte)(spec.SampleRate >> 16));
+        writer.Stream.WriteByte((byte)(spec.SampleRate >> 8));
+        writer.Stream.WriteByte((byte)spec.SampleRate);
     }
 }

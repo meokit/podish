@@ -2,12 +2,12 @@ using System.Text;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
+using Microsoft.Extensions.Logging;
 
 namespace Fiberish.Core;
 
 public sealed class VirtualDaemonRuntime
 {
-    private readonly VirtualDaemonContext _context;
     private int _exiting;
     private int _listenFd = -1;
     private UnixSocketInode? _listenInode;
@@ -19,7 +19,6 @@ public sealed class VirtualDaemonRuntime
         Process = task.Process;
         Syscalls = task.Process.Syscalls;
         Daemon = daemon;
-        _context = new VirtualDaemonContext(this);
         Task.SignalPosted += HandleSignalPosted;
     }
 
@@ -34,7 +33,7 @@ public sealed class VirtualDaemonRuntime
     {
         Scheduler.AssertSchedulerThread();
         EnsureUnixListener(backlog);
-        Daemon.OnStart(_context);
+        Daemon.OnStart(CreateContext(Task));
     }
 
     public LinuxFile EnsureUnixListener(int backlog = 16)
@@ -70,17 +69,29 @@ public sealed class VirtualDaemonRuntime
         return file;
     }
 
-    public void Schedule(Action<VirtualDaemonContext> action)
+    public void Schedule(Action<VirtualDaemonContext> action, FiberTask? task = null)
     {
-        Scheduler.Schedule(() => action(_context), Task);
+        var contextTask = task ?? Task;
+        var context = CreateContext(contextTask);
+        Scheduler.Schedule(() => action(context), contextTask);
     }
 
-    public void Schedule(Func<VirtualDaemonContext, ValueTask> action)
+    public void Schedule(Func<VirtualDaemonContext, ValueTask> action, FiberTask? task = null)
     {
-        Scheduler.Schedule(() => StartScheduledAction(action), Task);
+        var contextTask = task ?? Task;
+        var context = CreateContext(contextTask);
+        Scheduler.Schedule(() => StartScheduledAction(context, action), contextTask);
     }
 
-    public async ValueTask<(int Rc, VirtualDaemonConnection? Connection)> AcceptAsync(int flags = 0)
+    public void ScheduleChild(Func<VirtualDaemonContext, ValueTask> action)
+    {
+        Scheduler.AssertSchedulerThread();
+        var childTask = CreateChildTask();
+        var childContext = CreateContext(childTask);
+        Scheduler.Schedule(() => StartScheduledAction(childContext, action, childTask), childTask);
+    }
+
+    public async ValueTask<(int Rc, VirtualDaemonConnection? Connection)> AcceptAsync(FiberTask task, int flags = 0)
     {
         Scheduler.AssertSchedulerThread();
 
@@ -95,7 +106,7 @@ public sealed class VirtualDaemonRuntime
 
         var dentry = new Dentry($"socket:[{accepted.Inode.Ino}]", accepted.Inode, null, Syscalls.MemfdSuperBlock);
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, Syscalls.AnonMount);
-        return (0, new VirtualDaemonConnection(this, file, listenFile));
+        return (0, new VirtualDaemonConnection(this, task, file, listenFile));
     }
 
     public void Exit(int exitCode = 0)
@@ -104,12 +115,17 @@ public sealed class VirtualDaemonRuntime
 
         Scheduler.Schedule(() =>
         {
+            var logger = Scheduler.LoggerFactory.CreateLogger<VirtualDaemonRuntime>();
             try
             {
-                Daemon.OnStop(_context);
+                logger.LogInformation(
+                    "Virtual daemon exiting name={Name} pid={Pid} ppid={ParentPid} exitCode={ExitCode}",
+                    Daemon.Name, Process.TGID, Process.PPID, exitCode);
+                Daemon.OnStop(CreateContext(Task));
             }
             finally
             {
+                logger.LogDebug("Virtual daemon finalize exit name={Name} pid={Pid}", Daemon.Name, Process.TGID);
                 SyscallManager.FinalizeProcessExit(Task, exitCode, false, 0, false);
             }
         }, Task);
@@ -129,24 +145,52 @@ public sealed class VirtualDaemonRuntime
                     return;
                 case Signal.SIGTERM:
                 case Signal.SIGINT:
-                    Daemon.OnSignal(_context, signo);
+                    Daemon.OnSignal(CreateContext(Task), signo);
                     return;
                 default:
-                    Daemon.OnSignal(_context, signo);
+                    Daemon.OnSignal(CreateContext(Task), signo);
                     return;
             }
         }, Task);
     }
 
-    private void StartScheduledAction(Func<VirtualDaemonContext, ValueTask> action)
+    private VirtualDaemonContext CreateContext(FiberTask task)
+    {
+        return new VirtualDaemonContext(this, task);
+    }
+
+    private FiberTask CreateChildTask()
+    {
+        Scheduler.AssertSchedulerThread();
+
+        var engine = new Engine
+        {
+            CurrentSyscallManager = Syscalls
+        };
+        Syscalls.RegisterEngine(engine);
+
+        var tid = Scheduler.AllocateTaskId();
+        var task = new FiberTask(tid, Process, engine, Scheduler)
+        {
+            ExecutionMode = TaskExecutionMode.HostService,
+            Status = FiberTaskStatus.Waiting
+        };
+        engine.Owner = task;
+        return task;
+    }
+
+    private void StartScheduledAction(VirtualDaemonContext context, Func<VirtualDaemonContext, ValueTask> action,
+        FiberTask? completionTask = null)
     {
         ValueTask pending;
         try
         {
-            pending = action(_context);
+            pending = action(context);
         }
         catch
         {
+            if (completionTask != null)
+                RetireChildTask(completionTask);
             Exit(1);
             throw;
         }
@@ -154,13 +198,15 @@ public sealed class VirtualDaemonRuntime
         if (pending.IsCompletedSuccessfully)
         {
             pending.GetAwaiter().GetResult();
+            if (completionTask != null)
+                RetireChildTask(completionTask);
             return;
         }
 
-        _ = CompleteScheduledActionAsync(pending);
+        _ = CompleteScheduledActionAsync(pending, completionTask);
     }
 
-    private async Task CompleteScheduledActionAsync(ValueTask pending)
+    private async Task CompleteScheduledActionAsync(ValueTask pending, FiberTask? completionTask)
     {
         try
         {
@@ -168,8 +214,27 @@ public sealed class VirtualDaemonRuntime
         }
         catch
         {
+            if (completionTask != null)
+                RetireChildTask(completionTask);
             Exit(1);
             throw;
         }
+
+        if (completionTask != null)
+            RetireChildTask(completionTask);
+    }
+
+    private void RetireChildTask(FiberTask task)
+    {
+        if (task.Exited || task.Status == FiberTaskStatus.Terminated)
+            return;
+
+        Scheduler.Schedule(() =>
+        {
+            if (task.Exited || task.Status == FiberTaskStatus.Terminated)
+                return;
+
+            Scheduler.DetachTask(task);
+        }, task);
     }
 }

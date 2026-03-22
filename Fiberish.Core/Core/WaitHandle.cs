@@ -62,7 +62,6 @@ public class AsyncWaitQueue
         lock (_gate)
         {
             _isSignaled = false;
-            _waiters.Clear();
         }
     }
 

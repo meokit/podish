@@ -172,6 +172,68 @@ public class NetworkTests
         Assert.Equal(0, revents & PollEvents.POLLHUP);
     }
 
+    [Fact]
+    public async Task UnixSocketInode_StreamSocket_NonBlockingReadExact_MustObserveSequentialWrites()
+    {
+        using var env = new TestEnv();
+        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Stream, env.Scheduler);
+        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Stream, env.Scheduler);
+        sock1.ConnectPair(sock2);
+        sock2.ConnectPair(sock1);
+
+        var file1 = new LinuxFile(new Dentry("s1", sock1, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+            null!);
+        var file2 = new LinuxFile(new Dentry("s2", sock2, null, env.MemfdSuperBlock),
+            FileFlags.O_RDWR | FileFlags.O_NONBLOCK, null!);
+
+        static async ValueTask ReadExactAsync(
+            UnixSocketInode socket,
+            LinuxFile file,
+            FiberTask task,
+            KernelScheduler scheduler,
+            int bytesNeeded)
+        {
+            var buffer = new byte[bytesNeeded];
+            var total = 0;
+            while (total < bytesNeeded)
+            {
+                var scratch = new byte[bytesNeeded - total];
+                var read = await socket.RecvAsync(file, task, scratch, 0, scratch.Length);
+                if (read == -(int)Errno.EAGAIN)
+                {
+                    await new SleepAwaitable(1, task, scheduler);
+                    continue;
+                }
+
+                Assert.True(read > 0, $"Unexpected read result {read} while waiting for {bytesNeeded} bytes.");
+                Buffer.BlockCopy(scratch, 0, buffer, total, read);
+                total += read;
+            }
+        }
+
+        var receiver = env.StartOnScheduler(async () =>
+        {
+            await ReadExactAsync(sock2, file2, env.Task, env.Scheduler, 20);
+            await ReadExactAsync(sock2, file2, env.Task, env.Scheduler, 16384);
+            await ReadExactAsync(sock2, file2, env.Task, env.Scheduler, 20);
+            await ReadExactAsync(sock2, file2, env.Task, env.Scheduler, 16384);
+            return 1;
+        });
+
+        await env.WaitForBackgroundSchedulerAsync();
+
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            Assert.Equal(20, await sock1.SendAsync(file1, env.Task, new byte[20], 0));
+            Assert.Equal(16384, await sock1.SendAsync(file1, env.Task, new byte[16384], 0));
+            Assert.Equal(20, await sock1.SendAsync(file1, env.Task, new byte[20], 0));
+            Assert.Equal(16384, await sock1.SendAsync(file1, env.Task, new byte[16384], 0));
+        });
+
+        var result = await receiver.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, result);
+    }
+
     private class TestEnv : IDisposable
     {
         public TestEnv()
@@ -248,6 +310,31 @@ public class NetworkTests
                 {
                     tcs.TrySetException(ex);
                 }
+            });
+
+            return tcs.Task;
+        }
+
+        public Task InvokeOnSchedulerAsync(Func<ValueTask> action)
+        {
+            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            Scheduler.ScheduleFromAnyThread(() =>
+            {
+                async void Entry()
+                {
+                    try
+                    {
+                        await action();
+                        tcs.TrySetResult();
+                    }
+                    catch (Exception ex)
+                    {
+                        tcs.TrySetException(ex);
+                    }
+                }
+
+                Entry();
             });
 
             return tcs.Task;

@@ -56,6 +56,11 @@ public class FutexManager
         return woken;
     }
 
+    public int GetWaiterCount(uint addr)
+    {
+        return _privateQueues.TryGetValue(addr, out var list) ? list.Count : 0;
+    }
+
     public Waiter PrepareWaitShared(nint hostKey)
     {
         if (!_sharedQueues.TryGetValue(hostKey, out var list))
@@ -95,5 +100,10 @@ public class FutexManager
         if (list.Count == 0) _sharedQueues.Remove(hostKey);
 
         return woken;
+    }
+
+    public int GetWaiterCountShared(nint hostKey)
+    {
+        return _sharedQueues.TryGetValue(hostKey, out var list) ? list.Count : 0;
     }
 }

@@ -19,6 +19,9 @@ public sealed class ContainerRunRequest
 {
     public const string TestVirtualEchoSocketPath = "/podish-test-echo.sock";
     public const string TestVirtualEchoSocketEnvVar = "PODISH_TEST_VIRT_ECHO_SOCK";
+    public const string PulseServerSocketPath = "/run/pulse/native";
+    public const string PulseServerEnvVar = "PULSE_SERVER";
+    public const string PulseRuntimePathEnvVar = "PULSE_RUNTIME_PATH";
 
     public required string RootfsPath { get; init; }
     public string Hostname { get; init; } = string.Empty;
@@ -45,6 +48,7 @@ public sealed class ContainerRunRequest
     public long? MemoryQuotaBytes { get; init; }
     public string? GuestStatsExportDir { get; init; }
     public bool EnableTestVirtualEchoServer { get; init; }
+    public bool EnablePulseServer { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
 }
 
@@ -342,6 +346,11 @@ public sealed class ContainerRuntimeService
                 finalEnvs.Add(env);
             if (request.EnableTestVirtualEchoServer)
                 finalEnvs.Add($"{ContainerRunRequest.TestVirtualEchoSocketEnvVar}={ContainerRunRequest.TestVirtualEchoSocketPath}");
+            if (request.EnablePulseServer)
+            {
+                finalEnvs.Add($"{ContainerRunRequest.PulseServerEnvVar}=unix:{ContainerRunRequest.PulseServerSocketPath}");
+                finalEnvs.Add($"{ContainerRunRequest.PulseRuntimePathEnvVar}=/run/pulse");
+            }
 
             startupPhase = "resolve-init";
             var (loc, guestPathResolved) = runtime.Syscalls.ResolvePath(actualExe, true);
@@ -364,10 +373,9 @@ public sealed class ContainerRuntimeService
             var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs,
                 finalEnvs.ToArray(),
                 scheduler, ttyDiag, loc.Mount!, uts, engineInitProc?.TGID ?? 0);
-            if (request.EnableTestVirtualEchoServer)
+            if (request.EnableTestVirtualEchoServer || request.EnablePulseServer)
             {
-                var daemonParentPid = engineInitProc?.TGID ?? mainTask.Process.TGID;
-                request.ConfigureVirtualDaemons?.Invoke(runtime, scheduler, uts, daemonParentPid);
+                request.ConfigureVirtualDaemons?.Invoke(runtime, scheduler, uts, mainTask.Process.TGID);
             }
             initProcessStarted = true;
             startupPhase = "running";

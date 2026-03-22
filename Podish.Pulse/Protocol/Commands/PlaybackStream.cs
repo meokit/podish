@@ -84,6 +84,11 @@ public sealed class CreatePlaybackStreamParams : IEquatable<CreatePlaybackStream
     public uint? DeviceIndex;
 
     /// <summary>
+    /// The device name to use, or null for default.
+    /// </summary>
+    public string? DeviceName;
+
+    /// <summary>
     /// The sample specification.
     /// </summary>
     public SampleSpec SampleSpec;
@@ -102,6 +107,11 @@ public sealed class CreatePlaybackStreamParams : IEquatable<CreatePlaybackStream
     /// The buffer attributes.
     /// </summary>
     public PlaybackBufferAttr? BufferAttr;
+
+    /// <summary>
+    /// Stream sync group id.
+    /// </summary>
+    public uint SyncId;
 
     /// <summary>
     /// The stream properties.
@@ -123,10 +133,12 @@ public sealed class CreatePlaybackStreamParams : IEquatable<CreatePlaybackStream
     {
         if (other is null) return false;
         return DeviceIndex == other.DeviceIndex &&
+               DeviceName == other.DeviceName &&
                SampleSpec == other.SampleSpec &&
                ChannelMap == other.ChannelMap &&
                Flags == other.Flags &&
                BufferAttr == other.BufferAttr &&
+               SyncId == other.SyncId &&
                Props == other.Props &&
                Volume == other.Volume;
     }
@@ -138,7 +150,9 @@ public sealed class CreatePlaybackStreamParams : IEquatable<CreatePlaybackStream
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(DeviceIndex, SampleSpec, ChannelMap, Flags, BufferAttr, Props, Volume);
+        return HashCode.Combine(
+            HashCode.Combine(DeviceIndex, DeviceName, SampleSpec, ChannelMap),
+            HashCode.Combine(Flags, BufferAttr, SyncId, Props, Volume));
     }
 }
 
@@ -153,27 +167,63 @@ public sealed class CreatePlaybackStreamResponse : IEquatable<CreatePlaybackStre
     public uint ChannelIndex;
 
     /// <summary>
-    /// The device index.
+    /// The server-side stream index.
     /// </summary>
-    public uint DeviceIndex;
+    public uint StreamIndex;
+
+    /// <summary>
+    /// The number of bytes the server is requesting immediately.
+    /// </summary>
+    public uint RequestedBytes;
+
+    /// <summary>
+    /// The negotiated buffer attributes.
+    /// </summary>
+    public PlaybackBufferAttr BufferAttr = new();
 
     /// <summary>
     /// The sample specification.
     /// </summary>
-    public SampleSpec SampleSpec;
+    public SampleSpec SampleSpec = new();
 
     /// <summary>
     /// The channel map.
     /// </summary>
     public ChannelMap? ChannelMap;
 
+    /// <summary>
+    /// The sink index.
+    /// </summary>
+    public uint SinkIndex;
+
+    /// <summary>
+    /// The sink name.
+    /// </summary>
+    public string? SinkName;
+
+    /// <summary>
+    /// Whether the stream is suspended.
+    /// </summary>
+    public bool Suspended;
+
+    /// <summary>
+    /// The current stream latency in usec.
+    /// </summary>
+    public ulong StreamLatencyUsec;
+
     public bool Equals(CreatePlaybackStreamResponse? other)
     {
         if (other is null) return false;
         return ChannelIndex == other.ChannelIndex &&
-               DeviceIndex == other.DeviceIndex &&
+               StreamIndex == other.StreamIndex &&
+               RequestedBytes == other.RequestedBytes &&
+               Equals(BufferAttr, other.BufferAttr) &&
                SampleSpec == other.SampleSpec &&
-               ChannelMap == other.ChannelMap;
+               ChannelMap == other.ChannelMap &&
+               SinkIndex == other.SinkIndex &&
+               SinkName == other.SinkName &&
+               Suspended == other.Suspended &&
+               StreamLatencyUsec == other.StreamLatencyUsec;
     }
 
     public override bool Equals(object? obj)
@@ -183,7 +233,9 @@ public sealed class CreatePlaybackStreamResponse : IEquatable<CreatePlaybackStre
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(ChannelIndex, DeviceIndex, SampleSpec, ChannelMap);
+        return HashCode.Combine(
+            HashCode.Combine(ChannelIndex, StreamIndex, RequestedBytes, BufferAttr, SampleSpec),
+            HashCode.Combine(ChannelMap, SinkIndex, SinkName, Suspended, StreamLatencyUsec));
     }
 }
 
@@ -197,27 +249,112 @@ public static class PlaybackStreamExtensions
     /// </summary>
     public static CreatePlaybackStreamParams ReadCreatePlaybackStreamParams(this TagStructReader reader)
     {
+        if (reader.PeekTag() == Tag.U32)
+        {
+            var legacyParams = new CreatePlaybackStreamParams
+            {
+                DeviceIndex = reader.ReadIndex(),
+                SampleSpec = reader.ReadSampleSpec(),
+                ChannelMap = reader.ReadChannelMap(),
+                Flags = (PlaybackStreamFlags)reader.ReadU32(),
+            };
+
+            if (reader.HasDataLeft())
+            {
+                legacyParams.BufferAttr = reader.ReadPlaybackBufferAttr();
+            }
+
+            if (reader.HasDataLeft())
+            {
+                legacyParams.Props = reader.ReadProps();
+            }
+
+            if (reader.HasDataLeft())
+            {
+                legacyParams.Volume = reader.ReadChannelVolume();
+            }
+
+            return legacyParams;
+        }
+
         var params_ = new CreatePlaybackStreamParams
         {
-            DeviceIndex = reader.ReadIndex(),
             SampleSpec = reader.ReadSampleSpec(),
             ChannelMap = reader.ReadChannelMap(),
-            Flags = (PlaybackStreamFlags)reader.ReadU32(),
+            DeviceIndex = reader.ReadIndex(),
+            DeviceName = reader.ReadString(),
         };
 
-        if (reader.HasDataLeft())
+        uint maxLength = reader.ReadU32();
+        if (reader.ReadBool())
+            params_.Flags |= PlaybackStreamFlags.StartCorked;
+
+        params_.BufferAttr = new PlaybackBufferAttr
         {
-            params_.BufferAttr = reader.ReadPlaybackBufferAttr();
+            MaxLength = maxLength,
+            TargetLength = reader.ReadU32(),
+            Prebuffer = reader.ReadU32(),
+            MinRequest = reader.ReadU32(),
+            MinIncrement = 0,
+        };
+
+        params_.SyncId = reader.ReadU32();
+        params_.Volume = reader.ReadChannelVolume();
+
+        if (reader.ReadBool())
+            params_.Flags |= PlaybackStreamFlags.NoRemap;
+        if (reader.ReadBool())
+            params_.Flags |= PlaybackStreamFlags.NoRemix;
+        if (reader.ReadBool())
+            params_.Flags |= PlaybackStreamFlags.FixFormat;
+        if (reader.ReadBool())
+            params_.Flags |= PlaybackStreamFlags.FixRate;
+        if (reader.ReadBool())
+            params_.Flags |= PlaybackStreamFlags.FixChannels;
+        if (reader.ReadBool())
+            params_.Flags |= PlaybackStreamFlags.DontMove;
+        if (reader.ReadBool())
+            params_.Flags |= PlaybackStreamFlags.VariableRate;
+        if (reader.ReadBool())
+            params_.Flags |= PlaybackStreamFlags.StartMuted;
+
+        reader.ReadBool(); // adjust_latency
+        params_.Props = reader.ReadProps();
+
+        if (reader.ProtocolVersion >= 14)
+        {
+            bool hasVolume = reader.ReadBool();
+            if (!hasVolume)
+                params_.Volume = null;
+
+            if (reader.ReadBool())
+                params_.Flags |= PlaybackStreamFlags.EarlyRequests;
         }
 
-        if (reader.HasDataLeft())
+        if (reader.ProtocolVersion >= 15)
         {
-            params_.Props = reader.ReadProps();
+            reader.ReadBool(); // start_muted explicitly set
+            if (reader.ReadBool())
+                params_.Flags |= PlaybackStreamFlags.DontInhibitAutoSuspend;
+
+            reader.ReadBool(); // fail_on_suspend
         }
 
-        if (reader.HasDataLeft())
+        if (reader.ProtocolVersion >= 17)
         {
-            params_.Volume = reader.ReadChannelVolume();
+            reader.ReadBool(); // relative_volume
+        }
+
+        if (reader.ProtocolVersion >= 18)
+        {
+            reader.ReadBool(); // passthrough
+        }
+
+        if (reader.ProtocolVersion >= 21 && reader.HasDataLeft())
+        {
+            byte count = reader.ReadU8();
+            if (count != 0)
+                throw new InvalidProtocolMessageException("FormatInfo in playback stream params is not supported yet");
         }
 
         return params_;
@@ -228,28 +365,51 @@ public static class PlaybackStreamExtensions
     /// </summary>
     public static void WriteCreatePlaybackStreamParams(this TagStructWriter writer, CreatePlaybackStreamParams params_)
     {
-        writer.WriteIndex(params_.DeviceIndex);
         writer.WriteSampleSpec(params_.SampleSpec);
-        if (params_.ChannelMap != null)
-        {
-            writer.WriteChannelMap(params_.ChannelMap);
-        }
-        writer.WriteU32((uint)params_.Flags);
+        writer.WriteChannelMap(params_.ChannelMap ?? new ChannelMap());
+        writer.WriteIndex(params_.DeviceIndex);
+        writer.WriteString(params_.DeviceName);
 
-        if (params_.BufferAttr != null)
+        PlaybackBufferAttr bufferAttr = params_.BufferAttr ?? new PlaybackBufferAttr();
+        writer.WriteU32(bufferAttr.MaxLength);
+        writer.WriteBool(params_.Flags.HasFlag(PlaybackStreamFlags.StartCorked));
+        writer.WriteU32(bufferAttr.TargetLength);
+        writer.WriteU32(bufferAttr.Prebuffer);
+        writer.WriteU32(bufferAttr.MinRequest);
+        writer.WriteU32(params_.SyncId);
+        writer.WriteChannelVolume(params_.Volume ?? ChannelVolume.Norm(params_.SampleSpec.Channels));
+        writer.WriteBool(params_.Flags.HasFlag(PlaybackStreamFlags.NoRemap));
+        writer.WriteBool(params_.Flags.HasFlag(PlaybackStreamFlags.NoRemix));
+        writer.WriteBool(params_.Flags.HasFlag(PlaybackStreamFlags.FixFormat));
+        writer.WriteBool(params_.Flags.HasFlag(PlaybackStreamFlags.FixRate));
+        writer.WriteBool(params_.Flags.HasFlag(PlaybackStreamFlags.FixChannels));
+        writer.WriteBool(params_.Flags.HasFlag(PlaybackStreamFlags.DontMove));
+        writer.WriteBool(params_.Flags.HasFlag(PlaybackStreamFlags.VariableRate));
+        writer.WriteBool(params_.Flags.HasFlag(PlaybackStreamFlags.StartMuted));
+        writer.WriteBool(false); // adjust_latency
+        writer.WriteProps(params_.Props ?? new Props());
+
+        if (writer.ProtocolVersion >= 14)
         {
-            writer.WritePlaybackBufferAttr(params_.BufferAttr);
+            writer.WriteBool(params_.Volume != null);
+            writer.WriteBool(params_.Flags.HasFlag(PlaybackStreamFlags.EarlyRequests));
         }
 
-        if (params_.Props != null)
+        if (writer.ProtocolVersion >= 15)
         {
-            writer.WriteProps(params_.Props);
+            writer.WriteBool(params_.Flags.HasFlag(PlaybackStreamFlags.StartMuted));
+            writer.WriteBool(params_.Flags.HasFlag(PlaybackStreamFlags.DontInhibitAutoSuspend));
+            writer.WriteBool(false); // fail_on_suspend
         }
 
-        if (params_.Volume != null)
-        {
-            writer.WriteChannelVolume(params_.Volume);
-        }
+        if (writer.ProtocolVersion >= 17)
+            writer.WriteBool(false); // relative_volume
+
+        if (writer.ProtocolVersion >= 18)
+            writer.WriteBool(false); // passthrough
+
+        if (writer.ProtocolVersion >= 21)
+            writer.WriteU8(0); // no additional formats yet
     }
 
     /// <summary>
@@ -260,9 +420,22 @@ public static class PlaybackStreamExtensions
         return new CreatePlaybackStreamResponse
         {
             ChannelIndex = reader.ReadU32(),
-            DeviceIndex = reader.ReadU32(),
+            StreamIndex = reader.ReadU32(),
+            RequestedBytes = reader.ReadU32(),
+            BufferAttr = new PlaybackBufferAttr
+            {
+                MaxLength = reader.ReadU32(),
+                TargetLength = reader.ReadU32(),
+                Prebuffer = reader.ReadU32(),
+                MinRequest = reader.ReadU32(),
+                MinIncrement = 0,
+            },
             SampleSpec = reader.ReadSampleSpec(),
             ChannelMap = reader.ReadChannelMap(),
+            SinkIndex = reader.ReadU32(),
+            SinkName = reader.ReadString(),
+            Suspended = reader.ReadBool(),
+            StreamLatencyUsec = reader.ReadUsec(),
         };
     }
 
@@ -272,12 +445,25 @@ public static class PlaybackStreamExtensions
     public static void WriteCreatePlaybackStreamResponse(this TagStructWriter writer, CreatePlaybackStreamResponse response)
     {
         writer.WriteU32(response.ChannelIndex);
-        writer.WriteU32(response.DeviceIndex);
+        writer.WriteU32(response.StreamIndex);
+        writer.WriteU32(response.RequestedBytes);
+        writer.WriteU32(response.BufferAttr.MaxLength);
+        writer.WriteU32(response.BufferAttr.TargetLength);
+        writer.WriteU32(response.BufferAttr.Prebuffer);
+        writer.WriteU32(response.BufferAttr.MinRequest);
         writer.WriteSampleSpec(response.SampleSpec);
         if (response.ChannelMap != null)
         {
             writer.WriteChannelMap(response.ChannelMap);
         }
+        else
+        {
+            writer.WriteChannelMap(new ChannelMap());
+        }
+        writer.WriteU32(response.SinkIndex);
+        writer.WriteString(response.SinkName);
+        writer.WriteBool(response.Suspended);
+        writer.WriteUsec(response.StreamLatencyUsec);
     }
 
     /// <summary>

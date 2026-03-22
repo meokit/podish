@@ -310,8 +310,10 @@ public static class VolumeExtensions
     public static ChannelVolume ReadChannelVolume(this TagStructReader reader)
     {
         reader.ExpectTag(Tag.CVolume);
-        
-        byte nChannels = reader.ReadU8();
+
+        reader.EnsureBytes(1);
+        byte nChannels = reader.Remaining[0];
+        reader._position++;
         
         if (nChannels == 0 || nChannels > Constants.MaxChannels)
             throw new InvalidProtocolMessageException($"Invalid cvolume channel count {nChannels}, must be between 1 and {Constants.MaxChannels}");
@@ -319,7 +321,10 @@ public static class VolumeExtensions
         var cvolume = new ChannelVolume();
         for (byte i = 0; i < nChannels; i++)
         {
-            uint raw = reader.ReadU32();
+            reader.EnsureBytes(4);
+            uint raw = (uint)(reader.Remaining[0] << 24 | reader.Remaining[1] << 16 |
+                              reader.Remaining[2] << 8 | reader.Remaining[3]);
+            reader._position += 4;
             cvolume.Push(Volume.FromUInt32Clamped(raw));
         }
         
@@ -334,10 +339,13 @@ public static class VolumeExtensions
     public static void WriteChannelVolume(this TagStructWriter writer, ChannelVolume cvolume)
     {
         writer.WriteTag(Tag.CVolume);
-        writer.WriteU8(cvolume.Channels);
+        writer.Stream.WriteByte(cvolume.Channels);
         foreach (var volume in cvolume.GetVolumes())
         {
-            writer.WriteU32(volume.AsUInt32);
+            writer.Stream.WriteByte((byte)(volume.AsUInt32 >> 24));
+            writer.Stream.WriteByte((byte)(volume.AsUInt32 >> 16));
+            writer.Stream.WriteByte((byte)(volume.AsUInt32 >> 8));
+            writer.Stream.WriteByte((byte)volume.AsUInt32);
         }
     }
 

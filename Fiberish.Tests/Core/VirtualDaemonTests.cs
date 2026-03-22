@@ -121,6 +121,126 @@ public sealed class VirtualDaemonTests
         Assert.Equal(expected, result);
     }
 
+    [Fact]
+    public async Task VirtualDaemon_NonBlockingReadExact_MustReceiveSecondFrameAfterSendingControlPacket()
+    {
+        using var env = new TestEnv();
+        var step = "before invoke";
+
+        var result = await env.InvokeOnSchedulerAsync(async () =>
+        {
+            step = "spawn daemon";
+            env.Registry.Spawn(new InterleavedFrameVirtualDaemon("/virt-frames.sock"));
+
+            step = "create client";
+            var client = env.CreateClientTask("virt-client-frames");
+            var clientSocket = new UnixSocketInode(
+                0,
+                client.Syscalls.MemfdSuperBlock,
+                System.Net.Sockets.SocketType.Stream,
+                client.Task.CommonKernel);
+            var clientFile = new LinuxFile(
+                new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, client.Syscalls.MemfdSuperBlock),
+                FileFlags.O_RDWR,
+                client.Syscalls.AnonMount);
+
+            var endpoint = new UnixSockaddrInfo
+            {
+                IsAbstract = false,
+                Path = "/virt-frames.sock",
+                SunPathRaw = Encoding.UTF8.GetBytes("/virt-frames.sock\0")
+            };
+
+            step = "connect";
+            var connectRc = await clientSocket.ConnectAsync(clientFile, client.Task, endpoint);
+            Assert.Equal(0, connectRc);
+
+            step = "send frame 1";
+            Assert.Equal(20, await clientSocket.SendAsync(clientFile, client.Task, new byte[20], 0));
+            Assert.Equal(16384, await clientSocket.SendAsync(clientFile, client.Task, new byte[16384], 0));
+
+            step = "recv control";
+            var control = new byte[20];
+            var controlRead = await clientSocket.RecvAsync(clientFile, client.Task, control, 0, control.Length);
+            Assert.Equal(control.Length, controlRead);
+
+            step = "send frame 2";
+            Assert.Equal(20, await clientSocket.SendAsync(clientFile, client.Task, new byte[20], 0));
+            Assert.Equal(16384, await clientSocket.SendAsync(clientFile, client.Task, new byte[16384], 0));
+
+            step = "recv ack";
+            var ack = new byte[1];
+            var ackRead = await clientSocket.RecvAsync(clientFile, client.Task, ack, 0, ack.Length);
+            Assert.Equal(1, ackRead);
+
+            step = "close";
+            clientFile.Close();
+            return ack[0];
+        }, () => step);
+
+        Assert.Equal((byte)1, result);
+    }
+
+    [Fact]
+    public async Task VirtualDaemon_ScheduleChild_MustIsolateConnectionContinuationFromAcceptLoop()
+    {
+        using var env = new TestEnv();
+        var step = "before invoke";
+
+        var result = await env.InvokeOnSchedulerAsync(async () =>
+        {
+            step = "spawn daemon";
+            env.Registry.Spawn(new ChildTaskFrameVirtualDaemon("/virt-child-frames.sock"));
+
+            step = "create client";
+            var client = env.CreateClientTask("virt-client-child-frames");
+            var clientSocket = new UnixSocketInode(
+                0,
+                client.Syscalls.MemfdSuperBlock,
+                System.Net.Sockets.SocketType.Stream,
+                client.Task.CommonKernel);
+            var clientFile = new LinuxFile(
+                new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, client.Syscalls.MemfdSuperBlock),
+                FileFlags.O_RDWR,
+                client.Syscalls.AnonMount);
+
+            var endpoint = new UnixSockaddrInfo
+            {
+                IsAbstract = false,
+                Path = "/virt-child-frames.sock",
+                SunPathRaw = Encoding.UTF8.GetBytes("/virt-child-frames.sock\0")
+            };
+
+            step = "connect";
+            var connectRc = await clientSocket.ConnectAsync(clientFile, client.Task, endpoint);
+            Assert.Equal(0, connectRc);
+
+            step = "send frame 1";
+            Assert.Equal(20, await clientSocket.SendAsync(clientFile, client.Task, new byte[20], 0));
+            Assert.Equal(16384, await clientSocket.SendAsync(clientFile, client.Task, new byte[16384], 0));
+
+            step = "recv control";
+            var control = new byte[20];
+            var controlRead = await clientSocket.RecvAsync(clientFile, client.Task, control, 0, control.Length);
+            Assert.Equal(control.Length, controlRead);
+
+            step = "send frame 2";
+            Assert.Equal(20, await clientSocket.SendAsync(clientFile, client.Task, new byte[20], 0));
+            Assert.Equal(16384, await clientSocket.SendAsync(clientFile, client.Task, new byte[16384], 0));
+
+            step = "recv ack";
+            var ack = new byte[1];
+            var ackRead = await clientSocket.RecvAsync(clientFile, client.Task, ack, 0, ack.Length);
+            Assert.Equal(1, ackRead);
+
+            step = "close";
+            clientFile.Close();
+            return ack[0];
+        }, () => step);
+
+        Assert.Equal((byte)1, result);
+    }
+
     private sealed class EchoVirtualDaemon : IVirtualDaemon
     {
         public EchoVirtualDaemon(string unixPath)
@@ -213,6 +333,149 @@ public sealed class VirtualDaemonTests
 
         public void OnStop(VirtualDaemonContext context)
         {
+        }
+    }
+
+    private sealed class InterleavedFrameVirtualDaemon : IVirtualDaemon
+    {
+        public InterleavedFrameVirtualDaemon(string unixPath)
+        {
+            UnixPath = unixPath;
+            Name = "virt-frames";
+        }
+
+        public string Name { get; }
+        public string UnixPath { get; }
+
+        public void OnStart(VirtualDaemonContext context)
+        {
+            context.Schedule(async ctx =>
+            {
+                var (rc, connection) = await ctx.AcceptAsync();
+                Assert.Equal(0, rc);
+                Assert.NotNull(connection);
+
+                using (connection!)
+                {
+                    connection.File.Flags |= FileFlags.O_NONBLOCK;
+
+                    await ReadExactAsync(connection, 20);
+                    await ReadExactAsync(connection, 16384);
+
+                    Assert.Equal(20, await connection.SendAsync(new byte[20], 0));
+
+                    await ReadExactAsync(connection, 20);
+                    await ReadExactAsync(connection, 16384);
+
+                    Assert.Equal(1, await connection.SendAsync(new byte[] { 1 }, 0));
+                }
+
+                ctx.Exit(0);
+            });
+        }
+
+        public void OnSignal(VirtualDaemonContext context, int signo)
+        {
+            context.Exit(128 + signo);
+        }
+
+        public void OnStop(VirtualDaemonContext context)
+        {
+        }
+
+        private static async Task ReadExactAsync(VirtualDaemonConnection connection, int bytesNeeded)
+        {
+            var buffer = new byte[bytesNeeded];
+            var total = 0;
+            while (total < bytesNeeded)
+            {
+                var scratch = new byte[bytesNeeded - total];
+                var read = await connection.RecvAsync(scratch, 0, scratch.Length);
+                if (read == -(int)Native.Errno.EAGAIN || read == -(int)Native.Errno.EINTR)
+                {
+                    await new SleepAwaitable(1, connection.Task, connection.Runtime.Scheduler);
+                    continue;
+                }
+
+                Assert.True(read > 0, $"Unexpected read result {read} while waiting for {bytesNeeded} bytes.");
+                Buffer.BlockCopy(scratch, 0, buffer, total, read);
+                total += read;
+            }
+        }
+    }
+
+    private sealed class ChildTaskFrameVirtualDaemon : IVirtualDaemon
+    {
+        public ChildTaskFrameVirtualDaemon(string unixPath)
+        {
+            UnixPath = unixPath;
+            Name = "virt-child-frames";
+        }
+
+        public string Name { get; }
+        public string UnixPath { get; }
+
+        public void OnStart(VirtualDaemonContext context)
+        {
+            context.Schedule(async ctx =>
+            {
+                var (rc, connection) = await ctx.AcceptAsync();
+                Assert.Equal(0, rc);
+                Assert.NotNull(connection);
+
+                ctx.ScheduleChild(async childCtx =>
+                {
+                    connection!.BindTask(childCtx.Task);
+                    using (connection)
+                    {
+                        connection.File.Flags |= FileFlags.O_NONBLOCK;
+
+                        await ReadExactAsync(connection, 20);
+                        await ReadExactAsync(connection, 16384);
+
+                        Assert.Equal(20, await connection.SendAsync(new byte[20], 0));
+
+                        await ReadExactAsync(connection, 20);
+                        await ReadExactAsync(connection, 16384);
+
+                        Assert.Equal(1, await connection.SendAsync(new byte[] { 1 }, 0));
+                    }
+
+                    ctx.Exit(0);
+                });
+
+                while (!ctx.Task.Exited)
+                    await new SleepAwaitable(25, ctx.Task, ctx.Scheduler);
+            });
+        }
+
+        public void OnSignal(VirtualDaemonContext context, int signo)
+        {
+            context.Exit(128 + signo);
+        }
+
+        public void OnStop(VirtualDaemonContext context)
+        {
+        }
+
+        private static async Task ReadExactAsync(VirtualDaemonConnection connection, int bytesNeeded)
+        {
+            var buffer = new byte[bytesNeeded];
+            var total = 0;
+            while (total < bytesNeeded)
+            {
+                var scratch = new byte[bytesNeeded - total];
+                var read = await connection.RecvAsync(scratch, 0, scratch.Length);
+                if (read == -(int)Native.Errno.EAGAIN || read == -(int)Native.Errno.EINTR)
+                {
+                    await new SleepAwaitable(1, connection.Task, connection.Runtime.Scheduler);
+                    continue;
+                }
+
+                Assert.True(read > 0, $"Unexpected read result {read} while waiting for {bytesNeeded} bytes.");
+                Buffer.BlockCopy(scratch, 0, buffer, total, read);
+                total += read;
+            }
         }
     }
 

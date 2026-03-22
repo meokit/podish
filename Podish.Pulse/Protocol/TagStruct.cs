@@ -8,6 +8,8 @@ namespace Podish.Pulse.Protocol;
 public sealed class TagStructReader
 {
     private readonly byte[] _buffer;
+    private readonly int _start;
+    private readonly int _end;
     internal int _position;
     private readonly ushort _protocolVersion;
 
@@ -17,9 +19,16 @@ public sealed class TagStructReader
     /// <param name="buffer">The buffer to read from.</param>
     /// <param name="protocolVersion">The protocol version to use for parsing.</param>
     public TagStructReader(byte[] buffer, ushort protocolVersion)
+        : this(buffer, 0, buffer.Length, protocolVersion)
+    {
+    }
+
+    public TagStructReader(byte[] buffer, int offset, int length, ushort protocolVersion)
     {
         _buffer = buffer;
-        _position = 0;
+        _start = offset;
+        _position = offset;
+        _end = offset + length;
         _protocolVersion = protocolVersion;
     }
 
@@ -40,7 +49,7 @@ public sealed class TagStructReader
     {
         get
         {
-            byte[] result = new byte[_buffer.Length - _position];
+            byte[] result = new byte[_end - _position];
             Array.Copy(_buffer, _position, result, 0, result.Length);
             return result;
         }
@@ -55,6 +64,15 @@ public sealed class TagStructReader
     {
         EnsureBytes(1);
         byte value = _buffer[_position++];
+        if (Enum.IsDefined(typeof(Tag), value))
+            return (Tag)value;
+        throw new InvalidProtocolMessageException($"Invalid tag 0x{value:X2} in tagstruct");
+    }
+
+    public Tag PeekTag()
+    {
+        EnsureBytes(1);
+        byte value = _buffer[_position];
         if (Enum.IsDefined(typeof(Tag), value))
             return (Tag)value;
         throw new InvalidProtocolMessageException($"Invalid tag 0x{value:X2} in tagstruct");
@@ -151,7 +169,13 @@ public sealed class TagStructReader
     public ulong ReadUsec()
     {
         ExpectTag(Tag.Usec);
-        return ReadU64();
+        EnsureBytes(8);
+        ulong value = ((ulong)_buffer[_position] << 56) | ((ulong)_buffer[_position + 1] << 48) |
+                      ((ulong)_buffer[_position + 2] << 40) | ((ulong)_buffer[_position + 3] << 32) |
+                      ((ulong)_buffer[_position + 4] << 24) | ((ulong)_buffer[_position + 5] << 16) |
+                      ((ulong)_buffer[_position + 6] << 8) | _buffer[_position + 7];
+        _position += 8;
+        return value;
     }
 
     /// <summary>
@@ -178,7 +202,7 @@ public sealed class TagStructReader
     public byte[] ReadArbitrary()
     {
         ExpectTag(Tag.Arbitrary);
-        uint len = ReadU32();
+        uint len = ReadU32Raw();
         if (len > Constants.MaxPropSize)
             throw new InvalidProtocolMessageException($"Arbitrary data too large: {len} bytes");
         EnsureBytes((int)len);
@@ -186,6 +210,15 @@ public sealed class TagStructReader
         Array.Copy(_buffer, _position, result, 0, len);
         _position += (int)len;
         return result;
+    }
+
+    private uint ReadU32Raw()
+    {
+        EnsureBytes(4);
+        uint value = (uint)(_buffer[_position] << 24 | _buffer[_position + 1] << 16 |
+                            _buffer[_position + 2] << 8 | _buffer[_position + 3]);
+        _position += 4;
+        return value;
     }
 
     /// <summary>
@@ -241,21 +274,21 @@ public sealed class TagStructReader
     /// <summary>
     /// Returns whether there is any data left in the buffer.
     /// </summary>
-    public bool HasDataLeft() => _position < _buffer.Length;
+    public bool HasDataLeft() => _position < _end;
 
     internal void EnsureBytes(int count)
     {
-        if (_position + count > _buffer.Length)
-            throw new InvalidProtocolMessageException($"Unexpected end of buffer: need {count} bytes at position {_position}, but only {_buffer.Length - _position} available");
+        if (_position + count > _end)
+            throw new InvalidProtocolMessageException($"Unexpected end of buffer: need {count} bytes at position {_position - _start}, but only {_end - _position} available");
     }
 
     private string ReadNullTerminatedString()
     {
         int start = _position;
-        while (_position < _buffer.Length && _buffer[_position] != 0)
+        while (_position < _end && _buffer[_position] != 0)
             _position++;
         
-        if (_position >= _buffer.Length)
+        if (_position >= _end)
             throw new InvalidProtocolMessageException("Unterminated string");
         
         string result = Encoding.UTF8.GetString(_buffer, start, _position - start);
@@ -387,7 +420,14 @@ public sealed class TagStructWriter
     public void WriteUsec(ulong usec)
     {
         WriteTag(Tag.Usec);
-        WriteU64(usec);
+        _stream.WriteByte((byte)(usec >> 56));
+        _stream.WriteByte((byte)(usec >> 48));
+        _stream.WriteByte((byte)(usec >> 40));
+        _stream.WriteByte((byte)(usec >> 32));
+        _stream.WriteByte((byte)(usec >> 24));
+        _stream.WriteByte((byte)(usec >> 16));
+        _stream.WriteByte((byte)(usec >> 8));
+        _stream.WriteByte((byte)usec);
     }
 
     /// <summary>
@@ -424,7 +464,7 @@ public sealed class TagStructWriter
     public void WriteArbitrary(ReadOnlySpan<byte> data)
     {
         WriteTag(Tag.Arbitrary);
-        WriteU32((uint)data.Length);
+        WriteU32Raw((uint)data.Length);
         _stream.Write(data);
     }
 

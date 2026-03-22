@@ -35,6 +35,7 @@ public enum Errno
     EROFS = 30, /* Read-only file system */
     EMLINK = 31, /* Too many links */
     EPIPE = 32, /* Broken pipe */
+    EDEADLK = 35, /* Resource deadlock would occur */
     EDOM = 33, /* Math argument out of domain of func */
     ERANGE = 34, /* Math result not representable */
     ENOSYS = 38, /* Invalid system call number */
@@ -470,6 +471,8 @@ public static class LinuxConstants
     public const int SO_SNDBUF = 8;
     public const int SO_RCVBUF = 9;
     public const int SO_LINGER = 13;
+    public const int SO_PASSCRED = 16;
+    public const int SO_PEERCRED = 17;
     public const int SO_REUSEPORT = 15;
     public const int SO_RCVTIMEO = 20;
     public const int SO_SNDTIMEO = 21;

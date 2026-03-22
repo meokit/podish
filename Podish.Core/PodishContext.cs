@@ -30,6 +30,7 @@ public sealed class PodishRunSpec
     public bool Strace { get; init; }
     public bool Init { get; init; }
     public bool TestVirtualEchoServer { get; init; }
+    public bool PulseServer { get; init; }
     public long? MemoryQuotaBytes { get; init; }
     public string LogDriver { get; init; } = "json-file";
     public IReadOnlyList<PublishedPortSpec> PublishedPorts { get; init; } = Array.Empty<PublishedPortSpec>();
@@ -453,7 +454,9 @@ public sealed class PodishContext : IDisposable
             EnableHostConsoleInput = !attachTerminalBridge,
             PublishedPorts = spec.PublishedPorts,
             UseEngineInit = spec.Init,
-            MemoryQuotaBytes = spec.MemoryQuotaBytes
+            MemoryQuotaBytes = spec.MemoryQuotaBytes,
+            EnableTestVirtualEchoServer = spec.TestVirtualEchoServer,
+            EnablePulseServer = spec.PulseServer
         }));
 
         return new PodishContainerSession(containerId, imageRef, runTask, bridge, processController);

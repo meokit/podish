@@ -135,6 +135,25 @@ public static class ProtocolMessageIO
         return new ProtocolMessage(commandTag, sequence, commandPayload);
     }
 
+    public static ProtocolMessage Decode(Descriptor descriptor, byte[] payloadBuffer, int payloadLength,
+        ushort protocolVersion = Constants.MaxVersion)
+    {
+        if (descriptor.Channel != uint.MaxValue)
+            throw new InvalidProtocolMessageException("Only control descriptors can be decoded as protocol messages");
+
+        if (payloadLength < 0 || descriptor.Length > (uint)payloadLength)
+            throw new InvalidProtocolMessageException(
+                $"Payload length {descriptor.Length} exceeds provided buffer length {payloadLength}");
+
+        var reader = new TagStructReader(payloadBuffer, 0, (int)descriptor.Length, protocolVersion);
+
+        CommandTag commandTag = reader.ReadEnum<CommandTag>();
+        uint sequence = reader.ReadU32();
+
+        byte[] commandPayload = reader.Remaining;
+        return new ProtocolMessage(commandTag, sequence, commandPayload);
+    }
+
     /// <summary>
     /// Encodes a reply message to a byte array with the descriptor header.
     /// </summary>
@@ -233,6 +252,36 @@ public static class ProtocolMessageIO
         DescriptorIO.Write(result, descriptor);
         Array.Copy(payload, 0, result, Constants.DescriptorSize, payload.Length);
         
+        return result;
+    }
+
+    /// <summary>
+    /// Encodes an error message.
+    /// </summary>
+    /// <param name="sequence">The sequence number being replied to.</param>
+    /// <param name="error">The protocol error code.</param>
+    /// <returns>The encoded byte array.</returns>
+    public static byte[] EncodeError(uint sequence, PulseError error)
+    {
+        var writer = new TagStructWriter(Constants.MaxVersion);
+        writer.WriteU32((uint)CommandTag.Error);
+        writer.WriteU32(sequence);
+        writer.WriteU32((uint)error);
+
+        byte[] payload = writer.ToArray();
+
+        var descriptor = new Descriptor
+        {
+            Length = (uint)payload.Length,
+            Channel = uint.MaxValue,
+            Offset = 0,
+            Flags = DescriptorFlags.None,
+        };
+
+        byte[] result = new byte[Constants.DescriptorSize + payload.Length];
+        DescriptorIO.Write(result, descriptor);
+        Array.Copy(payload, 0, result, Constants.DescriptorSize, payload.Length);
+
         return result;
     }
 

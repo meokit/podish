@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Podish.Pulse\Podish.Pulse.csproj" />
+    <ProjectReference Include="..\Podish.Cli\Podish.Cli.csproj" />
   </ItemGroup>
 
 </Project>

@@ -190,6 +190,35 @@ public class AsyncWaitQueueTests
         Assert.IsType<InvalidOperationException>(captured);
     }
 
+    [Fact]
+    public void Reset_MustNotDropAlreadyRegisteredWaiters()
+    {
+        var scheduler = new KernelScheduler();
+        var process = new Process(600, null!, null!);
+        scheduler.RegisterProcess(process);
+
+        var queue = new AsyncWaitQueue(scheduler);
+        var fired = 0;
+        var task = new FiberTask(601, process, new MockEngine(), scheduler);
+
+        void Entry()
+        {
+            using var reg = queue.RegisterCancelable(() => fired++, task);
+
+            queue.Reset();
+            queue.Signal();
+
+            task.Exited = true;
+            task.Status = FiberTaskStatus.Terminated;
+        }
+
+        task.Continuation = Entry;
+        scheduler.RegisterTask(task);
+        scheduler.Run(100);
+
+        Assert.Equal(1, fired);
+    }
+
     private sealed class MockEngine : Engine
     {
         public MockEngine() : base(true)

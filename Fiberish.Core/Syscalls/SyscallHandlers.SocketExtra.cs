@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
+using Microsoft.Extensions.Logging;
 
 namespace Fiberish.Syscalls;
 
@@ -37,7 +38,12 @@ public partial class SyscallManager
         if (optlen > 0 && !task.CPU.CopyFromUser(optvalPtr, optval)) return -(int)Errno.EFAULT;
 
         if (file.TryGetSocketOptionOps(out var ops))
-            return ops.SetSocketOption(file, task, level, optname, optval);
+        {
+            var rc = ops.SetSocketOption(file, task, level, optname, optval);
+            Logger.LogTrace("[SysSetSockOpt] fd={Fd} inode={Inode} level={Level} optname={Optname} len={Len} rc={Rc}",
+                fd, file.OpenedInode?.GetType().Name, level, optname, optlen, rc);
+            return rc;
+        }
 
         if (file.OpenedInode is NetlinkRouteSocketInode)
             return 0; // Netlink stub
@@ -73,6 +79,8 @@ public partial class SyscallManager
         if (file.TryGetSocketOptionOps(out var ops))
         {
             var rc = ops.GetSocketOption(file, task, level, optname, optval, out var written);
+            Logger.LogTrace("[SysGetSockOpt] fd={Fd} inode={Inode} level={Level} optname={Optname} requestedLen={Len} rc={Rc} written={Written}",
+                fd, file.OpenedInode?.GetType().Name, level, optname, optlen, rc, written);
             if (rc < 0) return rc;
 
             if (written > 0 && optvalPtr != 0)

@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using Fiberish.Auth.Permission;
@@ -141,7 +142,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
 
     public async ValueTask<int> SendAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags)
     {
-        var rc = await SendMessageAsync(file, task, buffer.ToArray(), null, flags, null);
+        var rc = await SendMessageAsync(file, task, buffer, null, flags, null);
         if (rc == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
         return rc;
     }
@@ -176,7 +177,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
             return -(int)Errno.EAFNOSUPPORT;
         }
 
-        var rc = await SendMessageAsync(file, task, buffer.ToArray(), null, flags, explicitPeer);
+        var rc = await SendMessageAsync(file, task, buffer, null, flags, explicitPeer);
         if (rc == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
         return rc;
     }
@@ -393,14 +394,56 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
 
     public int SetSocketOption(LinuxFile file, FiberTask task, int level, int optname, ReadOnlySpan<byte> optval)
     {
-        return -(int)Errno.ENOPROTOOPT;
+        if (level != LinuxConstants.SOL_SOCKET)
+            return -(int)Errno.ENOPROTOOPT;
+
+        switch (optname)
+        {
+            case LinuxConstants.SO_REUSEADDR:
+            case LinuxConstants.SO_KEEPALIVE:
+            case LinuxConstants.SO_SNDBUF:
+            case LinuxConstants.SO_RCVBUF:
+            case LinuxConstants.SO_PASSCRED:
+            case 12: // SO_PRIORITY
+                return 0;
+            default:
+                _ = file;
+                _ = task;
+                return -(int)Errno.ENOPROTOOPT;
+        }
     }
 
     public int GetSocketOption(LinuxFile file, FiberTask task, int level, int optname, Span<byte> optval,
         out int written)
     {
-        written = 0;
-        return -(int)Errno.ENOPROTOOPT;
+        written = 4;
+        if (level != LinuxConstants.SOL_SOCKET)
+            return -(int)Errno.ENOPROTOOPT;
+
+        switch (optname)
+        {
+            case LinuxConstants.SO_TYPE:
+                BinaryPrimitives.WriteInt32LittleEndian(optval, UnixSocketType switch
+                {
+                    SocketType.Stream => LinuxConstants.SOCK_STREAM,
+                    SocketType.Dgram => LinuxConstants.SOCK_DGRAM,
+                    SocketType.Seqpacket => LinuxConstants.SOCK_SEQPACKET,
+                    _ => 0
+                });
+                return 0;
+            case LinuxConstants.SO_ERROR:
+                BinaryPrimitives.WriteInt32LittleEndian(optval, 0);
+                return 0;
+            case LinuxConstants.SO_SNDBUF:
+            case LinuxConstants.SO_RCVBUF:
+                BinaryPrimitives.WriteInt32LittleEndian(optval, MaxSendBuffer);
+                return 0;
+            case LinuxConstants.SO_PASSCRED:
+                BinaryPrimitives.WriteInt32LittleEndian(optval, 1);
+                return 0;
+            default:
+                return -(int)Errno.ENOPROTOOPT;
+        }
     }
 
     public bool RegisterWait(LinuxFile file, FiberTask task, Action callback, short events)
@@ -694,7 +737,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
             if (_shutDownRead || _peerWriteClosed)
             {
                 ReleaseQueuedFds(msg.Fds);
-                return; // Dropped
+                return;
             }
 
             _receiveQueue.Enqueue(msg);
@@ -747,8 +790,8 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
                         _readWaitQueue.Reset();
                     _queuedBytes -= toCopy;
                     UpdateWriteWaitQueueState();
-                    _writeWaitQueue.Set(); // signal backpressure relief
-                    return (toCopy, null, null); // FDs only on boundary
+                    _writeWaitQueue.Set();
+                    return (toCopy, null, null);
                 }
 
                 if (_receiveQueue.TryDequeue(out var msg))
@@ -769,7 +812,6 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
                     UpdateWriteWaitQueueState();
                     if (_receiveQueue.Count == 0 && _partialBuffer == null)
                         _readWaitQueue.Reset();
-
                     return (toCopy, msg.Fds, msg.SourceSunPathRaw);
                 }
 
@@ -777,9 +819,10 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
                     return (0, null, null); // EOF
             }
 
-            _writeWaitQueue.Set(); // backpressure relief
+            _writeWaitQueue.Set();
 
-            if (nonBlocking) return (-(int)Errno.EAGAIN, null, null);
+            if (nonBlocking)
+                return (-(int)Errno.EAGAIN, null, null);
 
             if (task.HasInterruptingPendingSignal()) return (-(int)Errno.ERESTARTSYS, null, null);
 
@@ -795,9 +838,8 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         return await SendMessageAsync(file, task, data, fds, flags, null);
     }
 
-    public async ValueTask<int> SendMessageAsync(LinuxFile file, FiberTask task, byte[] data, List<LinuxFile>? fds,
-        int flags,
-        UnixSocketInode? explicitPeer)
+    public async ValueTask<int> SendMessageAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> data,
+        List<LinuxFile>? fds, int flags, UnixSocketInode? explicitPeer)
     {
         var nonBlocking = (file.Flags & FileFlags.O_NONBLOCK) != 0 ||
                           (flags & LinuxConstants.MSG_DONTWAIT) != 0;
@@ -812,14 +854,13 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         if (peer == null)
             return UnixSocketType == SocketType.Dgram ? -(int)Errno.EDESTADDRREQ : -(int)Errno.ENOTCONN;
 
-        // Backpressure: check peer's queued bytes
         while (true)
         {
             using (peer.EnterStateScope())
             {
                 if (peer._shutDownRead) return -(int)Errno.EPIPE;
                 if (peer._queuedBytes < MaxSendBuffer)
-                    break; // Space available
+                    break;
             }
 
             if (nonBlocking)
@@ -827,7 +868,6 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
 
             await peer._writeWaitQueue.WaitAsync(task);
 
-            // Re-check connection after wakeup
             using (EnterStateScope())
             {
                 if (_shutDownWrite) return -(int)Errno.EPIPE;
@@ -837,19 +877,23 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
             }
         }
 
-        var clonedData = new byte[data.Length];
-        Array.Copy(data, clonedData, data.Length);
-
+        byte[] clonedData = data.ToArray();
         var msg = new UnixMessage { Data = clonedData, SourceSunPathRaw = GetLocalSunPathRaw() };
         if (fds != null)
         {
-            // Bump refcounts because they are in the queue now
             foreach (var f in fds) f.Get();
             msg.Fds.AddRange(fds);
         }
 
         peer.EnqueueMessage(msg);
-        return data.Length;
+        return clonedData.Length;
+    }
+
+    public async ValueTask<int> SendMessageAsync(LinuxFile file, FiberTask task, byte[] data, List<LinuxFile>? fds,
+        int flags,
+        UnixSocketInode? explicitPeer)
+    {
+        return await SendMessageAsync(file, task, data.AsMemory(), fds, flags, explicitPeer);
     }
 
     private void CloseLifecycleOnce()

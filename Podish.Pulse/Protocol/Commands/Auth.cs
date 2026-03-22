@@ -78,9 +78,22 @@ public sealed class AuthReply : IEquatable<AuthReply>
     /// </summary>
     public ushort Version;
 
+    /// <summary>
+    /// Whether shared memory memblocks should be used.
+    /// </summary>
+    public bool UseShm;
+
+    /// <summary>
+    /// Whether memfd memblocks should be used.
+    /// </summary>
+    public bool UseMemfd;
+
     public bool Equals(AuthReply? other)
     {
-        return other is not null && Version == other.Version;
+        return other is not null &&
+               Version == other.Version &&
+               UseShm == other.UseShm &&
+               UseMemfd == other.UseMemfd;
     }
 
     public override bool Equals(object? obj)
@@ -90,7 +103,7 @@ public sealed class AuthReply : IEquatable<AuthReply>
 
     public override int GetHashCode()
     {
-        return Version.GetHashCode();
+        return HashCode.Combine(Version, UseShm, UseMemfd);
     }
 }
 
@@ -99,6 +112,10 @@ public sealed class AuthReply : IEquatable<AuthReply>
 /// </summary>
 public static class AuthExtensions
 {
+    private const uint MemfdFlag = 0x40000000;
+    private const uint ShmFlag = 0x80000000;
+    private const uint VersionMask = 0x0000FFFF;
+
     /// <summary>
     /// Reads AuthParams from a tagstruct.
     /// </summary>
@@ -106,17 +123,15 @@ public static class AuthExtensions
     /// <returns>The auth params.</returns>
     public static AuthParams ReadAuthParams(this TagStructReader reader)
     {
+        uint packedVersion = reader.ReadU32();
         var auth = new AuthParams
         {
-            Version = (ushort)reader.ReadU32(),
-            SupportsShm = reader.ReadBool(),
-            SupportsMemfd = reader.ReadBool(),
+            Version = (ushort)(packedVersion & VersionMask),
+            SupportsShm = (packedVersion & ShmFlag) != 0,
+            SupportsMemfd = (packedVersion & MemfdFlag) != 0,
         };
-        
-        // Read the cookie as arbitrary data
-        byte[] cookie = reader.ReadArbitrary();
-        auth.Cookie = cookie;
-        
+
+        auth.Cookie = reader.ReadArbitrary();
         return auth;
     }
 
@@ -127,9 +142,13 @@ public static class AuthExtensions
     /// <param name="auth">The auth params.</param>
     public static void WriteAuthParams(this TagStructWriter writer, AuthParams auth)
     {
-        writer.WriteU32(auth.Version);
-        writer.WriteBool(auth.SupportsShm);
-        writer.WriteBool(auth.SupportsMemfd);
+        uint packedVersion = auth.Version;
+        if (auth.SupportsShm)
+            packedVersion |= ShmFlag;
+        if (auth.SupportsMemfd)
+            packedVersion |= MemfdFlag;
+
+        writer.WriteU32(packedVersion);
         writer.WriteArbitrary(auth.Cookie);
     }
 
@@ -140,9 +159,12 @@ public static class AuthExtensions
     /// <returns>The auth reply.</returns>
     public static AuthReply ReadAuthReply(this TagStructReader reader)
     {
+        uint packedReply = reader.ReadU32();
         return new AuthReply
         {
-            Version = (ushort)reader.ReadU32(),
+            Version = (ushort)(packedReply & VersionMask),
+            UseShm = (packedReply & ShmFlag) != 0,
+            UseMemfd = (packedReply & MemfdFlag) != 0,
         };
     }
 
@@ -153,6 +175,12 @@ public static class AuthExtensions
     /// <param name="reply">The auth reply.</param>
     public static void WriteAuthReply(this TagStructWriter writer, AuthReply reply)
     {
-        writer.WriteU32(reply.Version);
+        uint packedReply = reply.Version;
+        if (reply.UseShm)
+            packedReply |= ShmFlag;
+        if (reply.UseMemfd)
+            packedReply |= MemfdFlag;
+
+        writer.WriteU32(packedReply);
     }
 }

@@ -86,6 +86,101 @@ public partial class SyscallManager
                 : Futex.Wake(uaddr, count);
         }
 
+        if (opCode is LinuxConstants.FUTEX_LOCK_PI or LinuxConstants.FUTEX_TRYLOCK_PI)
+        {
+            var task = engine.Owner as FiberTask;
+            if (task == null) return -(int)Errno.EINVAL;
+
+            while (true)
+            {
+                var futexWord = new byte[4];
+                if (!engine.CopyFromUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
+
+                var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(futexWord);
+                var owner = currentVal & LinuxConstants.FUTEX_TID_MASK;
+                var hasWaiters = (currentVal & LinuxConstants.FUTEX_WAITERS) != 0;
+
+                if (owner == 0)
+                {
+                    var queuedWaiters = isPrivate
+                        ? Futex.GetWaiterCount(uaddr)
+                        : sharedKey != 0
+                            ? Futex.GetWaiterCountShared(sharedKey)
+                            : Futex.GetWaiterCount(uaddr);
+                    var nextVal = (uint)task.TID;
+                    if (hasWaiters || queuedWaiters > 0) nextVal |= LinuxConstants.FUTEX_WAITERS;
+                    BinaryPrimitives.WriteUInt32LittleEndian(futexWord, nextVal);
+                    if (!engine.CopyToUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
+
+                    Logger.LogTrace("[SysFutex {Op}] TID={TID} acquired uaddr=0x{Uaddr:x} waiters={Waiters}",
+                        opCode == LinuxConstants.FUTEX_LOCK_PI ? "LOCK_PI" : "TRYLOCK_PI",
+                        task.TID, uaddr, queuedWaiters);
+                    return 0;
+                }
+
+                if (owner == (uint)task.TID) return -(int)Errno.EDEADLK;
+                if (opCode == LinuxConstants.FUTEX_TRYLOCK_PI) return -(int)Errno.EBUSY;
+
+                if (!hasWaiters)
+                {
+                    BinaryPrimitives.WriteUInt32LittleEndian(futexWord, currentVal | LinuxConstants.FUTEX_WAITERS);
+                    if (!engine.CopyToUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
+                }
+
+                var waiter = isPrivate
+                    ? Futex.PrepareWait(uaddr)
+                    : sharedKey != 0
+                        ? Futex.PrepareWaitShared(sharedKey)
+                        : Futex.PrepareWait(uaddr);
+
+                Logger.LogTrace("[SysFutex LOCK_PI] TID={TID} waiting uaddr=0x{Uaddr:x} owner={Owner} isPrivate={IsPrivate} physKey=0x{PhysKey:x}",
+                    task.TID, uaddr, owner, isPrivate, sharedKey);
+                var result = await new FutexAwaitable(waiter, task);
+                if (result == AwaitResult.Interrupted)
+                {
+                    if (isPrivate)
+                        Futex.CancelWait(uaddr, waiter);
+                    else if (sharedKey != 0)
+                        Futex.CancelWaitShared(sharedKey, waiter);
+                    else
+                        Futex.CancelWait(uaddr, waiter);
+                    return -(int)Errno.ERESTARTSYS;
+                }
+            }
+        }
+
+        if (opCode == LinuxConstants.FUTEX_UNLOCK_PI)
+        {
+            var task = engine.Owner as FiberTask;
+            if (task == null) return -(int)Errno.EINVAL;
+
+            var futexWord = new byte[4];
+            if (!engine.CopyFromUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
+
+            var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(futexWord);
+            var owner = currentVal & LinuxConstants.FUTEX_TID_MASK;
+            if (owner != (uint)task.TID) return -(int)Errno.EPERM;
+
+            var queuedWaiters = isPrivate
+                ? Futex.GetWaiterCount(uaddr)
+                : sharedKey != 0
+                    ? Futex.GetWaiterCountShared(sharedKey)
+                    : Futex.GetWaiterCount(uaddr);
+            var nextVal = queuedWaiters > 0 ? LinuxConstants.FUTEX_WAITERS : 0u;
+            BinaryPrimitives.WriteUInt32LittleEndian(futexWord, nextVal);
+            if (!engine.CopyToUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
+
+            var woke = isPrivate
+                ? Futex.Wake(uaddr, 1)
+                : sharedKey != 0
+                    ? Futex.WakeShared(sharedKey, 1)
+                    : Futex.Wake(uaddr, 1);
+
+            Logger.LogTrace("[SysFutex UNLOCK_PI] TID={TID} released uaddr=0x{Uaddr:x} queuedWaiters={Waiters} woke={Woke}",
+                task.TID, uaddr, queuedWaiters, woke);
+            return 0;
+        }
+
         return -(int)Errno.ENOSYS;
     }
 

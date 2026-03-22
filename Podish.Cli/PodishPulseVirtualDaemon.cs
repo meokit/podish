@@ -2,22 +2,25 @@ using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
+using Podish.Cli.Pulse;
 
 namespace Podish.Cli;
 
-internal sealed class PodishTestVirtualEchoDaemon : IVirtualDaemon
+internal sealed class PodishPulseVirtualDaemon : IVirtualDaemon
 {
     private readonly ILogger _logger;
     private readonly int _ownerPid;
+    private readonly PulseServerState _serverState;
 
-    public PodishTestVirtualEchoDaemon(string unixPath, int ownerPid, ILogger logger)
+    public PodishPulseVirtualDaemon(string unixPath, int ownerPid, ILoggerFactory loggerFactory)
     {
         UnixPath = unixPath;
         _ownerPid = ownerPid;
-        _logger = logger;
+        _logger = loggerFactory.CreateLogger<PodishPulseVirtualDaemon>();
+        _serverState = new PulseServerState(loggerFactory);
     }
 
-    public string Name => "podish-test-echo";
+    public string Name => "podish-pulse";
     public string UnixPath { get; }
 
     public void OnStart(VirtualDaemonContext context)
@@ -27,13 +30,15 @@ internal sealed class PodishTestVirtualEchoDaemon : IVirtualDaemon
 
     public void OnSignal(VirtualDaemonContext context, int signo)
     {
-        _logger.LogDebug("Virtual echo daemon received signal {Signal}", signo);
+        _logger.LogDebug("{Prefix} virtual Pulse daemon received signal {Signal}", PulseServerLogging.Connection, signo);
         context.Exit(128 + signo);
     }
 
     public void OnStop(VirtualDaemonContext context)
     {
-        _logger.LogDebug("Virtual echo daemon stopping path={Path}", UnixPath);
+        _serverState.Dispose();
+        _logger.LogDebug("{Prefix} virtual Pulse daemon stopping path={Path}", PulseServerLogging.Connection,
+            UnixPath);
     }
 
     private void ScheduleAcceptLoop(VirtualDaemonContext context)
@@ -46,7 +51,9 @@ internal sealed class PodishTestVirtualEchoDaemon : IVirtualDaemon
             {
                 if (OwnerExited(ctx))
                 {
-                    _logger.LogDebug("Virtual echo daemon exiting because owner pid={OwnerPid} is gone", _ownerPid);
+                    _logger.LogDebug(
+                        "{Prefix} virtual Pulse daemon exiting because owner pid={OwnerPid} is gone",
+                        PulseServerLogging.Connection, _ownerPid);
                     ctx.Exit(0);
                     return;
                 }
@@ -61,7 +68,7 @@ internal sealed class PodishTestVirtualEchoDaemon : IVirtualDaemon
                 }
                 if (rc != 0 || connection == null)
                 {
-                    _logger.LogDebug("Virtual echo daemon accept returned rc={Rc}", rc);
+                    _logger.LogDebug("{Prefix} accept returned rc={Rc}", PulseServerLogging.Connection, rc);
                     return;
                 }
 
@@ -87,22 +94,14 @@ internal sealed class PodishTestVirtualEchoDaemon : IVirtualDaemon
     {
         try
         {
-            var buffer = new byte[16 * 1024];
-            while (true)
-            {
-                var bytes = await connection.RecvAsync(buffer, 0, buffer.Length);
-                if (bytes <= 0)
-                    return;
-
-                var written = 0;
-                while (written < bytes)
-                {
-                    var sent = await connection.SendAsync(buffer.AsMemory(written, bytes - written), 0);
-                    if (sent <= 0)
-                        return;
-                    written += sent;
-                }
-            }
+            var session = new PulseServerSession(connection, _serverState,
+                _serverState.LoggerFactory.CreateLogger<PulseServerSession>());
+            await session.RunAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "{Prefix} client handler failed", PulseServerLogging.Connection);
+            throw;
         }
         finally
         {
