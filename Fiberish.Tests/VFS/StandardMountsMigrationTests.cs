@@ -62,7 +62,9 @@ public class StandardMountsMigrationTests
         using var engine1 = new Engine();
         using var engine2 = new Engine();
         var sm1 = new SyscallManager(engine1, new VMAManager(), 0);
+        sm1.PtyManager.BindScheduler(new KernelScheduler());
         var sm2 = new SyscallManager(engine2, new VMAManager(), 0);
+        sm2.PtyManager.BindScheduler(new KernelScheduler());
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
 
         var rootSb1 = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root-1", null);

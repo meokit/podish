@@ -238,7 +238,7 @@ public class PipeTests
 
     private sealed class TestEnv : IDisposable
     {
-        public TestEnv(bool attachTaskOwner = false)
+        public TestEnv(bool attachTaskOwner = true)
         {
             Engine = new Engine();
             Vma = new VMAManager();
