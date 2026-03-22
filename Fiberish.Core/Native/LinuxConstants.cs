@@ -460,6 +460,8 @@ public static class LinuxConstants
     public const int IP_STRIPHDR = 23;
 
     public const int SOL_SOCKET = 1;
+    public const int SCM_RIGHTS = 1;
+    public const int SCM_MAX_FD = 253;
     public const int SO_TYPE = 3;
     public const int SO_ERROR = 4;
     public const int SO_REUSEADDR = 2;

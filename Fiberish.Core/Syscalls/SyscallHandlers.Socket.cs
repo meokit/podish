@@ -764,7 +764,7 @@ public partial class SyscallManager
         return (msg, 0);
     }
 
-    private static (byte[] Buffer, int Error) ReadIovecs(Engine engine, uint iovPtr, int iovLen)
+    private (byte[] Buffer, int Error) ReadIovecs(Engine engine, uint iovPtr, int iovLen)
     {
         if (iovLen == 0) return ([], 0);
         var res = ReadIovecsDef(engine, iovPtr, iovLen);
@@ -784,7 +784,7 @@ public partial class SyscallManager
         return (buffer, 0);
     }
 
-    private static (Iovec[] Iovecs, int Error) ReadIovecsDef(Engine engine, uint iovPtr, int iovLen)
+    private (Iovec[] Iovecs, int Error) ReadIovecsDef(Engine engine, uint iovPtr, int iovLen)
     {
         if (iovLen == 0) return ([], 0);
         var iovs = new Iovec[iovLen];
@@ -806,7 +806,7 @@ public partial class SyscallManager
         return (iovs, 0);
     }
 
-    private static int WriteIovecs(Engine engine, ReadOnlySpan<byte> data, Iovec[] iovs)
+    private int WriteIovecs(Engine engine, ReadOnlySpan<byte> data, Iovec[] iovs)
     {
         var offset = 0;
         foreach (var iov in iovs)
@@ -820,7 +820,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static (bool Success, List<LinuxFile>? Fds) ReadCmsgFds(Engine engine, uint controlPtr, int controlLen)
+    private (bool Success, List<LinuxFile>? Fds) ReadCmsgFds(Engine engine, uint controlPtr, int controlLen)
     {
         if (controlLen < 16 || controlPtr == 0) return (true, null);
         var cmRaw = new byte[controlLen];
@@ -828,6 +828,7 @@ public partial class SyscallManager
 
         List<LinuxFile> sendFds = new();
         var cmsgOffset = 0;
+        var totalFds = 0;
         while (cmsgOffset + 12 <= controlLen)
         {
             var cmsgLen = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset, 4));
@@ -835,18 +836,17 @@ public partial class SyscallManager
             var cmsgLevel = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset + 4, 4));
             var cmsgType = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset + 8, 4));
 
-            if (cmsgLevel == LinuxConstants.SOL_SOCKET && cmsgType == 1 /* SCM_RIGHTS */)
+            if (cmsgLevel == LinuxConstants.SOL_SOCKET && cmsgType == LinuxConstants.SCM_RIGHTS)
             {
-                var task = engine.Owner as FiberTask;
-                if (task != null)
+                var fdCount = (cmsgLen - 12) / 4;
+                if (totalFds + fdCount > LinuxConstants.SCM_MAX_FD) return (false, null);
+                totalFds += fdCount;
+
+                for (var j = 0; j < fdCount; j++)
                 {
-                    var fdCount = (cmsgLen - 12) / 4;
-                    for (var j = 0; j < fdCount; j++)
-                    {
-                        var cmsgFd = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset + 12 + j * 4, 4));
-                        var file = task.CPU.CurrentSyscallManager!.GetFD(cmsgFd);
-                        if (file != null) sendFds.Add(file);
-                    }
+                    var cmsgFd = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset + 12 + j * 4, 4));
+                    var file = GetFD(cmsgFd);
+                    if (file != null) sendFds.Add(file);
                 }
             }
 
@@ -856,14 +856,9 @@ public partial class SyscallManager
         return (true, sendFds.Count > 0 ? sendFds : null);
     }
 
-    private static void WriteCmsgFds(Engine engine, uint controlPtr, int controlLen, List<LinuxFile> fds, out int writtenBytes, bool cloexec = false)
+    private void WriteCmsgFds(Engine engine, uint controlPtr, int controlLen, List<LinuxFile> fds, out int writtenBytes, bool cloexec = false)
     {
         writtenBytes = 0;
-        var task = engine.Owner as FiberTask;
-        if (task == null) return;
-        var sm = task.CPU.CurrentSyscallManager;
-        if (sm == null) return;
-
         var maxFds = (controlLen - 12) / 4;
         var numFds = Math.Min(fds.Count, maxFds);
         var reqLen = 12 + numFds * 4;
@@ -872,11 +867,11 @@ public partial class SyscallManager
         var cmRaw = new byte[reqLen];
         BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(0, 4), reqLen);
         BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(4, 4), LinuxConstants.SOL_SOCKET);
-        BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(8, 4), 1 /* SCM_RIGHTS */);
+        BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(8, 4), LinuxConstants.SCM_RIGHTS);
 
         for (int i = 0; i < numFds; i++) {
-            var fd = sm.AllocFD(fds[i]);
-            if (cloexec) sm.SetFdCloseOnExec(fd, true);
+            var fd = AllocFD(fds[i]);
+            if (cloexec) SetFdCloseOnExec(fd, true);
             BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(12 + i * 4, 4), fd);
         }
 
@@ -884,14 +879,14 @@ public partial class SyscallManager
         writtenBytes = reqLen;
     }
 
-    private static void WriteBackMsgFlags(Engine engine, uint msgPtr, int msgFlags)
+    private void WriteBackMsgFlags(Engine engine, uint msgPtr, int msgFlags)
     {
         Span<byte> buf = stackalloc byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(buf, msgFlags);
         engine.CopyToUser(msgPtr + 24, buf);
     }
 
-    private static void WriteBackMsgControllen(Engine engine, uint msgPtr, int writtenLen)
+    private void WriteBackMsgControllen(Engine engine, uint msgPtr, int writtenLen)
     {
         Span<byte> buf = stackalloc byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(buf, writtenLen);
