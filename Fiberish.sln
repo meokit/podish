@@ -16,6 +16,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.SilkFS", "Fiberish
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fiberish.SilkFS.Tests", "Fiberish.SilkFS.Tests\Fiberish.SilkFS.Tests.csproj", "{5B279E7A-5366-4425-AF3D-D235D61A7D53}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Podish.Pulse", "Podish.Pulse\Podish.Pulse.csproj", "{9CFE3F33-3FC1-4223-8E55-AC974A4C4624}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Podish.Pulse.Tests", "Podish.Pulse.Tests\Podish.Pulse.Tests.csproj", "{BBD4D497-A7DE-48AE-8A1A-2E52B8BA188F}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Podish.Core", "Podish.Core\Podish.Core.csproj", "{E2C62256-26F2-4FC0-87BF-B7703A9FE2C6}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Podish.Core.Native", "Podish.Core.Native\Podish.Core.Native.csproj", "{25335650-7806-4372-824B-1AB0C1E81013}"
@@ -54,6 +58,14 @@ Global
 		{5B279E7A-5366-4425-AF3D-D235D61A7D53}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5B279E7A-5366-4425-AF3D-D235D61A7D53}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5B279E7A-5366-4425-AF3D-D235D61A7D53}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9CFE3F33-3FC1-4223-8E55-AC974A4C4624}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9CFE3F33-3FC1-4223-8E55-AC974A4C4624}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9CFE3F33-3FC1-4223-8E55-AC974A4C4624}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9CFE3F33-3FC1-4223-8E55-AC974A4C4624}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BBD4D497-A7DE-48AE-8A1A-2E52B8BA188F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BBD4D497-A7DE-48AE-8A1A-2E52B8BA188F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BBD4D497-A7DE-48AE-8A1A-2E52B8BA188F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BBD4D497-A7DE-48AE-8A1A-2E52B8BA188F}.Release|Any CPU.Build.0 = Release|Any CPU
 		{E2C62256-26F2-4FC0-87BF-B7703A9FE2C6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{E2C62256-26F2-4FC0-87BF-B7703A9FE2C6}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E2C62256-26F2-4FC0-87BF-B7703A9FE2C6}.Release|Any CPU.ActiveCfg = Release|Any CPU
