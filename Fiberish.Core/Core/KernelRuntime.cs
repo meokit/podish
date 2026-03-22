@@ -1,6 +1,7 @@
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Memory;
 using Fiberish.Syscalls;
+using Fiberish.VFS;
 
 namespace Fiberish.Core;
 
@@ -9,31 +10,35 @@ namespace Fiberish.Core;
 /// </summary>
 public sealed class KernelRuntime
 {
-    private KernelRuntime(Engine engine, VMAManager memory, SyscallManager syscalls, Configuration configuration)
+    private KernelRuntime(Engine engine, VMAManager memory, SyscallManager syscalls, Configuration configuration,
+        DeviceNumberManager deviceNumbers)
     {
         Engine = engine;
         Memory = memory;
         Syscalls = syscalls;
         Configuration = configuration;
+        DeviceNumbers = deviceNumbers;
     }
 
     public Engine Engine { get; }
     public VMAManager Memory { get; }
     public SyscallManager Syscalls { get; }
     public Configuration Configuration { get; }
+    public DeviceNumberManager DeviceNumbers { get; }
 
     public static KernelRuntime BootstrapBare(bool strace, TtyDiscipline? tty = null)
     {
         var configuration = new Configuration();
         var engine = new Engine();
         var mm = new VMAManager();
+        var deviceNumbers = new DeviceNumberManager();
 
-        var sys = new SyscallManager(engine, mm, 0, tty)
+        var sys = new SyscallManager(engine, mm, 0, tty, deviceNumbers)
         {
             Strace = strace
         };
 
-        return new KernelRuntime(engine, mm, sys, configuration);
+        return new KernelRuntime(engine, mm, sys, configuration, deviceNumbers);
     }
 
     public static KernelRuntime Bootstrap(string rootRes, bool strace, bool useOverlay, TtyDiscipline? tty = null)

@@ -38,12 +38,14 @@ public partial class SyscallManager
     private int _closed;
     private SharedLoopbackNetNamespace? _privateNetNamespace;
 
-    public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null)
+    public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null,
+        DeviceNumberManager? deviceNumbers = null)
     {
         _mountNamespace = new MountNamespace();
         _sharedFdTable = new SharedFdTable();
         _sharedUnixSocketNamespace = new SharedUnixSocketNamespace();
         _sharedFsState = new SharedFsState();
+        DeviceNumbers = deviceNumbers ?? new DeviceNumberManager();
         CurrentSyscallEngine = engine;
         Mem = mem;
         BrkAddr = brk;
@@ -101,11 +103,13 @@ public partial class SyscallManager
         TtyDiscipline? tty,
         PtyManager ptyManager,
         MountNamespace mountNamespace,
-        SharedLoopbackNetNamespace? privateNetNamespace)
+        SharedLoopbackNetNamespace? privateNetNamespace,
+        DeviceNumberManager deviceNumbers)
     {
         Mem = mem;
         _sharedFdTable = sharedFdTable;
         _sharedUnixSocketNamespace = sharedUnixSocketNamespace;
+        DeviceNumbers = deviceNumbers;
         Futex = futex;
         SysVShm = sysvShm;
         SysVSem = sysvSem;
@@ -128,7 +132,7 @@ public partial class SyscallManager
         _privateNetNamespace = privateNetNamespace;
     }
 
-    internal DeviceNumberManager DeviceNumbers { get; } = new();
+    internal DeviceNumberManager DeviceNumbers { get; }
 
     public TtyDiscipline? Tty { get; }
 
@@ -1030,7 +1034,7 @@ public partial class SyscallManager
         var newSys = new SyscallManager(newMem, newSharedFdTable, _sharedUnixSocketNamespace.AddRef(), sharedFsState,
             Futex, SysVShm, SysVSem, BrkAddr, BrkBase,
             Strace, DevShmRoot, MemfdSuperBlock, AnonMount, Tty, PtyManager,
-            sharedNamespace, _privateNetNamespace?.AddRef())
+            sharedNamespace, _privateNetNamespace?.AddRef(), DeviceNumbers)
         {
             NetworkMode = NetworkMode,
             CloneHandler = CloneHandler,

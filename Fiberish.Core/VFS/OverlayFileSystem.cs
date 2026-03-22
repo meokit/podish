@@ -41,7 +41,7 @@ public class OverlayFileSystem : FileSystem
         if (upper == null)
             throw new ArgumentException("OverlayFS requires an upper layer");
 
-        var sb = new OverlaySuperBlock(fsType, lowers, upper);
+        var sb = new OverlaySuperBlock(fsType, lowers, upper, DevManager);
         var lowerRoots = options.LowerRoots?.Where(r => r != null).ToList() ??
                          lowers.Select(l => l.Root).Where(r => r != null).ToList();
         var upperRoot = options.UpperRoot ?? upper.Root;
@@ -1071,7 +1071,6 @@ public class OverlayInode : Inode
         if (source == null) return -(int)Errno.EROFS;
         return source.Write(linuxFile, buffer, offset);
     }
-
 }
 
 public interface IOverlayWhiteoutCodec

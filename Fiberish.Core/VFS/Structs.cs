@@ -106,9 +106,22 @@ public class FileSystemType
     public Func<DeviceNumberManager, FileSystem> Factory { get; init; } = _ =>
         throw new InvalidOperationException("FileSystem factory is not configured.");
 
-    public FileSystem CreateFileSystem(DeviceNumberManager? devManager = null)
+    public FileSystem CreateFileSystem(DeviceNumberManager devManager)
     {
-        return Factory(devManager ?? new DeviceNumberManager());
+        ArgumentNullException.ThrowIfNull(devManager);
+        return Factory(devManager);
+    }
+
+    [Obsolete(
+        "Use CreateFileSystem(DeviceNumberManager) for mounted filesystems or CreateAnonymousFileSystem() for isolated tests/exports.")]
+    public FileSystem CreateFileSystem()
+    {
+        return CreateAnonymousFileSystem();
+    }
+
+    public FileSystem CreateAnonymousFileSystem()
+    {
+        return Factory(new DeviceNumberManager());
     }
 }
 
@@ -302,18 +315,11 @@ public abstract class Inode : IAddressSpaceOperations
     public virtual DateTime ATime { get; set; } = DateTime.Now;
     public virtual DateTime CTime { get; set; } = DateTime.Now;
 
-    public virtual int UpdateTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
-    {
-        if (atime.HasValue) ATime = atime.Value;
-        if (mtime.HasValue) MTime = mtime.Value;
-        if (ctime.HasValue) CTime = ctime.Value;
-        return 0;
-    }
-
     /// <summary>
     ///     Device ID for this inode. Defaults to the owning superblock's Dev.
+    ///     If the inode is detached from any superblock, report 0 instead of a fake device id.
     /// </summary>
-    public virtual uint Dev => SuperBlock?.Dev ?? 0x800;
+    public virtual uint Dev => SuperBlock?.Dev ?? 0;
 
     /// <summary>
     ///     Device number (rdev) for character/block devices.
@@ -397,6 +403,14 @@ public abstract class Inode : IAddressSpaceOperations
     public virtual int ReleaseFolio(long pageIndex)
     {
         Mapping?.RemovePagesInRange((uint)pageIndex, (uint)pageIndex + 1, static page => !page.Dirty);
+        return 0;
+    }
+
+    public virtual int UpdateTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
+    {
+        if (atime.HasValue) ATime = atime.Value;
+        if (mtime.HasValue) MTime = mtime.Value;
+        if (ctime.HasValue) CTime = ctime.Value;
         return 0;
     }
 
@@ -629,7 +643,6 @@ public abstract class Inode : IAddressSpaceOperations
 
     internal void RegisterMappedAddressSpace(VMAManager addressSpace)
     {
-        
         foreach (var mapped in _mappedAddressSpaces)
             if (ReferenceEquals(mapped, addressSpace))
                 return;
@@ -641,7 +654,6 @@ public abstract class Inode : IAddressSpaceOperations
 
     internal void UnregisterMappedAddressSpace(VMAManager addressSpace)
     {
-        
         var index = -1;
         for (var i = 0; i < _mappedAddressSpaces.Length; i++)
             if (ReferenceEquals(_mappedAddressSpaces[i], addressSpace))
@@ -667,7 +679,6 @@ public abstract class Inode : IAddressSpaceOperations
 
     internal VMAManager[] SnapshotMappedAddressSpaces()
     {
-        
         return _mappedAddressSpaces;
     }
 
@@ -1463,9 +1474,9 @@ public readonly record struct InodeRefTrace(
 
 public static class VfsDebugTrace
 {
+    private const int MaxTraceEntries = 4096;
     private static readonly ILogger Logger = Logging.CreateLogger("Fiberish.VFS.RefTrace");
     private static readonly object TraceLock = new();
-    private const int MaxTraceEntries = 4096;
     private static readonly Queue<InodeRefTrace> RefTraceQueue = [];
 
     public static bool Enabled { get; set; } =

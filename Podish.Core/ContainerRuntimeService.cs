@@ -216,7 +216,8 @@ public sealed class ContainerRuntimeService
             runtime.Syscalls.NetworkMode = request.NetworkMode;
             if (request.UseOverlay)
             {
-                if (!TryCreateLayerLower(request.RootfsPath, out var layerLowerSb, out var layerProvider,
+                if (!TryCreateLayerLower(runtime.DeviceNumbers, request.RootfsPath, out var layerLowerSb,
+                        out var layerProvider,
                         out var layerError))
                 {
                     Console.Error.WriteLine($"[Podish Error] {layerError}");
@@ -234,8 +235,10 @@ public sealed class ContainerRuntimeService
                 var overlayType = FileSystemRegistry.Get("overlay")
                                   ?? throw new InvalidOperationException("overlay is not registered");
 
-                var upperSb = silkType.CreateFileSystem().ReadSuper(silkType, 0, silkUpperStore, null);
-                var overlaySb = overlayType.CreateFileSystem().ReadSuper(overlayType, 0, "root_overlay",
+                var upperSb = silkType.CreateFileSystem(runtime.DeviceNumbers)
+                    .ReadSuper(silkType, 0, silkUpperStore, null);
+                var overlaySb = overlayType.CreateFileSystem(runtime.DeviceNumbers).ReadSuper(overlayType, 0,
+                    "root_overlay",
                     new OverlayMountOptions
                     {
                         Lower = layerLowerSb!,
@@ -256,7 +259,8 @@ public sealed class ContainerRuntimeService
             {
                 var hostType = FileSystemRegistry.Get("hostfs")
                                ?? throw new InvalidOperationException("hostfs is not registered");
-                var hostSb = hostType.CreateFileSystem().ReadSuper(hostType, 0, request.RootfsPath, null);
+                var hostSb = hostType.CreateFileSystem(runtime.DeviceNumbers)
+                    .ReadSuper(hostType, 0, request.RootfsPath, null);
                 runtime.Syscalls.MountRoot(hostSb, new SyscallManager.RootMountOptions
                 {
                     Source = request.RootfsPath,
@@ -345,10 +349,12 @@ public sealed class ContainerRuntimeService
             foreach (var env in request.GuestEnvs)
                 finalEnvs.Add(env);
             if (request.EnableTestVirtualEchoServer)
-                finalEnvs.Add($"{ContainerRunRequest.TestVirtualEchoSocketEnvVar}={ContainerRunRequest.TestVirtualEchoSocketPath}");
+                finalEnvs.Add(
+                    $"{ContainerRunRequest.TestVirtualEchoSocketEnvVar}={ContainerRunRequest.TestVirtualEchoSocketPath}");
             if (request.EnablePulseServer)
             {
-                finalEnvs.Add($"{ContainerRunRequest.PulseServerEnvVar}=unix:{ContainerRunRequest.PulseServerSocketPath}");
+                finalEnvs.Add(
+                    $"{ContainerRunRequest.PulseServerEnvVar}=unix:{ContainerRunRequest.PulseServerSocketPath}");
                 finalEnvs.Add($"{ContainerRunRequest.PulseRuntimePathEnvVar}=/run/pulse");
             }
 
@@ -374,9 +380,7 @@ public sealed class ContainerRuntimeService
                 finalEnvs.ToArray(),
                 scheduler, ttyDiag, loc.Mount!, uts, engineInitProc?.TGID ?? 0);
             if (request.EnableTestVirtualEchoServer || request.EnablePulseServer)
-            {
                 request.ConfigureVirtualDaemons?.Invoke(runtime, scheduler, uts, mainTask.Process.TGID);
-            }
             initProcessStarted = true;
             startupPhase = "running";
             request.ProcessController?.BindRuntimeControl(() =>
@@ -565,7 +569,8 @@ public sealed class ContainerRuntimeService
         }
     }
 
-    private bool TryCreateLayerLower(string ociStoreDir, out SuperBlock? lowerSb, out IDisposable? provider,
+    private bool TryCreateLayerLower(DeviceNumberManager devNumbers, string ociStoreDir, out SuperBlock? lowerSb,
+        out IDisposable? provider,
         out string error)
     {
         lowerSb = null;
@@ -706,7 +711,7 @@ public sealed class ContainerRuntimeService
         }
 
         provider = new TarBlobLayerContentProvider(digestToBlobPath);
-        lowerSb = layerType.CreateFileSystem().ReadSuper(layerType, 0, "layer-lower",
+        lowerSb = layerType.CreateFileSystem(devNumbers).ReadSuper(layerType, 0, "layer-lower",
             new LayerMountOptions { Index = merged, ContentProvider = (ILayerContentProvider)provider });
         return true;
     }

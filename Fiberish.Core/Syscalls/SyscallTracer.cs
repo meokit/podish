@@ -75,6 +75,11 @@ public static class SyscallTracer
                 var dirfd = (int)a1 == -100 ? "AT_FDCWD" : a1.ToString();
                 sb.Append($"{dirfd}, {ReadString(sys, a2)}, 0x{a3:X}, 0x{a4:X}");
                 break;
+            case X86SyscallNumbers.statx:
+                // statx(dirfd, path, flags, mask, statxbuf)
+                var statxDirfd = (int)a1 == -100 ? "AT_FDCWD" : a1.ToString();
+                sb.Append($"{statxDirfd}, {ReadString(sys, a2)}, 0x{a3:X}, 0x{a4:X}, 0x{a5:X}");
+                break;
             default:
                 sb.Append($"{a1:X}, {a2:X}, {a3:X}, {a4:X}, {a5:X}, {a6:X}");
                 break;

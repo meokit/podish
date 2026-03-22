@@ -68,4 +68,23 @@ public class SyscallManagerCloneTests
         sm.Close();
         Assert.Null(sm.GetFD(fd));
     }
+
+    [Fact]
+    public void Clone_MustShareDeviceNumberAllocator()
+    {
+        var engine = new Engine();
+        var vma = new VMAManager();
+        var sm = new SyscallManager(engine, vma, 0);
+
+        var cloned = sm.Clone(vma, false, false);
+
+        var tmpFsType = FileSystemRegistry.Get("tmpfs")!;
+        var sb1 = tmpFsType.CreateFileSystem(sm.DeviceNumbers).ReadSuper(tmpFsType, 0, "tmp-a", null);
+        var sb2 = tmpFsType.CreateFileSystem(cloned.DeviceNumbers).ReadSuper(tmpFsType, 0, "tmp-b", null);
+
+        Assert.NotEqual(0u, sb1.Dev);
+        Assert.NotEqual(0u, sb2.Dev);
+        Assert.NotEqual(sb1.Dev, sb2.Dev);
+        Assert.Same(sm.DeviceNumbers, cloned.DeviceNumbers);
+    }
 }

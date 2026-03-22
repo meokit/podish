@@ -30,22 +30,6 @@ public sealed class SilkFileSystem : FileSystem
 
 public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDropper
 {
-    internal static long ToUnixNanoseconds(DateTime value)
-    {
-        var utc = value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
-        var offset = new DateTimeOffset(utc);
-        var seconds = offset.ToUnixTimeSeconds();
-        var nanos = (utc.Ticks % TimeSpan.TicksPerSecond) * 100;
-        return checked(seconds * 1_000_000_000L + nanos);
-    }
-
-    internal static DateTime FromUnixNanoseconds(long nanoseconds)
-    {
-        var seconds = nanoseconds / 1_000_000_000L;
-        var nanosRemainder = nanoseconds % 1_000_000_000L;
-        return DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime.AddTicks(nanosRemainder / 100);
-    }
-
     public SilkSuperBlock(FileSystemType type, SilkRepository repository, DeviceNumberManager devManager) : base(type,
         devManager)
     {
@@ -67,6 +51,22 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
         }
 
         return dropped;
+    }
+
+    internal static long ToUnixNanoseconds(DateTime value)
+    {
+        var utc = value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
+        var offset = new DateTimeOffset(utc);
+        var seconds = offset.ToUnixTimeSeconds();
+        var nanos = utc.Ticks % TimeSpan.TicksPerSecond * 100;
+        return checked(seconds * 1_000_000_000L + nanos);
+    }
+
+    internal static DateTime FromUnixNanoseconds(long nanoseconds)
+    {
+        var seconds = nanoseconds / 1_000_000_000L;
+        var nanosRemainder = nanoseconds % 1_000_000_000L;
+        return DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime.AddTicks(nanosRemainder / 100);
     }
 
     protected override IndexedMemoryInode CreateIndexedInode(ulong ino)
@@ -180,13 +180,13 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
 public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 {
     private static readonly AsyncLocal<int> NamespaceMutationDepth = new();
+    private readonly HashSet<long> _dirtyPageIndexes = [];
     private readonly object _dirtyPageLock = new();
     private readonly object _mappedCacheLock = new();
     private readonly SilkMetadataStore _metadata;
     private readonly SilkRepository _repository;
-    private readonly HashSet<long> _dirtyPageIndexes = [];
-    private MappedFilePageCache? _mappedPageCache;
     private List<DirectoryEntry>? _cachedEntries;
+    private MappedFilePageCache? _mappedPageCache;
 
     public SilkInode(ulong ino, IndexedMemorySuperBlock sb, SilkRepository repository) : base(ino, sb)
     {
@@ -198,6 +198,19 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.File;
 
     private static bool IsNamespaceMutationSuppressed => NamespaceMutationDepth.Value > 0;
+
+    FilePageBackendDiagnostics IHostMappedCacheDropper.GetMappedCacheDiagnostics()
+    {
+        return GetMappedPageCacheDiagnostics();
+    }
+
+    long IHostMappedCacheDropper.TrimMappedCache(bool aggressive)
+    {
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.Trim(aggressive) ?? 0;
+        }
+    }
 
     public static SilkInodeKind MapInodeKind(InodeType type)
     {
@@ -286,13 +299,11 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
     {
         if (Type == InodeType.Directory) return 0;
         if (Type == InodeType.Symlink)
-        {
             lock (Lock)
             {
                 EnsureSymlinkDataLoadedLocked();
                 return base.BackendRead(linuxFile, buffer, offset);
             }
-        }
 
         if (offset < 0) return -(int)Errno.EINVAL;
 
@@ -482,6 +493,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             else if (child.Type == InodeType.File)
                 child.EnsureRegularFileBackingExists();
         }
+
         InvalidateEntriesCache();
         return created;
     }
@@ -892,8 +904,9 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
         lock (_mappedCacheLock)
         {
+            var livePath = _repository.GetLiveInodePath((long)Ino);
             _mappedPageCache ??= new MappedFilePageCache(
-                _repository.GetLiveInodePath((long)Ino),
+                livePath,
                 SuperBlock.MemoryContext.HostMemoryMapGeometry);
             return _mappedPageCache.TryAcquirePageHandle(
                 absoluteFileOffset / LinuxConstants.PageSize,
@@ -931,19 +944,6 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         lock (_mappedCacheLock)
         {
             return _mappedPageCache?.GetDiagnostics() ?? default;
-        }
-    }
-
-    FilePageBackendDiagnostics IHostMappedCacheDropper.GetMappedCacheDiagnostics()
-    {
-        return GetMappedPageCacheDiagnostics();
-    }
-
-    long IHostMappedCacheDropper.TrimMappedCache(bool aggressive)
-    {
-        lock (_mappedCacheLock)
-        {
-            return _mappedPageCache?.Trim(aggressive) ?? 0;
         }
     }
 

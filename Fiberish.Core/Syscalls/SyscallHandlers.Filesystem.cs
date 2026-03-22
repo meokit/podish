@@ -1162,7 +1162,10 @@ public partial class SyscallManager
             var f = GetFD(dirfd);
             if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
             RefreshHostfsProjectionForCaller(this, f.OpenedInode);
-            WriteStatx(engine, statxAddr, f.OpenedInode, mask);
+
+            if (!WriteStatx(engine, statxAddr, f.OpenedInode, mask))
+                return -(int)Errno.EFAULT;
+
             return 0;
         }
 
@@ -1180,7 +1183,10 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
-        WriteStatx(engine, statxAddr, loc.Dentry.Inode, mask);
+
+        if (!WriteStatx(engine, statxAddr, loc.Dentry.Inode, mask))
+            return -(int)Errno.EFAULT;
+
         return 0;
     }
 
@@ -1517,7 +1523,7 @@ public partial class SyscallManager
         if (!engine.CopyToUser(addr, buf)) return;
     }
 
-    private static void WriteStatx(Engine engine, uint addr, Inode inode, uint mask)
+    private static bool WriteStatx(Engine engine, uint addr, Inode inode, uint mask)
     {
         var buf = new byte[256];
 
@@ -1556,7 +1562,7 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x88), (inode.Dev >> 8) & 0xFF); // dev_major
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x8C), inode.Dev & 0xFF); // dev_minor
 
-        if (!engine.CopyToUser(addr, buf)) return;
+        return engine.CopyToUser(addr, buf);
     }
 
     private static int GetFsMagic(Dentry dentry)

@@ -388,6 +388,7 @@ public sealed class ImageArchiveService
 
     private (Dentry Root, Mount ExportMount, IDisposable Disposer) OpenExportView(string imageRef, string upperStore)
     {
+        var devNumbers = new DeviceNumberManager();
         var (storeDir, _) = ResolveStoreDirForImage(imageRef);
         var imagePath = Path.Combine(storeDir, "image.json");
         if (!File.Exists(imagePath))
@@ -395,7 +396,7 @@ public sealed class ImageArchiveService
         var image = JsonSerializer.Deserialize(File.ReadAllText(imagePath), PodishJsonContext.Default.OciStoredImage)
                     ?? throw new InvalidOperationException($"invalid image metadata: {imagePath}");
 
-        var (lowerSb, lowerProvider) = BuildLowerSuperBlock(image, storeDir);
+        var (lowerSb, lowerProvider) = BuildLowerSuperBlock(image, storeDir, devNumbers);
 
         if (!Directory.Exists(upperStore))
         {
@@ -408,8 +409,8 @@ public sealed class ImageArchiveService
         var overlayType = FileSystemRegistry.Get("overlay")
                           ?? throw new InvalidOperationException("overlay is not registered");
 
-        var upperSb = silkType.CreateFileSystem().ReadSuper(silkType, 0, upperStore, null);
-        var overlaySb = overlayType.CreateFileSystem().ReadSuper(overlayType, 0, "export-overlay",
+        var upperSb = silkType.CreateFileSystem(devNumbers).ReadSuper(silkType, 0, upperStore, null);
+        var overlaySb = overlayType.CreateFileSystem(devNumbers).ReadSuper(overlayType, 0, "export-overlay",
             new OverlayMountOptions
             {
                 Lower = lowerSb,
@@ -419,7 +420,8 @@ public sealed class ImageArchiveService
         return (overlaySb.Root, mountOverlay, new CompositeDisposable(lowerProvider));
     }
 
-    private (SuperBlock Lower, IDisposable Provider) BuildLowerSuperBlock(OciStoredImage image, string storeDir)
+    private (SuperBlock Lower, IDisposable Provider) BuildLowerSuperBlock(OciStoredImage image, string storeDir,
+        DeviceNumberManager devNumbers)
     {
         var layerIndexes = new List<IReadOnlyList<LayerIndexEntry>>(image.Layers.Count);
         var digestToBlobPath = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -456,7 +458,7 @@ public sealed class ImageArchiveService
         if (layerType == null)
             throw new InvalidOperationException("layerfs is not registered");
         var provider = new TarBlobLayerContentProvider(digestToBlobPath);
-        var lowerSb = layerType.CreateFileSystem().ReadSuper(layerType, 0, "layer-lower",
+        var lowerSb = layerType.CreateFileSystem(devNumbers).ReadSuper(layerType, 0, "layer-lower",
             new LayerMountOptions { Index = merged, ContentProvider = provider });
         return (lowerSb, provider);
     }
@@ -755,7 +757,7 @@ public sealed class ImageArchiveService
     private static void CreateTarFromDirectory(string sourceDir, string tarPath)
     {
         using var fs = File.Create(tarPath);
-        using var writer = new TarWriter(fs, TarEntryFormat.Pax, false);
+        using var writer = new TarWriter(fs, TarEntryFormat.Pax);
         foreach (var path in Directory.EnumerateFileSystemEntries(sourceDir, "*", SearchOption.AllDirectories)
                      .OrderBy(p => p, StringComparer.Ordinal))
         {
