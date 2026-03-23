@@ -180,7 +180,21 @@ public partial class SyscallManager
     private bool TryResolveFutexKey(Engine engine, uint uaddr, bool fshared, out FutexKey key, out int error)
     {
         if (fshared)
-            return TryResolveSharedFutexKey(engine, uaddr, out key, out error);
+        {
+            if (TryResolveSharedFutexKey(engine, uaddr, out key, out error))
+                return true;
+
+            // Linux allows non-private futex ops on private mappings too. When
+            // the address is not actually backed by shared memory, fall back to
+            // an mm-scoped private key instead of failing with EFAULT.
+            if (TryResolvePrivateFutexKey(engine, uaddr, out key))
+            {
+                error = 0;
+                return true;
+            }
+
+            return false;
+        }
 
         if (TryResolvePrivateFutexKey(engine, uaddr, out key))
         {

@@ -258,6 +258,49 @@ public class CloneThreadLifecycleTests
     }
 
     [Fact]
+    public void FutexWithoutPrivateFlag_OnPrivateMapping_FallsBackToPrivateKey()
+    {
+        using var env = new TestEnv(275, 275);
+        const uint futexAddr = 0x00638000;
+        env.MapUserPage(futexAddr);
+        Assert.True(env.Engine.CopyToUser(futexAddr, BitConverter.GetBytes(0u)));
+
+        var resolved = ResolveKey(env.SyscallManager, env.Engine, futexAddr, fshared: true, out var error);
+
+        Assert.Equal(0, error);
+        Assert.Equal(ResolvePrivateKey(env.Vma, futexAddr), resolved);
+    }
+
+    [Fact]
+    public async Task FutexWithoutPrivateFlag_OnSharedFileMapping_UsesSharedKey()
+    {
+        using var env = new TestEnv(276, 276);
+        var child = await env.Task.Clone(0, 0, 0, 0, 0);
+
+        var file1 = env.CreateTmpfsFile("futex-shared-nonprivate");
+        var file2 = new LinuxFile(file1.Dentry, FileFlags.O_RDWR, null!);
+        Assert.Equal(4, file1.Dentry.Inode!.Write(file1, BitConverter.GetBytes(0u), 0));
+
+        const uint parentAddr = 0x0063C000;
+        const uint childAddr = 0x00640000;
+        env.Vma.Mmap(parentAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+            MapFlags.Shared | MapFlags.Fixed, file1, 0, "futex-parent-nonprivate", env.Engine);
+        child.Process.Mem.Mmap(childAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+            MapFlags.Shared | MapFlags.Fixed, file2, 0, "futex-child-nonprivate", child.CPU);
+        Assert.True(env.Vma.HandleFault(parentAddr, true, env.Engine));
+        Assert.True(child.Process.Mem.HandleFault(childAddr, true, child.CPU));
+        Assert.True(env.Engine.CopyToUser(parentAddr, BitConverter.GetBytes(0u)));
+
+        var resolved = ResolveKey(env.SyscallManager, env.Engine, parentAddr, fshared: true, out var error);
+
+        Assert.Equal(0, error);
+        Assert.Equal(ResolveSharedKey(env.Vma, parentAddr), resolved);
+
+        file1.Close();
+        file2.Close();
+    }
+
+    [Fact]
     public async Task SysMunmap_FromOneThread_UnmapsPeerEngineMappings()
     {
         using var env = new TestEnv(300, 301);
@@ -457,5 +500,17 @@ public class CloneThreadLifecycleTests
             return FutexKey.SharedFile(vma.File!.OpenedInode!, pageIndex, offset);
         Assert.NotNull(vma.VmMapping);
         return FutexKey.SharedAnonymous(vma.VmMapping!, pageIndex, offset);
+    }
+
+    private static FutexKey ResolveKey(SyscallManager sm, Engine engine, uint uaddr, bool fshared, out int error)
+    {
+        var method = typeof(SyscallManager).GetMethod("TryResolveFutexKey", BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(method);
+
+        var args = new object?[] { engine, uaddr, fshared, null, 0 };
+        var ok = (bool)method!.Invoke(sm, args)!;
+        Assert.True(ok);
+        error = (int)args[4]!;
+        return (FutexKey)args[3]!;
     }
 }
