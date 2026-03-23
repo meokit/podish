@@ -127,6 +127,25 @@ public class CloneThreadLifecycleTests
     }
 
     [Fact]
+    public void FutexWaitRegistration_Cancel_RemovesPrivateWaiterFromQueue()
+    {
+        using var env = new TestEnv(205, 206);
+        const uint futexAddr = 0x00602000;
+        env.MapUserPage(futexAddr);
+
+        var waiter = env.SyscallManager.Futex.PrepareWait(futexAddr);
+        using var registration = env.SyscallManager.Futex.CreatePrivateWaitRegistration(futexAddr, waiter);
+
+        Assert.Equal(1, env.SyscallManager.Futex.GetWaiterCount(futexAddr));
+
+        registration.Cancel();
+
+        Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(futexAddr));
+        Assert.True(waiter.Tcs.Task.IsCompleted);
+        Assert.False(waiter.Tcs.Task.Result);
+    }
+
+    [Fact]
     public async Task SysExit_LeaderWithAliveThreads_MustNotFinalizeProcessOrCloseFds()
     {
         using var env = new TestEnv(240, 240);

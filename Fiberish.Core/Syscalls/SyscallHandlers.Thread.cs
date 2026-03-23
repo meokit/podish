@@ -37,10 +37,14 @@ public partial class SyscallManager
             var waiter = isPrivate
                 ? Futex.PrepareWait(uaddr)
                 : Futex.PrepareWaitShared(physKey);
+            var registration = isPrivate
+                ? Futex.CreatePrivateWaitRegistration(uaddr, waiter)
+                : Futex.CreateSharedWaitRegistration(physKey, waiter);
 
             var task = engine.Owner as FiberTask;
             if (task == null)
             {
+                registration.Cancel();
                 if (isPrivate)
                     Futex.CancelWait(uaddr, waiter);
                 else
@@ -51,7 +55,7 @@ public partial class SyscallManager
             Logger.LogInformation(
                 "[SysFutex WAIT] TID={TID} uaddr=0x{Uaddr:x} val={Val} isPrivate={IsPrivate} physKey=0x{PhysKey:x} WakeReason={WR} PendingSig=0x{PS:x}",
                 task.TID, uaddr, val, isPrivate, physKey, task.WakeReason, task.PendingSignals);
-            var result = await new FutexAwaitable(waiter, task);
+            var result = await new FutexAwaitable(waiter, task, registration);
             Logger.LogInformation(
                 "[SysFutex WAIT] TID={TID} awaiter result={Result} WakeReason={WR} PendingSig=0x{PS:x}",
                 task.TID, result, task.WakeReason, task.PendingSignals);
@@ -132,10 +136,15 @@ public partial class SyscallManager
                     : sharedKey != 0
                         ? Futex.PrepareWaitShared(sharedKey)
                         : Futex.PrepareWait(uaddr);
+                var registration = isPrivate
+                    ? Futex.CreatePrivateWaitRegistration(uaddr, waiter)
+                    : sharedKey != 0
+                        ? Futex.CreateSharedWaitRegistration(sharedKey, waiter)
+                        : Futex.CreatePrivateWaitRegistration(uaddr, waiter);
 
                 Logger.LogTrace("[SysFutex LOCK_PI] TID={TID} waiting uaddr=0x{Uaddr:x} owner={Owner} isPrivate={IsPrivate} physKey=0x{PhysKey:x}",
                     task.TID, uaddr, owner, isPrivate, sharedKey);
-                var result = await new FutexAwaitable(waiter, task);
+                var result = await new FutexAwaitable(waiter, task, registration);
                 if (result == AwaitResult.Interrupted)
                 {
                     if (isPrivate)
@@ -187,30 +196,34 @@ public partial class SyscallManager
     private readonly struct FutexAwaitable
     {
         private readonly Waiter _waiter;
+        private readonly ITaskAsyncRegistration _registration;
         private readonly FiberTask _task;
 
-        public FutexAwaitable(Waiter waiter, FiberTask task)
+        public FutexAwaitable(Waiter waiter, FiberTask task, ITaskAsyncRegistration registration)
         {
             _waiter = waiter;
             _task = task;
+            _registration = registration;
         }
 
         public FutexAwaiter GetAwaiter()
         {
-            return new FutexAwaiter(_waiter, _task);
+            return new FutexAwaiter(_waiter, _task, _registration);
         }
     }
 
     private readonly struct FutexAwaiter : INotifyCompletion
     {
         private readonly Waiter _waiter;
+        private readonly ITaskAsyncRegistration _registration;
         private readonly FiberTask _task;
         private readonly FiberTask.WaitToken _token;
 
-        public FutexAwaiter(Waiter waiter, FiberTask task)
+        public FutexAwaiter(Waiter waiter, FiberTask task, ITaskAsyncRegistration registration)
         {
             _waiter = waiter;
             _task = task;
+            _registration = registration;
             _token = task.BeginWaitToken();
         }
 
@@ -219,6 +232,12 @@ public partial class SyscallManager
         public void OnCompleted(Action continuation)
         {
             if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
+            {
+                _registration.Cancel();
+                return;
+            }
+
+            if (!operation.TryAddRegistration(_registration))
                 return;
 
             var handler = new FutexCompletionHandler(_task, _token, continuation, operation);

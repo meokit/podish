@@ -8,8 +8,8 @@ namespace Podish.Cli.Pulse;
 internal sealed class PulseServerState : IDisposable
 {
     private readonly object _gate = new();
-    private readonly Dictionary<uint, PlaybackStreamState> _playbackStreams = new();
-    private uint _nextChannelIndex;
+    private readonly Dictionary<uint, PlaybackStreamState> _playbackStreamsByStreamIndex = new();
+    private uint _nextPlaybackStreamIndex;
 
     public PulseServerState(ILoggerFactory loggerFactory)
     {
@@ -34,39 +34,37 @@ internal sealed class PulseServerState : IDisposable
         AudioSink.Dispose();
     }
 
-    public bool TryCreatePlaybackStream(CreatePlaybackStreamParams parameters, string? clientName,
-        out PlaybackStreamState? stream, out PulseError? error)
+    public bool TryAllocatePlaybackStreamIndex(CreatePlaybackStreamParams parameters,
+        out uint streamIndex, out PulseError? error)
     {
         lock (_gate)
         {
             if (!PulseAudioFormats.IsSupported(parameters.SampleSpec))
             {
-                stream = null;
+                streamIndex = 0;
                 error = PulseError.NotSupported;
                 return false;
             }
 
-            stream = new PlaybackStreamState(_nextChannelIndex++, parameters, clientName);
-            _playbackStreams.Add(stream.ChannelIndex, stream);
+            streamIndex = _nextPlaybackStreamIndex++;
             error = null;
             return true;
         }
     }
 
-    public PlaybackStreamState? GetPlaybackStream(uint channelIndex)
+    public void RegisterPlaybackStream(PlaybackStreamState stream)
     {
         lock (_gate)
         {
-            _playbackStreams.TryGetValue(channelIndex, out var stream);
-            return stream;
+            _playbackStreamsByStreamIndex.Add(stream.StreamIndex, stream);
         }
     }
 
-    public bool RemovePlaybackStream(uint channelIndex)
+    public bool RemovePlaybackStream(uint streamIndex)
     {
         lock (_gate)
         {
-            return _playbackStreams.Remove(channelIndex);
+            return _playbackStreamsByStreamIndex.Remove(streamIndex);
         }
     }
 
@@ -74,7 +72,7 @@ internal sealed class PulseServerState : IDisposable
     {
         lock (_gate)
         {
-            return _playbackStreams.Values.OrderBy(static stream => stream.StreamIndex).ToArray();
+            return _playbackStreamsByStreamIndex.Values.OrderBy(static stream => stream.StreamIndex).ToArray();
         }
     }
 
@@ -82,7 +80,8 @@ internal sealed class PulseServerState : IDisposable
     {
         lock (_gate)
         {
-            return _playbackStreams.Values.FirstOrDefault(stream => stream.StreamIndex == streamIndex);
+            _playbackStreamsByStreamIndex.TryGetValue(streamIndex, out var stream);
+            return stream;
         }
     }
 

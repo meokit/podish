@@ -234,7 +234,7 @@ internal sealed class PulseCommandDispatcher
             parameters.BufferAttr?.Prebuffer,
             parameters.BufferAttr?.MinRequest);
 
-        if (!_state.TryCreatePlaybackStream(parameters, session.ClientName, out var stream, out var error))
+        if (!session.TryCreatePlaybackStream(parameters, out var stream, out var error))
         {
             await session.SendErrorAsync(message.Sequence, error ?? PulseError.Internal);
             return;
@@ -282,7 +282,7 @@ internal sealed class PulseCommandDispatcher
             return;
         }
 
-        var stream = _state.GetPlaybackStream(channelIndex.Value);
+        var stream = session.GetPlaybackStreamByChannelIndex(channelIndex.Value);
         if (stream == null)
         {
             await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
@@ -305,7 +305,7 @@ internal sealed class PulseCommandDispatcher
             return;
         }
 
-        var stream = _state.GetPlaybackStream(channelIndex.Value);
+        var stream = session.GetPlaybackStreamByChannelIndex(channelIndex.Value);
         if (stream == null)
         {
             await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
@@ -322,7 +322,7 @@ internal sealed class PulseCommandDispatcher
 
     private async ValueTask HandleFlushPlaybackStreamAsync(PulseServerSession session, ProtocolMessage message)
     {
-        var stream = await ResolveStreamByIndexAsync(session, message);
+        var stream = await ResolveStreamByChannelAsync(session, message);
         if (stream == null)
             return;
 
@@ -334,7 +334,7 @@ internal sealed class PulseCommandDispatcher
 
     private async ValueTask HandleTriggerPlaybackStreamAsync(PulseServerSession session, ProtocolMessage message)
     {
-        var stream = await ResolveStreamByIndexAsync(session, message);
+        var stream = await ResolveStreamByChannelAsync(session, message);
         if (stream == null)
             return;
 
@@ -347,7 +347,7 @@ internal sealed class PulseCommandDispatcher
 
     private async ValueTask HandleDrainPlaybackStreamAsync(PulseServerSession session, ProtocolMessage message)
     {
-        var stream = await ResolveStreamByIndexAsync(session, message);
+        var stream = await ResolveStreamByChannelAsync(session, message);
         if (stream == null)
             return;
 
@@ -357,12 +357,11 @@ internal sealed class PulseCommandDispatcher
 
     private async ValueTask HandleDeletePlaybackStreamAsync(PulseServerSession session, ProtocolMessage message)
     {
-        var stream = await ResolveStreamByIndexAsync(session, message);
+        var stream = await ResolveStreamByChannelAsync(session, message);
         if (stream == null)
             return;
 
         stream.Clear();
-        _state.RemovePlaybackStream(stream.ChannelIndex);
         session.DetachPlaybackStream(stream.ChannelIndex);
         session.NotifyPlaybackStateChanged();
         await session.SendAckAsync(message.Sequence,
@@ -716,7 +715,7 @@ internal sealed class PulseCommandDispatcher
             return;
         }
 
-        PlaybackStreamState? stream = _state.GetPlaybackStream(channelIndex.Value);
+        PlaybackStreamState? stream = session.GetPlaybackStreamByChannelIndex(channelIndex.Value);
         if (stream == null)
         {
             await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
@@ -746,7 +745,7 @@ internal sealed class PulseCommandDispatcher
             return;
         }
 
-        PlaybackStreamState? stream = _state.GetPlaybackStream(channelIndex.Value);
+        PlaybackStreamState? stream = session.GetPlaybackStreamByChannelIndex(channelIndex.Value);
         if (stream == null)
         {
             await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
@@ -759,7 +758,7 @@ internal sealed class PulseCommandDispatcher
             $"remove-playback-stream-proplist channel={channelIndex.Value} removed={removed} requested={keys.Length}");
     }
 
-    private async ValueTask<PlaybackStreamState?> ResolveStreamByIndexAsync(PulseServerSession session,
+    private async ValueTask<PlaybackStreamState?> ResolveStreamByChannelAsync(PulseServerSession session,
         ProtocolMessage message)
     {
         var reader = message.ReadPayload();
@@ -770,7 +769,7 @@ internal sealed class PulseCommandDispatcher
             return null;
         }
 
-        var stream = _state.GetPlaybackStream(channelIndex.Value);
+        var stream = session.GetPlaybackStreamByChannelIndex(channelIndex.Value);
         if (stream == null)
         {
             await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);

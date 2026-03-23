@@ -28,6 +28,11 @@ public class FutexManager
         return w;
     }
 
+    internal ITaskAsyncRegistration CreatePrivateWaitRegistration(uint addr, Waiter waiter)
+    {
+        return new WaitRegistration(this, addr, waiter, isShared: false);
+    }
+
     public void CancelWait(uint addr, Waiter w)
     {
         if (_privateQueues.TryGetValue(addr, out var list))
@@ -74,6 +79,11 @@ public class FutexManager
         return w;
     }
 
+    internal ITaskAsyncRegistration CreateSharedWaitRegistration(nint hostKey, Waiter waiter)
+    {
+        return new WaitRegistration(this, hostKey, waiter, isShared: true);
+    }
+
     public void CancelWaitShared(nint hostKey, Waiter w)
     {
         if (_sharedQueues.TryGetValue(hostKey, out var list))
@@ -105,5 +115,50 @@ public class FutexManager
     public int GetWaiterCountShared(nint hostKey)
     {
         return _sharedQueues.TryGetValue(hostKey, out var list) ? list.Count : 0;
+    }
+
+    private sealed class WaitRegistration : ITaskAsyncRegistration
+    {
+        private readonly FutexManager _manager;
+        private readonly bool _isShared;
+        private readonly uint _privateAddr;
+        private readonly nint _sharedKey;
+        private Waiter? _waiter;
+
+        public WaitRegistration(FutexManager manager, uint privateAddr, Waiter waiter, bool isShared)
+        {
+            _manager = manager;
+            _privateAddr = privateAddr;
+            _waiter = waiter;
+            _isShared = isShared;
+        }
+
+        public WaitRegistration(FutexManager manager, nint sharedKey, Waiter waiter, bool isShared)
+        {
+            _manager = manager;
+            _sharedKey = sharedKey;
+            _waiter = waiter;
+            _isShared = isShared;
+        }
+
+        public bool IsActive => _waiter != null;
+
+        public void Cancel()
+        {
+            var waiter = Interlocked.Exchange(ref _waiter, null);
+            if (waiter == null) return;
+
+            if (_isShared)
+                _manager.CancelWaitShared(_sharedKey, waiter);
+            else
+                _manager.CancelWait(_privateAddr, waiter);
+
+            waiter.Tcs.TrySetResult(false);
+        }
+
+        public void Dispose()
+        {
+            Cancel();
+        }
     }
 }

@@ -34,6 +34,7 @@ internal sealed class PulseServerSession
     private byte[] _recvScratch = new byte[64 * 1024];
     private readonly Dictionary<uint, PlaybackStreamState> _playbackStreams = new();
     private readonly Dictionary<uint, LinuxFile> _registeredMemfdByShmId = new();
+    private uint _nextChannelIndex;
     private int _playbackPumpScheduled;
     private List<LinuxFile>? _pendingAncillaryFds;
 
@@ -121,6 +122,7 @@ internal sealed class PulseServerSession
         finally
         {
             _cts.Cancel();
+            CleanupPlaybackStreams();
             DisposePendingAncillaryFds();
             DisposeRegisteredMemfds();
             _logger.LogInformation("{Prefix} client session stopped", PulseServerLogging.Connection);
@@ -151,6 +153,24 @@ internal sealed class PulseServerSession
         return true;
     }
 
+    public bool TryCreatePlaybackStream(CreatePlaybackStreamParams parameters, out PlaybackStreamState? stream,
+        out PulseError? error)
+    {
+        if (!_state.TryAllocatePlaybackStreamIndex(parameters, out uint streamIndex, out error))
+        {
+            stream = null;
+            return false;
+        }
+
+        uint channelIndex;
+        lock (_playbackGate)
+            channelIndex = _nextChannelIndex++;
+
+        stream = new PlaybackStreamState(channelIndex, streamIndex, parameters, ClientName);
+        _state.RegisterPlaybackStream(stream);
+        return true;
+    }
+
     public void AttachPlaybackStream(PlaybackStreamState stream)
     {
         lock (_playbackGate)
@@ -163,9 +183,26 @@ internal sealed class PulseServerSession
 
     public void DetachPlaybackStream(uint channelIndex)
     {
+        PlaybackStreamState? stream;
         lock (_playbackGate)
+        {
+            _playbackStreams.TryGetValue(channelIndex, out stream);
             _playbackStreams.Remove(channelIndex);
+        }
+
+        if (stream != null)
+            _state.RemovePlaybackStream(stream.StreamIndex);
+
         _state.AudioSink.DetachStream(channelIndex);
+    }
+
+    public PlaybackStreamState? GetPlaybackStreamByChannelIndex(uint channelIndex)
+    {
+        lock (_playbackGate)
+        {
+            _playbackStreams.TryGetValue(channelIndex, out PlaybackStreamState? stream);
+            return stream;
+        }
     }
 
     public StatReply CreateStatReply()
@@ -294,7 +331,7 @@ internal sealed class PulseServerSession
 
     private async Task HandleStreamPacketAsync(Descriptor descriptor, byte[] payload, int payloadLength)
     {
-        PlaybackStreamState? stream = GetPlaybackStream(descriptor.Channel);
+        PlaybackStreamState? stream = GetPlaybackStreamByChannelIndex(descriptor.Channel);
         if (stream == null)
         {
             _logger.LogWarning("{Prefix} dropping packet for unknown channel={Channel}", PulseServerLogging.Stream,
@@ -493,6 +530,26 @@ internal sealed class PulseServerSession
         }
     }
 
+    private void CleanupPlaybackStreams()
+    {
+        PlaybackStreamState[] streams;
+        lock (_playbackGate)
+        {
+            streams = _playbackStreams.Values.ToArray();
+            _playbackStreams.Clear();
+        }
+
+        foreach (PlaybackStreamState stream in streams)
+        {
+            stream.Clear();
+            _state.RemovePlaybackStream(stream.StreamIndex);
+            _state.AudioSink.DetachStream(stream.ChannelIndex);
+        }
+
+        if (streams.Length > 0)
+            _state.AudioSink.NotifyStreamStateChanged();
+    }
+
     private async ValueTask SendRawAsync(byte[] payload)
     {
         await _sendLock.WaitAsync();
@@ -608,15 +665,6 @@ internal sealed class PulseServerSession
 
         int newSize = Math.Max(requiredBytes, _recvScratch.Length * 2);
         _recvScratch = new byte[newSize];
-    }
-
-    private PlaybackStreamState? GetPlaybackStream(uint channelIndex)
-    {
-        lock (_playbackGate)
-        {
-            _playbackStreams.TryGetValue(channelIndex, out PlaybackStreamState? stream);
-            return stream;
-        }
     }
 
     private PlaybackStreamState[] GetPlaybackStreamsSnapshot()

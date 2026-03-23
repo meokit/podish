@@ -250,7 +250,7 @@ public class PlaybackStreamStateTests
         var parameters = CreateParameters();
         parameters.Flags = PlaybackStreamFlags.StartCorked;
 
-        var stream = new PlaybackStreamState(1, parameters, "paplay");
+        var stream = new PlaybackStreamState(1, 11, parameters, "paplay");
 
         Assert.True(stream.Corked);
         stream.Trigger();
@@ -270,6 +270,15 @@ public class PlaybackStreamStateTests
         stream.SetCorked(false);
         stream.Append(new byte[stream.TargetBytesHint]);
         Assert.False(stream.ShouldRequestMore());
+    }
+
+    [Fact]
+    public void PlaybackStreamTracksDistinctChannelAndStreamIds()
+    {
+        var stream = new PlaybackStreamState(3, 17, CreateParameters(), "paplay");
+
+        Assert.Equal<uint>(3, stream.ChannelIndex);
+        Assert.Equal<uint>(17, stream.StreamIndex);
     }
 
     [Fact]
@@ -311,7 +320,7 @@ public class PlaybackStreamStateTests
 
     private static PlaybackStreamState CreateStream()
     {
-        return new PlaybackStreamState(1, CreateParameters(), "paplay");
+        return new PlaybackStreamState(1, 1, CreateParameters(), "paplay");
     }
 
     private static CreatePlaybackStreamParams CreateParameters()
@@ -435,7 +444,7 @@ public class PulseServerStateTests
     }
 
     [Fact]
-    public void CreatePlaybackStreamRejectsUnsupportedSpec()
+    public void AllocatePlaybackStreamIndexRejectsUnsupportedSpec()
     {
         using var state = new PulseServerState(NullLoggerFactory.Instance);
         var unsupported = new CreatePlaybackStreamParams
@@ -444,15 +453,15 @@ public class PulseServerStateTests
             ChannelMap = ChannelMap.Stereo()
         };
 
-        var ok = state.TryCreatePlaybackStream(unsupported, "paplay", out var stream, out var error);
+        var ok = state.TryAllocatePlaybackStreamIndex(unsupported, out var streamIndex, out var error);
 
         Assert.False(ok);
-        Assert.Null(stream);
+        Assert.Equal<uint>(0, streamIndex);
         Assert.Equal(PulseError.NotSupported, error);
     }
 
     [Fact]
-    public void CreatePlaybackStreamAllowsMultipleStreams()
+    public void AllocatePlaybackStreamIndexProducesDistinctGlobalIds()
     {
         using var state = new PulseServerState(NullLoggerFactory.Instance);
         var parameters = new CreatePlaybackStreamParams
@@ -461,16 +470,33 @@ public class PulseServerStateTests
             ChannelMap = ChannelMap.Stereo()
         };
 
-        var ok1 = state.TryCreatePlaybackStream(parameters, "paplay", out var stream1, out var error1);
-        var ok2 = state.TryCreatePlaybackStream(parameters, "paplay-2", out var stream2, out var error2);
+        var ok1 = state.TryAllocatePlaybackStreamIndex(parameters, out var streamIndex1, out var error1);
+        var ok2 = state.TryAllocatePlaybackStreamIndex(parameters, out var streamIndex2, out var error2);
 
         Assert.True(ok1);
-        Assert.NotNull(stream1);
         Assert.Null(error1);
         Assert.True(ok2);
-        Assert.NotNull(stream2);
         Assert.Null(error2);
-        Assert.NotEqual(stream1!.ChannelIndex, stream2!.ChannelIndex);
+        Assert.NotEqual(streamIndex1, streamIndex2);
+    }
+
+    [Fact]
+    public void PlaybackStreamRegistryIsKeyedByGlobalStreamIndex()
+    {
+        using var state = new PulseServerState(NullLoggerFactory.Instance);
+        var first = new PlaybackStreamState(0, 10, CreatePlaybackParameters(), "paplay");
+        var second = new PlaybackStreamState(0, 11, CreatePlaybackParameters(), "paplay");
+
+        state.RegisterPlaybackStream(first);
+        state.RegisterPlaybackStream(second);
+
+        Assert.Same(first, state.GetPlaybackStreamByStreamIndex(10));
+        Assert.Same(second, state.GetPlaybackStreamByStreamIndex(11));
+        Assert.Equal(new uint[] { 10, 11 }, state.GetPlaybackStreamsSnapshot().Select(static stream => stream.StreamIndex));
+
+        Assert.True(state.RemovePlaybackStream(10));
+        Assert.Null(state.GetPlaybackStreamByStreamIndex(10));
+        Assert.False(state.RemovePlaybackStream(10));
     }
 
     [Fact]
@@ -528,6 +554,15 @@ public class PulseServerStateTests
             Version = version,
             UseShm = useMemfd,
             UseMemfd = useMemfd
+        };
+    }
+
+    private static CreatePlaybackStreamParams CreatePlaybackParameters()
+    {
+        return new CreatePlaybackStreamParams
+        {
+            SampleSpec = new SampleSpec(SampleFormat.S16Le, 2, 48000),
+            ChannelMap = ChannelMap.Stereo()
         };
     }
 }

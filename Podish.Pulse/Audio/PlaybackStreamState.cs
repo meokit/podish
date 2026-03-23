@@ -10,12 +10,12 @@ public sealed class PlaybackStreamState
     private ulong _receivedBytesTotal;
     private int _requestInFlight;
 
-    public PlaybackStreamState(uint channelIndex, CreatePlaybackStreamParams parameters, string? clientName)
+    public PlaybackStreamState(uint channelIndex, uint streamIndex, CreatePlaybackStreamParams parameters, string? clientName)
     {
         PlaybackBufferAttr normalizedBufferAttr = NormalizeBufferAttr(parameters.BufferAttr, parameters.SampleSpec);
 
         ChannelIndex = channelIndex;
-        StreamIndex = channelIndex;
+        StreamIndex = streamIndex;
         DeviceIndex = parameters.DeviceIndex ?? 0;
         SampleSpec = parameters.SampleSpec;
         ChannelMap = parameters.ChannelMap ??
@@ -225,6 +225,9 @@ public sealed class PlaybackStreamState
     {
         if (Corked)
             return false;
+
+        if (!StartedNotified && BufferedBytes == 0)
+            return true;
 
         return QueuedOutputEstimateBytes + PendingRequestedBytes < TargetBytesHint;
     }
