@@ -54,6 +54,21 @@ public sealed class PortInfo : IEquatable<PortInfo>
     /// </summary>
     public uint Priority;
 
+    /// <summary>
+    /// The port availability state.
+    /// </summary>
+    public uint Available;
+
+    /// <summary>
+    /// The availability group name.
+    /// </summary>
+    public string? AvailabilityGroup;
+
+    /// <summary>
+    /// The port type.
+    /// </summary>
+    public uint Type;
+
     public PortInfo()
     {
         Name = string.Empty;
@@ -65,7 +80,10 @@ public sealed class PortInfo : IEquatable<PortInfo>
         if (other is null) return false;
         return Name == other.Name &&
                Description == other.Description &&
-               Priority == other.Priority;
+               Priority == other.Priority &&
+               Available == other.Available &&
+               AvailabilityGroup == other.AvailabilityGroup &&
+               Type == other.Type;
     }
 
     public override bool Equals(object? obj)
@@ -75,7 +93,7 @@ public sealed class PortInfo : IEquatable<PortInfo>
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(Name, Description, Priority);
+        return HashCode.Combine(Name, Description, Priority, Available, AvailabilityGroup, Type);
     }
 }
 
@@ -477,6 +495,8 @@ public sealed class SourceInfo : IEquatable<SourceInfo>
 /// </summary>
 public static class SinkSourceInfoExtensions
 {
+    private const byte PcmEncoding = 1;
+
     /// <summary>
     /// Reads SinkInfo from a tagstruct.
     /// </summary>
@@ -523,6 +543,13 @@ public static class SinkSourceInfoExtensions
             }
         }
 
+        if (reader.ProtocolVersion >= 21 && reader.HasDataLeft())
+        {
+            byte formatCount = reader.ReadU8();
+            for (int i = 0; i < formatCount; i++)
+                reader.ReadFormatInfo();
+        }
+
         return info;
     }
 
@@ -565,6 +592,12 @@ public static class SinkSourceInfoExtensions
                 ? info.Ports[(int)info.ActivePortIndex].Name
                 : null;
             writer.WriteString(activePortName);
+        }
+
+        if (writer.ProtocolVersion >= 21)
+        {
+            writer.WriteU8(1);
+            writer.WriteFormatInfo(PcmEncoding, new Props());
         }
     }
 
@@ -616,6 +649,13 @@ public static class SinkSourceInfoExtensions
             }
         }
 
+        if (reader.ProtocolVersion >= 22 && reader.HasDataLeft())
+        {
+            byte formatCount = reader.ReadU8();
+            for (int i = 0; i < formatCount; i++)
+                reader.ReadFormatInfo();
+        }
+
         return info;
     }
 
@@ -661,6 +701,12 @@ public static class SinkSourceInfoExtensions
                 : null;
             writer.WriteString(activePortName);
         }
+
+        if (writer.ProtocolVersion >= 22)
+        {
+            writer.WriteU8(1);
+            writer.WriteFormatInfo(PcmEncoding, new Props());
+        }
     }
 
     /// <summary>
@@ -668,12 +714,25 @@ public static class SinkSourceInfoExtensions
     /// </summary>
     public static PortInfo ReadPortInfo(this TagStructReader reader)
     {
-        return new PortInfo
+        var port = new PortInfo
         {
             Name = reader.ReadStringNonNull(),
             Description = reader.ReadStringNonNull(),
             Priority = reader.ReadU32(),
         };
+
+        if (reader.ProtocolVersion >= 24)
+        {
+            port.Available = reader.ReadU32();
+
+            if (reader.ProtocolVersion >= 34)
+            {
+                port.AvailabilityGroup = reader.ReadString();
+                port.Type = reader.ReadU32();
+            }
+        }
+
+        return port;
     }
 
     /// <summary>
@@ -684,5 +743,31 @@ public static class SinkSourceInfoExtensions
         writer.WriteString(port.Name);
         writer.WriteString(port.Description);
         writer.WriteU32(port.Priority);
+
+        if (writer.ProtocolVersion >= 24)
+        {
+            writer.WriteU32(port.Available);
+
+            if (writer.ProtocolVersion >= 34)
+            {
+                writer.WriteString(port.AvailabilityGroup);
+                writer.WriteU32(port.Type);
+            }
+        }
+    }
+
+    private static (byte Encoding, Props Props) ReadFormatInfo(this TagStructReader reader)
+    {
+        reader.ExpectTag(Tag.FormatInfo);
+        byte encoding = reader.ReadU8();
+        Props props = reader.ReadProps();
+        return (encoding, props);
+    }
+
+    private static void WriteFormatInfo(this TagStructWriter writer, byte encoding, Props props)
+    {
+        writer.WriteTag(Tag.FormatInfo);
+        writer.WriteU8(encoding);
+        writer.WriteProps(props);
     }
 }
