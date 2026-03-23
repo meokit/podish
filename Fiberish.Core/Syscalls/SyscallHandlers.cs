@@ -178,6 +178,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.rt_sigsuspend, SysRtSigSuspend);
 
         Register(X86SyscallNumbers.gettid, SysGettid);
+        Register(X86SyscallNumbers.sched_getaffinity, SysSchedGetAffinity);
         Register(X86SyscallNumbers.getpgid, SysGetPgid);
         Register(X86SyscallNumbers.setpgid, SysSetPgid);
         Register(X86SyscallNumbers.setsid, SysSetSid);

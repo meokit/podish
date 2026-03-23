@@ -214,6 +214,24 @@ public partial class SyscallManager
         return task?.TID ?? -1;
     }
 
+    private async ValueTask<int> SysSchedGetAffinity(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        const int affinityMaskBytes = sizeof(uint);
+        var cpusetsize = a2;
+        var maskPtr = a3;
+
+        if (cpusetsize < affinityMaskBytes)
+            return -(int)Errno.EINVAL;
+
+        var mask = new byte[cpusetsize];
+        mask[0] = 0x01; // Report CPU0 as available.
+        if (!engine.CopyToUser(maskPtr, mask))
+            return -(int)Errno.EFAULT;
+
+        return affinityMaskBytes;
+    }
+
     private async ValueTask<int> SysGetPgid(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
