@@ -157,19 +157,34 @@ internal sealed class PulseServerSession
         };
     }
 
-    public ValueTask SendAckAsync(uint sequence)
+    public ValueTask SendAckAsync(uint sequence, string? summary = null)
     {
-        return SendRawAsync(ProtocolMessageIO.EncodeAck(sequence));
+        if (!string.IsNullOrEmpty(summary))
+        {
+            _logger.LogDebug("{Prefix} reply seq={Sequence} ack {Summary}",
+                PulseServerLogging.Control, sequence, summary);
+        }
+
+        return SendRawAsync(ProtocolMessageIO.EncodeAck(sequence, ClientProtocolVersion));
     }
 
-    public ValueTask SendErrorAsync(uint sequence, PulseError error)
+    public ValueTask SendErrorAsync(uint sequence, PulseError error, string? summary = null)
     {
-        return SendRawAsync(ProtocolMessageIO.EncodeError(sequence, error));
+        _logger.LogDebug("{Prefix} reply seq={Sequence} error={Error}{SummarySuffix}",
+            PulseServerLogging.Control, sequence, error,
+            string.IsNullOrEmpty(summary) ? string.Empty : $" {summary}");
+        return SendRawAsync(ProtocolMessageIO.EncodeError(sequence, error, ClientProtocolVersion));
     }
 
-    public ValueTask SendReplyAsync<T>(uint sequence, T reply, Action<TagStructWriter, T> writerAction)
+    public ValueTask SendReplyAsync<T>(uint sequence, T reply, Action<TagStructWriter, T> writerAction, string? summary = null)
     {
-        return SendRawAsync(ProtocolMessageIO.EncodeReply(sequence, reply, writerAction));
+        if (!string.IsNullOrEmpty(summary))
+        {
+            _logger.LogDebug("{Prefix} reply seq={Sequence} {Summary}",
+                PulseServerLogging.Control, sequence, summary);
+        }
+
+        return SendRawAsync(ProtocolMessageIO.EncodeReply(sequence, reply, writerAction, ClientProtocolVersion));
     }
 
     public async ValueTask MaybeSendPlaybackRequestAsync(PlaybackStreamState stream)

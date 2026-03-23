@@ -287,7 +287,10 @@ public static class VolumeExtensions
     public static Volume ReadVolume(this TagStructReader reader)
     {
         reader.ExpectTag(Tag.Volume);
-        uint raw = reader.ReadU32();
+        reader.EnsureBytes(4);
+        uint raw = (uint)(reader.Remaining[0] << 24 | reader.Remaining[1] << 16 |
+                          reader.Remaining[2] << 8 | reader.Remaining[3]);
+        reader._position += 4;
         return Volume.FromUInt32Clamped(raw);
     }
 
@@ -299,7 +302,10 @@ public static class VolumeExtensions
     public static void WriteVolume(this TagStructWriter writer, Volume volume)
     {
         writer.WriteTag(Tag.Volume);
-        writer.WriteU32(volume.AsUInt32);
+        writer.Stream.WriteByte((byte)(volume.AsUInt32 >> 24));
+        writer.Stream.WriteByte((byte)(volume.AsUInt32 >> 16));
+        writer.Stream.WriteByte((byte)(volume.AsUInt32 >> 8));
+        writer.Stream.WriteByte((byte)volume.AsUInt32);
     }
 
     /// <summary>

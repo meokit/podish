@@ -313,12 +313,15 @@ public class ServerInfoTests
     {
         var expected = new ServerInfo
         {
-            ServerName = "PulseAudio on 1.2.3",
-            DefaultSinkIndex = 0,
-            DefaultSourceIndex = 1,
-            Cookie = new byte[] { 1, 2, 3, 4 },
-            DefaultSampleSpec = new SampleSpec(SampleFormat.S16Le, 2, 44100),
-            DefaultChannelMap = ChannelMap.Stereo(),
+            ServerName = "pulseaudio",
+            ServerVersion = "17.0",
+            UserName = "tester",
+            HostName = "hostbox",
+            SampleSpec = new SampleSpec(SampleFormat.S16Le, 2, 44100),
+            DefaultSinkName = "sink0",
+            DefaultSourceName = "source0",
+            Cookie = 0x01020304,
+            ChannelMap = ChannelMap.Stereo(),
         };
 
         var writer = new TagStructWriter(Constants.MaxVersion);
@@ -328,12 +331,14 @@ public class ServerInfoTests
         ServerInfo actual = reader.ReadServerInfo();
 
         Assert.Equal(expected.ServerName, actual.ServerName);
-        Assert.Equal(expected.DefaultSinkIndex, actual.DefaultSinkIndex);
-        Assert.Equal(expected.DefaultSourceIndex, actual.DefaultSourceIndex);
+        Assert.Equal(expected.ServerVersion, actual.ServerVersion);
+        Assert.Equal(expected.UserName, actual.UserName);
+        Assert.Equal(expected.HostName, actual.HostName);
+        Assert.Equal(expected.DefaultSinkName, actual.DefaultSinkName);
+        Assert.Equal(expected.DefaultSourceName, actual.DefaultSourceName);
         Assert.Equal(expected.Cookie, actual.Cookie);
-        Assert.Equal(expected.DefaultSampleSpec, actual.DefaultSampleSpec);
-        Assert.NotNull(actual.DefaultChannelMap);
-        Assert.Equal(expected.DefaultChannelMap.NumChannels, actual.DefaultChannelMap.NumChannels);
+        Assert.Equal(expected.SampleSpec, actual.SampleSpec);
+        Assert.Equal(expected.ChannelMap.NumChannels, actual.ChannelMap.NumChannels);
     }
 }
 
@@ -391,9 +396,14 @@ public class ProtocolMessageTests
         var serverInfo = new ServerInfo
         {
             ServerName = "Test Server",
-            DefaultSinkIndex = 0,
-            DefaultSourceIndex = 0,
-            DefaultSampleSpec = new SampleSpec(SampleFormat.S16Le, 2, 44100),
+            ServerVersion = "1.0",
+            UserName = "tester",
+            HostName = "host",
+            SampleSpec = new SampleSpec(SampleFormat.S16Le, 2, 44100),
+            DefaultSinkName = "sink0",
+            DefaultSourceName = "source0",
+            Cookie = 1234,
+            ChannelMap = ChannelMap.Stereo(),
         };
 
         byte[] encoded = ProtocolMessageIO.EncodeReply(expectedSequence, serverInfo, (writer, info) =>

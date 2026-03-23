@@ -6,52 +6,71 @@ namespace Podish.Pulse.Protocol.Commands;
 public sealed class ServerInfo : IEquatable<ServerInfo>
 {
     /// <summary>
-    /// The server name (e.g., "PulseAudio on 1.2.3").
+    /// Server "package name" (usually "pulseaudio").
     /// </summary>
     public string? ServerName { get; set; }
-    
+
     /// <summary>
-    /// The index of the default sink.
+    /// Version string of the daemon.
     /// </summary>
-    public uint? DefaultSinkIndex { get; set; }
-    
+    public string? ServerVersion { get; set; }
+
     /// <summary>
-    /// The index of the default source.
+    /// User name of the daemon process.
     /// </summary>
-    public uint? DefaultSourceIndex { get; set; }
-    
+    public string? UserName { get; set; }
+
     /// <summary>
-    /// A magic cookie for authentication.
+    /// Host name the daemon is running on.
     /// </summary>
-    public byte[]? Cookie { get; set; }
-    
+    public string? HostName { get; set; }
+
     /// <summary>
     /// The default sample specification.
     /// </summary>
-    public SampleSpec DefaultSampleSpec { get; set; }
-    
+    public SampleSpec SampleSpec { get; set; }
+
     /// <summary>
-    /// The default channel map.
+    /// Name of the current default sink.
     /// </summary>
-    public ChannelMap? DefaultChannelMap { get; set; }
+    public string? DefaultSinkName { get; set; }
+
+    /// <summary>
+    /// Name of the current default source.
+    /// </summary>
+    public string? DefaultSourceName { get; set; }
+
+    /// <summary>
+    /// A random ID to identify the server.
+    /// </summary>
+    public uint Cookie { get; set; }
+
+    /// <summary>
+    /// Channel map for the default sink.
+    /// </summary>
+    public ChannelMap ChannelMap { get; set; }
 
     /// <summary>
     /// Creates a new ServerInfo instance.
     /// </summary>
     public ServerInfo()
     {
-        DefaultSampleSpec = new SampleSpec();
+        SampleSpec = new SampleSpec();
+        ChannelMap = new ChannelMap();
     }
 
     public bool Equals(ServerInfo? other)
     {
         if (other is null) return false;
         return ServerName == other.ServerName &&
-               DefaultSinkIndex == other.DefaultSinkIndex &&
-               DefaultSourceIndex == other.DefaultSourceIndex &&
-               (Cookie == null && other.Cookie == null || Cookie != null && other.Cookie != null && Cookie.SequenceEqual(other.Cookie)) &&
-               DefaultSampleSpec == other.DefaultSampleSpec &&
-               (DefaultChannelMap == null && other.DefaultChannelMap == null || DefaultChannelMap?.Equals(other.DefaultChannelMap) == true);
+               ServerVersion == other.ServerVersion &&
+               UserName == other.UserName &&
+               HostName == other.HostName &&
+               SampleSpec == other.SampleSpec &&
+               DefaultSinkName == other.DefaultSinkName &&
+               DefaultSourceName == other.DefaultSourceName &&
+               Cookie == other.Cookie &&
+               ChannelMap.Equals(other.ChannelMap);
     }
 
     public override bool Equals(object? obj)
@@ -61,7 +80,20 @@ public sealed class ServerInfo : IEquatable<ServerInfo>
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(ServerName, DefaultSinkIndex, DefaultSourceIndex, DefaultSampleSpec);
+        unchecked
+        {
+            int hash = 17;
+            hash = hash * 31 + (ServerName?.GetHashCode() ?? 0);
+            hash = hash * 31 + (ServerVersion?.GetHashCode() ?? 0);
+            hash = hash * 31 + (UserName?.GetHashCode() ?? 0);
+            hash = hash * 31 + (HostName?.GetHashCode() ?? 0);
+            hash = hash * 31 + SampleSpec.GetHashCode();
+            hash = hash * 31 + (DefaultSinkName?.GetHashCode() ?? 0);
+            hash = hash * 31 + (DefaultSourceName?.GetHashCode() ?? 0);
+            hash = hash * 31 + Cookie.GetHashCode();
+            hash = hash * 31 + ChannelMap.GetHashCode();
+            return hash;
+        }
     }
 }
 
@@ -79,26 +111,19 @@ public static class ServerInfoExtensions
     {
         var info = new ServerInfo
         {
-            ServerName = reader.ReadStringNonNull(),
-            DefaultSinkIndex = reader.ReadU32(),
-            DefaultSourceIndex = reader.ReadU32(),
+            ServerName = reader.ReadString(),
+            ServerVersion = reader.ReadString(),
+            UserName = reader.ReadString(),
+            HostName = reader.ReadString(),
+            SampleSpec = reader.ReadSampleSpec(),
+            DefaultSinkName = reader.ReadString(),
+            DefaultSourceName = reader.ReadString(),
+            Cookie = reader.ReadU32(),
         };
-        
-        // Read cookie
-        uint cookieLen = reader.ReadU32();
-        if (cookieLen > 0)
-        {
-            info.Cookie = reader.ReadArbitrary();
-        }
-        
-        info.DefaultSampleSpec = reader.ReadSampleSpec();
-        
-        // Default channel map is optional in older protocol versions
-        if (reader.HasDataLeft() && reader.Remaining[0] == (byte)Tag.ChannelMap)
-        {
-            info.DefaultChannelMap = reader.ReadChannelMap();
-        }
-        
+
+        if (reader.ProtocolVersion >= 15 && reader.HasDataLeft())
+            info.ChannelMap = reader.ReadChannelMap();
+
         return info;
     }
 
@@ -109,25 +134,16 @@ public static class ServerInfoExtensions
     /// <param name="info">The server info.</param>
     public static void WriteServerInfo(this TagStructWriter writer, ServerInfo info)
     {
-        writer.WriteString(info.ServerName ?? "");
-        writer.WriteU32(info.DefaultSinkIndex ?? Constants.InvalidIndex);
-        writer.WriteU32(info.DefaultSourceIndex ?? Constants.InvalidIndex);
-        
-        if (info.Cookie != null && info.Cookie.Length > 0)
-        {
-            writer.WriteU32((uint)info.Cookie.Length);
-            writer.WriteArbitrary(info.Cookie);
-        }
-        else
-        {
-            writer.WriteU32(0);
-        }
-        
-        writer.WriteSampleSpec(info.DefaultSampleSpec);
-        
-        if (info.DefaultChannelMap != null)
-        {
-            writer.WriteChannelMap(info.DefaultChannelMap);
-        }
+        writer.WriteString(info.ServerName);
+        writer.WriteString(info.ServerVersion);
+        writer.WriteString(info.UserName);
+        writer.WriteString(info.HostName);
+        writer.WriteSampleSpec(info.SampleSpec);
+        writer.WriteString(info.DefaultSinkName);
+        writer.WriteString(info.DefaultSourceName);
+        writer.WriteU32(info.Cookie);
+
+        if (writer.ProtocolVersion >= 15)
+            writer.WriteChannelMap(info.ChannelMap);
     }
 }

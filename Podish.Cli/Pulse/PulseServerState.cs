@@ -16,6 +16,7 @@ internal sealed class PulseServerState : IDisposable
         Logger = loggerFactory.CreateLogger<PulseServerState>();
         AudioSink = new Sdl3AudioSink(loggerFactory.CreateLogger<Sdl3AudioSink>());
         DefaultSink = CreateDefaultSink(AudioSink.DefaultSampleSpec);
+        DefaultSource = CreateDefaultSource(DefaultSink);
         ServerInfo = CreateServerInfo(DefaultSink);
     }
 
@@ -23,6 +24,7 @@ internal sealed class PulseServerState : IDisposable
     public ILogger Logger { get; }
     public Sdl3AudioSink AudioSink { get; }
     public SinkInfo DefaultSink { get; }
+    public SourceInfo DefaultSource { get; }
     public ServerInfo ServerInfo { get; }
 
     public bool TryCreatePlaybackStream(CreatePlaybackStreamParams parameters, string? clientName,
@@ -61,6 +63,14 @@ internal sealed class PulseServerState : IDisposable
         }
     }
 
+    public PlaybackStreamState[] GetPlaybackStreamsSnapshot()
+    {
+        lock (_gate)
+        {
+            return _playbackStreams.Values.OrderBy(static stream => stream.StreamIndex).ToArray();
+        }
+    }
+
     public static bool IsSupported(SampleSpec sampleSpec)
     {
         return sampleSpec.Format == SampleFormat.S16Le &&
@@ -77,12 +87,15 @@ internal sealed class PulseServerState : IDisposable
     {
         return new ServerInfo
         {
-            ServerName = "Podish PulseAudio Server",
-            DefaultSinkIndex = sink.Index,
-            DefaultSourceIndex = null,
-            Cookie = Array.Empty<byte>(),
-            DefaultSampleSpec = sink.SampleSpec,
-            DefaultChannelMap = sink.ChannelMap,
+            ServerName = "pulseaudio",
+            ServerVersion = "17.0",
+            UserName = "podish",
+            HostName = Environment.MachineName,
+            SampleSpec = sink.SampleSpec,
+            DefaultSinkName = sink.Name,
+            DefaultSourceName = $"{sink.Name}.monitor",
+            Cookie = 0x504F4449,
+            ChannelMap = sink.ChannelMap ?? new ChannelMap(),
         };
     }
 
@@ -92,6 +105,17 @@ internal sealed class PulseServerState : IDisposable
         props.SetString("device.api", "podish");
         props.SetString("device.description", "Podish SDL Output");
         props.SetString("device.class", "sound");
+        props.SetString("device.string", "podish-sdl");
+
+        var ports = new List<PortInfo>
+        {
+            new()
+            {
+                Name = "analog-output",
+                Description = "Analog Output",
+                Priority = 0,
+            }
+        };
 
         return new SinkInfo
         {
@@ -100,11 +124,13 @@ internal sealed class PulseServerState : IDisposable
             Description = "Podish SDL Output",
             SampleSpec = sampleSpec,
             ChannelMap = sampleSpec.Channels == 1 ? ChannelMap.Mono() : ChannelMap.Stereo(),
-            MonitorSourceIndex = Constants.InvalidIndex,
-            Description2 = "Podish SDL Output",
+            OwnerModuleIndex = null,
+            MonitorSourceIndex = 2,
+            MonitorSourceName = "podish.sdl.default.monitor",
             Flags = 0,
             Props = props,
-            Latency = 0,
+            ActualLatency = 0,
+            ConfiguredLatency = 0,
             Driver = "podish-sdl",
             Format = sampleSpec.Format,
             Volume = ChannelVolume.Norm(sampleSpec.Channels),
@@ -113,9 +139,44 @@ internal sealed class PulseServerState : IDisposable
             State = SinkState.Idle,
             NVolumeSteps = 65536,
             CardIndex = null,
+            Ports = ports,
             ActivePortIndex = 0,
             NumInputs = 0,
             NumOutputs = 1,
+        };
+    }
+
+    private static SourceInfo CreateDefaultSource(SinkInfo sink)
+    {
+        var props = new Props();
+        props.SetString("device.api", "podish");
+        props.SetString("device.description", "Monitor of Podish SDL Output");
+        props.SetString("device.class", "monitor");
+        props.SetString("device.string", "podish-sdl.monitor");
+
+        return new SourceInfo
+        {
+            Index = sink.MonitorSourceIndex,
+            Name = sink.MonitorSourceName ?? $"{sink.Name}.monitor",
+            Description = "Monitor of Podish SDL Output",
+            SampleSpec = sink.SampleSpec,
+            ChannelMap = sink.ChannelMap ?? new ChannelMap(),
+            OwnerModuleIndex = null,
+            MonitorSinkIndex = sink.Index,
+            MonitorSinkName = sink.Name,
+            Flags = 0,
+            Props = props,
+            ActualLatency = 0,
+            ConfiguredLatency = 0,
+            Driver = "podish-sdl",
+            Volume = ChannelVolume.Norm(sink.SampleSpec.Channels),
+            Mute = false,
+            BaseVolume = Volume.Normal,
+            State = SourceState.Idle,
+            NVolumeSteps = 65536,
+            CardIndex = null,
+            Ports = new List<PortInfo>(),
+            ActivePortIndex = 0,
         };
     }
 }

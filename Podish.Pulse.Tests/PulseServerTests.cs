@@ -87,11 +87,13 @@ public class PlaybackCommandTests
             Description = "Podish SDL Output",
             SampleSpec = new SampleSpec(SampleFormat.S16Le, 2, 48000),
             ChannelMap = ChannelMap.Stereo(),
+            OwnerModuleIndex = null,
             MonitorSourceIndex = Constants.InvalidIndex,
-            Description2 = "Podish SDL Output",
+            MonitorSourceName = "podish.sdl.default.monitor",
             Flags = 0,
             Props = new Props(),
-            Latency = 1234,
+            ActualLatency = 1234,
+            ConfiguredLatency = 1234,
             Driver = "podish-sdl",
             Format = SampleFormat.S16Le,
             Volume = ChannelVolume.Norm(2),
@@ -118,8 +120,57 @@ public class PlaybackCommandTests
         Assert.Equal(expected.SampleSpec, actual.SampleSpec);
         Assert.Equal(expected.ChannelMap, actual.ChannelMap);
         Assert.Equal(expected.Driver, actual.Driver);
-        Assert.Equal(expected.Format, actual.Format);
         Assert.Equal(expected.Volume, actual.Volume);
+        Assert.Equal(expected.ActualLatency, actual.ActualLatency);
+        Assert.Equal(expected.ConfiguredLatency, actual.ConfiguredLatency);
+        Assert.Equal(expected.MonitorSourceName, actual.MonitorSourceName);
+        Assert.Equal(expected.Props.GetString("device.class"), actual.Props.GetString("device.class"));
+    }
+
+    [Fact]
+    public void SourceInfoSerde()
+    {
+        var expected = new SourceInfo
+        {
+            Index = 2,
+            Name = "podish.sdl.default.monitor",
+            Description = "Monitor of Podish SDL Output",
+            SampleSpec = new SampleSpec(SampleFormat.S16Le, 2, 48000),
+            ChannelMap = ChannelMap.Stereo(),
+            OwnerModuleIndex = null,
+            MonitorSinkIndex = 1,
+            MonitorSinkName = "podish.sdl.default",
+            Flags = 0,
+            Props = new Props(),
+            ActualLatency = 4321,
+            ConfiguredLatency = 4321,
+            Driver = "podish-sdl",
+            Volume = ChannelVolume.Norm(2),
+            Mute = false,
+            BaseVolume = Volume.Normal,
+            State = SourceState.Idle,
+            NVolumeSteps = 65536,
+            CardIndex = null,
+            ActivePortIndex = 0,
+        };
+        expected.Props.SetString("device.class", "monitor");
+
+        var writer = new TagStructWriter(Constants.MaxVersion);
+        writer.WriteSourceInfo(expected);
+
+        var reader = new TagStructReader(writer.Buffer, Constants.MaxVersion);
+        SourceInfo actual = reader.ReadSourceInfo();
+
+        Assert.Equal(expected.Index, actual.Index);
+        Assert.Equal(expected.Name, actual.Name);
+        Assert.Equal(expected.Description, actual.Description);
+        Assert.Equal(expected.SampleSpec, actual.SampleSpec);
+        Assert.Equal(expected.ChannelMap, actual.ChannelMap);
+        Assert.Equal(expected.Driver, actual.Driver);
+        Assert.Equal(expected.Volume, actual.Volume);
+        Assert.Equal(expected.ActualLatency, actual.ActualLatency);
+        Assert.Equal(expected.ConfiguredLatency, actual.ConfiguredLatency);
+        Assert.Equal(expected.MonitorSinkName, actual.MonitorSinkName);
         Assert.Equal(expected.Props.GetString("device.class"), actual.Props.GetString("device.class"));
     }
 

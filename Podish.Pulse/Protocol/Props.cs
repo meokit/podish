@@ -448,11 +448,10 @@ public static class PropsExtensions
             uint len = reader.ReadU32();
             if (len > Constants.MaxPropSize)
                 throw new InvalidProtocolMessageException($"Proplist value size {len} exceeds hard limit of {Constants.MaxPropSize} bytes");
-            
+
             byte[] value = reader.ReadArbitrary();
             if (len != value.Length)
                 throw new InvalidProtocolMessageException($"Proplist expected value size {len} does not match actual size {value.Length}");
-            
             props.SetBytes(key, value);
         }
         

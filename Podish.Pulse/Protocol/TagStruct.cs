@@ -221,6 +221,15 @@ public sealed class TagStructReader
         return value;
     }
 
+    internal byte[] ReadRawBytes(int length)
+    {
+        EnsureBytes(length);
+        byte[] result = new byte[length];
+        Array.Copy(_buffer, _position, result, 0, length);
+        _position += length;
+        return result;
+    }
+
     /// <summary>
     /// Reads a null-terminated string (which may be a special null string tag).
     /// </summary>
@@ -455,6 +464,11 @@ public sealed class TagStructWriter
         _stream.WriteByte((byte)(value >> 16));
         _stream.WriteByte((byte)(value >> 8));
         _stream.WriteByte((byte)value);
+    }
+
+    internal void WriteRawBytes(ReadOnlySpan<byte> data)
+    {
+        _stream.Write(data);
     }
 
     /// <summary>

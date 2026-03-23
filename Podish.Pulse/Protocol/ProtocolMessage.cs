@@ -162,9 +162,10 @@ public static class ProtocolMessageIO
     /// <param name="reply">The reply data.</param>
     /// <param name="writerAction">An action to write the reply data.</param>
     /// <returns>The encoded byte array.</returns>
-    public static byte[] EncodeReply<T>(uint sequence, T reply, Action<TagStructWriter, T> writerAction)
+    public static byte[] EncodeReply<T>(uint sequence, T reply, Action<TagStructWriter, T> writerAction,
+        ushort protocolVersion = Constants.MaxVersion)
     {
-        var writer = new TagStructWriter(Constants.MaxVersion);
+        var writer = new TagStructWriter(protocolVersion);
         writer.WriteU32((uint)CommandTag.Reply);
         writer.WriteU32(sequence);
         writerAction(writer, reply);
@@ -232,9 +233,9 @@ public static class ProtocolMessageIO
     /// </summary>
     /// <param name="sequence">The sequence number.</param>
     /// <returns>The encoded byte array.</returns>
-    public static byte[] EncodeAck(uint sequence)
+    public static byte[] EncodeAck(uint sequence, ushort protocolVersion = Constants.MaxVersion)
     {
-        var writer = new TagStructWriter(Constants.MaxVersion);
+        var writer = new TagStructWriter(protocolVersion);
         writer.WriteU32((uint)CommandTag.Reply);
         writer.WriteU32(sequence);
         
@@ -261,9 +262,9 @@ public static class ProtocolMessageIO
     /// <param name="sequence">The sequence number being replied to.</param>
     /// <param name="error">The protocol error code.</param>
     /// <returns>The encoded byte array.</returns>
-    public static byte[] EncodeError(uint sequence, PulseError error)
+    public static byte[] EncodeError(uint sequence, PulseError error, ushort protocolVersion = Constants.MaxVersion)
     {
-        var writer = new TagStructWriter(Constants.MaxVersion);
+        var writer = new TagStructWriter(protocolVersion);
         writer.WriteU32((uint)CommandTag.Error);
         writer.WriteU32(sequence);
         writer.WriteU32((uint)error);

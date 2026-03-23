@@ -110,14 +110,19 @@ public sealed class SinkInfo : IEquatable<SinkInfo>
     public ChannelMap? ChannelMap;
 
     /// <summary>
+    /// The owner module index.
+    /// </summary>
+    public uint? OwnerModuleIndex;
+
+    /// <summary>
     /// The monitor source index.
     /// </summary>
     public uint MonitorSourceIndex;
 
     /// <summary>
-    /// The sink description.
+    /// The monitor source name.
     /// </summary>
-    public string Description2;
+    public string? MonitorSourceName;
 
     /// <summary>
     /// The sink flags.
@@ -130,9 +135,14 @@ public sealed class SinkInfo : IEquatable<SinkInfo>
     public Props Props;
 
     /// <summary>
-    /// The latency in microseconds.
+    /// The actual latency in microseconds.
     /// </summary>
-    public ulong Latency;
+    public ulong ActualLatency;
+
+    /// <summary>
+    /// The configured latency in microseconds.
+    /// </summary>
+    public ulong ConfiguredLatency;
 
     /// <summary>
     /// The driver name.
@@ -199,7 +209,6 @@ public sealed class SinkInfo : IEquatable<SinkInfo>
         Name = string.Empty;
         Description = string.Empty;
         SampleSpec = new SampleSpec();
-        Description2 = string.Empty;
         Props = new Props();
         Driver = string.Empty;
         Format = SampleFormat.Invalid;
@@ -218,11 +227,13 @@ public sealed class SinkInfo : IEquatable<SinkInfo>
                Description == other.Description &&
                SampleSpec == other.SampleSpec &&
                ChannelMap == other.ChannelMap &&
+               OwnerModuleIndex == other.OwnerModuleIndex &&
                MonitorSourceIndex == other.MonitorSourceIndex &&
-               Description2 == other.Description2 &&
+               MonitorSourceName == other.MonitorSourceName &&
                Flags == other.Flags &&
                Props == other.Props &&
-               Latency == other.Latency &&
+               ActualLatency == other.ActualLatency &&
+               ConfiguredLatency == other.ConfiguredLatency &&
                Driver == other.Driver &&
                Format == other.Format &&
                Volume == other.Volume &&
@@ -252,11 +263,13 @@ public sealed class SinkInfo : IEquatable<SinkInfo>
             hash = hash * 31 + (Description?.GetHashCode() ?? 0);
             hash = hash * 31 + SampleSpec.GetHashCode();
             hash = hash * 31 + (ChannelMap?.GetHashCode() ?? 0);
+            hash = hash * 31 + OwnerModuleIndex.GetHashCode();
             hash = hash * 31 + MonitorSourceIndex.GetHashCode();
-            hash = hash * 31 + (Description2?.GetHashCode() ?? 0);
+            hash = hash * 31 + (MonitorSourceName?.GetHashCode() ?? 0);
             hash = hash * 31 + Flags.GetHashCode();
             hash = hash * 31 + (Props?.GetHashCode() ?? 0);
-            hash = hash * 31 + Latency.GetHashCode();
+            hash = hash * 31 + ActualLatency.GetHashCode();
+            hash = hash * 31 + ConfiguredLatency.GetHashCode();
             hash = hash * 31 + (Driver?.GetHashCode() ?? 0);
             hash = hash * 31 + Format.GetHashCode();
             hash = hash * 31 + (Volume?.GetHashCode() ?? 0);
@@ -304,14 +317,19 @@ public sealed class SourceInfo : IEquatable<SourceInfo>
     public ChannelMap? ChannelMap;
 
     /// <summary>
+    /// The owner module index.
+    /// </summary>
+    public uint? OwnerModuleIndex;
+
+    /// <summary>
     /// The monitor sink index.
     /// </summary>
     public uint MonitorSinkIndex;
 
     /// <summary>
-    /// The source description.
+    /// The monitor sink name.
     /// </summary>
-    public string Description2;
+    public string? MonitorSinkName;
 
     /// <summary>
     /// The source flags.
@@ -324,19 +342,19 @@ public sealed class SourceInfo : IEquatable<SourceInfo>
     public Props Props;
 
     /// <summary>
-    /// The latency in microseconds.
+    /// The actual latency in microseconds.
     /// </summary>
-    public ulong Latency;
+    public ulong ActualLatency;
+
+    /// <summary>
+    /// The configured latency in microseconds.
+    /// </summary>
+    public ulong ConfiguredLatency;
 
     /// <summary>
     /// The driver name.
     /// </summary>
     public string Driver;
-
-    /// <summary>
-    /// The source format.
-    /// </summary>
-    public SampleFormat Format;
 
     /// <summary>
     /// The channel volume.
@@ -379,24 +397,13 @@ public sealed class SourceInfo : IEquatable<SourceInfo>
     public uint ActivePortIndex;
 
     /// <summary>
-    /// The number of inputs.
-    /// </summary>
-    public uint NumInputs;
-
-    /// <summary>
-    /// The number of outputs.
-    /// </summary>
-    public uint NumOutputs;
-
     public SourceInfo()
     {
         Name = string.Empty;
         Description = string.Empty;
         SampleSpec = new SampleSpec();
-        Description2 = string.Empty;
         Props = new Props();
         Driver = string.Empty;
-        Format = SampleFormat.Invalid;
         Volume = new ChannelVolume();
         BaseVolume = Podish.Pulse.Protocol.Volume.Normal;
         State = default;
@@ -412,13 +419,14 @@ public sealed class SourceInfo : IEquatable<SourceInfo>
                Description == other.Description &&
                SampleSpec == other.SampleSpec &&
                ChannelMap == other.ChannelMap &&
+               OwnerModuleIndex == other.OwnerModuleIndex &&
                MonitorSinkIndex == other.MonitorSinkIndex &&
-               Description2 == other.Description2 &&
+               MonitorSinkName == other.MonitorSinkName &&
                Flags == other.Flags &&
                Props == other.Props &&
-               Latency == other.Latency &&
+               ActualLatency == other.ActualLatency &&
+               ConfiguredLatency == other.ConfiguredLatency &&
                Driver == other.Driver &&
-               Format == other.Format &&
                Volume == other.Volume &&
                Mute == other.Mute &&
                BaseVolume == other.BaseVolume &&
@@ -426,8 +434,6 @@ public sealed class SourceInfo : IEquatable<SourceInfo>
                NVolumeSteps == other.NVolumeSteps &&
                CardIndex == other.CardIndex &&
                ActivePortIndex == other.ActivePortIndex &&
-               NumInputs == other.NumInputs &&
-               NumOutputs == other.NumOutputs &&
                Ports.SequenceEqual(other.Ports);
     }
 
@@ -446,13 +452,14 @@ public sealed class SourceInfo : IEquatable<SourceInfo>
             hash = hash * 31 + (Description?.GetHashCode() ?? 0);
             hash = hash * 31 + SampleSpec.GetHashCode();
             hash = hash * 31 + (ChannelMap?.GetHashCode() ?? 0);
+            hash = hash * 31 + OwnerModuleIndex.GetHashCode();
             hash = hash * 31 + MonitorSinkIndex.GetHashCode();
-            hash = hash * 31 + (Description2?.GetHashCode() ?? 0);
+            hash = hash * 31 + (MonitorSinkName?.GetHashCode() ?? 0);
             hash = hash * 31 + Flags.GetHashCode();
             hash = hash * 31 + (Props?.GetHashCode() ?? 0);
-            hash = hash * 31 + Latency.GetHashCode();
+            hash = hash * 31 + ActualLatency.GetHashCode();
+            hash = hash * 31 + ConfiguredLatency.GetHashCode();
             hash = hash * 31 + (Driver?.GetHashCode() ?? 0);
-            hash = hash * 31 + Format.GetHashCode();
             hash = hash * 31 + (Volume?.GetHashCode() ?? 0);
             hash = hash * 31 + Mute.GetHashCode();
             hash = hash * 31 + BaseVolume.GetHashCode();
@@ -460,8 +467,6 @@ public sealed class SourceInfo : IEquatable<SourceInfo>
             hash = hash * 31 + NVolumeSteps.GetHashCode();
             hash = hash * 31 + CardIndex.GetHashCode();
             hash = hash * 31 + ActivePortIndex.GetHashCode();
-            hash = hash * 31 + NumInputs.GetHashCode();
-            hash = hash * 31 + NumOutputs.GetHashCode();
             return hash;
         }
     }
@@ -481,34 +486,42 @@ public static class SinkSourceInfoExtensions
         {
             Index = reader.ReadU32(),
             Name = reader.ReadStringNonNull(),
-            Description = reader.ReadStringNonNull(),
+            Description = reader.ReadString() ?? string.Empty,
             SampleSpec = reader.ReadSampleSpec(),
             ChannelMap = reader.ReadChannelMap(),
-            MonitorSourceIndex = reader.ReadU32(),
-            Description2 = reader.ReadStringNonNull(),
-            Flags = reader.ReadU32(),
-            Props = reader.ReadProps(),
-            Latency = reader.ReadU64(),
-            Driver = reader.ReadStringNonNull(),
-            Format = (SampleFormat)reader.ReadU32(),
+            OwnerModuleIndex = reader.ReadIndex(),
             Volume = reader.ReadChannelVolume(),
             Mute = reader.ReadBool(),
-            BaseVolume = reader.ReadVolume(),
-            State = (SinkState)reader.ReadU32(),
-            NVolumeSteps = reader.ReadU32(),
-            CardIndex = reader.ReadIndex(),
+            MonitorSourceIndex = reader.ReadIndex() ?? Constants.InvalidIndex,
+            MonitorSourceName = reader.ReadString(),
+            ActualLatency = reader.ReadUsec(),
+            Driver = reader.ReadString() ?? string.Empty,
+            Flags = reader.ReadU32(),
+            Props = reader.ReadProps(),
+            ConfiguredLatency = reader.ReadUsec(),
         };
 
-        // Read ports
-        uint numPorts = reader.ReadU32();
-        for (uint i = 0; i < numPorts; i++)
+        if (reader.ProtocolVersion >= 15)
         {
-            info.Ports.Add(reader.ReadPortInfo());
+            info.BaseVolume = reader.ReadVolume();
+            info.State = (SinkState)reader.ReadU32();
+            info.NVolumeSteps = reader.ReadU32();
+            info.CardIndex = reader.ReadIndex();
         }
 
-        info.ActivePortIndex = reader.ReadU32();
-        info.NumInputs = reader.ReadU32();
-        info.NumOutputs = reader.ReadU32();
+        if (reader.ProtocolVersion >= 16)
+        {
+            uint numPorts = reader.ReadU32();
+            for (uint i = 0; i < numPorts; i++)
+                info.Ports.Add(reader.ReadPortInfo());
+
+            string? activePortName = reader.ReadString();
+            if (!string.IsNullOrEmpty(activePortName))
+            {
+                int activePortIndex = info.Ports.FindIndex(port => port.Name == activePortName);
+                info.ActivePortIndex = activePortIndex >= 0 ? (uint)activePortIndex : 0;
+            }
+        }
 
         return info;
     }
@@ -522,33 +535,37 @@ public static class SinkSourceInfoExtensions
         writer.WriteString(info.Name);
         writer.WriteString(info.Description);
         writer.WriteSampleSpec(info.SampleSpec);
-        if (info.ChannelMap != null)
-        {
-            writer.WriteChannelMap(info.ChannelMap);
-        }
-        writer.WriteU32(info.MonitorSourceIndex);
-        writer.WriteString(info.Description2);
-        writer.WriteU32(info.Flags);
-        writer.WriteProps(info.Props);
-        writer.WriteU64(info.Latency);
-        writer.WriteString(info.Driver);
-        writer.WriteU32((uint)info.Format);
+        writer.WriteChannelMap(info.ChannelMap ?? new ChannelMap());
+        writer.WriteIndex(info.OwnerModuleIndex);
         writer.WriteChannelVolume(info.Volume);
         writer.WriteBool(info.Mute);
-        writer.WriteVolume(info.BaseVolume);
-        writer.WriteU32((uint)info.State);
-        writer.WriteU32(info.NVolumeSteps);
-        writer.WriteIndex(info.CardIndex);
+        writer.WriteIndex(info.MonitorSourceIndex == Constants.InvalidIndex ? null : info.MonitorSourceIndex);
+        writer.WriteString(info.MonitorSourceName);
+        writer.WriteUsec(info.ActualLatency);
+        writer.WriteString(info.Driver);
+        writer.WriteU32(info.Flags);
+        writer.WriteProps(info.Props);
+        writer.WriteUsec(info.ConfiguredLatency);
 
-        writer.WriteU32((uint)info.Ports.Count);
-        foreach (var port in info.Ports)
+        if (writer.ProtocolVersion >= 15)
         {
-            writer.WritePortInfo(port);
+            writer.WriteVolume(info.BaseVolume);
+            writer.WriteU32((uint)info.State);
+            writer.WriteU32(info.NVolumeSteps);
+            writer.WriteIndex(info.CardIndex);
         }
 
-        writer.WriteU32(info.ActivePortIndex);
-        writer.WriteU32(info.NumInputs);
-        writer.WriteU32(info.NumOutputs);
+        if (writer.ProtocolVersion >= 16)
+        {
+            writer.WriteU32((uint)info.Ports.Count);
+            foreach (var port in info.Ports)
+                writer.WritePortInfo(port);
+
+            string? activePortName = info.ActivePortIndex < info.Ports.Count
+                ? info.Ports[(int)info.ActivePortIndex].Name
+                : null;
+            writer.WriteString(activePortName);
+        }
     }
 
     /// <summary>
@@ -559,35 +576,45 @@ public static class SinkSourceInfoExtensions
         var info = new SourceInfo
         {
             Index = reader.ReadU32(),
-            Name = reader.ReadStringNonNull(),
-            Description = reader.ReadStringNonNull(),
+            Name = reader.ReadString() ?? string.Empty,
+            Description = reader.ReadString() ?? string.Empty,
             SampleSpec = reader.ReadSampleSpec(),
             ChannelMap = reader.ReadChannelMap(),
-            MonitorSinkIndex = reader.ReadU32(),
-            Description2 = reader.ReadStringNonNull(),
-            Flags = reader.ReadU32(),
-            Props = reader.ReadProps(),
-            Latency = reader.ReadU64(),
-            Driver = reader.ReadStringNonNull(),
-            Format = (SampleFormat)reader.ReadU32(),
+            OwnerModuleIndex = reader.ReadIndex(),
             Volume = reader.ReadChannelVolume(),
             Mute = reader.ReadBool(),
-            BaseVolume = reader.ReadVolume(),
-            State = (SourceState)reader.ReadU32(),
-            NVolumeSteps = reader.ReadU32(),
-            CardIndex = reader.ReadIndex(),
+            MonitorSinkIndex = reader.ReadIndex() ?? Constants.InvalidIndex,
+            MonitorSinkName = reader.ReadString(),
+            ActualLatency = reader.ReadUsec(),
+            Driver = reader.ReadString() ?? string.Empty,
+            Flags = reader.ReadU32(),
+            Props = reader.ReadProps(),
         };
 
-        // Read ports
-        uint numPorts = reader.ReadU32();
-        for (uint i = 0; i < numPorts; i++)
+        if (reader.ProtocolVersion >= 13)
+            info.ConfiguredLatency = reader.ReadUsec();
+
+        if (reader.ProtocolVersion >= 15)
         {
-            info.Ports.Add(reader.ReadPortInfo());
+            info.BaseVolume = reader.ReadVolume();
+            info.State = (SourceState)reader.ReadU32();
+            info.NVolumeSteps = reader.ReadU32();
+            info.CardIndex = reader.ReadIndex();
         }
 
-        info.ActivePortIndex = reader.ReadU32();
-        info.NumInputs = reader.ReadU32();
-        info.NumOutputs = reader.ReadU32();
+        if (reader.ProtocolVersion >= 16)
+        {
+            uint numPorts = reader.ReadU32();
+            for (uint i = 0; i < numPorts; i++)
+                info.Ports.Add(reader.ReadPortInfo());
+
+            string? activePortName = reader.ReadString();
+            if (!string.IsNullOrEmpty(activePortName))
+            {
+                int activePortIndex = info.Ports.FindIndex(port => port.Name == activePortName);
+                info.ActivePortIndex = activePortIndex >= 0 ? (uint)activePortIndex : 0;
+            }
+        }
 
         return info;
     }
@@ -601,33 +628,39 @@ public static class SinkSourceInfoExtensions
         writer.WriteString(info.Name);
         writer.WriteString(info.Description);
         writer.WriteSampleSpec(info.SampleSpec);
-        if (info.ChannelMap != null)
-        {
-            writer.WriteChannelMap(info.ChannelMap);
-        }
-        writer.WriteU32(info.MonitorSinkIndex);
-        writer.WriteString(info.Description2);
-        writer.WriteU32(info.Flags);
-        writer.WriteProps(info.Props);
-        writer.WriteU64(info.Latency);
-        writer.WriteString(info.Driver);
-        writer.WriteU32((uint)info.Format);
+        writer.WriteChannelMap(info.ChannelMap ?? new ChannelMap());
+        writer.WriteIndex(info.OwnerModuleIndex);
         writer.WriteChannelVolume(info.Volume);
         writer.WriteBool(info.Mute);
-        writer.WriteVolume(info.BaseVolume);
-        writer.WriteU32((uint)info.State);
-        writer.WriteU32(info.NVolumeSteps);
-        writer.WriteIndex(info.CardIndex);
+        writer.WriteIndex(info.MonitorSinkIndex == Constants.InvalidIndex ? null : info.MonitorSinkIndex);
+        writer.WriteString(info.MonitorSinkName);
+        writer.WriteUsec(info.ActualLatency);
+        writer.WriteString(info.Driver);
+        writer.WriteU32(info.Flags);
+        writer.WriteProps(info.Props);
 
-        writer.WriteU32((uint)info.Ports.Count);
-        foreach (var port in info.Ports)
+        if (writer.ProtocolVersion >= 13)
+            writer.WriteUsec(info.ConfiguredLatency);
+
+        if (writer.ProtocolVersion >= 15)
         {
-            writer.WritePortInfo(port);
+            writer.WriteVolume(info.BaseVolume);
+            writer.WriteU32((uint)info.State);
+            writer.WriteU32(info.NVolumeSteps);
+            writer.WriteIndex(info.CardIndex);
         }
 
-        writer.WriteU32(info.ActivePortIndex);
-        writer.WriteU32(info.NumInputs);
-        writer.WriteU32(info.NumOutputs);
+        if (writer.ProtocolVersion >= 16)
+        {
+            writer.WriteU32((uint)info.Ports.Count);
+            foreach (var port in info.Ports)
+                writer.WritePortInfo(port);
+
+            string? activePortName = info.ActivePortIndex < info.Ports.Count
+                ? info.Ports[(int)info.ActivePortIndex].Name
+                : null;
+            writer.WriteString(activePortName);
+        }
     }
 
     /// <summary>
