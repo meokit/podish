@@ -151,6 +151,51 @@ public sealed class Props : IEnumerable<KeyValuePair<string, byte[]>>
         _properties.Clear();
     }
 
+    public Props Clone()
+    {
+        var clone = new Props();
+        foreach (var kvp in _properties)
+            clone._properties[kvp.Key] = kvp.Value.ToArray();
+        return clone;
+    }
+
+    public void Update(PropsUpdateMode mode, Props other)
+    {
+        switch (mode)
+        {
+            case PropsUpdateMode.Set:
+                _properties.Clear();
+                foreach (var kvp in other._properties)
+                    _properties[kvp.Key] = kvp.Value.ToArray();
+                break;
+            case PropsUpdateMode.Merge:
+                foreach (var kvp in other._properties)
+                {
+                    if (!_properties.ContainsKey(kvp.Key))
+                        _properties[kvp.Key] = kvp.Value.ToArray();
+                }
+                break;
+            case PropsUpdateMode.Replace:
+                foreach (var kvp in other._properties)
+                    _properties[kvp.Key] = kvp.Value.ToArray();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mode), mode, null);
+        }
+    }
+
+    public int RemoveKeys(IEnumerable<string> keys)
+    {
+        int removed = 0;
+        foreach (string key in keys)
+        {
+            if (_properties.Remove(key))
+                removed++;
+        }
+
+        return removed;
+    }
+
     public IEnumerator<KeyValuePair<string, byte[]>> GetEnumerator()
     {
         return _properties.GetEnumerator();
@@ -492,7 +537,7 @@ public enum PropsUpdateMode : uint
     /// </summary>
     Merge = 1,
     /// <summary>
-    /// Remove the specified properties from the list.
+    /// Replace existing matching properties with the new values.
     /// </summary>
-    Remove = 2,
+    Replace = 2,
 }

@@ -58,6 +58,61 @@ internal sealed class PulseCommandDispatcher
                 case CommandTag.GetSinkInputInfoList:
                     await HandleSinkInputInfoAsync(session, message);
                     return;
+                case CommandTag.GetSourceOutputInfo:
+                case CommandTag.GetSourceOutputInfoList:
+                    await HandleSourceOutputInfoAsync(session, message);
+                    return;
+                case CommandTag.Subscribe:
+                    await HandleSubscribeAsync(session, message);
+                    return;
+                case CommandTag.LookupSink:
+                    await HandleLookupSinkAsync(session, message);
+                    return;
+                case CommandTag.LookupSource:
+                    await HandleLookupSourceAsync(session, message);
+                    return;
+                case CommandTag.SetDefaultSink:
+                    await HandleSetDefaultSinkAsync(session, message);
+                    return;
+                case CommandTag.SetDefaultSource:
+                    await HandleSetDefaultSourceAsync(session, message);
+                    return;
+                case CommandTag.SetSinkVolume:
+                    await HandleSetSinkVolumeAsync(session, message);
+                    return;
+                case CommandTag.SetSourceVolume:
+                    await HandleSetSourceVolumeAsync(session, message);
+                    return;
+                case CommandTag.SetSinkMute:
+                    await HandleSetSinkMuteAsync(session, message);
+                    return;
+                case CommandTag.SetSourceMute:
+                    await HandleSetSourceMuteAsync(session, message);
+                    return;
+                case CommandTag.SetSinkInputVolume:
+                    await HandleSetSinkInputVolumeAsync(session, message);
+                    return;
+                case CommandTag.SetSinkInputMute:
+                    await HandleSetSinkInputMuteAsync(session, message);
+                    return;
+                case CommandTag.SetSourceOutputVolume:
+                    await HandleSetSourceOutputVolumeAsync(session, message);
+                    return;
+                case CommandTag.SetSourceOutputMute:
+                    await HandleSetSourceOutputMuteAsync(session, message);
+                    return;
+                case CommandTag.UpdateClientProplist:
+                    await HandleUpdateClientProplistAsync(session, message);
+                    return;
+                case CommandTag.UpdatePlaybackStreamProplist:
+                    await HandleUpdatePlaybackStreamProplistAsync(session, message);
+                    return;
+                case CommandTag.RemoveClientProplist:
+                    await HandleRemoveClientProplistAsync(session, message);
+                    return;
+                case CommandTag.RemovePlaybackStreamProplist:
+                    await HandleRemovePlaybackStreamProplistAsync(session, message);
+                    return;
                 case CommandTag.Stat:
                     var stat = session.CreateStatReply();
                     await session.SendReplyAsync(message.Sequence, stat,
@@ -366,6 +421,324 @@ internal sealed class PulseCommandDispatcher
             $"sink-input-info-list count={streams.Length}");
     }
 
+    private async ValueTask HandleSourceOutputInfoAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        if (message.CommandTag == CommandTag.GetSourceOutputInfo)
+        {
+            uint? sourceOutputIndex = message.ReadPayload().ReadIndex();
+            _logger.LogDebug("{Prefix} seq={Sequence} get-source-output-info index={SourceOutputIndex}",
+                PulseServerLogging.Control, message.Sequence, sourceOutputIndex);
+            await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
+            return;
+        }
+
+        _logger.LogDebug("{Prefix} seq={Sequence} get-source-output-info-list count=0",
+            PulseServerLogging.Control, message.Sequence);
+        await session.SendAckAsync(message.Sequence, "source-output-info-list empty");
+    }
+
+    private async ValueTask HandleSubscribeAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        uint mask = message.ReadPayload().ReadU32();
+        _logger.LogDebug("{Prefix} seq={Sequence} subscribe mask=0x{Mask:x8}",
+            PulseServerLogging.Control, message.Sequence, mask);
+        await session.SendAckAsync(message.Sequence, $"subscribe mask=0x{mask:x8}");
+    }
+
+    private async ValueTask HandleLookupSinkAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        string? name = message.ReadPayload().ReadString();
+        _logger.LogDebug("{Prefix} seq={Sequence} lookup-sink name={Name}",
+            PulseServerLogging.Control, message.Sequence, name);
+
+        if (!_state.TryLookupSink(name, out uint index))
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
+            return;
+        }
+
+        await session.SendReplyAsync(message.Sequence, index,
+            static (writer, value) => writer.WriteU32(value),
+            $"lookup-sink index={index} name={name}");
+    }
+
+    private async ValueTask HandleLookupSourceAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        string? name = message.ReadPayload().ReadString();
+        _logger.LogDebug("{Prefix} seq={Sequence} lookup-source name={Name}",
+            PulseServerLogging.Control, message.Sequence, name);
+
+        if (!_state.TryLookupSource(name, out uint index))
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
+            return;
+        }
+
+        await session.SendReplyAsync(message.Sequence, index,
+            static (writer, value) => writer.WriteU32(value),
+            $"lookup-source index={index} name={name}");
+    }
+
+    private async ValueTask HandleSetDefaultSinkAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        string? name = message.ReadPayload().ReadString();
+        _logger.LogDebug("{Prefix} seq={Sequence} set-default-sink name={Name}",
+            PulseServerLogging.Control, message.Sequence, name);
+
+        if (!_state.TrySetDefaultSink(name))
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
+            return;
+        }
+
+        await session.SendAckAsync(message.Sequence, $"set-default-sink name={name}");
+    }
+
+    private async ValueTask HandleSetDefaultSourceAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        string? name = message.ReadPayload().ReadString();
+        _logger.LogDebug("{Prefix} seq={Sequence} set-default-source name={Name}",
+            PulseServerLogging.Control, message.Sequence, name);
+
+        if (!_state.TrySetDefaultSource(name))
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
+            return;
+        }
+
+        await session.SendAckAsync(message.Sequence, $"set-default-source name={name}");
+    }
+
+    private async ValueTask HandleSetSinkVolumeAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        var reader = message.ReadPayload();
+        uint? index = reader.ReadIndex();
+        string? name = reader.ReadString();
+        ChannelVolume volume = reader.ReadChannelVolume();
+        _logger.LogDebug("{Prefix} seq={Sequence} set-sink-volume index={Index} name={Name} channels={Channels}",
+            PulseServerLogging.Control, message.Sequence, index, name, volume.Channels);
+
+        if (!_state.TrySetSinkVolume(index, name, volume))
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
+            return;
+        }
+
+        await session.SendAckAsync(message.Sequence,
+            $"set-sink-volume index={index} name={name} channels={volume.Channels}");
+    }
+
+    private async ValueTask HandleSetSourceVolumeAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        var reader = message.ReadPayload();
+        uint? index = reader.ReadIndex();
+        string? name = reader.ReadString();
+        ChannelVolume volume = reader.ReadChannelVolume();
+        _logger.LogDebug("{Prefix} seq={Sequence} set-source-volume index={Index} name={Name} channels={Channels}",
+            PulseServerLogging.Control, message.Sequence, index, name, volume.Channels);
+
+        if (!_state.TrySetSourceVolume(index, name, volume))
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
+            return;
+        }
+
+        await session.SendAckAsync(message.Sequence,
+            $"set-source-volume index={index} name={name} channels={volume.Channels}");
+    }
+
+    private async ValueTask HandleSetSinkMuteAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        var reader = message.ReadPayload();
+        uint? index = reader.ReadIndex();
+        string? name = reader.ReadString();
+        bool mute = reader.ReadBool();
+        _logger.LogDebug("{Prefix} seq={Sequence} set-sink-mute index={Index} name={Name} mute={Mute}",
+            PulseServerLogging.Control, message.Sequence, index, name, mute);
+
+        if (!_state.TrySetSinkMute(index, name, mute))
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
+            return;
+        }
+
+        await session.SendAckAsync(message.Sequence,
+            $"set-sink-mute index={index} name={name} mute={mute}");
+    }
+
+    private async ValueTask HandleSetSourceMuteAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        var reader = message.ReadPayload();
+        uint? index = reader.ReadIndex();
+        string? name = reader.ReadString();
+        bool mute = reader.ReadBool();
+        _logger.LogDebug("{Prefix} seq={Sequence} set-source-mute index={Index} name={Name} mute={Mute}",
+            PulseServerLogging.Control, message.Sequence, index, name, mute);
+
+        if (!_state.TrySetSourceMute(index, name, mute))
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
+            return;
+        }
+
+        await session.SendAckAsync(message.Sequence,
+            $"set-source-mute index={index} name={name} mute={mute}");
+    }
+
+    private async ValueTask HandleSetSinkInputVolumeAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        var reader = message.ReadPayload();
+        uint? sinkInputIndex = reader.ReadIndex();
+        ChannelVolume volume = reader.ReadChannelVolume();
+        _logger.LogDebug("{Prefix} seq={Sequence} set-sink-input-volume index={Index} channels={Channels}",
+            PulseServerLogging.Control, message.Sequence, sinkInputIndex, volume.Channels);
+
+        if (sinkInputIndex == null)
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.Invalid);
+            return;
+        }
+
+        PlaybackStreamState? stream = _state.GetPlaybackStreamByStreamIndex(sinkInputIndex.Value);
+        if (stream == null)
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
+            return;
+        }
+
+        try
+        {
+            stream.SetVolume(volume);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.Invalid);
+            return;
+        }
+
+        await session.SendAckAsync(message.Sequence,
+            $"set-sink-input-volume index={sinkInputIndex.Value} channels={volume.Channels}");
+    }
+
+    private async ValueTask HandleSetSinkInputMuteAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        var reader = message.ReadPayload();
+        uint? sinkInputIndex = reader.ReadIndex();
+        bool mute = reader.ReadBool();
+        _logger.LogDebug("{Prefix} seq={Sequence} set-sink-input-mute index={Index} mute={Mute}",
+            PulseServerLogging.Control, message.Sequence, sinkInputIndex, mute);
+
+        if (sinkInputIndex == null)
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.Invalid);
+            return;
+        }
+
+        PlaybackStreamState? stream = _state.GetPlaybackStreamByStreamIndex(sinkInputIndex.Value);
+        if (stream == null)
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
+            return;
+        }
+
+        stream.SetMute(mute);
+        await session.SendAckAsync(message.Sequence,
+            $"set-sink-input-mute index={sinkInputIndex.Value} mute={mute}");
+    }
+
+    private async ValueTask HandleSetSourceOutputVolumeAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        var reader = message.ReadPayload();
+        uint? sourceOutputIndex = reader.ReadIndex();
+        ChannelVolume volume = reader.ReadChannelVolume();
+        _logger.LogDebug("{Prefix} seq={Sequence} set-source-output-volume index={Index} channels={Channels}",
+            PulseServerLogging.Control, message.Sequence, sourceOutputIndex, volume.Channels);
+        await session.SendErrorAsync(message.Sequence,
+            sourceOutputIndex == null ? PulseError.Invalid : PulseError.NoEntity);
+    }
+
+    private async ValueTask HandleSetSourceOutputMuteAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        var reader = message.ReadPayload();
+        uint? sourceOutputIndex = reader.ReadIndex();
+        bool mute = reader.ReadBool();
+        _logger.LogDebug("{Prefix} seq={Sequence} set-source-output-mute index={Index} mute={Mute}",
+            PulseServerLogging.Control, message.Sequence, sourceOutputIndex, mute);
+        await session.SendErrorAsync(message.Sequence,
+            sourceOutputIndex == null ? PulseError.Invalid : PulseError.NoEntity);
+    }
+
+    private async ValueTask HandleUpdateClientProplistAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        var reader = message.ReadPayload();
+        PropsUpdateMode mode = ReadPropsUpdateMode(reader);
+        Props props = reader.ReadProps();
+
+        session.ClientProperties.Update(mode, props);
+        session.ClientName = session.ClientProperties.GetString("application.name")
+                             ?? session.ClientProperties.GetString("application.process.binary")
+                             ?? session.ClientName;
+
+        await session.SendAckAsync(message.Sequence,
+            $"update-client-proplist mode={mode} count={props.Count}");
+    }
+
+    private async ValueTask HandleUpdatePlaybackStreamProplistAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        var reader = message.ReadPayload();
+        uint? channelIndex = reader.ReadIndex();
+        PropsUpdateMode mode = ReadPropsUpdateMode(reader);
+        Props props = reader.ReadProps();
+
+        if (channelIndex == null)
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.Invalid);
+            return;
+        }
+
+        PlaybackStreamState? stream = _state.GetPlaybackStream(channelIndex.Value);
+        if (stream == null)
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
+            return;
+        }
+
+        stream.UpdateProps(mode, props);
+        await session.SendAckAsync(message.Sequence,
+            $"update-playback-stream-proplist channel={channelIndex.Value} mode={mode} count={props.Count}");
+    }
+
+    private async ValueTask HandleRemoveClientProplistAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        string[] keys = ReadProplistKeys(message.ReadPayload());
+        int removed = session.ClientProperties.RemoveKeys(keys);
+        await session.SendAckAsync(message.Sequence,
+            $"remove-client-proplist removed={removed} requested={keys.Length}");
+    }
+
+    private async ValueTask HandleRemovePlaybackStreamProplistAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        var reader = message.ReadPayload();
+        uint? channelIndex = reader.ReadIndex();
+        if (channelIndex == null)
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.Invalid);
+            return;
+        }
+
+        PlaybackStreamState? stream = _state.GetPlaybackStream(channelIndex.Value);
+        if (stream == null)
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.NoEntity);
+            return;
+        }
+
+        string[] keys = ReadProplistKeys(reader);
+        int removed = stream.RemoveProps(keys);
+        await session.SendAckAsync(message.Sequence,
+            $"remove-playback-stream-proplist channel={channelIndex.Value} removed={removed} requested={keys.Length}");
+    }
+
     private async ValueTask<PlaybackStreamState?> ResolveStreamByIndexAsync(PulseServerSession session,
         ProtocolMessage message)
     {
@@ -499,11 +872,37 @@ internal sealed class PulseCommandDispatcher
             SinkLatencyUsec = 0,
             ResampleMethod = "copy",
             Driver = "podish-sdl",
-            Mute = false,
+            Mute = stream.Mute,
             Props = stream.Props,
             Corked = stream.Corked,
             HasVolume = true,
             VolumeWritable = true,
         };
+    }
+
+    private static PropsUpdateMode ReadPropsUpdateMode(TagStructReader reader)
+    {
+        uint raw = reader.ReadU32();
+        return raw switch
+        {
+            0 => PropsUpdateMode.Set,
+            1 => PropsUpdateMode.Merge,
+            2 => PropsUpdateMode.Replace,
+            _ => throw new InvalidProtocolMessageException($"Invalid props update mode {raw}"),
+        };
+    }
+
+    private static string[] ReadProplistKeys(TagStructReader reader)
+    {
+        var keys = new List<string>();
+        while (true)
+        {
+            string? key = reader.ReadString();
+            if (key == null)
+                break;
+            keys.Add(key);
+        }
+
+        return keys.ToArray();
     }
 }

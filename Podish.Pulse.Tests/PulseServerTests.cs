@@ -10,6 +10,36 @@ namespace Podish.Pulse.Tests;
 public class PlaybackCommandTests
 {
     [Fact]
+    public void PropsUpdateModesBehaveLikePulseAudio()
+    {
+        var props = new Props();
+        props.SetString("a", "one");
+
+        var merge = new Props();
+        merge.SetString("a", "override");
+        merge.SetString("b", "two");
+        props.Update(PropsUpdateMode.Merge, merge);
+        Assert.Equal("one", props.GetString("a"));
+        Assert.Equal("two", props.GetString("b"));
+
+        var replace = new Props();
+        replace.SetString("a", "override");
+        props.Update(PropsUpdateMode.Replace, replace);
+        Assert.Equal("override", props.GetString("a"));
+        Assert.Equal("two", props.GetString("b"));
+
+        var set = new Props();
+        set.SetString("c", "three");
+        props.Update(PropsUpdateMode.Set, set);
+        Assert.Null(props.GetString("a"));
+        Assert.Equal("three", props.GetString("c"));
+
+        int removed = props.RemoveKeys(new[] { "c", "missing" });
+        Assert.Equal(1, removed);
+        Assert.Null(props.GetString("c"));
+    }
+
+    [Fact]
     public void CreatePlaybackStreamReplyHexSnapshot()
     {
         byte[] encoded = ProtocolMessageIO.EncodeReply(2, new CreatePlaybackStreamResponse
@@ -254,6 +284,32 @@ public class PlaybackStreamStateTests
         Assert.Equal(0, stream.PendingRequestedBytes);
     }
 
+    [Fact]
+    public void SetVolumeExpandsMonoToStereoAndUpdatesState()
+    {
+        var stream = CreateStream();
+        var mono = new ChannelVolume(1);
+        mono[0] = Volume.FromLinear(0.5f);
+
+        stream.SetVolume(mono);
+
+        Assert.Equal(2, stream.Volume.Channels);
+        Assert.Equal(mono[0], stream.Volume[0]);
+        Assert.Equal(mono[0], stream.Volume[1]);
+    }
+
+    [Fact]
+    public void SetMuteUpdatesStreamState()
+    {
+        var stream = CreateStream();
+
+        stream.SetMute(true);
+        Assert.True(stream.Mute);
+
+        stream.SetMute(false);
+        Assert.False(stream.Mute);
+    }
+
     private static PlaybackStreamState CreateStream()
     {
         return new PlaybackStreamState(1, CreateParameters(), "paplay");
@@ -404,5 +460,51 @@ public class PulseServerStateTests
         Assert.NotNull(stream2);
         Assert.Null(error2);
         Assert.NotEqual(stream1!.ChannelIndex, stream2!.ChannelIndex);
+    }
+
+    [Fact]
+    public void CanSetDefaultSinkVolumeAndMute()
+    {
+        using var state = new PulseServerState(NullLoggerFactory.Instance);
+        var mono = new ChannelVolume(1);
+        mono[0] = Volume.FromLinear(0.5f);
+
+        bool setVolume = state.TrySetSinkVolume(Constants.InvalidIndex, "podish.sdl.default", mono);
+        bool setMute = state.TrySetSinkMute(Constants.InvalidIndex, "podish.sdl.default", true);
+
+        Assert.True(setVolume);
+        Assert.True(setMute);
+        Assert.Equal(2, state.DefaultSink.Volume.Channels);
+        Assert.Equal(mono[0], state.DefaultSink.Volume[0]);
+        Assert.Equal(mono[0], state.DefaultSink.Volume[1]);
+        Assert.True(state.DefaultSink.Mute);
+    }
+
+    [Fact]
+    public void CanSetDefaultSourceVolumeAndMuteByIndex()
+    {
+        using var state = new PulseServerState(NullLoggerFactory.Instance);
+        var stereo = new ChannelVolume(2);
+        stereo[0] = Volume.FromLinear(0.25f);
+        stereo[1] = Volume.FromLinear(0.75f);
+
+        bool setVolume = state.TrySetSourceVolume(state.DefaultSource.Index, null, stereo);
+        bool setMute = state.TrySetSourceMute(state.DefaultSource.Index, null, true);
+
+        Assert.True(setVolume);
+        Assert.True(setMute);
+        Assert.Equal(stereo, state.DefaultSource.Volume);
+        Assert.True(state.DefaultSource.Mute);
+    }
+
+    [Fact]
+    public void RejectsAmbiguousOrInvalidSinkTargets()
+    {
+        using var state = new PulseServerState(NullLoggerFactory.Instance);
+        var stereo = ChannelVolume.Norm(2);
+
+        Assert.False(state.TrySetSinkVolume(Constants.InvalidIndex, null, stereo));
+        Assert.False(state.TrySetSinkVolume(state.DefaultSink.Index, state.DefaultSink.Name, stereo));
+        Assert.False(state.TrySetSinkMute(999, null, true));
     }
 }

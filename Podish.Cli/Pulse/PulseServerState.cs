@@ -18,6 +18,7 @@ internal sealed class PulseServerState : IDisposable
         DefaultSink = CreateDefaultSink(AudioSink.DefaultSampleSpec);
         DefaultSource = CreateDefaultSource(DefaultSink);
         ServerInfo = CreateServerInfo(DefaultSink);
+        AudioSink.SetMasterVolume(DefaultSink.Volume, DefaultSink.Mute);
     }
 
     public ILoggerFactory LoggerFactory { get; }
@@ -71,6 +72,130 @@ internal sealed class PulseServerState : IDisposable
         }
     }
 
+    public PlaybackStreamState? GetPlaybackStreamByStreamIndex(uint streamIndex)
+    {
+        lock (_gate)
+        {
+            return _playbackStreams.Values.FirstOrDefault(stream => stream.StreamIndex == streamIndex);
+        }
+    }
+
+    public bool TryLookupSink(string? name, out uint index)
+    {
+        lock (_gate)
+        {
+            if (MatchesSinkName(name, DefaultSink.Name, ServerInfo.DefaultSinkName))
+            {
+                index = DefaultSink.Index;
+                return true;
+            }
+
+            index = 0;
+            return false;
+        }
+    }
+
+    public bool TryLookupSource(string? name, out uint index)
+    {
+        lock (_gate)
+        {
+            if (MatchesSourceName(name, DefaultSource.Name, ServerInfo.DefaultSourceName))
+            {
+                index = DefaultSource.Index;
+                return true;
+            }
+
+            index = 0;
+            return false;
+        }
+    }
+
+    public bool TrySetDefaultSink(string? name)
+    {
+        lock (_gate)
+        {
+            if (name == "@NONE@")
+            {
+                ServerInfo.DefaultSinkName = null;
+                return true;
+            }
+
+            if (!MatchesSinkName(name, DefaultSink.Name, ServerInfo.DefaultSinkName))
+                return false;
+
+            ServerInfo.DefaultSinkName = DefaultSink.Name;
+            return true;
+        }
+    }
+
+    public bool TrySetDefaultSource(string? name)
+    {
+        lock (_gate)
+        {
+            if (name == "@NONE@")
+            {
+                ServerInfo.DefaultSourceName = null;
+                return true;
+            }
+
+            if (!MatchesSourceName(name, DefaultSource.Name, ServerInfo.DefaultSourceName))
+                return false;
+
+            ServerInfo.DefaultSourceName = DefaultSource.Name;
+            return true;
+        }
+    }
+
+    public bool TrySetSinkVolume(uint? index, string? name, ChannelVolume volume)
+    {
+        lock (_gate)
+        {
+            if (!TryResolveSinkTarget(index, name))
+                return false;
+
+            DefaultSink.Volume = NormalizeChannelVolume(volume, DefaultSink.SampleSpec.Channels);
+            AudioSink.SetMasterVolume(DefaultSink.Volume, DefaultSink.Mute);
+            return true;
+        }
+    }
+
+    public bool TrySetSourceVolume(uint? index, string? name, ChannelVolume volume)
+    {
+        lock (_gate)
+        {
+            if (!TryResolveSourceTarget(index, name))
+                return false;
+
+            DefaultSource.Volume = NormalizeChannelVolume(volume, DefaultSource.SampleSpec.Channels);
+            return true;
+        }
+    }
+
+    public bool TrySetSinkMute(uint? index, string? name, bool mute)
+    {
+        lock (_gate)
+        {
+            if (!TryResolveSinkTarget(index, name))
+                return false;
+
+            DefaultSink.Mute = mute;
+            AudioSink.SetMasterVolume(DefaultSink.Volume, DefaultSink.Mute);
+            return true;
+        }
+    }
+
+    public bool TrySetSourceMute(uint? index, string? name, bool mute)
+    {
+        lock (_gate)
+        {
+            if (!TryResolveSourceTarget(index, name))
+                return false;
+
+            DefaultSource.Mute = mute;
+            return true;
+        }
+    }
+
     public static bool IsSupported(SampleSpec sampleSpec)
     {
         return sampleSpec.Format == SampleFormat.S16Le &&
@@ -81,6 +206,20 @@ internal sealed class PulseServerState : IDisposable
     public void Dispose()
     {
         AudioSink.Dispose();
+    }
+
+    private static bool MatchesSinkName(string? requestedName, string sinkName, string? defaultSinkName)
+    {
+        return requestedName == Constants.DefaultSink ||
+               requestedName == sinkName ||
+               (!string.IsNullOrEmpty(defaultSinkName) && requestedName == defaultSinkName);
+    }
+
+    private static bool MatchesSourceName(string? requestedName, string sourceName, string? defaultSourceName)
+    {
+        return requestedName == Constants.DefaultSource ||
+               requestedName == sourceName ||
+               (!string.IsNullOrEmpty(defaultSourceName) && requestedName == defaultSourceName);
     }
 
     private static ServerInfo CreateServerInfo(SinkInfo sink)
@@ -178,5 +317,55 @@ internal sealed class PulseServerState : IDisposable
             Ports = new List<PortInfo>(),
             ActivePortIndex = 0,
         };
+    }
+
+    private bool TryResolveSinkTarget(uint? index, string? name)
+    {
+        bool hasIndex = index is not null && index.Value != Constants.InvalidIndex;
+        bool hasName = !string.IsNullOrEmpty(name);
+        if (hasIndex == hasName)
+            return false;
+
+        return hasIndex
+            ? index == DefaultSink.Index
+            : MatchesSinkName(name, DefaultSink.Name, ServerInfo.DefaultSinkName);
+    }
+
+    private bool TryResolveSourceTarget(uint? index, string? name)
+    {
+        bool hasIndex = index is not null && index.Value != Constants.InvalidIndex;
+        bool hasName = !string.IsNullOrEmpty(name);
+        if (hasIndex == hasName)
+            return false;
+
+        return hasIndex
+            ? index == DefaultSource.Index
+            : MatchesSourceName(name, DefaultSource.Name, ServerInfo.DefaultSourceName);
+    }
+
+    private static ChannelVolume NormalizeChannelVolume(ChannelVolume requested, byte expectedChannels)
+    {
+        if (requested.Channels == expectedChannels)
+            return CloneChannelVolume(requested);
+
+        if (requested.Channels == 1)
+        {
+            var expanded = new ChannelVolume();
+            Volume volume = requested[0];
+            for (int i = 0; i < expectedChannels; i++)
+                expanded.Push(volume);
+            return expanded;
+        }
+
+        throw new ArgumentOutOfRangeException(nameof(requested),
+            $"Volume channel count {requested.Channels} is incompatible with target channel count {expectedChannels}");
+    }
+
+    private static ChannelVolume CloneChannelVolume(ChannelVolume requested)
+    {
+        var clone = new ChannelVolume();
+        for (int i = 0; i < requested.Channels; i++)
+            clone.Push(requested[i]);
+        return clone;
     }
 }

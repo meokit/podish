@@ -23,6 +23,7 @@ internal sealed class PlaybackStreamState
         Props = parameters.Props ?? new Props();
         Volume = parameters.Volume ?? ChannelVolume.Norm(parameters.SampleSpec.Channels);
         ClientName = clientName ?? "unknown";
+        Mute = parameters.Flags.HasFlag(PlaybackStreamFlags.StartMuted);
         Corked = parameters.Flags.HasFlag(PlaybackStreamFlags.StartCorked) ||
                  parameters.Flags.HasFlag(PlaybackStreamFlags.StartPaused);
 
@@ -31,7 +32,7 @@ internal sealed class PlaybackStreamState
             parameters.SampleSpec,
             ChannelMap,
             ComputeRingCapacity(normalizedBufferAttr, parameters.SampleSpec),
-            ComputeAverageGain(Volume),
+            ComputeGain(Volume, Mute),
             Corked);
     }
 
@@ -43,6 +44,7 @@ internal sealed class PlaybackStreamState
     public PlaybackBufferAttr BufferAttr { get; }
     public Props Props { get; }
     public ChannelVolume Volume { get; }
+    public bool Mute { get; private set; }
     public string ClientName { get; }
     public PolyfillAudioStream AudioStream { get; }
     public string? StreamName { get; private set; }
@@ -93,6 +95,43 @@ internal sealed class PlaybackStreamState
     public void SetStreamName(string? streamName)
     {
         StreamName = streamName;
+    }
+
+    public void SetVolume(ChannelVolume volume)
+    {
+        lock (_gate)
+        {
+            ChannelVolume normalized = NormalizeChannelVolume(volume, SampleSpec.Channels);
+            for (int i = 0; i < normalized.Channels; i++)
+                Volume[i] = normalized[i];
+
+            AudioStream.SetGain(ComputeGain(Volume, Mute));
+        }
+    }
+
+    public void SetMute(bool mute)
+    {
+        lock (_gate)
+        {
+            Mute = mute;
+            AudioStream.SetGain(ComputeGain(Volume, Mute));
+        }
+    }
+
+    public void UpdateProps(PropsUpdateMode mode, Props props)
+    {
+        lock (_gate)
+        {
+            Props.Update(mode, props);
+        }
+    }
+
+    public int RemoveProps(IEnumerable<string> keys)
+    {
+        lock (_gate)
+        {
+            return Props.RemoveKeys(keys);
+        }
     }
 
     public void SetCorked(bool corked)
@@ -189,6 +228,14 @@ internal sealed class PlaybackStreamState
         return QueuedOutputEstimateBytes + PendingRequestedBytes < TargetBytesHint;
     }
 
+    private static float ComputeGain(ChannelVolume volume, bool mute)
+    {
+        if (mute)
+            return 0.0f;
+
+        return ComputeAverageGain(volume);
+    }
+
     private static float ComputeAverageGain(ChannelVolume volume)
     {
         if (volume.Channels == 0)
@@ -258,5 +305,31 @@ internal sealed class PlaybackStreamState
         int size = Math.Max(1, frameSize);
         int remainder = bytes % size;
         return remainder == 0 ? bytes : bytes + (size - remainder);
+    }
+
+    private static ChannelVolume NormalizeChannelVolume(ChannelVolume requested, byte expectedChannels)
+    {
+        if (requested.Channels == expectedChannels)
+            return CloneChannelVolume(requested);
+
+        if (requested.Channels == 1)
+        {
+            var expanded = new ChannelVolume();
+            Volume volume = requested[0];
+            for (int i = 0; i < expectedChannels; i++)
+                expanded.Push(volume);
+            return expanded;
+        }
+
+        throw new ArgumentOutOfRangeException(nameof(requested),
+            $"Volume channel count {requested.Channels} is incompatible with target channel count {expectedChannels}");
+    }
+
+    private static ChannelVolume CloneChannelVolume(ChannelVolume requested)
+    {
+        var clone = new ChannelVolume();
+        for (int i = 0; i < requested.Channels; i++)
+            clone.Push(requested[i]);
+        return clone;
     }
 }

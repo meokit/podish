@@ -18,6 +18,8 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
     private bool _initialized;
     private uint _deviceId;
     private float[] _mixScratch = Array.Empty<float>();
+    private float _masterGain = 1.0f;
+    private bool _muted;
 
     public Sdl3AudioSink(ILogger logger)
     {
@@ -98,6 +100,15 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
             UpdateDevicePausedLocked();
     }
 
+    public void SetMasterVolume(ChannelVolume volume, bool muted)
+    {
+        lock (_gate)
+        {
+            _masterGain = muted ? 0.0f : ComputeAverageGain(volume);
+            _muted = muted;
+        }
+    }
+
     public void Dispose()
     {
         lock (_gate)
@@ -174,6 +185,12 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
                     anyMixed = true;
             }
 
+            if (anyMixed && (_muted || _masterGain != 1.0f))
+            {
+                for (int i = 0; i < sampleCount; i++)
+                    mix[i] *= _masterGain;
+            }
+
             if (anyMixed)
                 PolyfillAudioMixer.WriteS16LeStereo(destination, mix, frames);
 
@@ -185,5 +202,16 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
 
             UpdateDevicePausedLocked();
         }
+    }
+
+    private static float ComputeAverageGain(ChannelVolume volume)
+    {
+        if (volume.Channels == 0)
+            return 1.0f;
+
+        float total = 0;
+        for (int i = 0; i < volume.Channels; i++)
+            total += volume[i].ToLinear();
+        return total / volume.Channels;
     }
 }
