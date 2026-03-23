@@ -834,4 +834,60 @@ public abstract class IndexedMemoryInode : Inode
             DirtyPageIndexes.Add(page);
         }
     }
+
+    public bool VisitReadSegments(long offset, int length, Func<IntPtr, int, bool> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+
+        if (offset < 0 || length < 0)
+            return false;
+        if (length == 0)
+            return true;
+
+        lock (Lock)
+        {
+            if (Type != InodeType.File)
+                return false;
+
+            long fileSize = (long)Size;
+            if (offset > fileSize || length > fileSize - offset)
+                return false;
+
+            AddressSpace pageCache = EnsurePageCacheLocked();
+            int probeRemaining = length;
+            long probeAbsolute = offset;
+            while (probeRemaining > 0)
+            {
+                uint pageIndex = (uint)(probeAbsolute / LinuxConstants.PageSize);
+                int pageOffset = (int)(probeAbsolute & LinuxConstants.PageOffsetMask);
+                int chunk = Math.Min(probeRemaining, LinuxConstants.PageSize - pageOffset);
+                if (pageCache.GetPage(pageIndex) == IntPtr.Zero)
+                    return false;
+
+                probeAbsolute += chunk;
+                probeRemaining -= chunk;
+            }
+
+            int remaining = length;
+            long absolute = offset;
+            while (remaining > 0)
+            {
+                uint pageIndex = (uint)(absolute / LinuxConstants.PageSize);
+                int pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
+                int chunk = Math.Min(remaining, LinuxConstants.PageSize - pageOffset);
+                IntPtr pagePtr = pageCache.GetPage(pageIndex);
+                if (pagePtr == IntPtr.Zero)
+                    return false;
+
+                IntPtr chunkPtr = IntPtr.Add(pagePtr, pageOffset);
+                if (!visitor(chunkPtr, chunk))
+                    return false;
+
+                absolute += chunk;
+                remaining -= chunk;
+            }
+
+            return true;
+        }
+    }
 }

@@ -6,6 +6,7 @@ using Fiberish.Native;
 using System.Threading;
 using System.Linq;
 using Fiberish.VFS;
+using System;
 
 namespace Podish.Cli.Pulse;
 
@@ -325,19 +326,22 @@ internal sealed class PulseServerSession
             dataLength = checked((int)ReadUInt32NetworkOrder(
                 payload.AsSpan(ShmInfoLengthWord * sizeof(uint), sizeof(uint))));
 
-            if (!TryReadMemfdPayload(shmId, memfdIndex, dataLength, out byte[]? copied))
+            if (!TryAppendMemfdPayload(stream, shmId, memfdIndex, dataLength, out int buffered))
             {
                 _logger.LogWarning("{Prefix} dropping unresolved memfd packet for channel={Channel} shmId={ShmId}",
                     PulseServerLogging.Stream, descriptor.Channel, shmId);
                 return;
             }
 
-            data = copied;
+            _logger.LogDebug("{Prefix} stream={ChannelIndex} appended={Bytes} buffered={Buffered}",
+                PulseServerLogging.Stream, descriptor.Channel, dataLength, buffered);
         }
-
-        int buffered = stream.Append(data[..dataLength]);
-        _logger.LogDebug("{Prefix} stream={ChannelIndex} appended={Bytes} buffered={Buffered}",
-            PulseServerLogging.Stream, descriptor.Channel, dataLength, buffered);
+        else
+        {
+            int buffered = stream.Append(data[..dataLength]);
+            _logger.LogDebug("{Prefix} stream={ChannelIndex} appended={Bytes} buffered={Buffered}",
+                PulseServerLogging.Stream, descriptor.Channel, dataLength, buffered);
+        }
 
         if (stream.TryMarkStarted())
         {
@@ -393,9 +397,9 @@ internal sealed class PulseServerSession
         return total;
     }
 
-    private bool TryReadMemfdPayload(uint shmId, int offset, int length, out byte[]? data)
+    private bool TryAppendMemfdPayload(PlaybackStreamState stream, uint shmId, int offset, int length, out int buffered)
     {
-        data = null;
+        buffered = stream.BufferedBytes;
         if (offset < 0 || length < 0)
             return false;
 
@@ -408,12 +412,35 @@ internal sealed class PulseServerSession
         if (memfd?.OpenedInode == null)
             return false;
 
+        if (memfd.OpenedInode is IndexedMemoryInode indexedInode)
+        {
+            bool ok = true;
+            int written = 0;
+            int currentBuffered = buffered;
+            unsafe
+            {
+                ok = indexedInode.VisitReadSegments(offset, length, (ptr, chunkLength) =>
+                {
+                    ReadOnlySpan<byte> chunk = new((void*)ptr, chunkLength);
+                    currentBuffered = stream.Append(chunk);
+                    written += chunkLength;
+                    return true;
+                });
+            }
+
+            if (ok && written == length)
+            {
+                buffered = currentBuffered;
+                return true;
+            }
+        }
+
         byte[] buffer = new byte[length];
         int read = memfd.OpenedInode.Read(_connection.Task, memfd, buffer, offset);
         if (read < length)
             return false;
 
-        data = buffer;
+        buffered = stream.Append(buffer);
         return true;
     }
 
