@@ -5,7 +5,7 @@ using Silk.NET.SDL;
 
 namespace Podish.Cli.Pulse;
 
-internal sealed unsafe class Sdl3AudioSink : IDisposable
+internal sealed unsafe class SdlAudioSink : IDisposable
 {
     private sealed record StreamRegistration(PlaybackStreamState State, Action ProgressCallback);
 
@@ -21,7 +21,7 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
     private float _masterGain = 1.0f;
     private bool _muted;
 
-    public Sdl3AudioSink(ILogger logger)
+    public SdlAudioSink(ILogger logger)
     {
         _logger = logger;
         _sdl = Sdl.GetApi();
@@ -154,7 +154,7 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
             return;
 
         var handle = GCHandle.FromIntPtr((nint)userdata);
-        if (handle.Target is not Sdl3AudioSink sink)
+        if (handle.Target is not SdlAudioSink sink)
             return;
 
         sink.FillAudioBuffer(new Span<byte>(stream, len));
@@ -192,7 +192,7 @@ internal sealed unsafe class Sdl3AudioSink : IDisposable
             }
 
             if (anyMixed)
-                PolyfillAudioMixer.WriteS16LeStereo(destination, mix, frames);
+                AudioMixer.WriteS16LeStereo(destination, mix, frames);
 
             foreach (StreamRegistration registration in _streams.Values)
             {

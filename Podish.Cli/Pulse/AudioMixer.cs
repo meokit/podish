@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 
 namespace Podish.Cli.Pulse;
 
-internal static class PolyfillAudioMixer
+internal static class AudioMixer
 {
     public static float CubicInterpolate(float p0, float p1, float p2, float p3, float t)
     {

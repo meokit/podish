@@ -3,7 +3,7 @@ using Podish.Pulse.Protocol;
 
 namespace Podish.Cli.Pulse;
 
-internal sealed class PolyfillAudioStream
+internal sealed class AudioStream
 {
     private readonly object _gate = new();
     private readonly byte[] _ring;
@@ -22,7 +22,7 @@ internal sealed class PolyfillAudioStream
     private float _previousLeft;
     private float _previousRight;
 
-    public PolyfillAudioStream(
+    public AudioStream(
         uint channelIndex,
         SampleSpec inputSpec,
         ChannelMap channelMap,
@@ -209,8 +209,8 @@ internal sealed class PolyfillAudioStream
         ReadSampleWithBoundary(baseFrame + 1, availableFrames, out float p2L, out float p2R);
         ReadSampleWithBoundary(baseFrame + 2, availableFrames, out float p3L, out float p3R);
 
-        left = PolyfillAudioMixer.CubicInterpolate(p0L, p1L, p2L, p3L, t);
-        right = PolyfillAudioMixer.CubicInterpolate(p0R, p1R, p2R, p3R, t);
+        left = AudioMixer.CubicInterpolate(p0L, p1L, p2L, p3L, t);
+        right = AudioMixer.CubicInterpolate(p0R, p1R, p2R, p3R, t);
     }
 
     private void ReadSampleWithBoundary(int frameIndex, int availableFrames, out float left, out float right)

@@ -1,8 +1,8 @@
+using System.Buffers.Binary;
 using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Cli.Pulse;
 using Podish.Pulse.Protocol;
 using Podish.Pulse.Protocol.Commands;
-using System.Buffers.Binary;
 using Xunit;
 
 namespace Podish.Pulse.Tests;
@@ -34,7 +34,7 @@ public class PlaybackCommandTests
         Assert.Null(props.GetString("a"));
         Assert.Equal("three", props.GetString("c"));
 
-        int removed = props.RemoveKeys(new[] { "c", "missing" });
+        var removed = props.RemoveKeys(new[] { "c", "missing" });
         Assert.Equal(1, removed);
         Assert.Null(props.GetString("c"));
     }
@@ -42,7 +42,7 @@ public class PlaybackCommandTests
     [Fact]
     public void CreatePlaybackStreamReplyHexSnapshot()
     {
-        byte[] encoded = ProtocolMessageIO.EncodeReply(2, new CreatePlaybackStreamResponse
+        var encoded = ProtocolMessageIO.EncodeReply(2, new CreatePlaybackStreamResponse
         {
             ChannelIndex = 0,
             StreamIndex = 0,
@@ -52,17 +52,17 @@ public class PlaybackCommandTests
                 MaxLength = 4 * 1024 * 1024,
                 TargetLength = 128 * 1024,
                 Prebuffer = 128 * 1024,
-                MinRequest = 16 * 1024,
+                MinRequest = 16 * 1024
             },
             SampleSpec = new SampleSpec(SampleFormat.S16Le, 2, 48000),
             ChannelMap = ChannelMap.Stereo(),
             SinkIndex = 1,
             SinkName = "podish.sdl.default",
             Suspended = false,
-            StreamLatencyUsec = 0,
+            StreamLatencyUsec = 0
         }, static (writer, response) => writer.WriteCreatePlaybackStreamResponse(response));
 
-        string hex = Convert.ToHexString(encoded);
+        var hex = Convert.ToHexString(encoded);
         Assert.Equal(hex, hex);
     }
 
@@ -82,11 +82,11 @@ public class PlaybackCommandTests
                 TargetLength = 16384,
                 MinRequest = 4096,
                 Prebuffer = 0,
-                MinIncrement = 0,
+                MinIncrement = 0
             },
             Props = new Props(),
             Volume = ChannelVolume.Norm(2),
-            SyncId = 7,
+            SyncId = 7
         };
         expected.Props.SetString("media.name", "test");
 
@@ -94,7 +94,7 @@ public class PlaybackCommandTests
         writer.WriteCreatePlaybackStreamParams(expected);
 
         var reader = new TagStructReader(writer.Buffer, Constants.MaxVersion);
-        CreatePlaybackStreamParams actual = reader.ReadCreatePlaybackStreamParams();
+        var actual = reader.ReadCreatePlaybackStreamParams();
 
         Assert.Equal(expected.DeviceIndex, actual.DeviceIndex);
         Assert.Equal(expected.DeviceName, actual.DeviceName);
@@ -134,7 +134,7 @@ public class PlaybackCommandTests
             CardIndex = null,
             ActivePortIndex = 0,
             NumInputs = 1,
-            NumOutputs = 1,
+            NumOutputs = 1
         };
         expected.Props.SetString("device.class", "sound");
 
@@ -142,7 +142,7 @@ public class PlaybackCommandTests
         writer.WriteSinkInfo(expected);
 
         var reader = new TagStructReader(writer.Buffer, Constants.MaxVersion);
-        SinkInfo actual = reader.ReadSinkInfo();
+        var actual = reader.ReadSinkInfo();
 
         Assert.Equal(expected.Index, actual.Index);
         Assert.Equal(expected.Name, actual.Name);
@@ -181,7 +181,7 @@ public class PlaybackCommandTests
             State = SourceState.Idle,
             NVolumeSteps = 65536,
             CardIndex = null,
-            ActivePortIndex = 0,
+            ActivePortIndex = 0
         };
         expected.Props.SetString("device.class", "monitor");
 
@@ -189,7 +189,7 @@ public class PlaybackCommandTests
         writer.WriteSourceInfo(expected);
 
         var reader = new TagStructReader(writer.Buffer, Constants.MaxVersion);
-        SourceInfo actual = reader.ReadSourceInfo();
+        var actual = reader.ReadSourceInfo();
 
         Assert.Equal(expected.Index, actual.Index);
         Assert.Equal(expected.Name, actual.Name);
@@ -207,7 +207,7 @@ public class PlaybackCommandTests
     [Fact]
     public void EncodeErrorDecodesAsServerError()
     {
-        byte[] encoded = ProtocolMessageIO.EncodeError(12, PulseError.NotSupported);
+        var encoded = ProtocolMessageIO.EncodeError(12, PulseError.NotSupported);
         var ex = Assert.Throws<ServerErrorException>(() => ProtocolMessageIO.DecodeReply(encoded, static _ => 0u));
         Assert.Equal(PulseError.NotSupported, ex.Error);
     }
@@ -215,15 +215,13 @@ public class PlaybackCommandTests
     [Fact]
     public void DecodeControlMessageFromDescriptorAndPayloadBuffer()
     {
-        var message = ProtocolMessage.Create(CommandTag.GetServerInfo, 42, static writer =>
-        {
-            writer.WriteString("hello");
-        });
-        byte[] encoded = ProtocolMessageIO.Encode(message);
-        Descriptor descriptor = DescriptorIO.Read(encoded);
-        byte[] payload = encoded.AsSpan(Constants.DescriptorSize).ToArray();
+        var message = ProtocolMessage.Create(CommandTag.GetServerInfo, 42,
+            static writer => { writer.WriteString("hello"); });
+        var encoded = ProtocolMessageIO.Encode(message);
+        var descriptor = DescriptorIO.Read(encoded);
+        var payload = encoded.AsSpan(Constants.DescriptorSize).ToArray();
 
-        ProtocolMessage decoded = ProtocolMessageIO.Decode(descriptor, payload, payload.Length);
+        var decoded = ProtocolMessageIO.Decode(descriptor, payload, payload.Length);
 
         Assert.Equal(CommandTag.GetServerInfo, decoded.CommandTag);
         Assert.Equal<uint>(42, decoded.Sequence);
@@ -238,7 +236,7 @@ public class PlaybackStreamStateTests
     {
         var stream = CreateStream();
 
-        int buffered = stream.Append(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 });
+        var buffered = stream.Append(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 });
         Assert.Equal(8, buffered);
         Assert.Equal(8, stream.BufferedBytes);
         Assert.True(stream.QueuedOutputEstimateBytes > 0);
@@ -279,7 +277,7 @@ public class PlaybackStreamStateTests
         var stream = CreateStream();
         stream.RecordRequest(64);
 
-        byte[] payload = Enumerable.Range(0, 64).Select(static x => (byte)x).ToArray();
+        var payload = Enumerable.Range(0, 64).Select(static x => (byte)x).ToArray();
         Assert.Equal(64, stream.Append(payload));
         Assert.Equal(0, stream.PendingRequestedBytes);
     }
@@ -327,10 +325,10 @@ public class PlaybackStreamStateTests
                 TargetLength = 8192,
                 MinRequest = 4096,
                 Prebuffer = 0,
-                MinIncrement = 4096,
+                MinIncrement = 4096
             },
             Props = new Props(),
-            Volume = ChannelVolume.Norm(2),
+            Volume = ChannelVolume.Norm(2)
         };
     }
 }
@@ -341,9 +339,9 @@ public class PolyfillAudioStreamTests
     public void PutDataTracksQueuedInputBytes()
     {
         var stream = CreateAudioStream(new SampleSpec(SampleFormat.S16Le, 2, 48000));
-        byte[] data = Enumerable.Range(0, 16).Select(static x => (byte)x).ToArray();
+        var data = Enumerable.Range(0, 16).Select(static x => (byte)x).ToArray();
 
-        int written = stream.PutData(data);
+        var written = stream.PutData(data);
 
         Assert.Equal(16, written);
         Assert.Equal(16, stream.QueuedInputBytes);
@@ -356,8 +354,8 @@ public class PolyfillAudioStreamTests
         var stream = CreateAudioStream(new SampleSpec(SampleFormat.S16Le, 2, 48000));
         stream.PutData(CreateStereoS16Frames((short.MaxValue, 0), (0, short.MaxValue)));
 
-        float[] mix = new float[4];
-        int mixedFrames = stream.MixInto(mix, 2);
+        var mix = new float[4];
+        var mixedFrames = stream.MixInto(mix, 2);
 
         Assert.Equal(2, mixedFrames);
         Assert.True(mix[0] > 0.99f);
@@ -372,8 +370,8 @@ public class PolyfillAudioStreamTests
         var stream = CreateAudioStream(new SampleSpec(SampleFormat.S16Le, 1, 44100));
         stream.PutData(CreateMonoS16Frames(short.MaxValue, short.MaxValue, short.MaxValue, short.MaxValue));
 
-        float[] mix = new float[10];
-        int mixedFrames = stream.MixInto(mix, 5);
+        var mix = new float[10];
+        var mixedFrames = stream.MixInto(mix, 5);
 
         Assert.Equal(5, mixedFrames);
         Assert.True(mix[0] > 0.99f);
@@ -387,26 +385,26 @@ public class PolyfillAudioStreamTests
         Span<byte> destination = stackalloc byte[4];
         float[] mix = [1.5f, -1.5f];
 
-        PolyfillAudioMixer.WriteS16LeStereo(destination, mix, 1);
+        AudioMixer.WriteS16LeStereo(destination, mix, 1);
 
         Assert.Equal(short.MaxValue, BinaryPrimitives.ReadInt16LittleEndian(destination[..2]));
         Assert.Equal(short.MinValue, BinaryPrimitives.ReadInt16LittleEndian(destination[2..4]));
     }
 
-    private static PolyfillAudioStream CreateAudioStream(SampleSpec inputSpec)
+    private static AudioStream CreateAudioStream(SampleSpec inputSpec)
     {
-        return new PolyfillAudioStream(1, inputSpec,
+        return new AudioStream(1, inputSpec,
             inputSpec.Channels == 1 ? ChannelMap.Mono() : ChannelMap.Stereo(),
-            4096, 1.0f, paused: false);
+            4096, 1.0f, false);
     }
 
     private static byte[] CreateStereoS16Frames(params (short Left, short Right)[] frames)
     {
-        byte[] bytes = new byte[frames.Length * sizeof(short) * 2];
-        for (int i = 0; i < frames.Length; i++)
+        var bytes = new byte[frames.Length * sizeof(short) * 2];
+        for (var i = 0; i < frames.Length; i++)
         {
             BitConverter.TryWriteBytes(bytes.AsSpan(i * 4, 2), frames[i].Left);
-            BitConverter.TryWriteBytes(bytes.AsSpan((i * 4) + 2, 2), frames[i].Right);
+            BitConverter.TryWriteBytes(bytes.AsSpan(i * 4 + 2, 2), frames[i].Right);
         }
 
         return bytes;
@@ -414,8 +412,8 @@ public class PolyfillAudioStreamTests
 
     private static byte[] CreateMonoS16Frames(params short[] frames)
     {
-        byte[] bytes = new byte[frames.Length * sizeof(short)];
-        for (int i = 0; i < frames.Length; i++)
+        var bytes = new byte[frames.Length * sizeof(short)];
+        for (var i = 0; i < frames.Length; i++)
             BitConverter.TryWriteBytes(bytes.AsSpan(i * 2, 2), frames[i]);
         return bytes;
     }
@@ -426,11 +424,11 @@ public class PulseServerStateTests
     [Fact]
     public void AuthReplyNegotiatesMemfdOnlyWhenClientSupportsIt()
     {
-        AuthReply enabled = CreateNegotiatedAuthReply(new AuthParams(32, supportsShm: true, supportsMemfd: true, []));
+        var enabled = CreateNegotiatedAuthReply(new AuthParams(32, true, true, []));
         Assert.True(enabled.UseShm);
         Assert.True(enabled.UseMemfd);
 
-        AuthReply disabled = CreateNegotiatedAuthReply(new AuthParams(32, supportsShm: true, supportsMemfd: false, []));
+        var disabled = CreateNegotiatedAuthReply(new AuthParams(32, true, false, []));
         Assert.False(disabled.UseShm);
         Assert.False(disabled.UseMemfd);
     }
@@ -442,10 +440,10 @@ public class PulseServerStateTests
         var unsupported = new CreatePlaybackStreamParams
         {
             SampleSpec = new SampleSpec(SampleFormat.Float32Le, 2, 48000),
-            ChannelMap = ChannelMap.Stereo(),
+            ChannelMap = ChannelMap.Stereo()
         };
 
-        bool ok = state.TryCreatePlaybackStream(unsupported, "paplay", out var stream, out var error);
+        var ok = state.TryCreatePlaybackStream(unsupported, "paplay", out var stream, out var error);
 
         Assert.False(ok);
         Assert.Null(stream);
@@ -459,11 +457,11 @@ public class PulseServerStateTests
         var parameters = new CreatePlaybackStreamParams
         {
             SampleSpec = new SampleSpec(SampleFormat.S16Le, 2, 48000),
-            ChannelMap = ChannelMap.Stereo(),
+            ChannelMap = ChannelMap.Stereo()
         };
 
-        bool ok1 = state.TryCreatePlaybackStream(parameters, "paplay", out var stream1, out var error1);
-        bool ok2 = state.TryCreatePlaybackStream(parameters, "paplay-2", out var stream2, out var error2);
+        var ok1 = state.TryCreatePlaybackStream(parameters, "paplay", out var stream1, out var error1);
+        var ok2 = state.TryCreatePlaybackStream(parameters, "paplay-2", out var stream2, out var error2);
 
         Assert.True(ok1);
         Assert.NotNull(stream1);
@@ -481,8 +479,8 @@ public class PulseServerStateTests
         var mono = new ChannelVolume(1);
         mono[0] = Volume.FromLinear(0.5f);
 
-        bool setVolume = state.TrySetSinkVolume(Constants.InvalidIndex, "podish.sdl.default", mono);
-        bool setMute = state.TrySetSinkMute(Constants.InvalidIndex, "podish.sdl.default", true);
+        var setVolume = state.TrySetSinkVolume(Constants.InvalidIndex, "podish.sdl.default", mono);
+        var setMute = state.TrySetSinkMute(Constants.InvalidIndex, "podish.sdl.default", true);
 
         Assert.True(setVolume);
         Assert.True(setMute);
@@ -500,8 +498,8 @@ public class PulseServerStateTests
         stereo[0] = Volume.FromLinear(0.25f);
         stereo[1] = Volume.FromLinear(0.75f);
 
-        bool setVolume = state.TrySetSourceVolume(state.DefaultSource.Index, null, stereo);
-        bool setMute = state.TrySetSourceMute(state.DefaultSource.Index, null, true);
+        var setVolume = state.TrySetSourceVolume(state.DefaultSource.Index, null, stereo);
+        var setMute = state.TrySetSourceMute(state.DefaultSource.Index, null, true);
 
         Assert.True(setVolume);
         Assert.True(setMute);
@@ -522,13 +520,13 @@ public class PulseServerStateTests
 
     private static AuthReply CreateNegotiatedAuthReply(AuthParams auth)
     {
-        ushort version = Math.Min(auth.Version, Constants.MaxVersion);
-        bool useMemfd = auth.Version >= 31 && auth.SupportsMemfd;
+        var version = Math.Min(auth.Version, Constants.MaxVersion);
+        var useMemfd = auth.Version >= 31 && auth.SupportsMemfd;
         return new AuthReply
         {
             Version = version,
             UseShm = useMemfd,
-            UseMemfd = useMemfd,
+            UseMemfd = useMemfd
         };
     }
 }

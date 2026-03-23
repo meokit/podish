@@ -14,7 +14,7 @@ internal sealed class PulseServerState : IDisposable
     {
         LoggerFactory = loggerFactory;
         Logger = loggerFactory.CreateLogger<PulseServerState>();
-        AudioSink = new Sdl3AudioSink(loggerFactory.CreateLogger<Sdl3AudioSink>());
+        AudioSink = new SdlAudioSink(loggerFactory.CreateLogger<SdlAudioSink>());
         DefaultSink = CreateDefaultSink(AudioSink.DefaultSampleSpec);
         DefaultSource = CreateDefaultSource(DefaultSink);
         ServerInfo = CreateServerInfo(DefaultSink);
@@ -23,10 +23,15 @@ internal sealed class PulseServerState : IDisposable
 
     public ILoggerFactory LoggerFactory { get; }
     public ILogger Logger { get; }
-    public Sdl3AudioSink AudioSink { get; }
+    public SdlAudioSink AudioSink { get; }
     public SinkInfo DefaultSink { get; }
     public SourceInfo DefaultSource { get; }
     public ServerInfo ServerInfo { get; }
+
+    public void Dispose()
+    {
+        AudioSink.Dispose();
+    }
 
     public bool TryCreatePlaybackStream(CreatePlaybackStreamParams parameters, string? clientName,
         out PlaybackStreamState? stream, out PulseError? error)
@@ -51,7 +56,7 @@ internal sealed class PulseServerState : IDisposable
     {
         lock (_gate)
         {
-            _playbackStreams.TryGetValue(channelIndex, out PlaybackStreamState? stream);
+            _playbackStreams.TryGetValue(channelIndex, out var stream);
             return stream;
         }
     }
@@ -203,11 +208,6 @@ internal sealed class PulseServerState : IDisposable
                sampleSpec.SampleRate > 0;
     }
 
-    public void Dispose()
-    {
-        AudioSink.Dispose();
-    }
-
     private static bool MatchesSinkName(string? requestedName, string sinkName, string? defaultSinkName)
     {
         return requestedName == Constants.DefaultSink ||
@@ -234,7 +234,7 @@ internal sealed class PulseServerState : IDisposable
             DefaultSinkName = sink.Name,
             DefaultSourceName = $"{sink.Name}.monitor",
             Cookie = 0x504F4449,
-            ChannelMap = sink.ChannelMap ?? new ChannelMap(),
+            ChannelMap = sink.ChannelMap ?? new ChannelMap()
         };
     }
 
@@ -252,7 +252,7 @@ internal sealed class PulseServerState : IDisposable
             {
                 Name = "analog-output",
                 Description = "Analog Output",
-                Priority = 0,
+                Priority = 0
             }
         };
 
@@ -281,7 +281,7 @@ internal sealed class PulseServerState : IDisposable
             Ports = ports,
             ActivePortIndex = 0,
             NumInputs = 0,
-            NumOutputs = 1,
+            NumOutputs = 1
         };
     }
 
@@ -315,14 +315,14 @@ internal sealed class PulseServerState : IDisposable
             NVolumeSteps = 65536,
             CardIndex = null,
             Ports = new List<PortInfo>(),
-            ActivePortIndex = 0,
+            ActivePortIndex = 0
         };
     }
 
     private bool TryResolveSinkTarget(uint? index, string? name)
     {
-        bool hasIndex = index is not null && index.Value != Constants.InvalidIndex;
-        bool hasName = !string.IsNullOrEmpty(name);
+        var hasIndex = index is not null && index.Value != Constants.InvalidIndex;
+        var hasName = !string.IsNullOrEmpty(name);
         if (hasIndex == hasName)
             return false;
 
@@ -333,8 +333,8 @@ internal sealed class PulseServerState : IDisposable
 
     private bool TryResolveSourceTarget(uint? index, string? name)
     {
-        bool hasIndex = index is not null && index.Value != Constants.InvalidIndex;
-        bool hasName = !string.IsNullOrEmpty(name);
+        var hasIndex = index is not null && index.Value != Constants.InvalidIndex;
+        var hasName = !string.IsNullOrEmpty(name);
         if (hasIndex == hasName)
             return false;
 
@@ -351,8 +351,8 @@ internal sealed class PulseServerState : IDisposable
         if (requested.Channels == 1)
         {
             var expanded = new ChannelVolume();
-            Volume volume = requested[0];
-            for (int i = 0; i < expectedChannels; i++)
+            var volume = requested[0];
+            for (var i = 0; i < expectedChannels; i++)
                 expanded.Push(volume);
             return expanded;
         }
@@ -364,7 +364,7 @@ internal sealed class PulseServerState : IDisposable
     private static ChannelVolume CloneChannelVolume(ChannelVolume requested)
     {
         var clone = new ChannelVolume();
-        for (int i = 0; i < requested.Channels; i++)
+        for (var i = 0; i < requested.Channels; i++)
             clone.Push(requested[i]);
         return clone;
     }
