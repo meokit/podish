@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Podish.Pulse.Audio;
 using Podish.Pulse.Protocol;
 using Podish.Pulse.Protocol.Commands;
 
@@ -23,7 +24,7 @@ internal sealed class PulseServerState : IDisposable
 
     public ILoggerFactory LoggerFactory { get; }
     public ILogger Logger { get; }
-    public SdlAudioSink AudioSink { get; }
+    public IPulseAudioSink AudioSink { get; }
     public SinkInfo DefaultSink { get; }
     public SourceInfo DefaultSource { get; }
     public ServerInfo ServerInfo { get; }
@@ -38,7 +39,7 @@ internal sealed class PulseServerState : IDisposable
     {
         lock (_gate)
         {
-            if (!IsSupported(parameters.SampleSpec))
+            if (!PulseAudioFormats.IsSupported(parameters.SampleSpec))
             {
                 stream = null;
                 error = PulseError.NotSupported;
@@ -199,13 +200,6 @@ internal sealed class PulseServerState : IDisposable
             DefaultSource.Mute = mute;
             return true;
         }
-    }
-
-    public static bool IsSupported(SampleSpec sampleSpec)
-    {
-        return sampleSpec.Format == SampleFormat.S16Le &&
-               (sampleSpec.Channels == 1 || sampleSpec.Channels == 2) &&
-               sampleSpec.SampleRate > 0;
     }
 
     private static bool MatchesSinkName(string? requestedName, string sinkName, string? defaultSinkName)

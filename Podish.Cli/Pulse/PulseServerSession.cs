@@ -7,6 +7,7 @@ using System.Threading;
 using System.Linq;
 using Fiberish.VFS;
 using System;
+using Podish.Pulse.Audio;
 
 namespace Podish.Cli.Pulse;
 

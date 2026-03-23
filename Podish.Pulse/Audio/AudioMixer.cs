@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
 
-namespace Podish.Cli.Pulse;
+namespace Podish.Pulse.Audio;
 
-internal static class AudioMixer
+public static class AudioMixer
 {
     public static float CubicInterpolate(float p0, float p1, float p2, float p3, float t)
     {

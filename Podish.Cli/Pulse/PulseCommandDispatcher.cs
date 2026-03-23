@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Podish.Pulse.Audio;
 using Podish.Pulse.Protocol;
 using Podish.Pulse.Protocol.Commands;
 

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Cli.Pulse;
+using Podish.Pulse.Audio;
 using Podish.Pulse.Protocol;
 using Podish.Pulse.Protocol.Commands;
 using Xunit;

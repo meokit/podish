@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using Podish.Pulse.Protocol;
 
-namespace Podish.Cli.Pulse;
+namespace Podish.Pulse.Audio;
 
-internal sealed class AudioStream
+public sealed class AudioStream
 {
     private readonly object _gate = new();
     private readonly byte[] _ring;

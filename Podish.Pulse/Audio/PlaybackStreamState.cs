@@ -1,9 +1,9 @@
 using Podish.Pulse.Protocol;
 using Podish.Pulse.Protocol.Commands;
 
-namespace Podish.Cli.Pulse;
+namespace Podish.Pulse.Audio;
 
-internal sealed class PlaybackStreamState
+public sealed class PlaybackStreamState
 {
     private readonly object _gate = new();
     private int _pendingRequestedBytes;
@@ -12,7 +12,7 @@ internal sealed class PlaybackStreamState
 
     public PlaybackStreamState(uint channelIndex, CreatePlaybackStreamParams parameters, string? clientName)
     {
-        var normalizedBufferAttr = NormalizeBufferAttr(parameters.BufferAttr, parameters.SampleSpec);
+        PlaybackBufferAttr normalizedBufferAttr = NormalizeBufferAttr(parameters.BufferAttr, parameters.SampleSpec);
 
         ChannelIndex = channelIndex;
         StreamIndex = channelIndex;
@@ -63,9 +63,7 @@ internal sealed class PlaybackStreamState
         get
         {
             lock (_gate)
-            {
                 return _pendingRequestedBytes;
-            }
         }
     }
 
@@ -76,7 +74,7 @@ internal sealed class PlaybackStreamState
             if (BufferAttr.MinRequest > 0)
                 return (int)BufferAttr.MinRequest;
 
-            var frameSize = Math.Max(1, SampleSpec.BytesPerSample * SampleSpec.Channels);
+            int frameSize = Math.Max(1, SampleSpec.BytesPerSample * SampleSpec.Channels);
             return Math.Max(frameSize * 256, 4096);
         }
     }
@@ -90,7 +88,7 @@ internal sealed class PlaybackStreamState
             if (BufferAttr.TargetLength > 0)
                 return (int)BufferAttr.TargetLength;
 
-            var request = RequestBytesHint;
+            int request = RequestBytesHint;
             return Math.Max(request * 2, 8192);
         }
     }
@@ -104,8 +102,8 @@ internal sealed class PlaybackStreamState
     {
         lock (_gate)
         {
-            var normalized = NormalizeChannelVolume(volume, SampleSpec.Channels);
-            for (var i = 0; i < normalized.Channels; i++)
+            ChannelVolume normalized = NormalizeChannelVolume(volume, SampleSpec.Channels);
+            for (int i = 0; i < normalized.Channels; i++)
                 Volume[i] = normalized[i];
 
             AudioStream.SetGain(ComputeGain(Volume, Mute));
@@ -165,7 +163,7 @@ internal sealed class PlaybackStreamState
         if (data.IsEmpty)
             return BufferedBytes;
 
-        var written = AudioStream.PutData(data);
+        int written = AudioStream.PutData(data);
         lock (_gate)
         {
             _pendingRequestedBytes = Math.Max(0, _pendingRequestedBytes - written);
@@ -245,7 +243,7 @@ internal sealed class PlaybackStreamState
             return 1.0f;
 
         float total = 0;
-        for (var i = 0; i < volume.Channels; i++)
+        for (int i = 0; i < volume.Channels; i++)
             total += volume[i].ToLinear();
         return total / volume.Channels;
     }
@@ -267,7 +265,7 @@ internal sealed class PlaybackStreamState
 
     private static PlaybackBufferAttr NormalizeBufferAttr(PlaybackBufferAttr? bufferAttr, SampleSpec sampleSpec)
     {
-        var attr = bufferAttr is null
+        PlaybackBufferAttr attr = bufferAttr is null
             ? CreateDefaultBufferAttr(sampleSpec)
             : new PlaybackBufferAttr
             {
@@ -278,7 +276,7 @@ internal sealed class PlaybackStreamState
                 MinIncrement = bufferAttr.MinIncrement
             };
 
-        var defaults = CreateDefaultBufferAttr(sampleSpec);
+        PlaybackBufferAttr defaults = CreateDefaultBufferAttr(sampleSpec);
 
         if (attr.MaxLength == 0 || attr.MaxLength == uint.MaxValue)
             attr.MaxLength = defaults.MaxLength;
@@ -296,17 +294,17 @@ internal sealed class PlaybackStreamState
 
     private static int ComputeRingCapacity(PlaybackBufferAttr bufferAttr, SampleSpec sampleSpec)
     {
-        var target = bufferAttr.TargetLength > 0 ? (int)bufferAttr.TargetLength : 128 * 1024;
-        var frameSize = Math.Max(1, sampleSpec.BytesPerSample * sampleSpec.Channels);
-        var minRequest = bufferAttr.MinRequest > 0 ? (int)bufferAttr.MinRequest : Math.Max(frameSize * 256, 4096);
-        var capacity = Math.Max(256 * 1024, target + 2 * minRequest);
+        int target = bufferAttr.TargetLength > 0 ? (int)bufferAttr.TargetLength : 128 * 1024;
+        int frameSize = Math.Max(1, sampleSpec.BytesPerSample * sampleSpec.Channels);
+        int minRequest = bufferAttr.MinRequest > 0 ? (int)bufferAttr.MinRequest : Math.Max(frameSize * 256, 4096);
+        int capacity = Math.Max(256 * 1024, target + 2 * minRequest);
         return AlignToFrame(capacity, frameSize);
     }
 
     private static int AlignToFrame(int bytes, int frameSize)
     {
-        var size = Math.Max(1, frameSize);
-        var remainder = bytes % size;
+        int size = Math.Max(1, frameSize);
+        int remainder = bytes % size;
         return remainder == 0 ? bytes : bytes + (size - remainder);
     }
 
@@ -317,9 +315,9 @@ internal sealed class PlaybackStreamState
 
         if (requested.Channels == 1)
         {
-            var expanded = new ChannelVolume();
-            var volume = requested[0];
-            for (var i = 0; i < expectedChannels; i++)
+            ChannelVolume expanded = new();
+            Volume volume = requested[0];
+            for (int i = 0; i < expectedChannels; i++)
                 expanded.Push(volume);
             return expanded;
         }
@@ -330,8 +328,8 @@ internal sealed class PlaybackStreamState
 
     private static ChannelVolume CloneChannelVolume(ChannelVolume requested)
     {
-        var clone = new ChannelVolume();
-        for (var i = 0; i < requested.Channels; i++)
+        ChannelVolume clone = new();
+        for (int i = 0; i < requested.Channels; i++)
             clone.Push(requested[i]);
         return clone;
     }
