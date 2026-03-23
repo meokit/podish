@@ -109,11 +109,7 @@ public class CloneThreadLifecycleTests
         Assert.True(env.Engine.CopyToUser(clearTidPtr, BitConverter.GetBytes(123u)));
         env.Task.ChildClearTidPtr = clearTidPtr;
 
-        var hostPtr = env.Engine.GetPhysicalAddressSafe(clearTidPtr, false);
-        Assert.NotEqual(IntPtr.Zero, hostPtr);
-
-        var privateWaiter = env.SyscallManager.Futex.PrepareWait(clearTidPtr);
-        var sharedWaiter = env.SyscallManager.Futex.PrepareWaitShared(hostPtr);
+        var privateWaiter = env.SyscallManager.Futex.PrepareWait(ResolvePrivateKey(env.Vma, clearTidPtr));
 
         var rc = await CallSys(env.SyscallManager, env.Engine, "SysExit");
         Assert.Equal(0, rc);
@@ -122,7 +118,6 @@ public class CloneThreadLifecycleTests
         Assert.True(env.Engine.CopyFromUser(clearTidPtr, valueBuf));
         Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(valueBuf));
         Assert.True(privateWaiter.Tcs.Task.IsCompleted);
-        Assert.True(sharedWaiter.Tcs.Task.IsCompleted);
         GC.KeepAlive(sibling);
     }
 
@@ -133,14 +128,15 @@ public class CloneThreadLifecycleTests
         const uint futexAddr = 0x00602000;
         env.MapUserPage(futexAddr);
 
-        var waiter = env.SyscallManager.Futex.PrepareWait(futexAddr);
-        using var registration = env.SyscallManager.Futex.CreatePrivateWaitRegistration(futexAddr, waiter);
+        var key = ResolvePrivateKey(env.Vma, futexAddr);
+        var waiter = env.SyscallManager.Futex.PrepareWait(key);
+        using var registration = env.SyscallManager.Futex.CreateWaitRegistration(key, waiter);
 
-        Assert.Equal(1, env.SyscallManager.Futex.GetWaiterCount(futexAddr));
+        Assert.Equal(1, env.SyscallManager.Futex.GetWaiterCount(key));
 
         registration.Cancel();
 
-        Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(futexAddr));
+        Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(key));
         Assert.True(waiter.Tcs.Task.IsCompleted);
         Assert.False(waiter.Tcs.Task.Result);
     }
@@ -175,7 +171,7 @@ public class CloneThreadLifecycleTests
         var futexAddr = nodeAddr + futexOffset;
 
         env.MapUserPage(headAddr);
-        env.MapUserPage(nodeAddr);
+        env.MapSharedAnonymousPage(nodeAddr);
 
         var headBuf = new byte[12];
         BinaryPrimitives.WriteUInt32LittleEndian(headBuf.AsSpan(0, 4), nodeAddr);
@@ -191,9 +187,7 @@ public class CloneThreadLifecycleTests
         env.Task.RobustListHead = headAddr;
         env.Task.RobustListSize = 12;
 
-        var hostPtr = env.Engine.GetPhysicalAddressSafe(futexAddr, false);
-        Assert.NotEqual(IntPtr.Zero, hostPtr);
-        var waiter = env.SyscallManager.Futex.PrepareWaitShared(hostPtr);
+        var waiter = env.SyscallManager.Futex.PrepareWait(ResolveSharedKey(env.Vma, futexAddr));
 
         env.Task.ExitRobustList();
 
@@ -203,6 +197,64 @@ public class CloneThreadLifecycleTests
         Assert.True(env.Engine.CopyFromUser(futexAddr, valueBuf));
         var updated = BinaryPrimitives.ReadUInt32LittleEndian(valueBuf);
         Assert.True((updated & LinuxConstants.FUTEX_OWNER_DIED) != 0);
+    }
+
+    [Fact]
+    public async Task PrivateFutex_SameVirtualAddressInDifferentProcesses_DoesNotCollide()
+    {
+        using var env = new TestEnv(260, 260);
+        const uint futexAddr = 0x00620000;
+        env.MapUserPage(futexAddr);
+        Assert.True(env.Engine.CopyToUser(futexAddr, BitConverter.GetBytes(1u)));
+
+        var child = await env.Task.Clone(0, 0, 0, 0, 0);
+        Assert.NotSame(env.Process.Mem, child.Process.Mem);
+        Assert.True(child.CPU.CopyToUser(futexAddr, BitConverter.GetBytes(1u)));
+
+        var parentKey = ResolvePrivateKey(env.Vma, futexAddr);
+        var childKey = ResolvePrivateKey(child.Process.Mem, futexAddr);
+
+        var waiter = env.SyscallManager.Futex.PrepareWait(parentKey);
+        Assert.Equal(0, env.SyscallManager.Futex.Wake(childKey, 1));
+        Assert.False(waiter.Tcs.Task.IsCompleted);
+
+        Assert.Equal(1, env.SyscallManager.Futex.Wake(parentKey, 1));
+        Assert.True(waiter.Tcs.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task SharedFileFutex_DifferentMappingsAndFiles_HitSameKey()
+    {
+        using var env = new TestEnv(270, 270);
+        var child = await env.Task.Clone(0, 0, 0, 0, 0);
+
+        var file1 = env.CreateTmpfsFile("futex-shared");
+        var file2 = new LinuxFile(file1.Dentry, FileFlags.O_RDWR, null!);
+        Assert.Equal(file1.Dentry.Inode, file2.Dentry.Inode);
+        Assert.Equal(4, file1.Dentry.Inode!.Write(file1, BitConverter.GetBytes(2u), 0));
+
+        const uint parentAddr = 0x00630000;
+        const uint childAddr = 0x00634000;
+        env.Vma.Mmap(parentAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+            MapFlags.Shared | MapFlags.Fixed, file1, 0, "futex-parent", env.Engine);
+        child.Process.Mem.Mmap(childAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+            MapFlags.Shared | MapFlags.Fixed, file2, 0, "futex-child", child.CPU);
+        Assert.True(env.Vma.HandleFault(parentAddr, true, env.Engine));
+        Assert.True(child.Process.Mem.HandleFault(childAddr, true, child.CPU));
+        Assert.True(env.Engine.CopyToUser(parentAddr, BitConverter.GetBytes(2u)));
+        Assert.True(child.CPU.CopyToUser(childAddr, BitConverter.GetBytes(2u)));
+
+        file1.Close();
+
+        var parentKey = ResolveSharedKey(env.Vma, parentAddr);
+        var childKey = ResolveSharedKey(child.Process.Mem, childAddr);
+        Assert.Equal(parentKey, childKey);
+
+        var waiter = env.SyscallManager.Futex.PrepareWait(parentKey);
+        Assert.Equal(1, env.SyscallManager.Futex.Wake(childKey, 1));
+        Assert.True(waiter.Tcs.Task.IsCompleted);
+
+        file2.Close();
     }
 
     [Fact]
@@ -345,6 +397,9 @@ public class CloneThreadLifecycleTests
             Process = new Process(tgid, Vma, SyscallManager);
             Scheduler = new KernelScheduler();
 
+            var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+            TmpfsSuper = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-tmpfs", null);
+
             Task = new FiberTask(tid, Process, Engine, Scheduler);
             Engine.Owner = Task;
         }
@@ -355,6 +410,7 @@ public class CloneThreadLifecycleTests
         public Process Process { get; }
         public KernelScheduler Scheduler { get; }
         public FiberTask Task { get; }
+        public SuperBlock TmpfsSuper { get; }
 
         public void Dispose()
         {
@@ -368,5 +424,38 @@ public class CloneThreadLifecycleTests
                 Engine);
             Assert.True(Vma.HandleFault(addr, true, Engine));
         }
+
+        public void MapSharedAnonymousPage(uint addr)
+        {
+            Vma.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[test-shared]",
+                Engine);
+            Assert.True(Vma.HandleFault(addr, true, Engine));
+        }
+
+        public LinuxFile CreateTmpfsFile(string name)
+        {
+            var dentry = new Dentry(name, null, TmpfsSuper.Root, TmpfsSuper);
+            TmpfsSuper.Root.Inode!.Create(dentry, 0x1B6, 0, 0);
+            return new LinuxFile(dentry, FileFlags.O_RDWR, null!);
+        }
+    }
+
+    private static FutexKey ResolvePrivateKey(VMAManager mm, uint uaddr)
+    {
+        return FutexKey.Private(mm, uaddr & LinuxConstants.PageMask, (ushort)(uaddr & LinuxConstants.PageOffsetMask));
+    }
+
+    private static FutexKey ResolveSharedKey(VMAManager mm, uint uaddr)
+    {
+        var vma = mm.FindVmArea(uaddr);
+        Assert.NotNull(vma);
+        Assert.True((vma!.Flags & MapFlags.Shared) != 0);
+        var pageIndex = vma.GetPageIndex(uaddr & LinuxConstants.PageMask);
+        var offset = (ushort)(uaddr & LinuxConstants.PageOffsetMask);
+        if (vma.IsFileBacked)
+            return FutexKey.SharedFile(vma.File!.OpenedInode!, pageIndex, offset);
+        Assert.NotNull(vma.VmMapping);
+        return FutexKey.SharedAnonymous(vma.VmMapping!, pageIndex, offset);
     }
 }

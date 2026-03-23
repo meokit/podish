@@ -2,143 +2,95 @@ namespace Fiberish.Core;
 
 public class Waiter
 {
+    internal Waiter(FutexKey key)
+    {
+        Key = key;
+    }
+
+    internal FutexKey Key { get; }
     public TaskCompletionSource<bool> Tcs { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public void ReleaseKeyRef()
+    {
+        if (Interlocked.Exchange(ref _keyRefReleased, 1) != 0) return;
+        Key.ReleaseRef();
+    }
+
+    private int _keyRefReleased;
 }
 
 public class FutexManager
 {
     // Single-container scheduler-thread ownership: futex queue state is mutated only from scheduler thread.
 
-    // Private futex: keyed by guest virtual address (FUTEX_PRIVATE_FLAG or same-process)
-    private readonly Dictionary<uint, List<Waiter>> _privateQueues = [];
+    private readonly Dictionary<FutexKey, List<Waiter>> _queues = [];
 
-    // Shared futex: keyed by host physical pointer (cross-process MAP_SHARED)
-    private readonly Dictionary<nint, List<Waiter>> _sharedQueues = [];
-
-    public Waiter PrepareWait(uint addr)
+    internal Waiter PrepareWait(FutexKey key)
     {
-        if (!_privateQueues.TryGetValue(addr, out var list))
+        if (!_queues.TryGetValue(key, out var list))
         {
             list = [];
-            _privateQueues[addr] = list;
+            _queues[key] = list;
         }
 
-        var w = new Waiter();
+        key.AcquireRef();
+        var w = new Waiter(key);
         list.Add(w);
         return w;
     }
 
-    internal ITaskAsyncRegistration CreatePrivateWaitRegistration(uint addr, Waiter waiter)
+    internal ITaskAsyncRegistration CreateWaitRegistration(FutexKey key, Waiter waiter)
     {
-        return new WaitRegistration(this, addr, waiter, isShared: false);
+        return new WaitRegistration(this, key, waiter);
     }
 
-    public void CancelWait(uint addr, Waiter w)
+    internal void CancelWait(FutexKey key, Waiter waiter)
     {
-        if (_privateQueues.TryGetValue(addr, out var list))
+        if (_queues.TryGetValue(key, out var list))
         {
-            list.Remove(w);
-            if (list.Count == 0) _privateQueues.Remove(addr);
+            list.Remove(waiter);
+            if (list.Count == 0) _queues.Remove(key);
         }
+
+        waiter.ReleaseKeyRef();
     }
 
-    public int Wake(uint addr, int count)
+    internal int Wake(FutexKey key, int count)
     {
-        if (!_privateQueues.TryGetValue(addr, out var list) || list.Count == 0) return 0;
+        if (!_queues.TryGetValue(key, out var list) || list.Count == 0) return 0;
 
         var woken = 0;
         while (count > 0 && list.Count > 0)
         {
             var w = list[0];
             list.RemoveAt(0);
+            w.ReleaseKeyRef();
             w.Tcs.TrySetResult(true);
             woken++;
             count--;
         }
 
-        if (list.Count == 0) _privateQueues.Remove(addr);
+        if (list.Count == 0) _queues.Remove(key);
 
         return woken;
     }
 
-    public int GetWaiterCount(uint addr)
+    internal int GetWaiterCount(FutexKey key)
     {
-        return _privateQueues.TryGetValue(addr, out var list) ? list.Count : 0;
-    }
-
-    public Waiter PrepareWaitShared(nint hostKey)
-    {
-        if (!_sharedQueues.TryGetValue(hostKey, out var list))
-        {
-            list = [];
-            _sharedQueues[hostKey] = list;
-        }
-
-        var w = new Waiter();
-        list.Add(w);
-        return w;
-    }
-
-    internal ITaskAsyncRegistration CreateSharedWaitRegistration(nint hostKey, Waiter waiter)
-    {
-        return new WaitRegistration(this, hostKey, waiter, isShared: true);
-    }
-
-    public void CancelWaitShared(nint hostKey, Waiter w)
-    {
-        if (_sharedQueues.TryGetValue(hostKey, out var list))
-        {
-            list.Remove(w);
-            if (list.Count == 0) _sharedQueues.Remove(hostKey);
-        }
-    }
-
-    public int WakeShared(nint hostKey, int count)
-    {
-        if (!_sharedQueues.TryGetValue(hostKey, out var list) || list.Count == 0) return 0;
-
-        var woken = 0;
-        while (count > 0 && list.Count > 0)
-        {
-            var w = list[0];
-            list.RemoveAt(0);
-            w.Tcs.TrySetResult(true);
-            woken++;
-            count--;
-        }
-
-        if (list.Count == 0) _sharedQueues.Remove(hostKey);
-
-        return woken;
-    }
-
-    public int GetWaiterCountShared(nint hostKey)
-    {
-        return _sharedQueues.TryGetValue(hostKey, out var list) ? list.Count : 0;
+        return _queues.TryGetValue(key, out var list) ? list.Count : 0;
     }
 
     private sealed class WaitRegistration : ITaskAsyncRegistration
     {
         private readonly FutexManager _manager;
-        private readonly bool _isShared;
-        private readonly uint _privateAddr;
-        private readonly nint _sharedKey;
+        private readonly FutexKey _key;
         private Waiter? _waiter;
 
-        public WaitRegistration(FutexManager manager, uint privateAddr, Waiter waiter, bool isShared)
+        public WaitRegistration(FutexManager manager, FutexKey key, Waiter waiter)
         {
             _manager = manager;
-            _privateAddr = privateAddr;
+            _key = key;
             _waiter = waiter;
-            _isShared = isShared;
-        }
-
-        public WaitRegistration(FutexManager manager, nint sharedKey, Waiter waiter, bool isShared)
-        {
-            _manager = manager;
-            _sharedKey = sharedKey;
-            _waiter = waiter;
-            _isShared = isShared;
         }
 
         public bool IsActive => _waiter != null;
@@ -148,11 +100,7 @@ public class FutexManager
             var waiter = Interlocked.Exchange(ref _waiter, null);
             if (waiter == null) return;
 
-            if (_isShared)
-                _manager.CancelWaitShared(_sharedKey, waiter);
-            else
-                _manager.CancelWait(_privateAddr, waiter);
-
+            _manager.CancelWait(_key, waiter);
             waiter.Tcs.TrySetResult(false);
         }
 

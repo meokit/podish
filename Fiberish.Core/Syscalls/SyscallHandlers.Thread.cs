@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
@@ -26,74 +27,50 @@ public partial class SyscallManager
             var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(tidBuf);
             if (currentVal != val) return -(int)Errno.EAGAIN;
 
-            nint physKey = 0;
-            if (!isPrivate)
-            {
-                var hostPtr = engine.GetPhysicalAddressSafe(uaddr, false);
-                if (hostPtr == IntPtr.Zero) return -(int)Errno.EFAULT;
-                physKey = hostPtr;
-            }
+            if (!TryResolveFutexKey(engine, uaddr, fshared: !isPrivate, out var waitKey, out var error))
+                return error;
 
-            var waiter = isPrivate
-                ? Futex.PrepareWait(uaddr)
-                : Futex.PrepareWaitShared(physKey);
-            var registration = isPrivate
-                ? Futex.CreatePrivateWaitRegistration(uaddr, waiter)
-                : Futex.CreateSharedWaitRegistration(physKey, waiter);
+            var waiter = Futex.PrepareWait(waitKey);
+            var registration = Futex.CreateWaitRegistration(waitKey, waiter);
 
             var task = engine.Owner as FiberTask;
             if (task == null)
             {
                 registration.Cancel();
-                if (isPrivate)
-                    Futex.CancelWait(uaddr, waiter);
-                else
-                    Futex.CancelWaitShared(physKey, waiter);
                 return -(int)Errno.EINVAL;
             }
 
             Logger.LogInformation(
-                "[SysFutex WAIT] TID={TID} uaddr=0x{Uaddr:x} val={Val} isPrivate={IsPrivate} physKey=0x{PhysKey:x} WakeReason={WR} PendingSig=0x{PS:x}",
-                task.TID, uaddr, val, isPrivate, physKey, task.WakeReason, task.PendingSignals);
+                "[SysFutex WAIT] TID={TID} uaddr=0x{Uaddr:x} val={Val} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset} WakeReason={WR} PendingSig=0x{PS:x}",
+                task.TID, uaddr, val, isPrivate, waitKey.Kind, waitKey.PageValue, waitKey.OffsetWithinPage, task.WakeReason, task.PendingSignals);
             var result = await new FutexAwaitable(waiter, task, registration);
             Logger.LogInformation(
                 "[SysFutex WAIT] TID={TID} awaiter result={Result} WakeReason={WR} PendingSig=0x{PS:x}",
                 task.TID, result, task.WakeReason, task.PendingSignals);
             if (result == AwaitResult.Interrupted)
             {
-                if (isPrivate)
-                    Futex.CancelWait(uaddr, waiter);
-                else
-                    Futex.CancelWaitShared(physKey, waiter);
+                Futex.CancelWait(waitKey, waiter);
                 return -(int)Errno.ERESTARTSYS;
             }
 
             return 0;
         }
 
-        nint sharedKey = 0;
-        if (!isPrivate)
-        {
-            if (opCode == 1)
-                engine.CopyFromUser(uaddr, new byte[1]);
-
-            var hostPtr = engine.GetPhysicalAddressSafe(uaddr, false);
-            sharedKey = hostPtr != IntPtr.Zero ? hostPtr : 0;
-        }
-
         if (opCode == 1) // WAKE
         {
             var count = (int)val;
-            if (isPrivate) return Futex.Wake(uaddr, count);
-            return sharedKey != 0
-                ? Futex.WakeShared(sharedKey, count)
-                : Futex.Wake(uaddr, count);
+            if (!TryResolveFutexKey(engine, uaddr, fshared: !isPrivate, out var wakeKey, out var error))
+                return error;
+            return Futex.Wake(wakeKey, count);
         }
 
         if (opCode is LinuxConstants.FUTEX_LOCK_PI or LinuxConstants.FUTEX_TRYLOCK_PI)
         {
             var task = engine.Owner as FiberTask;
             if (task == null) return -(int)Errno.EINVAL;
+
+            if (!TryResolveFutexKey(engine, uaddr, fshared: !isPrivate, out var lockKey, out var error))
+                return error;
 
             while (true)
             {
@@ -106,11 +83,7 @@ public partial class SyscallManager
 
                 if (owner == 0)
                 {
-                    var queuedWaiters = isPrivate
-                        ? Futex.GetWaiterCount(uaddr)
-                        : sharedKey != 0
-                            ? Futex.GetWaiterCountShared(sharedKey)
-                            : Futex.GetWaiterCount(uaddr);
+                    var queuedWaiters = Futex.GetWaiterCount(lockKey);
                     var nextVal = (uint)task.TID;
                     if (hasWaiters || queuedWaiters > 0) nextVal |= LinuxConstants.FUTEX_WAITERS;
                     BinaryPrimitives.WriteUInt32LittleEndian(futexWord, nextVal);
@@ -131,28 +104,15 @@ public partial class SyscallManager
                     if (!engine.CopyToUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
                 }
 
-                var waiter = isPrivate
-                    ? Futex.PrepareWait(uaddr)
-                    : sharedKey != 0
-                        ? Futex.PrepareWaitShared(sharedKey)
-                        : Futex.PrepareWait(uaddr);
-                var registration = isPrivate
-                    ? Futex.CreatePrivateWaitRegistration(uaddr, waiter)
-                    : sharedKey != 0
-                        ? Futex.CreateSharedWaitRegistration(sharedKey, waiter)
-                        : Futex.CreatePrivateWaitRegistration(uaddr, waiter);
+                var waiter = Futex.PrepareWait(lockKey);
+                var registration = Futex.CreateWaitRegistration(lockKey, waiter);
 
-                Logger.LogTrace("[SysFutex LOCK_PI] TID={TID} waiting uaddr=0x{Uaddr:x} owner={Owner} isPrivate={IsPrivate} physKey=0x{PhysKey:x}",
-                    task.TID, uaddr, owner, isPrivate, sharedKey);
+                Logger.LogTrace("[SysFutex LOCK_PI] TID={TID} waiting uaddr=0x{Uaddr:x} owner={Owner} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset}",
+                    task.TID, uaddr, owner, isPrivate, lockKey.Kind, lockKey.PageValue, lockKey.OffsetWithinPage);
                 var result = await new FutexAwaitable(waiter, task, registration);
                 if (result == AwaitResult.Interrupted)
                 {
-                    if (isPrivate)
-                        Futex.CancelWait(uaddr, waiter);
-                    else if (sharedKey != 0)
-                        Futex.CancelWaitShared(sharedKey, waiter);
-                    else
-                        Futex.CancelWait(uaddr, waiter);
+                    Futex.CancelWait(lockKey, waiter);
                     return -(int)Errno.ERESTARTSYS;
                 }
             }
@@ -170,20 +130,15 @@ public partial class SyscallManager
             var owner = currentVal & LinuxConstants.FUTEX_TID_MASK;
             if (owner != (uint)task.TID) return -(int)Errno.EPERM;
 
-            var queuedWaiters = isPrivate
-                ? Futex.GetWaiterCount(uaddr)
-                : sharedKey != 0
-                    ? Futex.GetWaiterCountShared(sharedKey)
-                    : Futex.GetWaiterCount(uaddr);
+            if (!TryResolveFutexKey(engine, uaddr, fshared: !isPrivate, out var unlockKey, out var error))
+                return error;
+
+            var queuedWaiters = Futex.GetWaiterCount(unlockKey);
             var nextVal = queuedWaiters > 0 ? LinuxConstants.FUTEX_WAITERS : 0u;
             BinaryPrimitives.WriteUInt32LittleEndian(futexWord, nextVal);
             if (!engine.CopyToUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
 
-            var woke = isPrivate
-                ? Futex.Wake(uaddr, 1)
-                : sharedKey != 0
-                    ? Futex.WakeShared(sharedKey, 1)
-                    : Futex.Wake(uaddr, 1);
+            var woke = Futex.Wake(unlockKey, 1);
 
             Logger.LogTrace("[SysFutex UNLOCK_PI] TID={TID} released uaddr=0x{Uaddr:x} queuedWaiters={Waiters} woke={Woke}",
                 task.TID, uaddr, queuedWaiters, woke);
@@ -210,6 +165,79 @@ public partial class SyscallManager
         {
             return new FutexAwaiter(_waiter, _task, _registration);
         }
+    }
+
+    internal int WakeFutexAddress(Engine engine, uint uaddr, int count, bool includePrivate = true, bool includeShared = true)
+    {
+        var woke = 0;
+        if (includePrivate && TryResolvePrivateFutexKey(engine, uaddr, out var privateKey))
+            woke += Futex.Wake(privateKey, count);
+        if (includeShared && TryResolveSharedFutexKey(engine, uaddr, out var sharedKey))
+            woke += Futex.Wake(sharedKey, count);
+        return woke;
+    }
+
+    private bool TryResolveFutexKey(Engine engine, uint uaddr, bool fshared, out FutexKey key, out int error)
+    {
+        if (fshared)
+            return TryResolveSharedFutexKey(engine, uaddr, out key, out error);
+
+        if (TryResolvePrivateFutexKey(engine, uaddr, out key))
+        {
+            error = 0;
+            return true;
+        }
+
+        error = -(int)Errno.EFAULT;
+        return false;
+    }
+
+    private bool TryResolvePrivateFutexKey(Engine engine, uint uaddr, out FutexKey key)
+    {
+        key = default;
+        if (!engine.CopyFromUser(uaddr, new byte[1]))
+            return false;
+
+        key = FutexKey.Private(Mem, uaddr & LinuxConstants.PageMask, (ushort)(uaddr & LinuxConstants.PageOffsetMask));
+        return true;
+    }
+
+    private bool TryResolveSharedFutexKey(Engine engine, uint uaddr, out FutexKey key)
+    {
+        return TryResolveSharedFutexKey(engine, uaddr, out key, out _);
+    }
+
+    private bool TryResolveSharedFutexKey(Engine engine, uint uaddr, out FutexKey key, out int error)
+    {
+        key = default;
+        error = -(int)Errno.EFAULT;
+
+        if (!engine.CopyFromUser(uaddr, new byte[1]))
+            return false;
+
+        var vma = Mem.FindVmArea(uaddr);
+        if (vma == null || (vma.Flags & MapFlags.Shared) == 0)
+            return false;
+
+        var pageStart = uaddr & LinuxConstants.PageMask;
+        var pageIndex = vma.GetPageIndex(pageStart);
+        var offsetWithinPage = (ushort)(uaddr & LinuxConstants.PageOffsetMask);
+
+        if (vma.IsFileBacked && vma.File?.OpenedInode != null)
+        {
+            key = FutexKey.SharedFile(vma.File.OpenedInode, pageIndex, offsetWithinPage);
+            error = 0;
+            return true;
+        }
+
+        if (vma.VmMapping != null)
+        {
+            key = FutexKey.SharedAnonymous(vma.VmMapping, pageIndex, offsetWithinPage);
+            error = 0;
+            return true;
+        }
+
+        return false;
     }
 
     private readonly struct FutexAwaiter : INotifyCompletion

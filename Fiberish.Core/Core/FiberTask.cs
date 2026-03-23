@@ -2010,10 +2010,7 @@ public class FiberTask
         // If this is a pending op, and no one owns it, we might just wake it
         if (pendingOp && owner == 0)
         {
-            sm.Futex.Wake(uaddr, 1);
-            var pendingHostPtr = CPU.GetPhysicalAddressSafe(uaddr, false);
-            if (pendingHostPtr != IntPtr.Zero)
-                sm.Futex.WakeShared(pendingHostPtr, 1);
+            sm.WakeFutexAddress(CPU, uaddr, 1);
             return;
         }
 
@@ -2026,10 +2023,7 @@ public class FiberTask
 
         if ((uval & LinuxConstants.FUTEX_WAITERS) != 0)
         {
-            sm.Futex.Wake(uaddr, 1);
-            var hostPtr = CPU.GetPhysicalAddressSafe(uaddr, false);
-            if (hostPtr != IntPtr.Zero)
-                sm.Futex.WakeShared(hostPtr, 1);
+            sm.WakeFutexAddress(CPU, uaddr, 1);
         }
     }
 
@@ -2045,11 +2039,6 @@ public class FiberTask
         if (!CPU.CopyToUser(clearTidPtr, zero)) return;
 
         // Wake private-key waiters.
-        Process.Syscalls.Futex.Wake(clearTidPtr, 1);
-
-        // Also wake shared-key waiters used by non-private futex operations.
-        var hostPtr = CPU.GetPhysicalAddressSafe(clearTidPtr, false);
-        if (hostPtr != IntPtr.Zero)
-            Process.Syscalls.Futex.WakeShared(hostPtr, 1);
+        Process.Syscalls.WakeFutexAddress(CPU, clearTidPtr, 1);
     }
 }

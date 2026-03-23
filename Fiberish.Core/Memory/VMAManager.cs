@@ -26,6 +26,7 @@ public class VMAManager
 
     private readonly List<CodeCacheResetEntry> _pendingCodeCacheResets = [];
     private readonly List<VmArea> _vmas = [];
+    private int _futexKeyRefCount = 1;
     private VmArea? _lastFaultVma;
     private long _mapSequence;
     private int _sharedRefCount = 1;
@@ -50,6 +51,18 @@ public class VMAManager
     public int GetSharedRefCount()
     {
         return Volatile.Read(ref _sharedRefCount);
+    }
+
+    internal void AcquireFutexKeyRef()
+    {
+        Interlocked.Increment(ref _futexKeyRefCount);
+    }
+
+    internal void ReleaseFutexKeyRef()
+    {
+        var remaining = Interlocked.Decrement(ref _futexKeyRefCount);
+        if (remaining >= 0) return;
+        Interlocked.Exchange(ref _futexKeyRefCount, 0);
     }
 
     internal long BumpMapSequence()
