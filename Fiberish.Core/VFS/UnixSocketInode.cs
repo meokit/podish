@@ -40,6 +40,8 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
     private byte[]? _peerSunPathRaw;
     private bool _peerWriteClosed;
     private bool _passCred;
+    private UnixCredentials? _peerCredentials;
+    private UnixCredentials? _sendCredentialsOverride;
     private int _queuedBytes;
     private Action<UnixSocketInode>? _releaseUnbindCallback;
     private bool _shutDownRead;
@@ -355,6 +357,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         SetPeerSunPathRaw(target.GetLocalSunPathRaw());
         serverConn.SetLocalSunPathRaw(target.GetLocalSunPathRaw());
         serverConn.SetPeerSunPathRaw(GetLocalSunPathRaw());
+        serverConn.SetPeerCredentials(new UnixCredentials(task.Process.TGID, task.Process.EUID, task.Process.EGID));
 
         var enqueueRc = target.EnqueueConnection(serverConn);
         if (enqueueRc < 0)
@@ -678,6 +681,30 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         }
     }
 
+    public void SetPeerCredentials(UnixCredentials? credentials)
+    {
+        using (EnterStateScope())
+        {
+            _peerCredentials = credentials;
+        }
+    }
+
+    public UnixCredentials? GetPeerCredentials()
+    {
+        using (EnterStateScope())
+        {
+            return _peerCredentials;
+        }
+    }
+
+    public void SetSendCredentialsOverride(UnixCredentials? credentials)
+    {
+        using (EnterStateScope())
+        {
+            _sendCredentialsOverride = credentials;
+        }
+    }
+
     public void SetReleaseUnbindCallback(Action<UnixSocketInode>? callback)
     {
         using (EnterStateScope())
@@ -884,11 +911,17 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         }
 
         byte[] clonedData = data.ToArray();
+        UnixCredentials? credentials = null;
+        if (peer._passCred)
+        {
+            credentials = _sendCredentialsOverride ?? new UnixCredentials(task.Process.TGID, task.Process.EUID, task.Process.EGID);
+        }
+
         var msg = new UnixMessage
         {
             Data = clonedData,
             SourceSunPathRaw = GetLocalSunPathRaw(),
-            Credentials = peer._passCred ? new UnixCredentials(task.Process.TGID, task.Process.EUID, task.Process.EGID) : null
+            Credentials = credentials
         };
         if (fds != null)
         {

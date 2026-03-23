@@ -72,6 +72,13 @@ internal sealed class PodishPulseVirtualDaemon : IVirtualDaemon
                     return;
                 }
 
+                if (connection.File.OpenedInode is UnixSocketInode acceptedSocket)
+                {
+                    UnixCredentials? peerCredentials = acceptedSocket.GetPeerCredentials();
+                    if (peerCredentials != null)
+                        acceptedSocket.SetSendCredentialsOverride(peerCredentials);
+                }
+
                 ctx.ScheduleChild(childCtx =>
                 {
                     connection.BindTask(childCtx.Task);
