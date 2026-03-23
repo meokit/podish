@@ -536,11 +536,12 @@ public partial class SyscallManager
 
             var outMsgFlags = 0;
 
-            if (res.Fds != null && res.Fds.Count > 0 && msg.msg_control != 0 && msg.msg_controllen >= 16)
+            if ((res.Fds is { Count: > 0 } || res.Credentials != null) && msg.msg_control != 0 && msg.msg_controllen >= 16)
             {
                 var cloexec = (flags & LinuxConstants.MSG_CMSG_CLOEXEC) != 0;
-                WriteCmsgFds(engine, msg.msg_control, msg.msg_controllen, res.Fds, out var outCtlLen, cloexec);
-                if (outCtlLen < 12 + res.Fds.Count * 4)
+                WriteCmsg(engine, msg.msg_control, msg.msg_controllen, res.Fds, res.Credentials, out var outCtlLen,
+                    out bool truncated, cloexec);
+                if (truncated)
                     outMsgFlags |= LinuxConstants.MSG_CTRUNC;
                 WriteBackMsgControllen(engine, msgPtr, outCtlLen);
             }
@@ -856,27 +857,63 @@ public partial class SyscallManager
         return (true, sendFds.Count > 0 ? sendFds : null);
     }
 
-    private void WriteCmsgFds(Engine engine, uint controlPtr, int controlLen, List<LinuxFile> fds, out int writtenBytes, bool cloexec = false)
+    private void WriteCmsg(Engine engine, uint controlPtr, int controlLen, List<LinuxFile>? fds,
+        UnixCredentials? credentials, out int writtenBytes, out bool truncated, bool cloexec = false)
     {
         writtenBytes = 0;
-        var maxFds = (controlLen - 12) / 4;
-        var numFds = Math.Min(fds.Count, maxFds);
-        var reqLen = 12 + numFds * 4;
-        if (reqLen > controlLen) return;
+        truncated = false;
+        var cmRaw = new byte[controlLen];
 
-        var cmRaw = new byte[reqLen];
-        BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(0, 4), reqLen);
-        BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(4, 4), LinuxConstants.SOL_SOCKET);
-        BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(8, 4), LinuxConstants.SCM_RIGHTS);
+        if (fds is { Count: > 0 })
+        {
+            var maxFds = (controlLen - 12) / 4;
+            var numFds = Math.Min(fds.Count, maxFds);
+            var reqLen = 12 + numFds * 4;
+            if (reqLen > controlLen)
+            {
+                truncated = true;
+                return;
+            }
 
-        for (int i = 0; i < numFds; i++) {
-            var fd = AllocFD(fds[i]);
-            if (cloexec) SetFdCloseOnExec(fd, true);
-            BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(12 + i * 4, 4), fd);
+            BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(0, 4), reqLen);
+            BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(4, 4), LinuxConstants.SOL_SOCKET);
+            BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(8, 4), LinuxConstants.SCM_RIGHTS);
+
+            for (int i = 0; i < numFds; i++)
+            {
+                var fd = AllocFD(fds[i]);
+                if (cloexec) SetFdCloseOnExec(fd, true);
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(12 + i * 4, 4), fd);
+            }
+
+            writtenBytes = (reqLen + 3) & ~3;
+            if (numFds < fds.Count)
+                truncated = true;
         }
 
-        engine.CopyToUser(controlPtr, cmRaw);
-        writtenBytes = reqLen;
+        if (credentials != null)
+        {
+            const int ucredSize = 12;
+            int reqLen = 12 + ucredSize;
+            int alignedReqLen = (reqLen + 3) & ~3;
+            if (writtenBytes + reqLen > controlLen)
+            {
+                truncated = true;
+            }
+            else
+            {
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(writtenBytes + 0, 4), reqLen);
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(writtenBytes + 4, 4), LinuxConstants.SOL_SOCKET);
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(writtenBytes + 8, 4), LinuxConstants.SCM_CREDENTIALS);
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(writtenBytes + 12, 4), credentials.Pid);
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(writtenBytes + 16, 4), credentials.Uid);
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(writtenBytes + 20, 4), credentials.Gid);
+                writtenBytes += alignedReqLen;
+            }
+        }
+
+        if (writtenBytes > 0)
+            engine.CopyToUser(controlPtr, cmRaw.AsSpan(0, writtenBytes));
     }
 
     private void WriteBackMsgFlags(Engine engine, uint msgPtr, int msgFlags)

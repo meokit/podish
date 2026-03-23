@@ -424,6 +424,18 @@ public class PolyfillAudioStreamTests
 public class PulseServerStateTests
 {
     [Fact]
+    public void AuthReplyNegotiatesMemfdOnlyWhenClientSupportsIt()
+    {
+        AuthReply enabled = CreateNegotiatedAuthReply(new AuthParams(32, supportsShm: true, supportsMemfd: true, []));
+        Assert.True(enabled.UseShm);
+        Assert.True(enabled.UseMemfd);
+
+        AuthReply disabled = CreateNegotiatedAuthReply(new AuthParams(32, supportsShm: true, supportsMemfd: false, []));
+        Assert.False(disabled.UseShm);
+        Assert.False(disabled.UseMemfd);
+    }
+
+    [Fact]
     public void CreatePlaybackStreamRejectsUnsupportedSpec()
     {
         using var state = new PulseServerState(NullLoggerFactory.Instance);
@@ -506,5 +518,17 @@ public class PulseServerStateTests
         Assert.False(state.TrySetSinkVolume(Constants.InvalidIndex, null, stereo));
         Assert.False(state.TrySetSinkVolume(state.DefaultSink.Index, state.DefaultSink.Name, stereo));
         Assert.False(state.TrySetSinkMute(999, null, true));
+    }
+
+    private static AuthReply CreateNegotiatedAuthReply(AuthParams auth)
+    {
+        ushort version = Math.Min(auth.Version, Constants.MaxVersion);
+        bool useMemfd = auth.Version >= 31 && auth.SupportsMemfd;
+        return new AuthReply
+        {
+            Version = version,
+            UseShm = useMemfd,
+            UseMemfd = useMemfd,
+        };
     }
 }

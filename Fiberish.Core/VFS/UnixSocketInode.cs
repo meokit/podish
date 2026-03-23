@@ -13,6 +13,7 @@ public class UnixMessage
     public byte[] Data { get; init; } = [];
     public List<LinuxFile> Fds { get; init; } = new();
     public byte[]? SourceSunPathRaw { get; init; }
+    public UnixCredentials? Credentials { get; init; }
 }
 
 public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, ISocketEndpointOps, ISocketDataOps,
@@ -38,6 +39,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
     private UnixSocketInode? _peer;
     private byte[]? _peerSunPathRaw;
     private bool _peerWriteClosed;
+    private bool _passCred;
     private int _queuedBytes;
     private Action<UnixSocketInode>? _releaseUnbindCallback;
     private bool _shutDownRead;
@@ -196,7 +198,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         int flags, int maxBytes)
     {
         var res = await RecvMessageAsync(file, task, buffer, flags, maxBytes);
-        return new RecvMessageResult(res.BytesRead, res.Fds, null, res.SourceSunPathRaw);
+        return new RecvMessageResult(res.BytesRead, res.Fds, null, res.SourceSunPathRaw, res.Credentials);
     }
 
     public async ValueTask<int> SendMsgAsync(LinuxFile file, FiberTask task, byte[] buffer, List<LinuxFile>? fds,
@@ -234,7 +236,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         int flags, int maxBytes)
     {
         var res = await RecvMessageAsync(file, task, buffer, flags, maxBytes);
-        return new RecvMessageResult(res.BytesRead, res.Fds, null, res.SourceSunPathRaw);
+        return new RecvMessageResult(res.BytesRead, res.Fds, null, res.SourceSunPathRaw, res.Credentials);
     }
 
 
@@ -403,8 +405,12 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
             case LinuxConstants.SO_KEEPALIVE:
             case LinuxConstants.SO_SNDBUF:
             case LinuxConstants.SO_RCVBUF:
-            case LinuxConstants.SO_PASSCRED:
             case 12: // SO_PRIORITY
+                return 0;
+            case LinuxConstants.SO_PASSCRED:
+                if (optval.Length < 4)
+                    return -(int)Errno.EINVAL;
+                _passCred = BinaryPrimitives.ReadInt32LittleEndian(optval) != 0;
                 return 0;
             default:
                 _ = file;
@@ -439,7 +445,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
                 BinaryPrimitives.WriteInt32LittleEndian(optval, MaxSendBuffer);
                 return 0;
             case LinuxConstants.SO_PASSCRED:
-                BinaryPrimitives.WriteInt32LittleEndian(optval, 1);
+                BinaryPrimitives.WriteInt32LittleEndian(optval, _passCred ? 1 : 0);
                 return 0;
             default:
                 return -(int)Errno.ENOPROTOOPT;
@@ -763,12 +769,12 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         _writeWaitQueue.Signal();
     }
 
-    public async ValueTask<(int BytesRead, List<LinuxFile>? Fds, byte[]? SourceSunPathRaw)> RecvMessageAsync(
+    public async ValueTask<(int BytesRead, List<LinuxFile>? Fds, byte[]? SourceSunPathRaw, UnixCredentials? Credentials)> RecvMessageAsync(
         LinuxFile file, FiberTask task,
         byte[] buffer, int flags, int maxBytes = -1)
     {
         var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
-        if (recvLen <= 0) return (0, null, null);
+        if (recvLen <= 0) return (0, null, null, null);
         var nonBlocking = (file.Flags & FileFlags.O_NONBLOCK) != 0 ||
                           (flags & LinuxConstants.MSG_DONTWAIT) != 0;
         while (true)
@@ -791,7 +797,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
                     _queuedBytes -= toCopy;
                     UpdateWriteWaitQueueState();
                     _writeWaitQueue.Set();
-                    return (toCopy, null, null);
+                    return (toCopy, null, null, null);
                 }
 
                 if (_receiveQueue.TryDequeue(out var msg))
@@ -812,23 +818,23 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
                     UpdateWriteWaitQueueState();
                     if (_receiveQueue.Count == 0 && _partialBuffer == null)
                         _readWaitQueue.Reset();
-                    return (toCopy, msg.Fds, msg.SourceSunPathRaw);
+                    return (toCopy, msg.Fds, msg.SourceSunPathRaw, msg.Credentials);
                 }
 
                 if (_shutDownRead || _peer == null || _peerWriteClosed)
-                    return (0, null, null); // EOF
+                    return (0, null, null, null); // EOF
             }
 
             _writeWaitQueue.Set();
 
             if (nonBlocking)
-                return (-(int)Errno.EAGAIN, null, null);
+                return (-(int)Errno.EAGAIN, null, null, null);
 
-            if (task.HasInterruptingPendingSignal()) return (-(int)Errno.ERESTARTSYS, null, null);
+            if (task.HasInterruptingPendingSignal()) return (-(int)Errno.ERESTARTSYS, null, null, null);
 
             await _readWaitQueue.WaitInterruptiblyAsync(task);
 
-            if (task.HasInterruptingPendingSignal()) return (-(int)Errno.ERESTARTSYS, null, null);
+            if (task.HasInterruptingPendingSignal()) return (-(int)Errno.ERESTARTSYS, null, null, null);
         }
     }
 
@@ -878,7 +884,12 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         }
 
         byte[] clonedData = data.ToArray();
-        var msg = new UnixMessage { Data = clonedData, SourceSunPathRaw = GetLocalSunPathRaw() };
+        var msg = new UnixMessage
+        {
+            Data = clonedData,
+            SourceSunPathRaw = GetLocalSunPathRaw(),
+            Credentials = peer._passCred ? new UnixCredentials(task.Process.TGID, task.Process.EUID, task.Process.EGID) : null
+        };
         if (fds != null)
         {
             foreach (var f in fds) f.Get();

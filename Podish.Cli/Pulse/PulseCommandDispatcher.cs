@@ -6,7 +6,7 @@ namespace Podish.Cli.Pulse;
 
 internal sealed class PulseCommandDispatcher
 {
-    private const ushort MaxNegotiatedClientVersion = 20;
+    private const ushort MaxNegotiatedClientVersion = Constants.MaxVersion;
     private readonly ILogger _logger;
     private readonly PulseServerState _state;
 
@@ -30,6 +30,9 @@ internal sealed class PulseCommandDispatcher
                     return;
                 case CommandTag.SetClientName:
                     await HandleSetClientNameAsync(session, message);
+                    return;
+                case CommandTag.RegisterMemfdShmid:
+                    await HandleRegisterMemfdShmidAsync(session, message);
                     return;
                 case CommandTag.GetServerInfo:
                     await session.SendReplyAsync(message.Sequence, _state.ServerInfo,
@@ -165,13 +168,14 @@ internal sealed class PulseCommandDispatcher
     {
         var auth = message.ReadPayload().ReadAuthParams();
         session.ClientProtocolVersion = Math.Min(auth.Version, MaxNegotiatedClientVersion);
+        bool useMemfd = auth.Version >= 31 && auth.SupportsMemfd;
         return session.SendReplyAsync(message.Sequence, new AuthReply
         {
             Version = session.ClientProtocolVersion,
-            UseShm = false,
-            UseMemfd = false,
+            UseShm = useMemfd,
+            UseMemfd = useMemfd,
         }, static (writer, reply) => writer.WriteAuthReply(reply),
-            $"auth version={session.ClientProtocolVersion} useShm={false} useMemfd={false}");
+            $"auth version={session.ClientProtocolVersion} useShm={useMemfd} useMemfd={useMemfd}");
     }
 
     private ValueTask HandleSetClientNameAsync(PulseServerSession session, ProtocolMessage message)
@@ -193,6 +197,21 @@ internal sealed class PulseCommandDispatcher
         return session.SendReplyAsync(message.Sequence, new SetClientNameReply { ClientIndex = 1 },
             static (writer, reply) => writer.WriteSetClientNameReply(reply),
             $"set-client-name clientIndex=1 name={clientName}");
+    }
+
+    private async ValueTask HandleRegisterMemfdShmidAsync(PulseServerSession session, ProtocolMessage message)
+    {
+        uint shmId = message.ReadPayload().ReadU32();
+        _logger.LogDebug("{Prefix} seq={Sequence} register-memfd-shmid shmId={ShmId}",
+            PulseServerLogging.Control, message.Sequence, shmId);
+
+        if (!session.TryRegisterMemfdShmid(shmId))
+        {
+            await session.SendErrorAsync(message.Sequence, PulseError.Invalid);
+            return;
+        }
+
+        await session.SendAckAsync(message.Sequence, $"register-memfd-shmid shmId={shmId}");
     }
 
     private async ValueTask HandleCreatePlaybackStreamAsync(PulseServerSession session, ProtocolMessage message)

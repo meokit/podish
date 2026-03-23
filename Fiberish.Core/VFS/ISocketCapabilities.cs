@@ -7,7 +7,9 @@ namespace Fiberish.VFS;
 
 public record AcceptedSocketResult(int Rc, Inode? Inode, EndPoint? PeerEndPoint = null, byte[]? PeerUnixAddressRaw = null);
 public record SocketAddressResult(EndPoint? EndPoint = null, byte[]? UnixAddressRaw = null, int Rc = 0);
-public record RecvMessageResult(int BytesRead, List<LinuxFile>? Fds = null, EndPoint? SourceEndPoint = null, byte[]? SourceSunPathRaw = null);
+public record UnixCredentials(int Pid, int Uid, int Gid);
+public record RecvMessageResult(int BytesRead, List<LinuxFile>? Fds = null, EndPoint? SourceEndPoint = null,
+    byte[]? SourceSunPathRaw = null, UnixCredentials? Credentials = null);
 
 public interface ISocketEndpointOps
 {

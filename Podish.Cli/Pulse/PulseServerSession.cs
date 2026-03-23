@@ -12,6 +12,13 @@ namespace Podish.Cli.Pulse;
 internal sealed class PulseServerSession
 {
     private const int DescriptorSize = Constants.DescriptorSize;
+    private const uint FlagShmData = 0x80000000;
+    private const uint FlagShmDataMemfdBlock = 0x20000000;
+    private const int ShmInfoWords = 4;
+    private const int ShmInfoSize = ShmInfoWords * sizeof(uint);
+    private const int ShmInfoShmIdWord = 1;
+    private const int ShmInfoIndexWord = 2;
+    private const int ShmInfoLengthWord = 3;
 
     private readonly VirtualDaemonConnection _connection;
     private readonly PulseCommandDispatcher _dispatcher;
@@ -24,7 +31,9 @@ internal sealed class PulseServerSession
     private byte[] _payloadBuffer = Array.Empty<byte>();
     private byte[] _recvScratch = new byte[64 * 1024];
     private readonly Dictionary<uint, PlaybackStreamState> _playbackStreams = new();
+    private readonly Dictionary<uint, LinuxFile> _registeredMemfdByShmId = new();
     private int _playbackPumpScheduled;
+    private List<LinuxFile>? _pendingAncillaryFds;
 
     public PulseServerSession(VirtualDaemonConnection connection, PulseServerState state, ILogger logger)
     {
@@ -93,10 +102,12 @@ internal sealed class PulseServerSession
                     ProtocolMessage message = ProtocolMessageIO.Decode(descriptor, _payloadBuffer, payloadLength,
                         ClientProtocolVersion);
                     await _dispatcher.DispatchAsync(this, message);
+                    DisposePendingAncillaryFds();
                 }
                 else
                 {
                     await HandleStreamPacketAsync(descriptor, _payloadBuffer, payloadLength);
+                    DisposePendingAncillaryFds();
                 }
             }
         }
@@ -108,8 +119,34 @@ internal sealed class PulseServerSession
         finally
         {
             _cts.Cancel();
+            DisposePendingAncillaryFds();
+            DisposeRegisteredMemfds();
             _logger.LogInformation("{Prefix} client session stopped", PulseServerLogging.Connection);
         }
+    }
+
+    public bool TryRegisterMemfdShmid(uint shmId)
+    {
+        List<LinuxFile>? fds = TakePendingAncillaryFds();
+        if (fds is not { Count: 1 })
+        {
+            DisposeFds(fds);
+            return false;
+        }
+
+        LinuxFile memfd = fds[0];
+        lock (_playbackGate)
+        {
+            if (_registeredMemfdByShmId.TryGetValue(shmId, out LinuxFile? previous))
+            {
+                previous.Close();
+                _registeredMemfdByShmId.Remove(shmId);
+            }
+
+            _registeredMemfdByShmId[shmId] = memfd;
+        }
+
+        return true;
     }
 
     public void AttachPlaybackStream(PlaybackStreamState stream)
@@ -263,9 +300,44 @@ internal sealed class PulseServerSession
             return;
         }
 
-        int buffered = stream.Append(payload.AsSpan(0, payloadLength));
+        ReadOnlySpan<byte> data = payload.AsSpan(0, payloadLength);
+        int dataLength = payloadLength;
+        uint flags = (uint)descriptor.Flags;
+        if ((flags & FlagShmData) != 0)
+        {
+            if ((flags & FlagShmDataMemfdBlock) == 0)
+            {
+                _logger.LogWarning("{Prefix} dropping posix-shm packet for channel={Channel}",
+                    PulseServerLogging.Stream, descriptor.Channel);
+                return;
+            }
+
+            if (payloadLength < ShmInfoSize)
+            {
+                _logger.LogWarning("{Prefix} dropping short memfd packet for channel={Channel} payload={PayloadLength}",
+                    PulseServerLogging.Stream, descriptor.Channel, payloadLength);
+                return;
+            }
+
+            uint shmId = ReadUInt32NetworkOrder(payload.AsSpan(ShmInfoShmIdWord * sizeof(uint), sizeof(uint)));
+            int memfdIndex = checked((int)ReadUInt32NetworkOrder(
+                payload.AsSpan(ShmInfoIndexWord * sizeof(uint), sizeof(uint))));
+            dataLength = checked((int)ReadUInt32NetworkOrder(
+                payload.AsSpan(ShmInfoLengthWord * sizeof(uint), sizeof(uint))));
+
+            if (!TryReadMemfdPayload(shmId, memfdIndex, dataLength, out byte[]? copied))
+            {
+                _logger.LogWarning("{Prefix} dropping unresolved memfd packet for channel={Channel} shmId={ShmId}",
+                    PulseServerLogging.Stream, descriptor.Channel, shmId);
+                return;
+            }
+
+            data = copied;
+        }
+
+        int buffered = stream.Append(data[..dataLength]);
         _logger.LogDebug("{Prefix} stream={ChannelIndex} appended={Bytes} buffered={Buffered}",
-            PulseServerLogging.Stream, descriptor.Channel, payloadLength, buffered);
+            PulseServerLogging.Stream, descriptor.Channel, dataLength, buffered);
 
         if (stream.TryMarkStarted())
         {
@@ -285,15 +357,14 @@ internal sealed class PulseServerSession
         while (total < bytesNeeded)
         {
             int requested = bytesNeeded - total;
-            int read;
-            if (total == 0)
+            EnsureScratchCapacity(requested);
+            RecvMessageResult message = await _connection.RecvMsgAsync(_recvScratch, 0, requested);
+            int read = message.BytesRead;
+            AppendPendingAncillaryFds(message.Fds);
+
+            if (read > 0)
             {
-                read = await _connection.RecvAsync(buffer, 0, requested);
-            }
-            else
-            {
-                EnsureScratchCapacity(requested);
-                read = await _connection.RecvAsync(_recvScratch, 0, requested);
+                Buffer.BlockCopy(_recvScratch, 0, buffer, total, read);
             }
 
             if (read == -(int)Errno.EINTR)
@@ -302,11 +373,6 @@ internal sealed class PulseServerSession
             if (read == -(int)Errno.EAGAIN)
             {
                 throw new IOException("Unexpected EAGAIN while reading from blocking PulseAudio session socket");
-            }
-
-            if (read > 0 && total > 0)
-            {
-                Buffer.BlockCopy(_recvScratch, 0, buffer, total, read);
             }
 
             if (read > 0)
@@ -325,6 +391,30 @@ internal sealed class PulseServerSession
         }
 
         return total;
+    }
+
+    private bool TryReadMemfdPayload(uint shmId, int offset, int length, out byte[]? data)
+    {
+        data = null;
+        if (offset < 0 || length < 0)
+            return false;
+
+        LinuxFile? memfd;
+        lock (_playbackGate)
+        {
+            _registeredMemfdByShmId.TryGetValue(shmId, out memfd);
+        }
+
+        if (memfd?.OpenedInode == null)
+            return false;
+
+        byte[] buffer = new byte[length];
+        int read = memfd.OpenedInode.Read(_connection.Task, memfd, buffer, offset);
+        if (read < length)
+            return false;
+
+        data = buffer;
+        return true;
     }
 
     private async ValueTask PumpPlaybackAsync()
@@ -426,6 +516,52 @@ internal sealed class PulseServerSession
             _logger.LogTrace(ex, "{Prefix} failed to decode outgoing control packet",
                 PulseServerLogging.Control);
         }
+    }
+
+    private void AppendPendingAncillaryFds(List<LinuxFile>? fds)
+    {
+        if (fds == null || fds.Count == 0)
+            return;
+
+        _pendingAncillaryFds ??= new List<LinuxFile>(fds.Count);
+        _pendingAncillaryFds.AddRange(fds);
+    }
+
+    private List<LinuxFile>? TakePendingAncillaryFds()
+    {
+        List<LinuxFile>? fds = _pendingAncillaryFds;
+        _pendingAncillaryFds = null;
+        return fds;
+    }
+
+    private void DisposePendingAncillaryFds()
+    {
+        DisposeFds(_pendingAncillaryFds);
+        _pendingAncillaryFds = null;
+    }
+
+    private void DisposeRegisteredMemfds()
+    {
+        lock (_playbackGate)
+        {
+            foreach (LinuxFile memfd in _registeredMemfdByShmId.Values)
+                memfd.Close();
+            _registeredMemfdByShmId.Clear();
+        }
+    }
+
+    private static void DisposeFds(List<LinuxFile>? fds)
+    {
+        if (fds == null)
+            return;
+
+        foreach (LinuxFile fd in fds)
+            fd.Close();
+    }
+
+    private static uint ReadUInt32NetworkOrder(ReadOnlySpan<byte> bytes)
+    {
+        return ((uint)bytes[0] << 24) | ((uint)bytes[1] << 16) | ((uint)bytes[2] << 8) | bytes[3];
     }
 
     private void EnsurePayloadCapacity(int requiredBytes)
