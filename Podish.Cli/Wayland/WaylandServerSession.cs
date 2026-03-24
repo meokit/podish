@@ -15,7 +15,13 @@ internal sealed class WaylandServerSession
     {
         _connection = new WaylandConnection(connection);
         _logger = logger;
-        _client = server.CreateClient(message => _connection.SendAsync(message));
+        _client = server.CreateClient(message =>
+        {
+            WaylandMessageHeader header = WaylandMessageHeader.Decode(message.Buffer);
+            _logger.LogDebug("Wayland send object={ObjectId} opcode={Opcode} size={Size} fds={FdCount}",
+                header.ObjectId, header.Opcode, header.Size, message.Fds?.Count ?? 0);
+            return _connection.SendAsync(message);
+        });
     }
 
     public async Task RunAsync()

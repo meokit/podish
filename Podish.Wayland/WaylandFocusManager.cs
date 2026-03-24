@@ -1,0 +1,310 @@
+namespace Podish.Wayland;
+
+internal sealed class WaylandFocusManager
+{
+    private enum InteractiveMode
+    {
+        PassThrough,
+        Move,
+        Resize
+    }
+
+    private readonly WaylandServer _server;
+    private ulong? _focusedPointerSceneSurfaceId;
+    private ulong? _grabbedPointerSceneSurfaceId;
+    private ulong? _focusedKeyboardSceneSurfaceId;
+    private int _pressedPointerButtons;
+    private InteractiveMode _interactiveMode;
+    private int _pointerDesktopX;
+    private int _pointerDesktopY;
+    private int _grabOffsetX;
+    private int _grabOffsetY;
+    private WaylandSurfaceBounds _grabBounds;
+    private XdgToplevelResizeEdge _resizeEdges;
+
+    public WaylandFocusManager(WaylandServer server)
+    {
+        _server = server;
+    }
+
+    public ulong? FocusedPointerSceneSurfaceId => _focusedPointerSceneSurfaceId;
+    public ulong? GrabbedPointerSceneSurfaceId => _grabbedPointerSceneSurfaceId;
+    public ulong? FocusedKeyboardSceneSurfaceId => _focusedKeyboardSceneSurfaceId;
+
+    public async ValueTask HandlePointerMotionAsync(int desktopX, int desktopY, uint time)
+    {
+        _pointerDesktopX = desktopX;
+        _pointerDesktopY = desktopY;
+
+        if (_interactiveMode == InteractiveMode.Move)
+        {
+            ProcessInteractiveMove();
+            return;
+        }
+
+        if (_interactiveMode == InteractiveMode.Resize)
+        {
+            await ProcessInteractiveResizeAsync();
+            return;
+        }
+
+        if (_server.FramePresenter is not IWaylandSceneView sceneView)
+        {
+            await ClearPointerFocusAsync();
+            return;
+        }
+
+        if (_grabbedPointerSceneSurfaceId is ulong grabbedSceneSurfaceId &&
+            _pressedPointerButtons > 0 &&
+            sceneView.TryGetSurfaceBounds(grabbedSceneSurfaceId, out WaylandSurfaceBounds grabbedBounds) &&
+            _server.TryGetSceneSurface(grabbedSceneSurfaceId, out WlSurfaceResource? grabbedSurface))
+        {
+            _focusedPointerSceneSurfaceId = grabbedSceneSurfaceId;
+
+            await DispatchPointerMotionAsync(
+                grabbedSurface,
+                desktopX - grabbedBounds.X,
+                desktopY - grabbedBounds.Y,
+                time);
+            return;
+        }
+
+        if (!sceneView.TryGetSurfaceAt(desktopX, desktopY, out WaylandSurfaceHit hit) ||
+            !_server.TryGetSceneSurface(hit.SceneSurfaceId, out WlSurfaceResource? surface))
+        {
+            await ClearPointerFocusAsync();
+            return;
+        }
+
+        _focusedPointerSceneSurfaceId = hit.SceneSurfaceId;
+        await DispatchPointerMotionAsync(surface, hit.SurfaceX, hit.SurfaceY, time);
+    }
+
+    public async ValueTask HandlePointerButtonAsync(uint button, bool pressed, uint time)
+    {
+        if (pressed)
+        {
+            _pressedPointerButtons++;
+            _grabbedPointerSceneSurfaceId ??= _focusedPointerSceneSurfaceId;
+            if (_focusedPointerSceneSurfaceId is ulong focusedSceneSurfaceId)
+                await FocusKeyboardSurfaceAsync(focusedSceneSurfaceId);
+        }
+        else if (_pressedPointerButtons > 0)
+        {
+            _pressedPointerButtons--;
+            if (_pressedPointerButtons == 0)
+            {
+                _grabbedPointerSceneSurfaceId = null;
+                _interactiveMode = InteractiveMode.PassThrough;
+            }
+        }
+
+        foreach (WaylandClient client in _server.Clients)
+        {
+            foreach (WlPointerResource pointer in client.Objects.All.OfType<WlPointerResource>())
+                await pointer.HandleButtonAsync(button, pressed, time);
+        }
+    }
+
+    public async ValueTask HandleKeyboardKeyAsync(uint key, bool pressed, uint time)
+    {
+        if (_focusedKeyboardSceneSurfaceId is not ulong sceneSurfaceId ||
+            !_server.TryGetSceneSurface(sceneSurfaceId, out WlSurfaceResource? surface))
+            return;
+
+        foreach (WaylandClient client in _server.Clients)
+        {
+            if (!ReferenceEquals(client, surface.Client))
+                continue;
+
+            foreach (WlKeyboardResource keyboard in client.Objects.All.OfType<WlKeyboardResource>())
+                await keyboard.HandleKeyAsync(key, pressed, time);
+        }
+    }
+
+    public async ValueTask ClearPointerFocusAsync()
+    {
+        if (_pressedPointerButtons > 0)
+            return;
+
+        _focusedPointerSceneSurfaceId = null;
+        _grabbedPointerSceneSurfaceId = null;
+        foreach (WaylandClient client in _server.Clients)
+        {
+            foreach (WlPointerResource pointer in client.Objects.All.OfType<WlPointerResource>())
+                await pointer.ClearFocusAsync();
+        }
+    }
+
+    public async ValueTask HandleSurfaceDestroyedAsync(ulong sceneSurfaceId)
+    {
+        bool affected = false;
+
+        if (_focusedPointerSceneSurfaceId == sceneSurfaceId)
+        {
+            _focusedPointerSceneSurfaceId = null;
+            affected = true;
+        }
+
+        if (_grabbedPointerSceneSurfaceId == sceneSurfaceId)
+        {
+            _grabbedPointerSceneSurfaceId = null;
+            _pressedPointerButtons = 0;
+            affected = true;
+        }
+
+        if (_focusedKeyboardSceneSurfaceId == sceneSurfaceId)
+        {
+            _focusedKeyboardSceneSurfaceId = null;
+            foreach (WaylandClient client in _server.Clients)
+            {
+                foreach (WlKeyboardResource keyboard in client.Objects.All.OfType<WlKeyboardResource>())
+                    await keyboard.ClearFocusAsync();
+            }
+        }
+
+        if (affected)
+            await ClearPointerFocusAsync();
+    }
+
+    public async ValueTask BeginInteractiveMoveAsync(XdgToplevelResource toplevel)
+    {
+        if (_server.FramePresenter is not IWaylandDesktopSceneController desktopSceneController ||
+            _server.FramePresenter is not IWaylandSceneView sceneView ||
+            !sceneView.TryGetSurfaceBounds(toplevel.Surface.Surface.SceneSurfaceId, out WaylandSurfaceBounds bounds))
+            return;
+
+        await FocusKeyboardSurfaceAsync(toplevel.Surface.Surface.SceneSurfaceId);
+        desktopSceneController.RaiseSurface(toplevel.Surface.Surface.SceneSurfaceId);
+
+        _grabbedPointerSceneSurfaceId = toplevel.Surface.Surface.SceneSurfaceId;
+        _interactiveMode = InteractiveMode.Move;
+        _grabBounds = bounds;
+        _grabOffsetX = _pointerDesktopX - bounds.X;
+        _grabOffsetY = _pointerDesktopY - bounds.Y;
+    }
+
+    public async ValueTask BeginInteractiveResizeAsync(XdgToplevelResource toplevel, XdgToplevelResizeEdge edges)
+    {
+        if (_server.FramePresenter is not IWaylandDesktopSceneController desktopSceneController ||
+            _server.FramePresenter is not IWaylandSceneView sceneView ||
+            !sceneView.TryGetSurfaceBounds(toplevel.Surface.Surface.SceneSurfaceId, out WaylandSurfaceBounds bounds))
+            return;
+
+        await FocusKeyboardSurfaceAsync(toplevel.Surface.Surface.SceneSurfaceId);
+        desktopSceneController.RaiseSurface(toplevel.Surface.Surface.SceneSurfaceId);
+
+        _grabbedPointerSceneSurfaceId = toplevel.Surface.Surface.SceneSurfaceId;
+        _interactiveMode = InteractiveMode.Resize;
+        _resizeEdges = edges;
+        _grabBounds = bounds;
+        int borderX = bounds.X + ((edges & XdgToplevelResizeEdge.Right) != 0 ? bounds.Width : 0);
+        int borderY = bounds.Y + ((edges & XdgToplevelResizeEdge.Bottom) != 0 ? bounds.Height : 0);
+        _grabOffsetX = _pointerDesktopX - borderX;
+        _grabOffsetY = _pointerDesktopY - borderY;
+    }
+
+    private async ValueTask FocusKeyboardSurfaceAsync(ulong sceneSurfaceId)
+    {
+        if (_focusedKeyboardSceneSurfaceId == sceneSurfaceId)
+        {
+            if (_server.FramePresenter is IWaylandDesktopSceneController desktopSceneController)
+                desktopSceneController.RaiseSurface(sceneSurfaceId);
+            return;
+        }
+
+        if (_focusedKeyboardSceneSurfaceId is ulong oldSceneSurfaceId &&
+            _server.TryGetSceneSurface(oldSceneSurfaceId, out WlSurfaceResource? oldSurface) &&
+            oldSurface.XdgSurface?.Toplevel is XdgToplevelResource oldToplevel)
+            await oldToplevel.SetActivatedAsync(false);
+
+        _focusedKeyboardSceneSurfaceId = sceneSurfaceId;
+
+        if (_server.TryGetSceneSurface(sceneSurfaceId, out WlSurfaceResource? newSurface))
+        {
+            if (newSurface.XdgSurface?.Toplevel is XdgToplevelResource newToplevel)
+                await newToplevel.SetActivatedAsync(true);
+
+            foreach (WaylandClient client in _server.Clients)
+            {
+                bool ownsSurface = ReferenceEquals(client, newSurface.Client);
+                foreach (WlKeyboardResource keyboard in client.Objects.All.OfType<WlKeyboardResource>())
+                {
+                    if (ownsSurface)
+                        await keyboard.FocusAsync(newSurface.ObjectId);
+                    else
+                        await keyboard.ClearFocusAsync();
+                }
+            }
+        }
+
+        if (_server.FramePresenter is IWaylandDesktopSceneController sceneController)
+            sceneController.RaiseSurface(sceneSurfaceId);
+    }
+
+    private async ValueTask DispatchPointerMotionAsync(WlSurfaceResource targetSurface, int surfaceX, int surfaceY, uint time)
+    {
+        foreach (WaylandClient client in _server.Clients)
+        {
+            bool ownsSurface = ReferenceEquals(client, targetSurface.Client);
+            foreach (WlPointerResource pointer in client.Objects.All.OfType<WlPointerResource>())
+            {
+                if (ownsSurface)
+                    await pointer.HandleMotionAsync(targetSurface.ObjectId, surfaceX, surfaceY, time);
+                else
+                    await pointer.ClearFocusAsync();
+            }
+        }
+    }
+
+    private void ProcessInteractiveMove()
+    {
+        if (_grabbedPointerSceneSurfaceId is not ulong grabbedSceneSurfaceId ||
+            _server.FramePresenter is not IWaylandDesktopSceneController desktopSceneController ||
+            !_server.TryGetSceneSurface(grabbedSceneSurfaceId, out WlSurfaceResource? surface))
+            return;
+
+        var bounds = new WaylandSurfaceBounds(
+            _pointerDesktopX - _grabOffsetX,
+            _pointerDesktopY - _grabOffsetY,
+            _grabBounds.Width,
+            _grabBounds.Height);
+
+        desktopSceneController.SetSurfaceBounds(grabbedSceneSurfaceId, bounds);
+        desktopSceneController.RaiseSurface(grabbedSceneSurfaceId);
+        _focusedPointerSceneSurfaceId = grabbedSceneSurfaceId;
+    }
+
+    private async ValueTask ProcessInteractiveResizeAsync()
+    {
+        if (_grabbedPointerSceneSurfaceId is not ulong grabbedSceneSurfaceId ||
+            _server.FramePresenter is not IWaylandDesktopSceneController desktopSceneController ||
+            !_server.TryGetSceneSurface(grabbedSceneSurfaceId, out WlSurfaceResource? surface))
+            return;
+
+        int newLeft = _grabBounds.X;
+        int newRight = _grabBounds.X + _grabBounds.Width;
+        int newTop = _grabBounds.Y;
+        int newBottom = _grabBounds.Y + _grabBounds.Height;
+        int borderX = _pointerDesktopX - _grabOffsetX;
+        int borderY = _pointerDesktopY - _grabOffsetY;
+
+        if ((_resizeEdges & XdgToplevelResizeEdge.Top) != 0)
+            newTop = Math.Min(borderY, newBottom - 1);
+        else if ((_resizeEdges & XdgToplevelResizeEdge.Bottom) != 0)
+            newBottom = Math.Max(borderY, newTop + 1);
+
+        if ((_resizeEdges & XdgToplevelResizeEdge.Left) != 0)
+            newLeft = Math.Min(borderX, newRight - 1);
+        else if ((_resizeEdges & XdgToplevelResizeEdge.Right) != 0)
+            newRight = Math.Max(borderX, newLeft + 1);
+
+        var bounds = new WaylandSurfaceBounds(newLeft, newTop, newRight - newLeft, newBottom - newTop);
+        desktopSceneController.SetSurfaceBounds(grabbedSceneSurfaceId, bounds);
+        desktopSceneController.RaiseSurface(grabbedSceneSurfaceId);
+        _focusedPointerSceneSurfaceId = grabbedSceneSurfaceId;
+
+        if (surface.XdgSurface?.Toplevel is XdgToplevelResource toplevel)
+            await toplevel.SendConfigureAsync(bounds.Width, bounds.Height, resizing: true);
+    }
+}

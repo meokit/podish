@@ -1,6 +1,7 @@
 FROM docker.io/i386/alpine:3.20 AS build
 
 RUN apk add --no-cache \
+    adwaita-icon-theme \
     bash \
     build-base \
     coreutils \
@@ -8,7 +9,9 @@ RUN apk add --no-cache \
     pkgconf \
     wayland-dev \
     wayland-protocols \
-    wayland-utils
+    wayland-utils \
+    weston \
+    weston-clients
 
 WORKDIR /build
 
@@ -25,9 +28,18 @@ RUN cc -O2 -Wall -Wextra -o /build/test_wayland_shm_window \
 FROM docker.io/i386/alpine:3.20
 
 RUN apk add --no-cache \
+    adwaita-icon-theme \
     bash \
     coreutils \
-    wayland-utils
+    wayland-utils \
+    weston \
+    weston-clients
+
+RUN ln -sf move /usr/share/icons/Adwaita/cursors/dnd-move && \
+    ln -sf copy /usr/share/icons/Adwaita/cursors/dnd-copy && \
+    ln -sf no-drop /usr/share/icons/Adwaita/cursors/dnd-none && \
+    mkdir -p /usr/share/icons/default && \
+    printf '[Icon Theme]\nInherits=Adwaita\n' > /usr/share/icons/default/index.theme
 
 COPY --from=build /build/test_wayland_shm_window /usr/local/bin/test_wayland_shm_window
 

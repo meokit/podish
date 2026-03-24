@@ -44,3 +44,9 @@ FIBERISH_INTEGRATION_ASSETS_DIR=/path/to/assets pytest -m integration tests/inte
 - the same image also builds `/usr/local/bin/test_wayland_shm_window`, a minimal native
   Wayland client that creates an `xdg_surface`, allocates a `wl_shm` buffer, attaches it,
   and commits it against Podish's compositor
+- the same image also includes `weston-clients`, so we can smoke-test real upstream clients
+  such as `weston-simple-shm`; it also carries the `weston` runtime data files under
+  `/usr/share/weston` that some clients like `weston-stacking` expect at runtime
+- for manual rebuild/export/load/run of that image, use
+  `scripts/debug-wayland-weston.sh`, which wraps `podman build`, `podman save --format oci-archive`,
+  and `dotnet run --project Podish.Cli -- load -i ...`

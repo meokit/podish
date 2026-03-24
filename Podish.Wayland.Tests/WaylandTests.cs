@@ -112,7 +112,7 @@ public sealed class WaylandRuntimeTests
             uint serial = configureReader.ReadUInt();
             configureReader.EnsureExhausted();
 
-            await SendRequestAsync(client, 7, 2, writer => writer.WriteUInt(serial));
+            await SendRequestAsync(client, 7, 4, writer => writer.WriteUInt(serial));
 
             LinuxFile fd = env.CreateMemfdLikeFile("wl-shm", new string('a', 128));
             await SendRequestAsync(client, 4, 0, writer =>
@@ -139,11 +139,156 @@ public sealed class WaylandRuntimeTests
             });
 
             sent.Clear();
-            await SendRequestAsync(client, 6, 4, static _ => { });
+            await SendRequestAsync(client, 6, 6, static _ => { });
             Assert.Equal(2, sent.Count);
             Assert.Equal<uint>(11, DecodeHeader(sent[0]).ObjectId);
             Assert.Equal<uint>(1, DecodeHeader(sent[1]).ObjectId);
             fd.Close();
+        });
+    }
+
+    [Fact]
+    public async Task Runtime_BufferRelease_IsDeferredUntilDisplayConsumesLease()
+    {
+        using var env = new TestEnv();
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            var presenter = new RecordingFramePresenter();
+            var sent = new List<WaylandOutgoingMessage>();
+            var server = new WaylandServer(presenter);
+            var client = server.CreateClient(message =>
+            {
+                sent.Add(Clone(message));
+                return new ValueTask<int>(message.Buffer.Length);
+            });
+
+            await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
+            var globals = ParseGlobals(sent, 2);
+            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            uint shmName = globals.Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
+            uint xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
+
+            sent.Clear();
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(compositorName);
+                writer.WriteString(WlCompositorProtocol.InterfaceName);
+                writer.WriteUInt(4);
+                writer.WriteNewId(3);
+            });
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(shmName);
+                writer.WriteString(WlShmProtocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(4);
+            });
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(xdgName);
+                writer.WriteString(XdgWmBaseProtocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(5);
+            });
+
+            sent.Clear();
+            await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(6));
+            await SendRequestAsync(client, 5, 2, writer =>
+            {
+                writer.WriteNewId(7);
+                writer.WriteObjectId(6);
+            });
+            await SendRequestAsync(client, 7, 1, writer => writer.WriteNewId(8));
+            uint serial = new WaylandWireReader(sent[1].Buffer[WaylandMessageHeader.SizeInBytes..]).ReadUInt();
+            await SendRequestAsync(client, 7, 4, writer => writer.WriteUInt(serial));
+
+            LinuxFile fd = env.CreateMemfdLikeFile("wl-shm-release", new string('c', 128));
+            await SendRequestAsync(client, 4, 0, writer =>
+            {
+                writer.WriteNewId(9);
+                writer.WriteFd(fd);
+                writer.WriteInt(128);
+            });
+            await SendRequestAsync(client, 9, 0, writer =>
+            {
+                writer.WriteNewId(10);
+                writer.WriteInt(0);
+                writer.WriteInt(4);
+                writer.WriteInt(4);
+                writer.WriteInt(16);
+                writer.WriteUInt((uint)WlShmFormat.Argb8888);
+            });
+
+            sent.Clear();
+            await SendRequestAsync(client, 6, 1, writer =>
+            {
+                writer.WriteObjectId(10);
+                writer.WriteInt(0);
+                writer.WriteInt(0);
+            });
+            await SendRequestAsync(client, 6, 6, static _ => { });
+
+            Assert.NotNull(presenter.LastFrame);
+            Assert.DoesNotContain(sent, message => DecodeHeader(message).ObjectId == 10);
+
+            sent.Clear();
+            await server.HandleBufferConsumedAsync(presenter.LastFrame!.Value.LeaseToken);
+            Assert.Single(sent);
+            Assert.Equal<uint>(10, DecodeHeader(sent[0]).ObjectId);
+            fd.Close();
+        });
+    }
+
+    [Fact]
+    public async Task Runtime_ClickFocus_SendsKeyboardEnterOnButtonPress()
+    {
+        using var env = new TestEnv();
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            var presenter = new TestScenePresenter();
+            var sent = new List<WaylandOutgoingMessage>();
+            var server = new WaylandServer(presenter);
+            var client = server.CreateClient(message =>
+            {
+                sent.Add(Clone(message));
+                return new ValueTask<int>(message.Buffer.Length);
+            });
+
+            await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
+            var globals = ParseGlobals(sent, 2);
+            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            uint seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
+
+            sent.Clear();
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(compositorName);
+                writer.WriteString(WlCompositorProtocol.InterfaceName);
+                writer.WriteUInt(4);
+                writer.WriteNewId(3);
+            });
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(seatName);
+                writer.WriteString(WlSeatProtocol.InterfaceName);
+                writer.WriteUInt(7);
+                writer.WriteNewId(4);
+            });
+            await SendRequestAsync(client, 4, 0, writer => writer.WriteNewId(5));
+            await SendRequestAsync(client, 4, 1, writer => writer.WriteNewId(6));
+            await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(7));
+
+            object surface = client.Objects.Require(7);
+            ulong sceneSurfaceId = (ulong)(surface.GetType().GetProperty("SceneSurfaceId", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+                .GetValue(surface) ?? 0UL);
+            presenter.SetSurfaceBounds(sceneSurfaceId, new WaylandSurfaceBounds(100, 100, 300, 300));
+
+            sent.Clear();
+            await server.HandlePointerMotionAsync(120, 130, 1);
+            Assert.DoesNotContain(sent, message => DecodeHeader(message).ObjectId == 6 && DecodeHeader(message).Opcode == 1);
+
+            await server.HandlePointerButtonAsync(0x110, true, 2);
+            Assert.Contains(sent, message => DecodeHeader(message).ObjectId == 6 && DecodeHeader(message).Opcode == 1);
         });
     }
 }
@@ -164,14 +309,15 @@ public sealed class WaylandVirtualDaemonTests
                 builder.SetMinimumLevel(LogLevel.Trace);
                 builder.AddSimpleConsole(options => options.SingleLine = true);
             });
-            env.Registry.Spawn(new PodishWaylandVirtualDaemon("/virt-wayland.sock", 0, loggerFactory));
+            env.Registry.Spawn(new PodishWaylandVirtualDaemon("/virt-wayland.sock", 0, loggerFactory,
+                enableHostDisplay: false));
 
             step = "connect client";
             using var clientSocket = await env.CreateUnixClientAsync("/virt-wayland.sock");
 
             step = "get registry";
             await clientSocket.SendAsync(MakeRequest(1, 1, writer => writer.WriteNewId(2)).Buffer);
-            List<DecodedMessage> globals = await clientSocket.ReceiveMessagesAsync(3);
+            List<DecodedMessage> globals = await clientSocket.ReceiveMessagesAsync(5);
             uint compositorName = globals.Select(ParseGlobal).Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
             uint shmName = globals.Select(ParseGlobal).Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
             uint wmBaseName = globals.Select(ParseGlobal).Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
@@ -214,7 +360,7 @@ public sealed class WaylandVirtualDaemonTests
             await clientSocket.SendAsync(MakeRequest(7, 1, writer => writer.WriteNewId(8)).Buffer);
             List<DecodedMessage> configureMessages = await clientSocket.ReceiveMessagesAsync(2);
             uint serial = new WaylandWireReader(configureMessages[1].Body).ReadUInt();
-            await clientSocket.SendAsync(MakeRequest(7, 2, writer => writer.WriteUInt(serial)).Buffer);
+            await clientSocket.SendAsync(MakeRequest(7, 4, writer => writer.WriteUInt(serial)).Buffer);
 
             step = "shm buffer";
             LinuxFile fd = env.CreateMemfdLikeFile("virt-wayland-buffer", new string('b', 128));
@@ -241,7 +387,7 @@ public sealed class WaylandVirtualDaemonTests
                 writer.WriteInt(0);
                 writer.WriteInt(0);
             }).Buffer);
-            await clientSocket.SendAsync(MakeRequest(6, 4, static _ => { }).Buffer);
+            await clientSocket.SendAsync(MakeRequest(6, 6, static _ => { }).Buffer);
 
             step = "frame callback";
             List<DecodedMessage> callbackMessages = await clientSocket.ReceiveMessagesAsync(2);
@@ -301,6 +447,60 @@ internal static class WaylandTestHelpers
         WaylandMessageHeader header = WaylandMessageHeader.Decode(request.Buffer);
         await client.ProcessMessageAsync(new WaylandIncomingMessage(header,
             request.Buffer[WaylandMessageHeader.SizeInBytes..], request.Fds ?? Array.Empty<LinuxFile>()));
+    }
+}
+
+internal sealed class RecordingFramePresenter : IWaylandFramePresenter
+{
+    public WaylandShmFrame? LastFrame { get; private set; }
+
+    public ValueTask PresentSurfaceAsync(ulong sceneSurfaceId, WaylandShmFrame? frame, CancellationToken cancellationToken = default)
+    {
+        LastFrame = frame;
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class TestScenePresenter : IWaylandFramePresenter, IWaylandSceneView, IWaylandDesktopSceneController
+{
+    private readonly Dictionary<ulong, WaylandSurfaceBounds> _bounds = [];
+
+    public ValueTask PresentSurfaceAsync(ulong sceneSurfaceId, WaylandShmFrame? frame, CancellationToken cancellationToken = default)
+    {
+        return ValueTask.CompletedTask;
+    }
+
+    public bool TryGetSurfaceAt(int desktopX, int desktopY, out WaylandSurfaceHit hit)
+    {
+        foreach ((ulong sceneSurfaceId, WaylandSurfaceBounds bounds) in _bounds)
+        {
+            if (desktopX < bounds.X || desktopY < bounds.Y || desktopX >= bounds.X + bounds.Width || desktopY >= bounds.Y + bounds.Height)
+                continue;
+
+            hit = new WaylandSurfaceHit(sceneSurfaceId, desktopX - bounds.X, desktopY - bounds.Y);
+            return true;
+        }
+
+        hit = default;
+        return false;
+    }
+
+    public bool TryGetSurfaceBounds(ulong sceneSurfaceId, out WaylandSurfaceBounds bounds)
+    {
+        return _bounds.TryGetValue(sceneSurfaceId, out bounds);
+    }
+
+    public void ResizeDesktop(int width, int height)
+    {
+    }
+
+    public void RaiseSurface(ulong sceneSurfaceId)
+    {
+    }
+
+    public void SetSurfaceBounds(ulong sceneSurfaceId, WaylandSurfaceBounds bounds)
+    {
+        _bounds[sceneSurfaceId] = bounds;
     }
 }
 

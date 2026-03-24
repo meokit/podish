@@ -175,6 +175,90 @@ public enum WlSurfaceError : uint
     NoBuffer = 5,
 }
 
+public enum WlSeatCapability : uint
+{
+    Pointer = 1,
+    Keyboard = 2,
+    Touch = 4,
+}
+
+public enum WlSeatError : uint
+{
+    MissingCapability = 0,
+}
+
+public enum WlPointerError : uint
+{
+    Role = 0,
+}
+
+public enum WlPointerButtonState : uint
+{
+    Released = 0,
+    Pressed = 1,
+}
+
+public enum WlPointerAxis : uint
+{
+    VerticalScroll = 0,
+    HorizontalScroll = 1,
+}
+
+public enum WlPointerAxisSource : uint
+{
+    Wheel = 0,
+    Finger = 1,
+    Continuous = 2,
+    WheelTilt = 3,
+}
+
+public enum WlPointerAxisRelativeDirection : uint
+{
+    Identical = 0,
+    Inverted = 1,
+}
+
+public enum WlKeyboardKeymapFormat : uint
+{
+    NoKeymap = 0,
+    XkbV1 = 1,
+}
+
+public enum WlKeyboardKeyState : uint
+{
+    Released = 0,
+    Pressed = 1,
+    Repeated = 2,
+}
+
+public enum WlOutputSubpixel : uint
+{
+    Unknown = 0,
+    None = 1,
+    HorizontalRgb = 2,
+    HorizontalBgr = 3,
+    VerticalRgb = 4,
+    VerticalBgr = 5,
+}
+
+public enum WlOutputTransform : uint
+{
+    Normal = 0,
+    _90 = 1,
+    _180 = 2,
+    _270 = 3,
+    Flipped = 4,
+    Flipped_90 = 5,
+    Flipped_180 = 6,
+    Flipped_270 = 7,
+}
+
+public enum WlOutputMode : uint
+{
+    Current = 0x1,
+    Preferred = 0x2,
+}
+
 public enum XdgWmBaseError : uint
 {
     Role = 0,
@@ -614,7 +698,7 @@ public static class WlSurfaceProtocol
     public static WlSurfaceSetBufferTransformRequest DecodeSetBufferTransform(byte[] body, IReadOnlyList<LinuxFile> fds)
     {
         var reader = new WaylandWireReader(body, fds);
-        int arg0 = reader.ReadInt();
+        WlOutputTransform arg0 = (WlOutputTransform)reader.ReadInt();
         var request = new WlSurfaceSetBufferTransformRequest(arg0);
         reader.EnsureExhausted();
         return request;
@@ -648,7 +732,7 @@ public readonly record struct WlSurfaceDamageRequest(int X, int Y, int Width, in
 public readonly record struct WlSurfaceFrameRequest(uint Callback);
 public readonly record struct WlSurfaceSetOpaqueRegionRequest(uint Region);
 public readonly record struct WlSurfaceSetInputRegionRequest(uint Region);
-public readonly record struct WlSurfaceSetBufferTransformRequest(int Transform);
+public readonly record struct WlSurfaceSetBufferTransformRequest(WlOutputTransform Transform);
 public readonly record struct WlSurfaceSetBufferScaleRequest(int Scale);
 public readonly record struct WlSurfaceDamageBufferRequest(int X, int Y, int Width, int Height);
 
@@ -667,6 +751,340 @@ public static class WlSurfaceEventWriter
         return client.SendEventAsync(objectId, 1, writer =>
         {
             writer.WriteObjectId(output);
+        });
+    }
+
+}
+
+public static class WlSeatProtocol
+{
+    public const string InterfaceName = "wl_seat";
+    public const uint Version = 7;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "get_pointer", 0, 1, [
+            new WaylandArgumentMetadata("id", WaylandArgKind.NewId, "wl_pointer")
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "get_keyboard", 1, 1, [
+            new WaylandArgumentMetadata("id", WaylandArgKind.NewId, "wl_keyboard")
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "get_touch", 2, 1, [
+            new WaylandArgumentMetadata("id", WaylandArgKind.NewId, "wl_touch")
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "release", 3, 5, [])
+    ]);
+
+    public static WlSeatGetPointerRequest DecodeGetPointer(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        var request = new WlSeatGetPointerRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static WlSeatGetKeyboardRequest DecodeGetKeyboard(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        var request = new WlSeatGetKeyboardRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static WlSeatGetTouchRequest DecodeGetTouch(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        var request = new WlSeatGetTouchRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct WlSeatGetPointerRequest(uint Id);
+public readonly record struct WlSeatGetKeyboardRequest(uint Id);
+public readonly record struct WlSeatGetTouchRequest(uint Id);
+
+public static class WlSeatEventWriter
+{
+    public static ValueTask CapabilitiesAsync(WaylandClient client, uint objectId, WlSeatCapability capabilities)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteUInt((uint)capabilities);
+        });
+    }
+
+    public static ValueTask NameAsync(WaylandClient client, uint objectId, string name)
+    {
+        return client.SendEventAsync(objectId, 1, writer =>
+        {
+            writer.WriteString(name);
+        });
+    }
+
+}
+
+public static class WlPointerProtocol
+{
+    public const string InterfaceName = "wl_pointer";
+    public const uint Version = 7;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "set_cursor", 0, 1, [
+            new WaylandArgumentMetadata("serial", WaylandArgKind.Uint),
+            new WaylandArgumentMetadata("surface", WaylandArgKind.Object, "wl_surface", true),
+            new WaylandArgumentMetadata("hotspot_x", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("hotspot_y", WaylandArgKind.Int)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "release", 1, 3, [])
+    ]);
+
+    public static WlPointerSetCursorRequest DecodeSetCursor(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadUInt();
+        uint arg1 = reader.ReadObjectId();
+        int arg2 = reader.ReadInt();
+        int arg3 = reader.ReadInt();
+        var request = new WlPointerSetCursorRequest(arg0, arg1, arg2, arg3);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct WlPointerSetCursorRequest(uint Serial, uint Surface, int HotspotX, int HotspotY);
+
+public static class WlPointerEventWriter
+{
+    public static ValueTask EnterAsync(WaylandClient client, uint objectId, uint serial, uint surface, int surfaceX, int surfaceY)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteUInt(serial);
+            writer.WriteObjectId(surface);
+            writer.WriteFixed(surfaceX);
+            writer.WriteFixed(surfaceY);
+        });
+    }
+
+    public static ValueTask LeaveAsync(WaylandClient client, uint objectId, uint serial, uint surface)
+    {
+        return client.SendEventAsync(objectId, 1, writer =>
+        {
+            writer.WriteUInt(serial);
+            writer.WriteObjectId(surface);
+        });
+    }
+
+    public static ValueTask MotionAsync(WaylandClient client, uint objectId, uint time, int surfaceX, int surfaceY)
+    {
+        return client.SendEventAsync(objectId, 2, writer =>
+        {
+            writer.WriteUInt(time);
+            writer.WriteFixed(surfaceX);
+            writer.WriteFixed(surfaceY);
+        });
+    }
+
+    public static ValueTask ButtonAsync(WaylandClient client, uint objectId, uint serial, uint time, uint button, WlPointerButtonState state)
+    {
+        return client.SendEventAsync(objectId, 3, writer =>
+        {
+            writer.WriteUInt(serial);
+            writer.WriteUInt(time);
+            writer.WriteUInt(button);
+            writer.WriteUInt((uint)state);
+        });
+    }
+
+    public static ValueTask AxisAsync(WaylandClient client, uint objectId, uint time, WlPointerAxis axis, int value)
+    {
+        return client.SendEventAsync(objectId, 4, writer =>
+        {
+            writer.WriteUInt(time);
+            writer.WriteUInt((uint)axis);
+            writer.WriteFixed(value);
+        });
+    }
+
+    public static ValueTask FrameAsync(WaylandClient client, uint objectId)
+    {
+        return client.SendEventAsync(objectId, 5, static _ => { });
+    }
+
+    public static ValueTask AxisSourceAsync(WaylandClient client, uint objectId, WlPointerAxisSource axisSource)
+    {
+        return client.SendEventAsync(objectId, 6, writer =>
+        {
+            writer.WriteUInt((uint)axisSource);
+        });
+    }
+
+    public static ValueTask AxisStopAsync(WaylandClient client, uint objectId, uint time, WlPointerAxis axis)
+    {
+        return client.SendEventAsync(objectId, 7, writer =>
+        {
+            writer.WriteUInt(time);
+            writer.WriteUInt((uint)axis);
+        });
+    }
+
+    public static ValueTask AxisDiscreteAsync(WaylandClient client, uint objectId, WlPointerAxis axis, int discrete)
+    {
+        return client.SendEventAsync(objectId, 8, writer =>
+        {
+            writer.WriteUInt((uint)axis);
+            writer.WriteInt(discrete);
+        });
+    }
+
+}
+
+public static class WlKeyboardProtocol
+{
+    public const string InterfaceName = "wl_keyboard";
+    public const uint Version = 7;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "release", 0, 3, [])
+    ]);
+
+}
+
+public static class WlKeyboardEventWriter
+{
+    public static ValueTask KeymapAsync(WaylandClient client, uint objectId, WlKeyboardKeymapFormat format, LinuxFile fd, uint size)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteUInt((uint)format);
+            writer.WriteFd(fd);
+            writer.WriteUInt(size);
+        });
+    }
+
+    public static ValueTask EnterAsync(WaylandClient client, uint objectId, uint serial, uint surface, byte[] keys)
+    {
+        return client.SendEventAsync(objectId, 1, writer =>
+        {
+            writer.WriteUInt(serial);
+            writer.WriteObjectId(surface);
+            writer.WriteArray(keys);
+        });
+    }
+
+    public static ValueTask LeaveAsync(WaylandClient client, uint objectId, uint serial, uint surface)
+    {
+        return client.SendEventAsync(objectId, 2, writer =>
+        {
+            writer.WriteUInt(serial);
+            writer.WriteObjectId(surface);
+        });
+    }
+
+    public static ValueTask KeyAsync(WaylandClient client, uint objectId, uint serial, uint time, uint key, WlKeyboardKeyState state)
+    {
+        return client.SendEventAsync(objectId, 3, writer =>
+        {
+            writer.WriteUInt(serial);
+            writer.WriteUInt(time);
+            writer.WriteUInt(key);
+            writer.WriteUInt((uint)state);
+        });
+    }
+
+    public static ValueTask ModifiersAsync(WaylandClient client, uint objectId, uint serial, uint modsDepressed, uint modsLatched, uint modsLocked, uint group)
+    {
+        return client.SendEventAsync(objectId, 4, writer =>
+        {
+            writer.WriteUInt(serial);
+            writer.WriteUInt(modsDepressed);
+            writer.WriteUInt(modsLatched);
+            writer.WriteUInt(modsLocked);
+            writer.WriteUInt(group);
+        });
+    }
+
+    public static ValueTask RepeatInfoAsync(WaylandClient client, uint objectId, int rate, int delay)
+    {
+        return client.SendEventAsync(objectId, 5, writer =>
+        {
+            writer.WriteInt(rate);
+            writer.WriteInt(delay);
+        });
+    }
+
+}
+
+public static class WlOutputProtocol
+{
+    public const string InterfaceName = "wl_output";
+    public const uint Version = 4;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "release", 0, 3, [])
+    ]);
+
+}
+
+public static class WlOutputEventWriter
+{
+    public static ValueTask GeometryAsync(WaylandClient client, uint objectId, int x, int y, int physicalWidth, int physicalHeight, WlOutputSubpixel subpixel, string make, string model, WlOutputTransform transform)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteInt(x);
+            writer.WriteInt(y);
+            writer.WriteInt(physicalWidth);
+            writer.WriteInt(physicalHeight);
+            writer.WriteInt((int)subpixel);
+            writer.WriteString(make);
+            writer.WriteString(model);
+            writer.WriteInt((int)transform);
+        });
+    }
+
+    public static ValueTask ModeAsync(WaylandClient client, uint objectId, WlOutputMode flags, int width, int height, int refresh)
+    {
+        return client.SendEventAsync(objectId, 1, writer =>
+        {
+            writer.WriteUInt((uint)flags);
+            writer.WriteInt(width);
+            writer.WriteInt(height);
+            writer.WriteInt(refresh);
+        });
+    }
+
+    public static ValueTask DoneAsync(WaylandClient client, uint objectId)
+    {
+        return client.SendEventAsync(objectId, 2, static _ => { });
+    }
+
+    public static ValueTask ScaleAsync(WaylandClient client, uint objectId, int factor)
+    {
+        return client.SendEventAsync(objectId, 3, writer =>
+        {
+            writer.WriteInt(factor);
+        });
+    }
+
+    public static ValueTask NameAsync(WaylandClient client, uint objectId, string name)
+    {
+        return client.SendEventAsync(objectId, 4, writer =>
+        {
+            writer.WriteString(name);
+        });
+    }
+
+    public static ValueTask DescriptionAsync(WaylandClient client, uint objectId, string description)
+    {
+        return client.SendEventAsync(objectId, 5, writer =>
+        {
+            writer.WriteString(description);
         });
     }
 

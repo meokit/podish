@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Podish.Wayland;
 
@@ -91,7 +92,7 @@ public sealed class WaylandWireReader
         return value;
     }
 
-    public int ReadFixed() => ReadInt();
+    public int ReadFixed() => ReadInt() >> 8;
 
     public uint ReadObjectId() => ReadUInt();
 
@@ -165,7 +166,7 @@ public sealed class WaylandWireWriter
         _stream.Write(tmp);
     }
 
-    public void WriteFixed(int value) => WriteInt(value);
+    public void WriteFixed(int value) => WriteInt(checked(value << 8));
 
     public void WriteObjectId(uint value) => WriteUInt(value);
 
@@ -453,17 +454,41 @@ public sealed class WaylandDispatcher
 
 public sealed class WaylandServer
 {
-    public WaylandServer()
+    public sealed record OutputInfo(int Width = 1024, int Height = 768, int Scale = 1, string Name = "WL-1",
+        string Description = "Podish Virtual Output", string Make = "Podish", string Model = "Virtual Display");
+
+    private readonly List<WaylandClient> _clients = [];
+    private readonly Dictionary<ulong, WlSurfaceResource> _sceneSurfaces = [];
+    private readonly WaylandKeyboardKeymap _keyboardKeymap = new();
+    private long _nextDisplayLeaseToken;
+    private long _nextSceneSurfaceId;
+
+    public WaylandServer(IWaylandFramePresenter? framePresenter = null, OutputInfo? output = null)
     {
+        FramePresenter = framePresenter;
+        Output = output ?? new OutputInfo();
         Globals = new WaylandGlobalRegistry();
+        Focus = new WaylandFocusManager(this);
         RegisterCoreGlobals();
     }
 
+    public IWaylandFramePresenter? FramePresenter { get; private set; }
+    public OutputInfo Output { get; }
     public WaylandGlobalRegistry Globals { get; }
+    internal WaylandKeyboardKeymap KeyboardKeymap => _keyboardKeymap;
+    internal WaylandFocusManager Focus { get; }
+    internal IReadOnlyList<WaylandClient> Clients => _clients;
 
     public WaylandClient CreateClient(Func<WaylandOutgoingMessage, ValueTask<int>> sendAsync)
     {
-        return new WaylandClient(this, sendAsync);
+        var client = new WaylandClient(this, sendAsync);
+        _clients.Add(client);
+        return client;
+    }
+
+    public void SetFramePresenter(IWaylandFramePresenter? framePresenter)
+    {
+        FramePresenter = framePresenter;
     }
 
     private void RegisterCoreGlobals()
@@ -472,8 +497,72 @@ public sealed class WaylandServer
             static (client, objectId, version) => client.Register(new WlCompositorResource(client, objectId, version)));
         Globals.Add(WlShmProtocol.InterfaceName, WlShmProtocol.Version,
             static (client, objectId, version) => client.Register(new WlShmResource(client, objectId, version)));
+        Globals.Add(WlSeatProtocol.InterfaceName, WlSeatProtocol.Version,
+            static (client, objectId, version) => client.Register(new WlSeatResource(client, objectId, version)));
+        Globals.Add(WlOutputProtocol.InterfaceName, WlOutputProtocol.Version,
+            static (client, objectId, version) => client.Register(new WlOutputResource(client, objectId, version)));
         Globals.Add(XdgWmBaseProtocol.InterfaceName, XdgWmBaseProtocol.Version,
             static (client, objectId, version) => client.Register(new XdgWmBaseResource(client, objectId, version)));
+    }
+
+    public async ValueTask HandlePointerMotionAsync(int desktopX, int desktopY, uint time)
+    {
+        await Focus.HandlePointerMotionAsync(desktopX, desktopY, time);
+    }
+
+    public async ValueTask HandlePointerButtonAsync(uint button, bool pressed, uint time)
+    {
+        await Focus.HandlePointerButtonAsync(button, pressed, time);
+    }
+
+    public async ValueTask ClearPointerFocusAsync()
+    {
+        await Focus.ClearPointerFocusAsync();
+    }
+
+    public async ValueTask HandleKeyboardKeyAsync(uint key, bool pressed, uint time)
+    {
+        await Focus.HandleKeyboardKeyAsync(key, pressed, time);
+    }
+
+    internal ulong AllocateSceneSurfaceId()
+    {
+        return unchecked((ulong)Interlocked.Increment(ref _nextSceneSurfaceId));
+    }
+
+    internal ulong AllocateDisplayLeaseToken()
+    {
+        return unchecked((ulong)Interlocked.Increment(ref _nextDisplayLeaseToken));
+    }
+
+    internal void RegisterSceneSurface(WlSurfaceResource surface)
+    {
+        _sceneSurfaces.Add(surface.SceneSurfaceId, surface);
+    }
+
+    internal void UnregisterSceneSurface(WlSurfaceResource surface)
+    {
+        _sceneSurfaces.Remove(surface.SceneSurfaceId);
+    }
+
+    internal bool TryGetSceneSurface(ulong sceneSurfaceId, [NotNullWhen(true)] out WlSurfaceResource? surface)
+    {
+        return _sceneSurfaces.TryGetValue(sceneSurfaceId, out surface);
+    }
+
+    public async ValueTask HandleBufferConsumedAsync(ulong leaseToken)
+    {
+        foreach (WaylandClient client in _clients)
+        {
+            foreach (WlBufferResource buffer in client.Objects.All.OfType<WlBufferResource>())
+            {
+                if (!buffer.HasDisplayLease(leaseToken))
+                    continue;
+
+                await buffer.CompleteDisplayLeaseAsync(leaseToken);
+                return;
+            }
+        }
     }
 }
 

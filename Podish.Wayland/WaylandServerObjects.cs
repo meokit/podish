@@ -64,6 +64,10 @@ internal sealed class WlRegistryResource : WaylandResource
         WaylandResource resource = global.Bind(Client, request.Id, request.Version);
         if (resource is WlShmResource shm)
             return shm.AdvertiseFormatsAsync();
+        if (resource is WlSeatResource seat)
+            return seat.AdvertiseCapabilitiesAsync();
+        if (resource is WlOutputResource output)
+            return output.AdvertiseAsync();
         if (resource is XdgWmBaseResource wmBase)
             return wmBase.PingAsync();
         return ValueTask.CompletedTask;
@@ -134,13 +138,17 @@ internal sealed class WlSurfaceResource : WaylandResource
 {
     private readonly WlSurfaceState _pending = new();
     private readonly WlSurfaceState _current = new();
+    private readonly HashSet<uint> _enteredOutputIds = [];
 
     public WlSurfaceResource(WaylandClient client, uint objectId, uint version)
         : base(client, objectId, version, WlSurfaceProtocol.InterfaceName)
     {
+        SceneSurfaceId = client.Server.AllocateSceneSurfaceId();
+        client.Server.RegisterSceneSurface(this);
     }
 
     public override IReadOnlyList<WaylandMessageMetadata> Requests => WlSurfaceProtocol.Requests;
+    public ulong SceneSurfaceId { get; }
     public WlBufferResource? CurrentBuffer => _current.Buffer;
     public XdgSurfaceResource? XdgSurface { get; private set; }
 
@@ -218,10 +226,47 @@ internal sealed class WlSurfaceResource : WaylandResource
         _current.Damages.AddRange(_pending.Damages);
         _pending.Damages.Clear();
 
+        if (Client.Server.FramePresenter != null)
+            await Client.Server.FramePresenter.PresentSurfaceAsync(SceneSurfaceId, _current.Buffer?.ToFrame(SceneSurfaceId));
+
+        await SyncOutputPresenceAsync(_current.Buffer != null);
+
         List<WlCallbackResource> callbacks = [.. _pending.FrameCallbacks];
         _pending.FrameCallbacks.Clear();
         foreach (WlCallbackResource callback in callbacks)
             await callback.SendDoneAndDisposeAsync(Client.NextSerial());
+    }
+
+    private async ValueTask SyncOutputPresenceAsync(bool entered)
+    {
+        List<WlOutputResource> outputs = Client.Objects.All.OfType<WlOutputResource>().ToList();
+        if (entered)
+        {
+            foreach (WlOutputResource output in outputs)
+            {
+                if (_enteredOutputIds.Add(output.ObjectId))
+                    await WlSurfaceEventWriter.EnterAsync(Client, ObjectId, output.ObjectId);
+            }
+
+            return;
+        }
+
+        foreach (uint outputId in _enteredOutputIds.ToArray())
+        {
+            await WlSurfaceEventWriter.LeaveAsync(Client, ObjectId, outputId);
+            _enteredOutputIds.Remove(outputId);
+        }
+    }
+
+    public override void Destroy()
+    {
+        if (_enteredOutputIds.Count > 0)
+            SyncOutputPresenceAsync(false).AsTask().GetAwaiter().GetResult();
+        if (Client.Server.FramePresenter != null)
+            Client.Server.FramePresenter.PresentSurfaceAsync(SceneSurfaceId, null).AsTask().GetAwaiter().GetResult();
+        Client.Server.Focus.HandleSurfaceDestroyedAsync(SceneSurfaceId).AsTask().GetAwaiter().GetResult();
+        Client.Server.UnregisterSceneSurface(this);
+        base.Destroy();
     }
 }
 
@@ -344,6 +389,8 @@ internal sealed class WlShmPoolResource : WaylandResource
 
 internal sealed class WlBufferResource : WaylandResource
 {
+    private readonly HashSet<ulong> _displayLeaseTokens = [];
+
     public WlBufferResource(WaylandClient client, uint objectId, uint version, WlShmPoolResource pool, int offset,
         int width, int height, int stride, WlShmFormat format)
         : base(client, objectId, version, WlBufferProtocol.InterfaceName)
@@ -365,10 +412,296 @@ internal sealed class WlBufferResource : WaylandResource
 
     public override IReadOnlyList<WaylandMessageMetadata> Requests => WlBufferProtocol.Requests;
 
+    public WaylandShmFrame ToFrame(ulong sceneSurfaceId)
+    {
+        ulong leaseToken = Client.Server.AllocateDisplayLeaseToken();
+        _displayLeaseTokens.Add(leaseToken);
+        return new WaylandShmFrame(sceneSurfaceId, leaseToken, Pool.Fd, Offset, Width, Height, Stride, Format);
+    }
+
+    public ValueTask SendReleaseAsync()
+    {
+        if (Destroyed)
+            return ValueTask.CompletedTask;
+        return WlBufferEventWriter.ReleaseAsync(Client, ObjectId);
+    }
+
+    public bool HasDisplayLease(ulong leaseToken)
+    {
+        return _displayLeaseTokens.Contains(leaseToken);
+    }
+
+    public async ValueTask CompleteDisplayLeaseAsync(ulong leaseToken)
+    {
+        if (!_displayLeaseTokens.Remove(leaseToken))
+            return;
+
+        await SendReleaseAsync();
+    }
+
     public override ValueTask DispatchAsync(WaylandIncomingMessage message)
     {
         Destroy();
         return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class WlSeatResource : WaylandResource
+{
+    public WlSeatResource(WaylandClient client, uint objectId, uint version)
+        : base(client, objectId, version, WlSeatProtocol.InterfaceName)
+    {
+    }
+
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => WlSeatProtocol.Requests;
+
+    public async ValueTask AdvertiseCapabilitiesAsync()
+    {
+        await WlSeatEventWriter.CapabilitiesAsync(Client, ObjectId, WlSeatCapability.Pointer | WlSeatCapability.Keyboard);
+        if (Version >= 2)
+            await WlSeatEventWriter.NameAsync(Client, ObjectId, "seat0");
+    }
+
+    public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+            {
+                var request = WlSeatProtocol.DecodeGetPointer(message.Body, message.Fds);
+                Client.Register(new WlPointerResource(Client, request.Id, Math.Min(Version, WlPointerProtocol.Version)));
+                break;
+            }
+            case 1:
+            {
+                var request = WlSeatProtocol.DecodeGetKeyboard(message.Body, message.Fds);
+                var keyboard = Client.Register(new WlKeyboardResource(Client, request.Id, Math.Min(Version, WlKeyboardProtocol.Version)));
+                await keyboard.SendInitialStateAsync();
+                break;
+            }
+            case 2:
+                throw new WaylandProtocolException(ObjectId, 0, "wl_touch is not implemented.");
+            case 3:
+                Destroy();
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0, $"Unsupported wl_seat opcode {message.Header.Opcode}.");
+        }
+
+        await ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class WlOutputResource : WaylandResource
+{
+    public WlOutputResource(WaylandClient client, uint objectId, uint version)
+        : base(client, objectId, version, WlOutputProtocol.InterfaceName)
+    {
+    }
+
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => WlOutputProtocol.Requests;
+
+    public async ValueTask AdvertiseAsync()
+    {
+        WaylandServer.OutputInfo output = Client.Server.Output;
+        await WlOutputEventWriter.GeometryAsync(
+            Client,
+            ObjectId,
+            0,
+            0,
+            0,
+            0,
+            WlOutputSubpixel.Unknown,
+            output.Make,
+            output.Model,
+            WlOutputTransform.Normal);
+        await WlOutputEventWriter.ModeAsync(
+            Client,
+            ObjectId,
+            WlOutputMode.Current | WlOutputMode.Preferred,
+            output.Width,
+            output.Height,
+            60000);
+        if (Version >= 2)
+        {
+            await WlOutputEventWriter.ScaleAsync(Client, ObjectId, output.Scale);
+            await WlOutputEventWriter.DoneAsync(Client, ObjectId);
+        }
+
+        if (Version >= 4)
+        {
+            await WlOutputEventWriter.NameAsync(Client, ObjectId, output.Name);
+            await WlOutputEventWriter.DescriptionAsync(Client, ObjectId, output.Description);
+            await WlOutputEventWriter.DoneAsync(Client, ObjectId);
+        }
+    }
+
+    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+                Destroy();
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0, $"Unsupported wl_output opcode {message.Header.Opcode}.");
+        }
+
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class WlPointerResource : WaylandResource
+{
+    private uint? _focusedSurfaceId;
+
+    public WlPointerResource(WaylandClient client, uint objectId, uint version)
+        : base(client, objectId, version, WlPointerProtocol.InterfaceName)
+    {
+    }
+
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => WlPointerProtocol.Requests;
+
+    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+            {
+                var request = WlPointerProtocol.DecodeSetCursor(message.Body, message.Fds);
+                if (request.Surface != 0)
+                    Client.Objects.Require<WlSurfaceResource>(request.Surface);
+                break;
+            }
+            case 1:
+                Destroy();
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0, $"Unsupported wl_pointer opcode {message.Header.Opcode}.");
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    public async ValueTask HandleMotionAsync(uint surfaceId, int surfaceX, int surfaceY, uint time)
+    {
+        if (_focusedSurfaceId != surfaceId)
+        {
+            if (_focusedSurfaceId is uint oldSurfaceId)
+                await WlPointerEventWriter.LeaveAsync(Client, ObjectId, Client.NextSerial(), oldSurfaceId);
+
+            await WlPointerEventWriter.EnterAsync(Client, ObjectId, Client.NextSerial(), surfaceId, surfaceX, surfaceY);
+            _focusedSurfaceId = surfaceId;
+        }
+
+        await WlPointerEventWriter.MotionAsync(Client, ObjectId, time, surfaceX, surfaceY);
+        if (Version >= 5)
+            await WlPointerEventWriter.FrameAsync(Client, ObjectId);
+    }
+
+    public async ValueTask HandleButtonAsync(uint button, bool pressed, uint time)
+    {
+        if (_focusedSurfaceId == null)
+            return;
+
+        await WlPointerEventWriter.ButtonAsync(
+            Client,
+            ObjectId,
+            Client.NextSerial(),
+            time,
+            button,
+            pressed ? WlPointerButtonState.Pressed : WlPointerButtonState.Released);
+        if (Version >= 5)
+            await WlPointerEventWriter.FrameAsync(Client, ObjectId);
+    }
+
+    public async ValueTask ClearFocusAsync()
+    {
+        if (_focusedSurfaceId is not uint surfaceId)
+            return;
+
+        _focusedSurfaceId = null;
+        await WlPointerEventWriter.LeaveAsync(Client, ObjectId, Client.NextSerial(), surfaceId);
+        if (Version >= 5)
+            await WlPointerEventWriter.FrameAsync(Client, ObjectId);
+    }
+}
+
+internal sealed class WlKeyboardResource : WaylandResource
+{
+    private uint? _focusedSurfaceId;
+
+    public WlKeyboardResource(WaylandClient client, uint objectId, uint version)
+        : base(client, objectId, version, WlKeyboardProtocol.InterfaceName)
+    {
+    }
+
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => WlKeyboardProtocol.Requests;
+
+    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+                Destroy();
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0, $"Unsupported wl_keyboard opcode {message.Header.Opcode}.");
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    public async ValueTask SendInitialStateAsync()
+    {
+        LinuxFile keymap = Client.Server.KeyboardKeymap.OpenReadOnly();
+        try
+        {
+            await WlKeyboardEventWriter.KeymapAsync(Client, ObjectId, WlKeyboardKeymapFormat.XkbV1, keymap,
+                Client.Server.KeyboardKeymap.Size);
+            if (Version >= 4)
+                await WlKeyboardEventWriter.RepeatInfoAsync(Client, ObjectId, 25, 600);
+        }
+        finally
+        {
+            keymap.Close();
+        }
+    }
+
+    public async ValueTask FocusAsync(uint surfaceId)
+    {
+        if (_focusedSurfaceId == surfaceId)
+            return;
+
+        if (_focusedSurfaceId is uint oldSurfaceId)
+            await WlKeyboardEventWriter.LeaveAsync(Client, ObjectId, Client.NextSerial(), oldSurfaceId);
+
+        _focusedSurfaceId = surfaceId;
+        await WlKeyboardEventWriter.EnterAsync(Client, ObjectId, Client.NextSerial(), surfaceId, []);
+        await WlKeyboardEventWriter.ModifiersAsync(Client, ObjectId, Client.NextSerial(), 0, 0, 0, 0);
+    }
+
+    public async ValueTask HandleKeyAsync(uint key, bool pressed, uint time)
+    {
+        if (_focusedSurfaceId == null)
+            return;
+
+        await WlKeyboardEventWriter.KeyAsync(
+            Client,
+            ObjectId,
+            Client.NextSerial(),
+            time,
+            key,
+            pressed ? WlKeyboardKeyState.Pressed : WlKeyboardKeyState.Released);
+    }
+
+    public async ValueTask ClearFocusAsync()
+    {
+        if (_focusedSurfaceId is not uint surfaceId)
+            return;
+
+        _focusedSurfaceId = null;
+        await WlKeyboardEventWriter.LeaveAsync(Client, ObjectId, Client.NextSerial(), surfaceId);
     }
 }
 
@@ -494,10 +827,11 @@ internal sealed class XdgToplevelResource : WaylandResource
     public XdgSurfaceResource Surface { get; }
     public string Title { get; private set; } = string.Empty;
     public string AppId { get; private set; } = string.Empty;
+    public bool Activated { get; private set; }
 
     public override IReadOnlyList<WaylandMessageMetadata> Requests => XdgToplevelProtocol.Requests;
 
-    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
     {
         switch (message.Header.Opcode)
         {
@@ -505,6 +839,7 @@ internal sealed class XdgToplevelResource : WaylandResource
                 Destroy();
                 break;
             case 1:
+                _ = XdgToplevelProtocol.DecodeSetParent(message.Body, message.Fds);
                 break;
             case 2:
                 Title = XdgToplevelProtocol.DecodeSetTitle(message.Body, message.Fds).Title;
@@ -512,16 +847,74 @@ internal sealed class XdgToplevelResource : WaylandResource
             case 3:
                 AppId = XdgToplevelProtocol.DecodeSetAppId(message.Body, message.Fds).AppId;
                 break;
+            case 4:
+            {
+                var request = XdgToplevelProtocol.DecodeShowWindowMenu(message.Body, message.Fds);
+                Client.Objects.Require<WlSeatResource>(request.Seat);
+                break;
+            }
+            case 5:
+            {
+                var request = XdgToplevelProtocol.DecodeMove(message.Body, message.Fds);
+                Client.Objects.Require<WlSeatResource>(request.Seat);
+                await Client.Server.Focus.BeginInteractiveMoveAsync(this);
+                break;
+            }
+            case 6:
+            {
+                var request = XdgToplevelProtocol.DecodeResize(message.Body, message.Fds);
+                Client.Objects.Require<WlSeatResource>(request.Seat);
+                await Client.Server.Focus.BeginInteractiveResizeAsync(this, request.Edges);
+                break;
+            }
+            case 7:
+                _ = XdgToplevelProtocol.DecodeSetMaxSize(message.Body, message.Fds);
+                break;
+            case 8:
+                _ = XdgToplevelProtocol.DecodeSetMinSize(message.Body, message.Fds);
+                break;
+            case 9:
+            case 10:
+            case 12:
+            case 13:
+                break;
+            case 11:
+                _ = XdgToplevelProtocol.DecodeSetFullscreen(message.Body, message.Fds);
+                break;
             default:
                 throw new WaylandProtocolException(ObjectId, 0, $"Unsupported xdg_toplevel opcode {message.Header.Opcode}.");
         }
-
-        return ValueTask.CompletedTask;
     }
 
     public async ValueTask SendInitialConfigureAsync()
     {
-        await XdgToplevelEventWriter.ConfigureAsync(Client, ObjectId, 0, 0, []);
+        await SendConfigureAsync(0, 0);
+    }
+
+    public async ValueTask SetActivatedAsync(bool activated)
+    {
+        if (Activated == activated)
+            return;
+
+        Activated = activated;
+        await SendConfigureAsync(0, 0);
+    }
+
+    public async ValueTask SendConfigureAsync(int width, int height, bool resizing = false)
+    {
+        await XdgToplevelEventWriter.ConfigureAsync(Client, ObjectId, width, height, BuildStates(resizing));
         await Surface.SendConfigureAsync();
+    }
+
+    private byte[] BuildStates(bool resizing)
+    {
+        var states = new List<byte>(8);
+
+        if (Activated)
+            states.AddRange(BitConverter.GetBytes((uint)XdgToplevelState.Activated));
+        if (resizing)
+            states.AddRange(BitConverter.GetBytes((uint)XdgToplevelState.Resizing));
+
+        return [.. states];
     }
 }
