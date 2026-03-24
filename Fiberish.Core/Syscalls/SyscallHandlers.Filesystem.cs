@@ -221,6 +221,49 @@ public partial class SyscallManager
         return rc;
     }
 
+    private async ValueTask<int> SysFallocate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        const int FallocFlKeepSize = 0x01;
+        const int supportedFlags = FallocFlKeepSize;
+
+        int fd = (int)a1;
+        int mode = unchecked((int)a2);
+        long offset = (long)(((ulong)a4 << 32) | a3);
+        long length = (long)(((ulong)a6 << 32) | a5);
+
+        if (mode < 0 || (mode & ~supportedFlags) != 0)
+            return -(int)Errno.EOPNOTSUPP;
+        if (offset < 0 || length <= 0)
+            return -(int)Errno.EINVAL;
+
+        LinuxFile? file = GetFD(fd);
+        if (file?.OpenedInode == null)
+            return -(int)Errno.EBADF;
+        if (file.OpenedInode.Type == InodeType.Directory)
+            return -(int)Errno.EISDIR;
+
+        long endOffset;
+        try
+        {
+            endOffset = checked(offset + length);
+        }
+        catch (OverflowException)
+        {
+            return -(int)Errno.EFBIG;
+        }
+
+        if ((mode & FallocFlKeepSize) != 0)
+            return 0;
+
+        if (endOffset <= (long)file.OpenedInode.Size)
+            return 0;
+
+        int rc = file.OpenedInode.Truncate(endOffset);
+        if (rc == 0)
+            ProcessAddressSpaceSync.NotifyInodeTruncated(Mem, engine, file.OpenedInode, endOffset);
+        return rc;
+    }
+
     private async ValueTask<int> SysRmdir(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var path = ReadString(a1);

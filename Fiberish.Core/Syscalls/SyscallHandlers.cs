@@ -276,6 +276,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.tee, SysTee);
         Register(X86SyscallNumbers.readahead, SysReadahead);
         Register(X86SyscallNumbers.fadvise64, SysFadvise64);
+        Register(X86SyscallNumbers.fallocate, SysFallocate);
         Register(X86SyscallNumbers.memfd_create, SysMemfdCreate);
         Register(X86SyscallNumbers.epoll_create, SysEpollCreate);
         Register(X86SyscallNumbers.epoll_create1, SysEpollCreate1);
