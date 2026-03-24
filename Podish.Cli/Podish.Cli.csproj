@@ -4,6 +4,7 @@
         <ProjectReference Include="..\Fiberish.Core\Fiberish.Core.csproj"/>
         <ProjectReference Include="..\Podish.Core\Podish.Core.csproj"/>
         <ProjectReference Include="..\Podish.Pulse\Podish.Pulse.csproj"/>
+        <ProjectReference Include="..\Podish.Wayland\Podish.Wayland.csproj"/>
     </ItemGroup>
 
     <ItemGroup>

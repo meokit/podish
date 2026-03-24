@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="wayland">
+  <interface name="wl_display" version="1">
+    <request name="sync">
+      <arg name="callback" type="new_id" interface="wl_callback"/>
+    </request>
+    <request name="get_registry">
+      <arg name="registry" type="new_id" interface="wl_registry"/>
+    </request>
+    <event name="error">
+      <arg name="object_id" type="object"/>
+      <arg name="code" type="uint"/>
+      <arg name="message" type="string"/>
+    </event>
+    <event name="delete_id">
+      <arg name="id" type="uint"/>
+    </event>
+  </interface>
+
+  <interface name="wl_registry" version="1">
+    <request name="bind">
+      <arg name="name" type="uint"/>
+      <arg name="interface" type="string"/>
+      <arg name="version" type="uint"/>
+      <arg name="id" type="new_id"/>
+    </request>
+    <event name="global">
+      <arg name="name" type="uint"/>
+      <arg name="interface" type="string"/>
+      <arg name="version" type="uint"/>
+    </event>
+    <event name="global_remove">
+      <arg name="name" type="uint"/>
+    </event>
+  </interface>
+
+  <interface name="wl_callback" version="1">
+    <event name="done">
+      <arg name="callback_data" type="uint"/>
+    </event>
+  </interface>
+
+  <interface name="wl_compositor" version="4">
+    <request name="create_surface">
+      <arg name="id" type="new_id" interface="wl_surface"/>
+    </request>
+    <request name="create_region">
+      <arg name="id" type="new_id" interface="wl_region"/>
+    </request>
+  </interface>
+
+  <interface name="wl_surface" version="4">
+    <request name="destroy"/>
+    <request name="attach">
+      <arg name="buffer" type="object" interface="wl_buffer" allow-null="true"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+    </request>
+    <request name="damage">
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+    <request name="frame">
+      <arg name="callback" type="new_id" interface="wl_callback"/>
+    </request>
+    <request name="commit"/>
+    <request name="damage_buffer" since="4">
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+  </interface>
+
+  <interface name="wl_region" version="1">
+    <request name="destroy"/>
+    <request name="add">
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+    <request name="subtract">
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+  </interface>
+
+  <interface name="wl_shm" version="1">
+    <enum name="format">
+      <entry name="argb8888" value="0"/>
+      <entry name="xrgb8888" value="1"/>
+    </enum>
+    <request name="create_pool">
+      <arg name="id" type="new_id" interface="wl_shm_pool"/>
+      <arg name="fd" type="fd"/>
+      <arg name="size" type="int"/>
+    </request>
+    <event name="format">
+      <arg name="format" type="uint"/>
+    </event>
+  </interface>
+
+  <interface name="wl_shm_pool" version="1">
+    <request name="create_buffer">
+      <arg name="id" type="new_id" interface="wl_buffer"/>
+      <arg name="offset" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="stride" type="int"/>
+      <arg name="format" type="uint"/>
+    </request>
+    <request name="destroy"/>
+    <request name="resize">
+      <arg name="size" type="int"/>
+    </request>
+  </interface>
+
+  <interface name="wl_buffer" version="1">
+    <request name="destroy"/>
+    <event name="release"/>
+  </interface>
+</protocol>

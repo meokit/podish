@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Core;
 using Podish.Cli.Pulse;
+using Podish.Wayland;
 
 namespace Podish.Cli;
 
@@ -105,6 +106,9 @@ internal class Program
         var pulseServerOption = new Option<bool>(
             new[] { "--pulse-server", "--virt-pulse" },
             "Enable a virtual PulseAudio server inside the guest at /run/pulse/native");
+        var waylandServerOption = new Option<bool>(
+            new[] { "--wayland-server", "--virt-wayland" },
+            "Enable a virtual Wayland compositor inside the guest at /run/wayland-0");
         var runArgsArgument = new Argument<string[]>(
             "run-args",
             () => Array.Empty<string>(),
@@ -131,6 +135,7 @@ internal class Program
         runCommand.AddOption(guestStatsExportDirOption);
         runCommand.AddOption(testVirtEchoOption);
         runCommand.AddOption(pulseServerOption);
+        runCommand.AddOption(waylandServerOption);
         runCommand.AddArgument(runArgsArgument);
 
         runCommand.SetHandler(async context =>
@@ -153,6 +158,7 @@ internal class Program
             var guestStatsExportDir = context.ParseResult.GetValueForOption(guestStatsExportDirOption);
             var enableTestVirtEcho = context.ParseResult.GetValueForOption(testVirtEchoOption);
             var enablePulseServer = context.ParseResult.GetValueForOption(pulseServerOption);
+            var enableWaylandServer = context.ParseResult.GetValueForOption(waylandServerOption);
             var runArgs = context.ParseResult.GetValueForArgument(runArgsArgument) ?? Array.Empty<string>();
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
             string? image = null;
@@ -352,6 +358,7 @@ internal class Program
                 Init = useInit,
                 TestVirtualEchoServer = enableTestVirtEcho,
                 PulseServer = enablePulseServer,
+                WaylandServer = enableWaylandServer,
                 MemoryQuotaBytes = memoryQuotaBytes,
                 LogDriver = containerLogDriver.ToCliValue(),
                 PublishedPorts = publishedPorts
@@ -400,7 +407,8 @@ internal class Program
                 guestStatsExportDir,
                 memoryQuotaBytes,
                 enableTestVirtEcho,
-                enablePulseServer);
+                enablePulseServer,
+                enableWaylandServer);
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -555,7 +563,8 @@ internal class Program
                 guestStatsExportDir,
                 spec.MemoryQuotaBytes,
                 spec.TestVirtualEchoServer,
-                spec.PulseServer);
+                spec.PulseServer,
+                spec.WaylandServer);
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -1336,7 +1345,7 @@ internal class Program
         string containerId, string? containerName, string hostname, NetworkMode networkMode, string image,
         string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts, string? guestStatsExportDir,
-        long? memoryQuotaBytes, bool enableTestVirtEcho, bool enablePulseServer)
+        long? memoryQuotaBytes, bool enableTestVirtEcho, bool enablePulseServer, bool enableWaylandServer)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
         var service = new ContainerRuntimeService(Logger, ProgramLoggerFactory);
@@ -1365,16 +1374,17 @@ internal class Program
             MemoryQuotaBytes = memoryQuotaBytes,
             EnableTestVirtualEchoServer = enableTestVirtEcho,
             EnablePulseServer = enablePulseServer,
-            ConfigureVirtualDaemons = enableTestVirtEcho || enablePulseServer
+            EnableWaylandServer = enableWaylandServer,
+            ConfigureVirtualDaemons = enableTestVirtEcho || enablePulseServer || enableWaylandServer
                 ? (runtime, scheduler, uts, parentPid) =>
                     RegisterVirtualDaemons(rootfsPath, runtime, scheduler, uts, parentPid, enableTestVirtEcho,
-                        enablePulseServer)
+                        enablePulseServer, enableWaylandServer)
                 : null
         });
     }
 
     private static void RegisterVirtualDaemons(string rootfsPath, KernelRuntime runtime, KernelScheduler scheduler,
-        UTSNamespace? uts, int ownerPid, bool enableTestVirtEcho, bool enablePulseServer)
+        UTSNamespace? uts, int ownerPid, bool enableTestVirtEcho, bool enablePulseServer, bool enableWaylandServer)
     {
         var registry = new VirtualDaemonRegistry(runtime.Syscalls, scheduler);
         if (enableTestVirtEcho)
@@ -1399,6 +1409,18 @@ internal class Program
             var pulseRuntime = registry.Spawn(pulseDaemon, parentPid: ownerPid, uts: uts);
             Logger.LogInformation("Registered Podish virtual Pulse daemon pid={Pid} ownerPid={OwnerPid} path={Path}",
                 pulseRuntime.Process.TGID, ownerPid, pulseDaemon.UnixPath);
+        }
+
+        if (enableWaylandServer)
+        {
+            CleanupVirtualSocket(rootfsPath, runtime, ContainerRunRequest.WaylandDisplaySocketPath,
+                "Podish.RegisterVirtualDaemons.wayland.cleanup");
+            var waylandDaemon = new PodishWaylandVirtualDaemon(ContainerRunRequest.WaylandDisplaySocketPath,
+                ownerPid,
+                ProgramLoggerFactory);
+            var waylandRuntime = registry.Spawn(waylandDaemon, parentPid: ownerPid, uts: uts);
+            Logger.LogInformation("Registered Podish virtual Wayland daemon pid={Pid} ownerPid={OwnerPid} path={Path}",
+                waylandRuntime.Process.TGID, ownerPid, waylandDaemon.UnixPath);
         }
     }
 

@@ -1,0 +1,608 @@
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
+using Fiberish.Core;
+using Fiberish.Memory;
+using Fiberish.Syscalls;
+using Fiberish.VFS;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Podish.Cli;
+using Podish.Wayland;
+using Xunit;
+using static Podish.Wayland.Tests.WaylandTestHelpers;
+
+namespace Podish.Wayland.Tests;
+
+public sealed class WaylandWireTests
+{
+    [Fact]
+    public void WireWriter_RoundTripsHeaderStringArrayAndFd()
+    {
+        using var env = new TestEnv();
+        env.InvokeOnScheduler(() =>
+        {
+            LinuxFile fd = env.CreateMemfdLikeFile("wayland-wire", "hello-fd");
+            var writer = new WaylandWireWriter();
+            writer.WriteString("hello");
+            writer.WriteArray([1, 2, 3]);
+            writer.WriteFd(fd);
+
+            WaylandOutgoingMessage outgoing = writer.ToOutgoingMessage(7, 9);
+            Assert.Equal(1, outgoing.Fds?.Count);
+
+            WaylandMessageHeader header = WaylandMessageHeader.Decode(outgoing.Buffer);
+            Assert.Equal<uint>(7, header.ObjectId);
+            Assert.Equal<ushort>(9, header.Opcode);
+            Assert.Equal(outgoing.Buffer.Length, header.Size);
+
+            var reader = new WaylandWireReader(outgoing.Buffer[WaylandMessageHeader.SizeInBytes..], outgoing.Fds);
+            Assert.Equal("hello", reader.ReadString());
+            Assert.Equal([1, 2, 3], reader.ReadArray());
+            Assert.Same(fd, reader.ReadFd());
+            reader.EnsureExhausted();
+            fd.Close();
+        });
+    }
+}
+
+public sealed class WaylandRuntimeTests
+{
+    [Fact]
+    public async Task Runtime_MinimalXdgShmFlowCompletes()
+    {
+        using var env = new TestEnv();
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            var sent = new List<WaylandOutgoingMessage>();
+            var server = new WaylandServer();
+            var client = server.CreateClient(message =>
+            {
+                sent.Add(Clone(message));
+                return new ValueTask<int>(message.Buffer.Length);
+            });
+
+            await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
+            var globals = ParseGlobals(sent, 2);
+            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            uint shmName = globals.Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
+            uint xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
+
+            sent.Clear();
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(compositorName);
+                writer.WriteString(WlCompositorProtocol.InterfaceName);
+                writer.WriteUInt(4);
+                writer.WriteNewId(3);
+            });
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(shmName);
+                writer.WriteString(WlShmProtocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(4);
+            });
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(xdgName);
+                writer.WriteString(XdgWmBaseProtocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(5);
+            });
+
+            Assert.Equal(3, sent.Count);
+            Assert.Equal<uint>(4, DecodeHeader(sent[0]).ObjectId);
+            Assert.Equal<uint>(4, DecodeHeader(sent[1]).ObjectId);
+            Assert.Equal<uint>(5, DecodeHeader(sent[2]).ObjectId);
+
+            sent.Clear();
+            await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(6));
+            await SendRequestAsync(client, 5, 2, writer =>
+            {
+                writer.WriteNewId(7);
+                writer.WriteObjectId(6);
+            });
+            await SendRequestAsync(client, 7, 1, writer => writer.WriteNewId(8));
+
+            Assert.Equal(2, sent.Count);
+            Assert.Equal<uint>(8, DecodeHeader(sent[0]).ObjectId);
+            Assert.Equal<uint>(7, DecodeHeader(sent[1]).ObjectId);
+            var configureReader = new WaylandWireReader(sent[1].Buffer[WaylandMessageHeader.SizeInBytes..]);
+            uint serial = configureReader.ReadUInt();
+            configureReader.EnsureExhausted();
+
+            await SendRequestAsync(client, 7, 2, writer => writer.WriteUInt(serial));
+
+            LinuxFile fd = env.CreateMemfdLikeFile("wl-shm", new string('a', 128));
+            await SendRequestAsync(client, 4, 0, writer =>
+            {
+                writer.WriteNewId(9);
+                writer.WriteFd(fd);
+                writer.WriteInt(128);
+            });
+            await SendRequestAsync(client, 9, 0, writer =>
+            {
+                writer.WriteNewId(10);
+                writer.WriteInt(0);
+                writer.WriteInt(4);
+                writer.WriteInt(4);
+                writer.WriteInt(16);
+                writer.WriteUInt((uint)WlShmFormat.Argb8888);
+            });
+            await SendRequestAsync(client, 6, 3, writer => writer.WriteNewId(11));
+            await SendRequestAsync(client, 6, 1, writer =>
+            {
+                writer.WriteObjectId(10);
+                writer.WriteInt(0);
+                writer.WriteInt(0);
+            });
+
+            sent.Clear();
+            await SendRequestAsync(client, 6, 4, static _ => { });
+            Assert.Equal(2, sent.Count);
+            Assert.Equal<uint>(11, DecodeHeader(sent[0]).ObjectId);
+            Assert.Equal<uint>(1, DecodeHeader(sent[1]).ObjectId);
+            fd.Close();
+        });
+    }
+}
+
+public sealed class WaylandVirtualDaemonTests
+{
+    [Fact]
+    public async Task VirtualDaemon_RunsMinimalWaylandFlowWithMemfd()
+    {
+        using var env = new TestEnv();
+        var step = "before invoke";
+
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            step = "spawn daemon";
+            using ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
+            {
+                builder.SetMinimumLevel(LogLevel.Trace);
+                builder.AddSimpleConsole(options => options.SingleLine = true);
+            });
+            env.Registry.Spawn(new PodishWaylandVirtualDaemon("/virt-wayland.sock", 0, loggerFactory));
+
+            step = "connect client";
+            using var clientSocket = await env.CreateUnixClientAsync("/virt-wayland.sock");
+
+            step = "get registry";
+            await clientSocket.SendAsync(MakeRequest(1, 1, writer => writer.WriteNewId(2)).Buffer);
+            List<DecodedMessage> globals = await clientSocket.ReceiveMessagesAsync(3);
+            uint compositorName = globals.Select(ParseGlobal).Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            uint shmName = globals.Select(ParseGlobal).Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
+            uint wmBaseName = globals.Select(ParseGlobal).Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
+
+            step = "bind globals";
+            await clientSocket.SendAsync(MakeRequest(2, 0, writer =>
+            {
+                writer.WriteUInt(compositorName);
+                writer.WriteString(WlCompositorProtocol.InterfaceName);
+                writer.WriteUInt(4);
+                writer.WriteNewId(3);
+            }).Buffer);
+            await clientSocket.SendAsync(MakeRequest(2, 0, writer =>
+            {
+                writer.WriteUInt(shmName);
+                writer.WriteString(WlShmProtocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(4);
+            }).Buffer);
+            await clientSocket.SendAsync(MakeRequest(2, 0, writer =>
+            {
+                writer.WriteUInt(wmBaseName);
+                writer.WriteString(XdgWmBaseProtocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(5);
+            }).Buffer);
+
+            List<DecodedMessage> bindEvents = await clientSocket.ReceiveMessagesAsync(3);
+            Assert.Equal<uint>(4, bindEvents[0].Header.ObjectId);
+            Assert.Equal<uint>(4, bindEvents[1].Header.ObjectId);
+            Assert.Equal<uint>(5, bindEvents[2].Header.ObjectId);
+
+            step = "create surface";
+            await clientSocket.SendAsync(MakeRequest(3, 0, writer => writer.WriteNewId(6)).Buffer);
+            await clientSocket.SendAsync(MakeRequest(5, 2, writer =>
+            {
+                writer.WriteNewId(7);
+                writer.WriteObjectId(6);
+            }).Buffer);
+            await clientSocket.SendAsync(MakeRequest(7, 1, writer => writer.WriteNewId(8)).Buffer);
+            List<DecodedMessage> configureMessages = await clientSocket.ReceiveMessagesAsync(2);
+            uint serial = new WaylandWireReader(configureMessages[1].Body).ReadUInt();
+            await clientSocket.SendAsync(MakeRequest(7, 2, writer => writer.WriteUInt(serial)).Buffer);
+
+            step = "shm buffer";
+            LinuxFile fd = env.CreateMemfdLikeFile("virt-wayland-buffer", new string('b', 128));
+            WaylandOutgoingMessage createPool = MakeRequest(4, 0, writer =>
+            {
+                writer.WriteNewId(9);
+                writer.WriteFd(fd);
+                writer.WriteInt(128);
+            });
+            await clientSocket.SendAsync(createPool.Buffer, createPool.Fds);
+            await clientSocket.SendAsync(MakeRequest(9, 0, writer =>
+            {
+                writer.WriteNewId(10);
+                writer.WriteInt(0);
+                writer.WriteInt(4);
+                writer.WriteInt(4);
+                writer.WriteInt(16);
+                writer.WriteUInt((uint)WlShmFormat.Argb8888);
+            }).Buffer);
+            await clientSocket.SendAsync(MakeRequest(6, 3, writer => writer.WriteNewId(11)).Buffer);
+            await clientSocket.SendAsync(MakeRequest(6, 1, writer =>
+            {
+                writer.WriteObjectId(10);
+                writer.WriteInt(0);
+                writer.WriteInt(0);
+            }).Buffer);
+            await clientSocket.SendAsync(MakeRequest(6, 4, static _ => { }).Buffer);
+
+            step = "frame callback";
+            List<DecodedMessage> callbackMessages = await clientSocket.ReceiveMessagesAsync(2);
+            Assert.Equal<uint>(11, callbackMessages[0].Header.ObjectId);
+            Assert.Equal<uint>(1, callbackMessages[1].Header.ObjectId);
+            fd.Close();
+        }, () => step);
+    }
+}
+
+internal sealed record GlobalInfo(uint Name, string Interface, uint Version);
+
+internal sealed record DecodedMessage(WaylandMessageHeader Header, byte[] Body);
+
+internal static class WaylandTestHelpers
+{
+    public static WaylandOutgoingMessage MakeRequest(uint objectId, ushort opcode, Action<WaylandWireWriter> write)
+    {
+        var writer = new WaylandWireWriter();
+        write(writer);
+        return writer.ToOutgoingMessage(objectId, opcode);
+    }
+
+    public static WaylandMessageHeader DecodeHeader(WaylandOutgoingMessage message)
+    {
+        return WaylandMessageHeader.Decode(message.Buffer);
+    }
+
+    public static List<GlobalInfo> ParseGlobals(List<WaylandOutgoingMessage> sent, uint objectId)
+    {
+        return sent
+            .Select(message => new DecodedMessage(DecodeHeader(message), message.Buffer[WaylandMessageHeader.SizeInBytes..]))
+            .Where(decoded => decoded.Header.ObjectId == objectId)
+            .Select(ParseGlobal)
+            .ToList();
+    }
+
+    public static GlobalInfo ParseGlobal(DecodedMessage message)
+    {
+        var reader = new WaylandWireReader(message.Body);
+        uint name = reader.ReadUInt();
+        string iface = reader.ReadString() ?? string.Empty;
+        uint version = reader.ReadUInt();
+        reader.EnsureExhausted();
+        return new GlobalInfo(name, iface, version);
+    }
+
+    public static WaylandOutgoingMessage Clone(WaylandOutgoingMessage message)
+    {
+        return new WaylandOutgoingMessage(message.Buffer.ToArray(), message.Fds?.ToArray());
+    }
+
+    public static async Task SendRequestAsync(WaylandClient client, uint objectId, ushort opcode,
+        Action<WaylandWireWriter> write)
+    {
+        WaylandOutgoingMessage request = MakeRequest(objectId, opcode, write);
+        WaylandMessageHeader header = WaylandMessageHeader.Decode(request.Buffer);
+        await client.ProcessMessageAsync(new WaylandIncomingMessage(header,
+            request.Buffer[WaylandMessageHeader.SizeInBytes..], request.Fds ?? Array.Empty<LinuxFile>()));
+    }
+}
+
+internal sealed class WaylandSocketClient : IDisposable
+{
+    private readonly LinuxFile _file;
+    private readonly UnixSocketInode _socket;
+    private readonly FiberTask _task;
+    private readonly byte[] _scratch = new byte[4096];
+    private readonly List<byte> _pending = [];
+
+    public WaylandSocketClient(UnixSocketInode socket, LinuxFile file, FiberTask task)
+    {
+        _socket = socket;
+        _file = file;
+        _task = task;
+    }
+
+    public async Task SendAsync(byte[] buffer, IReadOnlyList<LinuxFile>? fds = null)
+    {
+        int rc = await _socket.SendMsgAsync(_file, _task, buffer, fds?.ToList(), 0, null);
+        Assert.Equal(buffer.Length, rc);
+    }
+
+    public async Task<List<DecodedMessage>> ReceiveMessagesAsync(int count)
+    {
+        var messages = new List<DecodedMessage>();
+        while (messages.Count < count)
+        {
+            int read = await _socket.RecvAsync(_file, _task, _scratch, 0, _scratch.Length);
+            Assert.True(read > 0);
+            _pending.AddRange(_scratch[..read]);
+
+            while (_pending.Count >= WaylandMessageHeader.SizeInBytes)
+            {
+                WaylandMessageHeader header = WaylandMessageHeader.Decode(CollectionsMarshal.AsSpan(_pending));
+                if (_pending.Count < header.Size)
+                    break;
+                byte[] packet = _pending[..header.Size].ToArray();
+                _pending.RemoveRange(0, header.Size);
+                messages.Add(new DecodedMessage(header, packet[WaylandMessageHeader.SizeInBytes..]));
+                if (messages.Count == count)
+                    break;
+            }
+        }
+
+        return messages;
+    }
+
+    public void Dispose()
+    {
+        _file.Close();
+    }
+}
+
+internal sealed class TestEnv : IDisposable
+{
+    private static readonly FieldInfo OwnerThreadIdField =
+        typeof(KernelScheduler).GetField("_ownerThreadId", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+    private readonly ClientTaskHandle _anchor;
+    private readonly List<ClientTaskHandle> _clients = [];
+    private Exception? _schedulerFailure;
+    private readonly Thread _schedulerThread;
+
+    public TestEnv()
+    {
+        Runtime = KernelRuntime.BootstrapBare(false);
+        Scheduler = new KernelScheduler();
+
+        var rootFs = new Tmpfs();
+        var rootSb = rootFs.ReadSuper(new FileSystemType { Name = "tmpfs" }, 0, "", null);
+        Runtime.Syscalls.MountRoot(rootSb, new SyscallManager.RootMountOptions
+        {
+            Source = "tmpfs",
+            FsType = "tmpfs",
+            Options = "rw"
+        });
+
+        Registry = new VirtualDaemonRegistry(Runtime.Syscalls, Scheduler);
+        _anchor = CreateClientTaskCore("scheduler-anchor", track: false);
+        _anchor.Task.Status = FiberTaskStatus.Waiting;
+        _schedulerThread = new Thread(() =>
+        {
+            try
+            {
+                ResetSchedulerThreadBinding();
+                Scheduler.Running = true;
+                Scheduler.Run();
+            }
+            catch (Exception ex)
+            {
+                _schedulerFailure = ex;
+            }
+            finally
+            {
+                ResetSchedulerThreadBinding();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WaylandTests.KernelScheduler"
+        };
+        _schedulerThread.Start();
+        Assert.True(WaitForSchedulerReady(TimeSpan.FromSeconds(5)));
+    }
+
+    public KernelRuntime Runtime { get; }
+    public KernelScheduler Scheduler { get; }
+    public VirtualDaemonRegistry Registry { get; }
+
+    public void Dispose()
+    {
+        Scheduler.Running = false;
+        Scheduler.WakeUp();
+        Assert.True(_schedulerThread.Join(TimeSpan.FromSeconds(5)));
+
+        foreach (var client in _clients)
+        {
+            client.Syscalls.Close();
+            client.Engine.Dispose();
+        }
+
+        _anchor.Syscalls.Close();
+        _anchor.Engine.Dispose();
+        Runtime.Syscalls.Close();
+        Runtime.Engine.Dispose();
+    }
+
+    public void InvokeOnScheduler(Action action)
+    {
+        InvokeOnSchedulerAsync(() =>
+        {
+            action();
+            return ValueTask.CompletedTask;
+        }).GetAwaiter().GetResult();
+    }
+
+    public async Task InvokeOnSchedulerAsync(Func<ValueTask> action, Func<string>? stepProvider = null)
+    {
+        await InvokeOnSchedulerAsync(async () =>
+        {
+            await action();
+            return 0;
+        }, stepProvider);
+    }
+
+    public async Task<T> InvokeOnSchedulerAsync<T>(Func<ValueTask<T>> action, Func<string>? stepProvider = null)
+    {
+        if (_schedulerFailure != null)
+            throw new InvalidOperationException("Wayland test scheduler thread failed.", _schedulerFailure);
+
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Scheduler.ScheduleFromAnyThread(() => StartScheduledAction(action, tcs));
+
+        try
+        {
+            return await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (TimeoutException) when (_schedulerFailure != null)
+        {
+            throw new InvalidOperationException("Wayland test scheduler thread failed.", _schedulerFailure);
+        }
+        catch (TimeoutException ex)
+        {
+            var step = stepProvider?.Invoke();
+            throw new TimeoutException(step == null ? ex.Message : $"The operation timed out at step '{step}'.", ex);
+        }
+    }
+
+    public LinuxFile CreateMemfdLikeFile(string name, string content)
+    {
+        Scheduler.AssertSchedulerThread();
+
+        var inode = Runtime.Syscalls.MemfdSuperBlock.AllocInode();
+        inode.Type = InodeType.File;
+        inode.Mode = 0x180;
+        var dentry = new Dentry($"memfd:{name}", inode, Runtime.Syscalls.MemfdSuperBlock.Root, Runtime.Syscalls.MemfdSuperBlock);
+        var file = new LinuxFile(dentry, FileFlags.O_RDWR, Runtime.Syscalls.AnonMount);
+
+        var payload = Encoding.UTF8.GetBytes(content);
+        var rc = inode.Write(file, payload, 0);
+        Assert.Equal(payload.Length, rc);
+        return file;
+    }
+
+    public async Task<WaylandSocketClient> CreateUnixClientAsync(string path)
+    {
+        Scheduler.AssertSchedulerThread();
+        var handle = CreateClientTaskCore("wayland-client", track: true);
+        var clientSocket = new UnixSocketInode(
+            0,
+            handle.Syscalls.MemfdSuperBlock,
+            System.Net.Sockets.SocketType.Stream,
+            handle.Task.CommonKernel);
+        var clientFile = new LinuxFile(
+            new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, handle.Syscalls.MemfdSuperBlock),
+            FileFlags.O_RDWR,
+            handle.Syscalls.AnonMount);
+        object endpoint = CreateUnixSockaddr(path);
+        int connectRc = await clientSocket.ConnectAsync(clientFile, handle.Task, endpoint);
+        Assert.Equal(0, connectRc);
+        return new WaylandSocketClient(clientSocket, clientFile, handle.Task);
+    }
+
+    private ClientTaskHandle CreateClientTaskCore(string name, bool track)
+    {
+        var pid = Scheduler.AllocateTaskId();
+        var mem = new VMAManager(Runtime.Syscalls.Mem.Backings);
+        var engine = new Engine();
+        var syscalls = Runtime.Syscalls.Clone(mem, false, true);
+        syscalls.CurrentSyscallEngine = engine;
+        syscalls.RegisterEngine(engine);
+        SetCurrentSyscallManager(engine, syscalls);
+
+        var process = new Process(pid, mem, syscalls)
+        {
+            PGID = pid,
+            SID = pid,
+            Name = name
+        };
+
+        Scheduler.RegisterProcess(process);
+        var task = new FiberTask(pid, process, engine, Scheduler)
+        {
+            Status = FiberTaskStatus.Waiting
+        };
+        engine.Owner = task;
+
+        var handle = new ClientTaskHandle(process, task, engine, syscalls);
+        if (track)
+            _clients.Add(handle);
+        return handle;
+    }
+
+    private void ResetSchedulerThreadBinding()
+    {
+        OwnerThreadIdField.SetValue(Scheduler, 0);
+    }
+
+    private bool WaitForSchedulerReady(TimeSpan timeout)
+    {
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Scheduler.ScheduleFromAnyThread(() => ready.TrySetResult());
+        return ready.Task.Wait(timeout);
+    }
+
+    private static void StartScheduledAction<T>(Func<ValueTask<T>> action, TaskCompletionSource<T> tcs)
+    {
+        ValueTask<T> pending;
+        try
+        {
+            pending = action();
+        }
+        catch (Exception ex)
+        {
+            tcs.TrySetException(ex);
+            return;
+        }
+
+        if (pending.IsCompletedSuccessfully)
+        {
+            tcs.TrySetResult(pending.Result);
+            return;
+        }
+
+        _ = CompleteScheduledActionAsync(pending, tcs);
+    }
+
+    private static async Task CompleteScheduledActionAsync<T>(ValueTask<T> pending, TaskCompletionSource<T> tcs)
+    {
+        try
+        {
+            tcs.TrySetResult(await pending);
+        }
+        catch (Exception ex)
+        {
+            tcs.TrySetException(ex);
+        }
+    }
+
+    private static object CreateUnixSockaddr(string path)
+    {
+        Type endpointType = typeof(SyscallManager).Assembly.GetType("Fiberish.Syscalls.UnixSockaddrInfo")
+                            ?? throw new InvalidOperationException("UnixSockaddrInfo type not found.");
+        object endpoint = Activator.CreateInstance(endpointType)
+                          ?? throw new InvalidOperationException("Failed to create UnixSockaddrInfo.");
+        endpointType.GetProperty("IsAbstract", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            .SetValue(endpoint, false);
+        endpointType.GetProperty("Path", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            .SetValue(endpoint, path);
+        endpointType.GetProperty("SunPathRaw", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            .SetValue(endpoint, Encoding.UTF8.GetBytes($"{path}\0"));
+        return endpoint;
+    }
+
+    private static void SetCurrentSyscallManager(Engine engine, SyscallManager syscalls)
+    {
+        typeof(Engine).GetProperty("CurrentSyscallManager",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            .SetValue(engine, syscalls);
+    }
+}
+
+internal sealed record ClientTaskHandle(Process Process, FiberTask Task, Engine Engine, SyscallManager Syscalls);

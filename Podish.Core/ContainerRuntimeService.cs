@@ -22,6 +22,8 @@ public sealed class ContainerRunRequest
     public const string PulseServerSocketPath = "/run/pulse/native";
     public const string PulseServerEnvVar = "PULSE_SERVER";
     public const string PulseRuntimePathEnvVar = "PULSE_RUNTIME_PATH";
+    public const string WaylandDisplaySocketPath = "/run/wayland-0";
+    public const string WaylandDisplayEnvVar = "WAYLAND_DISPLAY";
 
     public required string RootfsPath { get; init; }
     public string Hostname { get; init; } = string.Empty;
@@ -49,6 +51,7 @@ public sealed class ContainerRunRequest
     public string? GuestStatsExportDir { get; init; }
     public bool EnableTestVirtualEchoServer { get; init; }
     public bool EnablePulseServer { get; init; }
+    public bool EnableWaylandServer { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
 }
 
@@ -369,6 +372,8 @@ public sealed class ContainerRuntimeService
                     $"{ContainerRunRequest.PulseServerEnvVar}=unix:{ContainerRunRequest.PulseServerSocketPath}");
                 finalEnvs.Add($"{ContainerRunRequest.PulseRuntimePathEnvVar}=/run/pulse");
             }
+            if (request.EnableWaylandServer)
+                finalEnvs.Add($"{ContainerRunRequest.WaylandDisplayEnvVar}=wayland-0");
 
             startupPhase = "resolve-init";
             var (loc, guestPathResolved) = runtime.Syscalls.ResolvePath(actualExe, true);
@@ -391,7 +396,7 @@ public sealed class ContainerRuntimeService
             var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs,
                 finalEnvs.ToArray(),
                 scheduler, ttyDiag, loc.Mount!, uts, engineInitProc?.TGID ?? 0);
-            if (request.EnableTestVirtualEchoServer || request.EnablePulseServer)
+            if (request.EnableTestVirtualEchoServer || request.EnablePulseServer || request.EnableWaylandServer)
                 request.ConfigureVirtualDaemons?.Invoke(runtime, scheduler, uts, mainTask.Process.TGID);
             initProcessStarted = true;
             startupPhase = "running";
