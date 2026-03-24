@@ -160,6 +160,54 @@ public class NetworkTests
         Assert.Equal(-(int)Errno.ERESTARTSYS, result.BytesRead);
     }
 
+    [Fact(Skip = "Diagnostic reproduction for repeated epoll wakeups over Unix sockets; re-enable after the wake path is stabilized.")]
+    public async Task EpollInode_UnixSocketReadableEvent_CanWakeRepeatedly()
+    {
+        using var env = new TestEnv();
+        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Stream, env.Scheduler);
+        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Stream, env.Scheduler);
+        sock1.ConnectPair(sock2);
+        sock2.ConnectPair(sock1);
+
+        var file1 = new LinuxFile(new Dentry("s1", sock1, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
+        var file2 = new LinuxFile(new Dentry("s2", sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
+
+        var epoll = new EpollInode(3, env.MemfdSuperBlock, env.Scheduler);
+        const ulong data = 0x55667788UL;
+        Assert.Equal(0, epoll.Ctl(env.Task, LinuxConstants.EPOLL_CTL_ADD, 9, file2, LinuxConstants.EPOLLIN, data));
+
+        async Task WaitAndDrainOnceAsync(byte value)
+        {
+            var pending = env.StartOnScheduler(async () =>
+            {
+                var buffer = new byte[12];
+                var rc = await epoll.WaitAsync(env.Task, buffer, 1, -1);
+                return (Rc: rc, Buffer: buffer);
+            });
+
+            await env.WaitForBackgroundSchedulerAsync();
+            await env.InvokeOnSchedulerAsync(async () =>
+            {
+                Assert.Equal(1, await sock1.SendMessageAsync(file1, env.Task, [value], null, 0));
+            });
+
+            (int rc, byte[] eventBuffer) = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, rc);
+            Assert.Equal((uint)LinuxConstants.EPOLLIN,
+                BinaryPrimitives.ReadUInt32LittleEndian(eventBuffer.AsSpan(0, 4)));
+            Assert.Equal(data, BinaryPrimitives.ReadUInt64LittleEndian(eventBuffer.AsSpan(4, 8)));
+
+            await env.InvokeOnSchedulerAsync(async () =>
+            {
+                var recv = await sock2.RecvMessageAsync(file2, env.Task, new byte[8], 0);
+                Assert.Equal(1, recv.BytesRead);
+            });
+        }
+
+        await WaitAndDrainOnceAsync(0x2A);
+        await WaitAndDrainOnceAsync(0x2B);
+    }
+
     [Fact]
     public void UnixSocketInode_Poll_FreshSocket_DoesNotReportHangup()
     {

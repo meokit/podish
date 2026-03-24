@@ -52,6 +52,8 @@ public class EpollInode : TmpfsInode
                 oldItem.WaitRegistration?.Dispose();
             _watches.Remove(targetFile);
             _readyList.RemoveAll(x => x.File == targetFile);
+            if (_readyList.Count == 0)
+                _waitQueue.Reset();
         }
         else if (op == LinuxConstants.EPOLL_CTL_MOD)
         {
@@ -67,6 +69,8 @@ public class EpollInode : TmpfsInode
             {
                 _readyList.Remove(item);
                 item.IsReady = false;
+                if (_readyList.Count == 0)
+                    _waitQueue.Reset();
             }
 
             CheckAndRegister(item);
@@ -166,6 +170,8 @@ public class EpollInode : TmpfsInode
             {
                 // False alarm or event cleared before we harvested
                 item.IsReady = false;
+                if ((item.Events & LinuxConstants.EPOLLONESHOT) == 0)
+                    reEvalList.Add(item);
                 continue;
             }
 
@@ -192,6 +198,9 @@ public class EpollInode : TmpfsInode
         foreach (var item in reEvalList)
             if (_watches.ContainsValue(item))
                 CheckAndRegister(item);
+
+        if (_readyList.Count == 0)
+            _waitQueue.Reset();
 
         return harvested;
     }
