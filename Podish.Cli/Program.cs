@@ -6,6 +6,7 @@ using Fiberish.Diagnostics;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Podish.Cli.Wayland;
 using Podish.Core;
 using Podish.Cli.Pulse;
 using Podish.Wayland;
@@ -109,6 +110,10 @@ internal class Program
         var waylandServerOption = new Option<bool>(
             new[] { "--wayland-server", "--virt-wayland" },
             "Enable a virtual Wayland compositor inside the guest at /run/wayland-0");
+        var waylandDesktopSizeOption = new Option<string>(
+            new[] { "--wayland-desktop-size" },
+            () => "1024x768",
+            "Virtual Wayland desktop size as WIDTHxHEIGHT");
         var runArgsArgument = new Argument<string[]>(
             "run-args",
             () => Array.Empty<string>(),
@@ -136,6 +141,7 @@ internal class Program
         runCommand.AddOption(testVirtEchoOption);
         runCommand.AddOption(pulseServerOption);
         runCommand.AddOption(waylandServerOption);
+        runCommand.AddOption(waylandDesktopSizeOption);
         runCommand.AddArgument(runArgsArgument);
 
         runCommand.SetHandler(async context =>
@@ -159,6 +165,7 @@ internal class Program
             var enableTestVirtEcho = context.ParseResult.GetValueForOption(testVirtEchoOption);
             var enablePulseServer = context.ParseResult.GetValueForOption(pulseServerOption);
             var enableWaylandServer = context.ParseResult.GetValueForOption(waylandServerOption);
+            var waylandDesktopSizeRaw = context.ParseResult.GetValueForOption(waylandDesktopSizeOption) ?? "1024x768";
             var runArgs = context.ParseResult.GetValueForArgument(runArgsArgument) ?? Array.Empty<string>();
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
             string? image = null;
@@ -202,6 +209,14 @@ internal class Program
 
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
+
+            if (!TryParseDesktopSize(waylandDesktopSizeRaw, out var waylandDesktopSize))
+            {
+                Console.Error.WriteLine(
+                    $"[Podish.Cli] invalid --wayland-desktop-size value: {waylandDesktopSizeRaw}. Use WIDTHxHEIGHT");
+                context.ExitCode = 125;
+                return;
+            }
 
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
             var imagesDir = Path.Combine(fiberpodDir, "images");
@@ -359,6 +374,8 @@ internal class Program
                 TestVirtualEchoServer = enableTestVirtEcho,
                 PulseServer = enablePulseServer,
                 WaylandServer = enableWaylandServer,
+                WaylandDesktopWidth = waylandDesktopSize.Width,
+                WaylandDesktopHeight = waylandDesktopSize.Height,
                 MemoryQuotaBytes = memoryQuotaBytes,
                 LogDriver = containerLogDriver.ToCliValue(),
                 PublishedPorts = publishedPorts
@@ -408,7 +425,8 @@ internal class Program
                 memoryQuotaBytes,
                 enableTestVirtEcho,
                 enablePulseServer,
-                enableWaylandServer);
+                enableWaylandServer,
+                waylandDesktopSize);
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -564,7 +582,8 @@ internal class Program
                 spec.MemoryQuotaBytes,
                 spec.TestVirtualEchoServer,
                 spec.PulseServer,
-                spec.WaylandServer);
+                spec.WaylandServer,
+                new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight));
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -1313,6 +1332,24 @@ internal class Program
         return true;
     }
 
+    private static bool TryParseDesktopSize(string raw, out WaylandDesktopOptions desktopOptions)
+    {
+        desktopOptions = WaylandDesktopOptions.Default;
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        string[] parts = raw.Split(['x', 'X'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 2 ||
+            !int.TryParse(parts[0], out int width) ||
+            !int.TryParse(parts[1], out int height) ||
+            width <= 0 ||
+            height <= 0)
+            return false;
+
+        desktopOptions = new WaylandDesktopOptions(width, height);
+        return true;
+    }
+
     private static void CleanupOldAutoEngineLogs(string logsDir, int keep)
     {
         try
@@ -1339,52 +1376,82 @@ internal class Program
         return containerId;
     }
 
-    private static async Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
+    private static Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
         string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useEngineInit, bool useOverlay,
         string containersDir,
         string containerId, string? containerName, string hostname, NetworkMode networkMode, string image,
         string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts, string? guestStatsExportDir,
-        long? memoryQuotaBytes, bool enableTestVirtEcho, bool enablePulseServer, bool enableWaylandServer)
+        long? memoryQuotaBytes, bool enableTestVirtEcho, bool enablePulseServer, bool enableWaylandServer,
+        WaylandDesktopOptions waylandDesktopOptions)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
-        var service = new ContainerRuntimeService(Logger, ProgramLoggerFactory);
-        return await service.RunAsync(new ContainerRunRequest
+        using var runtimeThread = new ContainerRuntimeThread(Logger, ProgramLoggerFactory);
+        WaylandDisplayServerState? waylandDisplayState = enableWaylandServer
+            ? new WaylandDisplayServerState(ProgramLoggerFactory, waylandDesktopOptions)
+            : null;
+        var waylandIngressBridge = enableWaylandServer ? new WaylandDisplayIngressBridge() : null;
+        try
         {
-            RootfsPath = rootfsPath,
-            ContainerName = containerName,
-            Exe = exe,
-            ExeArgs = exeArgs,
-            Volumes = volumes,
-            GuestEnvs = guestEnvs,
-            DnsServers = dnsServers,
-            UseTty = useTty,
-            Strace = strace,
-            UseEngineInit = useEngineInit,
-            UseOverlay = useOverlay,
-            ContainerId = containerId,
-            Hostname = hostname,
-            NetworkMode = networkMode,
-            Image = image,
-            ContainerDir = containerDir,
-            LogDriver = logDriver,
-            EventStore = eventStore,
-            PublishedPorts = publishedPorts,
-            GuestStatsExportDir = guestStatsExportDir,
-            MemoryQuotaBytes = memoryQuotaBytes,
-            EnableTestVirtualEchoServer = enableTestVirtEcho,
-            EnablePulseServer = enablePulseServer,
-            EnableWaylandServer = enableWaylandServer,
-            ConfigureVirtualDaemons = enableTestVirtEcho || enablePulseServer || enableWaylandServer
-                ? (runtime, scheduler, uts, parentPid) =>
-                    RegisterVirtualDaemons(rootfsPath, runtime, scheduler, uts, parentPid, enableTestVirtEcho,
-                        enablePulseServer, enableWaylandServer)
-                : null
-        });
+            Task<int> runtimeTask = runtimeThread.Start(new ContainerRunRequest
+            {
+                RootfsPath = rootfsPath,
+                ContainerName = containerName,
+                Exe = exe,
+                ExeArgs = exeArgs,
+                Volumes = volumes,
+                GuestEnvs = guestEnvs,
+                DnsServers = dnsServers,
+                UseTty = useTty,
+                Strace = strace,
+                UseEngineInit = useEngineInit,
+                UseOverlay = useOverlay,
+                ContainerId = containerId,
+                Hostname = hostname,
+                NetworkMode = networkMode,
+                Image = image,
+                ContainerDir = containerDir,
+                LogDriver = logDriver,
+                EventStore = eventStore,
+                PublishedPorts = publishedPorts,
+                GuestStatsExportDir = guestStatsExportDir,
+                MemoryQuotaBytes = memoryQuotaBytes,
+                EnableTestVirtualEchoServer = enableTestVirtEcho,
+                EnablePulseServer = enablePulseServer,
+                EnableWaylandServer = enableWaylandServer,
+                WaylandDesktopWidth = waylandDesktopOptions.Width,
+                WaylandDesktopHeight = waylandDesktopOptions.Height,
+                ConfigureVirtualDaemons = enableTestVirtEcho || enablePulseServer || enableWaylandServer
+                    ? (runtime, scheduler, uts, parentPid) =>
+                        RegisterVirtualDaemons(rootfsPath, runtime, scheduler, uts, parentPid, enableTestVirtEcho,
+                            enablePulseServer, enableWaylandServer, waylandDesktopOptions, waylandDisplayState,
+                            waylandIngressBridge)
+                    : null
+            });
+
+            int exitCode;
+            if (waylandDisplayState != null && waylandIngressBridge != null)
+            {
+                waylandDisplayState.RunMainLoop(runtimeTask, waylandIngressBridge);
+                exitCode = runtimeTask.GetAwaiter().GetResult();
+            }
+            else
+            {
+                exitCode = runtimeTask.GetAwaiter().GetResult();
+            }
+
+            return Task.FromResult(exitCode);
+        }
+        finally
+        {
+            waylandDisplayState?.Dispose();
+        }
     }
 
     private static void RegisterVirtualDaemons(string rootfsPath, KernelRuntime runtime, KernelScheduler scheduler,
-        UTSNamespace? uts, int ownerPid, bool enableTestVirtEcho, bool enablePulseServer, bool enableWaylandServer)
+        UTSNamespace? uts, int ownerPid, bool enableTestVirtEcho, bool enablePulseServer, bool enableWaylandServer,
+        WaylandDesktopOptions waylandDesktopOptions, WaylandDisplayServerState? waylandDisplayState,
+        WaylandDisplayIngressBridge? waylandIngressBridge)
     {
         var registry = new VirtualDaemonRegistry(runtime.Syscalls, scheduler);
         if (enableTestVirtEcho)
@@ -1417,7 +1484,11 @@ internal class Program
                 "Podish.RegisterVirtualDaemons.wayland.cleanup");
             var waylandDaemon = new PodishWaylandVirtualDaemon(ContainerRunRequest.WaylandDisplaySocketPath,
                 ownerPid,
-                ProgramLoggerFactory);
+                ProgramLoggerFactory,
+                waylandDisplayState?.Presenter,
+                waylandIngressBridge,
+                enableHostDisplay: waylandDisplayState != null,
+                desktopOptions: waylandDesktopOptions);
             var waylandRuntime = registry.Spawn(waylandDaemon, parentPid: ownerPid, uts: uts);
             Logger.LogInformation("Registered Podish virtual Wayland daemon pid={Pid} ownerPid={OwnerPid} path={Path}",
                 waylandRuntime.Process.TGID, ownerPid, waylandDaemon.UnixPath);

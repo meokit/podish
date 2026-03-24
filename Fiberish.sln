@@ -31,6 +31,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Podish.Wayland.Generator", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Podish.Wayland.Tests", "Podish.Wayland.Tests\Podish.Wayland.Tests.csproj", "{D4FAE8C0-1C13-4FC6-ACC2-CECA7DC4FA7F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Podish.Display", "Podish.Display\Podish.Display.csproj", "{5FB4BAEE-D0CF-4C58-94C1-A6AE1771EAC2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -197,6 +199,18 @@ Global
 		{D4FAE8C0-1C13-4FC6-ACC2-CECA7DC4FA7F}.Release|x64.Build.0 = Release|Any CPU
 		{D4FAE8C0-1C13-4FC6-ACC2-CECA7DC4FA7F}.Release|x86.ActiveCfg = Release|Any CPU
 		{D4FAE8C0-1C13-4FC6-ACC2-CECA7DC4FA7F}.Release|x86.Build.0 = Release|Any CPU
+		{5FB4BAEE-D0CF-4C58-94C1-A6AE1771EAC2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5FB4BAEE-D0CF-4C58-94C1-A6AE1771EAC2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5FB4BAEE-D0CF-4C58-94C1-A6AE1771EAC2}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{5FB4BAEE-D0CF-4C58-94C1-A6AE1771EAC2}.Debug|x64.Build.0 = Debug|Any CPU
+		{5FB4BAEE-D0CF-4C58-94C1-A6AE1771EAC2}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{5FB4BAEE-D0CF-4C58-94C1-A6AE1771EAC2}.Debug|x86.Build.0 = Debug|Any CPU
+		{5FB4BAEE-D0CF-4C58-94C1-A6AE1771EAC2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5FB4BAEE-D0CF-4C58-94C1-A6AE1771EAC2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5FB4BAEE-D0CF-4C58-94C1-A6AE1771EAC2}.Release|x64.ActiveCfg = Release|Any CPU
+		{5FB4BAEE-D0CF-4C58-94C1-A6AE1771EAC2}.Release|x64.Build.0 = Release|Any CPU
+		{5FB4BAEE-D0CF-4C58-94C1-A6AE1771EAC2}.Release|x86.ActiveCfg = Release|Any CPU
+		{5FB4BAEE-D0CF-4C58-94C1-A6AE1771EAC2}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

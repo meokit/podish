@@ -53,6 +53,8 @@ public sealed class ContainerRunRequest
     public bool EnableTestVirtualEchoServer { get; init; }
     public bool EnablePulseServer { get; init; }
     public bool EnableWaylandServer { get; init; }
+    public int WaylandDesktopWidth { get; init; } = 1024;
+    public int WaylandDesktopHeight { get; init; } = 768;
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
 }
 

@@ -32,6 +32,8 @@ public sealed class PodishRunSpec
     public bool TestVirtualEchoServer { get; init; }
     public bool PulseServer { get; init; }
     public bool WaylandServer { get; init; }
+    public int WaylandDesktopWidth { get; init; } = 1024;
+    public int WaylandDesktopHeight { get; init; } = 768;
     public long? MemoryQuotaBytes { get; init; }
     public string LogDriver { get; init; } = "json-file";
     public IReadOnlyList<PublishedPortSpec> PublishedPorts { get; init; } = Array.Empty<PublishedPortSpec>();
@@ -430,8 +432,8 @@ public sealed class PodishContext : IDisposable
 
         var bridge = attachTerminalBridge && spec.Interactive && spec.Tty ? new PodishTerminalBridge() : null;
         var processController = new ContainerProcessController();
-        var service = new ContainerRuntimeService(_logger, LoggerFactory);
-        var runTask = Task.Run(() => service.RunAsync(new ContainerRunRequest
+        var runtimeThread = new ContainerRuntimeThread(_logger, LoggerFactory);
+        Task<int> runTask = runtimeThread.Start(new ContainerRunRequest
         {
             RootfsPath = rootfsPath,
             Exe = spec.Exe ?? string.Empty,
@@ -458,8 +460,15 @@ public sealed class PodishContext : IDisposable
             MemoryQuotaBytes = spec.MemoryQuotaBytes,
             EnableTestVirtualEchoServer = spec.TestVirtualEchoServer,
             EnablePulseServer = spec.PulseServer,
-            EnableWaylandServer = spec.WaylandServer
-        }));
+            EnableWaylandServer = spec.WaylandServer,
+            WaylandDesktopWidth = spec.WaylandDesktopWidth,
+            WaylandDesktopHeight = spec.WaylandDesktopHeight
+        });
+        runTask = runTask.ContinueWith(static (task, state) =>
+        {
+            ((ContainerRuntimeThread)state!).Dispose();
+            return task.GetAwaiter().GetResult();
+        }, runtimeThread, TaskScheduler.Default);
 
         return new PodishContainerSession(containerId, imageRef, runTask, bridge, processController);
     }
