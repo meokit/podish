@@ -13,7 +13,7 @@ namespace Fiberish.Tests.VFS;
 public class NetworkTests
 {
     [Fact]
-    public void EpollInode_ShouldRegisterAndTriggerEvents()
+    public async Task EpollInode_ShouldRegisterAndTriggerEvents()
     {
         using var env = new TestEnv();
         var epoll = new EpollInode(1, env.MemfdSuperBlock, env.Scheduler);
@@ -36,12 +36,7 @@ public class NetworkTests
 
         // Read Epoll
         var buffer = new byte[16];
-        var readEvents = 0;
-
-        // Since eventfd is already signaled, wait should complete immediately
-        var awaiter = epoll.WaitAsync(env.Task, buffer, 1, 0).GetAwaiter();
-        awaiter.OnCompleted(() => { readEvents = awaiter.GetResult(); });
-
+        var readEvents = await env.StartOnScheduler(async () => await epoll.WaitAsync(env.Task, buffer, 1, 0));
         Assert.Equal(1, readEvents);
 
         var eventsRead = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(0, 4));
@@ -160,7 +155,7 @@ public class NetworkTests
         Assert.Equal(-(int)Errno.ERESTARTSYS, result.BytesRead);
     }
 
-    [Fact(Skip = "Diagnostic reproduction for repeated epoll wakeups over Unix sockets; re-enable after the wake path is stabilized.")]
+    [Fact]
     public async Task EpollInode_UnixSocketReadableEvent_CanWakeRepeatedly()
     {
         using var env = new TestEnv();
@@ -176,36 +171,58 @@ public class NetworkTests
         const ulong data = 0x55667788UL;
         Assert.Equal(0, epoll.Ctl(env.Task, LinuxConstants.EPOLL_CTL_ADD, 9, file2, LinuxConstants.EPOLLIN, data));
 
-        async Task WaitAndDrainOnceAsync(byte value)
+        var firstWaitReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondWaitReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var pending = env.StartOnScheduler(async () =>
         {
-            var pending = env.StartOnScheduler(async () =>
+            static (uint Events, ulong Data) ReadEvent(byte[] eventBuffer)
             {
-                var buffer = new byte[12];
-                var rc = await epoll.WaitAsync(env.Task, buffer, 1, -1);
-                return (Rc: rc, Buffer: buffer);
-            });
+                return (
+                    BinaryPrimitives.ReadUInt32LittleEndian(eventBuffer.AsSpan(0, 4)),
+                    BinaryPrimitives.ReadUInt64LittleEndian(eventBuffer.AsSpan(4, 8))
+                );
+            }
 
-            await env.WaitForBackgroundSchedulerAsync();
-            await env.InvokeOnSchedulerAsync(async () =>
-            {
-                Assert.Equal(1, await sock1.SendMessageAsync(file1, env.Task, [value], null, 0));
-            });
+            var firstBuffer = new byte[12];
+            firstWaitReady.TrySetResult();
+            var firstRc = await epoll.WaitAsync(env.Task, firstBuffer, 1, -1);
+            Assert.Equal(1, firstRc);
+            var firstEvent = ReadEvent(firstBuffer);
 
-            (int rc, byte[] eventBuffer) = await pending.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(1, rc);
-            Assert.Equal((uint)LinuxConstants.EPOLLIN,
-                BinaryPrimitives.ReadUInt32LittleEndian(eventBuffer.AsSpan(0, 4)));
-            Assert.Equal(data, BinaryPrimitives.ReadUInt64LittleEndian(eventBuffer.AsSpan(4, 8)));
+            var firstRecv = await sock2.RecvMessageAsync(file2, env.Task, new byte[8], 0);
+            Assert.Equal(1, firstRecv.BytesRead);
 
-            await env.InvokeOnSchedulerAsync(async () =>
-            {
-                var recv = await sock2.RecvMessageAsync(file2, env.Task, new byte[8], 0);
-                Assert.Equal(1, recv.BytesRead);
-            });
-        }
+            var secondBuffer = new byte[12];
+            secondWaitReady.TrySetResult();
+            var secondRc = await epoll.WaitAsync(env.Task, secondBuffer, 1, -1);
+            Assert.Equal(1, secondRc);
+            var secondEvent = ReadEvent(secondBuffer);
 
-        await WaitAndDrainOnceAsync(0x2A);
-        await WaitAndDrainOnceAsync(0x2B);
+            var secondRecv = await sock2.RecvMessageAsync(file2, env.Task, new byte[8], 0);
+            Assert.Equal(1, secondRecv.BytesRead);
+
+            return (firstEvent, secondEvent);
+        });
+
+        await firstWaitReady.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            Assert.Equal(1, await sock1.SendMessageAsync(file1, env.Task, [0x2A], null, 0));
+        }).WaitAsync(TimeSpan.FromSeconds(5));
+
+        await secondWaitReady.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            Assert.Equal(1, await sock1.SendMessageAsync(file1, env.Task, [0x2B], null, 0));
+        }).WaitAsync(TimeSpan.FromSeconds(5));
+
+        var result = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal((uint)LinuxConstants.EPOLLIN, result.firstEvent.Events);
+        Assert.Equal(data, result.firstEvent.Data);
+        Assert.Equal((uint)LinuxConstants.EPOLLIN, result.secondEvent.Events);
+        Assert.Equal(data, result.secondEvent.Data);
     }
 
     [Fact]

@@ -1761,8 +1761,7 @@ public class FiberTask
             error = ex;
         }
 
-        StorePendingAsyncSyscallCompletion(result, error);
-        CommonKernel.Schedule(this);
+        CommonKernel.RunIngress(() => FinalizeAsyncSyscall(result, error), this);
     }
 
     // Runs on scheduler thread; all mutable task/signal/cpu state transitions happen here.

@@ -432,11 +432,10 @@ public class KernelScheduler
         if (task.IsRetiring)
             return;
 
-        // Continuations are resumptions of work, not evidence that the task is already runnable.
-        // Always hand them back to the task scheduler so EnqueueTask can decide whether this wake
-        // needs a new queue entry or should reuse an existing stale one.
-        task.Continuation = continuation;
-        Schedule(task);
+        // Wait/awaiter continuations are scheduler-thread callbacks associated with a task
+        // context, not guest instruction slices. Run them through the ingress FIFO so they
+        // preserve event order without mutating the task's runnable-slice state machine.
+        Schedule(continuation, task);
     }
 
     internal void PostSynchronizationContext(SendOrPostCallback callback, object? state, FiberTask? context)

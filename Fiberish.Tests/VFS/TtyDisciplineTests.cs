@@ -859,16 +859,11 @@ public class TtyDisciplineTests
     [Fact]
     public void Input_enqueues_to_device_buffer_not_processes_directly()
     {
-        // After Input() is called, data should be in Device buffer, not yet processed
+        // On the scheduler thread, Input() is processed immediately into the line discipline.
         _tty.Input(Encoding.ASCII.GetBytes("abc\n"));
 
-        // Data should be in the device buffer (HasInterrupt = true)
-        Assert.True(_tty.Device.HasInterrupt);
-
-        // The input queue count should be 0 until Read() or ProcessPendingInput() is called
-        // Note: We can't directly check _inq.Count, but we can verify via HasDataAvailable
-        // which checks both Device.HasInterrupt and queue count
-        Assert.True(_tty.HasDataAvailable); // True because Device.HasInterrupt is true
+        Assert.False(_tty.Device.HasInterrupt);
+        Assert.True(_tty.HasDataAvailable);
     }
 
     [Fact]
@@ -877,12 +872,8 @@ public class TtyDisciplineTests
         // DataAvailable should not be signaled initially
         Assert.False(_tty.DataAvailable.IsSignaled);
 
-        // Input data from "background thread"
+        // Scheduler-thread input is processed immediately and signals DataAvailable.
         _tty.Input(Encoding.ASCII.GetBytes("test\n"));
-        Assert.False(_tty.DataAvailable.IsSignaled);
-
-        // DataAvailable is signaled after scheduler thread processes device input.
-        _tty.ProcessPendingInput();
         Assert.True(_tty.DataAvailable.IsSignaled);
     }
 
@@ -957,8 +948,9 @@ public class TtyDisciplineTests
         _tty.Input(Encoding.ASCII.GetBytes("c"));
         _tty.Input(Encoding.ASCII.GetBytes("\n"));
 
-        // All data should be queued in device
-        Assert.True(_tty.Device.HasInterrupt);
+        // Scheduler-thread input is immediately drained from the device into the discipline queue.
+        Assert.False(_tty.Device.HasInterrupt);
+        Assert.True(_tty.HasDataAvailable);
 
         // Read should process all and return "abc\n"
         var read = _tty.Read(_task, buffer, FileFlags.O_NONBLOCK);

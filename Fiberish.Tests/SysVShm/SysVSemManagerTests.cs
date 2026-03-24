@@ -121,6 +121,7 @@ public class SysVSemManagerTests
         Assert.False(pending.IsCompleted);
 
         Assert.Equal(0, ctx.Manager.SemCtl(semid, 0, LinuxConstants.SETVAL, 1, ctx.Engine, 0, 0));
+        ctx.DrainEvents();
         var rc = await pending.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.Equal(0, rc);
         Assert.Equal(0, ctx.Manager.SemCtl(semid, 0, LinuxConstants.GETVAL, 0, ctx.Engine, 0, 0));
