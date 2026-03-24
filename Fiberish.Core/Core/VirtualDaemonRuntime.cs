@@ -11,6 +11,7 @@ public sealed class VirtualDaemonRuntime
     private int _exiting;
     private int _listenFd = -1;
     private UnixSocketInode? _listenInode;
+    private Exception? _lastScheduledFailure;
 
     internal VirtualDaemonRuntime(KernelScheduler scheduler, FiberTask task, IVirtualDaemon daemon)
     {
@@ -28,6 +29,7 @@ public sealed class VirtualDaemonRuntime
     public SyscallManager Syscalls { get; }
     public IVirtualDaemon Daemon { get; }
     public LinuxFile? ListenFile => _listenFd >= 0 ? Syscalls.GetFD(_listenFd) : null;
+    internal Exception? LastScheduledFailure => _lastScheduledFailure;
 
     public void Start(int backlog = 16)
     {
@@ -230,8 +232,9 @@ public sealed class VirtualDaemonRuntime
         {
             pending = action(context);
         }
-        catch
+        catch (Exception ex)
         {
+            _lastScheduledFailure = ex;
             if (completionTask != null)
                 RetireChildTask(completionTask);
             Exit(1);
@@ -255,8 +258,9 @@ public sealed class VirtualDaemonRuntime
         {
             await pending;
         }
-        catch
+        catch (Exception ex)
         {
+            _lastScheduledFailure = ex;
             if (completionTask != null)
                 RetireChildTask(completionTask);
             Exit(1);

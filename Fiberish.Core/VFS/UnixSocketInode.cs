@@ -16,6 +16,24 @@ public class UnixMessage
     public UnixCredentials? Credentials { get; init; }
 }
 
+internal sealed record UnixSocketDebugState(
+    int QueuedBytes,
+    int ReceiveQueueCount,
+    int PartialBytesRemaining,
+    bool PeerWriteClosed,
+    bool ShutDownRead,
+    bool ShutDownWrite,
+    bool HasPeer,
+    bool IsListening,
+    bool ReadWaitSignaled,
+    bool WriteWaitSignaled);
+
+internal sealed record UnixSocketDebugDequeueResult(
+    int BytesRead,
+    byte[] Data,
+    int FdCount,
+    UnixSocketDebugState StateAfter);
+
 public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, ISocketEndpointOps, ISocketDataOps,
     ISocketOptionOps
 {
@@ -92,6 +110,71 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
             {
                 return _localSunPathRaw != null;
             }
+        }
+    }
+
+    internal UnixSocketDebugState GetDebugState()
+    {
+        using (EnterStateScope())
+        {
+            return new UnixSocketDebugState(
+                _queuedBytes,
+                _receiveQueue.Count,
+                _partialBuffer == null ? 0 : _partialBuffer.Length - _partialOffset,
+                _peerWriteClosed,
+                _shutDownRead,
+                _shutDownWrite,
+                _peer != null,
+                _listening,
+                _readWaitQueue.IsSignaled,
+                _writeWaitQueue.IsSignaled);
+        }
+    }
+
+    internal UnixSocketDebugDequeueResult? DebugTryDequeue(int maxBytes)
+    {
+        using (EnterStateScope())
+        {
+            if (_partialBuffer != null)
+            {
+                var toCopy = Math.Min(maxBytes, _partialBuffer.Length - _partialOffset);
+                byte[] data = new byte[toCopy];
+                Array.Copy(_partialBuffer, _partialOffset, data, 0, toCopy);
+                _partialOffset += toCopy;
+                if (_partialOffset >= _partialBuffer.Length)
+                {
+                    _partialBuffer = null;
+                    _partialOffset = 0;
+                }
+
+                if (_receiveQueue.Count == 0 && _partialBuffer == null)
+                    _readWaitQueue.Reset();
+                _queuedBytes -= toCopy;
+                UpdateWriteWaitQueueState();
+                _writeWaitQueue.Set();
+                return new UnixSocketDebugDequeueResult(toCopy, data, 0, GetDebugState());
+            }
+
+            if (!_receiveQueue.TryDequeue(out var msg))
+                return null;
+
+            var bytes = Math.Min(maxBytes, msg.Data.Length);
+            byte[] copied = new byte[bytes];
+            Array.Copy(msg.Data, 0, copied, 0, bytes);
+
+            if (UnixSocketType == SocketType.Stream && bytes < msg.Data.Length)
+            {
+                _partialBuffer = msg.Data;
+                _partialOffset = bytes;
+            }
+
+            _queuedBytes -= bytes;
+            if (UnixSocketType != SocketType.Stream || bytes >= msg.Data.Length)
+                _queuedBytes -= msg.Data.Length - bytes;
+            UpdateWriteWaitQueueState();
+            if (_receiveQueue.Count == 0 && _partialBuffer == null)
+                _readWaitQueue.Reset();
+            return new UnixSocketDebugDequeueResult(bytes, copied, msg.Fds.Count, GetDebugState());
         }
     }
 

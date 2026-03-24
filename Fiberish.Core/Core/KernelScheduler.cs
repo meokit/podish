@@ -303,13 +303,32 @@ public class KernelScheduler
     private void EnqueueTask(FiberTask task)
     {
         AssertSchedulerThread();
-        if (task.Status == FiberTaskStatus.Terminated) return;
-        if (task.IsRetiring) return;
-        if (task.IsReadyQueued) return;
+        if (task.Status == FiberTaskStatus.Terminated)
+            return;
+
+        if (task.IsRetiring)
+            return;
+
+        if (task.IsReadyQueued)
+        {
+            // We allow stale queue entries: a task can already have a run-queue slot reserved
+            // and later transition back to Waiting before that slot is consumed. In that state
+            // IsReadyQueued only means "a dequeue token exists", not "the task is currently Ready".
+            //
+            // A fresh wakeup must still make forward progress, so if the task is no longer Ready
+            // we re-mark it as Ready and let the existing queue entry carry the wake. Skipping
+            // here would drop the wakeup entirely until some unrelated event re-schedules it.
+            if (task.Status != FiberTaskStatus.Ready)
+                task.Status = FiberTaskStatus.Ready;
+
+            AssertReadyQueueInvariant(task, "EnqueueTask.reuse");
+            return;
+        }
 
         task.IsReadyQueued = true;
         task.Status = FiberTaskStatus.Ready;
         _runQueue.Enqueue(task);
+        AssertReadyQueueInvariant(task, "EnqueueTask.new");
 
         EnqueueWake();
     }
@@ -383,6 +402,9 @@ public class KernelScheduler
 
     internal void Schedule(SchedulerWorkItem item)
     {
+        // ResumeTask is just another way to request "make this task runnable". If we are already
+        // on the scheduler thread, collapse that directly into EnqueueTask so the same stale-entry
+        // rules apply regardless of where the wake originated.
         if (IsSchedulerThread && item.Kind == SchedulerWorkItemKind.ResumeTask && item.Task != null)
             EnqueueTask(item.Task);
         else
@@ -407,7 +429,12 @@ public class KernelScheduler
 
     internal void ScheduleContinuation(Action continuation, FiberTask task)
     {
-        if (task.IsRetiring) return;
+        if (task.IsRetiring)
+            return;
+
+        // Continuations are resumptions of work, not evidence that the task is already runnable.
+        // Always hand them back to the task scheduler so EnqueueTask can decide whether this wake
+        // needs a new queue entry or should reuse an existing stale one.
         task.Continuation = continuation;
         Schedule(task);
     }
@@ -754,8 +781,21 @@ public class KernelScheduler
             return false;
 
         if (task != null)
+        {
+            // Dequeue consumes the single queued wake token for this task. The task may still be
+            // Waiting here because the queue item can be stale; callers decide whether to run it
+            // based on the current Status.
             task.IsReadyQueued = false;
+        }
         return true;
+    }
+
+    [Conditional("DEBUG")]
+    private static void AssertReadyQueueInvariant(FiberTask task, string site)
+    {
+        Debug.Assert(task.IsReadyQueued, $"[{site}] queued task must set IsReadyQueued.");
+        Debug.Assert(task.Status == FiberTaskStatus.Ready,
+            $"[{site}] queued task must be Ready after enqueue. actual={task.Status}");
     }
 
     public void SignalProcessGroup(int pgid, int signal)

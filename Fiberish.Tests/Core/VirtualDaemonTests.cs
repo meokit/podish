@@ -122,6 +122,160 @@ public sealed class VirtualDaemonTests
     }
 
     [Fact]
+    public async Task VirtualDaemon_SendMsgWithoutAncillaryData_WorksOverStreamSocket()
+    {
+        using var env = new TestEnv();
+        var payload = Encoding.UTF8.GetBytes("ping-sendmsg-no-fds");
+        var step = "before invoke";
+        var daemonStep = "daemon init";
+
+        var result = await env.InvokeOnSchedulerAsync(async () =>
+        {
+            step = "spawn daemon";
+            env.Registry.Spawn(new SendMsgEchoVirtualDaemon("/virt-sendmsg.sock", s => daemonStep = s));
+
+            step = "create client";
+            var client = env.CreateClientTask("virt-client-sendmsg");
+            var clientSocket = new UnixSocketInode(
+                0,
+                client.Syscalls.MemfdSuperBlock,
+                System.Net.Sockets.SocketType.Stream,
+                client.Task.CommonKernel);
+            var clientFile = new LinuxFile(
+                new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, client.Syscalls.MemfdSuperBlock),
+                FileFlags.O_RDWR,
+                client.Syscalls.AnonMount);
+
+            var endpoint = new UnixSockaddrInfo
+            {
+                IsAbstract = false,
+                Path = "/virt-sendmsg.sock",
+                SunPathRaw = Encoding.UTF8.GetBytes("/virt-sendmsg.sock\0")
+            };
+
+            step = "connect";
+            var connectRc = await clientSocket.ConnectAsync(clientFile, client.Task, endpoint);
+            Assert.Equal(0, connectRc);
+
+            step = "sendmsg";
+            var sent = await clientSocket.SendMsgAsync(clientFile, client.Task, payload, null, 0, null);
+            Assert.Equal(payload.Length, sent);
+
+            step = "recv";
+            var recvBuffer = new byte[128];
+            var recv = await ((ISocketDataOps)clientSocket).RecvMsgAsync(clientFile, client.Task, recvBuffer, 0, 128);
+            Assert.Equal(payload.Length, recv.BytesRead);
+            Assert.True(recv.Fds == null || recv.Fds.Count == 0);
+
+            clientFile.Close();
+            return Encoding.UTF8.GetString(recvBuffer, 0, recv.BytesRead);
+        }, () => $"{step} / {daemonStep}");
+
+        Assert.Equal("ping-sendmsg-no-fds", result);
+    }
+
+    [Fact]
+    public async Task VirtualDaemon_ClientSendMsgWithoutAncillary_DaemonCanReceiveAndReplyWithSend()
+    {
+        using var env = new TestEnv();
+        var payload = Encoding.UTF8.GetBytes("client-sendmsg");
+        var step = "before invoke";
+        var daemonStep = "daemon init";
+
+        var result = await env.InvokeOnSchedulerAsync(async () =>
+        {
+            step = "spawn daemon";
+            env.Registry.Spawn(new ReceiveMsgReplySendVirtualDaemon("/virt-sendmsg-in.sock", s => daemonStep = s));
+
+            step = "create client";
+            var client = env.CreateClientTask("virt-client-sendmsg-in");
+            var clientSocket = new UnixSocketInode(
+                0,
+                client.Syscalls.MemfdSuperBlock,
+                System.Net.Sockets.SocketType.Stream,
+                client.Task.CommonKernel);
+            var clientFile = new LinuxFile(
+                new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, client.Syscalls.MemfdSuperBlock),
+                FileFlags.O_RDWR,
+                client.Syscalls.AnonMount);
+
+            var endpoint = new UnixSockaddrInfo
+            {
+                IsAbstract = false,
+                Path = "/virt-sendmsg-in.sock",
+                SunPathRaw = Encoding.UTF8.GetBytes("/virt-sendmsg-in.sock\0")
+            };
+
+            step = "connect";
+            Assert.Equal(0, await clientSocket.ConnectAsync(clientFile, client.Task, endpoint));
+
+            step = "sendmsg";
+            Assert.Equal(payload.Length, await clientSocket.SendMsgAsync(clientFile, client.Task, payload, null, 0, null));
+
+            step = "recv";
+            var recvBuffer = new byte[128];
+            var recv = await clientSocket.RecvAsync(clientFile, client.Task, recvBuffer, 0, 128);
+            Assert.True(recv > 0);
+            clientFile.Close();
+            return Encoding.UTF8.GetString(recvBuffer, 0, recv);
+        }, () => $"{step} / {daemonStep}");
+
+        Assert.Equal("client-sendmsg", result);
+    }
+
+    [Fact]
+    public async Task VirtualDaemon_DaemonSendMsgWithoutAncillary_ClientCanReceive()
+    {
+        using var env = new TestEnv();
+        var payload = Encoding.UTF8.GetBytes("daemon-sendmsg");
+        var step = "before invoke";
+        var daemonStep = "daemon init";
+        VirtualDaemonRuntime? runtime = null;
+
+        var result = await env.InvokeOnSchedulerAsync(async () =>
+        {
+            step = "spawn daemon";
+            runtime = env.Registry.Spawn(new ReceiveReplySendMsgVirtualDaemon("/virt-sendmsg-out.sock", s => daemonStep = s));
+
+            step = "create client";
+            var client = env.CreateClientTask("virt-client-sendmsg-out");
+            var clientSocket = new UnixSocketInode(
+                0,
+                client.Syscalls.MemfdSuperBlock,
+                System.Net.Sockets.SocketType.Stream,
+                client.Task.CommonKernel);
+            var clientFile = new LinuxFile(
+                new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, client.Syscalls.MemfdSuperBlock),
+                FileFlags.O_RDWR,
+                client.Syscalls.AnonMount);
+
+            var endpoint = new UnixSockaddrInfo
+            {
+                IsAbstract = false,
+                Path = "/virt-sendmsg-out.sock",
+                SunPathRaw = Encoding.UTF8.GetBytes("/virt-sendmsg-out.sock\0")
+            };
+
+            step = "connect";
+            Assert.Equal(0, await clientSocket.ConnectAsync(clientFile, client.Task, endpoint));
+
+            step = "send";
+            Assert.Equal(payload.Length, await clientSocket.SendAsync(clientFile, client.Task, payload, 0));
+
+            step = "recv";
+            if (runtime?.LastScheduledFailure != null)
+                throw new InvalidOperationException("Virtual daemon child task failed.", runtime.LastScheduledFailure);
+            var recvBuffer = new byte[128];
+            var recv = await clientSocket.RecvAsync(clientFile, client.Task, recvBuffer, 0, 128);
+            Assert.True(recv > 0);
+            clientFile.Close();
+            return Encoding.UTF8.GetString(recvBuffer, 0, recv);
+        }, () => $"{step} / {daemonStep} / failure={(runtime?.LastScheduledFailure?.GetType().Name ?? "none")}");
+
+        Assert.Equal("daemon-sendmsg", result);
+    }
+
+    [Fact]
     public async Task VirtualDaemon_NonBlockingReadExact_MustReceiveSecondFrameAfterSendingControlPacket()
     {
         using var env = new TestEnv();
@@ -334,6 +488,145 @@ public sealed class VirtualDaemonTests
         public void OnStop(VirtualDaemonContext context)
         {
         }
+    }
+
+    private sealed class SendMsgEchoVirtualDaemon : IVirtualDaemon
+    {
+        private readonly Action<string> _setStep;
+
+        public SendMsgEchoVirtualDaemon(string unixPath, Action<string> setStep)
+        {
+            UnixPath = unixPath;
+            Name = "virt-sendmsg-echo";
+            _setStep = setStep;
+        }
+
+        public string Name { get; }
+        public string UnixPath { get; }
+
+        public void OnStart(VirtualDaemonContext context)
+        {
+            context.Schedule(async ctx =>
+            {
+                _setStep("daemon accept");
+                var (rc, connection) = await ctx.AcceptAsync();
+                Assert.Equal(0, rc);
+                Assert.NotNull(connection);
+
+                using (connection!)
+                {
+                    _setStep("daemon recvmsg");
+                    var recvBuffer = new byte[128];
+                    var recv = await connection.RecvMsgAsync(recvBuffer, 0, 128);
+                    Assert.True(recv.BytesRead > 0);
+                    Assert.True(recv.Fds == null || recv.Fds.Count == 0);
+
+                    _setStep("daemon sendmsg");
+                    var echo = recvBuffer[..recv.BytesRead];
+                    var sent = await connection.SendMsgAsync(echo, null, 0, null);
+                    Assert.Equal(echo.Length, sent);
+                    _setStep("daemon done");
+                }
+            });
+        }
+
+        public void OnSignal(VirtualDaemonContext context, int signo)
+        {
+            context.Exit(128 + signo);
+        }
+
+        public void OnStop(VirtualDaemonContext context)
+        {
+        }
+    }
+
+    private sealed class ReceiveMsgReplySendVirtualDaemon : IVirtualDaemon
+    {
+        private readonly Action<string> _setStep;
+
+        public ReceiveMsgReplySendVirtualDaemon(string unixPath, Action<string> setStep)
+        {
+            UnixPath = unixPath;
+            Name = "virt-sendmsg-in";
+            _setStep = setStep;
+        }
+
+        public string Name { get; }
+        public string UnixPath { get; }
+
+        public void OnStart(VirtualDaemonContext context)
+        {
+            context.Schedule(async ctx =>
+            {
+                _setStep("daemon accept");
+                var (rc, connection) = await ctx.AcceptAsync();
+                Assert.Equal(0, rc);
+                Assert.NotNull(connection);
+
+                using (connection!)
+                {
+                    _setStep("daemon recvmsg");
+                    var recvBuffer = new byte[128];
+                    var recv = await connection.RecvMsgAsync(recvBuffer, 0, 128);
+                    Assert.True(recv.BytesRead > 0);
+                    Assert.True(recv.Fds == null || recv.Fds.Count == 0);
+                    _setStep("daemon send");
+                    var sent = await connection.SendAsync(recvBuffer.AsMemory(0, recv.BytesRead), 0);
+                    Assert.Equal(recv.BytesRead, sent);
+                    _setStep("daemon done");
+                }
+            });
+        }
+
+        public void OnSignal(VirtualDaemonContext context, int signo) => context.Exit(128 + signo);
+        public void OnStop(VirtualDaemonContext context) { }
+    }
+
+    private sealed class ReceiveReplySendMsgVirtualDaemon : IVirtualDaemon
+    {
+        private readonly Action<string> _setStep;
+
+        public ReceiveReplySendMsgVirtualDaemon(string unixPath, Action<string> setStep)
+        {
+            UnixPath = unixPath;
+            Name = "virt-sendmsg-out";
+            _setStep = setStep;
+        }
+
+        public string Name { get; }
+        public string UnixPath { get; }
+
+        public void OnStart(VirtualDaemonContext context)
+        {
+            context.Schedule(async ctx =>
+            {
+                _setStep("daemon accept");
+                var (rc, connection) = await ctx.AcceptAsync();
+                Assert.Equal(0, rc);
+                Assert.NotNull(connection);
+
+                using (connection!)
+                {
+                    _setStep("daemon recv");
+                    var recvBuffer = new byte[128];
+                    var recv = await connection.RecvAsync(recvBuffer, 0, 128);
+                    Assert.True(recv > 0);
+                    var acceptedSocket = Assert.IsType<UnixSocketInode>(connection.File.OpenedInode);
+                    var acceptedState = acceptedSocket.GetDebugState();
+                    var clientPeer = (UnixSocketInode?)typeof(UnixSocketInode)
+                        .GetField("_peer", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .GetValue(acceptedSocket);
+                    var peerState = clientPeer?.GetDebugState();
+                    _setStep($"daemon sendmsg pre accepted={acceptedState} peer={peerState}");
+                    var sent = await connection.SendMsgAsync(recvBuffer[..recv], null, 0, null);
+                    Assert.Equal(recv, sent);
+                    _setStep($"daemon done accepted={acceptedSocket.GetDebugState()} peer={clientPeer?.GetDebugState()}");
+                }
+            });
+        }
+
+        public void OnSignal(VirtualDaemonContext context, int signo) => context.Exit(128 + signo);
+        public void OnStop(VirtualDaemonContext context) { }
     }
 
     private sealed class InterleavedFrameVirtualDaemon : IVirtualDaemon
