@@ -38,3 +38,9 @@ FIBERISH_INTEGRATION_ASSETS_DIR=/path/to/assets pytest -m integration tests/inte
 - tests use `dotnet run --project Podish.Cli/Podish.Cli.csproj -- ...`
 - some scenarios use OCI images, others use Podman-compatible `--rootfs`
 - `podman`, `zig`, `pytest`, and `pexpect` may be needed depending on the case
+- the Wayland e2e flow builds `tests/integration/Containerfile.wayland-utils` with `podman`,
+  saves it as an OCI archive, loads it into `.fiberpod`, then runs `wayland-info` with
+  `--wayland-server`
+- the same image also builds `/usr/local/bin/test_wayland_shm_window`, a minimal native
+  Wayland client that creates an `xdg_surface`, allocates a `wl_shm` buffer, attaches it,
+  and commits it against Podish's compositor

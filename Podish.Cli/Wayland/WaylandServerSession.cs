@@ -31,6 +31,10 @@ internal sealed class WaylandServerSession
                 return;
             }
 
+            int expectedFdCount = _client.GetExpectedFdCount(message.Header);
+            if (expectedFdCount > 0)
+                message = message with { Fds = _connection.TakePendingFds(expectedFdCount) };
+
             _logger.LogDebug("Wayland recv object={ObjectId} opcode={Opcode} size={Size} fds={FdCount}",
                 message.Header.ObjectId, message.Header.Opcode, message.Header.Size, message.Fds.Count);
 

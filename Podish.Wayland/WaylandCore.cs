@@ -253,14 +253,27 @@ public sealed class WaylandConnection
                 throw new InvalidDataException("Unexpected EOF while reading Wayland body.");
         }
 
-        List<LinuxFile> fds = [.. _pendingFds];
-        _pendingFds.Clear();
-        return new WaylandIncomingMessage(header, bodyLength == 0 ? Array.Empty<byte>() : _body[..bodyLength].ToArray(), fds);
+        return new WaylandIncomingMessage(header, bodyLength == 0 ? Array.Empty<byte>() : _body[..bodyLength].ToArray(),
+            Array.Empty<LinuxFile>());
     }
 
     public ValueTask<int> SendAsync(WaylandOutgoingMessage message)
     {
         return _connection.SendMsgAsync(message.Buffer, message.Fds?.ToList());
+    }
+
+    public IReadOnlyList<LinuxFile> TakePendingFds(int count)
+    {
+        if (count <= 0)
+            return Array.Empty<LinuxFile>();
+
+        int take = Math.Min(count, _pendingFds.Count);
+        if (take == 0)
+            return Array.Empty<LinuxFile>();
+
+        List<LinuxFile> fds = _pendingFds.GetRange(0, take);
+        _pendingFds.RemoveRange(0, take);
+        return fds;
     }
 
     private async ValueTask<int> ReadExactAsync(byte[] buffer, int needed)
@@ -318,6 +331,11 @@ public sealed class WaylandObjectTable
         if (resource is not T typed)
             throw new WaylandProtocolException(id, 0, $"Wayland object {id} is a {resource.InterfaceName}, not {typeof(T).Name}.");
         return typed;
+    }
+
+    public bool TryGetValue(uint id, out WaylandResource? resource)
+    {
+        return _resources.TryGetValue(id, out resource);
     }
 
     public WaylandResource Require(uint id)
@@ -503,6 +521,16 @@ public sealed class WaylandClient
                     fd.Close();
             }
         }
+    }
+
+    public int GetExpectedFdCount(WaylandMessageHeader header)
+    {
+        if (!Objects.TryGetValue(header.ObjectId, out WaylandResource? resource) || resource is null)
+            return 0;
+        if (resource.Destroyed || header.Opcode >= resource.Requests.Count)
+            return 0;
+
+        return resource.Requests[header.Opcode].Arguments.Count(static arg => arg.Kind == WaylandArgKind.Fd);
     }
 
     public async ValueTask SendEventAsync(uint objectId, ushort opcode, Action<WaylandWireWriter> writePayload,

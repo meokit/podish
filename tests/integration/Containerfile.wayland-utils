@@ -1,0 +1,36 @@
+FROM docker.io/i386/alpine:3.20 AS build
+
+RUN apk add --no-cache \
+    bash \
+    build-base \
+    coreutils \
+    linux-headers \
+    pkgconf \
+    wayland-dev \
+    wayland-protocols \
+    wayland-utils
+
+WORKDIR /build
+
+COPY tests/integration/wayland/test_wayland_shm_window.c /build/test_wayland_shm_window.c
+
+RUN wayland-scanner client-header /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml /build/xdg-shell-client-protocol.h
+RUN wayland-scanner private-code /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml /build/xdg-shell-protocol.c
+
+RUN cc -O2 -Wall -Wextra -o /build/test_wayland_shm_window \
+    /build/test_wayland_shm_window.c \
+    /build/xdg-shell-protocol.c \
+    $(pkg-config --cflags --libs wayland-client)
+
+FROM docker.io/i386/alpine:3.20
+
+RUN apk add --no-cache \
+    bash \
+    coreutils \
+    wayland-utils
+
+COPY --from=build /build/test_wayland_shm_window /usr/local/bin/test_wayland_shm_window
+
+WORKDIR /workspace
+
+CMD ["/bin/sh"]

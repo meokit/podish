@@ -24,6 +24,7 @@ public sealed class ContainerRunRequest
     public const string PulseRuntimePathEnvVar = "PULSE_RUNTIME_PATH";
     public const string WaylandDisplaySocketPath = "/run/wayland-0";
     public const string WaylandDisplayEnvVar = "WAYLAND_DISPLAY";
+    public const string XdgRuntimeDirEnvVar = "XDG_RUNTIME_DIR";
 
     public required string RootfsPath { get; init; }
     public string Hostname { get; init; } = string.Empty;
@@ -373,7 +374,10 @@ public sealed class ContainerRuntimeService
                 finalEnvs.Add($"{ContainerRunRequest.PulseRuntimePathEnvVar}=/run/pulse");
             }
             if (request.EnableWaylandServer)
+            {
                 finalEnvs.Add($"{ContainerRunRequest.WaylandDisplayEnvVar}=wayland-0");
+                finalEnvs.Add($"{ContainerRunRequest.XdgRuntimeDirEnvVar}=/run");
+            }
 
             startupPhase = "resolve-init";
             var (loc, guestPathResolved) = runtime.Syscalls.ResolvePath(actualExe, true);

@@ -17,15 +17,15 @@ internal sealed class WlDisplayResource : WaylandResource
         {
             case 0:
             {
-                SyncRequest request = WlDisplayProtocol.DecodeSync(message.Body, message.Fds);
-                var callback = Client.Register(new WlCallbackResource(Client, request.CallbackId, 1));
+                var request = WlDisplayProtocol.DecodeSync(message.Body, message.Fds);
+                var callback = Client.Register(new WlCallbackResource(Client, request.Callback, 1));
                 await callback.SendDoneAndDisposeAsync(Client.NextSerial());
                 break;
             }
             case 1:
             {
-                GetRegistryRequest request = WlDisplayProtocol.DecodeGetRegistry(message.Body, message.Fds);
-                var registry = Client.Register(new WlRegistryResource(Client, request.RegistryId, 1));
+                var request = WlDisplayProtocol.DecodeGetRegistry(message.Body, message.Fds);
+                var registry = Client.Register(new WlRegistryResource(Client, request.Registry, 1));
                 await registry.AdvertiseGlobalsAsync();
                 break;
             }
@@ -52,7 +52,7 @@ internal sealed class WlRegistryResource : WaylandResource
 
     public override ValueTask DispatchAsync(WaylandIncomingMessage message)
     {
-        BindRequest request = WlRegistryProtocol.DecodeBind(message.Body, message.Fds);
+        var request = WlRegistryProtocol.DecodeBind(message.Body, message.Fds);
         WaylandGlobal global = Client.Server.Globals.Require(request.Name);
         if (!string.Equals(global.Interface, request.Interface, StringComparison.Ordinal))
             throw new WaylandProtocolException(ObjectId, 0,
@@ -107,13 +107,13 @@ internal sealed class WlCompositorResource : WaylandResource
         {
             case 0:
             {
-                CreateSurfaceRequest request = WlCompositorProtocol.DecodeCreateSurface(message.Body, message.Fds);
+                var request = WlCompositorProtocol.DecodeCreateSurface(message.Body, message.Fds);
                 Client.Register(new WlSurfaceResource(Client, request.Id, Math.Min(Version, WlSurfaceProtocol.Version)));
                 break;
             }
             case 1:
             {
-                CreateRegionRequest request = WlCompositorProtocol.DecodeCreateRegion(message.Body, message.Fds);
+                var request = WlCompositorProtocol.DecodeCreateRegion(message.Body, message.Fds);
                 Client.Register(new WlRegionResource(Client, request.Id, 1));
                 break;
             }
@@ -160,28 +160,46 @@ internal sealed class WlSurfaceResource : WaylandResource
                 break;
             case 1:
             {
-                AttachRequest request = WlSurfaceProtocol.DecodeAttach(message.Body, message.Fds);
-                _pending.Buffer = request.BufferId == 0 ? null : Client.Objects.Require<WlBufferResource>(request.BufferId);
+                var request = WlSurfaceProtocol.DecodeAttach(message.Body, message.Fds);
+                _pending.Buffer = request.Buffer == 0 ? null : Client.Objects.Require<WlBufferResource>(request.Buffer);
                 break;
             }
             case 2:
             {
-                DamageRequest request = WlSurfaceProtocol.DecodeDamage(message.Body, message.Fds);
+                var request = WlSurfaceProtocol.DecodeDamage(message.Body, message.Fds);
                 _pending.Damages.Add(new WaylandRect(request.X, request.Y, request.Width, request.Height));
                 break;
             }
             case 3:
             {
-                FrameRequest request = WlSurfaceProtocol.DecodeFrame(message.Body, message.Fds);
-                _pending.FrameCallbacks.Add(Client.Register(new WlCallbackResource(Client, request.CallbackId, 1)));
+                var request = WlSurfaceProtocol.DecodeFrame(message.Body, message.Fds);
+                _pending.FrameCallbacks.Add(Client.Register(new WlCallbackResource(Client, request.Callback, 1)));
                 break;
             }
             case 4:
-                await CommitAsync();
-                break;
             case 5:
             {
-                DamageRequest request = WlSurfaceProtocol.DecodeDamage(message.Body, message.Fds);
+                var reader = new WaylandWireReader(message.Body, message.Fds);
+                uint regionId = reader.ReadObjectId();
+                if (regionId != 0)
+                    Client.Objects.Require<WlRegionResource>(regionId);
+                reader.EnsureExhausted();
+                break;
+            }
+            case 6:
+                await CommitAsync();
+                break;
+            case 7:
+            case 8:
+            {
+                var reader = new WaylandWireReader(message.Body, message.Fds);
+                _ = reader.ReadInt();
+                reader.EnsureExhausted();
+                break;
+            }
+            case 9:
+            {
+                var request = WlSurfaceProtocol.DecodeDamageBuffer(message.Body, message.Fds);
                 _pending.Damages.Add(new WaylandRect(request.X, request.Y, request.Width, request.Height));
                 break;
             }
@@ -263,7 +281,7 @@ internal sealed class WlShmResource : WaylandResource
 
     public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
     {
-        CreatePoolRequest request = WlShmProtocol.DecodeCreatePool(message.Body, message.Fds);
+        var request = WlShmProtocol.DecodeCreatePool(message.Body, message.Fds);
         if (request.Size <= 0)
             throw new WaylandProtocolException(ObjectId, 0, "wl_shm_pool size must be positive.");
 
@@ -292,7 +310,7 @@ internal sealed class WlShmPoolResource : WaylandResource
         {
             case 0:
             {
-                CreateBufferRequest request = WlShmPoolProtocol.DecodeCreateBuffer(message.Body, message.Fds);
+                var request = WlShmPoolProtocol.DecodeCreateBuffer(message.Body, message.Fds);
                 if (request.Width <= 0 || request.Height <= 0 || request.Stride <= 0 || request.Offset < 0)
                     throw new WaylandProtocolException(ObjectId, 0, "wl_buffer parameters must be positive.");
                 Client.Register(new WlBufferResource(Client, request.Id, 1, this, request.Offset, request.Width,
@@ -304,7 +322,7 @@ internal sealed class WlShmPoolResource : WaylandResource
                 break;
             case 2:
             {
-                ResizePoolRequest request = WlShmPoolProtocol.DecodeResize(message.Body, message.Fds);
+                var request = WlShmPoolProtocol.DecodeResize(message.Body, message.Fds);
                 if (request.Size <= 0)
                     throw new WaylandProtocolException(ObjectId, 0, "wl_shm_pool size must stay positive.");
                 Size = request.Size;
@@ -376,15 +394,15 @@ internal sealed class XdgWmBaseResource : WaylandResource
                 throw new WaylandProtocolException(ObjectId, 0, "xdg_positioner is not implemented in phase one.");
             case 2:
             {
-                GetXdgSurfaceRequest request = XdgWmBaseProtocol.DecodeGetXdgSurface(message.Body, message.Fds);
-                var surface = Client.Objects.Require<WlSurfaceResource>(request.SurfaceId);
+                var request = XdgWmBaseProtocol.DecodeGetXdgSurface(message.Body, message.Fds);
+                var surface = Client.Objects.Require<WlSurfaceResource>(request.Surface);
                 var xdgSurface = Client.Register(new XdgSurfaceResource(Client, request.Id, 1, surface));
                 surface.AttachXdgSurface(xdgSurface);
                 break;
             }
             case 3:
             {
-                PongRequest request = XdgWmBaseProtocol.DecodePong(message.Body, message.Fds);
+                var request = XdgWmBaseProtocol.DecodePong(message.Body, message.Fds);
                 LastPingSerial = request.Serial;
                 break;
             }
@@ -426,7 +444,7 @@ internal sealed class XdgSurfaceResource : WaylandResource
                 break;
             case 1:
             {
-                GetToplevelRequest request = XdgSurfaceProtocol.DecodeGetToplevel(message.Body, message.Fds);
+                var request = XdgSurfaceProtocol.DecodeGetToplevel(message.Body, message.Fds);
                 if (Toplevel != null)
                     throw new WaylandProtocolException(ObjectId, 0, "xdg_surface already has a toplevel.");
                 Toplevel = Client.Register(new XdgToplevelResource(Client, request.Id, 1, this));
@@ -434,8 +452,20 @@ internal sealed class XdgSurfaceResource : WaylandResource
                 break;
             }
             case 2:
+                throw new WaylandProtocolException(ObjectId, 0, "xdg_popup is not implemented in phase one.");
+            case 3:
             {
-                AckConfigureRequest request = XdgSurfaceProtocol.DecodeAckConfigure(message.Body, message.Fds);
+                var reader = new WaylandWireReader(message.Body, message.Fds);
+                _ = reader.ReadInt();
+                _ = reader.ReadInt();
+                _ = reader.ReadInt();
+                _ = reader.ReadInt();
+                reader.EnsureExhausted();
+                break;
+            }
+            case 4:
+            {
+                var request = XdgSurfaceProtocol.DecodeAckConfigure(message.Body, message.Fds);
                 if (request.Serial != PendingConfigureSerial)
                     throw new WaylandProtocolException(ObjectId, 0, $"Unknown configure serial {request.Serial}.");
                 AckedConfigureSerial = request.Serial;
