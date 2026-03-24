@@ -1,6 +1,8 @@
 using Fiberish.Core.Net;
+using Fiberish.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Core;
+using Podish.Core.Networking;
 using Xunit;
 
 namespace Fiberish.Tests.Podish;
@@ -39,8 +41,8 @@ public sealed class ContainerMemoryLimitsTests
     [Fact]
     public async Task RunAsync_MemoryQuotaBelowMinimum_IsRejected()
     {
-        using var pageScope = Fiberish.Memory.ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = Fiberish.Memory.GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
 
         var root = Path.Combine(Path.GetTempPath(), "podish-memory-limit-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -113,6 +115,135 @@ public sealed class ContainerMemoryLimitsTests
         }
     }
 
+    [Fact]
+    public async Task RunAsync_HostModeWithoutPublishedPorts_DoesNotCreatePortForwardManager()
+    {
+        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+
+        var root = CreateRuntimeTestRoot();
+        var managerCreated = false;
+
+        try
+        {
+            var service = new ContainerRuntimeService(NullLogger.Instance, NullLoggerFactory.Instance, () =>
+            {
+                managerCreated = true;
+                return new FakePortForwardManager();
+            });
+
+            var rc = await service.RunAsync(CreateHelloStaticRequest(root, NetworkMode.Host,
+                Array.Empty<PublishedPortSpec>()));
+            Assert.Equal(0, rc);
+            Assert.False(managerCreated);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_PrivateModeWithoutPublishedPorts_DoesNotCreatePortForwardManager()
+    {
+        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+
+        var root = CreateRuntimeTestRoot();
+        var managerCreated = false;
+
+        try
+        {
+            var service = new ContainerRuntimeService(NullLogger.Instance, NullLoggerFactory.Instance, () =>
+            {
+                managerCreated = true;
+                return new FakePortForwardManager();
+            });
+
+            var rc = await service.RunAsync(CreateHelloStaticRequest(root, NetworkMode.Private,
+                Array.Empty<PublishedPortSpec>()));
+            Assert.Equal(0, rc);
+            Assert.False(managerCreated);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_PrivateModeWithPublishedPorts_CreatesAndDisposesPortForwardManager()
+    {
+        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+
+        var root = CreateRuntimeTestRoot();
+        FakePortForwardManager? manager = null;
+
+        try
+        {
+            var service = new ContainerRuntimeService(NullLogger.Instance, NullLoggerFactory.Instance, () =>
+            {
+                manager = new FakePortForwardManager();
+                return manager;
+            });
+
+            var rc = await service.RunAsync(CreateHelloStaticRequest(root, NetworkMode.Private, [
+                new PublishedPortSpec
+                {
+                    HostPort = 0,
+                    ContainerPort = 12345,
+                    Protocol = TransportProtocol.Tcp
+                }
+            ]));
+
+            Assert.Equal(0, rc);
+            Assert.NotNull(manager);
+            Assert.Equal(1, manager!.StartCalls);
+            Assert.Equal(1, manager.StopCalls);
+            Assert.Equal(1, manager.DisposeCalls);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    private static string CreateRuntimeTestRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "podish-runtime-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(Path.Combine(root, "ctr"));
+        return root;
+    }
+
+    private static ContainerRunRequest CreateHelloStaticRequest(string root, NetworkMode networkMode,
+        IReadOnlyList<PublishedPortSpec> publishedPorts)
+    {
+        var guestRoot = ResolveGuestRootForHelloStatic();
+        return new ContainerRunRequest
+        {
+            RootfsPath = guestRoot,
+            Exe = "/hello_static",
+            ExeArgs = Array.Empty<string>(),
+            Volumes = Array.Empty<string>(),
+            GuestEnvs = Array.Empty<string>(),
+            DnsServers = Array.Empty<string>(),
+            UseTty = false,
+            Strace = false,
+            UseEngineInit = false,
+            UseOverlay = false,
+            ContainerId = "runtime-port-forward-test-" + Guid.NewGuid().ToString("N")[..12],
+            Hostname = "runtime-port-forward-test",
+            NetworkMode = networkMode,
+            Image = "runtime:test",
+            ContainerDir = Path.Combine(root, "ctr"),
+            LogDriver = ContainerLogDriver.None,
+            EventStore = new ContainerEventStore(Path.Combine(root, "events.jsonl")),
+            PublishedPorts = publishedPorts
+        };
+    }
+
     private static string ResolveGuestRootForHelloStatic()
     {
         const string rel = "tests/linux/hello_static";
@@ -127,5 +258,28 @@ public sealed class ContainerMemoryLimitsTests
         }
 
         throw new FileNotFoundException("Could not locate tests/linux/hello_static from test working directory.");
+    }
+
+    private sealed class FakePortForwardManager : IPortForwardManager
+    {
+        public int StartCalls { get; private set; }
+        public int StopCalls { get; private set; }
+        public int DisposeCalls { get; private set; }
+
+        public void Dispose()
+        {
+            DisposeCalls++;
+        }
+
+        public void Start(ContainerNetworkContext context, IReadOnlyList<PublishedPortSpec> ports)
+        {
+            StartCalls++;
+        }
+
+        public bool Stop(ContainerNetworkContext context)
+        {
+            StopCalls++;
+            return true;
+        }
     }
 }

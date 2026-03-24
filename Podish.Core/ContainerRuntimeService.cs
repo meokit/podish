@@ -56,13 +56,21 @@ public sealed class ContainerRuntimeService
 {
     private readonly ILogger _logger;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly PortForwardManager _portForwardManager;
+    private readonly Func<IPortForwardManager> _portForwardManagerFactory;
+    private IPortForwardManager? _portForwardManager;
 
     public ContainerRuntimeService(ILogger logger, ILoggerFactory loggerFactory)
+        : this(logger, loggerFactory, () => new PortForwardManager(loggerFactory))
+    {
+    }
+
+    internal ContainerRuntimeService(ILogger logger, ILoggerFactory loggerFactory,
+        Func<IPortForwardManager> portForwardManagerFactory)
     {
         _logger = logger ?? NullLogger.Instance;
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
-        _portForwardManager = new PortForwardManager(_loggerFactory);
+        _portForwardManagerFactory = portForwardManagerFactory
+                                     ?? throw new ArgumentNullException(nameof(portForwardManagerFactory));
     }
 
     public async Task<int> RunAsync(ContainerRunRequest request)
@@ -208,7 +216,12 @@ public sealed class ContainerRuntimeService
             {
                 networkContext = networkBackend.CreateContainerNetwork(new ContainerNetworkSpec
                     { ContainerId = request.ContainerId });
-                _portForwardManager.Start(networkContext, publishedPorts);
+                if (publishedPorts.Count > 0)
+                {
+                    _portForwardManager ??= _portForwardManagerFactory();
+                    _portForwardManager.Start(networkContext, publishedPorts);
+                }
+
                 runtime.Syscalls.SetPrivateNetNamespace(networkContext.SharedNamespace);
             }
 
@@ -549,7 +562,8 @@ public sealed class ContainerRuntimeService
 
             if (networkContext != null)
             {
-                if (_portForwardManager.Stop(networkContext))
+                var portForwardStopped = _portForwardManager?.Stop(networkContext) ?? true;
+                if (portForwardStopped)
                 {
                     networkBackend?.DestroyContainerNetwork(networkContext);
                     networkContext.Dispose();
@@ -563,6 +577,7 @@ public sealed class ContainerRuntimeService
             }
 
             networkBackend?.Dispose();
+            _portForwardManager?.Dispose();
 
             _logger.LogDebug("Container teardown finished containerId={ContainerId}", request.ContainerId);
         }

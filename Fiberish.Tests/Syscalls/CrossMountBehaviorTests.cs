@@ -396,7 +396,7 @@ public class CrossMountBehaviorTests
             SyscallManager = new SyscallManager(Engine, Vma, 0);
 
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "cross-mount-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "cross-mount-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root)
             {
                 Source = "tmpfs-root",
@@ -410,7 +410,7 @@ public class CrossMountBehaviorTests
             root.Inode!.Mkdir(mountPoint, 0x1FF, 0, 0);
             root.Children["mnt"] = mountPoint;
 
-            var mountedSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "cross-mount-mounted", null);
+            var mountedSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "cross-mount-mounted", null);
             var mountedMount = new Mount(mountedSb, mountedSb.Root)
             {
                 Source = "tmpfs-mounted",

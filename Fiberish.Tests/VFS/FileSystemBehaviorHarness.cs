@@ -58,7 +58,7 @@ internal sealed class TmpfsTestRig : IFileSystemTestRig
     public TmpfsTestRig()
     {
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-        SuperBlock = fsType.CreateFileSystem().ReadSuper(fsType, 0, "tmpfs-rig", null);
+        SuperBlock = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmpfs-rig", null);
         Root = SuperBlock.Root;
         RootInode = Root.Inode!;
     }
@@ -79,8 +79,8 @@ internal sealed class OverlayFsTestRig : IFileSystemTestRig
     {
         var lowerType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
         var upperType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-        var lower = lowerType.CreateFileSystem().ReadSuper(lowerType, 0, "ovl-lower", null);
-        var upper = upperType.CreateFileSystem().ReadSuper(upperType, 0, "ovl-upper", null);
+        var lower = lowerType.CreateAnonymousFileSystem().ReadSuper(lowerType, 0, "ovl-lower", null);
+        var upper = upperType.CreateAnonymousFileSystem().ReadSuper(upperType, 0, "ovl-upper", null);
 
         var overlayFs = new OverlayFileSystem();
         SuperBlock = overlayFs.ReadSuper(

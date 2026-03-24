@@ -20,7 +20,7 @@ public class SilkFsAdapterTests
         var vma = new VMAManager();
         var sm = new SyscallManager(engine, vma, 0);
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-        var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+        var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
         var rootMount = new Mount(rootSb, rootSb.Root)
         {
             Source = "tmpfs",
@@ -92,7 +92,7 @@ public class SilkFsAdapterTests
                 var vma = new VMAManager();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root)
                 {
                     Source = "tmpfs",
@@ -133,7 +133,7 @@ public class SilkFsAdapterTests
                 var vma = new VMAManager();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root)
                 {
                     Source = "tmpfs",
@@ -197,7 +197,7 @@ public class SilkFsAdapterTests
                 var vma = new VMAManager();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root)
                 {
                     Source = "tmpfs",
@@ -235,7 +235,7 @@ public class SilkFsAdapterTests
                 var vma = new VMAManager();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root)
                 {
                     Source = "tmpfs",
@@ -282,7 +282,7 @@ public class SilkFsAdapterTests
                 var vma = new VMAManager();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -327,7 +327,7 @@ public class SilkFsAdapterTests
                 var vma = new VMAManager();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -384,7 +384,7 @@ public class SilkFsAdapterTests
             var vma = new VMAManager();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -445,7 +445,7 @@ public class SilkFsAdapterTests
             var vma = new VMAManager();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -497,7 +497,7 @@ public class SilkFsAdapterTests
             var vma = new VMAManager();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -557,7 +557,7 @@ public class SilkFsAdapterTests
             var mm = new VMAManager();
             var sm = new SyscallManager(engine, mm, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -618,7 +618,7 @@ public class SilkFsAdapterTests
             var mm = new VMAManager();
             var sm = new SyscallManager(engine, mm, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -680,7 +680,7 @@ public class SilkFsAdapterTests
                 var mm = new VMAManager();
                 var sm = new SyscallManager(engine, mm, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -725,7 +725,7 @@ public class SilkFsAdapterTests
                 var mm = new VMAManager();
                 var sm = new SyscallManager(engine, mm, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -771,7 +771,7 @@ public class SilkFsAdapterTests
                 var mm = new VMAManager();
                 var sm = new SyscallManager(engine, mm, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -812,7 +812,7 @@ public class SilkFsAdapterTests
                 var mm = new VMAManager();
                 var sm = new SyscallManager(engine, mm, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -858,7 +858,7 @@ public class SilkFsAdapterTests
             var mm = new VMAManager();
             var sm = new SyscallManager(engine, mm, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -930,7 +930,7 @@ public class SilkFsAdapterTests
             var mm = new VMAManager();
             var sm = new SyscallManager(engine, mm, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -996,7 +996,7 @@ public class SilkFsAdapterTests
             var vma = new VMAManager();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -1063,7 +1063,7 @@ public class SilkFsAdapterTests
             var vma = new VMAManager();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -1111,7 +1111,7 @@ public class SilkFsAdapterTests
     {
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-partial-read-{Guid.NewGuid():N}");
         var payload = Enumerable.Range(0, LinuxConstants.PageSize * 3 + 257)
-            .Select(i => (byte)('a' + (i % 26)))
+            .Select(i => (byte)('a' + i % 26))
             .ToArray();
 
         try
@@ -1121,7 +1121,7 @@ public class SilkFsAdapterTests
                 var vma = new VMAManager();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -1152,7 +1152,7 @@ public class SilkFsAdapterTests
                 var vma = new VMAManager();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -1200,7 +1200,7 @@ public class SilkFsAdapterTests
                 var vma = new VMAManager();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -1234,7 +1234,7 @@ public class SilkFsAdapterTests
                 var vma = new VMAManager();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 

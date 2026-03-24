@@ -154,7 +154,6 @@ public class TruncateMmapLifecycleTests
         Assert.Equal(FaultResult.Handled,
             env.Mm2.HandleFaultDetailed(env.Map2 + LinuxConstants.PageSize, true, env.Engine2));
 
-        
 
         Assert.Equal(0, env.Inode.Truncate(LinuxConstants.PageSize));
         ProcessAddressSpaceSync.NotifyInodeTruncated(env.Mm1, env.Engine1, env.Inode, LinuxConstants.PageSize,
@@ -168,73 +167,66 @@ public class TruncateMmapLifecycleTests
     public async Task NotifyInodeTruncated_SharedAddressSpacePeerEngine_UsesSequenceInvalidation()
     {
         var scheduler = new KernelScheduler();
-        
+
+        var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "truncate-mm-shared", null);
+        var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
+        var dentry = new Dentry("data.bin", null, sb.Root, sb);
+        sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
+        var inode = dentry.Inode!;
+
+        using var engine = new Engine();
+        var mm = new VMAManager();
+        var sm = new SyscallManager(engine, mm, 0);
+        var process = new Process(9101, mm, sm);
+        scheduler.RegisterProcess(process);
+        var task = new FiberTask(9101, process, engine, scheduler);
+        engine.Owner = task;
+        engine.PageFaultResolver = (addr, isWrite) => mm.HandleFault(addr, isWrite, engine);
+
+        var file = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
         try
         {
-            var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            var sb = fsType.CreateFileSystem().ReadSuper(fsType, 0, "truncate-mm-shared", null);
-            var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
-            var dentry = new Dentry("data.bin", null, sb.Root, sb);
-            sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
-            var inode = dentry.Inode!;
+            var payload = new byte[LinuxConstants.PageSize * 2];
+            payload.AsSpan(0, 4).Fill((byte)'A');
+            payload.AsSpan(LinuxConstants.PageSize, 4).Fill((byte)'B');
+            Assert.Equal(payload.Length, inode.Write(file, payload, 0));
 
-            using var engine = new Engine();
-            var mm = new VMAManager();
-            var sm = new SyscallManager(engine, mm, 0);
-            var process = new Process(9101, mm, sm);
-            scheduler.RegisterProcess(process);
-            var task = new FiberTask(9101, process, engine, scheduler);
-            engine.Owner = task;
-            engine.PageFaultResolver = (addr, isWrite) => mm.HandleFault(addr, isWrite, engine);
+            var map = mm.Mmap(0x45000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
+                MapFlags.Shared, file, 0, "shared-mm-map", engine);
+            var secondPage = map + LinuxConstants.PageSize;
+            Assert.Equal(FaultResult.Handled, mm.HandleFaultDetailed(secondPage, true, engine));
 
-            var file = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
+            var peer = await task.Clone((int)(LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD), 0, 0, 0, 0);
             try
             {
-                var payload = new byte[LinuxConstants.PageSize * 2];
-                payload.AsSpan(0, 4).Fill((byte)'A');
-                payload.AsSpan(LinuxConstants.PageSize, 4).Fill((byte)'B');
-                Assert.Equal(payload.Length, inode.Write(file, payload, 0));
+                var peerEngine = peer.CPU;
+                var probe = new byte[1];
+                Assert.True(peerEngine.CopyFromUser(secondPage, probe));
 
-                var map = mm.Mmap(0x45000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
-                    MapFlags.Shared, file, 0, "shared-mm-map", engine);
-                var secondPage = map + LinuxConstants.PageSize;
-                Assert.Equal(FaultResult.Handled, mm.HandleFaultDetailed(secondPage, true, engine));
+                Assert.Equal(0, inode.Truncate(LinuxConstants.PageSize));
+                ProcessAddressSpaceSync.NotifyInodeTruncated(mm, engine, inode, LinuxConstants.PageSize, process);
 
-                var peer = await task.Clone((int)(LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD), 0, 0, 0, 0);
-                try
+                Assert.True(peerEngine.AddressSpaceMapSequenceSeen < mm.CurrentMapSequence);
+
+                FaultResult? lastFault = null;
+                peerEngine.PageFaultResolver = (addr, isWrite) =>
                 {
-                    var peerEngine = peer.CPU;
-                    var probe = new byte[1];
-                    Assert.True(peerEngine.CopyFromUser(secondPage, probe));
+                    lastFault = mm.HandleFaultDetailed(addr, isWrite, peerEngine);
+                    return lastFault == FaultResult.Handled;
+                };
 
-                    Assert.Equal(0, inode.Truncate(LinuxConstants.PageSize));
-                    ProcessAddressSpaceSync.NotifyInodeTruncated(mm, engine, inode, LinuxConstants.PageSize, process);
-
-                    Assert.True(peerEngine.AddressSpaceMapSequenceSeen < mm.CurrentMapSequence);
-
-                    FaultResult? lastFault = null;
-                    peerEngine.PageFaultResolver = (addr, isWrite) =>
-                    {
-                        lastFault = mm.HandleFaultDetailed(addr, isWrite, peerEngine);
-                        return lastFault == FaultResult.Handled;
-                    };
-
-                    Assert.False(peerEngine.CopyFromUser(secondPage, probe));
-                    Assert.Equal(FaultResult.BusError, lastFault);
-                }
-                finally
-                {
-                    _ = scheduler.DetachTask(peer);
-                }
+                Assert.False(peerEngine.CopyFromUser(secondPage, probe));
+                Assert.Equal(FaultResult.BusError, lastFault);
             }
             finally
             {
-                file.Close();
+                _ = scheduler.DetachTask(peer);
             }
         }
         finally
         {
-            
+            file.Close();
         }
     }
 
@@ -281,7 +273,7 @@ public class TruncateMmapLifecycleTests
             Engine.PageFaultResolver = (addr, isWrite) => Mm.HandleFault(addr, isWrite, Engine);
 
             var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            var sb = fsType.CreateFileSystem().ReadSuper(fsType, 0, "truncate-mm", null);
+            var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "truncate-mm", null);
             var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             var dentry = new Dentry("data.bin", null, sb.Root, sb);
             sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
@@ -322,10 +314,10 @@ public class TruncateMmapLifecycleTests
         public MultiProcessEnv()
         {
             Scheduler = new KernelScheduler();
-            
+
 
             var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            var sb = fsType.CreateFileSystem().ReadSuper(fsType, 0, "truncate-mm-multi", null);
+            var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "truncate-mm-multi", null);
             var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             var dentry = new Dentry("data.bin", null, sb.Root, sb);
             sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
@@ -386,7 +378,6 @@ public class TruncateMmapLifecycleTests
             File2.Close();
             Engine1.Dispose();
             Engine2.Dispose();
-            
         }
     }
 
@@ -395,10 +386,10 @@ public class TruncateMmapLifecycleTests
         public MixedMappingEnv(MapFlags flags1, MapFlags flags2)
         {
             Scheduler = new KernelScheduler();
-            
+
 
             var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            var sb = fsType.CreateFileSystem().ReadSuper(fsType, 0, "mixed-mm", null);
+            var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "mixed-mm", null);
             var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             var dentry = new Dentry("data.bin", null, sb.Root, sb);
             sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
@@ -455,7 +446,6 @@ public class TruncateMmapLifecycleTests
             File2.Close();
             Engine1.Dispose();
             Engine2.Dispose();
-            
         }
 
         public byte ReadByte1()

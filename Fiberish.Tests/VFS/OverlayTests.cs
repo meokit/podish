@@ -80,7 +80,7 @@ public class OverlayTests
             new LayerMountOptions { Root = lowerRoot });
 
         var upperFsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-        var upperSb = upperFsType.CreateFileSystem().ReadSuper(upperFsType, 0, "ovl-upper-flock", null);
+        var upperSb = upperFsType.CreateAnonymousFileSystem().ReadSuper(upperFsType, 0, "ovl-upper-flock", null);
 
         var overlayFs = new OverlayFileSystem();
         var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -340,7 +340,7 @@ public class OverlayTests
             lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
 
             var tmpType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            var upperSb = tmpType.CreateFileSystem().ReadSuper(tmpType, 0, "ovl-upper-mknod", null);
+            var upperSb = tmpType.CreateAnonymousFileSystem().ReadSuper(tmpType, 0, "ovl-upper-mknod", null);
 
             var overlayFs = new OverlayFileSystem();
             var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -745,8 +745,8 @@ public class OverlayTests
     public void OverlayUpperOnly_UnlinkedOpenFile_TruncateStillWorks()
     {
         var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-        var lowerSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "ovl-lower", null);
-        var upperSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "ovl-upper", null);
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "ovl-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "ovl-upper", null);
 
         var overlayFs = new OverlayFileSystem();
         var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Reflection;
+using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -29,7 +30,8 @@ public class UtimensSyscallTests
         BinaryPrimitives.WriteInt32LittleEndian(times.AsSpan(12, 4), 765_432_100);
         env.Write(timesPtr, times);
 
-        var rc = await env.Invoke("SysUtimensAt", unchecked((uint)-100), env.WriteString("/stamp.txt"), timesPtr, 0, 0, 0);
+        var rc = await env.Invoke("SysUtimensAt", unchecked((uint)-100), env.WriteString("/stamp.txt"), timesPtr, 0, 0,
+            0);
         Assert.Equal(0, rc);
 
         Assert.Equal(1_700_000_000L, new DateTimeOffset(file.Inode!.ATime).ToUnixTimeSeconds());
@@ -78,7 +80,7 @@ public class UtimensSyscallTests
             SyscallManager = new SyscallManager(Engine, Vma, 0);
 
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "utimens-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "utimens-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root)
             {
                 Source = "tmpfs",
@@ -125,7 +127,7 @@ public class UtimensSyscallTests
         {
             const uint addr = 0x11000;
             MapUserPage(addr);
-            Write(addr, System.Text.Encoding.UTF8.GetBytes(value + "\0"));
+            Write(addr, Encoding.UTF8.GetBytes(value + "\0"));
             return addr;
         }
     }

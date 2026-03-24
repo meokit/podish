@@ -10,7 +10,8 @@ public sealed class TmpfsSizeLimitTests
     public void ReadSuper_SizeOption_ParsesLimitBytes()
     {
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-        var sb = (TmpfsSuperBlock)fsType.CreateFileSystem().ReadSuper(fsType, 0, "tmpfs-size-parse", "size=64k,nosuid");
+        var sb = (TmpfsSuperBlock)fsType.CreateAnonymousFileSystem()
+            .ReadSuper(fsType, 0, "tmpfs-size-parse", "size=64k,nosuid");
 
         Assert.Equal(64 * 1024, sb.SizeLimitBytes);
     }
@@ -19,7 +20,8 @@ public sealed class TmpfsSizeLimitTests
     public void WriteBeyondSizeLimit_ReturnsEnospc_AndShrinkFreesSpace()
     {
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-        var sb = (TmpfsSuperBlock)fsType.CreateFileSystem().ReadSuper(fsType, 0, "tmpfs-size-write", "size=4k");
+        var sb = (TmpfsSuperBlock)fsType.CreateAnonymousFileSystem()
+            .ReadSuper(fsType, 0, "tmpfs-size-write", "size=4k");
         var root = sb.Root;
         var mount = new Mount(sb, root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw,size=4k" };
 

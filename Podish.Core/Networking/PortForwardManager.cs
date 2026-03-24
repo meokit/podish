@@ -3,7 +3,13 @@ using Microsoft.Extensions.Logging;
 
 namespace Podish.Core.Networking;
 
-public sealed class PortForwardManager : IDisposable
+internal interface IPortForwardManager : IDisposable
+{
+    void Start(ContainerNetworkContext context, IReadOnlyList<PublishedPortSpec> ports);
+    bool Stop(ContainerNetworkContext context);
+}
+
+public sealed class PortForwardManager : IPortForwardManager
 {
     private readonly ILogger<PortForwardManager> _logger;
     private readonly PortForwardLoop _loop;

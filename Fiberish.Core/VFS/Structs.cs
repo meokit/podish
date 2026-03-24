@@ -1480,7 +1480,7 @@ public static class VfsDebugTrace
     private static readonly Queue<InodeRefTrace> RefTraceQueue = [];
 
     public static bool Enabled { get; set; } =
-#if DEBUG
+#if VFS_REFTRACE
         true;
 #else
         false;

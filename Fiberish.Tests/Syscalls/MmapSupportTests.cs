@@ -402,7 +402,7 @@ public class MmapSupportTests
             SyscallManager = new SyscallManager(Engine, Vma, 0);
 
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var sb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-tmpfs", null);
+            var sb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-tmpfs", null);
             var mount = new Mount(sb, sb.Root)
             {
                 Source = "tmpfs",

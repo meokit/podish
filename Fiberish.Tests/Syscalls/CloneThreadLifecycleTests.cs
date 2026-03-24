@@ -265,7 +265,7 @@ public class CloneThreadLifecycleTests
         env.MapUserPage(futexAddr);
         Assert.True(env.Engine.CopyToUser(futexAddr, BitConverter.GetBytes(0u)));
 
-        var resolved = ResolveKey(env.SyscallManager, env.Engine, futexAddr, fshared: true, out var error);
+        var resolved = ResolveKey(env.SyscallManager, env.Engine, futexAddr, true, out var error);
 
         Assert.Equal(0, error);
         Assert.Equal(ResolvePrivateKey(env.Vma, futexAddr), resolved);
@@ -291,7 +291,7 @@ public class CloneThreadLifecycleTests
         Assert.True(child.Process.Mem.HandleFault(childAddr, true, child.CPU));
         Assert.True(env.Engine.CopyToUser(parentAddr, BitConverter.GetBytes(0u)));
 
-        var resolved = ResolveKey(env.SyscallManager, env.Engine, parentAddr, fshared: true, out var error);
+        var resolved = ResolveKey(env.SyscallManager, env.Engine, parentAddr, true, out var error);
 
         Assert.Equal(0, error);
         Assert.Equal(ResolveSharedKey(env.Vma, parentAddr), resolved);
@@ -430,6 +430,37 @@ public class CloneThreadLifecycleTests
         return await task;
     }
 
+    private static FutexKey ResolvePrivateKey(VMAManager mm, uint uaddr)
+    {
+        return FutexKey.Private(mm, uaddr & LinuxConstants.PageMask, (ushort)(uaddr & LinuxConstants.PageOffsetMask));
+    }
+
+    private static FutexKey ResolveSharedKey(VMAManager mm, uint uaddr)
+    {
+        var vma = mm.FindVmArea(uaddr);
+        Assert.NotNull(vma);
+        Assert.True((vma!.Flags & MapFlags.Shared) != 0);
+        var pageIndex = vma.GetPageIndex(uaddr & LinuxConstants.PageMask);
+        var offset = (ushort)(uaddr & LinuxConstants.PageOffsetMask);
+        if (vma.IsFileBacked)
+            return FutexKey.SharedFile(vma.File!.OpenedInode!, pageIndex, offset);
+        Assert.NotNull(vma.VmMapping);
+        return FutexKey.SharedAnonymous(vma.VmMapping!, pageIndex, offset);
+    }
+
+    private static FutexKey ResolveKey(SyscallManager sm, Engine engine, uint uaddr, bool fshared, out int error)
+    {
+        var method =
+            typeof(SyscallManager).GetMethod("TryResolveFutexKey", BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(method);
+
+        var args = new object?[] { engine, uaddr, fshared, null, 0 };
+        var ok = (bool)method!.Invoke(sm, args)!;
+        Assert.True(ok);
+        error = (int)args[4]!;
+        return (FutexKey)args[3]!;
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv(int tgid, int tid)
@@ -441,7 +472,7 @@ public class CloneThreadLifecycleTests
             Scheduler = new KernelScheduler();
 
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            TmpfsSuper = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-tmpfs", null);
+            TmpfsSuper = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-tmpfs", null);
 
             Task = new FiberTask(tid, Process, Engine, Scheduler);
             Engine.Owner = Task;
@@ -482,35 +513,5 @@ public class CloneThreadLifecycleTests
             TmpfsSuper.Root.Inode!.Create(dentry, 0x1B6, 0, 0);
             return new LinuxFile(dentry, FileFlags.O_RDWR, null!);
         }
-    }
-
-    private static FutexKey ResolvePrivateKey(VMAManager mm, uint uaddr)
-    {
-        return FutexKey.Private(mm, uaddr & LinuxConstants.PageMask, (ushort)(uaddr & LinuxConstants.PageOffsetMask));
-    }
-
-    private static FutexKey ResolveSharedKey(VMAManager mm, uint uaddr)
-    {
-        var vma = mm.FindVmArea(uaddr);
-        Assert.NotNull(vma);
-        Assert.True((vma!.Flags & MapFlags.Shared) != 0);
-        var pageIndex = vma.GetPageIndex(uaddr & LinuxConstants.PageMask);
-        var offset = (ushort)(uaddr & LinuxConstants.PageOffsetMask);
-        if (vma.IsFileBacked)
-            return FutexKey.SharedFile(vma.File!.OpenedInode!, pageIndex, offset);
-        Assert.NotNull(vma.VmMapping);
-        return FutexKey.SharedAnonymous(vma.VmMapping!, pageIndex, offset);
-    }
-
-    private static FutexKey ResolveKey(SyscallManager sm, Engine engine, uint uaddr, bool fshared, out int error)
-    {
-        var method = typeof(SyscallManager).GetMethod("TryResolveFutexKey", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.NotNull(method);
-
-        var args = new object?[] { engine, uaddr, fshared, null, 0 };
-        var ok = (bool)method!.Invoke(sm, args)!;
-        Assert.True(ok);
-        error = (int)args[4]!;
-        return (FutexKey)args[3]!;
     }
 }

@@ -319,7 +319,7 @@ public class InodeOrphanLifecycleSyscallTests
             SyscallManager = new SyscallManager(Engine, Vma, 0);
 
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var sb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "orphan-tmpfs", null);
+            var sb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "orphan-tmpfs", null);
             var mount = new Mount(sb, sb.Root)
             {
                 Source = "tmpfs",

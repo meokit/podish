@@ -958,7 +958,7 @@ public class ProcFsTests
         return KernelRuntime.BootstrapWithRoot(false, sys =>
         {
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "proc-test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "proc-test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root)
             {
                 Source = "tmpfs",

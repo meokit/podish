@@ -358,7 +358,7 @@ public class LayerFsTests
         var sm = new SyscallManager(engine, mm, 0);
 
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-        var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+        var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
         var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
         sm.InitializeRoot(rootSb.Root, rootMount);
 

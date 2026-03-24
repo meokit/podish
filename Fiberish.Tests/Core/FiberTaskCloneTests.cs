@@ -145,7 +145,7 @@ public class FiberTaskCloneTests
         public void MapPrivateFilePage(uint addr, byte initialByte)
         {
             var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            var sb = fsType.CreateFileSystem().ReadSuper(fsType, 0, "clone-private-file", null);
+            var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "clone-private-file", null);
             var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             var dentry = new Dentry("clone.bin", null, sb.Root, sb);
             sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);

@@ -121,8 +121,10 @@ public class HostfsMetadataTests
             Assert.Equal(1_700_000_100L, new DateTimeOffset(inode2.MTime).ToUnixTimeSeconds());
             Assert.Equal(1_700_000_200L, new DateTimeOffset(inode2.CTime).ToUnixTimeSeconds());
 
-            Assert.Equal(1_700_000_000L, new DateTimeOffset(File.GetLastAccessTimeUtc(Path.Combine(tempRoot, "f"))).ToUnixTimeSeconds());
-            Assert.Equal(1_700_000_100L, new DateTimeOffset(File.GetLastWriteTimeUtc(Path.Combine(tempRoot, "f"))).ToUnixTimeSeconds());
+            Assert.Equal(1_700_000_000L,
+                new DateTimeOffset(File.GetLastAccessTimeUtc(Path.Combine(tempRoot, "f"))).ToUnixTimeSeconds());
+            Assert.Equal(1_700_000_100L,
+                new DateTimeOffset(File.GetLastWriteTimeUtc(Path.Combine(tempRoot, "f"))).ToUnixTimeSeconds());
         }
         finally
         {
@@ -229,7 +231,7 @@ public class HostfsMetadataTests
         var vma = new VMAManager();
         var sm = new SyscallManager(engine, vma, 0);
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-        var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+        var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
         var rootMount = new Mount(rootSb, rootSb.Root)
         {
             Source = "tmpfs",

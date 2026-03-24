@@ -16,7 +16,7 @@ public class StandardMountsMigrationTests
         var vma = new VMAManager();
         var sm = new SyscallManager(engine, vma, 0);
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-        var rootSb = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+        var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
         var rootMount = new Mount(rootSb, rootSb.Root)
         {
             Source = "tmpfs",
@@ -67,11 +67,11 @@ public class StandardMountsMigrationTests
         sm2.PtyManager.BindScheduler(new KernelScheduler());
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
 
-        var rootSb1 = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root-1", null);
+        var rootSb1 = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root-1", null);
         var rootMount1 = new Mount(rootSb1, rootSb1.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
         sm1.InitializeRoot(rootSb1.Root, rootMount1);
 
-        var rootSb2 = tmpfsType.CreateFileSystem().ReadSuper(tmpfsType, 0, "test-root-2", null);
+        var rootSb2 = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root-2", null);
         var rootMount2 = new Mount(rootSb2, rootSb2.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
         sm2.InitializeRoot(rootSb2.Root, rootMount2);
 
