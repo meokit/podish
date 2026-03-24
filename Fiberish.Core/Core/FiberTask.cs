@@ -48,12 +48,15 @@ public class FiberTask
     private static int _tidCounter;
     private readonly object _waitStateGate = new();
     private Action? _activeWaitContinuation;
-    private WaitContinuationMode _activeWaitContinuationMode;
     private long _activeWaitId;
     private WakeReason _activeWaitReason;
+    private readonly object _asyncSyscallCompletionGate = new();
     private int _engineDisposed;
     private long _nextWaitTokenId;
     private int _pageFaultDepth;
+    private bool _hasPendingAsyncSyscallCompletion;
+    private Exception? _pendingAsyncSyscallError;
+    private int _pendingAsyncSyscallResult;
 
     private bool _pendingFaultFromInterrupt;
     private KernelSyncContext? _synchronizationContext;
@@ -95,6 +98,7 @@ public class FiberTask
     public Engine CPU { get; }
     public KernelScheduler CommonKernel { get; }
     public Action? Continuation { get; set; }
+    internal bool IsReadyQueued { get; set; }
     internal FiberTaskAsyncScope AsyncScope { get; }
     public bool IsRetiring => AsyncScope.IsClosing;
 
@@ -175,7 +179,6 @@ public class FiberTask
             _activeWaitId = waitId;
             _activeWaitReason = WakeReason.None;
             _activeWaitContinuation = null;
-            _activeWaitContinuationMode = WaitContinuationMode.RunAction;
             return new WaitToken(this, waitId);
         }
     }
@@ -223,7 +226,6 @@ public class FiberTask
     internal bool TrySetWaitReason(WaitToken token, WakeReason reason, bool scheduleStoredContinuation)
     {
         Action? continuationToRun = null;
-        var continuationMode = WaitContinuationMode.RunAction;
         lock (_waitStateGate)
         {
             if (!token.Matches(this, _activeWaitId)) return false;
@@ -233,14 +235,12 @@ public class FiberTask
             if (_activeWaitContinuation != null)
             {
                 continuationToRun = _activeWaitContinuation;
-                continuationMode = _activeWaitContinuationMode;
                 _activeWaitContinuation = null;
-                _activeWaitContinuationMode = WaitContinuationMode.RunAction;
             }
         }
 
         if (scheduleStoredContinuation && continuationToRun != null)
-            CommonKernel?.ScheduleContinuation(continuationToRun, this, continuationMode);
+            CommonKernel?.ScheduleContinuation(continuationToRun, this);
 
         return true;
     }
@@ -253,7 +253,6 @@ public class FiberTask
     public bool TrySetActiveWaitReason(WakeReason reason)
     {
         Action? continuationToRun = null;
-        var continuationMode = WaitContinuationMode.RunAction;
         lock (_waitStateGate)
         {
             if (_activeWaitId == 0) return false;
@@ -263,18 +262,16 @@ public class FiberTask
             if (_activeWaitContinuation != null)
             {
                 continuationToRun = _activeWaitContinuation;
-                continuationMode = _activeWaitContinuationMode;
                 _activeWaitContinuation = null;
-                _activeWaitContinuationMode = WaitContinuationMode.RunAction;
             }
         }
 
-        if (continuationToRun != null) CommonKernel?.ScheduleContinuation(continuationToRun, this, continuationMode);
+        if (continuationToRun != null) CommonKernel?.ScheduleContinuation(continuationToRun, this);
 
         return true;
     }
 
-    private void SetWaitContinuation(WaitToken token, Action continuation, WaitContinuationMode mode)
+    private void SetWaitContinuation(WaitToken token, Action continuation)
     {
         Action? runNow = null;
         lock (_waitStateGate)
@@ -283,15 +280,10 @@ public class FiberTask
             {
                 if (_activeWaitReason != WakeReason.None)
                     // Already completed or interrupted, run immediately
-                {
                     runNow = continuation;
-                }
                 else
-                {
                     // Still waiting
                     _activeWaitContinuation = continuation;
-                    _activeWaitContinuationMode = mode;
-                }
             }
             else
             {
@@ -300,7 +292,7 @@ public class FiberTask
             }
         }
 
-        if (runNow != null) CommonKernel?.ScheduleContinuation(runNow, this, mode);
+        if (runNow != null) CommonKernel?.ScheduleContinuation(runNow, this);
     }
 
     /// <summary>
@@ -315,7 +307,7 @@ public class FiberTask
     /// </summary>
     public void ArmSignalSafetyNet(WaitToken token, Action wakeAction)
     {
-        SetWaitContinuation(token, wakeAction, WaitContinuationMode.RunAction);
+        SetWaitContinuation(token, wakeAction);
         // Re-check in case a signal arrived before BeginWaitToken was called
         // (e.g. SIGWINCH sent by TTY driver during syscall entry, or SIGPIPE).
         // TrySetWaitReason is idempotent — if the token was already woken it's a no-op.
@@ -325,7 +317,7 @@ public class FiberTask
 
     public void ArmInterruptingSignalSafetyNet(WaitToken token, Action wakeAction)
     {
-        SetWaitContinuation(token, wakeAction, WaitContinuationMode.RunAction);
+        SetWaitContinuation(token, wakeAction);
         if (HasInterruptingPendingSignal())
             TrySetWaitReason(token, WakeReason.Signal);
     }
@@ -334,7 +326,8 @@ public class FiberTask
     {
         if (!token.HasValue)
         {
-            CommonKernel?.Schedule(wakeAction, this);
+            Continuation = wakeAction;
+            CommonKernel?.Schedule(this);
             return;
         }
 
@@ -345,49 +338,12 @@ public class FiberTask
     {
         if (!token.HasValue)
         {
-            CommonKernel?.Schedule(wakeAction, this);
+            Continuation = wakeAction;
+            CommonKernel?.Schedule(this);
             return;
         }
 
         ArmInterruptingSignalSafetyNet(token.Value, wakeAction);
-    }
-
-    public void ArmInterruptingSignalSafetyNetResumeTask(WaitToken token, Action continuation)
-    {
-        SetWaitContinuation(token, continuation, WaitContinuationMode.ResumeTask);
-        if (HasInterruptingPendingSignal())
-            TrySetWaitReason(token, WakeReason.Signal);
-    }
-
-    public void ArmInterruptingSignalSafetyNetResumeTask(WaitToken? token, Action continuation)
-    {
-        if (!token.HasValue)
-        {
-            Continuation = continuation;
-            CommonKernel?.Schedule(this);
-            return;
-        }
-
-        ArmInterruptingSignalSafetyNetResumeTask(token.Value, continuation);
-    }
-
-    public void ArmSignalSafetyNetResumeTask(WaitToken token, Action continuation)
-    {
-        SetWaitContinuation(token, continuation, WaitContinuationMode.ResumeTask);
-        if (HasUnblockedPendingSignal())
-            TrySetWaitReason(token, WakeReason.Signal);
-    }
-
-    public void ArmSignalSafetyNetResumeTask(WaitToken? token, Action continuation)
-    {
-        if (!token.HasValue)
-        {
-            Continuation = continuation;
-            CommonKernel?.Schedule(this);
-            return;
-        }
-
-        ArmSignalSafetyNetResumeTask(token.Value, continuation);
     }
 
     public WakeReason GetWaitReason(WaitToken token)
@@ -410,7 +366,6 @@ public class FiberTask
             if (!token.Matches(this, _activeWaitId)) return WakeReason.None;
             var reason = _activeWaitReason;
             _activeWaitContinuation = null;
-            _activeWaitContinuationMode = WaitContinuationMode.RunAction;
             _activeWaitReason = WakeReason.None;
             _activeWaitId = 0;
             return reason;
@@ -553,7 +508,7 @@ public class FiberTask
         var kernel = CommonKernel;
         if (kernel != null && !kernel.IsSchedulerThread)
         {
-            kernel.ScheduleFromAnyThread(() => PostSignalInfoCore(info), this);
+            kernel.PostSignalInfoFromAnyThread(this, info);
             return;
         }
 
@@ -563,7 +518,7 @@ public class FiberTask
     /// <summary>
     ///     Core signal enqueue logic. Must run on scheduler thread.
     /// </summary>
-    private void PostSignalInfoCore(SigInfo info)
+    internal void PostSignalInfoCore(SigInfo info)
     {
         var kernel = CommonKernel;
         kernel?.AssertSchedulerThread();
@@ -1214,6 +1169,7 @@ public class FiberTask
         return !Exited &&
                Process.State != ProcessState.Stopped &&
                PendingSyscall == null &&
+               !_hasPendingAsyncSyscallCompletion &&
                Continuation == null &&
                ExecutionMode == TaskExecutionMode.RunningGuest;
     }
@@ -1239,7 +1195,8 @@ public class FiberTask
             // and then HandleAsyncSyscall will deliver it AGAIN with the POST-SYSCALL EAX (-EINTR)
             // creating a nested sigreturn that restores SyscallNr and causes userspace to read the 
             // wrong return value (like returning 240 instead of -4).
-            if (PendingSyscall == null && Continuation == null) ProcessPendingSignals();
+            if (PendingSyscall == null && Continuation == null && !HasPendingAsyncSyscallCompletion())
+                ProcessPendingSignals();
 
             // ── Phase 1: Resume a stored continuation ────────────────────────────────
             // A Continuation is set when an awaiter (e.g. EpollAwaiter, PollAwaiter)
@@ -1272,6 +1229,16 @@ public class FiberTask
 
                 // Ensure we are not left in Running state — the continuation should
                 // have set us to Ready (via Schedule) or Waiting. If it forgot, park.
+                if (Status == FiberTaskStatus.Running)
+                    Status = FiberTaskStatus.Waiting;
+                return;
+            }
+
+            // ── Phase 1.5: Consume a completed async syscall on the task itself ─────────
+            if (TryTakePendingAsyncSyscallCompletion(out var asyncResult, out var asyncError))
+            {
+                ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
+                FinalizeAsyncSyscall(asyncResult, asyncError);
                 if (Status == FiberTaskStatus.Running)
                     Status = FiberTaskStatus.Waiting;
                 return;
@@ -1794,7 +1761,8 @@ public class FiberTask
             error = ex;
         }
 
-        CommonKernel.Schedule(SchedulerWorkItem.FinalizeAsyncSyscall(this, result, error));
+        StorePendingAsyncSyscallCompletion(result, error);
+        CommonKernel.Schedule(this);
     }
 
     // Runs on scheduler thread; all mutable task/signal/cpu state transitions happen here.
@@ -1947,9 +1915,42 @@ public class FiberTask
         }
     }
 
-    internal void FinalizeAsyncSyscallFromScheduler(int result, Exception? error)
+    private void StorePendingAsyncSyscallCompletion(int result, Exception? error)
     {
-        FinalizeAsyncSyscall(result, error);
+        lock (_asyncSyscallCompletionGate)
+        {
+            _pendingAsyncSyscallResult = result;
+            _pendingAsyncSyscallError = error;
+            _hasPendingAsyncSyscallCompletion = true;
+        }
+    }
+
+    private bool HasPendingAsyncSyscallCompletion()
+    {
+        lock (_asyncSyscallCompletionGate)
+        {
+            return _hasPendingAsyncSyscallCompletion;
+        }
+    }
+
+    private bool TryTakePendingAsyncSyscallCompletion(out int result, out Exception? error)
+    {
+        lock (_asyncSyscallCompletionGate)
+        {
+            if (!_hasPendingAsyncSyscallCompletion)
+            {
+                result = 0;
+                error = null;
+                return false;
+            }
+
+            result = _pendingAsyncSyscallResult;
+            error = _pendingAsyncSyscallError;
+            _pendingAsyncSyscallResult = 0;
+            _pendingAsyncSyscallError = null;
+            _hasPendingAsyncSyscallCompletion = false;
+            return true;
+        }
     }
 
     public void ExitRobustList()
@@ -2021,10 +2022,7 @@ public class FiberTask
         BinaryPrimitives.WriteUInt32LittleEndian(uvalBuf, mval);
         if (!CPU.CopyToUser(uaddr, uvalBuf)) return;
 
-        if ((uval & LinuxConstants.FUTEX_WAITERS) != 0)
-        {
-            sm.WakeFutexAddress(CPU, uaddr, 1);
-        }
+        if ((uval & LinuxConstants.FUTEX_WAITERS) != 0) sm.WakeFutexAddress(CPU, uaddr, 1);
     }
 
     public void ClearChildTidAndWake()

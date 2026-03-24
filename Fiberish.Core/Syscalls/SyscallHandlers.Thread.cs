@@ -27,7 +27,7 @@ public partial class SyscallManager
             var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(tidBuf);
             if (currentVal != val) return -(int)Errno.EAGAIN;
 
-            if (!TryResolveFutexKey(engine, uaddr, fshared: !isPrivate, out var waitKey, out var error))
+            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var waitKey, out var error))
                 return error;
 
             var waiter = Futex.PrepareWait(waitKey);
@@ -42,7 +42,8 @@ public partial class SyscallManager
 
             Logger.LogInformation(
                 "[SysFutex WAIT] TID={TID} uaddr=0x{Uaddr:x} val={Val} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset} WakeReason={WR} PendingSig=0x{PS:x}",
-                task.TID, uaddr, val, isPrivate, waitKey.Kind, waitKey.PageValue, waitKey.OffsetWithinPage, task.WakeReason, task.PendingSignals);
+                task.TID, uaddr, val, isPrivate, waitKey.Kind, waitKey.PageValue, waitKey.OffsetWithinPage,
+                task.WakeReason, task.PendingSignals);
             var result = await new FutexAwaitable(waiter, task, registration);
             Logger.LogInformation(
                 "[SysFutex WAIT] TID={TID} awaiter result={Result} WakeReason={WR} PendingSig=0x{PS:x}",
@@ -59,7 +60,7 @@ public partial class SyscallManager
         if (opCode == 1) // WAKE
         {
             var count = (int)val;
-            if (!TryResolveFutexKey(engine, uaddr, fshared: !isPrivate, out var wakeKey, out var error))
+            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var wakeKey, out var error))
                 return error;
             return Futex.Wake(wakeKey, count);
         }
@@ -69,7 +70,7 @@ public partial class SyscallManager
             var task = engine.Owner as FiberTask;
             if (task == null) return -(int)Errno.EINVAL;
 
-            if (!TryResolveFutexKey(engine, uaddr, fshared: !isPrivate, out var lockKey, out var error))
+            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var lockKey, out var error))
                 return error;
 
             while (true)
@@ -107,7 +108,8 @@ public partial class SyscallManager
                 var waiter = Futex.PrepareWait(lockKey);
                 var registration = Futex.CreateWaitRegistration(lockKey, waiter);
 
-                Logger.LogTrace("[SysFutex LOCK_PI] TID={TID} waiting uaddr=0x{Uaddr:x} owner={Owner} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset}",
+                Logger.LogTrace(
+                    "[SysFutex LOCK_PI] TID={TID} waiting uaddr=0x{Uaddr:x} owner={Owner} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset}",
                     task.TID, uaddr, owner, isPrivate, lockKey.Kind, lockKey.PageValue, lockKey.OffsetWithinPage);
                 var result = await new FutexAwaitable(waiter, task, registration);
                 if (result == AwaitResult.Interrupted)
@@ -130,7 +132,7 @@ public partial class SyscallManager
             var owner = currentVal & LinuxConstants.FUTEX_TID_MASK;
             if (owner != (uint)task.TID) return -(int)Errno.EPERM;
 
-            if (!TryResolveFutexKey(engine, uaddr, fshared: !isPrivate, out var unlockKey, out var error))
+            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var unlockKey, out var error))
                 return error;
 
             var queuedWaiters = Futex.GetWaiterCount(unlockKey);
@@ -140,7 +142,8 @@ public partial class SyscallManager
 
             var woke = Futex.Wake(unlockKey, 1);
 
-            Logger.LogTrace("[SysFutex UNLOCK_PI] TID={TID} released uaddr=0x{Uaddr:x} queuedWaiters={Waiters} woke={Woke}",
+            Logger.LogTrace(
+                "[SysFutex UNLOCK_PI] TID={TID} released uaddr=0x{Uaddr:x} queuedWaiters={Waiters} woke={Woke}",
                 task.TID, uaddr, queuedWaiters, woke);
             return 0;
         }
@@ -167,7 +170,8 @@ public partial class SyscallManager
         }
     }
 
-    internal int WakeFutexAddress(Engine engine, uint uaddr, int count, bool includePrivate = true, bool includeShared = true)
+    internal int WakeFutexAddress(Engine engine, uint uaddr, int count, bool includePrivate = true,
+        bool includeShared = true)
     {
         var woke = 0;
         if (includePrivate && TryResolvePrivateFutexKey(engine, uaddr, out var privateKey))
@@ -314,7 +318,7 @@ public partial class SyscallManager
                 _task = task;
                 _token = token;
                 _operation = operation;
-                _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
+                _operation.TryInitialize(continuation);
             }
 
             public void OnWaitCompleted()

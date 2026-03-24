@@ -3,19 +3,11 @@ namespace Fiberish.Core;
 internal enum SchedulerWorkItemKind
 {
     ResumeTask,
-    RunAction,
+    IngressAction,
     WakeScheduler,
     DispatchSyncContextPost,
     DispatchSyncContextSend,
-    SetWaitReasonAndRunContinuation,
-    FinalizeAsyncSyscall,
     FinalizeTaskRetirement
-}
-
-internal enum WaitContinuationMode
-{
-    RunAction,
-    ResumeTask
 }
 
 internal readonly struct SchedulerWorkItem
@@ -28,10 +20,7 @@ internal readonly struct SchedulerWorkItem
         SendOrPostCallback? callback = null,
         object? state = null,
         SyncContextSendRequest? sendRequest = null,
-        FiberTask.WaitToken waitToken = default,
-        WakeReason waitReason = WakeReason.None,
-        WaitContinuationMode continuationMode = WaitContinuationMode.RunAction,
-        int asyncResult = 0)
+        FiberTask.WaitToken waitToken = default)
     {
         Kind = kind;
         Context = context;
@@ -41,9 +30,6 @@ internal readonly struct SchedulerWorkItem
         State = state;
         SendRequest = sendRequest;
         WaitToken = waitToken;
-        WaitReason = waitReason;
-        ContinuationMode = continuationMode;
-        AsyncResult = asyncResult;
     }
 
     public SchedulerWorkItemKind Kind { get; }
@@ -54,18 +40,15 @@ internal readonly struct SchedulerWorkItem
     public object? State { get; }
     public SyncContextSendRequest? SendRequest { get; }
     public FiberTask.WaitToken WaitToken { get; }
-    public WakeReason WaitReason { get; }
-    public WaitContinuationMode ContinuationMode { get; }
-    public int AsyncResult { get; }
 
     public static SchedulerWorkItem ResumeTask(FiberTask task)
     {
         return new SchedulerWorkItem(SchedulerWorkItemKind.ResumeTask, task, task);
     }
 
-    public static SchedulerWorkItem RunAction(Action action, FiberTask? context = null)
+    public static SchedulerWorkItem IngressAction(Action action, FiberTask? context = null)
     {
-        return new SchedulerWorkItem(SchedulerWorkItemKind.RunAction, context, action: action);
+        return new SchedulerWorkItem(SchedulerWorkItemKind.IngressAction, context, action: action);
     }
 
     public static SchedulerWorkItem WakeScheduler()
@@ -97,33 +80,6 @@ internal readonly struct SchedulerWorkItem
             callback: callback,
             state: state,
             sendRequest: request);
-    }
-
-    public static SchedulerWorkItem SetWaitReasonAndRunContinuation(
-        FiberTask task,
-        FiberTask.WaitToken waitToken,
-        WakeReason reason,
-        Action continuation,
-        WaitContinuationMode continuationMode)
-    {
-        return new SchedulerWorkItem(
-            SchedulerWorkItemKind.SetWaitReasonAndRunContinuation,
-            task,
-            task,
-            continuation,
-            waitToken: waitToken,
-            waitReason: reason,
-            continuationMode: continuationMode);
-    }
-
-    public static SchedulerWorkItem FinalizeAsyncSyscall(FiberTask task, int result, Exception? error)
-    {
-        return new SchedulerWorkItem(
-            SchedulerWorkItemKind.FinalizeAsyncSyscall,
-            task,
-            task,
-            state: error,
-            asyncResult: result);
     }
 
     public static SchedulerWorkItem FinalizeTaskRetirement(FiberTask task)

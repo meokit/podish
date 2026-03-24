@@ -94,12 +94,9 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
             {
                 if (_discipline != null)
                 {
-                    // Process raw device input before readiness check so control chars
-                    // (e.g. VINTR/^C) can generate signals immediately while callers
-                    // are blocked in select/pselect/poll, without waiting for a read().
-                    _discipline.ProcessPendingInput();
-
-                    // Check if there's data in the input queue or pending input from device
+                    // Readiness is driven by the TTY ingress wake path. Poll should
+                    // observe already-materialized data, not consume hardware input
+                    // opportunistically with a higher scheduler priority.
                     if (_discipline.HasDataAvailable) revents |= POLLIN;
                 }
                 else
@@ -186,7 +183,8 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
             if ((events & POLLOUT) != 0)
             {
                 var scheduler = dispatcher?.Scheduler
-                                ?? throw new InvalidOperationException("TTY write wait requires an explicit scheduler.");
+                                ?? throw new InvalidOperationException(
+                                    "TTY write wait requires an explicit scheduler.");
                 return _discipline.RegisterWriteWait(callback, scheduler);
             }
         }
@@ -210,7 +208,8 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         return RegisterWaitHandleCore(callback, events, null, dispatcher);
     }
 
-    private IDisposable? RegisterWaitHandleCore(Action callback, short events, FiberTask? task, IReadyDispatcher? dispatcher)
+    private IDisposable? RegisterWaitHandleCore(Action callback, short events, FiberTask? task,
+        IReadyDispatcher? dispatcher)
     {
         if (_discipline == null)
             return null;

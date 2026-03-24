@@ -570,7 +570,7 @@ public partial class SyscallManager
             if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
                 return;
             _operation = operation;
-            _operation.TryInitialize(continuation, WaitContinuationMode.RunAction);
+            _operation.TryInitialize(continuation);
             if (_timeoutMs > 0)
             {
                 _timer = _task.CommonKernel.ScheduleTimer(_timeoutMs, OnTimeout);
@@ -593,7 +593,7 @@ public partial class SyscallManager
         private void ScheduleRePoll()
         {
             if (Interlocked.Exchange(ref _reschedulePending, 1) == 0)
-                _task.CommonKernel.Schedule(OnRePollScheduled, _task);
+                _task.CommonKernel.ScheduleContinuation(OnRePollScheduled, _task);
         }
 
         private void OnTimeout()
@@ -782,7 +782,7 @@ public partial class SyscallManager
             if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
                 return;
             _operation = operation;
-            _operation.TryInitialize(continuation, WaitContinuationMode.RunAction);
+            _operation.TryInitialize(continuation);
             if (_timeoutMs > 0)
             {
                 _timer = _task.CommonKernel.ScheduleTimer(_timeoutMs, OnTimeout);
@@ -805,7 +805,7 @@ public partial class SyscallManager
         private void ScheduleRePoll()
         {
             if (Interlocked.Exchange(ref _reschedulePending, 1) == 0)
-                _task.CommonKernel.Schedule(OnRePollScheduled, _task);
+                _task.CommonKernel.ScheduleContinuation(OnRePollScheduled, _task);
         }
 
         private void OnTimeout()

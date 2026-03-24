@@ -399,18 +399,18 @@ public partial class SyscallManager
 
         var sm = task.Process.Syscalls;
 
+        sm.Close();
+        ProcFsManager.OnProcessExit(sm, task.Process.TGID);
+        if (task.Process.Mem.GetSharedRefCount() == 1)
+            sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, task.CPU, task.Process);
+        MarkProcessExitAndReparent(task, exitStatus, exitedBySignal, termSignal, coreDumped);
+
         var ppid = task.Process.PPID;
         if (ppid > 0)
         {
             var parentTask = task.CommonKernel.GetTask(ppid);
             parentTask?.PostSignal((int)Signal.SIGCHLD);
         }
-
-        sm.Close();
-        ProcFsManager.OnProcessExit(sm, task.Process.TGID);
-        if (task.Process.Mem.GetSharedRefCount() == 1)
-            sm.SysVShm.OnProcessExit(task.Process.TGID, sm.Mem, task.CPU, task.Process);
-        MarkProcessExitAndReparent(task, exitStatus, exitedBySignal, termSignal, coreDumped);
     }
 
     internal static void MarkProcessExitAndReparent(FiberTask task, int exitStatus, bool exitedBySignal, int termSignal,

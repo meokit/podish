@@ -99,7 +99,6 @@ public sealed class ContainerRuntimeService
                 consoleDriver.BindTty(ttyDiag);
             if (request.TerminalBridge != null)
                 request.TerminalBridge.BindTty(ttyDiag);
-            scheduler.Tty = ttyDiag;
         }
 
         if (isInteractive)
@@ -1194,6 +1193,7 @@ public sealed class ContainerRuntimeService
                     _writeReady.Reset();
             }
 
+            _ = kind;
             _containerLogSink.Write(kind, payload);
             _hasData.Set();
             return written;
@@ -1262,13 +1262,13 @@ public sealed class ContainerRuntimeService
 
         public void SignalProcessGroup(FiberTask? task, int pgid, int signal)
         {
-            _scheduler.ScheduleFromAnyThread(() => _scheduler.SignalProcessGroup(pgid, signal));
+            _scheduler.SignalProcessGroupFromAnyThread(pgid, signal);
         }
 
         public void SignalForegroundTask(FiberTask? task, int signal)
         {
             if (task != null)
-                _scheduler.ScheduleFromAnyThread(() => task.PostSignal(signal), task);
+                _scheduler.SignalTaskFromAnyThread(task, signal);
         }
     }
 }

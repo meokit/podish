@@ -87,8 +87,10 @@ public class TtyDiscipline
     private readonly TtyInputQueue _inq;
     private readonly object _lock = new();
     private readonly ILogger _logger;
+    private readonly KernelScheduler _scheduler;
     private uint _cflag = 0xbf; // CS8 | CREAD | ...
     private ushort _cols = 80;
+    private int _inputDispatchPending;
 
     // Linux Termios fields
     private uint _iflag = 0x500; // ICRNL | IXON
@@ -110,8 +112,10 @@ public class TtyDiscipline
         _driver = driver;
         _broadcaster = broadcaster;
         _logger = logger;
+        _scheduler = scheduler;
         _inq = new TtyInputQueue(scheduler);
         Device = new TtyDevice();
+        Device.OnInputEnqueued += OnDeviceInputEnqueued;
         InitializeDefaults();
     }
 
@@ -533,6 +537,32 @@ public class TtyDiscipline
         }
     }
 
+    private void OnDeviceInputEnqueued()
+    {
+        if (_scheduler.IsSchedulerThread)
+        {
+            ProcessPendingInput();
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _inputDispatchPending, 1) != 0)
+        {
+            _scheduler.WakeUp();
+            return;
+        }
+
+        _scheduler.ScheduleFromAnyThread(ProcessPendingIngress);
+    }
+
+    private void ProcessPendingIngress()
+    {
+        Interlocked.Exchange(ref _inputDispatchPending, 0);
+        ProcessPendingInput();
+
+        if (HasPendingInput && Interlocked.Exchange(ref _inputDispatchPending, 1) == 0)
+            _scheduler.ScheduleFromAnyThread(ProcessPendingIngress);
+    }
+
     private void HandleResize(ushort rows, ushort cols, FiberTask? task)
     {
         if (_rows != rows || _cols != cols)
@@ -670,7 +700,8 @@ public class TtyDiscipline
         if ((_iflag & ICRNL) != 0 && b == 13)
             b = 10;
         // INLCR - map NL to CR (only if not already converted from CR)
-        else if ((_iflag & INLCR) != 0 && b == 10) b = 13;
+        else if ((_iflag & INLCR) != 0 && b == 10)
+            b = 13;
 
         return b;
     }

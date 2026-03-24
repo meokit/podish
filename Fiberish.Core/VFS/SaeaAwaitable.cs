@@ -37,7 +37,7 @@ internal sealed class SaeaOperation : SocketAsyncEventArgs, INotifyCompletion
             _task?.TID, _scheduler != null, _isCompleted, BytesTransferred, SocketError);
 
         var prev = Interlocked.CompareExchange(ref _continuation, continuation, null);
-        _operationHandle?.TryInitialize(continuation, WaitContinuationMode.RunAction);
+        _operationHandle?.TryInitialize(continuation);
         if (ReferenceEquals(prev, CompletedSentinel))
         {
             Logger.LogTrace(

@@ -1218,7 +1218,7 @@ public partial class SyscallManager
             {
                 _operation = operation;
                 _forRead = forRead;
-                _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
+                _operation.TryInitialize(continuation);
             }
 
             public bool TryRegister(IDisposable? registration)

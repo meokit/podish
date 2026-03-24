@@ -338,7 +338,7 @@ public partial class SyscallManager
             public PauseOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
             {
                 _operation = operation;
-                _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
+                _operation.TryInitialize(continuation);
             }
 
             public void OnSignal()

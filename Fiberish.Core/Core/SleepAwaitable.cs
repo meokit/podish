@@ -61,7 +61,7 @@ public readonly struct SleepAwaitable
         {
             _scheduler = scheduler;
             _operation = operation;
-            _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
+            _operation.TryInitialize(continuation);
         }
 
         public void Register(long tickDuration)

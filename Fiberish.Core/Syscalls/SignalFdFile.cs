@@ -268,7 +268,7 @@ public struct SignalFdAwaiter : INotifyCompletion
         public SignalFdWaitOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
         {
             _operation = operation;
-            _operation.TryInitialize(continuation, WaitContinuationMode.RunAction);
+            _operation.TryInitialize(continuation);
         }
 
         public void TryRegister(IDisposable? registration)

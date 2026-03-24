@@ -188,7 +188,6 @@ internal sealed class TaskAsyncOperationHandle
     private readonly FiberTask _task;
     private readonly List<ITaskAsyncRegistration> _registrations = [];
     private Action? _continuation;
-    private WaitContinuationMode _continuationMode = WaitContinuationMode.RunAction;
     private int _state;
 
     public TaskAsyncOperationHandle(FiberTaskAsyncScope scope, FiberTask task, int operationId,
@@ -204,11 +203,10 @@ internal sealed class TaskAsyncOperationHandle
     public FiberTask.WaitToken? Token { get; }
     public bool IsActive => Volatile.Read(ref _state) == 0;
 
-    public bool TryInitialize(Action continuation, WaitContinuationMode continuationMode)
+    public bool TryInitialize(Action continuation)
     {
         if (!IsActive) return false;
         _continuation = continuation;
-        _continuationMode = continuationMode;
         return true;
     }
 
@@ -242,12 +240,9 @@ internal sealed class TaskAsyncOperationHandle
         if (!_scope.IsTaskClosing() && continuation != null)
         {
             if (reason.HasValue && Token.HasValue)
-                _task.TrySetWaitReason(Token.Value, reason.Value, scheduleStoredContinuation: false);
+                _task.TrySetWaitReason(Token.Value, reason.Value, false);
 
-            if (_continuationMode == WaitContinuationMode.RunAction && _task.CommonKernel.IsSchedulerThread)
-                continuation();
-            else
-                _task.CommonKernel.ScheduleContinuation(continuation, _task, _continuationMode);
+            _task.CommonKernel.ScheduleContinuation(continuation, _task);
         }
 
         CompleteCore();

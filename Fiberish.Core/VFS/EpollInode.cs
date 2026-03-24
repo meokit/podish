@@ -273,7 +273,7 @@ public class EpollInode : TmpfsInode
             if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
                 return;
             _operation = operation;
-            _operation.TryInitialize(continuation, WaitContinuationMode.RunAction);
+            _operation.TryInitialize(continuation);
 
             if (_timeoutMs > 0)
             {
@@ -298,7 +298,7 @@ public class EpollInode : TmpfsInode
         private void ScheduleRePoll()
         {
             if (Interlocked.Exchange(ref _reschedulePending, 1) == 0)
-                _scheduler.ScheduleFromAnyThread(OnRePollScheduled);
+                _scheduler.ScheduleContinuation(OnRePollScheduled, _task);
         }
 
         private void OnTimeout()

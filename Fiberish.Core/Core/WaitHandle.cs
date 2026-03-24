@@ -141,11 +141,14 @@ public class AsyncWaitQueue
     {
         if (context == null || token == null || token.Value.Owner == null)
         {
-            scheduler.Schedule(continuation, context);
+            if (context != null)
+                scheduler.ScheduleContinuation(continuation, context);
+            else
+                scheduler.Schedule(continuation, context);
             return;
         }
 
-        scheduler.ScheduleWaitContinuation(context, token.Value, WakeReason.Event, continuation);
+        scheduler.WakeTask(context, token.Value, WakeReason.Event, continuation);
     }
 
     private void Unregister(long id)
@@ -294,7 +297,7 @@ public struct WaitQueueAwaiter : INotifyCompletion
         public QueueWaitOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
         {
             _operation = operation;
-            _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
+            _operation.TryInitialize(continuation);
         }
 
         public void TryRegister(IDisposable? registration)
@@ -391,7 +394,7 @@ public struct SelectAwaiter : INotifyCompletion
         public SelectWaitOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
         {
             _operation = operation;
-            _operation.TryInitialize(continuation, WaitContinuationMode.ResumeTask);
+            _operation.TryInitialize(continuation);
         }
 
         public void TryRegister(IDisposable? registration)
@@ -543,7 +546,7 @@ public readonly struct ChildStateAwaitable
             public ChildStateOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
             {
                 _operation = operation;
-                _operation.TryInitialize(continuation, WaitContinuationMode.RunAction);
+                _operation.TryInitialize(continuation);
             }
 
             public void TryRegister(IDisposable? registration)

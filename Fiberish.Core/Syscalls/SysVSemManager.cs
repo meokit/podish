@@ -93,7 +93,7 @@ public readonly struct SemWaitAwaiter : INotifyCompletion
         public SemWaitOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
         {
             _operation = operation;
-            _operation.TryInitialize(continuation, WaitContinuationMode.RunAction);
+            _operation.TryInitialize(continuation);
         }
 
         public void OnSignal()
@@ -265,10 +265,8 @@ public class SysVSemManager
                     _setsByKey.Remove(set.Key);
 
                 // Wake up all waiters with EIDRM
-                foreach (var waiter in set.Waiters.ToList())
-                {
-                    waiter.TryWake(WakeReason.Event); // let them fail with EIDRM loop
-                }
+                foreach (var waiter in
+                         set.Waiters.ToList()) waiter.TryWake(WakeReason.Event); // let them fail with EIDRM loop
 
                 /* WakeUp needed */
                 ;
@@ -294,10 +292,7 @@ public class SysVSemManager
                 set.Values[semnum] = (short)setval;
 
                 // Wake up all waiters since state changed
-                foreach (var waiter in set.Waiters.ToList())
-                {
-                    waiter.TryWake(WakeReason.Event);
-                }
+                foreach (var waiter in set.Waiters.ToList()) waiter.TryWake(WakeReason.Event);
 
                 /* WakeUp needed */
                 ;

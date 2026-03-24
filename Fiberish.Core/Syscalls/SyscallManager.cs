@@ -1504,7 +1504,7 @@ file class SignalBroadcasterImpl : ISignalBroadcaster
         if (scheduler.IsSchedulerThread)
             scheduler.SignalProcessGroup(pgid, signal);
         else
-            scheduler.ScheduleFromAnyThread(() => scheduler.SignalProcessGroup(pgid, signal));
+            scheduler.SignalProcessGroupFromAnyThread(pgid, signal);
     }
 
     public void SignalForegroundTask(FiberTask? task, int signal)
@@ -1521,7 +1521,7 @@ file class SignalBroadcasterImpl : ISignalBroadcaster
         if (scheduler.IsSchedulerThread)
             Deliver();
         else
-            scheduler.ScheduleFromAnyThread(Deliver);
+            scheduler.RunIngress(Deliver, task);
     }
 
     private static KernelScheduler? ResolveScheduler(FiberTask? task)

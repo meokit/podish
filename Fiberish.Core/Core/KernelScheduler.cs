@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
-using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -41,24 +40,11 @@ public class KernelScheduler
     private int _nextTaskId;
     private int _ownerThreadId;
 
-    private TtyDiscipline? _tty;
     private int _wakePending;
 
     public KernelScheduler()
     {
         _synchronizationContext = new KernelSyncContext(this);
-    }
-
-    // TTY reference for checking pending input
-    public TtyDiscipline? Tty
-    {
-        get => _tty;
-        set
-        {
-            if (_tty != null) _tty.Device.OnInputEnqueued -= WakeUp;
-            _tty = value;
-            if (_tty != null) _tty.Device.OnInputEnqueued += WakeUp;
-        }
     }
 
     public long CurrentTick => _timerSystem.CurrentTick;
@@ -319,7 +305,9 @@ public class KernelScheduler
         AssertSchedulerThread();
         if (task.Status == FiberTaskStatus.Terminated) return;
         if (task.IsRetiring) return;
+        if (task.IsReadyQueued) return;
 
+        task.IsReadyQueued = true;
         task.Status = FiberTaskStatus.Ready;
         _runQueue.Enqueue(task);
 
@@ -359,7 +347,7 @@ public class KernelScheduler
 
     private void EnqueueContinuation(Action continuation, FiberTask? context)
     {
-        EnqueueWorkItem(SchedulerWorkItem.RunAction(continuation, context));
+        EnqueueWorkItem(SchedulerWorkItem.IngressAction(continuation, context));
     }
 
     public void ScheduleLocal(Action continuation, FiberTask? context = null)
@@ -370,7 +358,19 @@ public class KernelScheduler
 
     public void ScheduleFromAnyThread(Action continuation, FiberTask? context = null)
     {
-        EnqueueWorkItem(SchedulerWorkItem.RunAction(continuation, context));
+        EnqueueWorkItem(SchedulerWorkItem.IngressAction(continuation, context));
+    }
+
+    internal void RunIngress(Action action, FiberTask? context = null)
+    {
+        if (IsSchedulerThread)
+        {
+            if (context == null || !context.IsRetiring)
+                action();
+            return;
+        }
+
+        ScheduleFromAnyThread(action, context);
     }
 
     public void Schedule(Action continuation, FiberTask? context = null)
@@ -389,30 +389,27 @@ public class KernelScheduler
             EnqueueWorkItem(item);
     }
 
-    internal void ScheduleWaitContinuation(FiberTask task, FiberTask.WaitToken token, WakeReason reason,
-        Action continuation, WaitContinuationMode mode = WaitContinuationMode.RunAction)
+    internal void WakeTask(FiberTask task, FiberTask.WaitToken token, WakeReason reason, Action continuation)
     {
         if (IsSchedulerThread)
         {
             if (task.TrySetWaitReason(token, reason, false))
-                ScheduleContinuation(continuation, task, mode);
+                ScheduleContinuation(continuation, task);
             return;
         }
 
-        Schedule(SchedulerWorkItem.SetWaitReasonAndRunContinuation(task, token, reason, continuation, mode));
+        ScheduleFromAnyThread(() =>
+        {
+            if (task.TrySetWaitReason(token, reason, false))
+                ScheduleContinuation(continuation, task);
+        }, task);
     }
 
-    internal void ScheduleContinuation(Action continuation, FiberTask task, WaitContinuationMode mode)
+    internal void ScheduleContinuation(Action continuation, FiberTask task)
     {
         if (task.IsRetiring) return;
-        if (mode == WaitContinuationMode.ResumeTask)
-        {
-            task.Continuation = continuation;
-            Schedule(task);
-            return;
-        }
-
-        Schedule(continuation, task);
+        task.Continuation = continuation;
+        Schedule(task);
     }
 
     internal void PostSynchronizationContext(SendOrPostCallback callback, object? state, FiberTask? context)
@@ -498,9 +495,6 @@ public class KernelScheduler
                 // 1. Process Timers & Wait
                 if (_runQueue.Count == 0 && !drainedEvents)
                 {
-                    if (TryProcessPendingInput())
-                        continue;
-
                     // Check scheduler state - this will detect actual bugs
                     ValidateSchedulerState();
 
@@ -524,14 +518,9 @@ public class KernelScheduler
                             if (waitTime < 0) waitTime = 0;
                         }
                     }
-                    else if (Tty != null && anyWaiting)
-                    {
-                        waitTime = -1; // Wait indefinitely for TTY or external events
-                    }
                     else
                     {
-                        // No timers, no tasks waiting on TTY?
-                        // If anyWaiting is true, we must wait indefinitely (e.g. waiting on a signal or socket)
+                        // If anyWaiting is true, we must wait indefinitely for external wakeups.
                         if (anyWaiting) waitTime = -1;
                         else
                             // Should not happen if anyAlive is true but runQueue empty (ValidateSchedulerState handles Ready tasks)
@@ -634,7 +623,7 @@ public class KernelScheduler
                 case SchedulerWorkItemKind.ResumeTask:
                     if (item.Task != null && !item.Task.IsRetiring) EnqueueTask(item.Task);
                     break;
-                case SchedulerWorkItemKind.RunAction:
+                case SchedulerWorkItemKind.IngressAction:
                     if (item.Context == null || !item.Context.IsRetiring)
                         item.Action?.Invoke();
                     break;
@@ -661,20 +650,6 @@ public class KernelScheduler
                     }
 
                     break;
-                case SchedulerWorkItemKind.SetWaitReasonAndRunContinuation:
-                    if (item.Task != null && item.Action != null)
-                    {
-                        if (item.Task.IsRetiring) break;
-                        if (item.Task.TrySetWaitReason(item.WaitToken, item.WaitReason,
-                                false))
-                            ScheduleContinuation(item.Action, item.Task, item.ContinuationMode);
-                    }
-
-                    break;
-                case SchedulerWorkItemKind.FinalizeAsyncSyscall:
-                    if (item.Task != null && !item.Task.IsRetiring)
-                        item.Task.FinalizeAsyncSyscallFromScheduler(item.AsyncResult, item.State as Exception);
-                    break;
                 case SchedulerWorkItemKind.FinalizeTaskRetirement:
                     item.Task?.TryFinalizeTaskRetirement();
                     break;
@@ -700,15 +675,6 @@ public class KernelScheduler
 
         if (Interlocked.Exchange(ref _wakePending, 1) != 0) return;
         _events.Writer.TryWrite(SchedulerWorkItem.WakeScheduler());
-    }
-
-    private bool TryProcessPendingInput()
-    {
-        if (Tty == null || !Tty.HasPendingInput) return false;
-
-        Logger.LogDebug("TTY has pending input, processing...");
-        Tty.ProcessPendingInput();
-        return true;
     }
 
     private (bool anyAlive, bool anyWaiting) GetTaskLiveness()
@@ -784,7 +750,12 @@ public class KernelScheduler
 
     private bool TryDequeue(out FiberTask? task)
     {
-        return _runQueue.TryDequeue(out task!);
+        if (!_runQueue.TryDequeue(out task!))
+            return false;
+
+        if (task != null)
+            task.IsReadyQueued = false;
+        return true;
     }
 
     public void SignalProcessGroup(int pgid, int signal)
@@ -792,7 +763,12 @@ public class KernelScheduler
         if (IsSchedulerThread)
             _ = SignalProcessGroupWithCount(pgid, signal);
         else
-            ScheduleFromAnyThread(() => { _ = SignalProcessGroupWithCount(pgid, signal); });
+            SignalProcessGroupFromAnyThread(pgid, signal);
+    }
+
+    public void SignalProcessGroupFromAnyThread(int pgid, int signal)
+    {
+        RunIngress(() => { _ = SignalProcessGroupWithCount(pgid, signal); });
     }
 
     public int SignalProcessGroupWithCount(int pgid, int signal)
@@ -918,11 +894,26 @@ public class KernelScheduler
             return;
         }
 
-        ScheduleFromAnyThread(() =>
+        SignalTaskFromAnyThread(tid, signal);
+    }
+
+    public void SignalTaskFromAnyThread(int tid, int signal)
+    {
+        RunIngress(() =>
         {
             var task = GetTask(tid);
             task?.PostSignal(signal);
         });
+    }
+
+    public void SignalTaskFromAnyThread(FiberTask task, int signal)
+    {
+        RunIngress(() => task.PostSignal(signal), task);
+    }
+
+    internal void PostSignalInfoFromAnyThread(FiberTask task, SigInfo info)
+    {
+        RunIngress(() => task.PostSignalInfoCore(info), task);
     }
 
     public bool IsValidProcessGroup(int pgid, int sid)
