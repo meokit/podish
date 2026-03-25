@@ -60,6 +60,33 @@ public sealed class VmPageSlots
         }
     }
 
+    public void ReplacePage(uint pageIndex, IntPtr ptr)
+    {
+        IntPtr oldPtr = IntPtr.Zero;
+        lock (_lock)
+        {
+            if (_pages.TryGetValue(pageIndex, out var existing))
+            {
+                if (existing.Ptr == ptr)
+                {
+                    existing.LastAccessTicks = DateTime.UtcNow.Ticks;
+                    return;
+                }
+
+                oldPtr = existing.Ptr;
+            }
+
+            _pages[pageIndex] = new VmPage
+            {
+                Ptr = ptr,
+                LastAccessTicks = DateTime.UtcNow.Ticks
+            };
+        }
+
+        if (oldPtr != IntPtr.Zero)
+            ExternalPageManager.ReleasePtr(oldPtr);
+    }
+
     public IntPtr InstallPageIfAbsent(uint pageIndex, IntPtr ptr, out bool inserted)
     {
         lock (_lock)

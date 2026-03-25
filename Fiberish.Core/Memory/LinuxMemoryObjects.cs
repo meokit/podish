@@ -140,8 +140,6 @@ public sealed class AnonVma
             clonedPage.Dirty = page.Dirty;
             clonedPage.Uptodate = page.Uptodate;
             clonedPage.Writeback = page.Writeback;
-            clonedPage.PinCount = page.PinCount;
-            clonedPage.MapCount = page.MapCount;
         });
 
         return clone;
@@ -164,7 +162,7 @@ public sealed class AnonVma
 
     public void SetPage(uint pageIndex, IntPtr ptr)
     {
-        Pages.InstallPage(pageIndex, ptr);
+        Pages.ReplacePage(pageIndex, ptr);
     }
 
     public void MarkDirty(uint pageIndex)

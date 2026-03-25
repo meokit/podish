@@ -639,6 +639,37 @@ public class VMAManager
             newMM.TrackMappedInodeOnVmaAdded(cloned);
         }
 
+        foreach (var pageAddr in ExternalPages.SnapshotMappedPages())
+        {
+            if (!ExternalPages.TryGetBinding(pageAddr, out var binding) || binding == null) continue;
+
+            var clonedVma = newMM.FindVmArea(pageAddr);
+            if (clonedVma == null)
+            {
+                throw new InvalidOperationException(
+                    $"Clone external binding lost VMA context: page=0x{pageAddr:X8}, owner={binding.OwnerKind}");
+            }
+
+            var pageIndex = clonedVma.GetPageIndex(pageAddr);
+            MappedPageBinding clonedBinding;
+            if (binding.OwnerKind == MappedPageOwnerKind.AnonVma &&
+                clonedVma.VmAnonVma?.PeekVmPage(pageIndex) is { } anonPage)
+            {
+                clonedBinding = MappedPageBinding.FromAnonVmaPage(clonedVma.VmAnonVma, pageIndex, anonPage);
+            }
+            else if (binding.OwnerKind == MappedPageOwnerKind.AddressSpace &&
+                     clonedVma.VmMapping?.PeekVmPage(pageIndex) is { } sharedPage)
+            {
+                clonedBinding = MappedPageBinding.FromAddressSpacePage(clonedVma.VmMapping, pageIndex, sharedPage);
+            }
+            else
+            {
+                clonedBinding = MappedPageBinding.FromRaw(binding.Ptr);
+            }
+
+            _ = newMM.ExternalPages.AddBinding(pageAddr, clonedBinding, out _);
+        }
+
         return newMM;
     }
 
@@ -1361,7 +1392,6 @@ public class VMAManager
                 LinuxConstants.PageSize, LinuxConstants.PageSize);
         }
 
-        ExternalPageManager.ReleasePtr(existingPrivate);
         return InstallPrivatePageAndMap(privateObject, pageStart, pageIndex, replacementPage, perms, engine,
             true);
     }

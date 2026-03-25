@@ -1523,6 +1523,8 @@ public class FiberTask
                 Process.Mem.CaptureDirtyPrivatePages(CPU);
 
             // 1. Clone CPU
+            // For fork/clone without CLONE_VM, preserve existing MMU external mappings in the child.
+            // We immediately re-protect MAP_PRIVATE ranges to read-only below to enforce COW semantics.
             newCpu = CPU.Clone(cloneVm);
 
             // 2. Resource Management
@@ -1538,8 +1540,6 @@ public class FiberTask
 
                 if (!cloneVm)
                 {
-                    newMem.RebuildExternalMappingsFromNative(newCpu, newMem.VMAs);
-
                     foreach (var vma in Process.Mem.VMAs)
                     {
                         if ((vma.Flags & MapFlags.Private) == 0 || vma.Length == 0) continue;
