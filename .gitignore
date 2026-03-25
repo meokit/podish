@@ -2,6 +2,7 @@ build/
 build_native/
 .build/
 .fiberish_meta/
+.tmp/
 *.o
 *.dylib
 linux/x86loader
