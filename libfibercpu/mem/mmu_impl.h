@@ -262,7 +262,11 @@ MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
         return {};
     }
 
-    utlb->tag_w = std::numeric_limits<decltype(utlb->tag_w)>::max();
+    // A write miss can be followed by a slow-path COW remap on this page.
+    // Invalidate both read/write micro-TLB tags to avoid stale read hits
+    // against the pre-remap addend in the same translated block.
+    utlb->invalidate();
+    tlb.flush_page(addr);
 #ifdef ENABLE_TLB_STATS
     stats.write_misses++;
     stats.total_writes++;
