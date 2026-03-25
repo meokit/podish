@@ -106,6 +106,32 @@ public class FiberTaskCloneTests
         Assert.Equal((byte)0x43, childRead[0]);
     }
 
+    [Fact]
+    public async Task Fork_SequentialChildren_WritingPrivateAnonymousPage_DoesNotCorruptParent()
+    {
+        using var env = new TestEnv();
+        const uint addr = 0x00520000;
+        env.MapUserPage(addr);
+        Assert.True(env.Engine.CopyToUser(addr, new byte[] { 0x11 }));
+
+        var probe = new byte[1];
+
+        var child1 = await env.Parent.Clone(0, 0, 0, 0, 0);
+        Assert.True(child1.CPU.CopyToUser(addr, new byte[] { 0x22 }));
+        Assert.True(env.Engine.CopyFromUser(addr, probe));
+        Assert.Equal((byte)0x11, probe[0]);
+
+        var child2 = await env.Parent.Clone(0, 0, 0, 0, 0);
+        Assert.True(child2.CPU.CopyToUser(addr, new byte[] { 0x33 }));
+        Assert.True(env.Engine.CopyFromUser(addr, probe));
+        Assert.Equal((byte)0x11, probe[0]);
+
+        Assert.True(child1.CPU.CopyFromUser(addr, probe));
+        Assert.Equal((byte)0x22, probe[0]);
+        Assert.True(child2.CPU.CopyFromUser(addr, probe));
+        Assert.Equal((byte)0x33, probe[0]);
+    }
+
     private sealed class TestEnv : IDisposable
     {
         private readonly List<LinuxFile> _files = [];
