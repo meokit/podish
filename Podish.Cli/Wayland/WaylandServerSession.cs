@@ -24,6 +24,8 @@ internal sealed class WaylandServerSession
         });
     }
 
+    public WaylandClient Client => _client;
+
     public async Task RunAsync()
     {
         _connection.RawConnection.File.Flags &= ~FileFlags.O_NONBLOCK;

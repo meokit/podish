@@ -60,6 +60,7 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
     private readonly SdlDisplayRenderer _renderer;
     private readonly List<DisplayInputEvent> _pendingInputEvents = [];
     private readonly Queue<DisplaySize> _pendingResizeEvents = [];
+    private Cursor* _cursor;
     private bool _disposed;
     private bool _isClosed;
 
@@ -207,6 +208,48 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
         return true;
     }
 
+    public void SetCursor(DisplayCursorDescriptor cursor)
+    {
+        ClearCursor();
+
+        fixed (byte* pixelPtr = cursor.Pixels)
+        {
+            Surface* surface = _sdl.CreateRGBSurfaceWithFormatFrom(
+                pixelPtr,
+                cursor.Width,
+                cursor.Height,
+                32,
+                cursor.Pitch,
+                372645892u);
+            if (surface == null)
+                throw new InvalidOperationException($"SDL create cursor surface failed: {GetError()}");
+
+            try
+            {
+                _cursor = _sdl.CreateColorCursor(surface, cursor.HotspotX, cursor.HotspotY);
+                if (_cursor == null)
+                    throw new InvalidOperationException($"SDL create color cursor failed: {GetError()}");
+            }
+            finally
+            {
+                _sdl.FreeSurface(surface);
+            }
+        }
+
+        _sdl.SetCursor(_cursor);
+        _sdl.ShowCursor(1);
+    }
+
+    public void ClearCursor()
+    {
+        if (_cursor != null)
+        {
+            _sdl.SetCursor((Cursor*)0);
+            _sdl.FreeCursor(_cursor);
+            _cursor = null;
+        }
+    }
+
     public void Present()
     {
         _renderer.Present();
@@ -217,6 +260,7 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
         if (_disposed)
             return;
 
+        ClearCursor();
         _renderer.Dispose();
         if (_window != null)
             _sdl.DestroyWindow(_window);

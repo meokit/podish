@@ -152,20 +152,30 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
 
     private async Task HandleClientAsync(VirtualDaemonConnection connection)
     {
+        WaylandServerSession? session = null;
         try
         {
             using (connection)
             {
                 _logger.LogInformation("Wayland client handler starting");
-                var session = new WaylandServerSession(connection, _server, _logger);
+                session = new WaylandServerSession(connection, _server, _logger);
                 await session.RunAsync();
                 _logger.LogInformation("Wayland client handler completed");
             }
+        }
+        catch (IOException ex)
+        {
+            _logger.LogInformation(ex, "Wayland client disconnected while sending or receiving");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Wayland client handler failed");
             throw;
+        }
+        finally
+        {
+            if (session != null)
+                await _server.DisconnectClientAsync(session.Client);
         }
     }
 

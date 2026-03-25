@@ -70,6 +70,15 @@ public readonly record struct DisplayTextureDescriptor(
     DisplayPixelFormat Format,
     DisplayTextureAccess Access = DisplayTextureAccess.Streaming);
 
+public readonly record struct DisplayCursorDescriptor(
+    int Width,
+    int Height,
+    int HotspotX,
+    int HotspotY,
+    DisplayPixelFormat Format,
+    byte[] Pixels,
+    int Pitch);
+
 public interface IDisplayBackend : IDisposable
 {
     string Name { get; }
@@ -88,6 +97,8 @@ public interface IDisplayOutput : IDisposable
     void PumpEvents();
     IReadOnlyList<DisplayInputEvent> DrainInputEvents();
     bool TryDequeueResize(out DisplaySize size);
+    void SetCursor(DisplayCursorDescriptor cursor);
+    void ClearCursor();
     void Present();
 }
 

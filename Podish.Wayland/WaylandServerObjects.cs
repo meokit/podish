@@ -134,11 +134,22 @@ internal sealed class WlSurfaceState
     public List<WlCallbackResource> FrameCallbacks { get; } = [];
 }
 
+internal enum WlSurfaceRole
+{
+    None,
+    Xdg,
+    Cursor
+}
+
 internal sealed class WlSurfaceResource : WaylandResource
 {
     private readonly WlSurfaceState _pending = new();
     private readonly WlSurfaceState _current = new();
     private readonly HashSet<uint> _enteredOutputIds = [];
+    private WlSurfaceRole _role;
+    private WlPointerResource? _cursorOwner;
+    private int _cursorHotspotX;
+    private int _cursorHotspotY;
 
     public WlSurfaceResource(WaylandClient client, uint objectId, uint version)
         : base(client, objectId, version, WlSurfaceProtocol.InterfaceName)
@@ -151,12 +162,47 @@ internal sealed class WlSurfaceResource : WaylandResource
     public ulong SceneSurfaceId { get; }
     public WlBufferResource? CurrentBuffer => _current.Buffer;
     public XdgSurfaceResource? XdgSurface { get; private set; }
+    public bool IsCursorRole => _role == WlSurfaceRole.Cursor;
 
     public void AttachXdgSurface(XdgSurfaceResource xdgSurface)
     {
-        if (XdgSurface != null)
+        if (_role != WlSurfaceRole.None)
             throw new WaylandProtocolException(ObjectId, 0, "wl_surface already has a role.");
+        _role = WlSurfaceRole.Xdg;
         XdgSurface = xdgSurface;
+    }
+
+    public async ValueTask SetCursorRoleAsync(WlPointerResource owner, int hotspotX, int hotspotY)
+    {
+        if (_role == WlSurfaceRole.Xdg)
+            throw new WaylandProtocolException(ObjectId, 0, "wl_surface already has a role.");
+
+        if (_role == WlSurfaceRole.None)
+            _role = WlSurfaceRole.Cursor;
+
+        _cursorOwner = owner;
+        _cursorHotspotX = hotspotX;
+        _cursorHotspotY = hotspotY;
+
+        if (Client.Server.FramePresenter != null)
+            await Client.Server.FramePresenter.PresentSurfaceAsync(SceneSurfaceId, null);
+
+        if (_current.Buffer != null && Client.Server.FramePresenter is IWaylandCursorPresenter cursorPresenter)
+        {
+            await cursorPresenter.UpdateCursorAsync(
+                SceneSurfaceId,
+                new WaylandCursorFrame(SceneSurfaceId, _current.Buffer.ToFrame(SceneSurfaceId), _cursorHotspotX, _cursorHotspotY));
+        }
+    }
+
+    public async ValueTask ClearCursorRoleAsync(WlPointerResource owner)
+    {
+        if (_role != WlSurfaceRole.Cursor || !ReferenceEquals(_cursorOwner, owner))
+            return;
+
+        _cursorOwner = null;
+        if (Client.Server.FramePresenter is IWaylandCursorPresenter cursorPresenter)
+            await cursorPresenter.UpdateCursorAsync(SceneSurfaceId, null);
     }
 
     public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
@@ -226,10 +272,22 @@ internal sealed class WlSurfaceResource : WaylandResource
         _current.Damages.AddRange(_pending.Damages);
         _pending.Damages.Clear();
 
-        if (Client.Server.FramePresenter != null)
+        if (_role == WlSurfaceRole.Cursor)
+        {
+            if (Client.Server.FramePresenter is IWaylandCursorPresenter cursorPresenter)
+            {
+                WaylandCursorFrame? cursor = _current.Buffer == null
+                    ? null
+                    : new WaylandCursorFrame(SceneSurfaceId, _current.Buffer.ToFrame(SceneSurfaceId), _cursorHotspotX, _cursorHotspotY);
+                await cursorPresenter.UpdateCursorAsync(SceneSurfaceId, cursor);
+            }
+        }
+        else if (Client.Server.FramePresenter != null)
+        {
             await Client.Server.FramePresenter.PresentSurfaceAsync(SceneSurfaceId, _current.Buffer?.ToFrame(SceneSurfaceId));
+        }
 
-        await SyncOutputPresenceAsync(_current.Buffer != null);
+        await SyncOutputPresenceAsync(_role != WlSurfaceRole.Cursor && _current.Buffer != null);
 
         List<WlCallbackResource> callbacks = [.. _pending.FrameCallbacks];
         _pending.FrameCallbacks.Clear();
@@ -262,7 +320,9 @@ internal sealed class WlSurfaceResource : WaylandResource
     {
         if (_enteredOutputIds.Count > 0)
             SyncOutputPresenceAsync(false).AsTask().GetAwaiter().GetResult();
-        if (Client.Server.FramePresenter != null)
+        if (_role == WlSurfaceRole.Cursor && Client.Server.FramePresenter is IWaylandCursorPresenter cursorPresenter)
+            cursorPresenter.UpdateCursorAsync(SceneSurfaceId, null).AsTask().GetAwaiter().GetResult();
+        else if (Client.Server.FramePresenter != null)
             Client.Server.FramePresenter.PresentSurfaceAsync(SceneSurfaceId, null).AsTask().GetAwaiter().GetResult();
         Client.Server.Focus.HandleSurfaceDestroyedAsync(SceneSurfaceId).AsTask().GetAwaiter().GetResult();
         Client.Server.UnregisterSceneSurface(this);
@@ -554,6 +614,7 @@ internal sealed class WlOutputResource : WaylandResource
 internal sealed class WlPointerResource : WaylandResource
 {
     private uint? _focusedSurfaceId;
+    private uint? _cursorSurfaceId;
 
     public WlPointerResource(WaylandClient client, uint objectId, uint version)
         : base(client, objectId, version, WlPointerProtocol.InterfaceName)
@@ -567,12 +628,7 @@ internal sealed class WlPointerResource : WaylandResource
         switch (message.Header.Opcode)
         {
             case 0:
-            {
-                var request = WlPointerProtocol.DecodeSetCursor(message.Body, message.Fds);
-                if (request.Surface != 0)
-                    Client.Objects.Require<WlSurfaceResource>(request.Surface);
-                break;
-            }
+                return HandleSetCursorAsync(WlPointerProtocol.DecodeSetCursor(message.Body, message.Fds));
             case 1:
                 Destroy();
                 break;
@@ -581,6 +637,26 @@ internal sealed class WlPointerResource : WaylandResource
         }
 
         return ValueTask.CompletedTask;
+    }
+
+    private async ValueTask HandleSetCursorAsync(WlPointerSetCursorRequest request)
+    {
+        if (_cursorSurfaceId is uint oldCursorSurfaceId &&
+            Client.Objects.TryGetValue(oldCursorSurfaceId, out WaylandResource? oldCursorResource) &&
+            oldCursorResource is WlSurfaceResource oldCursorSurface)
+            await oldCursorSurface.ClearCursorRoleAsync(this);
+
+        _cursorSurfaceId = request.Surface == 0 ? null : request.Surface;
+
+        if (request.Surface == 0)
+        {
+            if (Client.Server.FramePresenter is IWaylandCursorPresenter cursorPresenter)
+                await cursorPresenter.UpdateCursorAsync(0, null);
+            return;
+        }
+
+        WlSurfaceResource surface = Client.Objects.Require<WlSurfaceResource>(request.Surface);
+        await surface.SetCursorRoleAsync(this, request.HotspotX, request.HotspotY);
     }
 
     public async ValueTask HandleMotionAsync(uint surfaceId, int surfaceX, int surfaceY, uint time)
@@ -754,6 +830,8 @@ internal sealed class XdgWmBaseResource : WaylandResource
 
 internal sealed class XdgSurfaceResource : WaylandResource
 {
+    private readonly List<uint> _outstandingConfigureSerials = [];
+
     public XdgSurfaceResource(WaylandClient client, uint objectId, uint version, WlSurfaceResource surface)
         : base(client, objectId, version, XdgSurfaceProtocol.InterfaceName)
     {
@@ -799,9 +877,15 @@ internal sealed class XdgSurfaceResource : WaylandResource
             case 4:
             {
                 var request = XdgSurfaceProtocol.DecodeAckConfigure(message.Body, message.Fds);
-                if (request.Serial != PendingConfigureSerial)
+                int serialIndex = _outstandingConfigureSerials.IndexOf(request.Serial);
+                if (serialIndex < 0)
                     throw new WaylandProtocolException(ObjectId, 0, $"Unknown configure serial {request.Serial}.");
+
                 AckedConfigureSerial = request.Serial;
+                _outstandingConfigureSerials.RemoveRange(0, serialIndex + 1);
+                PendingConfigureSerial = _outstandingConfigureSerials.Count > 0
+                    ? _outstandingConfigureSerials[^1]
+                    : 0;
                 break;
             }
             default:
@@ -812,6 +896,7 @@ internal sealed class XdgSurfaceResource : WaylandResource
     public async ValueTask SendConfigureAsync()
     {
         PendingConfigureSerial = Client.NextSerial();
+        _outstandingConfigureSerials.Add(PendingConfigureSerial);
         await XdgSurfaceEventWriter.ConfigureAsync(Client, ObjectId, PendingConfigureSerial);
     }
 }

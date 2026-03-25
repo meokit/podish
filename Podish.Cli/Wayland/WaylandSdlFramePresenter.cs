@@ -2,7 +2,7 @@ using Podish.Wayland;
 
 namespace Podish.Cli.Wayland;
 
-internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylandSceneView, IWaylandSceneDebugView, IWaylandDesktopSceneController, IDisposable
+internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylandCursorPresenter, IWaylandSceneView, IWaylandSceneDebugView, IWaylandDesktopSceneController, IDisposable
 {
     private int _desktopWidth;
     private int _desktopHeight;
@@ -55,6 +55,26 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
         _zOrder.Remove(sceneSurfaceId);
         _zOrder.Add(sceneSurfaceId);
         _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.PresentSurface, sceneSurfaceId, frame.Value, state.Bounds));
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask UpdateCursorAsync(ulong sceneSurfaceId, WaylandCursorFrame? cursor, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _surfaces.Remove(sceneSurfaceId);
+        _zOrder.Remove(sceneSurfaceId);
+        _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.RemoveSurface, sceneSurfaceId));
+
+        if (cursor == null)
+        {
+            _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.ClearCursor, sceneSurfaceId));
+            return ValueTask.CompletedTask;
+        }
+
+        _enqueueCommand(new WaylandDisplayCommand(
+            WaylandDisplayCommandKind.SetCursor,
+            sceneSurfaceId,
+            Cursor: cursor.Value));
         return ValueTask.CompletedTask;
     }
 

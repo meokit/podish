@@ -291,6 +291,138 @@ public sealed class WaylandRuntimeTests
             Assert.Contains(sent, message => DecodeHeader(message).ObjectId == 6 && DecodeHeader(message).Opcode == 1);
         });
     }
+
+    [Fact]
+    public async Task Runtime_AckConfigure_AcceptsOlderOutstandingSerial()
+    {
+        using var env = new TestEnv();
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            var sent = new List<WaylandOutgoingMessage>();
+            var server = new WaylandServer();
+            var client = server.CreateClient(message =>
+            {
+                sent.Add(Clone(message));
+                return new ValueTask<int>(message.Buffer.Length);
+            });
+
+            await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
+            var globals = ParseGlobals(sent, 2);
+            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            uint xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
+
+            sent.Clear();
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(compositorName);
+                writer.WriteString(WlCompositorProtocol.InterfaceName);
+                writer.WriteUInt(4);
+                writer.WriteNewId(3);
+            });
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(xdgName);
+                writer.WriteString(XdgWmBaseProtocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(4);
+            });
+
+            sent.Clear();
+            await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(5));
+            await SendRequestAsync(client, 4, 2, writer =>
+            {
+                writer.WriteNewId(6);
+                writer.WriteObjectId(5);
+            });
+            await SendRequestAsync(client, 6, 1, writer => writer.WriteNewId(7));
+
+            Assert.Equal(2, sent.Count);
+            uint firstSerial = new WaylandWireReader(sent[1].Buffer[WaylandMessageHeader.SizeInBytes..]).ReadUInt();
+
+            object xdgSurface = client.Objects.Require(6);
+            object toplevel = xdgSurface.GetType().GetProperty("Toplevel", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+                .GetValue(xdgSurface)!;
+            var sendConfigureAsync = toplevel.GetType().GetMethod("SendConfigureAsync", [typeof(int), typeof(int), typeof(bool)])!;
+
+            sent.Clear();
+            await ((ValueTask)sendConfigureAsync.Invoke(toplevel, [320, 240, true])!);
+
+            Assert.Equal(2, sent.Count);
+            Assert.Equal<uint>(7, DecodeHeader(sent[0]).ObjectId);
+            Assert.Equal<uint>(6, DecodeHeader(sent[1]).ObjectId);
+            uint secondSerial = new WaylandWireReader(sent[1].Buffer[WaylandMessageHeader.SizeInBytes..]).ReadUInt();
+            Assert.NotEqual(firstSerial, secondSerial);
+
+            await SendRequestAsync(client, 6, 4, writer => writer.WriteUInt(firstSerial));
+
+            uint ackedSerial = (uint)(xdgSurface.GetType().GetProperty("AckedConfigureSerial", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+                .GetValue(xdgSurface) ?? 0U);
+            uint pendingSerial = (uint)(xdgSurface.GetType().GetProperty("PendingConfigureSerial", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+                .GetValue(xdgSurface) ?? 0U);
+
+            Assert.Equal(firstSerial, ackedSerial);
+            Assert.Equal(secondSerial, pendingSerial);
+        });
+    }
+
+    [Fact]
+    public async Task Runtime_SetCursor_CanReuseSameCursorSurfaceWithoutChangingRole()
+    {
+        using var env = new TestEnv();
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            var sent = new List<WaylandOutgoingMessage>();
+            var server = new WaylandServer();
+            var client = server.CreateClient(message =>
+            {
+                sent.Add(Clone(message));
+                return new ValueTask<int>(message.Buffer.Length);
+            });
+
+            await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
+            var globals = ParseGlobals(sent, 2);
+            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            uint seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
+
+            sent.Clear();
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(compositorName);
+                writer.WriteString(WlCompositorProtocol.InterfaceName);
+                writer.WriteUInt(4);
+                writer.WriteNewId(3);
+            });
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(seatName);
+                writer.WriteString(WlSeatProtocol.InterfaceName);
+                writer.WriteUInt(7);
+                writer.WriteNewId(4);
+            });
+            await SendRequestAsync(client, 4, 0, writer => writer.WriteNewId(5));
+            await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(6));
+
+            await SendRequestAsync(client, 5, 0, writer =>
+            {
+                writer.WriteUInt(1);
+                writer.WriteObjectId(6);
+                writer.WriteInt(4);
+                writer.WriteInt(5);
+            });
+            await SendRequestAsync(client, 5, 0, writer =>
+            {
+                writer.WriteUInt(2);
+                writer.WriteObjectId(6);
+                writer.WriteInt(8);
+                writer.WriteInt(9);
+            });
+
+            object surface = client.Objects.Require(6);
+            bool isCursorRole = (bool)(surface.GetType().GetProperty("IsCursorRole", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+                .GetValue(surface) ?? false);
+            Assert.True(isCursorRole);
+        });
+    }
 }
 
 public sealed class WaylandVirtualDaemonTests

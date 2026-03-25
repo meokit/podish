@@ -28,6 +28,8 @@ internal enum WaylandDisplayCommandKind
     UpdateSurfaceBounds,
     RaiseSurface,
     RemoveSurface,
+    SetCursor,
+    ClearCursor,
     Shutdown
 }
 
@@ -35,7 +37,8 @@ internal readonly record struct WaylandDisplayCommand(
     WaylandDisplayCommandKind Kind,
     ulong SceneSurfaceId = 0,
     WaylandShmFrame Frame = default,
-    WaylandSurfaceBounds Bounds = default);
+    WaylandSurfaceBounds Bounds = default,
+    WaylandCursorFrame Cursor = default);
 
 internal sealed class WaylandSdlDisplayThread : IDisposable
 {

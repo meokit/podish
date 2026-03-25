@@ -486,6 +486,23 @@ public sealed class WaylandServer
         return client;
     }
 
+    public async ValueTask DisconnectClientAsync(WaylandClient client)
+    {
+        if (!_clients.Remove(client))
+            return;
+
+        foreach (WlSurfaceResource surface in client.Objects.All.OfType<WlSurfaceResource>().ToList())
+        {
+            if (surface.IsCursorRole && FramePresenter is IWaylandCursorPresenter cursorPresenter)
+                await cursorPresenter.UpdateCursorAsync(surface.SceneSurfaceId, null);
+            else if (FramePresenter != null)
+                await FramePresenter.PresentSurfaceAsync(surface.SceneSurfaceId, null);
+
+            UnregisterSceneSurface(surface);
+            await Focus.HandleSurfaceDestroyedAsync(surface.SceneSurfaceId);
+        }
+    }
+
     public void SetFramePresenter(IWaylandFramePresenter? framePresenter)
     {
         FramePresenter = framePresenter;

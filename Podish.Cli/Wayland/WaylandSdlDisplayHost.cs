@@ -68,6 +68,12 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
                     dirty = true;
                     RemoveSurface(command.SceneSurfaceId);
                     break;
+                case WaylandDisplayCommandKind.SetCursor:
+                    SetCursor(command.Cursor);
+                    break;
+                case WaylandDisplayCommandKind.ClearCursor:
+                    ClearCursor();
+                    break;
                 case WaylandDisplayCommandKind.Shutdown:
                     shutdownRequested = true;
                     break;
@@ -112,6 +118,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
             surface.Texture.Dispose();
         _surfaces.Clear();
         _zOrder.Clear();
+        _output?.ClearCursor();
         _output?.Dispose();
         _output = null;
         _renderer = null;
@@ -190,6 +197,28 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     private static DisplayRect ToDisplayRect(WaylandSurfaceBounds bounds) =>
         new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
 
+    private void SetCursor(WaylandCursorFrame cursor)
+    {
+        EnsureStarted();
+        try
+        {
+            DisplayCursorDescriptor descriptor = ReadCursor(cursor);
+            _output!.SetCursor(descriptor);
+        }
+        catch (Exception ex)
+        {
+            _loggerFactory.CreateLogger<WaylandSdlDisplayHost>()
+                .LogWarning(ex, "Failed to bridge Wayland cursor sceneSurfaceId={SceneSurfaceId}; ignoring cursor update",
+                    cursor.SceneSurfaceId);
+        }
+    }
+
+    private void ClearCursor()
+    {
+        EnsureStarted();
+        _output!.ClearCursor();
+    }
+
     private void EnsureStarted()
     {
         if (_output == null || _renderer == null)
@@ -261,6 +290,29 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
                 throw new InvalidOperationException("Failed to read complete shm frame contents.");
             totalRead += read;
         }
+    }
+
+    private static DisplayCursorDescriptor ReadCursor(WaylandCursorFrame cursor)
+    {
+        WaylandShmFrame frame = cursor.Frame;
+        int byteLength = checked(frame.Stride * frame.Height);
+        byte[] pixels = GC.AllocateUninitializedArray<byte>(byteLength);
+        ReadExactly(frame, 0, pixels, byteLength);
+
+        if (frame.Format == WlShmFormat.Xrgb8888)
+        {
+            for (int i = 0; i < byteLength; i += 4)
+                pixels[i + 3] = 0xFF;
+        }
+
+        return new DisplayCursorDescriptor(
+            frame.Width,
+            frame.Height,
+            cursor.HotspotX,
+            cursor.HotspotY,
+            DisplayPixelFormat.Argb8888,
+            pixels,
+            frame.Stride);
     }
 
     private sealed class SurfaceTextureState(IDisplayTexture texture, int width, int height, DisplayPixelFormat format)

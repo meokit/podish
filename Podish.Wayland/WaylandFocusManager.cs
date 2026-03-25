@@ -57,7 +57,8 @@ internal sealed class WaylandFocusManager
         if (_grabbedPointerSceneSurfaceId is ulong grabbedSceneSurfaceId &&
             _pressedPointerButtons > 0 &&
             sceneView.TryGetSurfaceBounds(grabbedSceneSurfaceId, out WaylandSurfaceBounds grabbedBounds) &&
-            _server.TryGetSceneSurface(grabbedSceneSurfaceId, out WlSurfaceResource? grabbedSurface))
+            _server.TryGetSceneSurface(grabbedSceneSurfaceId, out WlSurfaceResource? grabbedSurface) &&
+            !grabbedSurface.IsCursorRole)
         {
             _focusedPointerSceneSurfaceId = grabbedSceneSurfaceId;
 
@@ -71,6 +72,12 @@ internal sealed class WaylandFocusManager
 
         if (!sceneView.TryGetSurfaceAt(desktopX, desktopY, out WaylandSurfaceHit hit) ||
             !_server.TryGetSceneSurface(hit.SceneSurfaceId, out WlSurfaceResource? surface))
+        {
+            await ClearPointerFocusAsync();
+            return;
+        }
+
+        if (surface.IsCursorRole)
         {
             await ClearPointerFocusAsync();
             return;
