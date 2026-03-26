@@ -1092,6 +1092,38 @@ public class TtyDisciplineTests
     }
 
     [Fact]
+    public void Hangup_SignalsSessionLeaderAndForegroundProcessGroup_AndClearsControllingTty()
+    {
+        _task.Process.SID = _task.Process.TGID;
+        _task.Process.PGID = _task.Process.TGID;
+        _task.Process.ControllingTty = _tty;
+        _tty.SessionId = _task.Process.TGID;
+        _tty.ForegroundPgrp = 200;
+
+        var fgProcess = new Process(200, new VMAManager(), new SyscallManager(new Engine(), new VMAManager(), 0))
+        {
+            SID = _task.Process.SID,
+            PGID = 200,
+            ControllingTty = _tty
+        };
+        _taskContext.Scheduler.RegisterProcess(fgProcess);
+        var fgTask = new FiberTask(200, fgProcess, new Engine(), _taskContext.Scheduler);
+
+        _tty.Hangup();
+
+        var hupMask = 1UL << ((int)Signal.SIGHUP - 1);
+        var contMask = 1UL << ((int)Signal.SIGCONT - 1);
+
+        Assert.NotEqual(0UL, _task.PendingSignals & hupMask);
+        Assert.NotEqual(0UL, fgTask.PendingSignals & hupMask);
+        Assert.NotEqual(0UL, fgTask.PendingSignals & contMask);
+        Assert.Null(_task.Process.ControllingTty);
+        Assert.Null(fgProcess.ControllingTty);
+        Assert.Equal(0, _tty.SessionId);
+        Assert.Equal(0, _tty.ForegroundPgrp);
+    }
+
+    [Fact]
     public void BackgroundWrite_with_TOSTOP_and_explicit_task_sends_SIGTTOU()
     {
         _task.Process.PGID = 200;

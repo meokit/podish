@@ -206,6 +206,7 @@ public class PtyPair
     public void CloseMaster()
     {
         _logger.LogInformation("[PtyPair] Master closed for PTY index={Index}", Index);
+        Slave.Discipline?.Hangup();
         _manager.ReleasePty(Index);
     }
 }

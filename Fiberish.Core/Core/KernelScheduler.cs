@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
 using Fiberish.Diagnostics;
+using Fiberish.Core.VFS.TTY;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Microsoft.Extensions.Logging;
@@ -251,6 +252,7 @@ public class KernelScheduler
         Process? fromProc;
         Process? toProc;
         List<int> adoptedPids = [];
+        HashSet<int> affectedProcessGroups = [];
 
         _processes.TryGetValue(fromPid, out fromProc);
         if (!_processes.TryGetValue(toPid, out toProc)) return 0;
@@ -260,6 +262,8 @@ public class KernelScheduler
             if (proc.PPID != fromPid) continue;
             proc.PPID = toPid;
             adoptedPids.Add(proc.TGID);
+            if (proc.PGID > 0)
+                affectedProcessGroups.Add(proc.PGID);
         }
 
         if (adoptedPids.Count == 0) return 0;
@@ -280,7 +284,56 @@ public class KernelScheduler
             Schedule(initTask);
         }
 
+        foreach (var pgid in affectedProcessGroups)
+            NotifyNewlyOrphanedStoppedProcessGroup(pgid);
+
         return adoptedPids.Count;
+    }
+
+    private void NotifyNewlyOrphanedStoppedProcessGroup(int pgid)
+    {
+        AssertSchedulerThread();
+        if (pgid <= 0) return;
+        if (!IsOrphanedProcessGroup(pgid)) return;
+        if (!ProcessGroupHasStoppedMembers(pgid)) return;
+
+        _ = SignalProcessGroupWithCount(pgid, (int)Signal.SIGHUP);
+        _ = SignalProcessGroupWithCount(pgid, (int)Signal.SIGCONT);
+    }
+
+    private bool IsOrphanedProcessGroup(int pgid)
+    {
+        AssertSchedulerThread();
+
+        var foundMember = false;
+        foreach (var process in _processes.Values)
+        {
+            if (process.PGID != pgid)
+                continue;
+
+            foundMember = true;
+
+            if (process.PPID <= 0)
+                continue;
+
+            if (!_processes.TryGetValue(process.PPID, out var parent))
+                continue;
+
+            if (parent.SID == process.SID && parent.PGID != pgid)
+                return false;
+        }
+
+        return foundMember;
+    }
+
+    private bool ProcessGroupHasStoppedMembers(int pgid)
+    {
+        AssertSchedulerThread();
+        foreach (var process in _processes.Values)
+            if (process.PGID == pgid && process.State == ProcessState.Stopped)
+                return true;
+
+        return false;
     }
 
     public bool TryAutoReapZombie(Process process)
@@ -300,6 +353,32 @@ public class KernelScheduler
         process.State = ProcessState.Dead;
         CleanupDeadProcess(process);
         return true;
+    }
+
+    public int TerminateRemainingProcessesForInitExit(int exitingPid)
+    {
+        AssertSchedulerThread();
+        if (exitingPid <= 0 || exitingPid != InitPid) return 0;
+
+        return SignalAllProcesses((int)Signal.SIGKILL, excludePid: exitingPid, skipInit: false);
+    }
+
+    public int ClearControllingTerminalForSession(TtyDiscipline tty, int sessionId)
+    {
+        AssertSchedulerThread();
+        if (sessionId <= 0) return 0;
+
+        var cleared = 0;
+        foreach (var process in _processes.Values)
+        {
+            if (process.SID != sessionId) continue;
+            if (!ReferenceEquals(process.ControllingTty, tty)) continue;
+
+            process.ControllingTty = null;
+            cleared++;
+        }
+
+        return cleared;
     }
 
     private void EnqueueTask(FiberTask task)

@@ -12,10 +12,10 @@ public class KernelSchedulerReparentTests
     {
         var scheduler = new KernelScheduler();
 
-        var init = new Process(1, null!, null!);
-        var parent = new Process(2, null!, null!);
-        var child1 = new Process(3, null!, null!) { PPID = 2 };
-        var child2 = new Process(4, null!, null!) { PPID = 2 };
+        var init = new Process(1, null!, null!) { SID = 1, PGID = 1 };
+        var parent = new Process(2, null!, null!) { SID = 2, PGID = 2 };
+        var child1 = new Process(3, null!, null!) { PPID = 2, SID = 2, PGID = 3 };
+        var child2 = new Process(4, null!, null!) { PPID = 2, SID = 2, PGID = 4 };
 
         parent.Children.Add(3);
         parent.Children.Add(4);
@@ -46,6 +46,72 @@ public class KernelSchedulerReparentTests
         var count = scheduler.ReparentChildrenToInit(1);
 
         Assert.Equal(0, count);
+    }
+
+    [Fact]
+    public void ReparentChildrenToInit_NewlyOrphanedStoppedGroup_GetsSighupAndSigcont()
+    {
+        var scheduler = new KernelScheduler();
+
+        var init = new Process(1, null!, null!) { SID = 1, PGID = 1 };
+        var parent = new Process(2, null!, null!) { SID = 200, PGID = 2 };
+        var child = new Process(3, null!, null!)
+        {
+            PPID = 2,
+            SID = 200,
+            PGID = 3,
+            State = ProcessState.Stopped
+        };
+        parent.Children.Add(3);
+
+        scheduler.RegisterProcess(init);
+        scheduler.RegisterProcess(parent);
+        scheduler.RegisterProcess(child);
+        scheduler.SetInitPid(1);
+
+        var childTask = new FiberTask(3, child, new MockEngine(), scheduler);
+
+        var count = scheduler.ReparentChildrenToInit(2);
+
+        Assert.Equal(1, count);
+        Assert.Equal(1, child.PPID);
+        var hupMask = 1UL << ((int)Signal.SIGHUP - 1);
+        var contMask = 1UL << ((int)Signal.SIGCONT - 1);
+        Assert.NotEqual(0UL, childTask.PendingSignals & hupMask);
+        Assert.NotEqual(0UL, childTask.PendingSignals & contMask);
+    }
+
+    [Fact]
+    public void ReparentChildrenToInit_SameSessionParentDoesNotOrphanGroup_NoSighup()
+    {
+        var scheduler = new KernelScheduler();
+
+        var init = new Process(1, null!, null!) { SID = 200, PGID = 1 };
+        var parent = new Process(2, null!, null!) { SID = 200, PGID = 2 };
+        var child = new Process(3, null!, null!)
+        {
+            PPID = 2,
+            SID = 200,
+            PGID = 3,
+            State = ProcessState.Stopped
+        };
+        parent.Children.Add(3);
+
+        scheduler.RegisterProcess(init);
+        scheduler.RegisterProcess(parent);
+        scheduler.RegisterProcess(child);
+        scheduler.SetInitPid(1);
+
+        var childTask = new FiberTask(3, child, new MockEngine(), scheduler);
+
+        var count = scheduler.ReparentChildrenToInit(2);
+
+        Assert.Equal(1, count);
+        Assert.Equal(1, child.PPID);
+        var hupMask = 1UL << ((int)Signal.SIGHUP - 1);
+        var contMask = 1UL << ((int)Signal.SIGCONT - 1);
+        Assert.Equal(0UL, childTask.PendingSignals & hupMask);
+        Assert.Equal(0UL, childTask.PendingSignals & contMask);
     }
 
     [Fact]

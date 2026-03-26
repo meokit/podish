@@ -425,10 +425,20 @@ public partial class SyscallManager
         task.Process.HasWaitableStop = false;
         task.Process.HasWaitableContinue = false;
 
-        var reparented = task.CommonKernel.ReparentChildrenToInit(task.Process.TGID);
-        if (reparented > 0)
-            Logger.LogDebug("[Exit] Reparented {Count} orphaned children from PID {Pid} to init PID {InitPid}",
-                reparented, task.Process.TGID, task.CommonKernel.InitPid);
+        if (task.Process.TGID == task.CommonKernel.InitPid)
+        {
+            var terminated = task.CommonKernel.TerminateRemainingProcessesForInitExit(task.Process.TGID);
+            if (terminated > 0)
+                Logger.LogDebug("[Exit] Init PID {Pid} exited; signaled {Count} remaining processes for termination",
+                    task.Process.TGID, terminated);
+        }
+        else
+        {
+            var reparented = task.CommonKernel.ReparentChildrenToInit(task.Process.TGID);
+            if (reparented > 0)
+                Logger.LogDebug("[Exit] Reparented {Count} orphaned children from PID {Pid} to init PID {InitPid}",
+                    reparented, task.Process.TGID, task.CommonKernel.InitPid);
+        }
 
         task.Process.StateChangeEvent.Set();
         task.CommonKernel.TryReleaseProcessMemory(task.Process, task.CPU);

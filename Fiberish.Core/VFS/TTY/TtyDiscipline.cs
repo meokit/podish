@@ -146,6 +146,38 @@ public class TtyDiscipline
     public AsyncWaitQueue DataAvailable => _inq.DataAvailable;
     public bool CanWriteOutput => _driver.CanWrite;
 
+    public void Hangup()
+    {
+        void ApplyHangup()
+        {
+            var sessionId = SessionId;
+            var foregroundPgrp = ForegroundPgrp;
+
+            if (sessionId <= 0 && foregroundPgrp <= 0)
+                return;
+
+            SessionId = 0;
+            ForegroundPgrp = 0;
+            _scheduler.ClearControllingTerminalForSession(this, sessionId);
+
+            if (sessionId > 0)
+                _scheduler.SignalProcess(sessionId, (int)Signal.SIGHUP);
+
+            if (foregroundPgrp > 0)
+            {
+                _scheduler.SignalProcessGroup(foregroundPgrp, (int)Signal.SIGHUP);
+                _scheduler.SignalProcessGroup(foregroundPgrp, (int)Signal.SIGCONT);
+            }
+
+            _inq.Signal();
+        }
+
+        if (_scheduler.IsSchedulerThread)
+            ApplyHangup();
+        else
+            _scheduler.RunIngress(ApplyHangup);
+    }
+
     private void InitializeDefaults()
     {
         // Defaults for Linux (like a standard terminal)
