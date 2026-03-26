@@ -43,7 +43,9 @@ public enum DisplayInputEventKind
     PointerMotion,
     PointerButton,
     PointerLeave,
-    KeyboardKey
+    KeyboardKey,
+    TextInput,
+    TextEditing
 }
 
 public readonly record struct DisplayInputEvent(
@@ -53,7 +55,10 @@ public readonly record struct DisplayInputEvent(
     uint Timestamp = 0,
     DisplayPointerButton Button = DisplayPointerButton.Left,
     bool Pressed = false,
-    uint Key = 0);
+    uint Key = 0,
+    string? Text = null,
+    int CursorBegin = 0,
+    int CursorEnd = 0);
 
 public readonly record struct DisplayOutputOptions(
     int Width,
@@ -113,6 +118,9 @@ public interface IDisplayOutput : IDisposable
     void PumpEvents();
     IReadOnlyList<DisplayInputEvent> DrainInputEvents();
     bool TryDequeueResize(out DisplaySize size);
+    void StartTextInput();
+    void StopTextInput();
+    void SetTextInputRect(DisplayRect rect);
     void SetCursor(DisplayCursorDescriptor cursor);
     void SetSystemCursor(DisplaySystemCursor cursor);
     void ClearCursor();

@@ -3,7 +3,7 @@ using Podish.Wayland;
 
 namespace Podish.Cli.Wayland;
 
-internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylandCursorPresenter, IWaylandSceneView, IWaylandSceneDebugView, IWaylandDesktopSceneController, IDisposable
+internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylandCursorPresenter, IWaylandTextInputPresenter, IWaylandSceneView, IWaylandSceneDebugView, IWaylandDesktopSceneController, IDisposable
 {
     private int _desktopWidth;
     private int _desktopHeight;
@@ -96,6 +96,16 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
         _enqueueCommand(new WaylandDisplayCommand(
             shape.HasValue ? WaylandDisplayCommandKind.SetSystemCursor : WaylandDisplayCommandKind.ClearCursor,
             SystemCursor: shape));
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask UpdateTextInputAsync(bool enabled, WaylandRect? cursorRectangle, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _enqueueCommand(new WaylandDisplayCommand(
+            WaylandDisplayCommandKind.UpdateTextInput,
+            TextInputRect: enabled ? cursorRectangle : null,
+            Hidden: !enabled));
         return ValueTask.CompletedTask;
     }
 

@@ -48,7 +48,7 @@ internal sealed class WaylandDisplayServerState : IDisposable
             if (inputEvents.Count > 0)
                 Logger.LogDebug("Wayland host drained input events count={Count}", inputEvents.Count);
 
-            foreach (DisplayInputEvent inputEvent in inputEvents)
+            foreach (DisplayInputEvent inputEvent in OrderInputEventsForIme(inputEvents))
             {
                 Logger.LogDebug("Wayland host input kind={Kind} x={X} y={Y} button={Button} key={Key} pressed={Pressed} ts={Timestamp}",
                     inputEvent.Kind, inputEvent.X, inputEvent.Y, inputEvent.Button, inputEvent.Key, inputEvent.Pressed, inputEvent.Timestamp);
@@ -99,5 +99,47 @@ internal sealed class WaylandDisplayServerState : IDisposable
             batch.Add(command);
 
         return _host.DrainCommands(batch, consumed, out shutdownRequested);
+    }
+
+    private static IEnumerable<DisplayInputEvent> OrderInputEventsForIme(IReadOnlyList<DisplayInputEvent> inputEvents)
+    {
+        bool containsImeTextEvent = inputEvents.Any(static ev =>
+            ev.Kind is DisplayInputEventKind.TextEditing or DisplayInputEventKind.TextInput);
+
+        static int Priority(DisplayInputEventKind kind) => kind switch
+        {
+            DisplayInputEventKind.TextEditing => 0,
+            DisplayInputEventKind.TextInput => 1,
+            DisplayInputEventKind.KeyboardKey => 2,
+            _ => 3
+        };
+
+        return inputEvents
+            .Where(ev => !containsImeTextEvent || !ShouldSuppressKeyboardEventForIme(ev))
+            .Select(static (ev, index) => (ev, index))
+            .OrderBy(static item => Priority(item.ev.Kind))
+            .ThenBy(static item => item.index)
+            .Select(static item => item.ev);
+    }
+
+    private static bool ShouldSuppressKeyboardEventForIme(DisplayInputEvent inputEvent)
+    {
+        if (inputEvent.Kind != DisplayInputEventKind.KeyboardKey)
+            return false;
+
+        if (!WaylandKeyboardLayout.TryGetByEvdevKey(inputEvent.Key, out WaylandKeyboardKeyDescriptor descriptor))
+            return false;
+
+        if (descriptor.ModifierRole != WaylandKeyboardModifierRole.None)
+            return false;
+
+        return descriptor.EvdevKey is
+            >= 2 and <= 13 or
+            >= 16 and <= 27 or
+            >= 30 and <= 53 or
+            14 or
+            15 or
+            28 or
+            57;
     }
 }

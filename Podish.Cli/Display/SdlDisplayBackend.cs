@@ -166,6 +166,31 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
                         Key: mappedKey));
                     break;
                 }
+                case EventType.Textinput:
+                {
+                    byte* textPtr = ev.Text.Text;
+                    string text = Marshal.PtrToStringUTF8((nint)textPtr) ?? string.Empty;
+                    if (text.Length == 0)
+                        break;
+
+                    _pendingInputEvents.Add(new DisplayInputEvent(
+                        DisplayInputEventKind.TextInput,
+                        Timestamp: ev.Text.Timestamp,
+                        Text: text));
+                    break;
+                }
+                case EventType.Textediting:
+                {
+                    byte* textPtr = ev.Edit.Text;
+                    string text = Marshal.PtrToStringUTF8((nint)textPtr) ?? string.Empty;
+                    _pendingInputEvents.Add(new DisplayInputEvent(
+                        DisplayInputEventKind.TextEditing,
+                        Timestamp: ev.Edit.Timestamp,
+                        Text: text,
+                        CursorBegin: ev.Edit.Start,
+                        CursorEnd: ev.Edit.Start + ev.Edit.Length));
+                    break;
+                }
                 case EventType.Windowevent:
                     _logger.LogDebug("SDL window event event={Event} data1={Data1} data2={Data2} timestamp={Timestamp}",
                         (WindowEventID)ev.Window.Event, ev.Window.Data1, ev.Window.Data2, ev.Window.Timestamp);
@@ -209,6 +234,22 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
         while (_pendingResizeEvents.Count > 0)
             size = _pendingResizeEvents.Dequeue();
         return true;
+    }
+
+    public void StartTextInput()
+    {
+        _sdl.StartTextInput();
+    }
+
+    public void StopTextInput()
+    {
+        _sdl.StopTextInput();
+    }
+
+    public void SetTextInputRect(DisplayRect rect)
+    {
+        var sdlRect = new Rectangle<int>(rect.X, rect.Y, rect.Width, rect.Height);
+        _sdl.SetTextInputRect(in sdlRect);
     }
 
     public void SetCursor(DisplayCursorDescriptor cursor)

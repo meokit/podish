@@ -94,6 +94,9 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
                     else
                         ClearCursor();
                     break;
+                case WaylandDisplayCommandKind.UpdateTextInput:
+                    UpdateTextInput(!command.Hidden, command.TextInputRect);
+                    break;
                 case WaylandDisplayCommandKind.ClearCursor:
                     ClearCursor();
                     break;
@@ -318,6 +321,21 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
             WaylandSystemCursorShape.Help => DisplaySystemCursor.Arrow,
             _ => DisplaySystemCursor.Arrow
         });
+    }
+
+    private void UpdateTextInput(bool enabled, WaylandRect? rect)
+    {
+        EnsureStarted();
+        if (!enabled)
+        {
+            _output!.StopTextInput();
+            return;
+        }
+
+        if (rect is WaylandRect cursorRect)
+            _output!.SetTextInputRect(new DisplayRect(cursorRect.X, cursorRect.Y, cursorRect.Width, cursorRect.Height));
+
+        _output!.StartTextInput();
     }
 
     private void EnsureStarted()

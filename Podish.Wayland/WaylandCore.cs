@@ -463,6 +463,7 @@ public sealed class WaylandServer
     private readonly WaylandKeyboardKeymap _keyboardKeymap = new();
     private WlDataSourceResource? _selectionSource;
     private ZwpPrimarySelectionSourceV1Resource? _primarySelectionSource;
+    private uint _nextTextInputDoneSerial = 1;
     private long _nextDisplayLeaseToken;
     private long _nextSceneSurfaceId;
 
@@ -525,6 +526,8 @@ public sealed class WaylandServer
             static (client, objectId, version) => client.Register(new WlDataDeviceManagerResource(client, objectId, version)));
         Globals.Add(ZwpPrimarySelectionDeviceManagerV1Protocol.InterfaceName, ZwpPrimarySelectionDeviceManagerV1Protocol.Version,
             static (client, objectId, version) => client.Register(new ZwpPrimarySelectionDeviceManagerV1Resource(client, objectId, version)));
+        Globals.Add(ZwpTextInputManagerV3Protocol.InterfaceName, ZwpTextInputManagerV3Protocol.Version,
+            static (client, objectId, version) => client.Register(new ZwpTextInputManagerV3Resource(client, objectId, version)));
         Globals.Add(WlSeatProtocol.InterfaceName, WlSeatProtocol.Version,
             static (client, objectId, version) => client.Register(new WlSeatResource(client, objectId, version)));
         Globals.Add(WlOutputProtocol.InterfaceName, WlOutputProtocol.Version,
@@ -554,7 +557,33 @@ public sealed class WaylandServer
 
     public async ValueTask HandleKeyboardKeyAsync(uint key, bool pressed, uint time)
     {
+        if (ShouldSuppressKeyboardKey(key))
+            return;
+
         await Focus.HandleKeyboardKeyAsync(key, pressed, time);
+    }
+
+    public async ValueTask HandleTextInputCommitAsync(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return;
+
+        ZwpTextInputV3Resource? textInput = GetFocusedEnabledTextInput();
+        if (textInput == null)
+            return;
+
+        textInput.SetHasActivePreedit(false);
+        await textInput.SendCommitStringAsync(text, NextTextInputDoneSerial());
+    }
+
+    public async ValueTask HandleTextInputPreeditAsync(string text, int cursorBegin, int cursorEnd)
+    {
+        ZwpTextInputV3Resource? textInput = GetFocusedEnabledTextInput();
+        if (textInput == null)
+            return;
+
+        textInput.SetHasActivePreedit(!string.IsNullOrEmpty(text));
+        await textInput.SendPreeditStringAsync(text, cursorBegin, cursorEnd, NextTextInputDoneSerial());
     }
 
     internal async ValueTask SetClipboardSelectionAsync(WlDataSourceResource? source)
@@ -599,6 +628,39 @@ public sealed class WaylandServer
     {
         await BroadcastClipboardSelectionAsync();
         await BroadcastPrimarySelectionAsync();
+    }
+
+    internal async ValueTask HandleKeyboardFocusTextInputChangedAsync()
+    {
+        WaylandClient? focusedClient = GetFocusedKeyboardClient();
+        uint? focusedSurfaceId = GetFocusedKeyboardSurfaceObjectId();
+
+        foreach (WaylandClient client in _clients.ToArray())
+        {
+            ZwpTextInputV3Resource[] textInputs = [.. client.Objects.All.OfType<ZwpTextInputV3Resource>()];
+            foreach (ZwpTextInputV3Resource textInput in textInputs)
+            {
+                if (ReferenceEquals(client, focusedClient) && focusedSurfaceId is uint surfaceId)
+                    await textInput.SetFocusAsync(surfaceId);
+                else
+                    await textInput.ClearFocusAsync();
+            }
+        }
+    }
+
+    internal async ValueTask HandleTextInputStateChangedAsync()
+    {
+        if (FramePresenter is not IWaylandTextInputPresenter textInputPresenter)
+            return;
+
+        ZwpTextInputV3Resource? textInput = GetFocusedEnabledTextInput();
+        if (textInput == null)
+        {
+            await textInputPresenter.UpdateTextInputAsync(false, null);
+            return;
+        }
+
+        await textInputPresenter.UpdateTextInputAsync(true, textInput.CursorRectangle);
     }
 
     internal void HandleClipboardSourceDestroyed(WlDataSourceResource source)
@@ -679,6 +741,42 @@ public sealed class WaylandServer
             return null;
 
         return surface.Client;
+    }
+
+    private uint? GetFocusedKeyboardSurfaceObjectId()
+    {
+        if (Focus.FocusedKeyboardSceneSurfaceId is not ulong sceneSurfaceId)
+            return null;
+
+        return TryGetSceneSurface(sceneSurfaceId, out WlSurfaceResource? surface) ? surface.ObjectId : null;
+    }
+
+    private ZwpTextInputV3Resource? GetFocusedEnabledTextInput()
+    {
+        WaylandClient? focusedClient = GetFocusedKeyboardClient();
+        if (focusedClient == null)
+            return null;
+
+        return focusedClient.Objects.All.OfType<ZwpTextInputV3Resource>()
+            .FirstOrDefault(static textInput => textInput.IsFocused && textInput.IsEnabled);
+    }
+
+    private uint NextTextInputDoneSerial()
+    {
+        return _nextTextInputDoneSerial++;
+    }
+
+    private bool ShouldSuppressKeyboardKey(uint key)
+    {
+        ZwpTextInputV3Resource? textInput = GetFocusedEnabledTextInput();
+        if (textInput is not { HasActivePreedit: true })
+            return false;
+
+        if (WaylandKeyboardLayout.TryGetByEvdevKey(key, out WaylandKeyboardKeyDescriptor descriptor) &&
+            descriptor.ModifierRole != WaylandKeyboardModifierRole.None)
+            return false;
+
+        return true;
     }
 
     internal void EnqueueFrameCallbacks(IEnumerable<WlCallbackResource> callbacks)

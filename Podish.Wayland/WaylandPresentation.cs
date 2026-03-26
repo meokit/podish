@@ -171,6 +171,12 @@ public interface IWaylandCursorPresenter
         CancellationToken cancellationToken = default);
 }
 
+public interface IWaylandTextInputPresenter
+{
+    ValueTask UpdateTextInputAsync(bool enabled, WaylandRect? cursorRectangle,
+        CancellationToken cancellationToken = default);
+}
+
 public interface IWaylandSceneView
 {
     bool TryGetSurfaceAt(int desktopX, int desktopY, out WaylandSurfaceHit hit);

@@ -4,6 +4,7 @@
 // Source protocol: xdg_decoration_unstable_v1 (/Users/jiangyiheng/repos/x86emu/spec/wayland/xdg-decoration-unstable-v1.xml)
 // Source protocol: cursor_shape_v1 (/Users/jiangyiheng/repos/x86emu/spec/wayland/cursor-shape-v1.xml)
 // Source protocol: wp_primary_selection_unstable_v1 (/Users/jiangyiheng/repos/x86emu/spec/wayland/primary-selection-unstable-v1.xml)
+// Source protocol: text_input_unstable_v3 (/Users/jiangyiheng/repos/x86emu/spec/wayland/text-input-unstable-v3.xml)
 #nullable enable
 namespace Podish.Wayland;
 
@@ -425,6 +426,45 @@ public enum WpCursorShapeDeviceV1Shape : uint
 public enum WpCursorShapeDeviceV1Error : uint
 {
     InvalidShape = 1,
+}
+
+public enum ZwpTextInputV3ChangeCause : uint
+{
+    InputMethod = 0,
+    Other = 1,
+}
+
+public enum ZwpTextInputV3ContentHint : uint
+{
+    None = 0x0,
+    Completion = 0x1,
+    Spellcheck = 0x2,
+    AutoCapitalization = 0x4,
+    Lowercase = 0x8,
+    Uppercase = 0x10,
+    Titlecase = 0x20,
+    HiddenText = 0x40,
+    SensitiveData = 0x80,
+    Latin = 0x100,
+    Multiline = 0x200,
+}
+
+public enum ZwpTextInputV3ContentPurpose : uint
+{
+    Normal = 0,
+    Alpha = 1,
+    Digits = 2,
+    Number = 3,
+    Phone = 4,
+    Url = 5,
+    Email = 6,
+    Name = 7,
+    Password = 8,
+    Pin = 9,
+    Date = 10,
+    Time = 11,
+    Datetime = 12,
+    Terminal = 13,
 }
 
 public static class WlDisplayProtocol
@@ -2252,4 +2292,165 @@ public static class ZwpPrimarySelectionSourceV1EventWriter
     }
 
 }
+
+public static class ZwpTextInputV3Protocol
+{
+    public const string InterfaceName = "zwp_text_input_v3";
+    public const uint Version = 1;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "enable", 1, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "disable", 2, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "set_surrounding_text", 3, 1, [
+            new WaylandArgumentMetadata("text", WaylandArgKind.String),
+            new WaylandArgumentMetadata("cursor", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("anchor", WaylandArgKind.Int)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_text_change_cause", 4, 1, [
+            new WaylandArgumentMetadata("cause", WaylandArgKind.Uint)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_content_type", 5, 1, [
+            new WaylandArgumentMetadata("hint", WaylandArgKind.Uint),
+            new WaylandArgumentMetadata("purpose", WaylandArgKind.Uint)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_cursor_rectangle", 6, 1, [
+            new WaylandArgumentMetadata("x", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("y", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("width", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("height", WaylandArgKind.Int)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "commit", 7, 1, [])
+    ]);
+
+    public static ZwpTextInputV3SetSurroundingTextRequest DecodeSetSurroundingText(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        string arg0 = reader.ReadString() ?? string.Empty;
+        int arg1 = reader.ReadInt();
+        int arg2 = reader.ReadInt();
+        var request = new ZwpTextInputV3SetSurroundingTextRequest(arg0, arg1, arg2);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwpTextInputV3SetTextChangeCauseRequest DecodeSetTextChangeCause(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        ZwpTextInputV3ChangeCause arg0 = (ZwpTextInputV3ChangeCause)reader.ReadUInt();
+        var request = new ZwpTextInputV3SetTextChangeCauseRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwpTextInputV3SetContentTypeRequest DecodeSetContentType(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        ZwpTextInputV3ContentHint arg0 = (ZwpTextInputV3ContentHint)reader.ReadUInt();
+        ZwpTextInputV3ContentPurpose arg1 = (ZwpTextInputV3ContentPurpose)reader.ReadUInt();
+        var request = new ZwpTextInputV3SetContentTypeRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwpTextInputV3SetCursorRectangleRequest DecodeSetCursorRectangle(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        int arg0 = reader.ReadInt();
+        int arg1 = reader.ReadInt();
+        int arg2 = reader.ReadInt();
+        int arg3 = reader.ReadInt();
+        var request = new ZwpTextInputV3SetCursorRectangleRequest(arg0, arg1, arg2, arg3);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZwpTextInputV3SetSurroundingTextRequest(string Text, int Cursor, int Anchor);
+public readonly record struct ZwpTextInputV3SetTextChangeCauseRequest(ZwpTextInputV3ChangeCause Cause);
+public readonly record struct ZwpTextInputV3SetContentTypeRequest(ZwpTextInputV3ContentHint Hint, ZwpTextInputV3ContentPurpose Purpose);
+public readonly record struct ZwpTextInputV3SetCursorRectangleRequest(int X, int Y, int Width, int Height);
+
+public static class ZwpTextInputV3EventWriter
+{
+    public static ValueTask EnterAsync(WaylandClient client, uint objectId, uint surface)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteObjectId(surface);
+        });
+    }
+
+    public static ValueTask LeaveAsync(WaylandClient client, uint objectId, uint surface)
+    {
+        return client.SendEventAsync(objectId, 1, writer =>
+        {
+            writer.WriteObjectId(surface);
+        });
+    }
+
+    public static ValueTask PreeditStringAsync(WaylandClient client, uint objectId, string? text, int cursorBegin, int cursorEnd)
+    {
+        return client.SendEventAsync(objectId, 2, writer =>
+        {
+            writer.WriteString(text);
+            writer.WriteInt(cursorBegin);
+            writer.WriteInt(cursorEnd);
+        });
+    }
+
+    public static ValueTask CommitStringAsync(WaylandClient client, uint objectId, string? text)
+    {
+        return client.SendEventAsync(objectId, 3, writer =>
+        {
+            writer.WriteString(text);
+        });
+    }
+
+    public static ValueTask DeleteSurroundingTextAsync(WaylandClient client, uint objectId, uint beforeLength, uint afterLength)
+    {
+        return client.SendEventAsync(objectId, 4, writer =>
+        {
+            writer.WriteUInt(beforeLength);
+            writer.WriteUInt(afterLength);
+        });
+    }
+
+    public static ValueTask DoneAsync(WaylandClient client, uint objectId, uint serial)
+    {
+        return client.SendEventAsync(objectId, 5, writer =>
+        {
+            writer.WriteUInt(serial);
+        });
+    }
+
+}
+
+public static class ZwpTextInputManagerV3Protocol
+{
+    public const string InterfaceName = "zwp_text_input_manager_v3";
+    public const uint Version = 1;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "get_text_input", 1, 1, [
+            new WaylandArgumentMetadata("id", WaylandArgKind.NewId, "zwp_text_input_v3"),
+            new WaylandArgumentMetadata("seat", WaylandArgKind.Object, "wl_seat")
+        ])
+    ]);
+
+    public static ZwpTextInputManagerV3GetTextInputRequest DecodeGetTextInput(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        uint arg1 = reader.ReadObjectId();
+        var request = new ZwpTextInputManagerV3GetTextInputRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZwpTextInputManagerV3GetTextInputRequest(uint Id, uint Seat);
 

@@ -225,6 +225,12 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
             case DisplayInputEventKind.KeyboardKey:
                 await _server.HandleKeyboardKeyAsync(inputEvent.Key, inputEvent.Pressed, inputEvent.Timestamp);
                 break;
+            case DisplayInputEventKind.TextInput:
+                await _server.HandleTextInputCommitAsync(inputEvent.Text ?? string.Empty);
+                break;
+            case DisplayInputEventKind.TextEditing:
+                await _server.HandleTextInputPreeditAsync(inputEvent.Text ?? string.Empty, inputEvent.CursorBegin, inputEvent.CursorEnd);
+                break;
         }
     }
 

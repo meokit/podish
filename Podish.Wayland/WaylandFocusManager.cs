@@ -221,6 +221,7 @@ internal sealed class WaylandFocusManager
             }
 
             await _server.HandleKeyboardFocusSelectionChangedAsync();
+            await _server.HandleKeyboardFocusTextInputChangedAsync();
         }
 
         if (affected)
@@ -308,6 +309,7 @@ internal sealed class WaylandFocusManager
             sceneController.RaiseSurface(sceneSurfaceId);
 
         await _server.HandleKeyboardFocusSelectionChangedAsync();
+        await _server.HandleKeyboardFocusTextInputChangedAsync();
     }
 
     private async ValueTask DispatchPointerMotionAsync(WlSurfaceResource targetSurface, int surfaceX, int surfaceY, uint time)

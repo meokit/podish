@@ -66,6 +66,8 @@ internal static class Program
         ["zwp_primary_selection_device_v1"] = 1,
         ["zwp_primary_selection_offer_v1"] = 1,
         ["zwp_primary_selection_source_v1"] = 1,
+        ["zwp_text_input_manager_v3"] = 1,
+        ["zwp_text_input_v3"] = 1,
     };
 
     private static int Main(string[] args)

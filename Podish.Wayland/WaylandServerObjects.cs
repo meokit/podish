@@ -1052,6 +1052,203 @@ internal sealed class ZwpPrimarySelectionDeviceManagerV1Resource : WaylandResour
     }
 }
 
+internal sealed class ZwpTextInputManagerV3Resource : WaylandResource
+{
+    public ZwpTextInputManagerV3Resource(WaylandClient client, uint objectId, uint version)
+        : base(client, objectId, version, ZwpTextInputManagerV3Protocol.InterfaceName)
+    {
+    }
+
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => ZwpTextInputManagerV3Protocol.Requests;
+
+    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+                Destroy();
+                break;
+            case 1:
+            {
+                ZwpTextInputManagerV3GetTextInputRequest request = ZwpTextInputManagerV3Protocol.DecodeGetTextInput(message.Body, message.Fds);
+                WlSeatResource seat = Client.Objects.Require<WlSeatResource>(request.Seat);
+                Client.Register(new ZwpTextInputV3Resource(Client, request.Id, 1, seat));
+                Client.Server.HandleKeyboardFocusTextInputChangedAsync().AsTask().GetAwaiter().GetResult();
+                break;
+            }
+            default:
+                throw new WaylandProtocolException(ObjectId, 0,
+                    $"Unsupported zwp_text_input_manager_v3 opcode {message.Header.Opcode}.");
+        }
+
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class ZwpTextInputV3Resource : WaylandResource
+{
+    private bool _pendingEnabled;
+    private bool _hasPendingEnable;
+    private string _pendingSurroundingText = string.Empty;
+    private int _pendingCursor;
+    private int _pendingAnchor;
+    private ZwpTextInputV3ChangeCause _pendingChangeCause;
+    private ZwpTextInputV3ContentHint _pendingContentHint;
+    private ZwpTextInputV3ContentPurpose _pendingContentPurpose;
+    private WaylandRect? _pendingCursorRectangle;
+
+    public ZwpTextInputV3Resource(WaylandClient client, uint objectId, uint version, WlSeatResource seat)
+        : base(client, objectId, version, ZwpTextInputV3Protocol.InterfaceName)
+    {
+        Seat = seat;
+    }
+
+    public WlSeatResource Seat { get; }
+    public bool IsEnabled { get; private set; }
+    public bool IsFocused { get; private set; }
+    public bool HasActivePreedit { get; private set; }
+    public uint? FocusedSurfaceId { get; private set; }
+    public string SurroundingText { get; private set; } = string.Empty;
+    public int Cursor { get; private set; }
+    public int Anchor { get; private set; }
+    public ZwpTextInputV3ChangeCause ChangeCause { get; private set; }
+    public ZwpTextInputV3ContentHint ContentHint { get; private set; }
+    public ZwpTextInputV3ContentPurpose ContentPurpose { get; private set; }
+    public WaylandRect? CursorRectangle { get; private set; }
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => ZwpTextInputV3Protocol.Requests;
+
+    public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+                Destroy();
+                break;
+            case 1:
+                _pendingEnabled = true;
+                _hasPendingEnable = true;
+                break;
+            case 2:
+                _pendingEnabled = false;
+                _hasPendingEnable = true;
+                break;
+            case 3:
+            {
+                ZwpTextInputV3SetSurroundingTextRequest request = ZwpTextInputV3Protocol.DecodeSetSurroundingText(message.Body, message.Fds);
+                _pendingSurroundingText = request.Text;
+                _pendingCursor = request.Cursor;
+                _pendingAnchor = request.Anchor;
+                break;
+            }
+            case 4:
+                _pendingChangeCause = ZwpTextInputV3Protocol.DecodeSetTextChangeCause(message.Body, message.Fds).Cause;
+                break;
+            case 5:
+            {
+                ZwpTextInputV3SetContentTypeRequest request = ZwpTextInputV3Protocol.DecodeSetContentType(message.Body, message.Fds);
+                _pendingContentHint = request.Hint;
+                _pendingContentPurpose = request.Purpose;
+                break;
+            }
+            case 6:
+            {
+                ZwpTextInputV3SetCursorRectangleRequest request = ZwpTextInputV3Protocol.DecodeSetCursorRectangle(message.Body, message.Fds);
+                _pendingCursorRectangle = new WaylandRect(request.X, request.Y, request.Width, request.Height);
+                break;
+            }
+            case 7:
+                ApplyPendingState();
+                await Client.Server.HandleTextInputStateChangedAsync();
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0,
+                    $"Unsupported zwp_text_input_v3 opcode {message.Header.Opcode}.");
+        }
+    }
+
+    public async ValueTask SetFocusAsync(uint surfaceId)
+    {
+        if (FocusedSurfaceId == surfaceId && IsFocused)
+            return;
+
+        if (IsFocused && FocusedSurfaceId is uint oldSurfaceId)
+            await ZwpTextInputV3EventWriter.LeaveAsync(Client, ObjectId, oldSurfaceId);
+
+        IsFocused = true;
+        FocusedSurfaceId = surfaceId;
+        await ZwpTextInputV3EventWriter.EnterAsync(Client, ObjectId, surfaceId);
+        await Client.Server.HandleTextInputStateChangedAsync();
+    }
+
+    public async ValueTask ClearFocusAsync()
+    {
+        if (!IsFocused || FocusedSurfaceId is not uint surfaceId)
+            return;
+
+        IsFocused = false;
+        FocusedSurfaceId = null;
+        await ZwpTextInputV3EventWriter.LeaveAsync(Client, ObjectId, surfaceId);
+        await Client.Server.HandleTextInputStateChangedAsync();
+    }
+
+    public async ValueTask SendPreeditStringAsync(string text, int cursorBegin, int cursorEnd, uint serial)
+    {
+        if (!IsFocused || !IsEnabled)
+            return;
+
+        await ZwpTextInputV3EventWriter.PreeditStringAsync(Client, ObjectId, text, cursorBegin, cursorEnd);
+        await ZwpTextInputV3EventWriter.DoneAsync(Client, ObjectId, serial);
+    }
+
+    public async ValueTask SendCommitStringAsync(string text, uint serial)
+    {
+        if (!IsFocused || !IsEnabled)
+            return;
+
+        await ZwpTextInputV3EventWriter.PreeditStringAsync(Client, ObjectId, null, 0, 0);
+        await ZwpTextInputV3EventWriter.CommitStringAsync(Client, ObjectId, text);
+        await ZwpTextInputV3EventWriter.DoneAsync(Client, ObjectId, serial);
+    }
+
+    public void SetHasActivePreedit(bool active)
+    {
+        HasActivePreedit = active;
+    }
+
+    public override void Destroy()
+    {
+        if (Destroyed)
+            return;
+
+        if (IsFocused && FocusedSurfaceId is uint surfaceId)
+            ZwpTextInputV3EventWriter.LeaveAsync(Client, ObjectId, surfaceId).AsTask().GetAwaiter().GetResult();
+
+        IsFocused = false;
+        FocusedSurfaceId = null;
+        IsEnabled = false;
+        HasActivePreedit = false;
+        Client.Server.HandleTextInputStateChangedAsync().AsTask().GetAwaiter().GetResult();
+        base.Destroy();
+    }
+
+    private void ApplyPendingState()
+    {
+        if (_hasPendingEnable)
+        {
+            IsEnabled = _pendingEnabled;
+            _hasPendingEnable = false;
+        }
+
+        SurroundingText = _pendingSurroundingText;
+        Cursor = _pendingCursor;
+        Anchor = _pendingAnchor;
+        ChangeCause = _pendingChangeCause;
+        ContentHint = _pendingContentHint;
+        ContentPurpose = _pendingContentPurpose;
+        CursorRectangle = _pendingCursorRectangle;
+    }
+}
+
 internal sealed class WlShmPoolResource : WaylandResource
 {
     public WlShmPoolResource(WaylandClient client, uint objectId, uint version, LinuxFile fd, int size)
