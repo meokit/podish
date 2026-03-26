@@ -16,6 +16,25 @@ public readonly record struct WaylandCursorFrame(
     int HotspotX,
     int HotspotY);
 
+public enum WaylandSystemCursorShape
+{
+    Default,
+    Text,
+    Pointer,
+    Crosshair,
+    Move,
+    EwResize,
+    NsResize,
+    NwseResize,
+    NeswResize,
+    NotAllowed,
+    Wait,
+    Progress,
+    Grab,
+    Grabbing,
+    Help
+}
+
 public enum WaylandSceneHitKind
 {
     Surface,
@@ -133,6 +152,8 @@ public interface IWaylandFramePresenter
 public interface IWaylandCursorPresenter
 {
     ValueTask UpdateCursorAsync(ulong sceneSurfaceId, WaylandCursorFrame? cursor,
+        CancellationToken cancellationToken = default);
+    ValueTask UpdateSystemCursorAsync(WaylandSystemCursorShape? shape,
         CancellationToken cancellationToken = default);
 }
 

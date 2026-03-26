@@ -191,12 +191,7 @@ internal sealed class WlSurfaceResource : WaylandResource
         if (Client.Server.FramePresenter != null)
             await Client.Server.FramePresenter.PresentSurfaceAsync(SceneSurfaceId, null);
 
-        if (_current.Buffer != null && Client.Server.FramePresenter is IWaylandCursorPresenter cursorPresenter)
-        {
-            await cursorPresenter.UpdateCursorAsync(
-                SceneSurfaceId,
-                new WaylandCursorFrame(SceneSurfaceId, _current.Buffer.ToFrame(SceneSurfaceId), _cursorHotspotX, _cursorHotspotY));
-        }
+        await owner.RefreshCursorAsync();
     }
 
     public async ValueTask ClearCursorRoleAsync(WlPointerResource owner)
@@ -205,8 +200,15 @@ internal sealed class WlSurfaceResource : WaylandResource
             return;
 
         _cursorOwner = null;
-        if (Client.Server.FramePresenter is IWaylandCursorPresenter cursorPresenter)
-            await cursorPresenter.UpdateCursorAsync(SceneSurfaceId, null);
+        await owner.RefreshCursorAsync();
+    }
+
+    public WaylandCursorFrame? CreateCursorFrameForOwner(WlPointerResource owner)
+    {
+        if (_role != WlSurfaceRole.Cursor || !ReferenceEquals(_cursorOwner, owner) || _current.Buffer == null)
+            return null;
+
+        return new WaylandCursorFrame(SceneSurfaceId, _current.Buffer.ToFrame(SceneSurfaceId), _cursorHotspotX, _cursorHotspotY);
     }
 
     public void AttachSubsurface(WlSubsurfaceResource subsurface)
@@ -312,13 +314,8 @@ internal sealed class WlSurfaceResource : WaylandResource
 
         if (_role == WlSurfaceRole.Cursor)
         {
-            if (Client.Server.FramePresenter is IWaylandCursorPresenter cursorPresenter)
-            {
-                WaylandCursorFrame? cursor = _current.Buffer == null
-                    ? null
-                    : new WaylandCursorFrame(SceneSurfaceId, _current.Buffer.ToFrame(SceneSurfaceId), _cursorHotspotX, _cursorHotspotY);
-                await cursorPresenter.UpdateCursorAsync(SceneSurfaceId, cursor);
-            }
+            if (_cursorOwner != null)
+                await _cursorOwner.RefreshCursorAsync();
         }
         else if (Client.Server.FramePresenter != null)
         {
@@ -362,8 +359,8 @@ internal sealed class WlSurfaceResource : WaylandResource
             childSubsurface.UpdatePlacementRecursive();
         if (_enteredOutputIds.Count > 0)
             SyncOutputPresenceAsync(false).AsTask().GetAwaiter().GetResult();
-        if (_role == WlSurfaceRole.Cursor && Client.Server.FramePresenter is IWaylandCursorPresenter cursorPresenter)
-            cursorPresenter.UpdateCursorAsync(SceneSurfaceId, null).AsTask().GetAwaiter().GetResult();
+        if (_role == WlSurfaceRole.Cursor && _cursorOwner != null)
+            _cursorOwner.RefreshCursorAsync().AsTask().GetAwaiter().GetResult();
         else if (Client.Server.FramePresenter != null)
             Client.Server.FramePresenter.PresentSurfaceAsync(SceneSurfaceId, null).AsTask().GetAwaiter().GetResult();
         Client.Server.Focus.HandleSurfaceDestroyedAsync(SceneSurfaceId).AsTask().GetAwaiter().GetResult();
@@ -974,6 +971,10 @@ internal sealed class WlPointerResource : WaylandResource
 {
     private uint? _focusedSurfaceId;
     private uint? _cursorSurfaceId;
+    private uint? _lastEnterSerial;
+    private WpCursorShapeDeviceV1Resource? _cursorShapeDevice;
+    private WaylandSystemCursorShape? _clientSystemCursorShape;
+    private WaylandSystemCursorShape? _compositorCursorOverride;
 
     public WlPointerResource(WaylandClient client, uint objectId, uint version)
         : base(client, objectId, version, WlPointerProtocol.InterfaceName)
@@ -981,6 +982,7 @@ internal sealed class WlPointerResource : WaylandResource
     }
 
     public override IReadOnlyList<WaylandMessageMetadata> Requests => WlPointerProtocol.Requests;
+    public bool HasCursorShapeDevice => _cursorShapeDevice != null;
 
     public override ValueTask DispatchAsync(WaylandIncomingMessage message)
     {
@@ -1005,12 +1007,12 @@ internal sealed class WlPointerResource : WaylandResource
             oldCursorResource is WlSurfaceResource oldCursorSurface)
             await oldCursorSurface.ClearCursorRoleAsync(this);
 
+        _clientSystemCursorShape = null;
         _cursorSurfaceId = request.Surface == 0 ? null : request.Surface;
 
         if (request.Surface == 0)
         {
-            if (Client.Server.FramePresenter is IWaylandCursorPresenter cursorPresenter)
-                await cursorPresenter.UpdateCursorAsync(0, null);
+            await RefreshCursorAsync();
             return;
         }
 
@@ -1025,10 +1027,13 @@ internal sealed class WlPointerResource : WaylandResource
             if (_focusedSurfaceId is uint oldSurfaceId)
                 await WlPointerEventWriter.LeaveAsync(Client, ObjectId, Client.NextSerial(), oldSurfaceId);
 
-            await WlPointerEventWriter.EnterAsync(Client, ObjectId, Client.NextSerial(), surfaceId, surfaceX, surfaceY);
+            uint serial = Client.NextSerial();
+            await WlPointerEventWriter.EnterAsync(Client, ObjectId, serial, surfaceId, surfaceX, surfaceY);
             _focusedSurfaceId = surfaceId;
+            _lastEnterSerial = serial;
         }
 
+        await SetCompositorCursorOverrideAsync(null);
         await WlPointerEventWriter.MotionAsync(Client, ObjectId, time, surfaceX, surfaceY);
         if (Version >= 5)
             await WlPointerEventWriter.FrameAsync(Client, ObjectId);
@@ -1056,9 +1061,189 @@ internal sealed class WlPointerResource : WaylandResource
             return;
 
         _focusedSurfaceId = null;
+        _lastEnterSerial = null;
         await WlPointerEventWriter.LeaveAsync(Client, ObjectId, Client.NextSerial(), surfaceId);
+        await RefreshCursorAsync();
         if (Version >= 5)
             await WlPointerEventWriter.FrameAsync(Client, ObjectId);
+    }
+
+    public void AttachCursorShapeDevice(WpCursorShapeDeviceV1Resource device)
+    {
+        if (_cursorShapeDevice != null)
+            throw new WaylandProtocolException(ObjectId, 0, "wl_pointer already has a wp_cursor_shape_device_v1.");
+
+        _cursorShapeDevice = device;
+    }
+
+    public void DetachCursorShapeDevice(WpCursorShapeDeviceV1Resource device)
+    {
+        if (ReferenceEquals(_cursorShapeDevice, device))
+            _cursorShapeDevice = null;
+    }
+
+    public async ValueTask SetSystemCursorShapeAsync(uint serial, WpCursorShapeDeviceV1Shape shape)
+    {
+        if (_lastEnterSerial != serial)
+            return;
+
+        if (!IsSupportedShape(shape))
+            throw new WaylandProtocolException(ObjectId, (uint)WpCursorShapeDeviceV1Error.InvalidShape,
+                $"Unsupported cursor shape {shape}.");
+
+        if (_cursorSurfaceId is uint oldCursorSurfaceId &&
+            Client.Objects.TryGetValue(oldCursorSurfaceId, out WaylandResource? oldCursorResource) &&
+            oldCursorResource is WlSurfaceResource oldCursorSurface)
+            await oldCursorSurface.ClearCursorRoleAsync(this);
+
+        _cursorSurfaceId = null;
+        _clientSystemCursorShape = MapSystemCursorShape(shape);
+        await RefreshCursorAsync();
+    }
+
+    public async ValueTask SetCompositorCursorOverrideAsync(WaylandSystemCursorShape? shape)
+    {
+        if (_compositorCursorOverride == shape)
+            return;
+
+        _compositorCursorOverride = shape;
+        await RefreshCursorAsync();
+    }
+
+    public async ValueTask RefreshCursorAsync()
+    {
+        if (Client.Server.FramePresenter is not IWaylandCursorPresenter cursorPresenter)
+            return;
+
+        if (_compositorCursorOverride is WaylandSystemCursorShape overrideShape)
+        {
+            await cursorPresenter.UpdateSystemCursorAsync(overrideShape);
+            return;
+        }
+
+        if (_clientSystemCursorShape is WaylandSystemCursorShape systemShape)
+        {
+            await cursorPresenter.UpdateSystemCursorAsync(systemShape);
+            return;
+        }
+
+        if (_cursorSurfaceId is uint cursorSurfaceId &&
+            Client.Objects.TryGetValue(cursorSurfaceId, out WaylandResource? cursorResource) &&
+            cursorResource is WlSurfaceResource cursorSurface)
+        {
+            WaylandCursorFrame? cursorFrame = cursorSurface.CreateCursorFrameForOwner(this);
+            if (cursorFrame != null)
+            {
+                await cursorPresenter.UpdateCursorAsync(cursorSurface.SceneSurfaceId, cursorFrame);
+                return;
+            }
+        }
+
+        await cursorPresenter.UpdateSystemCursorAsync(WaylandSystemCursorShape.Default);
+    }
+
+    private static bool IsSupportedShape(WpCursorShapeDeviceV1Shape shape)
+    {
+        return Enum.IsDefined(shape);
+    }
+
+    private static WaylandSystemCursorShape MapSystemCursorShape(WpCursorShapeDeviceV1Shape shape)
+    {
+        return shape switch
+        {
+            WpCursorShapeDeviceV1Shape.Text or WpCursorShapeDeviceV1Shape.VerticalText => WaylandSystemCursorShape.Text,
+            WpCursorShapeDeviceV1Shape.Pointer => WaylandSystemCursorShape.Pointer,
+            WpCursorShapeDeviceV1Shape.Crosshair or WpCursorShapeDeviceV1Shape.Cell => WaylandSystemCursorShape.Crosshair,
+            WpCursorShapeDeviceV1Shape.Move or WpCursorShapeDeviceV1Shape.AllScroll => WaylandSystemCursorShape.Move,
+            WpCursorShapeDeviceV1Shape.EResize or WpCursorShapeDeviceV1Shape.WResize or WpCursorShapeDeviceV1Shape.EwResize or WpCursorShapeDeviceV1Shape.ColResize => WaylandSystemCursorShape.EwResize,
+            WpCursorShapeDeviceV1Shape.NResize or WpCursorShapeDeviceV1Shape.SResize or WpCursorShapeDeviceV1Shape.NsResize or WpCursorShapeDeviceV1Shape.RowResize => WaylandSystemCursorShape.NsResize,
+            WpCursorShapeDeviceV1Shape.NwResize or WpCursorShapeDeviceV1Shape.SeResize or WpCursorShapeDeviceV1Shape.NwseResize => WaylandSystemCursorShape.NwseResize,
+            WpCursorShapeDeviceV1Shape.NeResize or WpCursorShapeDeviceV1Shape.SwResize or WpCursorShapeDeviceV1Shape.NeswResize => WaylandSystemCursorShape.NeswResize,
+            WpCursorShapeDeviceV1Shape.NotAllowed or WpCursorShapeDeviceV1Shape.NoDrop => WaylandSystemCursorShape.NotAllowed,
+            WpCursorShapeDeviceV1Shape.Wait => WaylandSystemCursorShape.Wait,
+            WpCursorShapeDeviceV1Shape.Progress => WaylandSystemCursorShape.Progress,
+            WpCursorShapeDeviceV1Shape.Grab => WaylandSystemCursorShape.Grab,
+            WpCursorShapeDeviceV1Shape.Grabbing => WaylandSystemCursorShape.Grabbing,
+            WpCursorShapeDeviceV1Shape.Help => WaylandSystemCursorShape.Help,
+            _ => WaylandSystemCursorShape.Default
+        };
+    }
+}
+
+internal sealed class WpCursorShapeManagerV1Resource : WaylandResource
+{
+    public WpCursorShapeManagerV1Resource(WaylandClient client, uint objectId, uint version)
+        : base(client, objectId, version, WpCursorShapeManagerV1Protocol.InterfaceName)
+    {
+    }
+
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => WpCursorShapeManagerV1Protocol.Requests;
+
+    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+                Destroy();
+                break;
+            case 1:
+            {
+                WpCursorShapeManagerV1GetPointerRequest request = WpCursorShapeManagerV1Protocol.DecodeGetPointer(message.Body, message.Fds);
+                WlPointerResource pointer = Client.Objects.Require<WlPointerResource>(request.Pointer);
+                if (pointer.HasCursorShapeDevice)
+                    throw new WaylandProtocolException(request.Pointer, 0, "wl_pointer already has a wp_cursor_shape_device_v1.");
+                var device = Client.Register(new WpCursorShapeDeviceV1Resource(Client, request.CursorShapeDevice, 1, pointer));
+                pointer.AttachCursorShapeDevice(device);
+                break;
+            }
+            case 2:
+                throw new WaylandProtocolException(ObjectId, 0, "wp_cursor_shape_manager_v1 tablet tool cursors are not implemented.");
+            default:
+                throw new WaylandProtocolException(ObjectId, 0,
+                    $"Unsupported wp_cursor_shape_manager_v1 opcode {message.Header.Opcode}.");
+        }
+
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class WpCursorShapeDeviceV1Resource : WaylandResource
+{
+    public WpCursorShapeDeviceV1Resource(WaylandClient client, uint objectId, uint version, WlPointerResource pointer)
+        : base(client, objectId, version, WpCursorShapeDeviceV1Protocol.InterfaceName)
+    {
+        Pointer = pointer;
+    }
+
+    public WlPointerResource Pointer { get; }
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => WpCursorShapeDeviceV1Protocol.Requests;
+
+    public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+                Destroy();
+                break;
+            case 1:
+            {
+                WpCursorShapeDeviceV1SetShapeRequest request = WpCursorShapeDeviceV1Protocol.DecodeSetShape(message.Body, message.Fds);
+                await Pointer.SetSystemCursorShapeAsync(request.Serial, request.Shape);
+                break;
+            }
+            default:
+                throw new WaylandProtocolException(ObjectId, 0,
+                    $"Unsupported wp_cursor_shape_device_v1 opcode {message.Header.Opcode}.");
+        }
+    }
+
+    public override void Destroy()
+    {
+        if (Destroyed)
+            return;
+
+        Pointer.DetachCursorShapeDevice(this);
+        base.Destroy();
     }
 }
 

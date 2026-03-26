@@ -67,6 +67,7 @@ internal sealed class WaylandFocusManager
                 WaylandSceneHitKind.Surface,
                 desktopX - grabbedBounds.X,
                 desktopY - grabbedBounds.Y);
+            await SetCompositorCursorOverrideAsync(null);
             await DispatchPointerMotionAsync(grabbedSurface, desktopX - grabbedBounds.X, desktopY - grabbedBounds.Y, time);
             return;
         }
@@ -89,10 +90,12 @@ internal sealed class WaylandFocusManager
 
         if (hit.Kind == WaylandSceneHitKind.Surface)
         {
+            await SetCompositorCursorOverrideAsync(null);
             await DispatchPointerMotionAsync(surface, hit.SurfaceX, hit.SurfaceY, time);
             return;
         }
 
+        await SetCompositorCursorOverrideAsync(MapCursorOverride(hit.Kind, hit.ResizeEdges));
         await ClearClientPointerFocusAsync();
     }
 
@@ -183,6 +186,7 @@ internal sealed class WaylandFocusManager
         _focusedPointerSceneSurfaceId = null;
         _grabbedPointerSceneSurfaceId = null;
         _focusedSceneHit = default;
+        await SetCompositorCursorOverrideAsync(WaylandSystemCursorShape.Default);
         await ClearClientPointerFocusAsync();
     }
 
@@ -332,6 +336,35 @@ internal sealed class WaylandFocusManager
             return;
 
         await HandlePointerMotionAsync(_pointerDesktopX, _pointerDesktopY, 0);
+    }
+
+    private async ValueTask SetCompositorCursorOverrideAsync(WaylandSystemCursorShape? shape)
+    {
+        foreach (WaylandClient client in _server.Clients)
+        {
+            foreach (WlPointerResource pointer in client.Objects.All.OfType<WlPointerResource>())
+                await pointer.SetCompositorCursorOverrideAsync(shape);
+        }
+    }
+
+    private static WaylandSystemCursorShape MapCursorOverride(WaylandSceneHitKind kind, XdgToplevelResizeEdge edges)
+    {
+        return kind switch
+        {
+            WaylandSceneHitKind.Titlebar => WaylandSystemCursorShape.Default,
+            WaylandSceneHitKind.CloseButton => WaylandSystemCursorShape.Pointer,
+            WaylandSceneHitKind.MaximizeButton => WaylandSystemCursorShape.Pointer,
+            WaylandSceneHitKind.MinimizeButton => WaylandSystemCursorShape.Pointer,
+            WaylandSceneHitKind.ResizeBorder => edges switch
+            {
+                XdgToplevelResizeEdge.Left or XdgToplevelResizeEdge.Right => WaylandSystemCursorShape.EwResize,
+                XdgToplevelResizeEdge.Top or XdgToplevelResizeEdge.Bottom => WaylandSystemCursorShape.NsResize,
+                XdgToplevelResizeEdge.TopLeft or XdgToplevelResizeEdge.BottomRight => WaylandSystemCursorShape.NwseResize,
+                XdgToplevelResizeEdge.TopRight or XdgToplevelResizeEdge.BottomLeft => WaylandSystemCursorShape.NeswResize,
+                _ => WaylandSystemCursorShape.Default
+            },
+            _ => WaylandSystemCursorShape.Default
+        };
     }
 
     private async ValueTask FocusTopmostRemainingToplevelAsync()

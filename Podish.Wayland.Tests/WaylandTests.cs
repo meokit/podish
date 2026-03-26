@@ -89,6 +89,250 @@ public sealed class WaylandRuntimeTests
     }
 
     [Fact]
+    public async Task Runtime_CursorShapeGlobal_IsAdvertised()
+    {
+        using var env = new TestEnv();
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            var sent = new List<WaylandOutgoingMessage>();
+            var server = new WaylandServer();
+            var client = server.CreateClient(message =>
+            {
+                sent.Add(Clone(message));
+                return new ValueTask<int>(message.Buffer.Length);
+            });
+
+            await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
+            List<GlobalInfo> globals = ParseGlobals(sent, 2);
+
+            Assert.Contains(globals, static g => g.Interface == WpCursorShapeManagerV1Protocol.InterfaceName);
+        });
+    }
+
+    [Fact]
+    public async Task Runtime_CursorShapeGetPointer_DuplicateBindingRaisesProtocolError()
+    {
+        using var env = new TestEnv();
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            var sent = new List<WaylandOutgoingMessage>();
+            var server = new WaylandServer();
+            var client = server.CreateClient(message =>
+            {
+                sent.Add(Clone(message));
+                return new ValueTask<int>(message.Buffer.Length);
+            });
+
+            await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
+            var globals = ParseGlobals(sent, 2);
+            uint seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
+            uint cursorShapeName = globals.Single(x => x.Interface == WpCursorShapeManagerV1Protocol.InterfaceName).Name;
+
+            sent.Clear();
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(seatName);
+                writer.WriteString(WlSeatProtocol.InterfaceName);
+                writer.WriteUInt(7);
+                writer.WriteNewId(3);
+            });
+            await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(4));
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(cursorShapeName);
+                writer.WriteString(WpCursorShapeManagerV1Protocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(5);
+            });
+
+            await SendRequestAsync(client, 5, 1, writer =>
+            {
+                writer.WriteNewId(6);
+                writer.WriteObjectId(4);
+            });
+
+            await Assert.ThrowsAsync<WaylandProtocolException>(async () =>
+            {
+                await SendRequestAsync(client, 5, 1, writer =>
+                {
+                    writer.WriteNewId(7);
+                    writer.WriteObjectId(4);
+                });
+            });
+        });
+    }
+
+    [Fact]
+    public async Task Runtime_CursorShape_InvalidSerialIsIgnored()
+    {
+        using var env = new TestEnv();
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            var presenter = new RecordingFramePresenter();
+            var sent = new List<WaylandOutgoingMessage>();
+            var server = new WaylandServer(presenter);
+            var client = server.CreateClient(message =>
+            {
+                sent.Add(Clone(message));
+                return new ValueTask<int>(message.Buffer.Length);
+            });
+
+            await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
+            var globals = ParseGlobals(sent, 2);
+            uint seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
+            uint cursorShapeName = globals.Single(x => x.Interface == WpCursorShapeManagerV1Protocol.InterfaceName).Name;
+
+            sent.Clear();
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(seatName);
+                writer.WriteString(WlSeatProtocol.InterfaceName);
+                writer.WriteUInt(7);
+                writer.WriteNewId(3);
+            });
+            await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(4));
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(cursorShapeName);
+                writer.WriteString(WpCursorShapeManagerV1Protocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(5);
+            });
+            await SendRequestAsync(client, 5, 1, writer =>
+            {
+                writer.WriteNewId(6);
+                writer.WriteObjectId(4);
+            });
+
+            await SendRequestAsync(client, 6, 1, writer =>
+            {
+                writer.WriteUInt(999);
+                writer.WriteUInt((uint)WpCursorShapeDeviceV1Shape.Text);
+            });
+
+            Assert.Null(presenter.LastSystemCursor);
+        });
+    }
+
+    [Fact]
+    public async Task Runtime_CursorShape_SetShapeAndClientCursorSurface_LastRequestWins()
+    {
+        using var env = new TestEnv();
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            var presenter = new RecordingFramePresenter();
+            var sent = new List<WaylandOutgoingMessage>();
+            var server = new WaylandServer(presenter);
+            var client = server.CreateClient(message =>
+            {
+                sent.Add(Clone(message));
+                return new ValueTask<int>(message.Buffer.Length);
+            });
+
+            await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
+            var globals = ParseGlobals(sent, 2);
+            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            uint shmName = globals.Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
+            uint seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
+            uint cursorShapeName = globals.Single(x => x.Interface == WpCursorShapeManagerV1Protocol.InterfaceName).Name;
+
+            sent.Clear();
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(compositorName);
+                writer.WriteString(WlCompositorProtocol.InterfaceName);
+                writer.WriteUInt(4);
+                writer.WriteNewId(3);
+            });
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(shmName);
+                writer.WriteString(WlShmProtocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(4);
+            });
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(seatName);
+                writer.WriteString(WlSeatProtocol.InterfaceName);
+                writer.WriteUInt(7);
+                writer.WriteNewId(5);
+            });
+            await SendRequestAsync(client, 5, 0, writer => writer.WriteNewId(6));
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(cursorShapeName);
+                writer.WriteString(WpCursorShapeManagerV1Protocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(7);
+            });
+            await SendRequestAsync(client, 7, 1, writer =>
+            {
+                writer.WriteNewId(8);
+                writer.WriteObjectId(6);
+            });
+            await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(9));
+
+            sent.Clear();
+            await server.HandlePointerMotionAsync(10, 10, 1);
+            uint enterSerial = sent
+                .Select(message => new DecodedMessage(
+                    WaylandTestHelpers.DecodeHeader(message),
+                    message.Buffer[WaylandMessageHeader.SizeInBytes..]))
+                .Where(m => m.Header.ObjectId == 6 && m.Header.Opcode == 0)
+                .Select(m => new WaylandWireReader(m.Body).ReadUInt())
+                .Single();
+
+            await SendRequestAsync(client, 8, 1, writer =>
+            {
+                writer.WriteUInt(enterSerial);
+                writer.WriteUInt((uint)WpCursorShapeDeviceV1Shape.Text);
+            });
+            Assert.Equal(WaylandSystemCursorShape.Text, presenter.LastSystemCursor);
+
+            LinuxFile fd = env.CreateMemfdLikeFile("wl-cursor", new string('z', 64));
+            await SendRequestAsync(client, 4, 0, writer =>
+            {
+                writer.WriteNewId(10);
+                writer.WriteFd(fd);
+                writer.WriteInt(64);
+            });
+            await SendRequestAsync(client, 10, 0, writer =>
+            {
+                writer.WriteNewId(11);
+                writer.WriteInt(0);
+                writer.WriteInt(4);
+                writer.WriteInt(4);
+                writer.WriteInt(16);
+                writer.WriteUInt((uint)WlShmFormat.Argb8888);
+            });
+            await SendRequestAsync(client, 9, 1, writer =>
+            {
+                writer.WriteObjectId(11);
+                writer.WriteInt(0);
+                writer.WriteInt(0);
+            });
+            await SendRequestAsync(client, 9, 6, static _ => { });
+            await SendRequestAsync(client, 6, 0, writer =>
+            {
+                writer.WriteUInt(enterSerial);
+                writer.WriteUInt(9);
+                writer.WriteInt(1);
+                writer.WriteInt(2);
+            });
+            Assert.NotNull(presenter.LastCursor);
+
+            await SendRequestAsync(client, 8, 1, writer =>
+            {
+                writer.WriteUInt(enterSerial);
+                writer.WriteUInt((uint)WpCursorShapeDeviceV1Shape.Crosshair);
+            });
+            Assert.Equal(WaylandSystemCursorShape.Crosshair, presenter.LastSystemCursor);
+            fd.Close();
+        });
+    }
+
+    [Fact]
     public async Task Runtime_MinimalXdgShmFlowCompletes()
     {
         using var env = new TestEnv();
@@ -982,13 +1226,31 @@ internal static class WaylandTestHelpers
     }
 }
 
-internal sealed class RecordingFramePresenter : IWaylandFramePresenter
+internal sealed class RecordingFramePresenter : IWaylandFramePresenter, IWaylandCursorPresenter
 {
     public WaylandShmFrame? LastFrame { get; private set; }
+    public WaylandCursorFrame? LastCursor { get; private set; }
+    public WaylandSystemCursorShape? LastSystemCursor { get; private set; }
 
     public ValueTask PresentSurfaceAsync(ulong sceneSurfaceId, WaylandShmFrame? frame, CancellationToken cancellationToken = default)
     {
         LastFrame = frame;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask UpdateCursorAsync(ulong sceneSurfaceId, WaylandCursorFrame? cursor, CancellationToken cancellationToken = default)
+    {
+        LastCursor = cursor;
+        if (cursor != null)
+            LastSystemCursor = null;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask UpdateSystemCursorAsync(WaylandSystemCursorShape? shape, CancellationToken cancellationToken = default)
+    {
+        LastSystemCursor = shape;
+        if (shape != null)
+            LastCursor = null;
         return ValueTask.CompletedTask;
     }
 }
