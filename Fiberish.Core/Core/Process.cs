@@ -187,9 +187,10 @@ public class Process
 
     public void LoadExecutable(Dentry dentry, string guestPath, string[] args, string[] envs, Mount mount)
     {
-        UpdateProcessImage(guestPath, args);
+        var resolved = ResolveExecutableImage(dentry, guestPath, args, mount);
+        UpdateProcessImage(resolved.GuestPath, resolved.Args);
 
-        var res = ElfLoader.Load(dentry, guestPath, Syscalls, args, envs, mount);
+        var res = ElfLoader.Load(resolved.Dentry, resolved.GuestPath, Syscalls, resolved.Args, envs, resolved.Mount);
         Syscalls.BrkAddr = res.BrkAddr;
 
         // Setup CPU State
@@ -209,6 +210,66 @@ public class Process
 
         if (!engine.CopyToUser(spBase, stackData))
             throw new InvalidOperationException("Failed to write initial stack content to guest memory");
+    }
+
+    private (Dentry Dentry, string GuestPath, string[] Args, Mount Mount) ResolveExecutableImage(
+        Dentry dentry,
+        string guestPath,
+        string[] args,
+        Mount mount)
+    {
+        const int maxShebangDepth = 4;
+
+        for (var depth = 0; depth < maxShebangDepth; depth++)
+        {
+            var headerBuf = new byte[256];
+            var headerLen = 0;
+            if (dentry.Inode != null)
+            {
+                var file = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
+                headerLen = dentry.Inode.Read(file, headerBuf.AsSpan(), 0);
+                if (headerLen < 0) headerLen = 0;
+            }
+
+            if (headerLen < 2 || headerBuf[0] != '#' || headerBuf[1] != '!')
+                return (dentry, guestPath, args, mount);
+
+            var lineEnd = Array.IndexOf(headerBuf, (byte)'\n', 2);
+            if (lineEnd < 0) lineEnd = headerLen;
+
+            var shebangLine = Encoding.UTF8.GetString(headerBuf, 2, lineEnd - 2).Trim();
+            if (string.IsNullOrWhiteSpace(shebangLine))
+                throw new InvalidDataException($"Invalid shebang line in '{guestPath}'.");
+
+            var interpPath = shebangLine;
+            string? interpArg = null;
+            var splitIdx = shebangLine.IndexOfAny([' ', '\t']);
+            if (splitIdx >= 0)
+            {
+                interpPath = shebangLine[..splitIdx];
+                interpArg = shebangLine[(splitIdx + 1)..].Trim();
+                if (string.IsNullOrEmpty(interpArg))
+                    interpArg = null;
+            }
+
+            var (interpLoc, interpGuestPath) = Syscalls.ResolvePath(interpPath);
+            if (!interpLoc.IsValid)
+                throw new FileNotFoundException($"Interpreter not found in VFS: {interpPath}");
+
+            List<string> newArgs = [interpPath];
+            if (interpArg != null)
+                newArgs.Add(interpArg);
+            newArgs.Add(guestPath);
+            if (args.Length > 1)
+                newArgs.AddRange(args.Skip(1));
+
+            dentry = interpLoc.Dentry!;
+            guestPath = interpGuestPath;
+            args = [.. newArgs];
+            mount = interpLoc.Mount!;
+        }
+
+        throw new InvalidDataException($"Shebang recursion too deep for '{guestPath}'.");
     }
 
     internal void Exec(Dentry dentry, string guestPath, string[] args, string[] envs, Mount mount)

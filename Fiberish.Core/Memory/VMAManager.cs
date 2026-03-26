@@ -1367,9 +1367,7 @@ public class VMAManager
         byte perms,
         Engine engine)
     {
-        var hasCurrentMapping = ExternalPages.TryGet(pageStart, out var mappedPtr);
-        var mapsExistingPrivate = hasCurrentMapping && mappedPtr == existingPrivate;
-        var nonOwnerRefs = ExternalPageManager.GetRefCount(existingPrivate) - 1 - (mapsExistingPrivate ? 1 : 0);
+        var nonOwnerRefs = ExternalPageManager.GetRefCount(existingPrivate) - 1;
         if (nonOwnerRefs <= 0)
         {
             privateObject.MarkDirty(pageIndex);

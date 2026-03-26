@@ -182,6 +182,7 @@ public class KernelScheduler
 
     private void ReleaseDetachedTask(FiberTask task)
     {
+        task.CancelAsyncSyscallForRetirement();
         task.BeginTaskRetirement();
         task.Process.Syscalls?.UnregisterEngine(task.CPU);
         task.Status = FiberTaskStatus.Terminated;

@@ -45,6 +45,8 @@ public enum WakeReason
 
 public class FiberTask
 {
+    private const int FaultStackWordCount = 8;
+    private const int FaultBacktraceMaxFrames = 16;
     private static int _tidCounter;
     private readonly object _waitStateGate = new();
     private Action? _activeWaitContinuation;
@@ -57,6 +59,7 @@ public class FiberTask
     private bool _hasPendingAsyncSyscallCompletion;
     private Exception? _pendingAsyncSyscallError;
     private int _pendingAsyncSyscallResult;
+    private int _faultDiagnosticsDepth;
 
     private bool _pendingFaultFromInterrupt;
     private KernelSyncContext? _synchronizationContext;
@@ -196,6 +199,17 @@ public class FiberTask
     public void BeginTaskRetirement()
     {
         AsyncScope.Close();
+    }
+
+    internal void CancelAsyncSyscallForRetirement()
+    {
+        PendingSyscall = null;
+        InterruptingSignal = null;
+        Continuation = null;
+        _hasPendingAsyncSyscallCompletion = false;
+        _pendingAsyncSyscallError = null;
+        _pendingAsyncSyscallResult = 0;
+        _handlingAsyncSyscall = false;
     }
 
     public bool TryFinalizeTaskRetirement()
@@ -430,30 +444,7 @@ public class FiberTask
             Logger.LogInformation("Segment bases: FS=0x{Fs:X} GS=0x{Gs:X}",
                 CPU.GetSegBase(Seg.FS), CPU.GetSegBase(Seg.GS));
 
-            // Dump debug info
-            var stats = CPU.DumpStats();
-            Logger.LogInformation("CPU State: {CPU}", CPU.ToString());
-            if (!string.IsNullOrEmpty(stats)) Logger.LogInformation("Native Stats:\n{Stats}", stats);
-
-            var esp = CPU.RegRead(Reg.ESP);
-            var stackBuf = new byte[16];
-            // Fault diagnostics must not trigger nested page faults.
-            var copied = CPU.CopyFromUserNoFault(esp, stackBuf);
-            if (copied == stackBuf.Length)
-            {
-                var v0 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(0, 4));
-                var v1 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(4, 4));
-                var v2 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(8, 4));
-                var v3 = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(12, 4));
-                Logger.LogInformation("Stack Dump at ESP=0x{Esp:X}: [0x{V0:X8}, 0x{V1:X8}, 0x{V2:X8}, 0x{V3:X8}]",
-                    esp, v0, v1, v2, v3);
-            }
-            else
-            {
-                Logger.LogInformation("Stack Dump at ESP=0x{Esp:X}: <partial read {Copied}/{Total} bytes>",
-                    esp, copied, stackBuf.Length);
-            }
-
+            LogGuestFaultDiagnostics($"page fault at 0x{addr:X8} ({(isWrite ? "write" : "read")})", addr);
             Process.Mem.LogVmAreas();
 
             // Deliver fatal signal and yield
@@ -906,6 +897,7 @@ public class FiberTask
                 break;
             case DefaultSignalAction.Core:
                 Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: core/terminate", sig);
+                LogGuestFaultDiagnostics($"default action for fatal signal {sig}");
                 TerminateBySignal(sig, true);
                 break;
             case DefaultSignalAction.Stop:
@@ -1401,6 +1393,7 @@ public class FiberTask
 
         Logger.LogWarning("CPU Fault detected: {FaultName} at EIP=0x{EIP:X}. Delivering {Sig}.",
             faultName, CPU.Eip, sig);
+        LogGuestFaultDiagnostics($"cpu fault {faultName}");
 
         if (MustForceDefaultForSynchronousFault((int)sig))
         {
@@ -1452,6 +1445,163 @@ public class FiberTask
         }
 
         return false;
+    }
+
+    private void LogGuestFaultDiagnostics(string reason, uint? faultAddr = null)
+    {
+        var depth = Interlocked.Increment(ref _faultDiagnosticsDepth);
+        try
+        {
+            if (depth > 1)
+            {
+                Logger.LogWarning("[FaultDiag] Re-entrant guest fault diagnostics suppressed for TID={Tid}", TID);
+                return;
+            }
+
+            var eip = CPU.Eip;
+            var esp = CPU.RegRead(Reg.ESP);
+            var ebp = CPU.RegRead(Reg.EBP);
+            Logger.LogInformation("[FaultDiag] TID={Tid} PID={Pid} reason={Reason}", TID, PID, reason);
+            if (faultAddr.HasValue)
+                Logger.LogInformation("[FaultDiag] Fault address: 0x{Addr:X8}", faultAddr.Value);
+
+            Logger.LogInformation("CPU State: {CPU}", CPU.ToString());
+            var stats = CPU.DumpStats();
+            if (!string.IsNullOrEmpty(stats))
+                Logger.LogInformation("Native Stats:\n{Stats}", stats);
+
+            LogAddressContext("EIP", eip);
+            LogAddressContext("ESP", esp);
+            LogAddressContext("EBP", ebp);
+            LogInstructionBytes(eip);
+            LogStackWords(esp);
+            LogStackReturnCandidates(esp);
+            LogFramePointerBacktrace(ebp);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _faultDiagnosticsDepth);
+        }
+    }
+
+    private void LogInstructionBytes(uint eip)
+    {
+        var bytes = new byte[16];
+        var copied = CPU.CopyFromUserNoFault(eip, bytes);
+        if (copied <= 0)
+        {
+            Logger.LogInformation("[FaultDiag] Code bytes @EIP=0x{Eip:X8}: <unreadable>", eip);
+            return;
+        }
+
+        var hex = BitConverter.ToString(bytes, 0, copied).Replace("-", " ");
+        Logger.LogInformation("[FaultDiag] Code bytes @EIP=0x{Eip:X8}: {Bytes}", eip, hex);
+    }
+
+    private void LogStackWords(uint esp)
+    {
+        var stackBuf = new byte[FaultStackWordCount * sizeof(uint)];
+        var copied = CPU.CopyFromUserNoFault(esp, stackBuf);
+        if (copied <= 0)
+        {
+            Logger.LogInformation("[FaultDiag] Stack words @ESP=0x{Esp:X8}: <unreadable>", esp);
+            return;
+        }
+
+        var wordCount = copied / sizeof(uint);
+        var parts = new string[wordCount];
+        for (var i = 0; i < wordCount; i++)
+        {
+            var value = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(i * sizeof(uint), sizeof(uint)));
+            parts[i] = $"[{i}]={value:X8}";
+        }
+
+        Logger.LogInformation("[FaultDiag] Stack words @ESP=0x{Esp:X8}: {Words}", esp, string.Join(", ", parts));
+    }
+
+    private void LogStackReturnCandidates(uint esp)
+    {
+        var stackBuf = new byte[FaultStackWordCount * sizeof(uint)];
+        var copied = CPU.CopyFromUserNoFault(esp, stackBuf);
+        var wordCount = copied / sizeof(uint);
+        for (var i = 0; i < wordCount; i++)
+        {
+            var candidate = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(i * sizeof(uint), sizeof(uint)));
+            var vma = Process.Mem.FindVmArea(candidate);
+            if (vma == null || (vma.Perms & Protection.Exec) == 0)
+                continue;
+
+            Logger.LogInformation(
+                "[FaultDiag] Stack return candidate #{Index}: 0x{Addr:X8} -> {VmaName} [0x{Start:X8}-0x{End:X8}) perms={Perms}",
+                i, candidate, FormatVmaName(vma), vma.Start, vma.End, vma.Perms);
+        }
+    }
+
+    private void LogFramePointerBacktrace(uint ebp)
+    {
+        if (ebp == 0)
+        {
+            Logger.LogInformation("[FaultDiag] Frame-pointer backtrace: <EBP is zero>");
+            return;
+        }
+
+        var previousEbp = 0u;
+        for (var frame = 0; frame < FaultBacktraceMaxFrames; frame++)
+        {
+            var buf = new byte[8];
+            var copied = CPU.CopyFromUserNoFault(ebp, buf);
+            if (copied < buf.Length)
+            {
+                Logger.LogInformation(
+                    "[FaultDiag] Frame #{Frame}: EBP=0x{Ebp:X8} <unreadable {Copied}/{Total} bytes>",
+                    frame, ebp, copied, buf.Length);
+                break;
+            }
+
+            var nextEbp = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
+            var returnAddress = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(4, 4));
+            var vma = Process.Mem.FindVmArea(returnAddress);
+            Logger.LogInformation(
+                "[FaultDiag] Frame #{Frame}: EBP=0x{Ebp:X8} RET=0x{Ret:X8} -> {Location}",
+                frame, ebp, returnAddress, FormatAddressLocation(vma, returnAddress));
+
+            if (nextEbp == 0)
+            {
+                Logger.LogInformation("[FaultDiag] Frame #{Frame}: end of EBP chain", frame);
+                break;
+            }
+
+            if (nextEbp <= ebp || nextEbp == previousEbp)
+            {
+                Logger.LogInformation(
+                    "[FaultDiag] Frame #{Frame}: invalid next EBP 0x{NextEbp:X8}, stopping unwind",
+                    frame, nextEbp);
+                break;
+            }
+
+            previousEbp = ebp;
+            ebp = nextEbp;
+        }
+    }
+
+    private void LogAddressContext(string label, uint address)
+    {
+        var vma = Process.Mem.FindVmArea(address);
+        Logger.LogInformation("[FaultDiag] {Label}=0x{Addr:X8} -> {Location}",
+            label, address, FormatAddressLocation(vma, address));
+    }
+
+    private static string FormatAddressLocation(VmArea? vma, uint address)
+    {
+        if (vma == null)
+            return "<unmapped>";
+
+        return $"{FormatVmaName(vma)} [0x{vma.Start:X8}-0x{vma.End:X8}) perms={vma.Perms} offset=0x{(address - vma.Start):X}";
+    }
+
+    private static string FormatVmaName(VmArea vma)
+    {
+        return string.IsNullOrWhiteSpace(vma.Name) ? "<anonymous>" : vma.Name;
     }
 
     public readonly struct WaitToken
@@ -1540,6 +1690,8 @@ public class FiberTask
 
                 if (!cloneVm)
                 {
+                    newMem.RebuildExternalMappingsFromNative(newCpu, newMem.VMAs);
+
                     foreach (var vma in Process.Mem.VMAs)
                     {
                         if ((vma.Flags & MapFlags.Private) == 0 || vma.Length == 0) continue;
@@ -1769,6 +1921,14 @@ public class FiberTask
     {
         try
         {
+            if (IsRetiring || Status == FiberTaskStatus.Terminated || Exited)
+            {
+                PendingSyscall = null;
+                InterruptingSignal = null;
+                _handlingAsyncSyscall = false;
+                return;
+            }
+
             if (error != null)
             {
                 var ret = SyscallManager.MapSyscallExceptionToErrno(error);

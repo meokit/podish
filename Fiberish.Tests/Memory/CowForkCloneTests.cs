@@ -25,7 +25,9 @@ public class CowForkCloneTests
 
         // Fork-style clone: child gets independent VmAnonVma metadata with shared page pointers.
         var childMm = env.ParentMm.Clone();
-        using var childEngine = new Engine();
+        using var childEngine = env.ParentEngine.Clone(false);
+        childMm.RebuildExternalMappingsFromNative(childEngine, childMm.VMAs);
+        ReprotectPrivateMappings(childMm, childEngine);
         childEngine.PageFaultResolver =
             (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
 
@@ -76,7 +78,8 @@ public class CowForkCloneTests
         Assert.Null(parentVma.VmMapping);
 
         var childMm = parentMm.Clone();
-        using var childEngine = new Engine();
+        using var childEngine = parentEngine.Clone(false);
+        childMm.RebuildExternalMappingsFromNative(childEngine, childMm.VMAs);
         childEngine.PageFaultResolver =
             (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
 
@@ -192,7 +195,9 @@ public class CowForkCloneTests
         var allocatedBeforeClone = ExternalPageManager.GetAllocatedBytes();
 
         var childMm = parentMm.Clone();
-        using var childEngine = new Engine();
+        using var childEngine = parentEngine.Clone(false);
+        childMm.RebuildExternalMappingsFromNative(childEngine, childMm.VMAs);
+        ReprotectPrivateMappings(childMm, childEngine);
         childEngine.PageFaultResolver =
             (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
 
@@ -306,6 +311,16 @@ public class CowForkCloneTests
             var mapped = ParentMm.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
                 MapFlags.Private | MapFlags.Fixed, File, 0, "fork-cow", ParentEngine);
             Assert.Equal(addr, mapped);
+        }
+    }
+
+    private static void ReprotectPrivateMappings(VMAManager mm, Engine engine)
+    {
+        foreach (var vma in mm.VMAs)
+        {
+            if ((vma.Flags & MapFlags.Private) == 0 || vma.Length == 0) continue;
+            var readOnlyPerms = vma.Perms & ~Protection.Write;
+            mm.ReprotectNativeMappings(engine, vma.Start, vma.Length, readOnlyPerms, false);
         }
     }
 }
