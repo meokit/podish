@@ -13,6 +13,9 @@
         <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0"/>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0"/>
         <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0"/>
+        <PackageReference Include="SkiaSharp" Version="2.88.9"/>
+        <PackageReference Include="SkiaSharp.NativeAssets.macOS" Version="2.88.9" Condition="$([MSBuild]::IsOsPlatform('OSX'))"/>
+        <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="2.88.9" Condition="$([MSBuild]::IsOsPlatform('Linux'))"/>
         <PackageReference Include="Silk.NET.SDL" Version="2.23.0"/>
     </ItemGroup>
 
