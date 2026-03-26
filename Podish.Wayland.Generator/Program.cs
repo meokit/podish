@@ -62,6 +62,10 @@ internal static class Program
         ["zxdg_toplevel_decoration_v1"] = 1,
         ["wp_cursor_shape_manager_v1"] = 1,
         ["wp_cursor_shape_device_v1"] = 1,
+        ["zwp_primary_selection_device_manager_v1"] = 1,
+        ["zwp_primary_selection_device_v1"] = 1,
+        ["zwp_primary_selection_offer_v1"] = 1,
+        ["zwp_primary_selection_source_v1"] = 1,
     };
 
     private static int Main(string[] args)

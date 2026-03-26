@@ -461,6 +461,8 @@ public sealed class WaylandServer
     private readonly List<WlCallbackResource> _pendingFrameCallbacks = [];
     private readonly Dictionary<ulong, WlSurfaceResource> _sceneSurfaces = [];
     private readonly WaylandKeyboardKeymap _keyboardKeymap = new();
+    private WlDataSourceResource? _selectionSource;
+    private ZwpPrimarySelectionSourceV1Resource? _primarySelectionSource;
     private long _nextDisplayLeaseToken;
     private long _nextSceneSurfaceId;
 
@@ -521,6 +523,8 @@ public sealed class WaylandServer
             static (client, objectId, version) => client.Register(new WlShmResource(client, objectId, version)));
         Globals.Add(WlDataDeviceManagerProtocol.InterfaceName, WlDataDeviceManagerProtocol.Version,
             static (client, objectId, version) => client.Register(new WlDataDeviceManagerResource(client, objectId, version)));
+        Globals.Add(ZwpPrimarySelectionDeviceManagerV1Protocol.InterfaceName, ZwpPrimarySelectionDeviceManagerV1Protocol.Version,
+            static (client, objectId, version) => client.Register(new ZwpPrimarySelectionDeviceManagerV1Resource(client, objectId, version)));
         Globals.Add(WlSeatProtocol.InterfaceName, WlSeatProtocol.Version,
             static (client, objectId, version) => client.Register(new WlSeatResource(client, objectId, version)));
         Globals.Add(WlOutputProtocol.InterfaceName, WlOutputProtocol.Version,
@@ -553,6 +557,68 @@ public sealed class WaylandServer
         await Focus.HandleKeyboardKeyAsync(key, pressed, time);
     }
 
+    internal async ValueTask SetClipboardSelectionAsync(WlDataSourceResource? source)
+    {
+        if (ReferenceEquals(_selectionSource, source))
+            return;
+
+        WlDataSourceResource? previous = _selectionSource;
+        _selectionSource = source;
+
+        if (previous is { Destroyed: false } && !ReferenceEquals(previous, source))
+            await previous.SendCancelledAsync();
+
+        await BroadcastClipboardSelectionAsync();
+    }
+
+    internal async ValueTask SetPrimarySelectionAsync(ZwpPrimarySelectionSourceV1Resource? source)
+    {
+        if (ReferenceEquals(_primarySelectionSource, source))
+            return;
+
+        ZwpPrimarySelectionSourceV1Resource? previous = _primarySelectionSource;
+        _primarySelectionSource = source;
+
+        if (previous is { Destroyed: false } && !ReferenceEquals(previous, source))
+            await previous.SendCancelledAsync();
+
+        await BroadcastPrimarySelectionAsync();
+    }
+
+    internal ValueTask SendClipboardSelectionAsync(WlDataDeviceResource device)
+    {
+        return device.SendSelectionAsync(ReferenceEquals(device.Client, GetFocusedKeyboardClient()) ? _selectionSource : null);
+    }
+
+    internal ValueTask SendPrimarySelectionAsync(ZwpPrimarySelectionDeviceV1Resource device)
+    {
+        return device.SendSelectionAsync(ReferenceEquals(device.Client, GetFocusedKeyboardClient()) ? _primarySelectionSource : null);
+    }
+
+    internal async ValueTask HandleKeyboardFocusSelectionChangedAsync()
+    {
+        await BroadcastClipboardSelectionAsync();
+        await BroadcastPrimarySelectionAsync();
+    }
+
+    internal void HandleClipboardSourceDestroyed(WlDataSourceResource source)
+    {
+        if (!ReferenceEquals(_selectionSource, source))
+            return;
+
+        _selectionSource = null;
+        BroadcastClipboardSelectionAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    internal void HandlePrimarySelectionSourceDestroyed(ZwpPrimarySelectionSourceV1Resource source)
+    {
+        if (!ReferenceEquals(_primarySelectionSource, source))
+            return;
+
+        _primarySelectionSource = null;
+        BroadcastPrimarySelectionAsync().AsTask().GetAwaiter().GetResult();
+    }
+
     internal ulong AllocateSceneSurfaceId()
     {
         return unchecked((ulong)Interlocked.Increment(ref _nextSceneSurfaceId));
@@ -576,6 +642,43 @@ public sealed class WaylandServer
     internal bool TryGetSceneSurface(ulong sceneSurfaceId, [NotNullWhen(true)] out WlSurfaceResource? surface)
     {
         return _sceneSurfaces.TryGetValue(sceneSurfaceId, out surface);
+    }
+
+    private async ValueTask BroadcastClipboardSelectionAsync()
+    {
+        WaylandClient[] clients = [.. _clients];
+
+        foreach (WaylandClient client in clients)
+        {
+            WlDataDeviceResource[] devices = [.. client.Objects.All.OfType<WlDataDeviceResource>()];
+
+            foreach (WlDataDeviceResource device in devices)
+                await SendClipboardSelectionAsync(device);
+        }
+    }
+
+    private async ValueTask BroadcastPrimarySelectionAsync()
+    {
+        WaylandClient[] clients = [.. _clients];
+
+        foreach (WaylandClient client in clients)
+        {
+            ZwpPrimarySelectionDeviceV1Resource[] devices = [.. client.Objects.All.OfType<ZwpPrimarySelectionDeviceV1Resource>()];
+
+            foreach (ZwpPrimarySelectionDeviceV1Resource device in devices)
+                await SendPrimarySelectionAsync(device);
+        }
+    }
+
+    private WaylandClient? GetFocusedKeyboardClient()
+    {
+        if (Focus.FocusedKeyboardSceneSurfaceId is not ulong sceneSurfaceId)
+            return null;
+
+        if (!TryGetSceneSurface(sceneSurfaceId, out WlSurfaceResource? surface))
+            return null;
+
+        return surface.Client;
     }
 
     internal void EnqueueFrameCallbacks(IEnumerable<WlCallbackResource> callbacks)
@@ -625,6 +728,7 @@ public sealed class WaylandClient
     private readonly Func<WaylandOutgoingMessage, ValueTask<int>> _sendAsync;
     private readonly WaylandDispatcher _dispatcher;
     private uint _nextSerial = 1;
+    private uint _nextServerObjectId = 0xfeffffff;
 
     public WaylandClient(WaylandServer server, Func<WaylandOutgoingMessage, ValueTask<int>> sendAsync)
     {
@@ -639,6 +743,18 @@ public sealed class WaylandClient
     public WaylandObjectTable Objects { get; }
 
     public uint NextSerial() => _nextSerial++;
+
+    public uint AllocateServerObjectId()
+    {
+        while (_nextServerObjectId < uint.MaxValue)
+        {
+            uint candidate = ++_nextServerObjectId;
+            if (!Objects.TryGet(candidate, out _))
+                return candidate;
+        }
+
+        throw new InvalidOperationException("No free server-side Wayland object ids remain.");
+    }
 
     public T Register<T>(T resource) where T : WaylandResource
     {

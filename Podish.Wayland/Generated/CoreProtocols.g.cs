@@ -3,6 +3,7 @@
 // Source protocol: xdg_shell (/Users/jiangyiheng/repos/x86emu/spec/wayland/xdg-shell.xml)
 // Source protocol: xdg_decoration_unstable_v1 (/Users/jiangyiheng/repos/x86emu/spec/wayland/xdg-decoration-unstable-v1.xml)
 // Source protocol: cursor_shape_v1 (/Users/jiangyiheng/repos/x86emu/spec/wayland/cursor-shape-v1.xml)
+// Source protocol: wp_primary_selection_unstable_v1 (/Users/jiangyiheng/repos/x86emu/spec/wayland/primary-selection-unstable-v1.xml)
 #nullable enable
 namespace Podish.Wayland;
 
@@ -2082,4 +2083,173 @@ public static class WpCursorShapeDeviceV1Protocol
 }
 
 public readonly record struct WpCursorShapeDeviceV1SetShapeRequest(uint Serial, WpCursorShapeDeviceV1Shape Shape);
+
+public static class ZwpPrimarySelectionDeviceManagerV1Protocol
+{
+    public const string InterfaceName = "zwp_primary_selection_device_manager_v1";
+    public const uint Version = 1;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "create_source", 0, 1, [
+            new WaylandArgumentMetadata("id", WaylandArgKind.NewId, "zwp_primary_selection_source_v1")
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "get_device", 1, 1, [
+            new WaylandArgumentMetadata("id", WaylandArgKind.NewId, "zwp_primary_selection_device_v1"),
+            new WaylandArgumentMetadata("seat", WaylandArgKind.Object, "wl_seat")
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "destroy", 2, 1, [])
+    ]);
+
+    public static ZwpPrimarySelectionDeviceManagerV1CreateSourceRequest DecodeCreateSource(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        var request = new ZwpPrimarySelectionDeviceManagerV1CreateSourceRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwpPrimarySelectionDeviceManagerV1GetDeviceRequest DecodeGetDevice(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        uint arg1 = reader.ReadObjectId();
+        var request = new ZwpPrimarySelectionDeviceManagerV1GetDeviceRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZwpPrimarySelectionDeviceManagerV1CreateSourceRequest(uint Id);
+public readonly record struct ZwpPrimarySelectionDeviceManagerV1GetDeviceRequest(uint Id, uint Seat);
+
+public static class ZwpPrimarySelectionDeviceV1Protocol
+{
+    public const string InterfaceName = "zwp_primary_selection_device_v1";
+    public const uint Version = 1;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "set_selection", 0, 1, [
+            new WaylandArgumentMetadata("source", WaylandArgKind.Object, "zwp_primary_selection_source_v1", true),
+            new WaylandArgumentMetadata("serial", WaylandArgKind.Uint)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "destroy", 1, 1, [])
+    ]);
+
+    public static ZwpPrimarySelectionDeviceV1SetSelectionRequest DecodeSetSelection(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadObjectId();
+        uint arg1 = reader.ReadUInt();
+        var request = new ZwpPrimarySelectionDeviceV1SetSelectionRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZwpPrimarySelectionDeviceV1SetSelectionRequest(uint Source, uint Serial);
+
+public static class ZwpPrimarySelectionDeviceV1EventWriter
+{
+    public static ValueTask DataOfferAsync(WaylandClient client, uint objectId, uint offer)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteNewId(offer);
+        });
+    }
+
+    public static ValueTask SelectionAsync(WaylandClient client, uint objectId, uint id)
+    {
+        return client.SendEventAsync(objectId, 1, writer =>
+        {
+            writer.WriteObjectId(id);
+        });
+    }
+
+}
+
+public static class ZwpPrimarySelectionOfferV1Protocol
+{
+    public const string InterfaceName = "zwp_primary_selection_offer_v1";
+    public const uint Version = 1;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "receive", 0, 1, [
+            new WaylandArgumentMetadata("mime_type", WaylandArgKind.String),
+            new WaylandArgumentMetadata("fd", WaylandArgKind.Fd)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "destroy", 1, 1, [])
+    ]);
+
+    public static ZwpPrimarySelectionOfferV1ReceiveRequest DecodeReceive(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        string arg0 = reader.ReadString() ?? string.Empty;
+        LinuxFile arg1 = reader.ReadFd();
+        var request = new ZwpPrimarySelectionOfferV1ReceiveRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZwpPrimarySelectionOfferV1ReceiveRequest(string MimeType, LinuxFile Fd);
+
+public static class ZwpPrimarySelectionOfferV1EventWriter
+{
+    public static ValueTask OfferAsync(WaylandClient client, uint objectId, string mimeType)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteString(mimeType);
+        });
+    }
+
+}
+
+public static class ZwpPrimarySelectionSourceV1Protocol
+{
+    public const string InterfaceName = "zwp_primary_selection_source_v1";
+    public const uint Version = 1;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "offer", 0, 1, [
+            new WaylandArgumentMetadata("mime_type", WaylandArgKind.String)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "destroy", 1, 1, [])
+    ]);
+
+    public static ZwpPrimarySelectionSourceV1OfferRequest DecodeOffer(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        string arg0 = reader.ReadString() ?? string.Empty;
+        var request = new ZwpPrimarySelectionSourceV1OfferRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZwpPrimarySelectionSourceV1OfferRequest(string MimeType);
+
+public static class ZwpPrimarySelectionSourceV1EventWriter
+{
+    public static ValueTask SendAsync(WaylandClient client, uint objectId, string mimeType, LinuxFile fd)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteString(mimeType);
+            writer.WriteFd(fd);
+        });
+    }
+
+    public static ValueTask CancelledAsync(WaylandClient client, uint objectId)
+    {
+        return client.SendEventAsync(objectId, 1, static _ => { });
+    }
+
+}
 

@@ -32,6 +32,8 @@ internal sealed class WlDisplayResource : WaylandResource
             default:
                 throw new WaylandProtocolException(ObjectId, 0, $"Unsupported wl_display opcode {message.Header.Opcode}.");
         }
+
+        return;
     }
 }
 
@@ -83,7 +85,7 @@ internal sealed class WlCallbackResource : WaylandResource
 
     public override IReadOnlyList<WaylandMessageMetadata> Requests => WlCallbackProtocol.Requests;
 
-    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
     {
         throw new WaylandProtocolException(ObjectId, 0, "wl_callback has no requests.");
     }
@@ -105,7 +107,7 @@ internal sealed class WlCompositorResource : WaylandResource
 
     public override IReadOnlyList<WaylandMessageMetadata> Requests => WlCompositorProtocol.Requests;
 
-    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
     {
         switch (message.Header.Opcode)
         {
@@ -123,7 +125,7 @@ internal sealed class WlCompositorResource : WaylandResource
             }
         }
 
-        return ValueTask.CompletedTask;
+        return;
     }
 }
 
@@ -595,14 +597,23 @@ internal sealed class WlShmResource : WaylandResource
 
 internal sealed class WlDataOfferResource : WaylandResource
 {
-    public WlDataOfferResource(WaylandClient client, uint objectId, uint version)
+    private WlDataSourceResource? _source;
+
+    public WlDataOfferResource(WaylandClient client, uint objectId, uint version, WlDataSourceResource source)
         : base(client, objectId, version, WlDataOfferProtocol.InterfaceName)
     {
+        _source = source;
     }
 
+    public WlDataSourceResource? Source => _source;
     public override IReadOnlyList<WaylandMessageMetadata> Requests => WlDataOfferProtocol.Requests;
 
-    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    public void Invalidate()
+    {
+        _source = null;
+    }
+
+    public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
     {
         switch (message.Header.Opcode)
         {
@@ -612,7 +623,21 @@ internal sealed class WlDataOfferResource : WaylandResource
             case 1:
             {
                 var request = WlDataOfferProtocol.DecodeReceive(message.Body, message.Fds);
-                request.Fd.Close();
+                if (_source == null || _source.Destroyed || !_source.MimeTypes.Contains(request.MimeType, StringComparer.Ordinal))
+                {
+                    request.Fd.Close();
+                    break;
+                }
+
+                request.Fd.Get();
+                try
+                {
+                    await WlDataSourceEventWriter.SendAsync(_source.Client, _source.ObjectId, request.MimeType, request.Fd);
+                }
+                finally
+                {
+                    request.Fd.Close();
+                }
                 break;
             }
             case 2:
@@ -626,7 +651,7 @@ internal sealed class WlDataOfferResource : WaylandResource
                 throw new WaylandProtocolException(ObjectId, 0, $"Unsupported wl_data_offer opcode {message.Header.Opcode}.");
         }
 
-        return ValueTask.CompletedTask;
+        return;
     }
 }
 
@@ -664,10 +689,26 @@ internal sealed class WlDataSourceResource : WaylandResource
 
         return ValueTask.CompletedTask;
     }
+
+    public ValueTask SendCancelledAsync()
+    {
+        return WlDataSourceEventWriter.CancelledAsync(Client, ObjectId);
+    }
+
+    public override void Destroy()
+    {
+        if (Destroyed)
+            return;
+
+        Client.Server.HandleClipboardSourceDestroyed(this);
+        base.Destroy();
+    }
 }
 
 internal sealed class WlDataDeviceResource : WaylandResource
 {
+    private uint? _selectionOfferId;
+
     public WlDataDeviceResource(WaylandClient client, uint objectId, uint version, WlSeatResource seat)
         : base(client, objectId, version, WlDataDeviceProtocol.InterfaceName)
     {
@@ -679,10 +720,28 @@ internal sealed class WlDataDeviceResource : WaylandResource
 
     public ValueTask SendInitialSelectionAsync()
     {
-        return WlDataDeviceEventWriter.SelectionAsync(Client, ObjectId, 0);
+        return Client.Server.SendClipboardSelectionAsync(this);
     }
 
-    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    public async ValueTask SendSelectionAsync(WlDataSourceResource? source)
+    {
+        DestroySelectionOffer();
+        if (source == null || source.Destroyed || source.MimeTypes.Count == 0)
+        {
+            await WlDataDeviceEventWriter.SelectionAsync(Client, ObjectId, 0);
+            return;
+        }
+
+        uint offerId = Client.AllocateServerObjectId();
+        _selectionOfferId = offerId;
+        var offer = Client.Register(new WlDataOfferResource(Client, offerId, 3, source));
+        await WlDataDeviceEventWriter.DataOfferAsync(Client, ObjectId, offerId);
+        foreach (string mimeType in source.MimeTypes.Distinct(StringComparer.Ordinal))
+            await WlDataOfferEventWriter.OfferAsync(Client, offer.ObjectId, mimeType);
+        await WlDataDeviceEventWriter.SelectionAsync(Client, ObjectId, offerId);
+    }
+
+    public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
     {
         switch (message.Header.Opcode)
         {
@@ -699,9 +758,11 @@ internal sealed class WlDataDeviceResource : WaylandResource
             case 1:
             {
                 var request = WlDataDeviceProtocol.DecodeSetSelection(message.Body, message.Fds);
-                if (request.Source != 0)
-                    Client.Objects.Require<WlDataSourceResource>(request.Source);
-                break;
+                WlDataSourceResource? source = request.Source == 0
+                    ? null
+                    : Client.Objects.Require<WlDataSourceResource>(request.Source);
+                await Client.Server.SetClipboardSelectionAsync(source);
+                return;
             }
             case 2:
                 Destroy();
@@ -710,7 +771,26 @@ internal sealed class WlDataDeviceResource : WaylandResource
                 throw new WaylandProtocolException(ObjectId, 0, $"Unsupported wl_data_device opcode {message.Header.Opcode}.");
         }
 
-        return ValueTask.CompletedTask;
+        return;
+    }
+
+    public override void Destroy()
+    {
+        if (Destroyed)
+            return;
+
+        DestroySelectionOffer();
+        base.Destroy();
+    }
+
+    private void DestroySelectionOffer()
+    {
+        if (_selectionOfferId is not uint offerId)
+            return;
+
+        _selectionOfferId = null;
+        if (Client.Objects.TryGet(offerId, out WaylandResource? resource) && resource is WlDataOfferResource offer)
+            offer.Invalidate();
     }
 }
 
@@ -723,7 +803,7 @@ internal sealed class WlDataDeviceManagerResource : WaylandResource
 
     public override IReadOnlyList<WaylandMessageMetadata> Requests => WlDataDeviceManagerProtocol.Requests;
 
-    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
     {
         switch (message.Header.Opcode)
         {
@@ -744,6 +824,228 @@ internal sealed class WlDataDeviceManagerResource : WaylandResource
             default:
                 throw new WaylandProtocolException(ObjectId, 0,
                     $"Unsupported wl_data_device_manager opcode {message.Header.Opcode}.");
+        }
+
+        await ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class ZwpPrimarySelectionOfferV1Resource : WaylandResource
+{
+    private ZwpPrimarySelectionSourceV1Resource? _source;
+
+    public ZwpPrimarySelectionOfferV1Resource(
+        WaylandClient client,
+        uint objectId,
+        uint version,
+        ZwpPrimarySelectionSourceV1Resource source)
+        : base(client, objectId, version, ZwpPrimarySelectionOfferV1Protocol.InterfaceName)
+    {
+        _source = source;
+    }
+
+    public ZwpPrimarySelectionSourceV1Resource? Source => _source;
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => ZwpPrimarySelectionOfferV1Protocol.Requests;
+
+    public void Invalidate()
+    {
+        _source = null;
+    }
+
+    public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+            {
+                var request = ZwpPrimarySelectionOfferV1Protocol.DecodeReceive(message.Body, message.Fds);
+                if (_source == null || _source.Destroyed || !_source.MimeTypes.Contains(request.MimeType, StringComparer.Ordinal))
+                {
+                    request.Fd.Close();
+                    break;
+                }
+
+                request.Fd.Get();
+                try
+                {
+                    await ZwpPrimarySelectionSourceV1EventWriter.SendAsync(_source.Client, _source.ObjectId, request.MimeType, request.Fd);
+                }
+                finally
+                {
+                    request.Fd.Close();
+                }
+                break;
+            }
+            case 1:
+                Destroy();
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0,
+                    $"Unsupported zwp_primary_selection_offer_v1 opcode {message.Header.Opcode}.");
+        }
+    }
+}
+
+internal sealed class ZwpPrimarySelectionSourceV1Resource : WaylandResource
+{
+    public ZwpPrimarySelectionSourceV1Resource(WaylandClient client, uint objectId, uint version)
+        : base(client, objectId, version, ZwpPrimarySelectionSourceV1Protocol.InterfaceName)
+    {
+    }
+
+    public List<string> MimeTypes { get; } = [];
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => ZwpPrimarySelectionSourceV1Protocol.Requests;
+
+    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+            {
+                string mimeType = ZwpPrimarySelectionSourceV1Protocol.DecodeOffer(message.Body, message.Fds).MimeType;
+                if (!string.IsNullOrWhiteSpace(mimeType))
+                    MimeTypes.Add(mimeType);
+                break;
+            }
+            case 1:
+                Destroy();
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0,
+                    $"Unsupported zwp_primary_selection_source_v1 opcode {message.Header.Opcode}.");
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask SendCancelledAsync()
+    {
+        return ZwpPrimarySelectionSourceV1EventWriter.CancelledAsync(Client, ObjectId);
+    }
+
+    public override void Destroy()
+    {
+        if (Destroyed)
+            return;
+
+        Client.Server.HandlePrimarySelectionSourceDestroyed(this);
+        base.Destroy();
+    }
+}
+
+internal sealed class ZwpPrimarySelectionDeviceV1Resource : WaylandResource
+{
+    private uint? _selectionOfferId;
+
+    public ZwpPrimarySelectionDeviceV1Resource(WaylandClient client, uint objectId, uint version, WlSeatResource seat)
+        : base(client, objectId, version, ZwpPrimarySelectionDeviceV1Protocol.InterfaceName)
+    {
+        Seat = seat;
+    }
+
+    public WlSeatResource Seat { get; }
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => ZwpPrimarySelectionDeviceV1Protocol.Requests;
+
+    public ValueTask SendInitialSelectionAsync()
+    {
+        return Client.Server.SendPrimarySelectionAsync(this);
+    }
+
+    public async ValueTask SendSelectionAsync(ZwpPrimarySelectionSourceV1Resource? source)
+    {
+        DestroySelectionOffer();
+        if (source == null || source.Destroyed || source.MimeTypes.Count == 0)
+        {
+            await ZwpPrimarySelectionDeviceV1EventWriter.SelectionAsync(Client, ObjectId, 0);
+            return;
+        }
+
+        uint offerId = Client.AllocateServerObjectId();
+        _selectionOfferId = offerId;
+        var offer = Client.Register(new ZwpPrimarySelectionOfferV1Resource(Client, offerId, 1, source));
+        await ZwpPrimarySelectionDeviceV1EventWriter.DataOfferAsync(Client, ObjectId, offerId);
+        foreach (string mimeType in source.MimeTypes.Distinct(StringComparer.Ordinal))
+            await ZwpPrimarySelectionOfferV1EventWriter.OfferAsync(Client, offer.ObjectId, mimeType);
+        await ZwpPrimarySelectionDeviceV1EventWriter.SelectionAsync(Client, ObjectId, offerId);
+    }
+
+    public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+            {
+                var request = ZwpPrimarySelectionDeviceV1Protocol.DecodeSetSelection(message.Body, message.Fds);
+                ZwpPrimarySelectionSourceV1Resource? source = request.Source == 0
+                    ? null
+                    : Client.Objects.Require<ZwpPrimarySelectionSourceV1Resource>(request.Source);
+                await Client.Server.SetPrimarySelectionAsync(source);
+                return;
+            }
+            case 1:
+                Destroy();
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0,
+                    $"Unsupported zwp_primary_selection_device_v1 opcode {message.Header.Opcode}.");
+        }
+
+        await ValueTask.CompletedTask;
+    }
+
+    public override void Destroy()
+    {
+        if (Destroyed)
+            return;
+
+        DestroySelectionOffer();
+        base.Destroy();
+    }
+
+    private void DestroySelectionOffer()
+    {
+        if (_selectionOfferId is not uint offerId)
+            return;
+
+        _selectionOfferId = null;
+        if (Client.Objects.TryGet(offerId, out WaylandResource? resource) && resource is ZwpPrimarySelectionOfferV1Resource offer)
+            offer.Invalidate();
+    }
+}
+
+internal sealed class ZwpPrimarySelectionDeviceManagerV1Resource : WaylandResource
+{
+    public ZwpPrimarySelectionDeviceManagerV1Resource(WaylandClient client, uint objectId, uint version)
+        : base(client, objectId, version, ZwpPrimarySelectionDeviceManagerV1Protocol.InterfaceName)
+    {
+    }
+
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => ZwpPrimarySelectionDeviceManagerV1Protocol.Requests;
+
+    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+            {
+                var request = ZwpPrimarySelectionDeviceManagerV1Protocol.DecodeCreateSource(message.Body, message.Fds);
+                Client.Register(new ZwpPrimarySelectionSourceV1Resource(Client, request.Id, 1));
+                break;
+            }
+            case 1:
+            {
+                var request = ZwpPrimarySelectionDeviceManagerV1Protocol.DecodeGetDevice(message.Body, message.Fds);
+                WlSeatResource seat = Client.Objects.Require<WlSeatResource>(request.Seat);
+                var device = Client.Register(new ZwpPrimarySelectionDeviceV1Resource(Client, request.Id, 1, seat));
+                device.SendInitialSelectionAsync().AsTask().GetAwaiter().GetResult();
+                break;
+            }
+            case 2:
+                Destroy();
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0,
+                    $"Unsupported zwp_primary_selection_device_manager_v1 opcode {message.Header.Opcode}.");
         }
 
         return ValueTask.CompletedTask;
