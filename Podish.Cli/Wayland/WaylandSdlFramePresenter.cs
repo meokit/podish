@@ -90,6 +90,15 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
         return ValueTask.CompletedTask;
     }
 
+    public ValueTask UpdateSystemCursorAsync(WaylandSystemCursorShape? shape, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _enqueueCommand(new WaylandDisplayCommand(
+            shape.HasValue ? WaylandDisplayCommandKind.SetSystemCursor : WaylandDisplayCommandKind.ClearCursor,
+            SystemCursor: shape));
+        return ValueTask.CompletedTask;
+    }
+
     public bool TryGetSurfaceAt(int desktopX, int desktopY, out WaylandSurfaceHit hit)
     {
         if (TryGetSceneHitAt(desktopX, desktopY, out WaylandSceneHit sceneHit))

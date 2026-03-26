@@ -31,6 +31,7 @@ internal enum WaylandDisplayCommandKind
     RaiseSurface,
     RemoveSurface,
     SetCursor,
+    SetSystemCursor,
     ClearCursor,
     Shutdown
 }
@@ -41,6 +42,7 @@ internal readonly record struct WaylandDisplayCommand(
     WaylandShmFrame Frame = default,
     WaylandSurfaceBounds Bounds = default,
     WaylandCursorFrame Cursor = default,
+    WaylandSystemCursorShape? SystemCursor = null,
     WaylandDecorationSceneState Decoration = default,
     bool Hidden = false);
 

@@ -79,6 +79,22 @@ public readonly record struct DisplayCursorDescriptor(
     byte[] Pixels,
     int Pitch);
 
+public enum DisplaySystemCursor
+{
+    Arrow = 0,
+    IBeam = 1,
+    Wait = 2,
+    Crosshair = 3,
+    WaitArrow = 4,
+    SizeNwse = 5,
+    SizeNesw = 6,
+    SizeWe = 7,
+    SizeNs = 8,
+    SizeAll = 9,
+    No = 10,
+    Hand = 11
+}
+
 public interface IDisplayBackend : IDisposable
 {
     string Name { get; }
@@ -98,6 +114,7 @@ public interface IDisplayOutput : IDisposable
     IReadOnlyList<DisplayInputEvent> DrainInputEvents();
     bool TryDequeueResize(out DisplaySize size);
     void SetCursor(DisplayCursorDescriptor cursor);
+    void SetSystemCursor(DisplaySystemCursor cursor);
     void ClearCursor();
     void Present();
 }

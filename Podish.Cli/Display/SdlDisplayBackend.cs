@@ -62,6 +62,8 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
     private readonly List<DisplayInputEvent> _pendingInputEvents = [];
     private readonly Queue<DisplaySize> _pendingResizeEvents = [];
     private Cursor* _cursor;
+    private DisplaySystemCursor? _systemCursor;
+    private bool _cursorIsSystem;
     private bool _disposed;
     private bool _isClosed;
 
@@ -239,6 +241,29 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
 
         _sdl.SetCursor(_cursor);
         _sdl.ShowCursor(1);
+        _cursorIsSystem = false;
+        _systemCursor = null;
+    }
+
+    public void SetSystemCursor(DisplaySystemCursor cursor)
+    {
+        if (_cursor != null && _cursorIsSystem && _systemCursor == cursor)
+        {
+            _sdl.SetCursor(_cursor);
+            _sdl.ShowCursor(1);
+            return;
+        }
+
+        ClearCursor();
+
+        _cursor = _sdl.CreateSystemCursor((SystemCursor)cursor);
+        if (_cursor == null)
+            throw new InvalidOperationException($"SDL create system cursor failed: {GetError()}");
+
+        _sdl.SetCursor(_cursor);
+        _sdl.ShowCursor(1);
+        _cursorIsSystem = true;
+        _systemCursor = cursor;
     }
 
     public void ClearCursor()
@@ -249,6 +274,9 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
             _sdl.FreeCursor(_cursor);
             _cursor = null;
         }
+
+        _cursorIsSystem = false;
+        _systemCursor = null;
     }
 
     public void Present()

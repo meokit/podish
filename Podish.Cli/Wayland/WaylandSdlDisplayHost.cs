@@ -85,6 +85,12 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
                 case WaylandDisplayCommandKind.SetCursor:
                     SetCursor(command.Cursor);
                     break;
+                case WaylandDisplayCommandKind.SetSystemCursor:
+                    if (command.SystemCursor is WaylandSystemCursorShape shape)
+                        SetSystemCursor(shape);
+                    else
+                        ClearCursor();
+                    break;
                 case WaylandDisplayCommandKind.ClearCursor:
                     ClearCursor();
                     break;
@@ -275,6 +281,30 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     {
         EnsureStarted();
         _output!.ClearCursor();
+    }
+
+    private void SetSystemCursor(WaylandSystemCursorShape shape)
+    {
+        EnsureStarted();
+        _output!.SetSystemCursor(shape switch
+        {
+            WaylandSystemCursorShape.Default => DisplaySystemCursor.Arrow,
+            WaylandSystemCursorShape.Text => DisplaySystemCursor.IBeam,
+            WaylandSystemCursorShape.Pointer => DisplaySystemCursor.Hand,
+            WaylandSystemCursorShape.Crosshair => DisplaySystemCursor.Crosshair,
+            WaylandSystemCursorShape.Move => DisplaySystemCursor.SizeAll,
+            WaylandSystemCursorShape.EwResize => DisplaySystemCursor.SizeWe,
+            WaylandSystemCursorShape.NsResize => DisplaySystemCursor.SizeNs,
+            WaylandSystemCursorShape.NwseResize => DisplaySystemCursor.SizeNwse,
+            WaylandSystemCursorShape.NeswResize => DisplaySystemCursor.SizeNesw,
+            WaylandSystemCursorShape.NotAllowed => DisplaySystemCursor.No,
+            WaylandSystemCursorShape.Wait => DisplaySystemCursor.Wait,
+            WaylandSystemCursorShape.Progress => DisplaySystemCursor.WaitArrow,
+            WaylandSystemCursorShape.Grab => DisplaySystemCursor.Hand,
+            WaylandSystemCursorShape.Grabbing => DisplaySystemCursor.SizeAll,
+            WaylandSystemCursorShape.Help => DisplaySystemCursor.Arrow,
+            _ => DisplaySystemCursor.Arrow
+        });
     }
 
     private void EnsureStarted()
