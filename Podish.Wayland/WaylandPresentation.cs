@@ -141,6 +141,20 @@ public static class WaylandDecorationLayout
         WaylandSurfaceBounds row = GetButtonRowBounds(windowBounds, theme);
         return new WaylandSurfaceBounds(row.X + (metrics.ButtonSize + metrics.ButtonGap) * 2, row.Y, metrics.ButtonSize, metrics.ButtonSize);
     }
+
+    public static WaylandSurfaceBounds GetTitleTextBounds(WaylandSurfaceBounds windowBounds, WaylandUiTheme theme)
+    {
+        WaylandDecorationMetrics metrics = WaylandDecorationMetrics.FromTheme(theme);
+        WaylandSurfaceBounds titlebar = GetTitlebarBounds(windowBounds, theme);
+        WaylandSurfaceBounds buttonRow = GetButtonRowBounds(windowBounds, theme);
+        int left = titlebar.X + theme.Spacing.TitlebarHorizontalPadding;
+        int right = buttonRow.X - metrics.ButtonGap - theme.Spacing.TitlebarHorizontalPadding;
+        return new WaylandSurfaceBounds(
+            left,
+            titlebar.Y,
+            Math.Max(0, right - left),
+            titlebar.Height);
+    }
 }
 
 public interface IWaylandFramePresenter

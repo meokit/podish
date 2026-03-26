@@ -1,9 +1,11 @@
 using System.Buffers;
+using System.Runtime.InteropServices;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Podish.Cli.Display;
 using Podish.Display;
 using Podish.Wayland;
+using SkiaSharp;
 
 namespace Podish.Cli.Wayland;
 
@@ -18,6 +20,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     private IDisplayTexture? _closeButtonIcon;
     private IDisplayTexture? _maximizeButtonIcon;
     private IDisplayTexture? _minimizeButtonIcon;
+    private SKTypeface? _titleTypeface;
     private readonly Dictionary<ulong, SurfaceTextureState> _surfaces = [];
     private readonly List<ulong> _zOrder = [];
 
@@ -140,12 +143,16 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     public void Dispose()
     {
         foreach (SurfaceTextureState surface in _surfaces.Values)
+        {
             surface.Texture?.Dispose();
+            surface.TitleTexture?.Dispose();
+        }
         _surfaces.Clear();
         _zOrder.Clear();
         _closeButtonIcon?.Dispose();
         _maximizeButtonIcon?.Dispose();
         _minimizeButtonIcon?.Dispose();
+        _titleTypeface?.Dispose();
         _output?.ClearCursor();
         _output?.Dispose();
         _output = null;
@@ -180,12 +187,16 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
     private void UpdateSurfaceBounds(ulong sceneSurfaceId, WaylandSurfaceBounds bounds)
     {
-        EnsureSurfaceState(sceneSurfaceId).Bounds = bounds;
+        SurfaceTextureState state = EnsureSurfaceState(sceneSurfaceId);
+        state.Bounds = bounds;
+        InvalidateTitleTexture(state);
     }
 
     private void UpdateDecoration(ulong sceneSurfaceId, WaylandDecorationSceneState decoration)
     {
-        EnsureSurfaceState(sceneSurfaceId).Decoration = decoration;
+        SurfaceTextureState state = EnsureSurfaceState(sceneSurfaceId);
+        state.Decoration = decoration;
+        InvalidateTitleTexture(state);
     }
 
     private void SetSurfaceVisibility(ulong sceneSurfaceId, bool hidden)
@@ -208,6 +219,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
             return;
 
         _zOrder.Remove(sceneSurfaceId);
+        surface.TitleTexture?.Dispose();
         surface.Texture?.Dispose();
     }
 
@@ -253,6 +265,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         _renderer.FillRect(minimizeRect, ToDisplayColor(_theme.WindowDecoration.Buttons.BackgroundMinimize));
         _renderer.FillRect(maximizeRect, ToDisplayColor(_theme.WindowDecoration.Buttons.BackgroundMaximize));
         _renderer.FillRect(closeRect, ToDisplayColor(_theme.WindowDecoration.Buttons.BackgroundClose));
+        DrawTitle(surface, windowBounds, chrome);
         if (_minimizeButtonIcon != null)
             _renderer.Blit(_minimizeButtonIcon, destination: minimizeRect);
         if (_maximizeButtonIcon != null)
@@ -332,6 +345,117 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         _closeButtonIcon = CreateButtonIconTexture(size, DrawCloseIcon);
         _maximizeButtonIcon = CreateButtonIconTexture(size, DrawMaximizeIcon);
         _minimizeButtonIcon = CreateButtonIconTexture(size, DrawMinimizeIcon);
+    }
+
+    private void DrawTitle(SurfaceTextureState surface, WaylandSurfaceBounds windowBounds, WaylandSurfaceChromeTheme chrome)
+    {
+        if (string.IsNullOrWhiteSpace(surface.Decoration.Title))
+            return;
+
+        WaylandSurfaceBounds titleBounds = WaylandDecorationLayout.GetTitleTextBounds(windowBounds, _theme);
+        if (titleBounds.Width <= 0 || titleBounds.Height <= 0)
+            return;
+
+        EnsureTitleTexture(surface, titleBounds, chrome.Foreground);
+        if (surface.TitleTexture != null)
+            _renderer!.Blit(surface.TitleTexture, destination: ToDisplayRect(titleBounds));
+    }
+
+    private void EnsureTitleTexture(SurfaceTextureState surface, WaylandSurfaceBounds titleBounds, WaylandColor color)
+    {
+        string title = surface.Decoration.Title.Trim();
+        if (surface.TitleTexture != null &&
+            surface.CachedTitle == title &&
+            surface.CachedTitleBounds == titleBounds &&
+            surface.CachedTitleColor == color)
+            return;
+
+        InvalidateTitleTexture(surface);
+        surface.CachedTitle = title;
+        surface.CachedTitleBounds = titleBounds;
+        surface.CachedTitleColor = color;
+
+        if (string.IsNullOrEmpty(title))
+            return;
+
+        int width = Math.Max(1, titleBounds.Width);
+        int height = Math.Max(1, titleBounds.Height);
+        byte[] pixels = RasterizeTitle(title, width, height, color);
+        IDisplayTexture texture = _renderer!.CreateTexture(new DisplayTextureDescriptor(
+            width,
+            height,
+            DisplayPixelFormat.Argb8888,
+            DisplayTextureAccess.Streaming));
+        texture.Update(pixels, width * 4);
+        surface.TitleTexture = texture;
+    }
+
+    private void InvalidateTitleTexture(SurfaceTextureState surface)
+    {
+        surface.TitleTexture?.Dispose();
+        surface.TitleTexture = null;
+        surface.CachedTitle = string.Empty;
+        surface.CachedTitleBounds = default;
+        surface.CachedTitleColor = default;
+    }
+
+    private byte[] RasterizeTitle(string title, int width, int height, WaylandColor color)
+    {
+        byte[] pixels = GC.AllocateUninitializedArray<byte>(width * height * 4);
+        var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        using var bitmap = new SKBitmap(info);
+        using var canvas = new SKCanvas(bitmap);
+        canvas.Clear(SKColors.Transparent);
+
+        using var paint = new SKPaint
+        {
+            IsAntialias = true,
+            SubpixelText = true,
+            Color = new SKColor(color.R, color.G, color.B, color.A),
+            TextSize = _theme.Typography.TitleFontSize,
+            Typeface = GetTitleTypeface(title)
+        };
+
+        string fittedTitle = EllipsizeTitle(title, paint, width);
+        paint.GetFontMetrics(out SKFontMetrics metrics);
+        float baseline = ((height - (metrics.Descent - metrics.Ascent)) * 0.5f) - metrics.Ascent;
+        canvas.DrawText(fittedTitle, 0, baseline, paint);
+        canvas.Flush();
+        Marshal.Copy(bitmap.GetPixels(), pixels, 0, pixels.Length);
+        return pixels;
+    }
+
+    private SKTypeface GetTitleTypeface(string title)
+    {
+        if (_titleTypeface != null)
+            return _titleTypeface;
+
+        SKFontManager fontManager = SKFontManager.Default;
+        char candidate = title.FirstOrDefault(c => !char.IsWhiteSpace(c) && c > 127);
+        _titleTypeface = candidate != default
+            ? fontManager.MatchCharacter(candidate)
+            : fontManager.MatchCharacter('中');
+        _titleTypeface ??= SKTypeface.Default;
+        return _titleTypeface;
+    }
+
+    private static string EllipsizeTitle(string title, SKPaint paint, int maxWidth)
+    {
+        if (string.IsNullOrEmpty(title) || paint.MeasureText(title) <= maxWidth)
+            return title;
+
+        const string ellipsis = "…";
+        if (paint.MeasureText(ellipsis) > maxWidth)
+            return string.Empty;
+
+        for (int length = title.Length - 1; length >= 0; length--)
+        {
+            string candidate = string.Concat(title.AsSpan(0, length), ellipsis);
+            if (paint.MeasureText(candidate) <= maxWidth)
+                return candidate;
+        }
+
+        return ellipsis;
     }
 
     private IDisplayTexture CreateButtonIconTexture(int size, Action<Span<byte>, int, int, WaylandColor, int> draw)
@@ -493,11 +617,15 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     private sealed class SurfaceTextureState(IDisplayTexture? texture, int width, int height, DisplayPixelFormat format)
     {
         public IDisplayTexture? Texture { get; set; } = texture;
+        public IDisplayTexture? TitleTexture { get; set; }
         public int Width { get; set; } = width;
         public int Height { get; set; } = height;
         public DisplayPixelFormat Format { get; set; } = format;
         public WaylandSurfaceBounds Bounds { get; set; }
         public WaylandDecorationSceneState Decoration { get; set; }
         public bool Hidden { get; set; }
+        public string CachedTitle { get; set; } = string.Empty;
+        public WaylandSurfaceBounds CachedTitleBounds { get; set; }
+        public WaylandColor CachedTitleColor { get; set; }
     }
 }
