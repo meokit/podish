@@ -77,6 +77,38 @@ public class KernelSchedulerTests
         Assert.Equal("T1-Start;T2-Start;T1-Mid;T2-Mid;T1-End;T2-End;", result);
     }
 
+    [Fact]
+    public void Run_WhenIngressEventsFloodQueue_TaskStillGetsASliceBeforeAllEventsDrain()
+    {
+        var kernel = new KernelScheduler();
+        var sb = new StringBuilder();
+
+        var task = new FiberTask(201, CreateMockProcess(200), new MockEngine(), kernel);
+        task.Continuation = () =>
+        {
+            sb.Append("TASK;");
+            task.Exited = true;
+            task.Status = FiberTaskStatus.Terminated;
+        };
+
+        for (var i = 0; i < 256; i++)
+        {
+            var capture = i;
+            kernel.ScheduleFromAnyThread(() => sb.Append($"E{capture};"));
+        }
+
+        kernel.RegisterTask(task);
+        kernel.Run(100);
+
+        var result = sb.ToString();
+        var taskIndex = result.IndexOf("TASK;", StringComparison.Ordinal);
+        Assert.True(taskIndex >= 0);
+        Assert.Contains("E0;", result);
+        Assert.Contains("E255;", result);
+        Assert.True(taskIndex < result.IndexOf("E255;", StringComparison.Ordinal),
+            "TASK should run before the scheduler drains every ingress event.");
+    }
+
     private class MockEngine : Engine
     {
         public MockEngine() : base(true)

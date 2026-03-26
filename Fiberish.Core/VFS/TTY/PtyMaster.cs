@@ -60,6 +60,9 @@ public class PtyMaster
     /// </summary>
     public int Write(FiberTask? task, ReadOnlySpan<byte> buffer)
     {
+        if (_pair.Slave.Discipline != null)
+            return _pair.Slave.Discipline.Input(buffer.ToArray());
+
         _ = task;
         return InputBuffer.Write(buffer);
     }

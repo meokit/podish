@@ -258,6 +258,166 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
     }
 }
 
+public sealed class ControllingTtyInode : Inode, ITaskWaitSource, IDispatcherWaitSource
+{
+    public ControllingTtyInode(SuperBlock sb)
+    {
+        SuperBlock = sb;
+        Type = InodeType.CharDev;
+        Mode = 0x1B6; // 0666
+        Ino = 2; // Dummy but distinct from ConsoleInode
+    }
+
+    public override int Read(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
+    {
+        if (ResolveDiscipline(task, linuxFile) is not { } tty)
+            return -(int)Errno.ENXIO;
+
+        return tty.Read(task, buffer, linuxFile.Flags);
+    }
+
+    public override async ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
+    {
+        if (ResolveDiscipline(task, linuxFile) is not { } tty)
+            return;
+
+        await tty.DataAvailable.WaitAsync(task);
+        tty.DataAvailable.Reset();
+    }
+
+    public override int Write(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        if (ResolveDiscipline(task, linuxFile) is not { } tty)
+            return -(int)Errno.ENXIO;
+
+        return tty.Write(task, buffer);
+    }
+
+    public override short Poll(LinuxFile linuxFile, short events)
+    {
+        const short POLLIN = 0x0001;
+        const short POLLOUT = 0x0004;
+
+        if (linuxFile.PrivateData is not TtyDiscipline tty)
+            return 0;
+
+        short revents = 0;
+        if ((events & POLLIN) != 0 && tty.HasDataAvailable)
+            revents |= POLLIN;
+        if ((events & POLLOUT) != 0 && tty.CanWriteOutput)
+            revents |= POLLOUT;
+        return revents;
+    }
+
+    public override bool RegisterWait(LinuxFile linuxFile, Action callback, short events)
+    {
+        return false;
+    }
+
+    public bool RegisterWait(LinuxFile linuxFile, FiberTask task, Action callback, short events)
+    {
+        if (ResolveDiscipline(task, linuxFile) is not { } tty)
+            return false;
+
+        const short POLLIN = 0x0001;
+        const short POLLOUT = 0x0004;
+        if ((events & POLLIN) != 0)
+        {
+            tty.DataAvailable.Register(callback, task);
+            return true;
+        }
+
+        if ((events & POLLOUT) != 0)
+            return tty.RegisterWriteWait(callback, task.CommonKernel);
+
+        return false;
+    }
+
+    bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
+        short events)
+    {
+        if (linuxFile.PrivateData is not TtyDiscipline tty)
+            return false;
+
+        const short POLLIN = 0x0001;
+        const short POLLOUT = 0x0004;
+        if ((events & POLLIN) != 0)
+        {
+            var scheduler = dispatcher.Scheduler
+                            ?? throw new InvalidOperationException("TTY read wait requires an explicit scheduler.");
+            tty.DataAvailable.Register(callback, scheduler);
+            return true;
+        }
+
+        if ((events & POLLOUT) != 0)
+        {
+            var scheduler = dispatcher.Scheduler
+                            ?? throw new InvalidOperationException("TTY write wait requires an explicit scheduler.");
+            return tty.RegisterWriteWait(callback, scheduler);
+        }
+
+        return false;
+    }
+
+    public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        return null;
+    }
+
+    public IDisposable? RegisterWaitHandle(LinuxFile linuxFile, FiberTask task, Action callback, short events)
+    {
+        if (ResolveDiscipline(task, linuxFile) is not { } tty)
+            return null;
+
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) != 0)
+            return tty.DataAvailable.RegisterCancelable(callback, task);
+
+        return null;
+    }
+
+    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher,
+        Action callback, short events)
+    {
+        if (linuxFile.PrivateData is not TtyDiscipline tty)
+            return null;
+
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) != 0)
+        {
+            var scheduler = dispatcher.Scheduler
+                            ?? throw new InvalidOperationException("TTY read wait requires an explicit scheduler.");
+            return tty.DataAvailable.RegisterCancelable(callback, scheduler);
+        }
+
+        return null;
+    }
+
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
+    {
+        if (ResolveDiscipline(task, linuxFile) is not { } tty)
+            return -(int)Errno.ENXIO;
+
+        return tty.Ioctl(task, request, arg);
+    }
+
+    public override int Truncate(long size)
+    {
+        return 0;
+    }
+
+    private static TtyDiscipline? ResolveDiscipline(FiberTask? task, LinuxFile linuxFile)
+    {
+        if (linuxFile.PrivateData is TtyDiscipline cached)
+            return cached;
+
+        TtyDiscipline? tty = task?.Process.ControllingTty;
+        if (tty != null)
+            linuxFile.PrivateData = tty;
+        return tty;
+    }
+}
+
 public class RandomInode : Inode
 {
     public RandomInode(SuperBlock sb)

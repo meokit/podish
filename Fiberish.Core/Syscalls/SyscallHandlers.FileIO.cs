@@ -311,6 +311,8 @@ public partial class SyscallManager
             var inode = MemfdSuperBlock.AllocInode();
             inode.Type = InodeType.File;
             inode.Mode = 0x180; // 0600
+            if (inode is TmpfsInode tmpfsInode)
+                tmpfsInode.InitializeMemfd((flags & MFD_ALLOW_SEALING) != 0);
 
             var t = engine.Owner as FiberTask;
             inode.Uid = t?.Process.EUID ?? 0;

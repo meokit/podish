@@ -43,7 +43,11 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
                         ?? throw new InvalidOperationException("PTY slave wait requires an explicit scheduler.");
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
+        {
+            if (!PtyPair.Slave.HasDataAvailable && PtyPair.Slave.DataAvailable.IsSignaled)
+                PtyPair.Slave.DataAvailable.Reset();
             return PtyPair.Slave.DataAvailable.RegisterCancelable(callback, scheduler);
+        }
         return null;
     }
 
@@ -63,7 +67,11 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
     {
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
+        {
+            if (!PtyPair.Slave.HasDataAvailable && PtyPair.Slave.DataAvailable.IsSignaled)
+                PtyPair.Slave.DataAvailable.Reset();
             return PtyPair.Slave.DataAvailable.RegisterCancelable(callback, task);
+        }
         return null;
     }
 
@@ -111,6 +119,8 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
         {
+            if (!PtyPair.Slave.HasDataAvailable && PtyPair.Slave.DataAvailable.IsSignaled)
+                PtyPair.Slave.DataAvailable.Reset();
             if (dispatcher?.Scheduler is { } scheduler)
                 PtyPair.Slave.DataAvailable.Register(callback, scheduler);
             else
@@ -178,7 +188,11 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
                         ?? throw new InvalidOperationException("PTY master wait requires an explicit scheduler.");
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
+        {
+            if (!pair.Master.HasDataAvailable && pair.Master.DataAvailable.IsSignaled)
+                pair.Master.DataAvailable.Reset();
             return pair.Master.DataAvailable.RegisterCancelable(callback, scheduler);
+        }
 
         return null;
     }
@@ -205,7 +219,11 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
+        {
+            if (!pair.Master.HasDataAvailable && pair.Master.DataAvailable.IsSignaled)
+                pair.Master.DataAvailable.Reset();
             return pair.Master.DataAvailable.RegisterCancelable(callback, task);
+        }
 
         return null;
     }
@@ -278,6 +296,8 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
         {
+            if (!pair.Master.HasDataAvailable && pair.Master.DataAvailable.IsSignaled)
+                pair.Master.DataAvailable.Reset();
             if (dispatcher?.Scheduler is { } scheduler)
                 pair.Master.DataAvailable.Register(callback, scheduler);
             else
@@ -298,7 +318,12 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         if (linuxFile.PrivateData is not PtyPair pair)
             return -(int)Errno.EBADF;
 
-        return pair.Master.Ioctl(task, request, arg);
+        return request switch
+        {
+            LinuxConstants.TIOCGPTN or LinuxConstants.TIOCSPTLCK or LinuxConstants.TIOCGPTLCK
+                => pair.Master.Ioctl(task, request, arg),
+            _ => pair.Slave.GetOrCreateDiscipline(_broadcaster, _logger, task.CommonKernel).Ioctl(task, request, arg)
+        };
     }
 
     public override void Open(LinuxFile linuxFile)

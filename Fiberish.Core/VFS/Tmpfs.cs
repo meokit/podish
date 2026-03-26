@@ -144,13 +144,48 @@ public class TmpfsSuperBlock : IndexedMemorySuperBlock
 
 public class TmpfsInode : IndexedMemoryInode
 {
+    private const uint F_SEAL_SEAL = 0x0001;
+    private const uint F_SEAL_SHRINK = 0x0002;
+    private const uint F_SEAL_GROW = 0x0004;
+    private const uint F_SEAL_WRITE = 0x0008;
+    private const uint KnownSealMask = F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE;
+
     public TmpfsInode(ulong ino, SuperBlock sb) : base(ino, (IndexedMemorySuperBlock)sb)
     {
     }
 
     protected override bool PinNamespaceDentries => true;
 
+    public bool IsMemfd { get; set; }
+    public bool AllowSealing { get; set; }
+    public uint SealFlags { get; private set; } = F_SEAL_SEAL;
+
+    public void InitializeMemfd(bool allowSealing)
+    {
+        IsMemfd = true;
+        AllowSealing = allowSealing;
+        SealFlags = allowSealing ? 0u : F_SEAL_SEAL;
+    }
+
     private TmpfsSuperBlock TmpfsSb => (TmpfsSuperBlock)SuperBlock;
+
+    public int AddSeals(uint seals)
+    {
+        if (!IsMemfd)
+            return -(int)Errno.EINVAL;
+        if ((seals & ~KnownSealMask) != 0)
+            return -(int)Errno.EINVAL;
+        if (!AllowSealing || (SealFlags & F_SEAL_SEAL) != 0)
+            return -(int)Errno.EPERM;
+
+        SealFlags |= seals;
+        return 0;
+    }
+
+    public int GetSeals()
+    {
+        return IsMemfd ? (int)SealFlags : -(int)Errno.EINVAL;
+    }
 
     protected override int BackendWrite(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
@@ -169,8 +204,13 @@ public class TmpfsInode : IndexedMemoryInode
             return -(int)Errno.EFBIG;
         }
 
+        if ((SealFlags & F_SEAL_WRITE) != 0)
+            return -(int)Errno.EPERM;
+
         var oldSize = (long)Size;
         var growth = Math.Max(0L, endOffset - oldSize);
+        if (growth > 0 && (SealFlags & F_SEAL_GROW) != 0)
+            return -(int)Errno.EPERM;
         if (growth > 0 && !TmpfsSb.TryReserveDataBytes(growth))
             return -(int)Errno.ENOSPC;
 
@@ -197,6 +237,10 @@ public class TmpfsInode : IndexedMemoryInode
             return -(int)Errno.EINVAL;
 
         var oldSize = (long)Size;
+        if (size > oldSize && (SealFlags & F_SEAL_GROW) != 0)
+            return -(int)Errno.EPERM;
+        if (size < oldSize && (SealFlags & F_SEAL_SHRINK) != 0)
+            return -(int)Errno.EPERM;
         if (size > oldSize)
         {
             var growth = size - oldSize;

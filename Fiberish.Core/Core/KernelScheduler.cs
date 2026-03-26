@@ -13,6 +13,7 @@ namespace Fiberish.Core;
 public class KernelScheduler
 {
     private static readonly ILogger Logger = Logging.CreateLogger<KernelScheduler>();
+    private const int RunQueueDrainEventBudget = 64;
 
     // Global instance (or dependency injected)
     // public static KernelScheduler Instance { get; set; } = new();
@@ -322,7 +323,21 @@ public class KernelScheduler
             if (task.Status != FiberTaskStatus.Ready)
                 task.Status = FiberTaskStatus.Ready;
 
+            if (!RunQueueContainsTask(task))
+            {
+                Logger.LogWarning(
+                    "Ready-queue token state drift detected for TID={Tid}: IsReadyQueued=true but task missing from run queue. Re-enqueuing.",
+                    task.TID);
+                _runQueue.Enqueue(task);
+                AssertReadyQueueInvariant(task, "EnqueueTask.repair");
+                EnqueueWake();
+                return;
+            }
+
             AssertReadyQueueInvariant(task, "EnqueueTask.reuse");
+            // The reserved queue token may already exist while the scheduler is asleep or spinning
+            // on unrelated work. Re-signal the scheduler so this wakeup cannot be lost.
+            EnqueueWake();
             return;
         }
 
@@ -332,6 +347,15 @@ public class KernelScheduler
         AssertReadyQueueInvariant(task, "EnqueueTask.new");
 
         EnqueueWake();
+    }
+
+    private bool RunQueueContainsTask(FiberTask task)
+    {
+        foreach (var queued in _runQueue)
+            if (ReferenceEquals(queued, task))
+                return true;
+
+        return false;
     }
 
     public void ScheduleLocal(FiberTask task)
@@ -517,7 +541,8 @@ public class KernelScheduler
                 }
 
                 // 0. Process Continuations (High Priority)
-                var drainedEvents = DrainEvents();
+                var hadRunnableTasks = _runQueue.Count > 0;
+                var drainedEvents = DrainEventsWithBudget(hadRunnableTasks ? RunQueueDrainEventBudget : int.MaxValue);
 
                 // 1. Process Timers & Wait
                 if (_runQueue.Count == 0 && !drainedEvents)
@@ -592,6 +617,8 @@ public class KernelScheduler
                     // Time accounting (simplified)
                     // _timerSystem.Advance(1); // Removed: Time is driven by _sw.ElapsedMilliseconds
                 }
+                else if (TryFindReadyTask(out var readyTaskAfterDequeueMiss))
+                    EnqueueTask(readyTaskAfterDequeueMiss!);
             }
         }
         catch (Exception ex)
@@ -615,15 +642,35 @@ public class KernelScheduler
 
     private bool DrainEvents()
     {
+        return DrainEventsWithBudget(int.MaxValue);
+    }
+
+    private bool DrainEventsWithBudget(int maxItems)
+    {
         var drained = false;
-        while (_events.Reader.TryRead(out var item))
+        var drainedCount = 0;
+        while (drainedCount < maxItems && _events.Reader.TryRead(out var item))
         {
             drained = true;
+            drainedCount++;
             ExecuteEvent(item);
         }
 
-        if (drained) _wakeEvent.Reset();
+        if (drained && !_events.Reader.TryPeek(out _)) _wakeEvent.Reset();
         return drained;
+    }
+
+    private bool TryFindReadyTask(out FiberTask? readyTask)
+    {
+        foreach (var task in _tasks.Values)
+            if (task.Status == FiberTaskStatus.Ready)
+            {
+                readyTask = task;
+                return true;
+            }
+
+        readyTask = null;
+        return false;
     }
 
     private void WaitForEvent()

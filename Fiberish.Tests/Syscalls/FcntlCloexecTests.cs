@@ -14,6 +14,13 @@ public class FcntlCloexecTests
     private const uint F_GETFD = 1;
     private const uint F_SETFD = 2;
     private const uint FD_CLOEXEC = 1;
+    private const uint F_ADD_SEALS = 1033;
+    private const uint F_GET_SEALS = 1034;
+    private const uint MFD_ALLOW_SEALING = 0x0002;
+    private const uint F_SEAL_SEAL = 0x0001;
+    private const uint F_SEAL_SHRINK = 0x0002;
+    private const uint F_SEAL_GROW = 0x0004;
+    private const uint F_SEAL_WRITE = 0x0008;
 
     [Fact]
     public async Task FcntlSetFdCloexec_ShouldNotLeakToSiblingFd_AndDup2ShouldClearIt()
@@ -50,6 +57,37 @@ public class FcntlCloexecTests
         {
             File.Delete(testFile);
         }
+    }
+
+    [Fact]
+    public async Task Memfd_AddSeals_AllowedMemfd_ReturnsConfiguredSeals()
+    {
+        using var env = new TestEnv();
+        const uint nameAddr = 0x22000;
+        env.MapUserPage(nameAddr);
+        env.WriteCString(nameAddr, "foot-shm");
+
+        var fd = await env.Call("SysMemfdCreate", nameAddr, MFD_ALLOW_SEALING);
+        Assert.True(fd >= 0);
+
+        var seals = F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE;
+        Assert.Equal(0, await env.Call("SysFcntl64", (uint)fd, F_ADD_SEALS, seals));
+        Assert.Equal((int)seals, await env.Call("SysFcntl64", (uint)fd, F_GET_SEALS));
+    }
+
+    [Fact]
+    public async Task Memfd_AddSeals_WithoutAllowSealing_ReturnsEperm()
+    {
+        using var env = new TestEnv();
+        const uint nameAddr = 0x23000;
+        env.MapUserPage(nameAddr);
+        env.WriteCString(nameAddr, "plain-memfd");
+
+        var fd = await env.Call("SysMemfdCreate", nameAddr, 0);
+        Assert.True(fd >= 0);
+
+        Assert.Equal(-(int)Errno.EPERM, await env.Call("SysFcntl64", (uint)fd, F_ADD_SEALS, F_SEAL_WRITE));
+        Assert.Equal((int)F_SEAL_SEAL, await env.Call("SysFcntl64", (uint)fd, F_GET_SEALS));
     }
 
     private sealed class TestEnv : IDisposable

@@ -1884,11 +1884,8 @@ public class FiberTask
         }
 
         _handlingAsyncSyscall = true;
-        Logger.LogTrace("[HandleAsyncSyscall] Enter TID={Tid} pendingPresent={PendingPresent}", TID,
-            PendingSyscall != null);
         if (PendingSyscall == null)
         {
-            Logger.LogTrace("[HandleAsyncSyscall] Exit early TID={Tid}: PendingSyscall is null", TID);
             _handlingAsyncSyscall = false;
             return ValueTask.CompletedTask;
         }
@@ -1904,9 +1901,7 @@ public class FiberTask
         Exception? error = null;
         try
         {
-            Logger.LogTrace("[HandleAsyncSyscall] Await begin TID={Tid}", TID);
             result = await pending();
-            Logger.LogTrace("[HandleAsyncSyscall] Await done TID={Tid} result={Result}", TID, result);
         }
         catch (Exception ex)
         {
@@ -1940,8 +1935,7 @@ public class FiberTask
                 InterruptingSignal = null;
                 if (!Exited)
                 {
-                    ExecutionMode = TaskExecutionMode.RunningGuest;
-                    Status = FiberTaskStatus.Ready;
+                    PrepareFreshWakeAfterAsyncSyscall();
                     CommonKernel.Schedule(this);
                 }
 
@@ -1987,8 +1981,8 @@ public class FiberTask
                     {
                         // Ignored signal — just restart
                         CPU.Eip = SyscallEip;
-                        ExecutionMode = TaskExecutionMode.RunningGuest;
                         PendingSyscall = null;
+                        PrepareFreshWakeAfterAsyncSyscall();
                         CommonKernel.Schedule(this);
                         return;
                     }
@@ -2015,8 +2009,8 @@ public class FiberTask
                         // Step 2: Deliver the signal (sets up frame with adjusted registers)
                         DeliverSignalForRestart(sig.Value, action);
 
-                        ExecutionMode = TaskExecutionMode.RunningGuest;
                         PendingSyscall = null;
+                        PrepareFreshWakeAfterAsyncSyscall();
                         CommonKernel.Schedule(this);
                         return;
                     }
@@ -2036,8 +2030,8 @@ public class FiberTask
                     Logger.LogInformation(
                         "[HandleAsyncSyscall] Signal {Sig} is default-ignored; restarting syscall", sig);
                     CPU.Eip = SyscallEip;
-                    ExecutionMode = TaskExecutionMode.RunningGuest;
                     PendingSyscall = null;
+                    PrepareFreshWakeAfterAsyncSyscall();
                     CommonKernel.Schedule(this);
                     return;
                 }
@@ -2062,8 +2056,11 @@ public class FiberTask
                 SyscallTracer.TraceExit(Logger, Process.Syscalls, TID, SyscallNr, result, SyscallArg1, SyscallArg2,
                     SyscallArg3);
 
-            ExecutionMode = TaskExecutionMode.RunningGuest;
+            PrepareFreshWakeAfterAsyncSyscall();
             // Reschedule the task
+            Logger.LogTrace(
+                "[HandleAsyncSyscall] Finalize scheduling task TID={Tid} currentThread={CurrentThread} ownerThread={OwnerThread} status={Status} readyQueued={ReadyQueued}",
+                TID, Environment.CurrentManagedThreadId, CommonKernel.OwnerThreadId, Status, IsReadyQueued);
             CommonKernel.Schedule(this);
         }
         finally
@@ -2072,6 +2069,15 @@ public class FiberTask
                 TID, PendingSyscall != null, Status);
             _handlingAsyncSyscall = false;
         }
+    }
+
+    private void PrepareFreshWakeAfterAsyncSyscall()
+    {
+        ExecutionMode = TaskExecutionMode.RunningGuest;
+        Status = FiberTaskStatus.Ready;
+        // Async completion is a real runnable transition. Clear any stale reservation state so
+        // the scheduler must recreate a concrete run-queue entry for this wakeup.
+        IsReadyQueued = false;
     }
 
     private void StorePendingAsyncSyscallCompletion(int result, Exception? error)

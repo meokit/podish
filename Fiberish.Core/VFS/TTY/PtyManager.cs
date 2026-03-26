@@ -288,6 +288,8 @@ public class PtyBuffer
 
             if (_buffer.Count > 0)
                 DataAvailable.Signal();
+            else
+                DataAvailable.Reset();
 
             return count;
         }

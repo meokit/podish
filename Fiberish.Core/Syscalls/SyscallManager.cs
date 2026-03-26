@@ -978,8 +978,8 @@ public partial class SyscallManager
         var ptmxDentry = new Dentry("ptmx", ptmxInode, devRoot, devSb);
         RegisterDev("ptmx", ptmxDentry);
 
-        // Create /dev/tty (controlling terminal)
-        var ttyInode = new ConsoleInode(devSb, true, tty);
+        // Create /dev/tty (dynamic controlling terminal for the calling process)
+        var ttyInode = new ControllingTtyInode(devSb);
         ttyInode.Rdev = 0x0500; // TTY major 5, minor 0
         var ttyDentry = new Dentry("tty", ttyInode, devRoot, devSb);
         RegisterDev("tty", ttyDentry);

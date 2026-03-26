@@ -52,6 +52,8 @@ public partial class SyscallManager
         const uint F_SETLK64 = 13;
         const uint F_SETLKW64 = 14;
         const uint F_DUPFD_CLOEXEC = 1030;
+        const uint F_ADD_SEALS = 1033;
+        const uint F_GET_SEALS = 1034;
 
         const uint FD_CLOEXEC = 1;
         const int O_ASYNC = 0x2000;
@@ -71,6 +73,8 @@ public partial class SyscallManager
             F_SETLK64 => 0,
             F_SETLKW64 => 0,
             F_DUPFD_CLOEXEC => DupFD(targetFd, (int)arg, true),
+            F_ADD_SEALS => AddSeals(file, arg),
+            F_GET_SEALS => GetSeals(file),
             _ => -(int)Errno.EINVAL
         };
 
@@ -96,6 +100,20 @@ public partial class SyscallManager
             Span<byte> flock = stackalloc byte[is64 ? 24 : 16];
             BinaryPrimitives.WriteInt16LittleEndian(flock, F_UNLCK);
             return engine.CopyToUser(arg, flock) ? 0 : -(int)Errno.EFAULT;
+        }
+
+        static int AddSeals(LinuxFile file, uint arg)
+        {
+            return file.OpenedInode is TmpfsInode tmpfsInode
+                ? tmpfsInode.AddSeals(arg)
+                : -(int)Errno.EINVAL;
+        }
+
+        static int GetSeals(LinuxFile file)
+        {
+            return file.OpenedInode is TmpfsInode tmpfsInode
+                ? tmpfsInode.GetSeals()
+                : -(int)Errno.EINVAL;
         }
     }
 }

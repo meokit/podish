@@ -1,5 +1,9 @@
 using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
+using Fiberish.Memory;
+using Fiberish.Native;
+using Fiberish.Syscalls;
+using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -171,6 +175,35 @@ public class PtyTests
     }
 
     [Fact]
+    public void PtyBuffer_ReadDrain_ResetsDataAvailableSignal()
+    {
+        var scheduler = NewScheduler();
+        var process = new Process(700, null!, null!);
+        scheduler.RegisterProcess(process);
+        var task = new FiberTask(701, process, new Engine(), scheduler);
+        var buffer = new PtyBuffer(scheduler, 1024);
+
+        void Entry()
+        {
+            buffer.Write("abc"u8);
+            Assert.True(buffer.DataAvailable.IsSignaled);
+
+            Span<byte> readBuffer = stackalloc byte[8];
+            var read = buffer.Read(readBuffer);
+            Assert.Equal(3, read);
+            Assert.False(buffer.HasData);
+            Assert.False(buffer.DataAvailable.IsSignaled);
+
+            task.Exited = true;
+            task.Status = FiberTaskStatus.Terminated;
+        }
+
+        task.Continuation = Entry;
+        scheduler.RegisterTask(task);
+        scheduler.Run(100);
+    }
+
+    [Fact]
     public void PtyPair_Unlock_SetsIsLockedToFalse()
     {
         var manager = new PtyManager(_logger, NewScheduler());
@@ -213,5 +246,101 @@ public class PtyTests
         pair.Master!.OutputBuffer.Write(new byte[] { 1, 2, 3 });
 
         Assert.True(pair.Master.HasDataAvailable);
+    }
+
+    [Fact]
+    public void PtmxInode_Tiocswinsz_ForwardsToSlaveDiscipline()
+    {
+        using var ctx = new PtyTaskContext();
+        var broadcaster = new MockSignalBroadcaster();
+        var superBlock = new TmpfsSuperBlock(new FileSystemType { Name = "tmpfs" }, new DeviceNumberManager());
+        var ptmxInode = new PtmxInode(superBlock, ctx.Manager, broadcaster, _logger);
+        var linuxFile = new LinuxFile(new Dentry("ptmx", ptmxInode, null, ptmxInode.SuperBlock), FileFlags.O_RDWR, null!);
+        ptmxInode.Open(linuxFile);
+
+        var pair = Assert.IsType<PtyPair>(linuxFile.PrivateData);
+        var winsizePtr = 0x20000u;
+        ctx.MapUserPage(winsizePtr);
+        ctx.Engine.CopyToUser(winsizePtr, new byte[] { 40, 0, 100, 0, 0, 0, 0, 0 });
+
+        var setRc = ptmxInode.Ioctl(linuxFile, ctx.Task, LinuxConstants.TIOCSWINSZ, winsizePtr);
+        Assert.Equal(0, setRc);
+        Assert.NotNull(pair.Slave.Discipline);
+
+        var readBack = new byte[LinuxConstants.WINSIZE_SIZE];
+        var getRc = pair.Slave.Discipline!.GetWindowSize(readBack);
+        Assert.Equal(0, getRc);
+        Assert.Equal(40, BitConverter.ToUInt16(readBack, 0));
+        Assert.Equal(100, BitConverter.ToUInt16(readBack, 2));
+    }
+
+    [Fact]
+    public void PtyMaster_Write_RoutesThroughSlaveDiscipline_WhenPresent()
+    {
+        var manager = new PtyManager(_logger, NewScheduler());
+        var pair = manager.AllocatePty();
+        var discipline = pair!.Slave.GetOrCreateDiscipline(new MockSignalBroadcaster(), _logger, NewScheduler());
+
+        var written = pair.Master.Write("hello\n"u8);
+        Assert.Equal(6, written);
+        discipline.ProcessPendingInput();
+
+        var buffer = new byte[16];
+        var read = pair.Slave.Read(null, buffer, FileFlags.O_NONBLOCK);
+        Assert.Equal(6, read);
+        Assert.Equal("hello\n", System.Text.Encoding.ASCII.GetString(buffer, 0, read));
+    }
+
+    private sealed class PtyTaskContext : IDisposable
+    {
+        public PtyTaskContext()
+        {
+            Engine = new Engine();
+            Memory = new VMAManager();
+            SyscallManager = new SyscallManager(Engine, Memory, 0);
+            Scheduler = new KernelScheduler();
+            Process = new Process(1234, Memory, SyscallManager)
+            {
+                PGID = 1234,
+                SID = 1234
+            };
+            Scheduler.RegisterProcess(Process);
+            Task = new FiberTask(1234, Process, Engine, Scheduler);
+            Engine.Owner = Task;
+            Scheduler.CurrentTask = Task;
+            Manager = new PtyManager(NullLogger.Instance, Scheduler);
+        }
+
+        public Engine Engine { get; }
+        public VMAManager Memory { get; }
+        public SyscallManager SyscallManager { get; }
+        public KernelScheduler Scheduler { get; }
+        public Process Process { get; }
+        public FiberTask Task { get; }
+        public PtyManager Manager { get; }
+
+        public void MapUserPage(uint addr)
+        {
+            ProcessAddressSpaceSync.Mmap(Memory, Engine, addr, 4096, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[test]");
+            Assert.True(Memory.PrefaultRange(addr, 4096, Engine, true));
+        }
+
+        public void Dispose()
+        {
+            SyscallManager.Close();
+            GC.KeepAlive(Task);
+        }
+    }
+
+    private sealed class MockSignalBroadcaster : ISignalBroadcaster
+    {
+        public void SignalProcessGroup(FiberTask? task, int pgid, int signal)
+        {
+        }
+
+        public void SignalForegroundTask(FiberTask? task, int signal)
+        {
+        }
     }
 }
