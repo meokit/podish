@@ -18,8 +18,10 @@ internal sealed class WaylandServerSession
         _client = server.CreateClient(message =>
         {
             WaylandMessageHeader header = WaylandMessageHeader.Decode(message.Buffer);
-            _logger.LogDebug("Wayland send object={ObjectId} opcode={Opcode} size={Size} fds={FdCount}",
-                header.ObjectId, header.Opcode, header.Size, message.Fds?.Count ?? 0);
+            var (interfaceName, messageName) = DescribeOutgoing(header);
+            _logger.LogDebug(
+                "Wayland send object={ObjectId} interface={Interface} opcode={Opcode} message={Message} size={Size} fds={FdCount}",
+                header.ObjectId, interfaceName, header.Opcode, messageName, header.Size, message.Fds?.Count ?? 0);
             return _connection.SendAsync(message);
         });
     }
@@ -43,14 +45,25 @@ internal sealed class WaylandServerSession
             if (expectedFdCount > 0)
                 message = message with { Fds = _connection.TakePendingFds(expectedFdCount) };
 
-            _logger.LogDebug("Wayland recv object={ObjectId} opcode={Opcode} size={Size} fds={FdCount}",
-                message.Header.ObjectId, message.Header.Opcode, message.Header.Size, message.Fds.Count);
+            var (interfaceName, messageName) = DescribeIncoming(message.Header);
+            _logger.LogDebug(
+                "Wayland recv object={ObjectId} interface={Interface} opcode={Opcode} message={Message} size={Size} fds={FdCount}",
+                message.Header.ObjectId, interfaceName, message.Header.Opcode, messageName, message.Header.Size, message.Fds.Count);
+
+            if (string.Equals(interfaceName, WlRegistryProtocol.InterfaceName, StringComparison.Ordinal) &&
+                message.Header.Opcode == 0)
+            {
+                var bind = WlRegistryProtocol.DecodeBind(message.Body, message.Fds);
+                _logger.LogDebug(
+                    "Wayland registry bind global={GlobalName} interface={BindInterface} version={Version} newId={NewId}",
+                    bind.Name, bind.Interface, bind.Version, bind.Id);
+            }
 
             try
             {
                 await _client.ProcessMessageAsync(message);
-                _logger.LogDebug("Wayland dispatch completed object={ObjectId} opcode={Opcode}",
-                    message.Header.ObjectId, message.Header.Opcode);
+                _logger.LogDebug("Wayland dispatch completed object={ObjectId} interface={Interface} opcode={Opcode} message={Message}",
+                    message.Header.ObjectId, interfaceName, message.Header.Opcode, messageName);
             }
             catch (WaylandProtocolException ex)
             {
@@ -59,5 +72,24 @@ internal sealed class WaylandServerSession
                 return;
             }
         }
+    }
+
+    private (string Interface, string Message) DescribeIncoming(WaylandMessageHeader header)
+    {
+        if (!_client.Objects.TryGetValue(header.ObjectId, out WaylandResource? resource) || resource is null)
+            return ("<unknown>", "<unknown>");
+
+        var messageName = header.Opcode < resource.Requests.Count
+            ? resource.Requests[header.Opcode].Name
+            : "<unknown>";
+        return (resource.InterfaceName, messageName);
+    }
+
+    private (string Interface, string Message) DescribeOutgoing(WaylandMessageHeader header)
+    {
+        if (!_client.Objects.TryGetValue(header.ObjectId, out WaylandResource? resource) || resource is null)
+            return ("<unknown>", "<unknown>");
+
+        return (resource.InterfaceName, $"event#{header.Opcode}");
     }
 }

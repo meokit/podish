@@ -140,6 +140,9 @@ public sealed class WaylandRuntimeTests
 
             sent.Clear();
             await SendRequestAsync(client, 6, 6, static _ => { });
+            Assert.Empty(sent);
+
+            await server.HandlePresentationTickAsync(1234);
             Assert.Equal(2, sent.Count);
             Assert.Equal<uint>(11, DecodeHeader(sent[0]).ObjectId);
             Assert.Equal<uint>(1, DecodeHeader(sent[1]).ObjectId);
@@ -236,6 +239,124 @@ public sealed class WaylandRuntimeTests
             Assert.Single(sent);
             Assert.Equal<uint>(10, DecodeHeader(sent[0]).ObjectId);
             fd.Close();
+        });
+    }
+
+    [Fact]
+    public async Task Runtime_Subcompositor_AssignsSubsurfaceRoleAndRejectsRoleReuse()
+    {
+        using var env = new TestEnv();
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            var sent = new List<WaylandOutgoingMessage>();
+            var server = new WaylandServer(new TestScenePresenter());
+            var client = server.CreateClient(message =>
+            {
+                sent.Add(Clone(message));
+                return new ValueTask<int>(message.Buffer.Length);
+            });
+
+            await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
+            var globals = ParseGlobals(sent, 2);
+            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            uint subcompositorName = globals.Single(x => x.Interface == WlSubcompositorProtocol.InterfaceName).Name;
+            uint xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
+
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(compositorName);
+                writer.WriteString(WlCompositorProtocol.InterfaceName);
+                writer.WriteUInt(4);
+                writer.WriteNewId(3);
+            });
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(subcompositorName);
+                writer.WriteString(WlSubcompositorProtocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(4);
+            });
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(xdgName);
+                writer.WriteString(XdgWmBaseProtocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(5);
+            });
+
+            await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(6));
+            await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(7));
+            await SendRequestAsync(client, 4, 1, writer =>
+            {
+                writer.WriteNewId(8);
+                writer.WriteObjectId(7);
+                writer.WriteObjectId(6);
+            });
+
+            object childSurface = client.Objects.Require(7);
+            object? subsurface = childSurface.GetType()
+                .GetProperty("Subsurface", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+                .GetValue(childSurface);
+            Assert.NotNull(subsurface);
+
+            WaylandProtocolException roleEx = await Assert.ThrowsAsync<WaylandProtocolException>(async () =>
+                await SendRequestAsync(client, 5, 2, writer =>
+                {
+                    writer.WriteNewId(9);
+                    writer.WriteObjectId(7);
+                }));
+            Assert.Contains("already has a role", roleEx.Message);
+        });
+    }
+
+    [Fact]
+    public async Task Runtime_SubsurfaceDestroy_RemainsValidAfterParentSurfaceDestroy()
+    {
+        using var env = new TestEnv();
+        await env.InvokeOnSchedulerAsync(async () =>
+        {
+            var sent = new List<WaylandOutgoingMessage>();
+            var server = new WaylandServer(new TestScenePresenter());
+            var client = server.CreateClient(message =>
+            {
+                sent.Add(Clone(message));
+                return new ValueTask<int>(message.Buffer.Length);
+            });
+
+            await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
+            var globals = ParseGlobals(sent, 2);
+            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            uint subcompositorName = globals.Single(x => x.Interface == WlSubcompositorProtocol.InterfaceName).Name;
+
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(compositorName);
+                writer.WriteString(WlCompositorProtocol.InterfaceName);
+                writer.WriteUInt(4);
+                writer.WriteNewId(3);
+            });
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(subcompositorName);
+                writer.WriteString(WlSubcompositorProtocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(4);
+            });
+
+            await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(10));
+            await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(11));
+            await SendRequestAsync(client, 4, 1, writer =>
+            {
+                writer.WriteNewId(12);
+                writer.WriteObjectId(11);
+                writer.WriteObjectId(10);
+            });
+
+            await SendRequestAsync(client, 10, 0, _ => { });
+            await SendRequestAsync(client, 12, 0, _ => { });
+
+            Assert.Throws<KeyNotFoundException>(() => client.Objects.Require(10));
+            Assert.Throws<KeyNotFoundException>(() => client.Objects.Require(12));
         });
     }
 
@@ -449,7 +570,7 @@ public sealed class WaylandVirtualDaemonTests
 
             step = "get registry";
             await clientSocket.SendAsync(MakeRequest(1, 1, writer => writer.WriteNewId(2)).Buffer);
-            List<DecodedMessage> globals = await clientSocket.ReceiveMessagesAsync(5);
+            List<DecodedMessage> globals = await clientSocket.ReceiveMessagesAsync(7);
             uint compositorName = globals.Select(ParseGlobal).Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
             uint shmName = globals.Select(ParseGlobal).Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
             uint wmBaseName = globals.Select(ParseGlobal).Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
@@ -521,10 +642,7 @@ public sealed class WaylandVirtualDaemonTests
             }).Buffer);
             await clientSocket.SendAsync(MakeRequest(6, 6, static _ => { }).Buffer);
 
-            step = "frame callback";
-            List<DecodedMessage> callbackMessages = await clientSocket.ReceiveMessagesAsync(2);
-            Assert.Equal<uint>(11, callbackMessages[0].Header.ObjectId);
-            Assert.Equal<uint>(1, callbackMessages[1].Header.ObjectId);
+            step = "frame callback deferred";
             fd.Close();
         }, () => step);
     }

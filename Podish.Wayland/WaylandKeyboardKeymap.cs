@@ -6,6 +6,7 @@ internal sealed class WaylandKeyboardKeymap
 {
     private readonly Mount _mount;
     private readonly Dentry _fileDentry;
+    private readonly LinuxFile _readOnlyFile;
 
     public WaylandKeyboardKeymap()
     {
@@ -26,7 +27,7 @@ internal sealed class WaylandKeyboardKeymap
         _fileDentry = new Dentry("keymap.xkb", null, sb.Root, sb);
         sb.Root.Inode!.Create(_fileDentry, 0x1A4, 0, 0);
 
-        var writer = new LinuxFile(_fileDentry, FileFlags.O_WRONLY, _mount);
+        var writer = new LinuxFile(_fileDentry, FileFlags.O_RDWR, _mount);
         try
         {
             int rc = _fileDentry.Inode!.Write(writer, keymapBytes, 0);
@@ -38,6 +39,9 @@ internal sealed class WaylandKeyboardKeymap
             writer.Close();
         }
 
+        // Keep a dedicated read-only handle for wl_keyboard.keymap, matching wlroots' fd-pair model.
+        _readOnlyFile = new LinuxFile(_fileDentry, FileFlags.O_RDONLY, _mount);
+
         Size = (uint)keymapBytes.Length;
     }
 
@@ -45,7 +49,7 @@ internal sealed class WaylandKeyboardKeymap
 
     public LinuxFile OpenReadOnly()
     {
-        return new LinuxFile(_fileDentry, FileFlags.O_RDONLY, _mount);
+        return _readOnlyFile;
     }
 
     private static class XkbCommon

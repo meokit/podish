@@ -66,7 +66,9 @@ internal sealed class WaylandDisplayServerState : IDisposable
             if (dirty)
             {
                 _host.Render();
-                ingressBridge.Post(new WaylandDisplayIngressEvent(WaylandDisplayIngressKind.VSyncTick));
+                ingressBridge.Post(new WaylandDisplayIngressEvent(
+                    WaylandDisplayIngressKind.VSyncTick,
+                    Timestamp: unchecked((uint)Environment.TickCount64)));
             }
 
             if (shutdownRequested)

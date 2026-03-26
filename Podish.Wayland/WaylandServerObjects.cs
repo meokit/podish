@@ -138,7 +138,8 @@ internal enum WlSurfaceRole
 {
     None,
     Xdg,
-    Cursor
+    Cursor,
+    Subsurface
 }
 
 internal sealed class WlSurfaceResource : WaylandResource
@@ -146,10 +147,12 @@ internal sealed class WlSurfaceResource : WaylandResource
     private readonly WlSurfaceState _pending = new();
     private readonly WlSurfaceState _current = new();
     private readonly HashSet<uint> _enteredOutputIds = [];
+    private readonly List<WlSubsurfaceResource> _childSubsurfaces = [];
     private WlSurfaceRole _role;
     private WlPointerResource? _cursorOwner;
     private int _cursorHotspotX;
     private int _cursorHotspotY;
+    private WlSubsurfaceResource? _subsurfaceRole;
 
     public WlSurfaceResource(WaylandClient client, uint objectId, uint version)
         : base(client, objectId, version, WlSurfaceProtocol.InterfaceName)
@@ -163,6 +166,7 @@ internal sealed class WlSurfaceResource : WaylandResource
     public WlBufferResource? CurrentBuffer => _current.Buffer;
     public XdgSurfaceResource? XdgSurface { get; private set; }
     public bool IsCursorRole => _role == WlSurfaceRole.Cursor;
+    public WlSubsurfaceResource? Subsurface => _subsurfaceRole;
 
     public void AttachXdgSurface(XdgSurfaceResource xdgSurface)
     {
@@ -174,7 +178,7 @@ internal sealed class WlSurfaceResource : WaylandResource
 
     public async ValueTask SetCursorRoleAsync(WlPointerResource owner, int hotspotX, int hotspotY)
     {
-        if (_role == WlSurfaceRole.Xdg)
+        if (_role != WlSurfaceRole.None && _role != WlSurfaceRole.Cursor)
             throw new WaylandProtocolException(ObjectId, 0, "wl_surface already has a role.");
 
         if (_role == WlSurfaceRole.None)
@@ -203,6 +207,40 @@ internal sealed class WlSurfaceResource : WaylandResource
         _cursorOwner = null;
         if (Client.Server.FramePresenter is IWaylandCursorPresenter cursorPresenter)
             await cursorPresenter.UpdateCursorAsync(SceneSurfaceId, null);
+    }
+
+    public void AttachSubsurface(WlSubsurfaceResource subsurface)
+    {
+        if (_role != WlSurfaceRole.None)
+            throw new WaylandProtocolException(ObjectId, (uint)WlSubcompositorError.BadSurface,
+                "wl_surface already has a role.");
+
+        _role = WlSurfaceRole.Subsurface;
+        _subsurfaceRole = subsurface;
+        subsurface.ParentSurface.AddChildSubsurface(subsurface);
+    }
+
+    public void ClearSubsurfaceAssociation(WlSubsurfaceResource subsurface)
+    {
+        if (ReferenceEquals(_subsurfaceRole, subsurface))
+            _subsurfaceRole = null;
+    }
+
+    public void AddChildSubsurface(WlSubsurfaceResource subsurface)
+    {
+        if (!_childSubsurfaces.Contains(subsurface))
+            _childSubsurfaces.Add(subsurface);
+    }
+
+    public void RemoveChildSubsurface(WlSubsurfaceResource subsurface)
+    {
+        _childSubsurfaces.Remove(subsurface);
+    }
+
+    public void UpdateChildSubsurfacePlacements()
+    {
+        foreach (WlSubsurfaceResource subsurface in _childSubsurfaces.ToArray())
+            subsurface.UpdatePlacementRecursive();
     }
 
     public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
@@ -287,12 +325,14 @@ internal sealed class WlSurfaceResource : WaylandResource
             await Client.Server.FramePresenter.PresentSurfaceAsync(SceneSurfaceId, _current.Buffer?.ToFrame(SceneSurfaceId));
         }
 
+        _subsurfaceRole?.UpdatePlacementRecursive();
+        UpdateChildSubsurfacePlacements();
+
         await SyncOutputPresenceAsync(_role != WlSurfaceRole.Cursor && _current.Buffer != null);
 
         List<WlCallbackResource> callbacks = [.. _pending.FrameCallbacks];
         _pending.FrameCallbacks.Clear();
-        foreach (WlCallbackResource callback in callbacks)
-            await callback.SendDoneAndDisposeAsync(Client.NextSerial());
+        Client.Server.EnqueueFrameCallbacks(callbacks);
     }
 
     private async ValueTask SyncOutputPresenceAsync(bool entered)
@@ -318,6 +358,8 @@ internal sealed class WlSurfaceResource : WaylandResource
 
     public override void Destroy()
     {
+        foreach (WlSubsurfaceResource childSubsurface in _childSubsurfaces.ToArray())
+            childSubsurface.UpdatePlacementRecursive();
         if (_enteredOutputIds.Count > 0)
             SyncOutputPresenceAsync(false).AsTask().GetAwaiter().GetResult();
         if (_role == WlSurfaceRole.Cursor && Client.Server.FramePresenter is IWaylandCursorPresenter cursorPresenter)
@@ -369,6 +411,166 @@ internal sealed class WlRegionResource : WaylandResource
     }
 }
 
+internal sealed class WlSubcompositorResource : WaylandResource
+{
+    public WlSubcompositorResource(WaylandClient client, uint objectId, uint version)
+        : base(client, objectId, version, WlSubcompositorProtocol.InterfaceName)
+    {
+    }
+
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => WlSubcompositorProtocol.Requests;
+
+    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+                Destroy();
+                break;
+            case 1:
+            {
+                var request = WlSubcompositorProtocol.DecodeGetSubsurface(message.Body, message.Fds);
+                WlSurfaceResource surface = Client.Objects.Require<WlSurfaceResource>(request.Surface);
+                WlSurfaceResource parent = Client.Objects.Require<WlSurfaceResource>(request.Parent);
+                if (ReferenceEquals(surface, parent))
+                {
+                    throw new WaylandProtocolException(ObjectId, (uint)WlSubcompositorError.BadParent,
+                        "wl_subsurface parent must be a different wl_surface.");
+                }
+
+                var subsurface = Client.Register(new WlSubsurfaceResource(Client, request.Id, 1, surface, parent));
+                surface.AttachSubsurface(subsurface);
+                subsurface.UpdatePlacementRecursive();
+                break;
+            }
+            default:
+                throw new WaylandProtocolException(ObjectId, 0,
+                    $"Unsupported wl_subcompositor opcode {message.Header.Opcode}.");
+        }
+
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class WlSubsurfaceResource : WaylandResource
+{
+    private int _positionX;
+    private int _positionY;
+    private bool _sync = true;
+
+    public WlSubsurfaceResource(WaylandClient client, uint objectId, uint version, WlSurfaceResource surface,
+        WlSurfaceResource parentSurface)
+        : base(client, objectId, version, WlSubsurfaceProtocol.InterfaceName)
+    {
+        Surface = surface;
+        ParentSurface = parentSurface;
+    }
+
+    public WlSurfaceResource Surface { get; }
+    public WlSurfaceResource ParentSurface { get; }
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => WlSubsurfaceProtocol.Requests;
+
+    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+                Destroy();
+                break;
+            case 1:
+            {
+                var request = WlSubsurfaceProtocol.DecodeSetPosition(message.Body, message.Fds);
+                _positionX = request.X;
+                _positionY = request.Y;
+                UpdatePlacementRecursive();
+                break;
+            }
+            case 2:
+            {
+                WlSurfaceResource sibling = Client.Objects.Require<WlSurfaceResource>(
+                    WlSubsurfaceProtocol.DecodePlaceAbove(message.Body, message.Fds).Sibling);
+                ValidateSiblingRelationship(sibling);
+                UpdatePlacementRecursive();
+                break;
+            }
+            case 3:
+            {
+                WlSurfaceResource sibling = Client.Objects.Require<WlSurfaceResource>(
+                    WlSubsurfaceProtocol.DecodePlaceBelow(message.Body, message.Fds).Sibling);
+                ValidateSiblingRelationship(sibling);
+                break;
+            }
+            case 4:
+                _sync = true;
+                break;
+            case 5:
+                _sync = false;
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0, $"Unsupported wl_subsurface opcode {message.Header.Opcode}.");
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    public void UpdatePlacementRecursive()
+    {
+        if (Client.Server.FramePresenter is not IWaylandDesktopSceneController sceneController ||
+            Client.Server.FramePresenter is not IWaylandSceneView sceneView ||
+            !sceneView.TryGetSurfaceBounds(ParentSurface.SceneSurfaceId, out WaylandSurfaceBounds parentBounds))
+            return;
+
+        int width = Surface.CurrentBuffer?.Width ?? 0;
+        int height = Surface.CurrentBuffer?.Height ?? 0;
+        if (sceneView.TryGetSurfaceBounds(Surface.SceneSurfaceId, out WaylandSurfaceBounds currentBounds))
+        {
+            width = currentBounds.Width;
+            height = currentBounds.Height;
+        }
+
+        if (width <= 0 || height <= 0)
+            return;
+
+        sceneController.SetSurfaceBounds(
+            Surface.SceneSurfaceId,
+            new WaylandSurfaceBounds(parentBounds.X + _positionX, parentBounds.Y + _positionY, width, height));
+
+        if (!_sync)
+            sceneController.RaiseSurface(Surface.SceneSurfaceId);
+
+        Surface.UpdateChildSubsurfacePlacements();
+    }
+
+    public override void Destroy()
+    {
+        if (Destroyed)
+            return;
+
+        ParentSurface.RemoveChildSubsurface(this);
+        Surface.ClearSubsurfaceAssociation(this);
+        if (!Surface.Destroyed)
+        {
+            if (Client.Server.FramePresenter != null)
+                Client.Server.FramePresenter.PresentSurfaceAsync(Surface.SceneSurfaceId, null).AsTask().GetAwaiter().GetResult();
+            Surface.UpdateChildSubsurfacePlacements();
+        }
+
+        base.Destroy();
+    }
+
+    private void ValidateSiblingRelationship(WlSurfaceResource sibling)
+    {
+        if (ReferenceEquals(sibling, ParentSurface))
+            return;
+
+        if (!ReferenceEquals(sibling.Subsurface?.ParentSurface, ParentSurface))
+        {
+            throw new WaylandProtocolException(ObjectId, (uint)WlSubsurfaceError.BadSurface,
+                "wl_subsurface sibling must be the parent or another child of the same parent.");
+        }
+    }
+}
+
 internal sealed class WlShmResource : WaylandResource
 {
     public WlShmResource(WaylandClient client, uint objectId, uint version)
@@ -391,6 +593,163 @@ internal sealed class WlShmResource : WaylandResource
             throw new WaylandProtocolException(ObjectId, 0, "wl_shm_pool size must be positive.");
 
         Client.Register(new WlShmPoolResource(Client, request.Id, 1, request.Fd, request.Size));
+    }
+}
+
+internal sealed class WlDataOfferResource : WaylandResource
+{
+    public WlDataOfferResource(WaylandClient client, uint objectId, uint version)
+        : base(client, objectId, version, WlDataOfferProtocol.InterfaceName)
+    {
+    }
+
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => WlDataOfferProtocol.Requests;
+
+    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+                _ = WlDataOfferProtocol.DecodeAccept(message.Body, message.Fds);
+                break;
+            case 1:
+            {
+                var request = WlDataOfferProtocol.DecodeReceive(message.Body, message.Fds);
+                request.Fd.Close();
+                break;
+            }
+            case 2:
+            case 3:
+                Destroy();
+                break;
+            case 4:
+                _ = WlDataOfferProtocol.DecodeSetActions(message.Body, message.Fds);
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0, $"Unsupported wl_data_offer opcode {message.Header.Opcode}.");
+        }
+
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class WlDataSourceResource : WaylandResource
+{
+    public WlDataSourceResource(WaylandClient client, uint objectId, uint version)
+        : base(client, objectId, version, WlDataSourceProtocol.InterfaceName)
+    {
+    }
+
+    public List<string> MimeTypes { get; } = [];
+    public WlDataDeviceManagerDndAction DndActions { get; private set; }
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => WlDataSourceProtocol.Requests;
+
+    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+            {
+                string mimeType = WlDataSourceProtocol.DecodeOffer(message.Body, message.Fds).MimeType;
+                if (!string.IsNullOrWhiteSpace(mimeType))
+                    MimeTypes.Add(mimeType);
+                break;
+            }
+            case 1:
+                Destroy();
+                break;
+            case 2:
+                DndActions = WlDataSourceProtocol.DecodeSetActions(message.Body, message.Fds).DndActions;
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0, $"Unsupported wl_data_source opcode {message.Header.Opcode}.");
+        }
+
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class WlDataDeviceResource : WaylandResource
+{
+    public WlDataDeviceResource(WaylandClient client, uint objectId, uint version, WlSeatResource seat)
+        : base(client, objectId, version, WlDataDeviceProtocol.InterfaceName)
+    {
+        Seat = seat;
+    }
+
+    public WlSeatResource Seat { get; }
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => WlDataDeviceProtocol.Requests;
+
+    public ValueTask SendInitialSelectionAsync()
+    {
+        return WlDataDeviceEventWriter.SelectionAsync(Client, ObjectId, 0);
+    }
+
+    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+            {
+                var request = WlDataDeviceProtocol.DecodeStartDrag(message.Body, message.Fds);
+                if (request.Source != 0)
+                    Client.Objects.Require<WlDataSourceResource>(request.Source);
+                Client.Objects.Require<WlSurfaceResource>(request.Origin);
+                if (request.Icon != 0)
+                    Client.Objects.Require<WlSurfaceResource>(request.Icon);
+                break;
+            }
+            case 1:
+            {
+                var request = WlDataDeviceProtocol.DecodeSetSelection(message.Body, message.Fds);
+                if (request.Source != 0)
+                    Client.Objects.Require<WlDataSourceResource>(request.Source);
+                break;
+            }
+            case 2:
+                Destroy();
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0, $"Unsupported wl_data_device opcode {message.Header.Opcode}.");
+        }
+
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class WlDataDeviceManagerResource : WaylandResource
+{
+    public WlDataDeviceManagerResource(WaylandClient client, uint objectId, uint version)
+        : base(client, objectId, version, WlDataDeviceManagerProtocol.InterfaceName)
+    {
+    }
+
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => WlDataDeviceManagerProtocol.Requests;
+
+    public override ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+            {
+                var request = WlDataDeviceManagerProtocol.DecodeCreateDataSource(message.Body, message.Fds);
+                Client.Register(new WlDataSourceResource(Client, request.Id, 3));
+                break;
+            }
+            case 1:
+            {
+                var request = WlDataDeviceManagerProtocol.DecodeGetDataDevice(message.Body, message.Fds);
+                WlSeatResource seat = Client.Objects.Require<WlSeatResource>(request.Seat);
+                var dataDevice = Client.Register(new WlDataDeviceResource(Client, request.Id, 3, seat));
+                dataDevice.SendInitialSelectionAsync().AsTask().GetAwaiter().GetResult();
+                break;
+            }
+            default:
+                throw new WaylandProtocolException(ObjectId, 0,
+                    $"Unsupported wl_data_device_manager opcode {message.Header.Opcode}.");
+        }
+
+        return ValueTask.CompletedTask;
     }
 }
 
@@ -731,17 +1090,10 @@ internal sealed class WlKeyboardResource : WaylandResource
     public async ValueTask SendInitialStateAsync()
     {
         LinuxFile keymap = Client.Server.KeyboardKeymap.OpenReadOnly();
-        try
-        {
-            await WlKeyboardEventWriter.KeymapAsync(Client, ObjectId, WlKeyboardKeymapFormat.XkbV1, keymap,
-                Client.Server.KeyboardKeymap.Size);
-            if (Version >= 4)
-                await WlKeyboardEventWriter.RepeatInfoAsync(Client, ObjectId, 25, 600);
-        }
-        finally
-        {
-            keymap.Close();
-        }
+        await WlKeyboardEventWriter.KeymapAsync(Client, ObjectId, WlKeyboardKeymapFormat.XkbV1, keymap,
+            Client.Server.KeyboardKeymap.Size);
+        if (Version >= 4)
+            await WlKeyboardEventWriter.RepeatInfoAsync(Client, ObjectId, 25, 600);
     }
 
     public async ValueTask FocusAsync(uint surfaceId)

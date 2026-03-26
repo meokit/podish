@@ -116,7 +116,9 @@ internal sealed class WaylandSdlDisplayThread : IDisposable
                 if (dirty)
                 {
                     _host.Render();
-                    _postIngress(new WaylandDisplayIngressEvent(WaylandDisplayIngressKind.VSyncTick));
+                    _postIngress(new WaylandDisplayIngressEvent(
+                        WaylandDisplayIngressKind.VSyncTick,
+                        Timestamp: unchecked((uint)Environment.TickCount64)));
                 }
 
                 if (shutdownRequested)

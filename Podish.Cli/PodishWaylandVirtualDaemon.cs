@@ -246,6 +246,9 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
                 _logger.LogInformation("Wayland display output closed, continuing runtime without host display");
                 return false;
             case WaylandDisplayIngressKind.VSyncTick:
+                await _server.HandlePresentationTickAsync(ingress.Timestamp != 0
+                    ? ingress.Timestamp
+                    : unchecked((uint)Environment.TickCount64));
                 return true;
             default:
                 return true;

@@ -279,6 +279,7 @@ internal sealed class WaylandFocusManager
 
         desktopSceneController.SetSurfaceBounds(grabbedSceneSurfaceId, bounds);
         desktopSceneController.RaiseSurface(grabbedSceneSurfaceId);
+        surface.UpdateChildSubsurfacePlacements();
         _focusedPointerSceneSurfaceId = grabbedSceneSurfaceId;
     }
 
@@ -309,6 +310,7 @@ internal sealed class WaylandFocusManager
         var bounds = new WaylandSurfaceBounds(newLeft, newTop, newRight - newLeft, newBottom - newTop);
         desktopSceneController.SetSurfaceBounds(grabbedSceneSurfaceId, bounds);
         desktopSceneController.RaiseSurface(grabbedSceneSurfaceId);
+        surface.UpdateChildSubsurfacePlacements();
         _focusedPointerSceneSurfaceId = grabbedSceneSurfaceId;
 
         if (surface.XdgSurface?.Toplevel is XdgToplevelResource toplevel)

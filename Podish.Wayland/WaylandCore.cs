@@ -458,6 +458,7 @@ public sealed class WaylandServer
         string Description = "Podish Virtual Output", string Make = "Podish", string Model = "Virtual Display");
 
     private readonly List<WaylandClient> _clients = [];
+    private readonly List<WlCallbackResource> _pendingFrameCallbacks = [];
     private readonly Dictionary<ulong, WlSurfaceResource> _sceneSurfaces = [];
     private readonly WaylandKeyboardKeymap _keyboardKeymap = new();
     private long _nextDisplayLeaseToken;
@@ -491,6 +492,8 @@ public sealed class WaylandServer
         if (!_clients.Remove(client))
             return;
 
+        _pendingFrameCallbacks.RemoveAll(callback => ReferenceEquals(callback.Client, client));
+
         foreach (WlSurfaceResource surface in client.Objects.All.OfType<WlSurfaceResource>().ToList())
         {
             if (surface.IsCursorRole && FramePresenter is IWaylandCursorPresenter cursorPresenter)
@@ -512,8 +515,12 @@ public sealed class WaylandServer
     {
         Globals.Add(WlCompositorProtocol.InterfaceName, WlCompositorProtocol.Version,
             static (client, objectId, version) => client.Register(new WlCompositorResource(client, objectId, version)));
+        Globals.Add(WlSubcompositorProtocol.InterfaceName, WlSubcompositorProtocol.Version,
+            static (client, objectId, version) => client.Register(new WlSubcompositorResource(client, objectId, version)));
         Globals.Add(WlShmProtocol.InterfaceName, WlShmProtocol.Version,
             static (client, objectId, version) => client.Register(new WlShmResource(client, objectId, version)));
+        Globals.Add(WlDataDeviceManagerProtocol.InterfaceName, WlDataDeviceManagerProtocol.Version,
+            static (client, objectId, version) => client.Register(new WlDataDeviceManagerResource(client, objectId, version)));
         Globals.Add(WlSeatProtocol.InterfaceName, WlSeatProtocol.Version,
             static (client, objectId, version) => client.Register(new WlSeatResource(client, objectId, version)));
         Globals.Add(WlOutputProtocol.InterfaceName, WlOutputProtocol.Version,
@@ -565,6 +572,32 @@ public sealed class WaylandServer
     internal bool TryGetSceneSurface(ulong sceneSurfaceId, [NotNullWhen(true)] out WlSurfaceResource? surface)
     {
         return _sceneSurfaces.TryGetValue(sceneSurfaceId, out surface);
+    }
+
+    internal void EnqueueFrameCallbacks(IEnumerable<WlCallbackResource> callbacks)
+    {
+        foreach (WlCallbackResource callback in callbacks)
+        {
+            if (!callback.Destroyed)
+                _pendingFrameCallbacks.Add(callback);
+        }
+    }
+
+    public async ValueTask HandlePresentationTickAsync(uint timeMs)
+    {
+        if (_pendingFrameCallbacks.Count == 0)
+            return;
+
+        List<WlCallbackResource> callbacks = [.. _pendingFrameCallbacks];
+        _pendingFrameCallbacks.Clear();
+
+        foreach (WlCallbackResource callback in callbacks)
+        {
+            if (callback.Destroyed)
+                continue;
+
+            await callback.SendDoneAndDisposeAsync(timeMs);
+        }
     }
 
     public async ValueTask HandleBufferConsumedAsync(ulong leaseToken)
