@@ -13,6 +13,7 @@ internal sealed class WaylandFocusManager
     private ulong? _focusedPointerSceneSurfaceId;
     private ulong? _grabbedPointerSceneSurfaceId;
     private ulong? _focusedKeyboardSceneSurfaceId;
+    private WaylandSceneHit _focusedSceneHit;
     private int _pressedPointerButtons;
     private InteractiveMode _interactiveMode;
     private int _pointerDesktopX;
@@ -61,16 +62,16 @@ internal sealed class WaylandFocusManager
             !grabbedSurface.IsCursorRole)
         {
             _focusedPointerSceneSurfaceId = grabbedSceneSurfaceId;
-
-            await DispatchPointerMotionAsync(
-                grabbedSurface,
+            _focusedSceneHit = new WaylandSceneHit(
+                grabbedSceneSurfaceId,
+                WaylandSceneHitKind.Surface,
                 desktopX - grabbedBounds.X,
-                desktopY - grabbedBounds.Y,
-                time);
+                desktopY - grabbedBounds.Y);
+            await DispatchPointerMotionAsync(grabbedSurface, desktopX - grabbedBounds.X, desktopY - grabbedBounds.Y, time);
             return;
         }
 
-        if (!sceneView.TryGetSurfaceAt(desktopX, desktopY, out WaylandSurfaceHit hit) ||
+        if (!sceneView.TryGetSceneHitAt(desktopX, desktopY, out WaylandSceneHit hit) ||
             !_server.TryGetSceneSurface(hit.SceneSurfaceId, out WlSurfaceResource? surface))
         {
             await ClearPointerFocusAsync();
@@ -84,17 +85,56 @@ internal sealed class WaylandFocusManager
         }
 
         _focusedPointerSceneSurfaceId = hit.SceneSurfaceId;
-        await DispatchPointerMotionAsync(surface, hit.SurfaceX, hit.SurfaceY, time);
+        _focusedSceneHit = hit;
+
+        if (hit.Kind == WaylandSceneHitKind.Surface)
+        {
+            await DispatchPointerMotionAsync(surface, hit.SurfaceX, hit.SurfaceY, time);
+            return;
+        }
+
+        await ClearClientPointerFocusAsync();
     }
 
     public async ValueTask HandlePointerButtonAsync(uint button, bool pressed, uint time)
     {
+        if (pressed &&
+            _focusedPointerSceneSurfaceId is ulong focusedSceneSurfaceId &&
+            _focusedSceneHit.Kind != WaylandSceneHitKind.Surface &&
+            _server.TryGetSceneSurface(focusedSceneSurfaceId, out WlSurfaceResource? surface))
+        {
+            await FocusKeyboardSurfaceAsync(focusedSceneSurfaceId);
+
+            if (surface.XdgSurface?.Toplevel is XdgToplevelResource toplevel)
+            {
+                _pressedPointerButtons++;
+                switch (_focusedSceneHit.Kind)
+                {
+                    case WaylandSceneHitKind.Titlebar:
+                        await BeginInteractiveMoveAsync(toplevel);
+                        return;
+                    case WaylandSceneHitKind.ResizeBorder:
+                        await BeginInteractiveResizeAsync(toplevel, _focusedSceneHit.ResizeEdges);
+                        return;
+                    case WaylandSceneHitKind.CloseButton:
+                        await toplevel.SendCloseAsync();
+                        return;
+                    case WaylandSceneHitKind.MaximizeButton:
+                        await toplevel.SetMaximizedAsync(!toplevel.IsMaximized);
+                        return;
+                    case WaylandSceneHitKind.MinimizeButton:
+                        await toplevel.SetMinimizedAsync(true);
+                        return;
+                }
+            }
+        }
+
         if (pressed)
         {
             _pressedPointerButtons++;
             _grabbedPointerSceneSurfaceId ??= _focusedPointerSceneSurfaceId;
-            if (_focusedPointerSceneSurfaceId is ulong focusedSceneSurfaceId)
-                await FocusKeyboardSurfaceAsync(focusedSceneSurfaceId);
+            if (_focusedPointerSceneSurfaceId is ulong focusedSurfaceId)
+                await FocusKeyboardSurfaceAsync(focusedSurfaceId);
         }
         else if (_pressedPointerButtons > 0)
         {
@@ -105,6 +145,9 @@ internal sealed class WaylandFocusManager
                 _interactiveMode = InteractiveMode.PassThrough;
             }
         }
+
+        if (_focusedSceneHit.Kind != WaylandSceneHitKind.Surface)
+            return;
 
         foreach (WaylandClient client in _server.Clients)
         {
@@ -136,11 +179,8 @@ internal sealed class WaylandFocusManager
 
         _focusedPointerSceneSurfaceId = null;
         _grabbedPointerSceneSurfaceId = null;
-        foreach (WaylandClient client in _server.Clients)
-        {
-            foreach (WlPointerResource pointer in client.Objects.All.OfType<WlPointerResource>())
-                await pointer.ClearFocusAsync();
-        }
+        _focusedSceneHit = default;
+        await ClearClientPointerFocusAsync();
     }
 
     public async ValueTask HandleSurfaceDestroyedAsync(ulong sceneSurfaceId)
@@ -150,6 +190,7 @@ internal sealed class WaylandFocusManager
         if (_focusedPointerSceneSurfaceId == sceneSurfaceId)
         {
             _focusedPointerSceneSurfaceId = null;
+            _focusedSceneHit = default;
             affected = true;
         }
 
@@ -157,6 +198,7 @@ internal sealed class WaylandFocusManager
         {
             _grabbedPointerSceneSurfaceId = null;
             _pressedPointerButtons = 0;
+            _interactiveMode = InteractiveMode.PassThrough;
             affected = true;
         }
 
@@ -178,7 +220,7 @@ internal sealed class WaylandFocusManager
     {
         if (_server.FramePresenter is not IWaylandDesktopSceneController desktopSceneController ||
             _server.FramePresenter is not IWaylandSceneView sceneView ||
-            !sceneView.TryGetSurfaceBounds(toplevel.Surface.Surface.SceneSurfaceId, out WaylandSurfaceBounds bounds))
+            !sceneView.TryGetWindowBounds(toplevel.Surface.Surface.SceneSurfaceId, out WaylandSurfaceBounds bounds))
             return;
 
         await FocusKeyboardSurfaceAsync(toplevel.Surface.Surface.SceneSurfaceId);
@@ -195,7 +237,7 @@ internal sealed class WaylandFocusManager
     {
         if (_server.FramePresenter is not IWaylandDesktopSceneController desktopSceneController ||
             _server.FramePresenter is not IWaylandSceneView sceneView ||
-            !sceneView.TryGetSurfaceBounds(toplevel.Surface.Surface.SceneSurfaceId, out WaylandSurfaceBounds bounds))
+            !sceneView.TryGetWindowBounds(toplevel.Surface.Surface.SceneSurfaceId, out WaylandSurfaceBounds bounds))
             return;
 
         await FocusKeyboardSurfaceAsync(toplevel.Surface.Surface.SceneSurfaceId);
@@ -264,6 +306,15 @@ internal sealed class WaylandFocusManager
         }
     }
 
+    private async ValueTask ClearClientPointerFocusAsync()
+    {
+        foreach (WaylandClient client in _server.Clients)
+        {
+            foreach (WlPointerResource pointer in client.Objects.All.OfType<WlPointerResource>())
+                await pointer.ClearFocusAsync();
+        }
+    }
+
     private void ProcessInteractiveMove()
     {
         if (_grabbedPointerSceneSurfaceId is not ulong grabbedSceneSurfaceId ||
@@ -277,7 +328,7 @@ internal sealed class WaylandFocusManager
             _grabBounds.Width,
             _grabBounds.Height);
 
-        desktopSceneController.SetSurfaceBounds(grabbedSceneSurfaceId, bounds);
+        desktopSceneController.SetWindowBounds(grabbedSceneSurfaceId, bounds);
         desktopSceneController.RaiseSurface(grabbedSceneSurfaceId);
         surface.UpdateChildSubsurfacePlacements();
         _focusedPointerSceneSurfaceId = grabbedSceneSurfaceId;
@@ -308,12 +359,16 @@ internal sealed class WaylandFocusManager
             newRight = Math.Max(borderX, newLeft + 1);
 
         var bounds = new WaylandSurfaceBounds(newLeft, newTop, newRight - newLeft, newBottom - newTop);
-        desktopSceneController.SetSurfaceBounds(grabbedSceneSurfaceId, bounds);
+        desktopSceneController.SetWindowBounds(grabbedSceneSurfaceId, bounds);
         desktopSceneController.RaiseSurface(grabbedSceneSurfaceId);
         surface.UpdateChildSubsurfacePlacements();
         _focusedPointerSceneSurfaceId = grabbedSceneSurfaceId;
 
-        if (surface.XdgSurface?.Toplevel is XdgToplevelResource toplevel)
-            await toplevel.SendConfigureAsync(bounds.Width, bounds.Height, resizing: true);
+        if (surface.XdgSurface?.Toplevel is XdgToplevelResource toplevel &&
+            _server.FramePresenter is IWaylandSceneView sceneView &&
+            sceneView.TryGetSurfaceBounds(grabbedSceneSurfaceId, out WaylandSurfaceBounds contentBounds))
+        {
+            await toplevel.SendConfigureAsync(contentBounds.Width, contentBounds.Height, resizing: true);
+        }
     }
 }

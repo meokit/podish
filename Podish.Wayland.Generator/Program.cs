@@ -58,6 +58,8 @@ internal static class Program
         ["xdg_wm_base"] = 1,
         ["xdg_surface"] = 1,
         ["xdg_toplevel"] = 1,
+        ["zxdg_decoration_manager_v1"] = 1,
+        ["zxdg_toplevel_decoration_v1"] = 1,
     };
 
     private static int Main(string[] args)

@@ -1064,7 +1064,17 @@ internal sealed class WlPointerResource : WaylandResource
 
 internal sealed class WlKeyboardResource : WaylandResource
 {
+    private const uint ModShift = 1u << 0;
+    private const uint ModLock = 1u << 1;
+    private const uint ModControl = 1u << 2;
+    private const uint Mod1 = 1u << 3;
+    private const uint Mod2 = 1u << 4;
+    private const uint Mod4 = 1u << 6;
+
     private uint? _focusedSurfaceId;
+    private readonly HashSet<uint> _pressedKeys = [];
+    private uint _modsDepressed;
+    private uint _modsLocked;
 
     public WlKeyboardResource(WaylandClient client, uint objectId, uint version)
         : base(client, objectId, version, WlKeyboardProtocol.InterfaceName)
@@ -1105,14 +1115,20 @@ internal sealed class WlKeyboardResource : WaylandResource
             await WlKeyboardEventWriter.LeaveAsync(Client, ObjectId, Client.NextSerial(), oldSurfaceId);
 
         _focusedSurfaceId = surfaceId;
-        await WlKeyboardEventWriter.EnterAsync(Client, ObjectId, Client.NextSerial(), surfaceId, []);
-        await WlKeyboardEventWriter.ModifiersAsync(Client, ObjectId, Client.NextSerial(), 0, 0, 0, 0);
+        await WlKeyboardEventWriter.EnterAsync(Client, ObjectId, Client.NextSerial(), surfaceId, EncodePressedKeys());
+        await WlKeyboardEventWriter.ModifiersAsync(Client, ObjectId, Client.NextSerial(), _modsDepressed, 0, _modsLocked, 0);
     }
 
     public async ValueTask HandleKeyAsync(uint key, bool pressed, uint time)
     {
         if (_focusedSurfaceId == null)
             return;
+
+        bool modifiersChanged = UpdateModifierState(key, pressed);
+        if (pressed)
+            _pressedKeys.Add(key);
+        else
+            _pressedKeys.Remove(key);
 
         await WlKeyboardEventWriter.KeyAsync(
             Client,
@@ -1121,6 +1137,9 @@ internal sealed class WlKeyboardResource : WaylandResource
             time,
             key,
             pressed ? WlKeyboardKeyState.Pressed : WlKeyboardKeyState.Released);
+
+        if (modifiersChanged)
+            await WlKeyboardEventWriter.ModifiersAsync(Client, ObjectId, Client.NextSerial(), _modsDepressed, 0, _modsLocked, 0);
     }
 
     public async ValueTask ClearFocusAsync()
@@ -1130,6 +1149,61 @@ internal sealed class WlKeyboardResource : WaylandResource
 
         _focusedSurfaceId = null;
         await WlKeyboardEventWriter.LeaveAsync(Client, ObjectId, Client.NextSerial(), surfaceId);
+    }
+
+    private bool UpdateModifierState(uint key, bool pressed)
+    {
+        if (!WaylandKeyboardLayout.TryGetByEvdevKey(key, out WaylandKeyboardKeyDescriptor descriptor))
+            return false;
+
+        uint oldDepressed = _modsDepressed;
+        uint oldLocked = _modsLocked;
+        uint mask = descriptor.ModifierRole switch
+        {
+            WaylandKeyboardModifierRole.Shift => ModShift,
+            WaylandKeyboardModifierRole.Control => ModControl,
+            WaylandKeyboardModifierRole.Alt => Mod1,
+            WaylandKeyboardModifierRole.Super => Mod4,
+            WaylandKeyboardModifierRole.CapsLock => ModLock,
+            WaylandKeyboardModifierRole.NumLock => Mod2,
+            _ => 0
+        };
+
+        if (mask == 0)
+            return false;
+
+        switch (descriptor.ModifierRole)
+        {
+            case WaylandKeyboardModifierRole.CapsLock:
+            case WaylandKeyboardModifierRole.NumLock:
+                if (pressed)
+                    _modsLocked ^= mask;
+                break;
+            default:
+                if (pressed)
+                    _modsDepressed |= mask;
+                else
+                    _modsDepressed &= ~mask;
+                break;
+        }
+
+        return oldDepressed != _modsDepressed || oldLocked != _modsLocked;
+    }
+
+    private byte[] EncodePressedKeys()
+    {
+        if (_pressedKeys.Count == 0)
+            return [];
+
+        byte[] bytes = new byte[_pressedKeys.Count * sizeof(uint)];
+        int offset = 0;
+        foreach (uint key in _pressedKeys.OrderBy(static x => x))
+        {
+            BitConverter.TryWriteBytes(bytes.AsSpan(offset, sizeof(uint)), key);
+            offset += sizeof(uint);
+        }
+
+        return bytes;
     }
 }
 
@@ -1255,6 +1329,8 @@ internal sealed class XdgSurfaceResource : WaylandResource
 
 internal sealed class XdgToplevelResource : WaylandResource
 {
+    private WaylandSurfaceBounds? _restoreBounds;
+
     public XdgToplevelResource(WaylandClient client, uint objectId, uint version, XdgSurfaceResource surface)
         : base(client, objectId, version, XdgToplevelProtocol.InterfaceName)
     {
@@ -1265,6 +1341,12 @@ internal sealed class XdgToplevelResource : WaylandResource
     public string Title { get; private set; } = string.Empty;
     public string AppId { get; private set; } = string.Empty;
     public bool Activated { get; private set; }
+    public bool IsMaximized { get; private set; }
+    public bool IsMinimized { get; private set; }
+    public WaylandDecorationMetrics DecorationMetrics { get; } = WaylandDecorationMetrics.Default;
+    public ZxdgToplevelDecorationV1Mode DecorationMode { get; private set; } = ZxdgToplevelDecorationV1Mode.ServerSide;
+    public ZxdgToplevelDecorationV1Resource? DecorationResource { get; private set; }
+    public bool IsServerSideDecorated => DecorationResource != null && DecorationMode == ZxdgToplevelDecorationV1Mode.ServerSide;
 
     public override IReadOnlyList<WaylandMessageMetadata> Requests => XdgToplevelProtocol.Requests;
 
@@ -1280,6 +1362,7 @@ internal sealed class XdgToplevelResource : WaylandResource
                 break;
             case 2:
                 Title = XdgToplevelProtocol.DecodeSetTitle(message.Body, message.Fds).Title;
+                SyncSceneDecoration();
                 break;
             case 3:
                 AppId = XdgToplevelProtocol.DecodeSetAppId(message.Body, message.Fds).AppId;
@@ -1311,12 +1394,18 @@ internal sealed class XdgToplevelResource : WaylandResource
                 _ = XdgToplevelProtocol.DecodeSetMinSize(message.Body, message.Fds);
                 break;
             case 9:
+                await SetMaximizedAsync(true);
+                break;
             case 10:
-            case 12:
-            case 13:
+                await SetMaximizedAsync(false);
                 break;
             case 11:
                 _ = XdgToplevelProtocol.DecodeSetFullscreen(message.Body, message.Fds);
+                break;
+            case 12:
+                break;
+            case 13:
+                await SetMinimizedAsync(true);
                 break;
             default:
                 throw new WaylandProtocolException(ObjectId, 0, $"Unsupported xdg_toplevel opcode {message.Header.Opcode}.");
@@ -1334,13 +1423,107 @@ internal sealed class XdgToplevelResource : WaylandResource
             return;
 
         Activated = activated;
+        SyncSceneDecoration();
         await SendConfigureAsync(0, 0);
     }
 
     public async ValueTask SendConfigureAsync(int width, int height, bool resizing = false)
     {
+        if (DecorationResource != null)
+            await DecorationResource.SendConfigureAsync(DecorationMode);
         await XdgToplevelEventWriter.ConfigureAsync(Client, ObjectId, width, height, BuildStates(resizing));
         await Surface.SendConfigureAsync();
+    }
+
+    public void AttachDecoration(ZxdgToplevelDecorationV1Resource decoration)
+    {
+        if (DecorationResource != null)
+        {
+            throw new WaylandProtocolException(ObjectId,
+                (uint)ZxdgToplevelDecorationV1Error.AlreadyConstructed,
+                "xdg_toplevel already has a decoration object.");
+        }
+
+        DecorationResource = decoration;
+        DecorationMode = ZxdgToplevelDecorationV1Mode.ServerSide;
+        SyncSceneDecoration();
+    }
+
+    public void DetachDecoration(ZxdgToplevelDecorationV1Resource decoration)
+    {
+        if (!ReferenceEquals(DecorationResource, decoration))
+            return;
+
+        DecorationResource = null;
+        SyncSceneDecoration();
+    }
+
+    public async ValueTask SetDecorationModeAsync(ZxdgToplevelDecorationV1Mode? requestedMode)
+    {
+        DecorationMode = requestedMode ?? ZxdgToplevelDecorationV1Mode.ServerSide;
+        SyncSceneDecoration();
+        await SendConfigureAsync(0, 0);
+    }
+
+    public async ValueTask SendCloseAsync()
+    {
+        await XdgToplevelEventWriter.CloseAsync(Client, ObjectId);
+    }
+
+    public async ValueTask SetMaximizedAsync(bool maximized)
+    {
+        if (IsMaximized == maximized)
+            return;
+
+        if (Client.Server.FramePresenter is IWaylandDesktopSceneController sceneController &&
+            Client.Server.FramePresenter is IWaylandSceneView sceneView)
+        {
+            if (maximized)
+            {
+                if (sceneView.TryGetSurfaceBounds(Surface.Surface.SceneSurfaceId, out WaylandSurfaceBounds currentBounds))
+                    _restoreBounds ??= currentBounds;
+
+                WaylandSurfaceBounds desktopWindowBounds = new(0, 0, Client.Server.Output.Width, Client.Server.Output.Height);
+                WaylandDecorationSceneState decoration = BuildDecorationSceneState() with { Maximized = true };
+                sceneController.SetWindowBounds(Surface.Surface.SceneSurfaceId, desktopWindowBounds);
+                sceneController.SetSurfaceDecoration(Surface.Surface.SceneSurfaceId, decoration);
+            }
+            else
+            {
+                if (_restoreBounds is { } restoreBounds)
+                    sceneController.SetSurfaceBounds(Surface.Surface.SceneSurfaceId, restoreBounds);
+
+                sceneController.SetSurfaceDecoration(Surface.Surface.SceneSurfaceId, BuildDecorationSceneState() with { Maximized = false });
+            }
+        }
+
+        IsMaximized = maximized;
+        IsMinimized = false;
+        SyncSceneDecoration();
+
+        if (Client.Server.FramePresenter is IWaylandSceneView updatedScene &&
+            updatedScene.TryGetSurfaceBounds(Surface.Surface.SceneSurfaceId, out WaylandSurfaceBounds contentBounds))
+        {
+            await SendConfigureAsync(contentBounds.Width, contentBounds.Height);
+        }
+        else
+        {
+            await SendConfigureAsync(0, 0);
+        }
+    }
+
+    public async ValueTask SetMinimizedAsync(bool minimized)
+    {
+        if (IsMinimized == minimized)
+            return;
+
+        IsMinimized = minimized;
+        if (minimized)
+            Activated = false;
+
+        SyncSceneDecoration();
+        if (!minimized)
+            await SendConfigureAsync(0, 0);
     }
 
     private byte[] BuildStates(bool resizing)
@@ -1349,9 +1532,112 @@ internal sealed class XdgToplevelResource : WaylandResource
 
         if (Activated)
             states.AddRange(BitConverter.GetBytes((uint)XdgToplevelState.Activated));
+        if (IsMaximized)
+            states.AddRange(BitConverter.GetBytes((uint)XdgToplevelState.Maximized));
         if (resizing)
             states.AddRange(BitConverter.GetBytes((uint)XdgToplevelState.Resizing));
 
         return [.. states];
+    }
+
+    private WaylandDecorationSceneState BuildDecorationSceneState()
+    {
+        return new WaylandDecorationSceneState(
+            IsServerSideDecorated,
+            Activated,
+            IsMaximized,
+            IsMinimized,
+            string.IsNullOrWhiteSpace(Title) ? AppId : Title,
+            DecorationMetrics);
+    }
+
+    private void SyncSceneDecoration()
+    {
+        if (Client.Server.FramePresenter is not IWaylandDesktopSceneController sceneController)
+            return;
+
+        sceneController.SetSurfaceDecoration(Surface.Surface.SceneSurfaceId, BuildDecorationSceneState());
+        sceneController.SetSurfaceHidden(Surface.Surface.SceneSurfaceId, IsMinimized);
+    }
+}
+
+internal sealed class ZxdgDecorationManagerV1Resource : WaylandResource
+{
+    public ZxdgDecorationManagerV1Resource(WaylandClient client, uint objectId, uint version)
+        : base(client, objectId, version, ZxdgDecorationManagerV1Protocol.InterfaceName)
+    {
+    }
+
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => ZxdgDecorationManagerV1Protocol.Requests;
+
+    public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+                Destroy();
+                break;
+            case 1:
+            {
+                var request = ZxdgDecorationManagerV1Protocol.DecodeGetToplevelDecoration(message.Body, message.Fds);
+                XdgToplevelResource toplevel = Client.Objects.Require<XdgToplevelResource>(request.Toplevel);
+                var decoration = Client.Register(new ZxdgToplevelDecorationV1Resource(Client, request.Id, 1, toplevel));
+                toplevel.AttachDecoration(decoration);
+                await decoration.SendConfigureAsync(toplevel.DecorationMode);
+                await toplevel.SendConfigureAsync(0, 0);
+                break;
+            }
+            default:
+                throw new WaylandProtocolException(ObjectId, 0,
+                    $"Unsupported zxdg_decoration_manager_v1 opcode {message.Header.Opcode}.");
+        }
+    }
+}
+
+internal sealed class ZxdgToplevelDecorationV1Resource : WaylandResource
+{
+    public ZxdgToplevelDecorationV1Resource(WaylandClient client, uint objectId, uint version, XdgToplevelResource toplevel)
+        : base(client, objectId, version, ZxdgToplevelDecorationV1Protocol.InterfaceName)
+    {
+        Toplevel = toplevel;
+    }
+
+    public XdgToplevelResource Toplevel { get; }
+    public override IReadOnlyList<WaylandMessageMetadata> Requests => ZxdgToplevelDecorationV1Protocol.Requests;
+
+    public override async ValueTask DispatchAsync(WaylandIncomingMessage message)
+    {
+        switch (message.Header.Opcode)
+        {
+            case 0:
+                Destroy();
+                break;
+            case 1:
+            {
+                ZxdgToplevelDecorationV1SetModeRequest request = ZxdgToplevelDecorationV1Protocol.DecodeSetMode(message.Body, message.Fds);
+                await Toplevel.SetDecorationModeAsync(request.Mode);
+                break;
+            }
+            case 2:
+                await Toplevel.SetDecorationModeAsync(null);
+                break;
+            default:
+                throw new WaylandProtocolException(ObjectId, 0,
+                    $"Unsupported zxdg_toplevel_decoration_v1 opcode {message.Header.Opcode}.");
+        }
+    }
+
+    public async ValueTask SendConfigureAsync(ZxdgToplevelDecorationV1Mode mode)
+    {
+        await ZxdgToplevelDecorationV1EventWriter.ConfigureAsync(Client, ObjectId, mode);
+    }
+
+    public override void Destroy()
+    {
+        if (Destroyed)
+            return;
+
+        Toplevel.DetachDecoration(this);
+        base.Destroy();
     }
 }

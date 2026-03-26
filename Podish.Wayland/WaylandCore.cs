@@ -527,6 +527,8 @@ public sealed class WaylandServer
             static (client, objectId, version) => client.Register(new WlOutputResource(client, objectId, version)));
         Globals.Add(XdgWmBaseProtocol.InterfaceName, XdgWmBaseProtocol.Version,
             static (client, objectId, version) => client.Register(new XdgWmBaseResource(client, objectId, version)));
+        Globals.Add(ZxdgDecorationManagerV1Protocol.InterfaceName, ZxdgDecorationManagerV1Protocol.Version,
+            static (client, objectId, version) => client.Register(new ZxdgDecorationManagerV1Resource(client, objectId, version)));
     }
 
     public async ValueTask HandlePointerMotionAsync(int desktopX, int desktopY, uint time)
