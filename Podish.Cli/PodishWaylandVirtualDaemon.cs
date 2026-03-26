@@ -61,6 +61,7 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
     public void OnStop(VirtualDaemonContext context)
     {
         _logger.LogDebug("Wayland daemon stopping path={Path}", UnixPath);
+        _server.ShutdownAsync().AsTask().GetAwaiter().GetResult();
     }
 
     private void ScheduleAcceptLoop(VirtualDaemonContext context)
@@ -255,7 +256,8 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
                     desktopSceneController.ResizeDesktop(ingress.Size.Width, ingress.Size.Height);
                 return true;
             case WaylandDisplayIngressKind.WindowClosed:
-                _logger.LogInformation("Wayland display output closed, continuing runtime without host display");
+                _logger.LogInformation("Wayland display output closed, exiting wayland compositor");
+                context?.Exit(0);
                 return false;
             case WaylandDisplayIngressKind.VSyncTick:
                 await _server.HandlePresentationTickAsync(ingress.Timestamp != 0

@@ -220,7 +220,7 @@ public sealed class WaylandRuntimeTests
         using var env = new TestEnv();
         await env.InvokeOnSchedulerAsync(async () =>
         {
-            var presenter = new RecordingFramePresenter();
+            var presenter = new TestScenePresenter();
             var sent = new List<WaylandOutgoingMessage>();
             var server = new WaylandServer(presenter);
             var client = server.CreateClient(message =>
@@ -235,6 +235,7 @@ public sealed class WaylandRuntimeTests
             uint shmName = globals.Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
             uint seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
             uint cursorShapeName = globals.Single(x => x.Interface == WpCursorShapeManagerV1Protocol.InterfaceName).Name;
+            uint xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
 
             sent.Clear();
             await SendRequestAsync(client, 2, 0, writer =>
@@ -271,7 +272,51 @@ public sealed class WaylandRuntimeTests
                 writer.WriteNewId(8);
                 writer.WriteObjectId(6);
             });
+            await SendRequestAsync(client, 2, 0, writer =>
+            {
+                writer.WriteUInt(xdgName);
+                writer.WriteString(XdgWmBaseProtocol.InterfaceName);
+                writer.WriteUInt(1);
+                writer.WriteNewId(100);
+            });
             await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(9));
+
+            // Create a separate surface (120) to be the XDG toplevel for scene hit presence
+            await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(120));
+            await SendRequestAsync(client, 100, 2, writer =>
+            {
+                writer.WriteNewId(101);
+                writer.WriteObjectId(120);
+            });
+            await SendRequestAsync(client, 101, 1, writer => writer.WriteNewId(102));
+            uint serial = new WaylandWireReader(sent.Last().Buffer[WaylandMessageHeader.SizeInBytes..]).ReadUInt();
+            await SendRequestAsync(client, 101, 4, writer => writer.WriteUInt(serial));
+
+            // Commit a buffer to the XDG surface so PresentSurfaceAsync registers its bounds
+            LinuxFile sharedFd = env.CreateMemfdLikeFile("xdg-shm", new string('x', 64));
+            await SendRequestAsync(client, 4, 0, writer =>
+            {
+                writer.WriteNewId(50);
+                writer.WriteFd(sharedFd);
+                writer.WriteInt(64);
+            });
+            await SendRequestAsync(client, 50, 0, writer =>
+            {
+                writer.WriteNewId(51);
+                writer.WriteInt(0);
+                writer.WriteInt(4);
+                writer.WriteInt(4);
+                writer.WriteInt(16);
+                writer.WriteUInt((uint)WlShmFormat.Argb8888);
+            });
+            await SendRequestAsync(client, 120, 1, writer =>
+            {
+                writer.WriteObjectId(51);
+                writer.WriteInt(0);
+                writer.WriteInt(0);
+            });
+            await SendRequestAsync(client, 120, 6, static _ => { });
+            sharedFd.Close();
 
             sent.Clear();
             await server.HandlePointerMotionAsync(10, 10, 1);
@@ -1096,7 +1141,7 @@ public sealed class WaylandVirtualDaemonTests
 
             step = "get registry";
             await clientSocket.SendAsync(MakeRequest(1, 1, writer => writer.WriteNewId(2)).Buffer);
-            List<DecodedMessage> globals = await clientSocket.ReceiveMessagesAsync(8);
+            List<DecodedMessage> globals = await clientSocket.ReceiveMessagesAsync(11);
             uint compositorName = globals.Select(ParseGlobal).Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
             uint shmName = globals.Select(ParseGlobal).Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
             uint wmBaseName = globals.Select(ParseGlobal).Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
@@ -1255,15 +1300,37 @@ internal sealed class RecordingFramePresenter : IWaylandFramePresenter, IWayland
     }
 }
 
-internal sealed class TestScenePresenter : IWaylandFramePresenter, IWaylandSceneView, IWaylandDesktopSceneController
+internal sealed class TestScenePresenter : IWaylandFramePresenter, IWaylandSceneView, IWaylandDesktopSceneController, IWaylandCursorPresenter
 {
     private readonly WaylandUiTheme _theme = WaylandUiTheme.BreezeLight;
     private readonly Dictionary<ulong, WaylandSurfaceBounds> _bounds = [];
     private readonly Dictionary<ulong, WaylandDecorationSceneState> _decorations = [];
     private readonly HashSet<ulong> _hidden = [];
 
+    public WaylandCursorFrame? LastCursor { get; private set; }
+    public WaylandSystemCursorShape? LastSystemCursor { get; private set; }
+
     public ValueTask PresentSurfaceAsync(ulong sceneSurfaceId, WaylandShmFrame? frame, CancellationToken cancellationToken = default)
     {
+        // Auto-register default bounds when a surface first appears so pointer hit-tests can find it
+        if (frame != null)
+            _bounds.TryAdd(sceneSurfaceId, new WaylandSurfaceBounds(0, 0, 1024, 768));
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask UpdateCursorAsync(ulong sceneSurfaceId, WaylandCursorFrame? cursor, CancellationToken cancellationToken = default)
+    {
+        LastCursor = cursor;
+        if (cursor != null)
+            LastSystemCursor = null;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask UpdateSystemCursorAsync(WaylandSystemCursorShape? shape, CancellationToken cancellationToken = default)
+    {
+        LastSystemCursor = shape;
+        if (shape != null)
+            LastCursor = null;
         return ValueTask.CompletedTask;
     }
 

@@ -508,6 +508,15 @@ public sealed class WaylandServer
             UnregisterSceneSurface(surface);
             await Focus.HandleSurfaceDestroyedAsync(surface.SceneSurfaceId);
         }
+
+        client.HandleClosed();
+    }
+
+    public async ValueTask ShutdownAsync()
+    {
+        WaylandClient[] clients = [.. _clients];
+        foreach (WaylandClient client in clients)
+            await DisconnectClientAsync(client);
     }
 
     public void SetFramePresenter(IWaylandFramePresenter? framePresenter)
@@ -865,6 +874,9 @@ public sealed class WaylandClient
 
     public WaylandServer Server { get; }
     public WaylandObjectTable Objects { get; }
+    public event Action? OnClosed;
+
+    internal void HandleClosed() => OnClosed?.Invoke();
 
     public uint NextSerial() => _nextSerial++;
 

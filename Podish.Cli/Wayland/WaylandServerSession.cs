@@ -24,6 +24,17 @@ internal sealed class WaylandServerSession
                 header.ObjectId, interfaceName, header.Opcode, messageName, header.Size, message.Fds?.Count ?? 0);
             return _connection.SendAsync(message);
         });
+        _client.OnClosed += () =>
+        {
+            try
+            {
+                _connection.RawConnection.Dispose();
+            }
+            catch
+            {
+                // ignore
+            }
+        };
     }
 
     public WaylandClient Client => _client;
