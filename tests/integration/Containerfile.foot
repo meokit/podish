@@ -1,0 +1,12 @@
+FROM docker.io/i386/alpine:3.20
+
+RUN apk add --no-cache \
+    bash \
+    coreutils \
+    fontconfig \
+    font-dejavu \
+    foot
+
+WORKDIR /workspace
+
+CMD ["/bin/sh"]

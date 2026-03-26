@@ -1,0 +1,19 @@
+FROM docker.io/i386/alpine:3.20
+
+RUN apk add --no-cache \
+    bash \
+    coreutils \
+    ffmpeg \
+    ffplay \
+    libxkbcommon \
+    pulseaudio-utils
+
+RUN mkdir -p /run/pulse /workspace \
+    && ffmpeg -hide_banner -loglevel error \
+        -f lavfi -i "sine=frequency=1000:duration=3" \
+        -q:a 9 -acodec libmp3lame \
+        /workspace/sample-3s.mp3 -y
+
+WORKDIR /workspace
+
+CMD ["/bin/sh"]
