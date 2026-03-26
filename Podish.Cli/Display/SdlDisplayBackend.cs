@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Podish.Display;
+using Podish.Wayland;
 using Silk.NET.Maths;
 using Silk.NET.SDL;
 
@@ -293,23 +294,9 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
 
     private static uint? TryMapKeyboardScancodeToEvdev(int scancode)
     {
-        return scancode switch
-        {
-            4 => 30, 5 => 48, 6 => 46, 7 => 32, 8 => 18, 9 => 33, 10 => 34, 11 => 35,
-            12 => 23, 13 => 36, 14 => 37, 15 => 38, 16 => 50, 17 => 49, 18 => 24, 19 => 25,
-            20 => 16, 21 => 19, 22 => 31, 23 => 20, 24 => 22, 25 => 47, 26 => 17, 27 => 45,
-            28 => 21, 29 => 44,
-            30 => 2, 31 => 3, 32 => 4, 33 => 5, 34 => 6, 35 => 7, 36 => 8, 37 => 9, 38 => 10, 39 => 11,
-            40 => 28, 41 => 1, 42 => 14, 43 => 15, 44 => 57,
-            45 => 12, 46 => 13, 47 => 26, 48 => 27, 49 => 43, 51 => 39, 52 => 40, 53 => 41,
-            54 => 51, 55 => 52, 56 => 53,
-            58 => 59, 59 => 60, 60 => 61, 61 => 62, 62 => 63, 63 => 64, 64 => 65, 65 => 66,
-            66 => 67, 67 => 68, 68 => 87, 69 => 88,
-            73 => 110, 74 => 102, 75 => 104, 76 => 111, 77 => 107, 78 => 109,
-            79 => 106, 80 => 105, 81 => 108, 82 => 103,
-            224 => 29, 225 => 42, 226 => 56, 227 => 125, 228 => 97, 229 => 54, 230 => 100, 231 => 126,
-            _ => null
-        };
+        return WaylandKeyboardLayout.TryGetBySdlScancode(scancode, out WaylandKeyboardKeyDescriptor descriptor)
+            ? descriptor.EvdevKey
+            : null;
     }
 }
 
@@ -374,6 +361,11 @@ internal sealed unsafe class SdlDisplayRenderer : IDisplayRenderer
         if (texture == null)
             throw new InvalidOperationException($"SDL create texture failed: {GetError()}");
 
+        var blendMode = descriptor.Format == DisplayPixelFormat.Argb8888
+            ? BlendMode.Blend
+            : BlendMode.None;
+        ThrowIfFailed(_sdl.SetTextureBlendMode(texture, blendMode), "set texture blend mode");
+
         return new SdlDisplayTexture(_sdl, texture, descriptor);
     }
 
@@ -381,6 +373,13 @@ internal sealed unsafe class SdlDisplayRenderer : IDisplayRenderer
     {
         ThrowIfFailed(_sdl.SetRenderDrawColor(_renderer, color.R, color.G, color.B, color.A), "set render draw color");
         ThrowIfFailed(_sdl.RenderClear(_renderer), "render clear");
+    }
+
+    public void FillRect(DisplayRect rect, DisplayColor color)
+    {
+        ThrowIfFailed(_sdl.SetRenderDrawColor(_renderer, color.R, color.G, color.B, color.A), "set render draw color");
+        Rectangle<int> sdlRect = new(rect.X, rect.Y, rect.Width, rect.Height);
+        ThrowIfFailed(_sdl.RenderFillRect(_renderer, &sdlRect), "render fill rect");
     }
 
     public void Blit(IDisplayTexture texture, DisplayRect? source = null, DisplayRect? destination = null)

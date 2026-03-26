@@ -109,6 +109,7 @@ public interface IDisplayRenderer : IDisposable
     IDisplayTexture CreateTexture(DisplayTextureDescriptor descriptor);
     void SetLogicalSize(int width, int height);
     void Clear(DisplayColor color);
+    void FillRect(DisplayRect rect, DisplayColor color);
     void Blit(IDisplayTexture texture, DisplayRect? source = null, DisplayRect? destination = null);
     void Present();
 }

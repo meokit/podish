@@ -1,3 +1,4 @@
+using Podish.Display;
 using Podish.Wayland;
 
 namespace Podish.Cli.Wayland;
@@ -37,16 +38,25 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
             state.Width = frame.Value.Width;
             state.Height = frame.Value.Height;
             if (state.AutoCentered)
-                state.Bounds = ComputeCenteredRect(frame.Value.Width, frame.Value.Height);
+            {
+                WaylandSurfaceBounds centered = ComputeCenteredContentRect(frame.Value.Width, frame.Value.Height, state.Decoration);
+                state.ContentBounds = centered;
+            }
             else
-                state.Bounds = new WaylandSurfaceBounds(state.Bounds.X, state.Bounds.Y, frame.Value.Width, frame.Value.Height);
+            {
+                state.ContentBounds = new WaylandSurfaceBounds(
+                    state.ContentBounds.X,
+                    state.ContentBounds.Y,
+                    frame.Value.Width,
+                    frame.Value.Height);
+            }
         }
         else
         {
             state = new SurfaceState(frame.Value.Width, frame.Value.Height)
             {
                 SceneSurfaceId = sceneSurfaceId,
-                Bounds = ComputeCenteredRect(frame.Value.Width, frame.Value.Height),
+                ContentBounds = ComputeCenteredContentRect(frame.Value.Width, frame.Value.Height, default),
                 AutoCentered = true
             };
             _surfaces[sceneSurfaceId] = state;
@@ -54,7 +64,7 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
 
         _zOrder.Remove(sceneSurfaceId);
         _zOrder.Add(sceneSurfaceId);
-        _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.PresentSurface, sceneSurfaceId, frame.Value, state.Bounds));
+        _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.PresentSurface, sceneSurfaceId, frame.Value, state.ContentBounds));
         return ValueTask.CompletedTask;
     }
 
@@ -80,19 +90,26 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
 
     public bool TryGetSurfaceAt(int desktopX, int desktopY, out WaylandSurfaceHit hit)
     {
+        if (TryGetSceneHitAt(desktopX, desktopY, out WaylandSceneHit sceneHit))
+        {
+            hit = new WaylandSurfaceHit(sceneHit.SceneSurfaceId, sceneHit.SurfaceX, sceneHit.SurfaceY);
+            return true;
+        }
+
+        hit = default;
+        return false;
+    }
+
+    public bool TryGetSceneHitAt(int desktopX, int desktopY, out WaylandSceneHit hit)
+    {
         for (int i = _zOrder.Count - 1; i >= 0; i--)
         {
             ulong sceneSurfaceId = _zOrder[i];
-            if (!_surfaces.TryGetValue(sceneSurfaceId, out SurfaceState? surface))
+            if (!_surfaces.TryGetValue(sceneSurfaceId, out SurfaceState? surface) || surface.Hidden)
                 continue;
 
-            WaylandSurfaceBounds bounds = surface.Bounds;
-            if (desktopX < bounds.X || desktopY < bounds.Y || desktopX >= bounds.X + bounds.Width ||
-                desktopY >= bounds.Y + bounds.Height)
-                continue;
-
-            hit = new WaylandSurfaceHit(sceneSurfaceId, desktopX - bounds.X, desktopY - bounds.Y);
-            return true;
+            if (TryHitSurface(surface, desktopX, desktopY, out hit))
+                return true;
         }
 
         hit = default;
@@ -103,11 +120,19 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
     {
         if (_surfaces.TryGetValue(sceneSurfaceId, out SurfaceState? surface))
         {
-            bounds = new WaylandSurfaceBounds(
-                surface.Bounds.X,
-                surface.Bounds.Y,
-                surface.Bounds.Width,
-                surface.Bounds.Height);
+            bounds = surface.ContentBounds;
+            return true;
+        }
+
+        bounds = default;
+        return false;
+    }
+
+    public bool TryGetWindowBounds(ulong sceneSurfaceId, out WaylandSurfaceBounds bounds)
+    {
+        if (_surfaces.TryGetValue(sceneSurfaceId, out SurfaceState? surface))
+        {
+            bounds = GetWindowBounds(surface);
             return true;
         }
 
@@ -119,7 +144,7 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
     {
         return [.. _zOrder
             .Where(sceneSurfaceId => _surfaces.ContainsKey(sceneSurfaceId))
-            .Select(sceneSurfaceId => (sceneSurfaceId, _surfaces[sceneSurfaceId].Bounds))];
+            .Select(sceneSurfaceId => (sceneSurfaceId, _surfaces[sceneSurfaceId].ContentBounds))];
     }
 
     public void ResizeDesktop(int width, int height)
@@ -132,11 +157,11 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
             if (!state.AutoCentered)
                 continue;
 
-            state.Bounds = ComputeCenteredRect(state.Width, state.Height);
+            state.ContentBounds = ComputeCenteredContentRect(state.Width, state.Height, state.Decoration);
             _enqueueCommand(new WaylandDisplayCommand(
                 WaylandDisplayCommandKind.UpdateSurfaceBounds,
                 state.SceneSurfaceId,
-                Bounds: state.Bounds));
+                Bounds: state.ContentBounds));
         }
     }
 
@@ -152,14 +177,49 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
 
     public void SetSurfaceBounds(ulong sceneSurfaceId, WaylandSurfaceBounds bounds)
     {
-        if (!_surfaces.TryGetValue(sceneSurfaceId, out SurfaceState? state))
-            return;
+        SurfaceState state = GetOrCreateState(sceneSurfaceId);
 
         state.AutoCentered = false;
-        state.Bounds = bounds;
+        state.ContentBounds = bounds;
         state.Width = bounds.Width;
         state.Height = bounds.Height;
         _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.UpdateSurfaceBounds, sceneSurfaceId, Bounds: bounds));
+    }
+
+    public void SetWindowBounds(ulong sceneSurfaceId, WaylandSurfaceBounds bounds)
+    {
+        SurfaceState state = GetOrCreateState(sceneSurfaceId);
+
+        SetSurfaceBounds(sceneSurfaceId, WaylandDecorationLayout.GetContentBoundsFromWindowBounds(bounds, state.Decoration));
+    }
+
+    public void SetSurfaceDecoration(ulong sceneSurfaceId, WaylandDecorationSceneState decoration)
+    {
+        SurfaceState state = GetOrCreateState(sceneSurfaceId);
+
+        state.Decoration = decoration;
+        if (state.AutoCentered)
+            state.ContentBounds = ComputeCenteredContentRect(state.Width, state.Height, decoration);
+
+        _enqueueCommand(new WaylandDisplayCommand(
+            WaylandDisplayCommandKind.UpdateDecoration,
+            sceneSurfaceId,
+            Decoration: decoration));
+        _enqueueCommand(new WaylandDisplayCommand(
+            WaylandDisplayCommandKind.UpdateSurfaceBounds,
+            sceneSurfaceId,
+            Bounds: state.ContentBounds));
+    }
+
+    public void SetSurfaceHidden(ulong sceneSurfaceId, bool hidden)
+    {
+        SurfaceState state = GetOrCreateState(sceneSurfaceId);
+
+        state.Hidden = hidden;
+        _enqueueCommand(new WaylandDisplayCommand(
+            WaylandDisplayCommandKind.SetSurfaceVisibility,
+            sceneSurfaceId,
+            Hidden: hidden));
     }
 
     public void Dispose()
@@ -168,13 +228,152 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
         _zOrder.Clear();
     }
 
-    private WaylandSurfaceBounds ComputeCenteredRect(int width, int height)
+    private WaylandSurfaceBounds ComputeCenteredContentRect(int width, int height, WaylandDecorationSceneState decoration)
     {
+        var contentBounds = new WaylandSurfaceBounds(0, 0, width, height);
+        WaylandSurfaceBounds windowBounds = WaylandDecorationLayout.GetWindowBounds(contentBounds, decoration);
+        int leftInset = -windowBounds.X;
+        int topInset = -windowBounds.Y;
+        int outerWidth = windowBounds.Width;
+        int outerHeight = windowBounds.Height;
+
         return new WaylandSurfaceBounds(
-            (_desktopWidth - width) / 2,
-            (_desktopHeight - height) / 2,
+            (_desktopWidth - outerWidth) / 2 + leftInset,
+            (_desktopHeight - outerHeight) / 2 + topInset,
             width,
             height);
+    }
+
+    private static WaylandSurfaceBounds GetWindowBounds(SurfaceState surface)
+    {
+        return WaylandDecorationLayout.GetWindowBounds(surface.ContentBounds, surface.Decoration);
+    }
+
+    private SurfaceState GetOrCreateState(ulong sceneSurfaceId)
+    {
+        if (_surfaces.TryGetValue(sceneSurfaceId, out SurfaceState? existing))
+            return existing;
+
+        var state = new SurfaceState(1, 1)
+        {
+            SceneSurfaceId = sceneSurfaceId,
+            ContentBounds = ComputeCenteredContentRect(1, 1, default),
+            AutoCentered = true
+        };
+        _surfaces[sceneSurfaceId] = state;
+        return state;
+    }
+
+    private static bool TryHitSurface(SurfaceState surface, int desktopX, int desktopY, out WaylandSceneHit hit)
+    {
+        WaylandSurfaceBounds contentBounds = surface.ContentBounds;
+        WaylandSurfaceBounds windowBounds = GetWindowBounds(surface);
+        if (desktopX < windowBounds.X || desktopY < windowBounds.Y ||
+            desktopX >= windowBounds.X + windowBounds.Width || desktopY >= windowBounds.Y + windowBounds.Height)
+        {
+            hit = default;
+            return false;
+        }
+
+        int surfaceX = desktopX - contentBounds.X;
+        int surfaceY = desktopY - contentBounds.Y;
+        if (desktopX >= contentBounds.X && desktopY >= contentBounds.Y &&
+            desktopX < contentBounds.X + contentBounds.Width && desktopY < contentBounds.Y + contentBounds.Height)
+        {
+            hit = new WaylandSceneHit(surface.SceneSurfaceId, WaylandSceneHitKind.Surface, surfaceX, surfaceY);
+            return true;
+        }
+
+        if (surface.Decoration.Visible && !surface.Decoration.Minimized)
+        {
+            if (TryHitDecoration(surface, windowBounds, desktopX, desktopY, surfaceX, surfaceY, out hit))
+                return true;
+        }
+
+        hit = default;
+        return false;
+    }
+
+    private static bool TryHitDecoration(SurfaceState surface, WaylandSurfaceBounds windowBounds, int desktopX, int desktopY,
+        int surfaceX, int surfaceY, out WaylandSceneHit hit)
+    {
+        WaylandDecorationMetrics metrics = surface.Decoration.Metrics;
+        DisplayRect close = GetCloseButtonRect(windowBounds, metrics);
+        DisplayRect maximize = GetMaximizeButtonRect(windowBounds, metrics);
+        DisplayRect minimize = GetMinimizeButtonRect(windowBounds, metrics);
+
+        if (Contains(close, desktopX, desktopY))
+        {
+            hit = new WaylandSceneHit(surface.SceneSurfaceId, WaylandSceneHitKind.CloseButton, surfaceX, surfaceY);
+            return true;
+        }
+
+        if (Contains(maximize, desktopX, desktopY))
+        {
+            hit = new WaylandSceneHit(surface.SceneSurfaceId, WaylandSceneHitKind.MaximizeButton, surfaceX, surfaceY);
+            return true;
+        }
+
+        if (Contains(minimize, desktopX, desktopY))
+        {
+            hit = new WaylandSceneHit(surface.SceneSurfaceId, WaylandSceneHitKind.MinimizeButton, surfaceX, surfaceY);
+            return true;
+        }
+
+        XdgToplevelResizeEdge resizeEdges = XdgToplevelResizeEdge.None;
+        int border = metrics.BorderThickness;
+        if (desktopX < surface.ContentBounds.X)
+            resizeEdges |= XdgToplevelResizeEdge.Left;
+        else if (desktopX >= surface.ContentBounds.X + surface.ContentBounds.Width)
+            resizeEdges |= XdgToplevelResizeEdge.Right;
+        if (desktopY < surface.ContentBounds.Y)
+            resizeEdges |= XdgToplevelResizeEdge.Top;
+        else if (desktopY >= surface.ContentBounds.Y + surface.ContentBounds.Height)
+            resizeEdges |= XdgToplevelResizeEdge.Bottom;
+
+        bool insideResizeZone =
+            desktopX < windowBounds.X + border ||
+            desktopX >= windowBounds.X + windowBounds.Width - border ||
+            desktopY < windowBounds.Y + border ||
+            desktopY >= windowBounds.Y + windowBounds.Height - border;
+        if (resizeEdges != XdgToplevelResizeEdge.None && insideResizeZone)
+        {
+            hit = new WaylandSceneHit(surface.SceneSurfaceId, WaylandSceneHitKind.ResizeBorder, surfaceX, surfaceY, resizeEdges);
+            return true;
+        }
+
+        hit = new WaylandSceneHit(surface.SceneSurfaceId, WaylandSceneHitKind.Titlebar, surfaceX, surfaceY);
+        return true;
+    }
+
+    private static bool Contains(DisplayRect rect, int x, int y)
+    {
+        return x >= rect.X && y >= rect.Y && x < rect.X + rect.Width && y < rect.Y + rect.Height;
+    }
+
+    private static DisplayRect GetCloseButtonRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
+    {
+        DisplayRect row = GetButtonRowRect(windowBounds, metrics);
+        return new DisplayRect(row.X + metrics.ButtonSize * 2, row.Y, metrics.ButtonSize, metrics.ButtonSize);
+    }
+
+    private static DisplayRect GetMaximizeButtonRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
+    {
+        DisplayRect row = GetButtonRowRect(windowBounds, metrics);
+        return new DisplayRect(row.X + metrics.ButtonSize, row.Y, metrics.ButtonSize, metrics.ButtonSize);
+    }
+
+    private static DisplayRect GetMinimizeButtonRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
+    {
+        DisplayRect row = GetButtonRowRect(windowBounds, metrics);
+        return new DisplayRect(row.X, row.Y, metrics.ButtonSize, metrics.ButtonSize);
+    }
+
+    private static DisplayRect GetButtonRowRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
+    {
+        int width = metrics.ButtonSize * 3 + metrics.ButtonPadding * 2;
+        int x = windowBounds.X + windowBounds.Width - metrics.BorderThickness - metrics.ButtonPadding - width;
+        return new DisplayRect(x, windowBounds.Y + 6, width, metrics.ButtonSize);
     }
 
     private sealed class SurfaceState(int width, int height)
@@ -182,7 +381,9 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
         public ulong SceneSurfaceId { get; init; }
         public int Width { get; set; } = width;
         public int Height { get; set; } = height;
-        public WaylandSurfaceBounds Bounds { get; set; }
+        public WaylandSurfaceBounds ContentBounds { get; set; }
         public bool AutoCentered { get; set; }
+        public WaylandDecorationSceneState Decoration { get; set; }
+        public bool Hidden { get; set; }
     }
 }

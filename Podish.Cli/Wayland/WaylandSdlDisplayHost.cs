@@ -14,6 +14,9 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     private SdlDisplayBackend? _backend;
     private IDisplayOutput? _output;
     private IDisplayRenderer? _renderer;
+    private IDisplayTexture? _closeButtonIcon;
+    private IDisplayTexture? _maximizeButtonIcon;
+    private IDisplayTexture? _minimizeButtonIcon;
     private readonly Dictionary<ulong, SurfaceTextureState> _surfaces = [];
     private readonly List<ulong> _zOrder = [];
 
@@ -39,6 +42,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
             AllowHighDpi: true,
             Resizable: true));
         _renderer = _output.Renderer;
+        EnsureButtonTextures();
     }
 
     public bool DrainCommands(IEnumerable<WaylandDisplayCommand> commands, List<ulong> consumedLeases, out bool shutdownRequested)
@@ -59,6 +63,14 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
                 case WaylandDisplayCommandKind.UpdateSurfaceBounds:
                     dirty = true;
                     UpdateSurfaceBounds(command.SceneSurfaceId, command.Bounds);
+                    break;
+                case WaylandDisplayCommandKind.UpdateDecoration:
+                    dirty = true;
+                    UpdateDecoration(command.SceneSurfaceId, command.Decoration);
+                    break;
+                case WaylandDisplayCommandKind.SetSurfaceVisibility:
+                    dirty = true;
+                    SetSurfaceVisibility(command.SceneSurfaceId, command.Hidden);
                     break;
                 case WaylandDisplayCommandKind.RaiseSurface:
                     dirty = true;
@@ -105,7 +117,12 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         {
             if (!_surfaces.TryGetValue(sceneSurfaceId, out SurfaceTextureState? surface))
                 continue;
+            if (surface.Hidden)
+                continue;
+            if (surface.Texture == null)
+                continue;
 
+            DrawDecoration(surface);
             _renderer.Blit(surface.Texture, destination: ToDisplayRect(surface.Bounds));
         }
 
@@ -115,9 +132,12 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     public void Dispose()
     {
         foreach (SurfaceTextureState surface in _surfaces.Values)
-            surface.Texture.Dispose();
+            surface.Texture?.Dispose();
         _surfaces.Clear();
         _zOrder.Clear();
+        _closeButtonIcon?.Dispose();
+        _maximizeButtonIcon?.Dispose();
+        _minimizeButtonIcon?.Dispose();
         _output?.ClearCursor();
         _output?.Dispose();
         _output = null;
@@ -140,7 +160,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         };
 
         SurfaceTextureState state = EnsureSurfaceTexture(sceneSurfaceId, frame.Width, frame.Height, pixelFormat);
-        UpdateTexture(state.Texture, frame);
+        UpdateTexture(state.Texture!, frame);
         state.Width = frame.Width;
         state.Height = frame.Height;
         state.Format = pixelFormat;
@@ -152,8 +172,17 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
     private void UpdateSurfaceBounds(ulong sceneSurfaceId, WaylandSurfaceBounds bounds)
     {
-        if (_surfaces.TryGetValue(sceneSurfaceId, out SurfaceTextureState? surface))
-            surface.Bounds = bounds;
+        EnsureSurfaceState(sceneSurfaceId).Bounds = bounds;
+    }
+
+    private void UpdateDecoration(ulong sceneSurfaceId, WaylandDecorationSceneState decoration)
+    {
+        EnsureSurfaceState(sceneSurfaceId).Decoration = decoration;
+    }
+
+    private void SetSurfaceVisibility(ulong sceneSurfaceId, bool hidden)
+    {
+        EnsureSurfaceState(sceneSurfaceId).Hidden = hidden;
     }
 
     private void RaiseSurface(ulong sceneSurfaceId)
@@ -171,7 +200,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
             return;
 
         _zOrder.Remove(sceneSurfaceId);
-        surface.Texture.Dispose();
+        surface.Texture?.Dispose();
     }
 
     private SurfaceTextureState EnsureSurfaceTexture(ulong sceneSurfaceId, int width, int height,
@@ -179,23 +208,87 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     {
         EnsureStarted();
         if (_surfaces.TryGetValue(sceneSurfaceId, out SurfaceTextureState? existing) &&
+            existing.Texture != null &&
             existing.Width == width &&
             existing.Height == height &&
             existing.Format == format)
             return existing;
 
-        existing?.Texture.Dispose();
-        var replacement = new SurfaceTextureState(
-            _renderer!.CreateTexture(new DisplayTextureDescriptor(width, height, format, DisplayTextureAccess.Streaming)),
-            width,
-            height,
-            format);
-        _surfaces[sceneSurfaceId] = replacement;
-        return replacement;
+        SurfaceTextureState state = EnsureSurfaceState(sceneSurfaceId);
+        state.Texture?.Dispose();
+        state.Texture = _renderer!.CreateTexture(new DisplayTextureDescriptor(width, height, format, DisplayTextureAccess.Streaming));
+        state.Width = width;
+        state.Height = height;
+        state.Format = format;
+        return state;
     }
 
     private static DisplayRect ToDisplayRect(WaylandSurfaceBounds bounds) =>
         new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
+
+    private void DrawDecoration(SurfaceTextureState surface)
+    {
+        if (!surface.Decoration.Visible || surface.Decoration.Minimized)
+            return;
+
+        WaylandSurfaceBounds windowBounds = WaylandDecorationLayout.GetWindowBounds(surface.Bounds, surface.Decoration);
+        WaylandDecorationMetrics metrics = surface.Decoration.Metrics;
+        DisplayColor borderColor = surface.Decoration.Active
+            ? new DisplayColor(96, 125, 182, 255)
+            : new DisplayColor(112, 118, 128, 255);
+        DisplayColor titlebarColor = surface.Decoration.Active
+            ? new DisplayColor(61, 111, 186, 255)
+            : new DisplayColor(84, 90, 100, 255);
+        DisplayColor buttonStripColor = surface.Decoration.Active
+            ? new DisplayColor(74, 123, 198, 255)
+            : new DisplayColor(95, 101, 111, 255);
+
+        _renderer!.FillRect(ToDisplayRect(windowBounds), borderColor);
+        _renderer.FillRect(new DisplayRect(
+            windowBounds.X + metrics.BorderThickness,
+            windowBounds.Y,
+            windowBounds.Width - metrics.BorderThickness * 2,
+            metrics.TitlebarHeight), titlebarColor);
+        _renderer.FillRect(GetButtonRowRect(windowBounds, metrics), buttonStripColor);
+
+        DisplayRect minimizeRect = GetMinimizeButtonRect(windowBounds, metrics);
+        DisplayRect maximizeRect = GetMaximizeButtonRect(windowBounds, metrics);
+        DisplayRect closeRect = GetCloseButtonRect(windowBounds, metrics);
+        _renderer.FillRect(minimizeRect, new DisplayColor(219, 176, 88, 255));
+        _renderer.FillRect(maximizeRect, new DisplayColor(125, 190, 117, 255));
+        _renderer.FillRect(closeRect, new DisplayColor(214, 89, 89, 255));
+        if (_minimizeButtonIcon != null)
+            _renderer.Blit(_minimizeButtonIcon, destination: minimizeRect);
+        if (_maximizeButtonIcon != null)
+            _renderer.Blit(_maximizeButtonIcon, destination: maximizeRect);
+        if (_closeButtonIcon != null)
+            _renderer.Blit(_closeButtonIcon, destination: closeRect);
+    }
+
+    private static DisplayRect GetButtonRowRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
+    {
+        int width = metrics.ButtonSize * 3 + metrics.ButtonPadding * 2;
+        int x = windowBounds.X + windowBounds.Width - metrics.BorderThickness - metrics.ButtonPadding - width;
+        return new DisplayRect(x, windowBounds.Y + 6, width, metrics.ButtonSize);
+    }
+
+    private static DisplayRect GetCloseButtonRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
+    {
+        DisplayRect buttonRow = GetButtonRowRect(windowBounds, metrics);
+        return new DisplayRect(buttonRow.X + metrics.ButtonSize * 2, buttonRow.Y, metrics.ButtonSize, metrics.ButtonSize);
+    }
+
+    private static DisplayRect GetMaximizeButtonRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
+    {
+        DisplayRect buttonRow = GetButtonRowRect(windowBounds, metrics);
+        return new DisplayRect(buttonRow.X + metrics.ButtonSize, buttonRow.Y, metrics.ButtonSize, metrics.ButtonSize);
+    }
+
+    private static DisplayRect GetMinimizeButtonRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
+    {
+        DisplayRect buttonRow = GetButtonRowRect(windowBounds, metrics);
+        return new DisplayRect(buttonRow.X, buttonRow.Y, metrics.ButtonSize, metrics.ButtonSize);
+    }
 
     private void SetCursor(WaylandCursorFrame cursor)
     {
@@ -223,6 +316,74 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     {
         if (_output == null || _renderer == null)
             throw new InvalidOperationException("SDL display host has not been started.");
+    }
+
+    private SurfaceTextureState EnsureSurfaceState(ulong sceneSurfaceId)
+    {
+        if (_surfaces.TryGetValue(sceneSurfaceId, out SurfaceTextureState? existing))
+            return existing;
+
+        var state = new SurfaceTextureState(null, 1, 1, DisplayPixelFormat.Argb8888);
+        _surfaces[sceneSurfaceId] = state;
+        return state;
+    }
+
+    private void EnsureButtonTextures()
+    {
+        if (_renderer == null || _closeButtonIcon != null)
+            return;
+
+        _closeButtonIcon = CreateButtonIconTexture(18, DrawCloseIcon);
+        _maximizeButtonIcon = CreateButtonIconTexture(18, DrawMaximizeIcon);
+        _minimizeButtonIcon = CreateButtonIconTexture(18, DrawMinimizeIcon);
+    }
+
+    private IDisplayTexture CreateButtonIconTexture(int size, Action<Span<byte>, int, int> draw)
+    {
+        IDisplayTexture texture = _renderer!.CreateTexture(new DisplayTextureDescriptor(size, size, DisplayPixelFormat.Argb8888, DisplayTextureAccess.Streaming));
+        byte[] pixels = new byte[size * size * 4];
+        draw(pixels, size, size * 4);
+        texture.Update(pixels, size * 4);
+        return texture;
+    }
+
+    private static void DrawCloseIcon(Span<byte> pixels, int size, int pitch)
+    {
+        for (int i = 4; i < size - 4; i++)
+        {
+            PutPixel(pixels, pitch, i, i, 255, 255, 255, 255);
+            PutPixel(pixels, pitch, size - 1 - i, i, 255, 255, 255, 255);
+        }
+    }
+
+    private static void DrawMaximizeIcon(Span<byte> pixels, int size, int pitch)
+    {
+        for (int x = 4; x < size - 4; x++)
+        {
+            PutPixel(pixels, pitch, x, 4, 255, 255, 255, 255);
+            PutPixel(pixels, pitch, x, size - 5, 255, 255, 255, 255);
+        }
+
+        for (int y = 4; y < size - 4; y++)
+        {
+            PutPixel(pixels, pitch, 4, y, 255, 255, 255, 255);
+            PutPixel(pixels, pitch, size - 5, y, 255, 255, 255, 255);
+        }
+    }
+
+    private static void DrawMinimizeIcon(Span<byte> pixels, int size, int pitch)
+    {
+        for (int x = 4; x < size - 4; x++)
+            PutPixel(pixels, pitch, x, size - 6, 255, 255, 255, 255);
+    }
+
+    private static void PutPixel(Span<byte> pixels, int pitch, int x, int y, byte r, byte g, byte b, byte a)
+    {
+        int offset = y * pitch + x * 4;
+        pixels[offset] = b;
+        pixels[offset + 1] = g;
+        pixels[offset + 2] = r;
+        pixels[offset + 3] = a;
     }
 
     private static void UpdateTexture(IDisplayTexture texture, WaylandShmFrame frame)
@@ -315,12 +476,14 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
             frame.Stride);
     }
 
-    private sealed class SurfaceTextureState(IDisplayTexture texture, int width, int height, DisplayPixelFormat format)
+    private sealed class SurfaceTextureState(IDisplayTexture? texture, int width, int height, DisplayPixelFormat format)
     {
-        public IDisplayTexture Texture { get; } = texture;
+        public IDisplayTexture? Texture { get; set; } = texture;
         public int Width { get; set; } = width;
         public int Height { get; set; } = height;
         public DisplayPixelFormat Format { get; set; } = format;
         public WaylandSurfaceBounds Bounds { get; set; }
+        public WaylandDecorationSceneState Decoration { get; set; }
+        public bool Hidden { get; set; }
     }
 }
