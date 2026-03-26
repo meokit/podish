@@ -57,14 +57,13 @@ public partial class SyscallManager
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
-        try
-        {
-            return await DoSelectWithTimeout(this, engine, (int)a1, a2, a3, a4, timeoutMs);
-        }
-        finally
-        {
-            if (hasMask) task.SignalMask = oldMask;
-        }
+        var result = await DoSelectWithTimeout(this, engine, (int)a1, a2, a3, a4, timeoutMs);
+        if (hasMask)
+            if (result == -(int)Errno.ERESTARTSYS)
+                task.DeferSignalMaskRestore(oldMask);
+            else
+                task.SignalMask = oldMask;
+        return result;
     }
 
     private async ValueTask<int> SysPpoll(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -76,14 +75,13 @@ public partial class SyscallManager
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
-        try
-        {
-            return await DoPoll(this, engine, a1, a2, timeoutMs);
-        }
-        finally
-        {
-            if (hasMask) task.SignalMask = oldMask;
-        }
+        var result = await DoPoll(this, engine, a1, a2, timeoutMs);
+        if (hasMask)
+            if (result == -(int)Errno.ERESTARTSYS)
+                task.DeferSignalMaskRestore(oldMask);
+            else
+                task.SignalMask = oldMask;
+        return result;
     }
 
     private async ValueTask<int> SysPselect6Time64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -96,14 +94,13 @@ public partial class SyscallManager
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
-        try
-        {
-            return await DoSelectWithTimeout(this, engine, (int)a1, a2, a3, a4, timeoutMs);
-        }
-        finally
-        {
-            if (hasMask) task.SignalMask = oldMask;
-        }
+        var result = await DoSelectWithTimeout(this, engine, (int)a1, a2, a3, a4, timeoutMs);
+        if (hasMask)
+            if (result == -(int)Errno.ERESTARTSYS)
+                task.DeferSignalMaskRestore(oldMask);
+            else
+                task.SignalMask = oldMask;
+        return result;
     }
 
     private async ValueTask<int> SysPpollTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -116,14 +113,13 @@ public partial class SyscallManager
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
-        try
-        {
-            return await DoPoll(this, engine, a1, a2, timeoutMs);
-        }
-        finally
-        {
-            if (hasMask) task.SignalMask = oldMask;
-        }
+        var result = await DoPoll(this, engine, a1, a2, timeoutMs);
+        if (hasMask)
+            if (result == -(int)Errno.ERESTARTSYS)
+                task.DeferSignalMaskRestore(oldMask);
+            else
+                task.SignalMask = oldMask;
+        return result;
     }
 
     private static async ValueTask<int> DoSelect(SyscallManager sm, Engine engine, int n, uint inp, uint outp,

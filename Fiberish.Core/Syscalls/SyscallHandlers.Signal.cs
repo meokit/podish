@@ -177,7 +177,7 @@ public partial class SyscallManager
 
         if (pid == 0)
         {
-            if (!kernel.IsValidProcessGroup(task.Process.PGID, task.Process.SID)) return -(int)Errno.ESRCH;
+            if (!kernel.ProcessGroupExists(task.Process.PGID)) return -(int)Errno.ESRCH;
             if (sig != 0) delivered = kernel.SignalProcessGroupWithCount(task.Process.PGID, sig);
             return 0;
         }
@@ -190,7 +190,7 @@ public partial class SyscallManager
         }
 
         var pgid = -pid;
-        if (!kernel.IsValidProcessGroup(pgid, task.Process.SID)) return -(int)Errno.ESRCH;
+        if (!kernel.ProcessGroupExists(pgid)) return -(int)Errno.ESRCH;
         if (sig != 0) delivered = kernel.SignalProcessGroupWithCount(pgid, sig);
         if (sig != 0 && delivered == 0) return -(int)Errno.ESRCH;
         return 0;

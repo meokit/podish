@@ -93,16 +93,12 @@ public partial class SyscallManager
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
-        int result;
-        try
-        {
-            result = await DoEpollWait(this, engine, a1, a2, a3, (int)a4);
-        }
-        finally
-        {
-            if (hasMask) task.SignalMask = oldMask;
-        }
-
+        var result = await DoEpollWait(this, engine, a1, a2, a3, (int)a4);
+        if (hasMask)
+            if (result == -(int)Errno.ERESTARTSYS)
+                task.DeferSignalMaskRestore(oldMask);
+            else
+                task.SignalMask = oldMask;
         return result;
     }
 
@@ -118,14 +114,14 @@ public partial class SyscallManager
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
-        try
-        {
-            return await DoEpollWait(this, engine, a1, a2, a3, timeoutMs);
-        }
-        finally
-        {
-            if (hasMask) task.SignalMask = oldMask;
-        }
+        var result = await DoEpollWait(this, engine, a1, a2, a3, timeoutMs);
+        if (hasMask)
+            if (result == -(int)Errno.ERESTARTSYS)
+                task.DeferSignalMaskRestore(oldMask);
+            else
+                task.SignalMask = oldMask;
+
+        return result;
     }
 
     private static async ValueTask<int> DoEpollWait(SyscallManager sm, Engine engine, uint epfdArg, uint eventsPtr,

@@ -1003,11 +1003,11 @@ public class KernelScheduler
         RunIngress(() => task.PostSignalInfoCore(info), task);
     }
 
-    public bool IsValidProcessGroup(int pgid, int sid)
+    public bool ProcessGroupExists(int pgid)
     {
         AssertSchedulerThread();
         foreach (var p in _processes.Values)
-            if (p.PGID == pgid && p.SID == sid)
+            if (p.PGID == pgid)
                 return true;
 
         return false;

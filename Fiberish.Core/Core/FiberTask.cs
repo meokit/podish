@@ -60,6 +60,8 @@ public class FiberTask
     private Exception? _pendingAsyncSyscallError;
     private int _pendingAsyncSyscallResult;
     private int _faultDiagnosticsDepth;
+    private bool _hasDeferredSignalMaskRestore;
+    private ulong _deferredSignalMaskRestore;
 
     private bool _pendingFaultFromInterrupt;
     private KernelSyncContext? _synchronizationContext;
@@ -687,6 +689,21 @@ public class FiberTask
         }
 
         return false;
+    }
+
+    public void DeferSignalMaskRestore(ulong oldMask)
+    {
+        _hasDeferredSignalMaskRestore = true;
+        _deferredSignalMaskRestore = oldMask;
+    }
+
+    public void RestoreDeferredSignalMaskIfAny()
+    {
+        if (!_hasDeferredSignalMaskRestore) return;
+
+        SignalMask = _deferredSignalMaskRestore;
+        _deferredSignalMaskRestore = 0;
+        _hasDeferredSignalMaskRestore = false;
     }
 
     public bool IsSignalIgnoredOrBlocked(int sig)
@@ -1968,6 +1985,8 @@ public class FiberTask
                                 }
                     }
 
+                RestoreDeferredSignalMaskIfAny();
+
                 Logger.LogInformation("[HandleAsyncSyscall] Syscall interrupted with -ERESTARTSYS, signal={Sig}", sig);
 
                 if (sig.HasValue && Process.SignalActions.TryGetValue(sig.Value, out var action))
@@ -2044,6 +2063,7 @@ public class FiberTask
             {
                 // Clear interrupting signal if syscall completed normally
                 InterruptingSignal = null;
+                RestoreDeferredSignalMaskIfAny();
             }
 
             // We safely clear PendingSyscall here since the wait is truly over
