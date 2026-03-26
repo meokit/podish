@@ -60,6 +60,8 @@ internal static class Program
         ["xdg_toplevel"] = 1,
         ["zxdg_decoration_manager_v1"] = 1,
         ["zxdg_toplevel_decoration_v1"] = 1,
+        ["wp_cursor_shape_manager_v1"] = 1,
+        ["wp_cursor_shape_device_v1"] = 1,
     };
 
     private static int Main(string[] args)
