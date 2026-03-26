@@ -11,6 +11,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 {
     private readonly ILoggerFactory _loggerFactory;
     private readonly WaylandDesktopOptions _desktopOptions;
+    private readonly WaylandUiTheme _theme;
     private SdlDisplayBackend? _backend;
     private IDisplayOutput? _output;
     private IDisplayRenderer? _renderer;
@@ -24,6 +25,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     {
         _loggerFactory = loggerFactory;
         _desktopOptions = desktopOptions;
+        _theme = desktopOptions.Theme;
     }
 
     public bool IsClosed => _output?.IsClosed ?? false;
@@ -111,7 +113,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     public void Render()
     {
         EnsureStarted();
-        _renderer!.Clear(new DisplayColor(0, 0, 0, 255));
+        _renderer!.Clear(ToDisplayColor(_theme.Desktop.Background));
 
         foreach (ulong sceneSurfaceId in _zOrder)
         {
@@ -231,63 +233,26 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         if (!surface.Decoration.Visible || surface.Decoration.Minimized)
             return;
 
-        WaylandSurfaceBounds windowBounds = WaylandDecorationLayout.GetWindowBounds(surface.Bounds, surface.Decoration);
-        WaylandDecorationMetrics metrics = surface.Decoration.Metrics;
-        DisplayColor borderColor = surface.Decoration.Active
-            ? new DisplayColor(96, 125, 182, 255)
-            : new DisplayColor(112, 118, 128, 255);
-        DisplayColor titlebarColor = surface.Decoration.Active
-            ? new DisplayColor(61, 111, 186, 255)
-            : new DisplayColor(84, 90, 100, 255);
-        DisplayColor buttonStripColor = surface.Decoration.Active
-            ? new DisplayColor(74, 123, 198, 255)
-            : new DisplayColor(95, 101, 111, 255);
+        WaylandSurfaceBounds windowBounds = WaylandDecorationLayout.GetWindowBounds(surface.Bounds, surface.Decoration, _theme);
+        WaylandSurfaceChromeTheme chrome = surface.Decoration.Active
+            ? _theme.WindowDecoration.Active
+            : _theme.WindowDecoration.Inactive;
 
-        _renderer!.FillRect(ToDisplayRect(windowBounds), borderColor);
-        _renderer.FillRect(new DisplayRect(
-            windowBounds.X + metrics.BorderThickness,
-            windowBounds.Y,
-            windowBounds.Width - metrics.BorderThickness * 2,
-            metrics.TitlebarHeight), titlebarColor);
-        _renderer.FillRect(GetButtonRowRect(windowBounds, metrics), buttonStripColor);
+        _renderer!.FillRect(ToDisplayRect(windowBounds), ToDisplayColor(surface.Decoration.Active ? chrome.BorderActive : chrome.Border));
+        _renderer.FillRect(ToDisplayRect(WaylandDecorationLayout.GetTitlebarBounds(windowBounds, _theme)), ToDisplayColor(chrome.Background));
 
-        DisplayRect minimizeRect = GetMinimizeButtonRect(windowBounds, metrics);
-        DisplayRect maximizeRect = GetMaximizeButtonRect(windowBounds, metrics);
-        DisplayRect closeRect = GetCloseButtonRect(windowBounds, metrics);
-        _renderer.FillRect(minimizeRect, new DisplayColor(219, 176, 88, 255));
-        _renderer.FillRect(maximizeRect, new DisplayColor(125, 190, 117, 255));
-        _renderer.FillRect(closeRect, new DisplayColor(214, 89, 89, 255));
+        DisplayRect minimizeRect = ToDisplayRect(WaylandDecorationLayout.GetMinimizeButtonBounds(windowBounds, _theme));
+        DisplayRect maximizeRect = ToDisplayRect(WaylandDecorationLayout.GetMaximizeButtonBounds(windowBounds, _theme));
+        DisplayRect closeRect = ToDisplayRect(WaylandDecorationLayout.GetCloseButtonBounds(windowBounds, _theme));
+        _renderer.FillRect(minimizeRect, ToDisplayColor(_theme.WindowDecoration.Buttons.BackgroundMinimize));
+        _renderer.FillRect(maximizeRect, ToDisplayColor(_theme.WindowDecoration.Buttons.BackgroundMaximize));
+        _renderer.FillRect(closeRect, ToDisplayColor(_theme.WindowDecoration.Buttons.BackgroundClose));
         if (_minimizeButtonIcon != null)
             _renderer.Blit(_minimizeButtonIcon, destination: minimizeRect);
         if (_maximizeButtonIcon != null)
             _renderer.Blit(_maximizeButtonIcon, destination: maximizeRect);
         if (_closeButtonIcon != null)
             _renderer.Blit(_closeButtonIcon, destination: closeRect);
-    }
-
-    private static DisplayRect GetButtonRowRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
-    {
-        int width = metrics.ButtonSize * 3 + metrics.ButtonPadding * 2;
-        int x = windowBounds.X + windowBounds.Width - metrics.BorderThickness - metrics.ButtonPadding - width;
-        return new DisplayRect(x, windowBounds.Y + 6, width, metrics.ButtonSize);
-    }
-
-    private static DisplayRect GetCloseButtonRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
-    {
-        DisplayRect buttonRow = GetButtonRowRect(windowBounds, metrics);
-        return new DisplayRect(buttonRow.X + metrics.ButtonSize * 2, buttonRow.Y, metrics.ButtonSize, metrics.ButtonSize);
-    }
-
-    private static DisplayRect GetMaximizeButtonRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
-    {
-        DisplayRect buttonRow = GetButtonRowRect(windowBounds, metrics);
-        return new DisplayRect(buttonRow.X + metrics.ButtonSize, buttonRow.Y, metrics.ButtonSize, metrics.ButtonSize);
-    }
-
-    private static DisplayRect GetMinimizeButtonRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
-    {
-        DisplayRect buttonRow = GetButtonRowRect(windowBounds, metrics);
-        return new DisplayRect(buttonRow.X, buttonRow.Y, metrics.ButtonSize, metrics.ButtonSize);
     }
 
     private void SetCursor(WaylandCursorFrame cursor)
@@ -333,48 +298,49 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         if (_renderer == null || _closeButtonIcon != null)
             return;
 
-        _closeButtonIcon = CreateButtonIconTexture(18, DrawCloseIcon);
-        _maximizeButtonIcon = CreateButtonIconTexture(18, DrawMaximizeIcon);
-        _minimizeButtonIcon = CreateButtonIconTexture(18, DrawMinimizeIcon);
+        int size = _theme.Spacing.ButtonSize;
+        _closeButtonIcon = CreateButtonIconTexture(size, DrawCloseIcon);
+        _maximizeButtonIcon = CreateButtonIconTexture(size, DrawMaximizeIcon);
+        _minimizeButtonIcon = CreateButtonIconTexture(size, DrawMinimizeIcon);
     }
 
-    private IDisplayTexture CreateButtonIconTexture(int size, Action<Span<byte>, int, int> draw)
+    private IDisplayTexture CreateButtonIconTexture(int size, Action<Span<byte>, int, int, WaylandColor, int> draw)
     {
         IDisplayTexture texture = _renderer!.CreateTexture(new DisplayTextureDescriptor(size, size, DisplayPixelFormat.Argb8888, DisplayTextureAccess.Streaming));
         byte[] pixels = new byte[size * size * 4];
-        draw(pixels, size, size * 4);
+        draw(pixels, size, size * 4, _theme.WindowDecoration.Buttons.Foreground, _theme.Spacing.IconStrokeWidth);
         texture.Update(pixels, size * 4);
         return texture;
     }
 
-    private static void DrawCloseIcon(Span<byte> pixels, int size, int pitch)
+    private static void DrawCloseIcon(Span<byte> pixels, int size, int pitch, WaylandColor color, int stroke)
     {
-        for (int i = 4; i < size - 4; i++)
+        for (int i = 3; i < size - 3; i++)
         {
-            PutPixel(pixels, pitch, i, i, 255, 255, 255, 255);
-            PutPixel(pixels, pitch, size - 1 - i, i, 255, 255, 255, 255);
+            DrawDot(pixels, pitch, i, i, stroke, color);
+            DrawDot(pixels, pitch, size - 1 - i, i, stroke, color);
         }
     }
 
-    private static void DrawMaximizeIcon(Span<byte> pixels, int size, int pitch)
+    private static void DrawMaximizeIcon(Span<byte> pixels, int size, int pitch, WaylandColor color, int stroke)
     {
         for (int x = 4; x < size - 4; x++)
         {
-            PutPixel(pixels, pitch, x, 4, 255, 255, 255, 255);
-            PutPixel(pixels, pitch, x, size - 5, 255, 255, 255, 255);
+            DrawDot(pixels, pitch, x, 4, stroke, color);
+            DrawDot(pixels, pitch, x, size - 5, stroke, color);
         }
 
         for (int y = 4; y < size - 4; y++)
         {
-            PutPixel(pixels, pitch, 4, y, 255, 255, 255, 255);
-            PutPixel(pixels, pitch, size - 5, y, 255, 255, 255, 255);
+            DrawDot(pixels, pitch, 4, y, stroke, color);
+            DrawDot(pixels, pitch, size - 5, y, stroke, color);
         }
     }
 
-    private static void DrawMinimizeIcon(Span<byte> pixels, int size, int pitch)
+    private static void DrawMinimizeIcon(Span<byte> pixels, int size, int pitch, WaylandColor color, int stroke)
     {
         for (int x = 4; x < size - 4; x++)
-            PutPixel(pixels, pitch, x, size - 6, 255, 255, 255, 255);
+            DrawDot(pixels, pitch, x, size - 6, stroke, color);
     }
 
     private static void PutPixel(Span<byte> pixels, int pitch, int x, int y, byte r, byte g, byte b, byte a)
@@ -385,6 +351,24 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         pixels[offset + 2] = r;
         pixels[offset + 3] = a;
     }
+
+    private static void DrawDot(Span<byte> pixels, int pitch, int centerX, int centerY, int stroke, WaylandColor color)
+    {
+        int radius = Math.Max(0, stroke - 1);
+        for (int dy = -radius; dy <= radius; dy++)
+        for (int dx = -radius; dx <= radius; dx++)
+        {
+            int x = centerX + dx;
+            int y = centerY + dy;
+            if (x < 0 || y < 0)
+                continue;
+            if (y * pitch + x * 4 + 3 >= pixels.Length)
+                continue;
+            PutPixel(pixels, pitch, x, y, color.R, color.G, color.B, color.A);
+        }
+    }
+
+    private static DisplayColor ToDisplayColor(WaylandColor color) => new(color.R, color.G, color.B, color.A);
 
     private static void UpdateTexture(IDisplayTexture texture, WaylandShmFrame frame)
     {

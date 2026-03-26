@@ -49,6 +49,46 @@ public sealed class WaylandWireTests
 public sealed class WaylandRuntimeTests
 {
     [Fact]
+    public void Theme_BreezeLight_HasStableDecorationTokens()
+    {
+        WaylandUiTheme theme = WaylandUiTheme.BreezeLight;
+
+        Assert.Equal((byte)142, theme.Desktop.Background.R);
+        Assert.Equal((byte)158, theme.Desktop.Background.G);
+        Assert.Equal((byte)182, theme.Desktop.Background.B);
+        Assert.True(theme.Spacing.WindowBorderThickness > 0);
+        Assert.True(theme.Spacing.TitlebarHeight > 0);
+        Assert.True(theme.Spacing.ButtonSize > 0);
+        Assert.True(theme.Spacing.IconStrokeWidth > 0);
+        Assert.True(theme.Corners.WindowCornerRadius >= 0);
+        Assert.True(theme.WindowDecoration.Buttons.CornerRadius >= 0);
+    }
+
+    [Fact]
+    public void Theme_Layout_UsesThemeSpacingForWindowAndButtons()
+    {
+        WaylandUiTheme theme = WaylandUiTheme.BreezeLight;
+        WaylandDecorationSceneState decoration = new(true, true, false, false, "foot");
+        WaylandSurfaceBounds content = new(100, 120, 640, 400);
+
+        WaylandSurfaceBounds window = WaylandDecorationLayout.GetWindowBounds(content, decoration, theme);
+        Assert.Equal(content.X - theme.Spacing.WindowBorderThickness, window.X);
+        Assert.Equal(content.Y - theme.Spacing.TitlebarHeight, window.Y);
+        Assert.Equal(content.Width + theme.Spacing.WindowBorderThickness * 2, window.Width);
+        Assert.Equal(content.Height + theme.Spacing.TitlebarHeight + theme.Spacing.WindowBorderThickness, window.Height);
+
+        WaylandSurfaceBounds close = WaylandDecorationLayout.GetCloseButtonBounds(window, theme);
+        WaylandSurfaceBounds maximize = WaylandDecorationLayout.GetMaximizeButtonBounds(window, theme);
+        WaylandSurfaceBounds minimize = WaylandDecorationLayout.GetMinimizeButtonBounds(window, theme);
+
+        Assert.Equal(theme.Spacing.ButtonSize, close.Width);
+        Assert.Equal(theme.Spacing.ButtonSize, maximize.Width);
+        Assert.Equal(theme.Spacing.ButtonSize, minimize.Width);
+        Assert.Equal(theme.Spacing.ButtonGap, maximize.X - (minimize.X + minimize.Width));
+        Assert.Equal(theme.Spacing.ButtonGap, close.X - (maximize.X + maximize.Width));
+    }
+
+    [Fact]
     public async Task Runtime_MinimalXdgShmFlowCompletes()
     {
         using var env = new TestEnv();
@@ -955,6 +995,7 @@ internal sealed class RecordingFramePresenter : IWaylandFramePresenter
 
 internal sealed class TestScenePresenter : IWaylandFramePresenter, IWaylandSceneView, IWaylandDesktopSceneController
 {
+    private readonly WaylandUiTheme _theme = WaylandUiTheme.BreezeLight;
     private readonly Dictionary<ulong, WaylandSurfaceBounds> _bounds = [];
     private readonly Dictionary<ulong, WaylandDecorationSceneState> _decorations = [];
     private readonly HashSet<ulong> _hidden = [];
@@ -986,7 +1027,7 @@ internal sealed class TestScenePresenter : IWaylandFramePresenter, IWaylandScene
             WaylandDecorationSceneState decoration = _decorations.TryGetValue(sceneSurfaceId, out WaylandDecorationSceneState state)
                 ? state
                 : default;
-            WaylandSurfaceBounds windowBounds = WaylandDecorationLayout.GetWindowBounds(bounds, decoration);
+            WaylandSurfaceBounds windowBounds = WaylandDecorationLayout.GetWindowBounds(bounds, decoration, _theme);
             if (desktopX < windowBounds.X || desktopY < windowBounds.Y || desktopX >= windowBounds.X + windowBounds.Width || desktopY >= windowBounds.Y + windowBounds.Height)
                 continue;
 
@@ -1016,7 +1057,7 @@ internal sealed class TestScenePresenter : IWaylandFramePresenter, IWaylandScene
             WaylandDecorationSceneState decoration = _decorations.TryGetValue(sceneSurfaceId, out WaylandDecorationSceneState state)
                 ? state
                 : default;
-            bounds = WaylandDecorationLayout.GetWindowBounds(contentBounds, decoration);
+            bounds = WaylandDecorationLayout.GetWindowBounds(contentBounds, decoration, _theme);
             return true;
         }
 
@@ -1042,7 +1083,7 @@ internal sealed class TestScenePresenter : IWaylandFramePresenter, IWaylandScene
         WaylandDecorationSceneState decoration = _decorations.TryGetValue(sceneSurfaceId, out WaylandDecorationSceneState state)
             ? state
             : default;
-        _bounds[sceneSurfaceId] = WaylandDecorationLayout.GetContentBoundsFromWindowBounds(bounds, decoration);
+        _bounds[sceneSurfaceId] = WaylandDecorationLayout.GetContentBoundsFromWindowBounds(bounds, decoration, _theme);
     }
 
     public void SetSurfaceDecoration(ulong sceneSurfaceId, WaylandDecorationSceneState decoration)

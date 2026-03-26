@@ -7,6 +7,7 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
 {
     private int _desktopWidth;
     private int _desktopHeight;
+    private readonly WaylandUiTheme _theme;
     private readonly Action<WaylandDisplayCommand> _enqueueCommand;
     private readonly Dictionary<ulong, SurfaceState> _surfaces = [];
     private readonly List<ulong> _zOrder = [];
@@ -15,6 +16,7 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
     {
         _desktopWidth = desktopOptions.Width;
         _desktopHeight = desktopOptions.Height;
+        _theme = desktopOptions.Theme;
         _enqueueCommand = enqueueCommand;
     }
 
@@ -190,7 +192,7 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
     {
         SurfaceState state = GetOrCreateState(sceneSurfaceId);
 
-        SetSurfaceBounds(sceneSurfaceId, WaylandDecorationLayout.GetContentBoundsFromWindowBounds(bounds, state.Decoration));
+        SetSurfaceBounds(sceneSurfaceId, WaylandDecorationLayout.GetContentBoundsFromWindowBounds(bounds, state.Decoration, _theme));
     }
 
     public void SetSurfaceDecoration(ulong sceneSurfaceId, WaylandDecorationSceneState decoration)
@@ -231,7 +233,7 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
     private WaylandSurfaceBounds ComputeCenteredContentRect(int width, int height, WaylandDecorationSceneState decoration)
     {
         var contentBounds = new WaylandSurfaceBounds(0, 0, width, height);
-        WaylandSurfaceBounds windowBounds = WaylandDecorationLayout.GetWindowBounds(contentBounds, decoration);
+        WaylandSurfaceBounds windowBounds = WaylandDecorationLayout.GetWindowBounds(contentBounds, decoration, _theme);
         int leftInset = -windowBounds.X;
         int topInset = -windowBounds.Y;
         int outerWidth = windowBounds.Width;
@@ -244,9 +246,9 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
             height);
     }
 
-    private static WaylandSurfaceBounds GetWindowBounds(SurfaceState surface)
+    private WaylandSurfaceBounds GetWindowBounds(SurfaceState surface)
     {
-        return WaylandDecorationLayout.GetWindowBounds(surface.ContentBounds, surface.Decoration);
+        return WaylandDecorationLayout.GetWindowBounds(surface.ContentBounds, surface.Decoration, _theme);
     }
 
     private SurfaceState GetOrCreateState(ulong sceneSurfaceId)
@@ -264,7 +266,7 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
         return state;
     }
 
-    private static bool TryHitSurface(SurfaceState surface, int desktopX, int desktopY, out WaylandSceneHit hit)
+    private bool TryHitSurface(SurfaceState surface, int desktopX, int desktopY, out WaylandSceneHit hit)
     {
         WaylandSurfaceBounds contentBounds = surface.ContentBounds;
         WaylandSurfaceBounds windowBounds = GetWindowBounds(surface);
@@ -286,7 +288,7 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
 
         if (surface.Decoration.Visible && !surface.Decoration.Minimized)
         {
-            if (TryHitDecoration(surface, windowBounds, desktopX, desktopY, surfaceX, surfaceY, out hit))
+            if (TryHitDecoration(surface, windowBounds, desktopX, desktopY, surfaceX, surfaceY, _theme, out hit))
                 return true;
         }
 
@@ -295,12 +297,12 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
     }
 
     private static bool TryHitDecoration(SurfaceState surface, WaylandSurfaceBounds windowBounds, int desktopX, int desktopY,
-        int surfaceX, int surfaceY, out WaylandSceneHit hit)
+        int surfaceX, int surfaceY, WaylandUiTheme theme, out WaylandSceneHit hit)
     {
-        WaylandDecorationMetrics metrics = surface.Decoration.Metrics;
-        DisplayRect close = GetCloseButtonRect(windowBounds, metrics);
-        DisplayRect maximize = GetMaximizeButtonRect(windowBounds, metrics);
-        DisplayRect minimize = GetMinimizeButtonRect(windowBounds, metrics);
+        WaylandDecorationMetrics metrics = WaylandDecorationMetrics.FromTheme(theme);
+        DisplayRect close = ToDisplayRect(WaylandDecorationLayout.GetCloseButtonBounds(windowBounds, theme));
+        DisplayRect maximize = ToDisplayRect(WaylandDecorationLayout.GetMaximizeButtonBounds(windowBounds, theme));
+        DisplayRect minimize = ToDisplayRect(WaylandDecorationLayout.GetMinimizeButtonBounds(windowBounds, theme));
 
         if (Contains(close, desktopX, desktopY))
         {
@@ -321,7 +323,7 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
         }
 
         XdgToplevelResizeEdge resizeEdges = XdgToplevelResizeEdge.None;
-        int border = metrics.BorderThickness;
+        int border = metrics.ResizeGripThickness;
         if (desktopX < surface.ContentBounds.X)
             resizeEdges |= XdgToplevelResizeEdge.Left;
         else if (desktopX >= surface.ContentBounds.X + surface.ContentBounds.Width)
@@ -351,30 +353,7 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
         return x >= rect.X && y >= rect.Y && x < rect.X + rect.Width && y < rect.Y + rect.Height;
     }
 
-    private static DisplayRect GetCloseButtonRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
-    {
-        DisplayRect row = GetButtonRowRect(windowBounds, metrics);
-        return new DisplayRect(row.X + metrics.ButtonSize * 2, row.Y, metrics.ButtonSize, metrics.ButtonSize);
-    }
-
-    private static DisplayRect GetMaximizeButtonRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
-    {
-        DisplayRect row = GetButtonRowRect(windowBounds, metrics);
-        return new DisplayRect(row.X + metrics.ButtonSize, row.Y, metrics.ButtonSize, metrics.ButtonSize);
-    }
-
-    private static DisplayRect GetMinimizeButtonRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
-    {
-        DisplayRect row = GetButtonRowRect(windowBounds, metrics);
-        return new DisplayRect(row.X, row.Y, metrics.ButtonSize, metrics.ButtonSize);
-    }
-
-    private static DisplayRect GetButtonRowRect(WaylandSurfaceBounds windowBounds, WaylandDecorationMetrics metrics)
-    {
-        int width = metrics.ButtonSize * 3 + metrics.ButtonPadding * 2;
-        int x = windowBounds.X + windowBounds.Width - metrics.BorderThickness - metrics.ButtonPadding - width;
-        return new DisplayRect(x, windowBounds.Y + 6, width, metrics.ButtonSize);
-    }
+    private static DisplayRect ToDisplayRect(WaylandSurfaceBounds bounds) => new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
 
     private sealed class SurfaceState(int width, int height)
     {

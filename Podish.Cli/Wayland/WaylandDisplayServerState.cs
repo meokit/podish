@@ -5,9 +5,13 @@ using Podish.Wayland;
 
 namespace Podish.Cli.Wayland;
 
-internal readonly record struct WaylandDesktopOptions(int Width, int Height)
+internal readonly record struct WaylandDesktopOptions(int Width, int Height, WaylandUiTheme Theme)
 {
-    public static WaylandDesktopOptions Default => new(1024, 768);
+    public WaylandDesktopOptions(int Width, int Height) : this(Width, Height, WaylandUiTheme.BreezeLight)
+    {
+    }
+
+    public static WaylandDesktopOptions Default => new(1024, 768, WaylandUiTheme.BreezeLight);
 }
 
 internal sealed class WaylandDisplayServerState : IDisposable

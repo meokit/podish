@@ -1343,7 +1343,10 @@ internal sealed class XdgToplevelResource : WaylandResource
     public bool Activated { get; private set; }
     public bool IsMaximized { get; private set; }
     public bool IsMinimized { get; private set; }
-    public WaylandDecorationMetrics DecorationMetrics { get; } = WaylandDecorationMetrics.Default;
+    public int MinWidth { get; private set; }
+    public int MinHeight { get; private set; }
+    public int MaxWidth { get; private set; }
+    public int MaxHeight { get; private set; }
     public ZxdgToplevelDecorationV1Mode DecorationMode { get; private set; } = ZxdgToplevelDecorationV1Mode.ServerSide;
     public ZxdgToplevelDecorationV1Resource? DecorationResource { get; private set; }
     public bool IsServerSideDecorated => DecorationResource != null && DecorationMode == ZxdgToplevelDecorationV1Mode.ServerSide;
@@ -1388,11 +1391,19 @@ internal sealed class XdgToplevelResource : WaylandResource
                 break;
             }
             case 7:
-                _ = XdgToplevelProtocol.DecodeSetMaxSize(message.Body, message.Fds);
+            {
+                var request = XdgToplevelProtocol.DecodeSetMaxSize(message.Body, message.Fds);
+                MaxWidth = Math.Max(0, request.Width);
+                MaxHeight = Math.Max(0, request.Height);
                 break;
+            }
             case 8:
-                _ = XdgToplevelProtocol.DecodeSetMinSize(message.Body, message.Fds);
+            {
+                var request = XdgToplevelProtocol.DecodeSetMinSize(message.Body, message.Fds);
+                MinWidth = Math.Max(0, request.Width);
+                MinHeight = Math.Max(0, request.Height);
                 break;
+            }
             case 9:
                 await SetMaximizedAsync(true);
                 break;
@@ -1526,6 +1537,23 @@ internal sealed class XdgToplevelResource : WaylandResource
             await SendConfigureAsync(0, 0);
     }
 
+    public (int Width, int Height) ClampConfiguredContentSize(int width, int height)
+    {
+        int clampedWidth = width;
+        int clampedHeight = height;
+
+        if (MinWidth > 0)
+            clampedWidth = Math.Max(clampedWidth, MinWidth);
+        if (MinHeight > 0)
+            clampedHeight = Math.Max(clampedHeight, MinHeight);
+        if (MaxWidth > 0)
+            clampedWidth = Math.Min(clampedWidth, MaxWidth);
+        if (MaxHeight > 0)
+            clampedHeight = Math.Min(clampedHeight, MaxHeight);
+
+        return (clampedWidth, clampedHeight);
+    }
+
     private byte[] BuildStates(bool resizing)
     {
         var states = new List<byte>(8);
@@ -1547,8 +1575,7 @@ internal sealed class XdgToplevelResource : WaylandResource
             Activated,
             IsMaximized,
             IsMinimized,
-            string.IsNullOrWhiteSpace(Title) ? AppId : Title,
-            DecorationMetrics);
+            string.IsNullOrWhiteSpace(Title) ? AppId : Title);
     }
 
     private void SyncSceneDecoration()

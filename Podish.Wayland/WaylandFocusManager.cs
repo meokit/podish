@@ -98,6 +98,9 @@ internal sealed class WaylandFocusManager
 
     public async ValueTask HandlePointerButtonAsync(uint button, bool pressed, uint time)
     {
+        if (pressed && _focusedPointerSceneSurfaceId == null)
+            await HandlePointerMotionAsync(_pointerDesktopX, _pointerDesktopY, time);
+
         if (pressed &&
             _focusedPointerSceneSurfaceId is ulong focusedSceneSurfaceId &&
             _focusedSceneHit.Kind != WaylandSceneHitKind.Surface &&
@@ -186,6 +189,7 @@ internal sealed class WaylandFocusManager
     public async ValueTask HandleSurfaceDestroyedAsync(ulong sceneSurfaceId)
     {
         bool affected = false;
+        bool keyboardAffected = false;
 
         if (_focusedPointerSceneSurfaceId == sceneSurfaceId)
         {
@@ -205,6 +209,7 @@ internal sealed class WaylandFocusManager
         if (_focusedKeyboardSceneSurfaceId == sceneSurfaceId)
         {
             _focusedKeyboardSceneSurfaceId = null;
+            keyboardAffected = true;
             foreach (WaylandClient client in _server.Clients)
             {
                 foreach (WlKeyboardResource keyboard in client.Objects.All.OfType<WlKeyboardResource>())
@@ -213,7 +218,13 @@ internal sealed class WaylandFocusManager
         }
 
         if (affected)
+        {
             await ClearPointerFocusAsync();
+            await RefreshPointerFocusAsync();
+        }
+
+        if (keyboardAffected)
+            await FocusTopmostRemainingToplevelAsync();
     }
 
     public async ValueTask BeginInteractiveMoveAsync(XdgToplevelResource toplevel)
@@ -315,6 +326,34 @@ internal sealed class WaylandFocusManager
         }
     }
 
+    private async ValueTask RefreshPointerFocusAsync()
+    {
+        if (_pressedPointerButtons > 0 || _interactiveMode != InteractiveMode.PassThrough)
+            return;
+
+        await HandlePointerMotionAsync(_pointerDesktopX, _pointerDesktopY, 0);
+    }
+
+    private async ValueTask FocusTopmostRemainingToplevelAsync()
+    {
+        if (_server.FramePresenter is not IWaylandSceneDebugView debugView)
+            return;
+
+        foreach ((ulong sceneSurfaceId, _) in debugView.SnapshotSurfaceBounds().Reverse())
+        {
+            if (!_server.TryGetSceneSurface(sceneSurfaceId, out WlSurfaceResource? surface) ||
+                surface.IsCursorRole ||
+                surface.XdgSurface?.Toplevel is not XdgToplevelResource toplevel ||
+                toplevel.IsMinimized)
+            {
+                continue;
+            }
+
+            await FocusKeyboardSurfaceAsync(sceneSurfaceId);
+            return;
+        }
+    }
+
     private void ProcessInteractiveMove()
     {
         if (_grabbedPointerSceneSurfaceId is not ulong grabbedSceneSurfaceId ||
@@ -359,6 +398,38 @@ internal sealed class WaylandFocusManager
             newRight = Math.Max(borderX, newLeft + 1);
 
         var bounds = new WaylandSurfaceBounds(newLeft, newTop, newRight - newLeft, newBottom - newTop);
+
+        if (surface.XdgSurface?.Toplevel is XdgToplevelResource resizeToplevel &&
+            _server.FramePresenter is IWaylandSceneView resizeSceneView &&
+            resizeSceneView.TryGetSurfaceBounds(grabbedSceneSurfaceId, out WaylandSurfaceBounds currentContentBounds) &&
+            resizeSceneView.TryGetWindowBounds(grabbedSceneSurfaceId, out WaylandSurfaceBounds currentWindowBounds))
+        {
+            int chromeLeft = currentContentBounds.X - currentWindowBounds.X;
+            int chromeTop = currentContentBounds.Y - currentWindowBounds.Y;
+            int chromeRight = (currentWindowBounds.X + currentWindowBounds.Width) -
+                              (currentContentBounds.X + currentContentBounds.Width);
+            int chromeBottom = (currentWindowBounds.Y + currentWindowBounds.Height) -
+                               (currentContentBounds.Y + currentContentBounds.Height);
+
+            int proposedContentWidth = Math.Max(1, bounds.Width - chromeLeft - chromeRight);
+            int proposedContentHeight = Math.Max(1, bounds.Height - chromeTop - chromeBottom);
+            (int clampedContentWidth, int clampedContentHeight) =
+                resizeToplevel.ClampConfiguredContentSize(proposedContentWidth, proposedContentHeight);
+
+            int clampedOuterWidth = clampedContentWidth + chromeLeft + chromeRight;
+            int clampedOuterHeight = clampedContentHeight + chromeTop + chromeBottom;
+
+            if ((_resizeEdges & XdgToplevelResizeEdge.Left) != 0)
+                bounds = bounds with { X = newRight - clampedOuterWidth, Width = clampedOuterWidth };
+            else if ((_resizeEdges & XdgToplevelResizeEdge.Right) != 0)
+                bounds = bounds with { Width = clampedOuterWidth };
+
+            if ((_resizeEdges & XdgToplevelResizeEdge.Top) != 0)
+                bounds = bounds with { Y = newBottom - clampedOuterHeight, Height = clampedOuterHeight };
+            else if ((_resizeEdges & XdgToplevelResizeEdge.Bottom) != 0)
+                bounds = bounds with { Height = clampedOuterHeight };
+        }
+
         desktopSceneController.SetWindowBounds(grabbedSceneSurfaceId, bounds);
         desktopSceneController.RaiseSurface(grabbedSceneSurfaceId);
         surface.UpdateChildSubsurfacePlacements();
