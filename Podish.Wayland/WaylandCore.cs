@@ -464,6 +464,7 @@ public sealed class WaylandServer
     private WlDataSourceResource? _selectionSource;
     private ZwpPrimarySelectionSourceV1Resource? _primarySelectionSource;
     private uint _nextTextInputDoneSerial = 1;
+    private bool _hostTextInputFocused = true;
     private long _nextDisplayLeaseToken;
     private long _nextSceneSurfaceId;
 
@@ -648,12 +649,31 @@ public sealed class WaylandServer
         }
     }
 
+    public async ValueTask HandleHostTextInputFocusLostAsync()
+    {
+        _hostTextInputFocused = false;
+
+        WaylandClient[] clients = [.. _clients];
+        foreach (WaylandClient client in clients)
+        {
+            ZwpTextInputV3Resource[] textInputs = [.. client.Objects.All.OfType<ZwpTextInputV3Resource>()];
+            foreach (ZwpTextInputV3Resource textInput in textInputs)
+                await textInput.ClearFocusAsync();
+        }
+    }
+
+    public async ValueTask HandleHostTextInputFocusGainedAsync()
+    {
+        _hostTextInputFocused = true;
+        await HandleKeyboardFocusTextInputChangedAsync();
+    }
+
     internal async ValueTask HandleTextInputStateChangedAsync()
     {
         if (FramePresenter is not IWaylandTextInputPresenter textInputPresenter)
             return;
 
-        ZwpTextInputV3Resource? textInput = GetFocusedEnabledTextInput();
+        ZwpTextInputV3Resource? textInput = _hostTextInputFocused ? GetFocusedEnabledTextInput() : null;
         if (textInput == null)
         {
             await textInputPresenter.UpdateTextInputAsync(false, null);
@@ -764,6 +784,11 @@ public sealed class WaylandServer
     private uint NextTextInputDoneSerial()
     {
         return _nextTextInputDoneSerial++;
+    }
+
+    internal uint NextTextInputDoneSerialForResource()
+    {
+        return NextTextInputDoneSerial();
     }
 
     private bool ShouldSuppressKeyboardKey(uint key)

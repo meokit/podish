@@ -199,6 +199,12 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
                         case WindowEventID.Leave:
                             _pendingInputEvents.Add(new DisplayInputEvent(DisplayInputEventKind.PointerLeave, Timestamp: ev.Window.Timestamp));
                             break;
+                        case WindowEventID.FocusLost:
+                            _pendingInputEvents.Add(new DisplayInputEvent(DisplayInputEventKind.WindowFocusLost, Timestamp: ev.Window.Timestamp));
+                            break;
+                        case WindowEventID.FocusGained:
+                            _pendingInputEvents.Add(new DisplayInputEvent(DisplayInputEventKind.WindowFocusGained, Timestamp: ev.Window.Timestamp));
+                            break;
                         case WindowEventID.Resized:
                         case WindowEventID.SizeChanged:
                             Width = ev.Window.Data1;

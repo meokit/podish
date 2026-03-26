@@ -231,6 +231,12 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
             case DisplayInputEventKind.TextEditing:
                 await _server.HandleTextInputPreeditAsync(inputEvent.Text ?? string.Empty, inputEvent.CursorBegin, inputEvent.CursorEnd);
                 break;
+            case DisplayInputEventKind.WindowFocusLost:
+                await _server.HandleHostTextInputFocusLostAsync();
+                break;
+            case DisplayInputEventKind.WindowFocusGained:
+                await _server.HandleHostTextInputFocusGainedAsync();
+                break;
         }
     }
 

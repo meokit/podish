@@ -43,6 +43,8 @@ public enum DisplayInputEventKind
     PointerMotion,
     PointerButton,
     PointerLeave,
+    WindowFocusLost,
+    WindowFocusGained,
     KeyboardKey,
     TextInput,
     TextEditing

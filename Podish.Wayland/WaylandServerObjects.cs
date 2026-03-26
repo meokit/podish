@@ -1172,7 +1172,10 @@ internal sealed class ZwpTextInputV3Resource : WaylandResource
             return;
 
         if (IsFocused && FocusedSurfaceId is uint oldSurfaceId)
+        {
+            await ClearPreeditAsync(Client.Server.NextTextInputDoneSerialForResource());
             await ZwpTextInputV3EventWriter.LeaveAsync(Client, ObjectId, oldSurfaceId);
+        }
 
         IsFocused = true;
         FocusedSurfaceId = surfaceId;
@@ -1185,6 +1188,7 @@ internal sealed class ZwpTextInputV3Resource : WaylandResource
         if (!IsFocused || FocusedSurfaceId is not uint surfaceId)
             return;
 
+        await ClearPreeditAsync(Client.Server.NextTextInputDoneSerialForResource());
         IsFocused = false;
         FocusedSurfaceId = null;
         await ZwpTextInputV3EventWriter.LeaveAsync(Client, ObjectId, surfaceId);
@@ -1196,8 +1200,7 @@ internal sealed class ZwpTextInputV3Resource : WaylandResource
         if (!IsFocused || !IsEnabled)
             return;
 
-        await ZwpTextInputV3EventWriter.PreeditStringAsync(Client, ObjectId, text, cursorBegin, cursorEnd);
-        await ZwpTextInputV3EventWriter.DoneAsync(Client, ObjectId, serial);
+        await SendUpdateAsync(text, cursorBegin, cursorEnd, null, serial);
     }
 
     public async ValueTask SendCommitStringAsync(string text, uint serial)
@@ -1205,14 +1208,24 @@ internal sealed class ZwpTextInputV3Resource : WaylandResource
         if (!IsFocused || !IsEnabled)
             return;
 
-        await ZwpTextInputV3EventWriter.PreeditStringAsync(Client, ObjectId, null, 0, 0);
-        await ZwpTextInputV3EventWriter.CommitStringAsync(Client, ObjectId, text);
-        await ZwpTextInputV3EventWriter.DoneAsync(Client, ObjectId, serial);
+        await SendUpdateAsync(null, 0, 0, text, serial);
     }
 
     public void SetHasActivePreedit(bool active)
     {
         HasActivePreedit = active;
+    }
+
+    public async ValueTask ClearPreeditAsync(uint serial)
+    {
+        if (!HasActivePreedit || !IsFocused || !IsEnabled)
+        {
+            HasActivePreedit = false;
+            return;
+        }
+
+        HasActivePreedit = false;
+        await SendUpdateAsync(null, 0, 0, null, serial);
     }
 
     public override void Destroy()
@@ -1233,6 +1246,14 @@ internal sealed class ZwpTextInputV3Resource : WaylandResource
 
     private void ApplyPendingState()
     {
+        bool wasEnabled = IsEnabled;
+        bool willDisable = _hasPendingEnable && !_pendingEnabled;
+
+        if (wasEnabled && willDisable)
+        {
+            ClearPreeditAsync(Client.Server.NextTextInputDoneSerialForResource()).AsTask().GetAwaiter().GetResult();
+        }
+
         if (_hasPendingEnable)
         {
             IsEnabled = _pendingEnabled;
@@ -1246,6 +1267,16 @@ internal sealed class ZwpTextInputV3Resource : WaylandResource
         ContentHint = _pendingContentHint;
         ContentPurpose = _pendingContentPurpose;
         CursorRectangle = _pendingCursorRectangle;
+    }
+
+    private async ValueTask SendUpdateAsync(string? preeditText, int cursorBegin, int cursorEnd, string? commitText, uint serial)
+    {
+        await ZwpTextInputV3EventWriter.PreeditStringAsync(Client, ObjectId, preeditText, cursorBegin, cursorEnd);
+
+        if (commitText != null)
+            await ZwpTextInputV3EventWriter.CommitStringAsync(Client, ObjectId, commitText);
+
+        await ZwpTextInputV3EventWriter.DoneAsync(Client, ObjectId, serial);
     }
 }
 
