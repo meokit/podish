@@ -666,6 +666,7 @@ public sealed class WaylandServer
     {
         _hostTextInputFocused = true;
         await HandleKeyboardFocusTextInputChangedAsync();
+        await HandleTextInputStateChangedAsync();
     }
 
     internal async ValueTask HandleTextInputStateChangedAsync()

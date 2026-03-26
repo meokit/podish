@@ -18,6 +18,7 @@ internal sealed class WaylandDisplayServerState : IDisposable
 {
     private readonly WaylandSdlDisplayHost _host;
     private readonly ConcurrentQueue<WaylandDisplayCommand> _commands = [];
+    private readonly HashSet<uint> _suppressedImeKeys = [];
 
     public WaylandDisplayServerState(ILoggerFactory loggerFactory, WaylandDesktopOptions desktopOptions)
     {
@@ -101,10 +102,12 @@ internal sealed class WaylandDisplayServerState : IDisposable
         return _host.DrainCommands(batch, consumed, out shutdownRequested);
     }
 
-    private static IEnumerable<DisplayInputEvent> OrderInputEventsForIme(IReadOnlyList<DisplayInputEvent> inputEvents)
+    private IEnumerable<DisplayInputEvent> OrderInputEventsForIme(IReadOnlyList<DisplayInputEvent> inputEvents)
     {
-        bool containsImeTextEvent = inputEvents.Any(static ev =>
-            ev.Kind is DisplayInputEventKind.TextEditing or DisplayInputEventKind.TextInput);
+        if (inputEvents.Any(static ev => ev.Kind is DisplayInputEventKind.WindowFocusLost or DisplayInputEventKind.WindowFocusGained))
+            _suppressedImeKeys.Clear();
+
+        bool containsImePreeditEvent = inputEvents.Any(static ev => ev.Kind == DisplayInputEventKind.TextEditing);
 
         static int Priority(DisplayInputEventKind kind) => kind switch
         {
@@ -115,11 +118,11 @@ internal sealed class WaylandDisplayServerState : IDisposable
         };
 
         return inputEvents
-            .Where(ev => !containsImeTextEvent || !ShouldSuppressKeyboardEventForIme(ev))
             .Select(static (ev, index) => (ev, index))
             .OrderBy(static item => Priority(item.ev.Kind))
             .ThenBy(static item => item.index)
-            .Select(static item => item.ev);
+            .Select(static item => item.ev)
+            .Where(ev => ShouldEmitOrderedInputEvent(ev, containsImePreeditEvent));
     }
 
     private static bool ShouldSuppressKeyboardEventForIme(DisplayInputEvent inputEvent)
@@ -141,5 +144,30 @@ internal sealed class WaylandDisplayServerState : IDisposable
             15 or
             28 or
             57;
+    }
+
+    private bool ShouldEmitOrderedInputEvent(DisplayInputEvent inputEvent, bool containsImePreeditEvent)
+    {
+        if (inputEvent.Kind != DisplayInputEventKind.KeyboardKey)
+            return true;
+
+        if (_suppressedImeKeys.Contains(inputEvent.Key))
+        {
+            if (!inputEvent.Pressed)
+                _suppressedImeKeys.Remove(inputEvent.Key);
+            return false;
+        }
+
+        if (!containsImePreeditEvent)
+            return true;
+
+        if (!inputEvent.Pressed)
+            return true;
+
+        if (!ShouldSuppressKeyboardEventForIme(inputEvent))
+            return true;
+
+        _suppressedImeKeys.Add(inputEvent.Key);
+        return false;
     }
 }
