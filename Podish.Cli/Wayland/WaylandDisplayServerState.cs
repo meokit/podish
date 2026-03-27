@@ -26,7 +26,10 @@ internal sealed class WaylandDisplayServerState : IDisposable
         Logger = loggerFactory.CreateLogger<WaylandDisplayServerState>();
         DesktopOptions = desktopOptions;
         _host = new WaylandSdlDisplayHost(loggerFactory, desktopOptions);
-        Presenter = new WaylandSdlFramePresenter(desktopOptions, command => _commands.Enqueue(command));
+        Presenter = new WaylandSdlFramePresenter(
+            desktopOptions,
+            command => _commands.Enqueue(command),
+            loggerFactory.CreateLogger<WaylandSdlFramePresenter>());
     }
 
     public ILoggerFactory LoggerFactory { get; }

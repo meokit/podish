@@ -11,6 +11,7 @@ namespace Podish.Cli.Wayland;
 
 internal sealed class WaylandSdlDisplayHost : IDisposable
 {
+    private readonly ILogger _logger;
     private readonly ILoggerFactory _loggerFactory;
     private readonly WaylandDesktopOptions _desktopOptions;
     private readonly WaylandUiTheme _theme;
@@ -29,6 +30,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         _loggerFactory = loggerFactory;
         _desktopOptions = desktopOptions;
         _theme = desktopOptions.Theme;
+        _logger = loggerFactory.CreateLogger<WaylandSdlDisplayHost>();
     }
 
     public bool IsClosed => _output?.IsClosed ?? false;
@@ -47,6 +49,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
             AllowHighDpi: true,
             Resizable: true));
         _renderer = _output.Renderer;
+        _logger.LogInformation("Wayland SDL host started desktop={Width}x{Height}", _desktopOptions.Width, _desktopOptions.Height);
         EnsureButtonTextures();
     }
 
@@ -125,6 +128,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     public void Render()
     {
         EnsureStarted();
+        _logger.LogDebug("Wayland SDL host render surfaces={Count} zOrder={ZOrderCount}", _surfaces.Count, _zOrder.Count);
         _renderer!.Clear(ToDisplayColor(_theme.Desktop.Background));
 
         foreach (ulong sceneSurfaceId in _zOrder)
@@ -132,9 +136,15 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
             if (!_surfaces.TryGetValue(sceneSurfaceId, out SurfaceTextureState? surface))
                 continue;
             if (surface.Hidden)
+            {
+                _logger.LogDebug("Wayland SDL host skip hidden sceneSurfaceId={SceneSurfaceId}", sceneSurfaceId);
                 continue;
+            }
             if (surface.Texture == null)
+            {
+                _logger.LogDebug("Wayland SDL host skip missing texture sceneSurfaceId={SceneSurfaceId}", sceneSurfaceId);
                 continue;
+            }
 
             DrawDecoration(surface);
             _renderer.Blit(surface.Texture, destination: ToDisplayRect(surface.Bounds));
@@ -178,12 +188,11 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         };
 
         SurfaceTextureState state = EnsureSurfaceTexture(sceneSurfaceId, frame.Width, frame.Height, pixelFormat);
-        UpdateTexture(state.Texture!, frame);
+        UpdateTexture(sceneSurfaceId, state.Texture!, frame);
         state.Width = frame.Width;
         state.Height = frame.Height;
         state.Format = pixelFormat;
         state.Bounds = bounds;
-
         _zOrder.Remove(sceneSurfaceId);
         _zOrder.Add(sceneSurfaceId);
     }
@@ -542,7 +551,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
     private static DisplayColor ToDisplayColor(WaylandColor color) => new(color.R, color.G, color.B, color.A);
 
-    private static void UpdateTexture(IDisplayTexture texture, WaylandShmFrame frame)
+    private void UpdateTexture(ulong sceneSurfaceId, IDisplayTexture texture, WaylandShmFrame frame)
     {
         const int maxChunkRows = 64;
         int maxChunkBytes = frame.Stride * Math.Min(frame.Height, maxChunkRows);
@@ -569,44 +578,15 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
             throw new InvalidOperationException("Wayland shm file has no inode.");
 
         long offset = frame.Offset + (long)rowOffset * frame.Stride;
-        if (frame.File.OpenedInode is IndexedMemoryInode indexedInode &&
-            TryReadIndexedSegments(indexedInode, offset, destination, length))
-            return;
-
-        ReadExactly(frame.File, offset, destination.AsSpan(0, length));
-    }
-
-    private static bool TryReadIndexedSegments(IndexedMemoryInode indexedInode, long offset, byte[] destination,
-        int length)
-    {
         int written = 0;
-        bool ok = indexedInode.VisitReadSegments(offset, length, (ptr, chunkLength) =>
+        bool ok = frame.File.OpenedInode.VisitReadableSegments(frame.File, offset, length, chunk =>
         {
-            unsafe
-            {
-                new ReadOnlySpan<byte>((void*)ptr, chunkLength).CopyTo(destination.AsSpan(written, chunkLength));
-            }
-
-            written += chunkLength;
+            chunk.CopyTo(destination.AsSpan(written, chunk.Length));
+            written += chunk.Length;
             return true;
         });
-
-        return ok && written == length;
-    }
-
-    private static void ReadExactly(LinuxFile file, long offset, Span<byte> destination)
-    {
-        if (file.OpenedInode == null)
-            throw new InvalidOperationException("Wayland shm file has no inode.");
-
-        int totalRead = 0;
-        while (totalRead < destination.Length)
-        {
-            int read = file.OpenedInode.Read(file, destination[totalRead..], offset + totalRead);
-            if (read <= 0)
-                throw new InvalidOperationException("Failed to read complete shm frame contents.");
-            totalRead += read;
-        }
+        if (!ok || written != length)
+            throw new InvalidOperationException("Failed to read complete shm frame contents.");
     }
 
     private static DisplayCursorDescriptor ReadCursor(WaylandCursorFrame cursor)

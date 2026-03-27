@@ -49,6 +49,8 @@ public interface IAddressSpaceOperations : IPageCacheOps
     int ReleaseFolio(long pageIndex);
 }
 
+public delegate bool ReadOnlySpanVisitor(ReadOnlySpan<byte> buffer);
+
 public enum InodeType
 {
     Unknown = 0,
@@ -796,6 +798,104 @@ public abstract class Inode : IAddressSpaceOperations
     {
         if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
         return 0;
+    }
+
+    public virtual bool VisitReadableSegments(LinuxFile? linuxFile, long offset, int length, ReadOnlySpanVisitor visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+
+        if (offset < 0 || length < 0)
+            return false;
+        if (length == 0)
+            return true;
+        if (Type == InodeType.Directory)
+            return false;
+
+        long fileSize = (long)Size;
+        if (offset > fileSize || length > fileSize - offset)
+            return false;
+
+        AddressSpace? pageCache = Mapping;
+        if (pageCache == null)
+        {
+            if (linuxFile == null)
+                return false;
+
+            byte[] tempPage = new byte[LinuxConstants.PageSize];
+            int remainingNoCache = length;
+            long absoluteNoCache = offset;
+            while (remainingNoCache > 0)
+            {
+                uint pageIndex = (uint)(absoluteNoCache / LinuxConstants.PageSize);
+                int pageOffset = (int)(absoluteNoCache & LinuxConstants.PageOffsetMask);
+                int chunk = Math.Min(remainingNoCache, LinuxConstants.PageSize - pageOffset);
+                long pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
+                int pageReadLen = (int)Math.Min(LinuxConstants.PageSize, Math.Max(0, fileSize - pageFileOffset));
+                tempPage.AsSpan().Clear();
+                if (pageReadLen > 0)
+                {
+                    int rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
+                    if (rc < 0)
+                        return false;
+                }
+
+                if (!visitor(tempPage.AsSpan(pageOffset, chunk)))
+                    return false;
+
+                absoluteNoCache += chunk;
+                remainingNoCache -= chunk;
+            }
+
+            return true;
+        }
+
+        int remaining = length;
+        long absolute = offset;
+        while (remaining > 0)
+        {
+            uint pageIndex = (uint)(absolute / LinuxConstants.PageSize);
+            int pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
+            int chunk = Math.Min(remaining, LinuxConstants.PageSize - pageOffset);
+            IntPtr pagePtr = pageCache.GetPage(pageIndex);
+            if (pagePtr == IntPtr.Zero)
+            {
+                if (linuxFile == null)
+                    return false;
+
+                long pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
+                int pageReadLen = (int)Math.Min(LinuxConstants.PageSize, Math.Max(0, fileSize - pageFileOffset));
+                pagePtr = pageCache.GetOrCreatePage(pageIndex, ptr =>
+                {
+                    unsafe
+                    {
+                        Span<byte> dst = new((void*)ptr, LinuxConstants.PageSize);
+                        dst.Clear();
+                        if (pageReadLen > 0)
+                        {
+                            int rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), dst);
+                            if (rc < 0)
+                                return false;
+                        }
+                    }
+
+                    return true;
+                }, out _, true, AllocationClass.PageCache);
+                if (pagePtr == IntPtr.Zero)
+                    return false;
+            }
+
+            unsafe
+            {
+                ReadOnlySpan<byte> span = new((void*)((byte*)pagePtr + pageOffset), chunk);
+                if (!visitor(span))
+                    return false;
+            }
+
+            absolute += chunk;
+            remaining -= chunk;
+        }
+
+        return true;
     }
 
     protected int ReadWithPageCache(

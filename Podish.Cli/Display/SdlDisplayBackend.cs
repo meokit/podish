@@ -437,7 +437,13 @@ internal sealed unsafe class SdlDisplayRenderer : IDisplayRenderer
             throw new InvalidOperationException($"SDL create texture failed: {GetError()}");
 
         var blendMode = descriptor.Format == DisplayPixelFormat.Argb8888
-            ? BlendMode.Blend
+            ? _sdl.ComposeCustomBlendMode(
+                BlendFactor.One,
+                BlendFactor.OneMinusSrcAlpha,
+                BlendOperation.Add,
+                BlendFactor.One,
+                BlendFactor.OneMinusSrcAlpha,
+                BlendOperation.Add)
             : BlendMode.None;
         ThrowIfFailed(_sdl.SetTextureBlendMode(texture, blendMode), "set texture blend mode");
 

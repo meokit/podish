@@ -484,6 +484,59 @@ public abstract class IndexedMemoryInode : Inode
         return BackendRead(linuxFile, buffer, offset);
     }
 
+    public override bool VisitReadableSegments(LinuxFile? linuxFile, long offset, int length, ReadOnlySpanVisitor visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+
+        if (offset < 0 || length < 0)
+            return false;
+        if (length == 0)
+            return true;
+
+        lock (Lock)
+        {
+            if (Type != InodeType.File)
+                return false;
+
+            long fileSize = (long)Size;
+            if (offset > fileSize || length > fileSize - offset)
+                return false;
+
+            AddressSpace pageCache = EnsurePageCacheLocked();
+            int remaining = length;
+            long absolute = offset;
+            while (remaining > 0)
+            {
+                uint pageIndex = (uint)(absolute / LinuxConstants.PageSize);
+                int pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
+                int chunk = Math.Min(remaining, LinuxConstants.PageSize - pageOffset);
+                IntPtr pagePtr = pageCache.GetOrCreatePage(pageIndex, ptr =>
+                {
+                    unsafe
+                    {
+                        new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
+                    }
+
+                    return true;
+                }, out _, true, AllocationClass.PageCache);
+                if (pagePtr == IntPtr.Zero)
+                    return false;
+
+                unsafe
+                {
+                    ReadOnlySpan<byte> span = new((void*)((byte*)pagePtr + pageOffset), chunk);
+                    if (!visitor(span))
+                        return false;
+                }
+
+                absolute += chunk;
+                remaining -= chunk;
+            }
+
+            return true;
+        }
+    }
+
     public override int Flock(LinuxFile linuxFile, int operation)
     {
         var nonBlock = (operation & LinuxConstants.LOCK_NB) != 0;

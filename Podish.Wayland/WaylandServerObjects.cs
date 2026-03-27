@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace Podish.Wayland;
 
 public sealed record WaylandRect(int X, int Y, int Width, int Height);
@@ -324,6 +326,9 @@ internal sealed class WlSurfaceResource : WaylandResource
             await Client.Server.FramePresenter.PresentSurfaceAsync(SceneSurfaceId, _current.Buffer?.ToFrame(SceneSurfaceId));
         }
 
+        if (XdgSurface?.Toplevel is { } toplevel && _current.Buffer != null)
+            await toplevel.MaybeSendPostCommitConfigureAsync(_current.Buffer.Width, _current.Buffer.Height);
+
         _subsurfaceRole?.UpdatePlacementRecursive();
         UpdateChildSubsurfacePlacements();
 
@@ -590,6 +595,12 @@ internal sealed class WlShmResource : WaylandResource
         var request = WlShmProtocol.DecodeCreatePool(message.Body, message.Fds);
         if (request.Size <= 0)
             throw new WaylandProtocolException(ObjectId, 0, "wl_shm_pool size must be positive.");
+
+        Client.Server.Logger?.LogDebug(
+            "Wayland shm create_pool poolObjectId={PoolObjectId} size={Size} fd={Fd}",
+            request.Id,
+            request.Size,
+            WaylandShmDebug.DescribeLinuxFile(request.Fd));
 
         Client.Register(new WlShmPoolResource(Client, request.Id, 1, request.Fd, request.Size));
     }
@@ -1304,6 +1315,17 @@ internal sealed class WlShmPoolResource : WaylandResource
                 var request = WlShmPoolProtocol.DecodeCreateBuffer(message.Body, message.Fds);
                 if (request.Width <= 0 || request.Height <= 0 || request.Stride <= 0 || request.Offset < 0)
                     throw new WaylandProtocolException(ObjectId, 0, "wl_buffer parameters must be positive.");
+                Client.Server.Logger?.LogDebug(
+                    "Wayland shm create_buffer poolObjectId={PoolObjectId} bufferObjectId={BufferObjectId} offset={Offset} width={Width} height={Height} stride={Stride} format={Format} size={PoolSize} fd={Fd}",
+                    ObjectId,
+                    request.Id,
+                    request.Offset,
+                    request.Width,
+                    request.Height,
+                    request.Stride,
+                    request.Format,
+                    Size,
+                    WaylandShmDebug.DescribeLinuxFile(Fd));
                 Client.Register(new WlBufferResource(Client, request.Id, 1, this, request.Offset, request.Width,
                     request.Height, request.Stride, request.Format));
                 break;
@@ -1362,6 +1384,17 @@ internal sealed class WlBufferResource : WaylandResource
     {
         ulong leaseToken = Client.Server.AllocateDisplayLeaseToken();
         _displayLeaseTokens.Add(leaseToken);
+        Client.Server.Logger?.LogDebug(
+            "Wayland shm to_frame sceneSurfaceId={SceneSurfaceId} bufferObjectId={BufferObjectId} leaseToken={LeaseToken} offset={Offset} width={Width} height={Height} stride={Stride} format={Format} fd={Fd}",
+            sceneSurfaceId,
+            ObjectId,
+            leaseToken,
+            Offset,
+            Width,
+            Height,
+            Stride,
+            Format,
+            WaylandShmDebug.DescribeLinuxFile(Pool.Fd));
         return new WaylandShmFrame(sceneSurfaceId, leaseToken, Pool.Fd, Offset, Width, Height, Stride, Format);
     }
 
@@ -1389,6 +1422,18 @@ internal sealed class WlBufferResource : WaylandResource
     {
         Destroy();
         return ValueTask.CompletedTask;
+    }
+}
+
+internal static class WaylandShmDebug
+{
+    public static string DescribeLinuxFile(LinuxFile file)
+    {
+        Inode? inode = file.OpenedInode;
+        string inodePart = inode == null
+            ? "inode=null"
+            : $"inodeHash=0x{inode.GetHashCode():x} ino={inode.Ino} dev={inode.Dev} type={inode.Type}";
+        return $"fileHash=0x{file.GetHashCode():x} {inodePart} dentry={file.Dentry.Name}";
     }
 }
 
@@ -2045,6 +2090,7 @@ internal sealed class XdgSurfaceResource : WaylandResource
 internal sealed class XdgToplevelResource : WaylandResource
 {
     private WaylandSurfaceBounds? _restoreBounds;
+    private bool _hasSentNonZeroConfigure;
 
     public XdgToplevelResource(WaylandClient client, uint objectId, uint version, XdgSurfaceResource surface)
         : base(client, objectId, version, XdgToplevelProtocol.InterfaceName)
@@ -2155,10 +2201,21 @@ internal sealed class XdgToplevelResource : WaylandResource
 
     public async ValueTask SendConfigureAsync(int width, int height, bool resizing = false)
     {
+        if (width > 0 || height > 0)
+            _hasSentNonZeroConfigure = true;
+
         if (DecorationResource != null)
             await DecorationResource.SendConfigureAsync(DecorationMode);
         await XdgToplevelEventWriter.ConfigureAsync(Client, ObjectId, width, height, BuildStates(resizing));
         await Surface.SendConfigureAsync();
+    }
+
+    public async ValueTask MaybeSendPostCommitConfigureAsync(int width, int height)
+    {
+        if (_hasSentNonZeroConfigure || width <= 0 || height <= 0)
+            return;
+
+        await SendConfigureAsync(width, height);
     }
 
     public void AttachDecoration(ZxdgToplevelDecorationV1Resource decoration)

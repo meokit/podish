@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using Microsoft.Extensions.Logging;
 
 namespace Podish.Wayland;
 
@@ -461,6 +462,7 @@ public sealed class WaylandServer
     private readonly List<WlCallbackResource> _pendingFrameCallbacks = [];
     private readonly Dictionary<ulong, WlSurfaceResource> _sceneSurfaces = [];
     private readonly WaylandKeyboardKeymap _keyboardKeymap = new();
+    private readonly ILogger? _logger;
     private WlDataSourceResource? _selectionSource;
     private ZwpPrimarySelectionSourceV1Resource? _primarySelectionSource;
     private uint _nextTextInputDoneSerial = 1;
@@ -468,10 +470,11 @@ public sealed class WaylandServer
     private long _nextDisplayLeaseToken;
     private long _nextSceneSurfaceId;
 
-    public WaylandServer(IWaylandFramePresenter? framePresenter = null, OutputInfo? output = null)
+    public WaylandServer(IWaylandFramePresenter? framePresenter = null, OutputInfo? output = null, ILogger? logger = null)
     {
         FramePresenter = framePresenter;
         Output = output ?? new OutputInfo();
+        _logger = logger;
         Globals = new WaylandGlobalRegistry();
         Focus = new WaylandFocusManager(this);
         RegisterCoreGlobals();
@@ -480,6 +483,7 @@ public sealed class WaylandServer
     public IWaylandFramePresenter? FramePresenter { get; private set; }
     public OutputInfo Output { get; }
     public WaylandGlobalRegistry Globals { get; }
+    internal ILogger? Logger => _logger;
     internal WaylandKeyboardKeymap KeyboardKeymap => _keyboardKeymap;
     internal WaylandFocusManager Focus { get; }
     internal IReadOnlyList<WaylandClient> Clients => _clients;
@@ -816,10 +820,20 @@ public sealed class WaylandServer
 
     internal void EnqueueFrameCallbacks(IEnumerable<WlCallbackResource> callbacks)
     {
+        int added = 0;
         foreach (WlCallbackResource callback in callbacks)
         {
             if (!callback.Destroyed)
+            {
                 _pendingFrameCallbacks.Add(callback);
+                added++;
+            }
+        }
+
+        if (added != 0)
+        {
+            _logger?.LogDebug("Wayland frame callback queued count={Count} pending={Pending}", added,
+                _pendingFrameCallbacks.Count);
         }
     }
 
@@ -830,12 +844,15 @@ public sealed class WaylandServer
 
         List<WlCallbackResource> callbacks = [.. _pendingFrameCallbacks];
         _pendingFrameCallbacks.Clear();
+        _logger?.LogDebug("Wayland frame callback flush count={Count} timeMs={TimeMs}", callbacks.Count, timeMs);
 
         foreach (WlCallbackResource callback in callbacks)
         {
             if (callback.Destroyed)
                 continue;
 
+            _logger?.LogTrace("Wayland frame callback done clientHash={ClientHash} callbackObjectId={ObjectId} timeMs={TimeMs}",
+                callback.Client.GetHashCode(), callback.ObjectId, timeMs);
             await callback.SendDoneAndDisposeAsync(timeMs);
         }
     }

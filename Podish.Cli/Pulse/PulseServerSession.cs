@@ -450,35 +450,18 @@ internal sealed class PulseServerSession
         if (memfd?.OpenedInode == null)
             return false;
 
-        if (memfd.OpenedInode is IndexedMemoryInode indexedInode)
+        int written = 0;
+        int currentBuffered = buffered;
+        bool ok = memfd.OpenedInode.VisitReadableSegments(memfd, offset, length, chunk =>
         {
-            bool ok = true;
-            int written = 0;
-            int currentBuffered = buffered;
-            unsafe
-            {
-                ok = indexedInode.VisitReadSegments(offset, length, (ptr, chunkLength) =>
-                {
-                    ReadOnlySpan<byte> chunk = new((void*)ptr, chunkLength);
-                    currentBuffered = stream.Append(chunk);
-                    written += chunkLength;
-                    return true;
-                });
-            }
-
-            if (ok && written == length)
-            {
-                buffered = currentBuffered;
-                return true;
-            }
-        }
-
-        byte[] buffer = new byte[length];
-        int read = memfd.OpenedInode.Read(_connection.Task, memfd, buffer, offset);
-        if (read < length)
+            currentBuffered = stream.Append(chunk);
+            written += chunk.Length;
+            return true;
+        });
+        if (!ok || written != length)
             return false;
 
-        buffered = stream.Append(buffer);
+        buffered = currentBuffered;
         return true;
     }
 

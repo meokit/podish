@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Podish.Display;
 using Podish.Wayland;
 
@@ -5,6 +6,7 @@ namespace Podish.Cli.Wayland;
 
 internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylandCursorPresenter, IWaylandTextInputPresenter, IWaylandSceneView, IWaylandSceneDebugView, IWaylandDesktopSceneController, IDisposable
 {
+    private readonly Microsoft.Extensions.Logging.ILogger _logger;
     private int _desktopWidth;
     private int _desktopHeight;
     private readonly WaylandUiTheme _theme;
@@ -18,6 +20,19 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
         _desktopHeight = desktopOptions.Height;
         _theme = desktopOptions.Theme;
         _enqueueCommand = enqueueCommand;
+        _logger = Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+    }
+
+    public WaylandSdlFramePresenter(
+        WaylandDesktopOptions desktopOptions,
+        Action<WaylandDisplayCommand> enqueueCommand,
+        Microsoft.Extensions.Logging.ILogger logger)
+    {
+        _desktopWidth = desktopOptions.Width;
+        _desktopHeight = desktopOptions.Height;
+        _theme = desktopOptions.Theme;
+        _enqueueCommand = enqueueCommand;
+        _logger = logger;
     }
 
     public ValueTask PresentSurfaceAsync(ulong sceneSurfaceId, WaylandShmFrame? frame,

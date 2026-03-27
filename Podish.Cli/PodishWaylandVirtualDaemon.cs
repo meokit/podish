@@ -38,7 +38,7 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
             "WL-1",
             "Podish Virtual Output",
             "Podish",
-            "SDL Desktop"));
+            "SDL Desktop"), _logger);
     }
 
     public string Name => "podish-wayland";
