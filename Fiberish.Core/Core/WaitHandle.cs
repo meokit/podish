@@ -10,7 +10,7 @@ namespace Fiberish.Core;
 public class AsyncWaitQueue
 {
     private readonly List<WaiterEntry> _drainBuffer = new();
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly List<WaiterEntry> _waiters = new();
 
     private bool _isSignaled;

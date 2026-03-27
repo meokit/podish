@@ -54,7 +54,7 @@ public class ConcurrencyIsolationTests
         Directory.CreateDirectory(root);
         var lockPath = Path.Combine(root, "resource.lock");
         var trace = new List<string>();
-        var gate = new object();
+        var gate = new Lock();
 
         try
         {

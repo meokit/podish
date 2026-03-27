@@ -1,3 +1,4 @@
+using System.Data;
 using Microsoft.Data.Sqlite;
 using SQLitePCL;
 
@@ -39,9 +40,9 @@ public sealed class SilkMetadataStore
 
     private static int _sqliteInit;
     private readonly string _connectionString;
-    private readonly object _readLock = new();
-    private SqliteCommand? _lookupDentryCmd;
+    private readonly Lock _readLock = new();
     private SqliteCommand? _listDentriesByParentCmd;
+    private SqliteCommand? _lookupDentryCmd;
     private SqliteConnection? _readConnection;
 
     public SilkMetadataStore(string dbPath)
@@ -170,7 +171,8 @@ public sealed class SilkMetadataStore
     public void UpsertInode(long ino, SilkInodeKind kind, int mode, int uid, int gid, int nlink = 1, uint rdev = 0,
         long size = 0, long? atimeNs = null, long? mtimeNs = null, long? ctimeNs = null)
     {
-        ExecuteTransaction(tx => tx.UpsertInode(ino, kind, mode, uid, gid, nlink, rdev, size, atimeNs, mtimeNs, ctimeNs));
+        ExecuteTransaction(tx =>
+            tx.UpsertInode(ino, kind, mode, uid, gid, nlink, rdev, size, atimeNs, mtimeNs, ctimeNs));
     }
 
     public bool InodeExists(long ino)
@@ -186,7 +188,8 @@ public sealed class SilkMetadataStore
     {
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns FROM inodes WHERE ino = @ino;";
+        cmd.CommandText =
+            "SELECT ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns FROM inodes WHERE ino = @ino;";
         cmd.Parameters.AddWithValue("@ino", ino);
         using var reader = cmd.ExecuteReader();
         if (!reader.Read()) return null;
@@ -208,7 +211,8 @@ public sealed class SilkMetadataStore
     {
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns FROM inodes ORDER BY ino ASC;";
+        cmd.CommandText =
+            "SELECT ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns FROM inodes ORDER BY ino ASC;";
         using var reader = cmd.ExecuteReader();
         var result = new List<SilkInodeRecord>();
         while (reader.Read())
@@ -512,6 +516,39 @@ public sealed class SilkMetadataStore
         cmd.ExecuteNonQuery();
     }
 
+    private SqliteConnection GetReadConnectionLocked()
+    {
+        if (_readConnection is { State: ConnectionState.Open })
+            return _readConnection;
+
+        _readConnection?.Dispose();
+        _readConnection = OpenConnection();
+        _lookupDentryCmd = null;
+        _listDentriesByParentCmd = null;
+        return _readConnection;
+    }
+
+    private SqliteCommand GetLookupDentryCommandLocked()
+    {
+        if (_lookupDentryCmd != null) return _lookupDentryCmd;
+        var cmd = GetReadConnectionLocked().CreateCommand();
+        cmd.CommandText = "SELECT ino FROM dentries WHERE parent_ino = @p AND name = @n;";
+        cmd.Parameters.Add("@p", SqliteType.Integer);
+        cmd.Parameters.Add("@n", SqliteType.Text);
+        _lookupDentryCmd = cmd;
+        return cmd;
+    }
+
+    private SqliteCommand GetListDentriesByParentCommandLocked()
+    {
+        if (_listDentriesByParentCmd != null) return _listDentriesByParentCmd;
+        var cmd = GetReadConnectionLocked().CreateCommand();
+        cmd.CommandText = "SELECT parent_ino, name, ino FROM dentries WHERE parent_ino = @p ORDER BY name ASC;";
+        cmd.Parameters.Add("@p", SqliteType.Integer);
+        _listDentriesByParentCmd = cmd;
+        return cmd;
+    }
+
     public sealed class SilkMetadataTransaction
     {
         private readonly SqliteConnection _conn;
@@ -537,20 +574,20 @@ public sealed class SilkMetadataStore
             var effectiveMtime = mtimeNs ?? now;
             var effectiveCtime = ctimeNs ?? now;
             _upsertInodeCmd ??= PrepareCommand("""
-                                              INSERT INTO inodes(ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns)
-                                              VALUES (@ino, @kind, @mode, @uid, @gid, @nlink, @rdev, @size, @atime, @mtime, @ctime)
-                                              ON CONFLICT(ino) DO UPDATE SET
-                                                kind = excluded.kind,
-                                                mode = excluded.mode,
-                                                uid = excluded.uid,
-                                                gid = excluded.gid,
-                                                nlink = excluded.nlink,
-                                                rdev = excluded.rdev,
-                                                size = excluded.size,
-                                                atime_ns = excluded.atime_ns,
-                                                mtime_ns = excluded.mtime_ns,
-                                                ctime_ns = excluded.ctime_ns;
-                                              """,
+                                               INSERT INTO inodes(ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns)
+                                               VALUES (@ino, @kind, @mode, @uid, @gid, @nlink, @rdev, @size, @atime, @mtime, @ctime)
+                                               ON CONFLICT(ino) DO UPDATE SET
+                                                 kind = excluded.kind,
+                                                 mode = excluded.mode,
+                                                 uid = excluded.uid,
+                                                 gid = excluded.gid,
+                                                 nlink = excluded.nlink,
+                                                 rdev = excluded.rdev,
+                                                 size = excluded.size,
+                                                 atime_ns = excluded.atime_ns,
+                                                 mtime_ns = excluded.mtime_ns,
+                                                 ctime_ns = excluded.ctime_ns;
+                                               """,
                 cmd =>
                 {
                     cmd.Parameters.Add("@ino", SqliteType.Integer);
@@ -659,38 +696,5 @@ public sealed class SilkMetadataStore
             configureParameters(cmd);
             return cmd;
         }
-    }
-
-    private SqliteConnection GetReadConnectionLocked()
-    {
-        if (_readConnection is { State: System.Data.ConnectionState.Open })
-            return _readConnection;
-
-        _readConnection?.Dispose();
-        _readConnection = OpenConnection();
-        _lookupDentryCmd = null;
-        _listDentriesByParentCmd = null;
-        return _readConnection;
-    }
-
-    private SqliteCommand GetLookupDentryCommandLocked()
-    {
-        if (_lookupDentryCmd != null) return _lookupDentryCmd;
-        var cmd = GetReadConnectionLocked().CreateCommand();
-        cmd.CommandText = "SELECT ino FROM dentries WHERE parent_ino = @p AND name = @n;";
-        cmd.Parameters.Add("@p", SqliteType.Integer);
-        cmd.Parameters.Add("@n", SqliteType.Text);
-        _lookupDentryCmd = cmd;
-        return cmd;
-    }
-
-    private SqliteCommand GetListDentriesByParentCommandLocked()
-    {
-        if (_listDentriesByParentCmd != null) return _listDentriesByParentCmd;
-        var cmd = GetReadConnectionLocked().CreateCommand();
-        cmd.CommandText = "SELECT parent_ino, name, ino FROM dentries WHERE parent_ino = @p ORDER BY name ASC;";
-        cmd.Parameters.Add("@p", SqliteType.Integer);
-        _listDentriesByParentCmd = cmd;
-        return cmd;
     }
 }

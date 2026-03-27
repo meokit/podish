@@ -912,7 +912,7 @@ internal sealed class CompositeDisposable(params IDisposable[] disposables) : ID
 internal sealed class TarBlobLayerContentProvider : ILayerContentProvider, IDisposable
 {
     private readonly Dictionary<string, string> _digestToBlobPath;
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly Dictionary<string, FileStream> _streams = new(StringComparer.Ordinal);
 
     public TarBlobLayerContentProvider(Dictionary<string, string> digestToBlobPath)

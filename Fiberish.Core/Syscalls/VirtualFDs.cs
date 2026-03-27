@@ -179,7 +179,7 @@ public class EventFdInode : TmpfsInode
 
 public class TimerFdInode : TmpfsInode
 {
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly List<Action> _waiters = [];
     private ulong _expirations;
 

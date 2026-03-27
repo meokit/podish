@@ -5,7 +5,7 @@ namespace Fiberish.Memory;
 
 public sealed class VmBackingManager
 {
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly Dictionary<string, AddressSpace> _namedObjects = new(StringComparer.Ordinal);
 
     /// <summary>
@@ -55,7 +55,8 @@ public sealed class VmBackingManager
     public AddressSpace CreateSharedAnonymous()
     {
         var obj = new AddressSpace(AddressSpaceKind.Shmem);
-        GlobalAddressSpaceCacheManager.TrackAddressSpace(obj, GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem);
+        GlobalAddressSpaceCacheManager.TrackAddressSpace(obj,
+            GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem);
         return obj;
     }
 

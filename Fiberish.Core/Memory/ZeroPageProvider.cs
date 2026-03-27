@@ -6,7 +6,7 @@ namespace Fiberish.Memory;
 internal static class ZeroPageProvider
 {
     private static nint _sharedZeroPagePtr;
-    private static readonly object Gate = new();
+    private static readonly Lock Gate = new();
 
     public static IntPtr GetPointer()
     {

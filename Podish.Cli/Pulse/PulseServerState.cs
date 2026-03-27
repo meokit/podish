@@ -7,7 +7,7 @@ namespace Podish.Cli.Pulse;
 
 internal sealed class PulseServerState : IDisposable
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly Dictionary<uint, PlaybackStreamState> _playbackStreamsByStreamIndex = new();
     private uint _nextPlaybackStreamIndex;
 

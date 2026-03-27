@@ -45,7 +45,8 @@ public static class GlobalAddressSpaceCacheManager
         return new ScopeRestore(previous);
     }
 
-    public static void TrackAddressSpace(AddressSpace mapping, AddressSpaceCacheClass cacheClass = AddressSpaceCacheClass.File)
+    public static void TrackAddressSpace(AddressSpace mapping,
+        AddressSpaceCacheClass cacheClass = AddressSpaceCacheClass.File)
     {
         var state = CurrentState;
         lock (state.Gate)
@@ -184,7 +185,8 @@ public static class GlobalAddressSpaceCacheManager
         }
     }
 
-    private static long ReclaimFromCaches(List<(AddressSpace Cache, AddressSpaceCacheClass Class)> caches, long targetFreeBytes)
+    private static long ReclaimFromCaches(List<(AddressSpace Cache, AddressSpaceCacheClass Class)> caches,
+        long targetFreeBytes)
     {
         if (targetFreeBytes <= 0) return 0;
         var candidates = new List<(AddressSpace Cache, uint PageIndex, long LastAccessTicks)>();
@@ -215,7 +217,7 @@ public static class GlobalAddressSpaceCacheManager
 
     private sealed class State
     {
-        public readonly object Gate = new();
+        public readonly Lock Gate = new();
         public readonly Dictionary<int, TrackedEntry> TrackedCaches = [];
         public long HighWatermarkBytes = 256L * 1024 * 1024;
         public long LowWatermarkBytes = 192L * 1024 * 1024;

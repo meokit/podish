@@ -30,10 +30,10 @@ public class PtyManager
     public const int MAX_PTYS = 1024;
 
     private readonly ILogger _logger;
-    private KernelScheduler? _scheduler;
 
     private readonly ConcurrentDictionary<int, PtyPair> _ptyPairs = new();
     private int _nextPtyIndex;
+    private KernelScheduler? _scheduler;
 
     public PtyManager(ILogger logger, KernelScheduler? scheduler = null)
     {
@@ -149,7 +149,7 @@ public class PtyManager
 /// </summary>
 public class PtyPair
 {
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly ILogger _logger;
     private readonly PtyManager _manager;
 
@@ -217,7 +217,7 @@ public class PtyPair
 public class PtyBuffer
 {
     private readonly Queue<byte> _buffer = new();
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly int _maxSize;
 
     public PtyBuffer(KernelScheduler scheduler, int maxSize = 65536)

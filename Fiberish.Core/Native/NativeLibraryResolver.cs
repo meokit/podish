@@ -6,7 +6,7 @@ namespace Fiberish.Core.Native;
 
 internal static class NativeLibraryResolver
 {
-    private static readonly object Gate = new();
+    private static readonly Lock Gate = new();
     private static readonly HashSet<string> LibraryNames = new(StringComparer.Ordinal);
     private static bool _installed;
     private static Assembly? _assembly;

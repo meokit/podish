@@ -85,15 +85,15 @@ public class TtyDiscipline
     private readonly byte[] _cc = new byte[32];
     private readonly ITtyDriver _driver;
     private readonly TtyInputQueue _inq;
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly ILogger _logger;
     private readonly KernelScheduler _scheduler;
     private uint _cflag = 0xbf; // CS8 | CREAD | ...
     private ushort _cols = 80;
-    private int _inputDispatchPending;
 
     // Linux Termios fields
     private uint _iflag = 0x500; // ICRNL | IXON
+    private int _inputDispatchPending;
     private uint _lflag = 0x8a3b | IEXTEN; // ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN
 
     // LNEXT state - next character should be treated literally
@@ -1105,7 +1105,7 @@ public class TtyDiscipline
 
 internal sealed class TtyInputQueue
 {
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly Queue<byte> _queue = new();
     private bool _hasCanonicalLine;
 

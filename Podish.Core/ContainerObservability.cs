@@ -50,7 +50,7 @@ public sealed class NoneContainerLogSink : IContainerLogSink
 
 public sealed class JsonFileContainerLogSink : IContainerLogSink
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly ILogger? _logger;
     private readonly StreamWriter _writer;
 
@@ -107,7 +107,7 @@ public sealed record ContainerEvent(
 
 public sealed class ContainerEventStore
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly string _lockPath;
     private readonly string _path;
 

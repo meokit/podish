@@ -48,20 +48,20 @@ public class FiberTask
     private const int FaultStackWordCount = 8;
     private const int FaultBacktraceMaxFrames = 16;
     private static int _tidCounter;
-    private readonly object _waitStateGate = new();
+    private readonly Lock _asyncSyscallCompletionGate = new();
+    private readonly Lock _waitStateGate = new();
     private Action? _activeWaitContinuation;
     private long _activeWaitId;
     private WakeReason _activeWaitReason;
-    private readonly object _asyncSyscallCompletionGate = new();
+    private ulong _deferredSignalMaskRestore;
     private int _engineDisposed;
-    private long _nextWaitTokenId;
-    private int _pageFaultDepth;
-    private bool _hasPendingAsyncSyscallCompletion;
-    private Exception? _pendingAsyncSyscallError;
-    private int _pendingAsyncSyscallResult;
     private int _faultDiagnosticsDepth;
     private bool _hasDeferredSignalMaskRestore;
-    private ulong _deferredSignalMaskRestore;
+    private bool _hasPendingAsyncSyscallCompletion;
+    private long _nextWaitTokenId;
+    private int _pageFaultDepth;
+    private Exception? _pendingAsyncSyscallError;
+    private int _pendingAsyncSyscallResult;
 
     private bool _pendingFaultFromInterrupt;
     private KernelSyncContext? _synchronizationContext;
@@ -1613,7 +1613,8 @@ public class FiberTask
         if (vma == null)
             return "<unmapped>";
 
-        return $"{FormatVmaName(vma)} [0x{vma.Start:X8}-0x{vma.End:X8}) perms={vma.Perms} offset=0x{(address - vma.Start):X}";
+        return
+            $"{FormatVmaName(vma)} [0x{vma.Start:X8}-0x{vma.End:X8}) perms={vma.Perms} offset=0x{address - vma.Start:X}";
     }
 
     private static string FormatVmaName(VmArea vma)

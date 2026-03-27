@@ -8,7 +8,7 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
 {
     private readonly HostMemoryMapGeometry _geometry;
     private readonly Dictionary<long, int> _guestPageRefs = [];
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
 
     private readonly Dictionary<long, Window> _windows = [];
     private string _path;

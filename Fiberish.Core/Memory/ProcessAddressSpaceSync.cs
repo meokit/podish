@@ -6,7 +6,7 @@ namespace Fiberish.Memory;
 
 internal static class ProcessAddressSpaceSync
 {
-    private static readonly object AddressSpaceRegistryLock = new();
+    private static readonly Lock AddressSpaceRegistryLock = new();
     private static readonly Dictionary<VMAManager, HashSet<Engine>> EnginesByAddressSpace = [];
     private static readonly Dictionary<IntPtr, (VMAManager AddressSpace, Engine Engine)> AddressSpaceByEngineState = [];
     [ThreadStatic] private static Stack<EngineSnapshotBuffer>? SnapshotBufferPool;

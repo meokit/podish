@@ -181,8 +181,8 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 {
     private static readonly AsyncLocal<int> NamespaceMutationDepth = new();
     private readonly HashSet<long> _dirtyPageIndexes = [];
-    private readonly object _dirtyPageLock = new();
-    private readonly object _mappedCacheLock = new();
+    private readonly Lock _dirtyPageLock = new();
+    private readonly Lock _mappedCacheLock = new();
     private readonly SilkMetadataStore _metadata;
     private readonly SilkRepository _repository;
     private List<DirectoryEntry>? _cachedEntries;

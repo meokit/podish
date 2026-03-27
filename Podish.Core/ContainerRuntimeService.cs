@@ -369,6 +369,7 @@ public sealed class ContainerRuntimeService
                     $"{ContainerRunRequest.PulseServerEnvVar}=unix:{ContainerRunRequest.PulseServerSocketPath}");
                 finalEnvs.Add($"{ContainerRunRequest.PulseRuntimePathEnvVar}=/run/pulse");
             }
+
             if (request.EnableWaylandServer)
             {
                 finalEnvs.Add($"{ContainerRunRequest.WaylandDisplayEnvVar}=wayland-0");
@@ -1045,7 +1046,7 @@ public sealed class ContainerRuntimeService
     private sealed class TarBlobLayerContentProvider : ILayerContentProvider, IDisposable
     {
         private readonly Dictionary<string, string> _digestToBlobPath;
-        private readonly object _lock = new();
+        private readonly Lock _lock = new();
         private readonly Dictionary<string, FileStream> _streams = new(StringComparer.Ordinal);
 
         public TarBlobLayerContentProvider(Dictionary<string, string> digestToBlobPath)
@@ -1158,7 +1159,7 @@ public sealed class ContainerRuntimeService
         private readonly IContainerLogSink _containerLogSink;
         private readonly CancellationTokenSource _cts = new();
         private readonly AutoResetEvent _hasData = new(false);
-        private readonly object _lock = new();
+        private readonly Lock _lock = new();
         private readonly Task _pumpTask;
         private readonly Queue<(TtyEndpointKind Kind, byte[] Data)> _queue = new();
         private readonly AsyncWaitQueue _writeReady;

@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-
 namespace Fiberish.Core;
 
 internal interface ITaskAsyncRegistration : IDisposable
@@ -72,12 +70,12 @@ internal static class TaskAsyncRegistration
 
 internal sealed class FiberTaskAsyncScope
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly Dictionary<int, TaskAsyncOperationHandle> _operations = [];
     private readonly FiberTask _task;
+    private bool _finalizeQueued;
     private int _nextOperationId;
     private AsyncScopeState _state;
-    private bool _finalizeQueued;
 
     public FiberTaskAsyncScope(FiberTask task)
     {
@@ -183,10 +181,10 @@ internal sealed class FiberTaskAsyncScope
 
 internal sealed class TaskAsyncOperationHandle
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
+    private readonly List<ITaskAsyncRegistration> _registrations = [];
     private readonly FiberTaskAsyncScope _scope;
     private readonly FiberTask _task;
-    private readonly List<ITaskAsyncRegistration> _registrations = [];
     private Action? _continuation;
     private int _state;
 

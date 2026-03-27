@@ -44,10 +44,7 @@ public class RtSignalTests
 
         // Dequeue once
         SigInfo? info;
-        lock (env.Task)
-        {
-            info = env.Task.DequeueSignalUnsafe((int)Signal.SIGUSR1);
-        }
+        info = env.Task.DequeueSignalUnsafe((int)Signal.SIGUSR1);
 
         Assert.NotNull(info);
 
@@ -91,12 +88,9 @@ public class RtSignalTests
         env.Task.PostSignalInfo(new SigInfo { Signo = rtSig, Code = 0, Value = 30 });
 
         SigInfo? s1, s2, s3;
-        lock (env.Task)
-        {
-            s1 = env.Task.DequeueSignalUnsafe(rtSig);
-            s2 = env.Task.DequeueSignalUnsafe(rtSig);
-            s3 = env.Task.DequeueSignalUnsafe(rtSig);
-        }
+        s1 = env.Task.DequeueSignalUnsafe(rtSig);
+        s2 = env.Task.DequeueSignalUnsafe(rtSig);
+        s3 = env.Task.DequeueSignalUnsafe(rtSig);
 
         Assert.NotNull(s1);
         Assert.NotNull(s2);
@@ -121,18 +115,12 @@ public class RtSignalTests
         Assert.NotEqual(0UL, env.Task.PendingSignals & bit);
 
         // First dequeue: bit should remain set (another item still in queue)
-        lock (env.Task)
-        {
-            env.Task.DequeueSignalUnsafe(rtSig);
-        }
+        env.Task.DequeueSignalUnsafe(rtSig);
 
         Assert.NotEqual(0UL, env.Task.PendingSignals & bit);
 
         // Second dequeue clears bit
-        lock (env.Task)
-        {
-            env.Task.DequeueSignalUnsafe(rtSig);
-        }
+        env.Task.DequeueSignalUnsafe(rtSig);
 
         Assert.Equal(0UL, env.Task.PendingSignals & bit);
     }
@@ -170,7 +158,7 @@ public class RtSignalTests
         public TestEnv()
         {
             Scheduler = new KernelScheduler();
-            
+
             Engine = new Engine();
             Process = new Process(100, new VMAManager(), null!);
             Task = new FiberTask(100, Process, Engine, Scheduler);
@@ -183,7 +171,6 @@ public class RtSignalTests
 
         public void Dispose()
         {
-            
         }
     }
 }

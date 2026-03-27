@@ -4,7 +4,7 @@ namespace Fiberish.Memory;
 
 public sealed class VmPageSlots
 {
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly Dictionary<uint, VmPage> _pages = new();
 
     public int PageCount
@@ -62,7 +62,7 @@ public sealed class VmPageSlots
 
     public void ReplacePage(uint pageIndex, IntPtr ptr)
     {
-        IntPtr oldPtr = IntPtr.Zero;
+        var oldPtr = IntPtr.Zero;
         lock (_lock)
         {
             if (_pages.TryGetValue(pageIndex, out var existing))

@@ -656,9 +656,8 @@ internal sealed class HostfsMetadataStore
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
 
-    private readonly bool _enabled;
     private readonly string _identitiesDir;
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly string _manifestPath;
     private readonly string _metaDir;
     private readonly string _objectsDir;
@@ -666,7 +665,7 @@ internal sealed class HostfsMetadataStore
 
     public HostfsMetadataStore(string hostRoot, bool enabled = true)
     {
-        _enabled = enabled;
+        IsEnabled = enabled;
         var normalizedRoot = Path.GetFullPath(hostRoot);
         // hostRoot can be either a directory mount or a single-file mount.
         // For file mounts, place sidecar metadata under the parent directory.
@@ -679,22 +678,22 @@ internal sealed class HostfsMetadataStore
         _identitiesDir = Path.Combine(_metaDir, "identities");
         _manifestPath = Path.Combine(_metaDir, "manifest.json");
 
-        if (_enabled)
+        if (IsEnabled)
             InitializeV2Store();
     }
 
-    public bool IsEnabled => _enabled;
+    public bool IsEnabled { get; }
 
     public bool IsMetaDirPath(string path)
     {
-        if (!_enabled) return false;
+        if (!IsEnabled) return false;
         var full = Path.GetFullPath(path);
         return string.Equals(full, _metaDir, PathComparison);
     }
 
     public void ApplyToInode(string hostPath, HostInodeKey identity, HostInode inode)
     {
-        if (!_enabled) return;
+        if (!IsEnabled) return;
         var normalizedPath = NormalizeHostPath(hostPath);
 
         lock (_lock)
@@ -711,18 +710,24 @@ internal sealed class HostfsMetadataStore
             }
 
             inode.SetProjectedTimes(
-                meta.ATimeNs.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(meta.ATimeNs.Value / 1_000_000).UtcDateTime
-                    .AddTicks((meta.ATimeNs.Value % 1_000_000) / 100) : null,
-                meta.MTimeNs.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(meta.MTimeNs.Value / 1_000_000).UtcDateTime
-                    .AddTicks((meta.MTimeNs.Value % 1_000_000) / 100) : null,
-                meta.CTimeNs.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(meta.CTimeNs.Value / 1_000_000).UtcDateTime
-                    .AddTicks((meta.CTimeNs.Value % 1_000_000) / 100) : null);
+                meta.ATimeNs.HasValue
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(meta.ATimeNs.Value / 1_000_000).UtcDateTime
+                        .AddTicks(meta.ATimeNs.Value % 1_000_000 / 100)
+                    : null,
+                meta.MTimeNs.HasValue
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(meta.MTimeNs.Value / 1_000_000).UtcDateTime
+                        .AddTicks(meta.MTimeNs.Value % 1_000_000 / 100)
+                    : null,
+                meta.CTimeNs.HasValue
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(meta.CTimeNs.Value / 1_000_000).UtcDateTime
+                        .AddTicks(meta.CTimeNs.Value % 1_000_000 / 100)
+                    : null);
         }
     }
 
     public Dictionary<string, byte[]> LoadXAttrs(HostInode inode, string hostPath)
     {
-        if (!_enabled) return new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        if (!IsEnabled) return new Dictionary<string, byte[]>(StringComparer.Ordinal);
         var normalizedPath = NormalizeHostPath(hostPath);
         lock (_lock)
         {
@@ -746,7 +751,7 @@ internal sealed class HostfsMetadataStore
 
     public void SaveXAttrs(HostInode inode, string hostPath, Dictionary<string, byte[]> xattrs)
     {
-        if (!_enabled) return;
+        if (!IsEnabled) return;
         var normalizedPath = NormalizeHostPath(hostPath);
         lock (_lock)
         {
@@ -763,7 +768,7 @@ internal sealed class HostfsMetadataStore
 
     public void WriteMknod(string hostPath, InodeType type, uint rdev)
     {
-        if (!_enabled) return;
+        if (!IsEnabled) return;
         var normalizedPath = NormalizeHostPath(hostPath);
         lock (_lock)
         {
@@ -781,7 +786,7 @@ internal sealed class HostfsMetadataStore
 
     public void SaveTimes(HostInode inode, string hostPath, DateTime? atime, DateTime? mtime, DateTime? ctime)
     {
-        if (!_enabled) return;
+        if (!IsEnabled) return;
         var normalizedPath = NormalizeHostPath(hostPath);
         lock (_lock)
         {
@@ -800,7 +805,7 @@ internal sealed class HostfsMetadataStore
 
     public void LinkPath(string sourcePath, string linkedPath, HostInode sourceInode)
     {
-        if (!_enabled) return;
+        if (!IsEnabled) return;
         var normalizedSource = NormalizeHostPath(sourcePath);
         var normalizedLinked = NormalizeHostPath(linkedPath);
         lock (_lock)
@@ -818,7 +823,7 @@ internal sealed class HostfsMetadataStore
 
     public void RemovePath(string hostPath)
     {
-        if (!_enabled) return;
+        if (!IsEnabled) return;
         var normalizedPath = NormalizeHostPath(hostPath);
         lock (_lock)
         {
@@ -832,7 +837,7 @@ internal sealed class HostfsMetadataStore
 
     public void RenamePath(string oldPath, string newPath)
     {
-        if (!_enabled) return;
+        if (!IsEnabled) return;
         var oldFull = NormalizeHostPath(oldPath);
         var newFull = NormalizeHostPath(newPath);
         lock (_lock)
@@ -1073,7 +1078,7 @@ internal sealed class HostfsMetadataStore
         var utc = value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
         var offset = new DateTimeOffset(utc);
         var seconds = offset.ToUnixTimeSeconds();
-        var nanos = (utc.Ticks % TimeSpan.TicksPerSecond) * 100;
+        var nanos = utc.Ticks % TimeSpan.TicksPerSecond * 100;
         return checked(seconds * 1_000_000_000L + nanos);
     }
 
@@ -1261,9 +1266,9 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         : StringComparer.Ordinal);
 
     private readonly HashSet<long> _dirtyPageIndexes = [];
-    private readonly object _dirtyPageLock = new();
-    private readonly object _mappedCacheLock = new();
-    private readonly object _xattrLock = new();
+    private readonly Lock _dirtyPageLock = new();
+    private readonly Lock _mappedCacheLock = new();
+    private readonly Lock _xattrLock = new();
     private string _hostPath;
     private MappedFilePageCache? _mappedPageCache;
     private DateTime? _projectedATime;
@@ -1388,6 +1393,19 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
             }
         }
         set => base.CTime = value;
+    }
+
+    FilePageBackendDiagnostics IHostMappedCacheDropper.GetMappedCacheDiagnostics()
+    {
+        return GetMappedPageCacheDiagnostics();
+    }
+
+    long IHostMappedCacheDropper.TrimMappedCache(bool aggressive)
+    {
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.Trim(aggressive) ?? 0;
+        }
     }
 
     internal void SetProjectedTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
@@ -2088,19 +2106,6 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         lock (_mappedCacheLock)
         {
             return _mappedPageCache?.GetDiagnostics() ?? default;
-        }
-    }
-
-    FilePageBackendDiagnostics IHostMappedCacheDropper.GetMappedCacheDiagnostics()
-    {
-        return GetMappedPageCacheDiagnostics();
-    }
-
-    long IHostMappedCacheDropper.TrimMappedCache(bool aggressive)
-    {
-        lock (_mappedCacheLock)
-        {
-            return _mappedPageCache?.Trim(aggressive) ?? 0;
         }
     }
 

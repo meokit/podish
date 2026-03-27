@@ -20,7 +20,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
     private readonly List<WaiterRegistration> _readWaiters = [];
     private readonly Socket _socket;
 
-    private readonly object _waitersLock = new();
+    private readonly Lock _waitersLock = new();
     private readonly List<WaiterRegistration> _writeWaiters = [];
     private SocketAsyncEventArgs? _acceptProbeArgs;
     private int _acceptProbeInFlight;
@@ -668,7 +668,8 @@ internal sealed class HostSocketProbeEngine : IDisposable
         private int _disposed;
         private HostSocketProbeEngine? _owner;
 
-        public WaiterRegistration(HostSocketProbeEngine owner, IReadyDispatcher dispatcher, Action callback, short eventMask)
+        public WaiterRegistration(HostSocketProbeEngine owner, IReadyDispatcher dispatcher, Action callback,
+            short eventMask)
         {
             _owner = owner;
             _dispatcher = dispatcher;

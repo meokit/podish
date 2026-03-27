@@ -6,7 +6,7 @@ namespace Fiberish.Core.Utils;
 /// </summary>
 public class Locked<T>
 {
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly T _value;
 
     public Locked(T value)

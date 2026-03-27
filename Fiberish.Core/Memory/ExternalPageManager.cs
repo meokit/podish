@@ -690,7 +690,7 @@ public sealed class ExternalPageManager
         public readonly long[] AllocPagesBySource = new long[Enum.GetValues<AllocationSource>().Length];
         public readonly long[] FreedPagesByClass = new long[Enum.GetValues<AllocationClass>().Length];
         public readonly long[] FreedPagesBySource = new long[Enum.GetValues<AllocationSource>().Length];
-        public readonly object GlobalLock = new();
+        public readonly Lock GlobalLock = new();
         public readonly Dictionary<nint, PageRefEntry> PageRefs = new();
         public readonly Dictionary<long, SegmentEntry> Segments = new();
         public long LegacyAllocOverQuota;

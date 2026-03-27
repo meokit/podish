@@ -91,6 +91,7 @@ internal sealed class NativeContext : IDisposable
     private readonly Dictionary<string, string> _containerIdByName = new(StringComparer.Ordinal);
 
     private readonly Dictionary<string, NativeContainer> _containersById = new(StringComparer.Ordinal);
+    private readonly PodishContext _context = null!;
 
     private readonly Channel<byte[]> _ipcEvents =
         Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
@@ -102,7 +103,6 @@ internal sealed class NativeContext : IDisposable
     private readonly ConcurrentDictionary<int, string> _lastErrorByThread = [];
 
     private readonly Task _runtimeLoop;
-    private readonly PodishContext _context = null!;
     private int _disposed;
     private string _lastError = string.Empty;
 
@@ -424,7 +424,7 @@ internal sealed class NativeContext : IDisposable
 internal sealed class NativeContainer
 {
     private readonly DateTimeOffset _createdAt;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly SemaphoreSlim _startGate = new(1, 1);
     private int? _exitCode;
     private string? _name;

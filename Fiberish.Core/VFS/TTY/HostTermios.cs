@@ -57,7 +57,7 @@ public static class HostTermios
     private const int LINUX_VTIME = 5;
     private const int LINUX_NCCS = 32;
 
-    private static readonly object RawModeLock = new();
+    private static readonly Lock RawModeLock = new();
     private static readonly Dictionary<int, RawModeState> RawModeStates = [];
 
     [DllImport("libc", SetLastError = true)]
@@ -142,6 +142,7 @@ public static class HostTermios
                 var originalMac = (MacTermios)state.Original;
                 tcsetattr(fd, 0 /* TCSANOW */, ref originalMac);
             }
+
             RawModeStates.Remove(fd);
         }
     }

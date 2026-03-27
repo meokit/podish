@@ -1,4 +1,4 @@
-﻿using System.CommandLine;
+using System.CommandLine;
 using System.Text.Json;
 using Fiberish.Core;
 using Fiberish.Core.Net;
@@ -8,8 +8,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Cli.Wayland;
 using Podish.Core;
-using Podish.Cli.Pulse;
-using Podish.Wayland;
 
 namespace Podish.Cli;
 
@@ -852,7 +850,8 @@ internal class Program
 
             if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
             {
-                Console.WriteLine(JsonSerializer.Serialize(rows, PodishCliJsonContext.Default.ListPodishContainerMetadata));
+                Console.WriteLine(JsonSerializer.Serialize(rows,
+                    PodishCliJsonContext.Default.ListPodishContainerMetadata));
                 return;
             }
 
@@ -1351,10 +1350,10 @@ internal class Program
         if (string.IsNullOrWhiteSpace(raw))
             return false;
 
-        string[] parts = raw.Split(['x', 'X'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var parts = raw.Split(['x', 'X'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length != 2 ||
-            !int.TryParse(parts[0], out int width) ||
-            !int.TryParse(parts[1], out int height) ||
+            !int.TryParse(parts[0], out var width) ||
+            !int.TryParse(parts[1], out var height) ||
             width <= 0 ||
             height <= 0)
             return false;
@@ -1400,13 +1399,13 @@ internal class Program
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
         using var runtimeThread = new ContainerRuntimeThread(Logger, ProgramLoggerFactory);
-        WaylandDisplayServerState? waylandDisplayState = enableWaylandServer
+        var waylandDisplayState = enableWaylandServer
             ? new WaylandDisplayServerState(ProgramLoggerFactory, waylandDesktopOptions)
             : null;
         var waylandIngressBridge = enableWaylandServer ? new WaylandDisplayIngressBridge() : null;
         try
         {
-            Task<int> runtimeTask = runtimeThread.Start(new ContainerRunRequest
+            var runtimeTask = runtimeThread.Start(new ContainerRunRequest
             {
                 RootfsPath = rootfsPath,
                 ContainerName = containerName,
@@ -1486,8 +1485,8 @@ internal class Program
                 ProgramLoggerFactory,
                 waylandDisplayState?.Presenter,
                 waylandIngressBridge,
-                enableHostDisplay: waylandDisplayState != null,
-                desktopOptions: waylandDesktopOptions);
+                waylandDisplayState != null,
+                waylandDesktopOptions);
             var waylandRuntime = registry.Spawn(waylandDaemon, parentPid: ownerPid, uts: uts);
             Logger.LogInformation("Registered Podish virtual Wayland daemon pid={Pid} ownerPid={OwnerPid} path={Path}",
                 waylandRuntime.Process.TGID, ownerPid, waylandDaemon.UnixPath);
@@ -1512,7 +1511,6 @@ internal class Program
         {
             var (parentLoc, name, err) = runtime.Syscalls.PathWalkForCreate(unixPath);
             if (err == 0 && parentLoc.Dentry?.Inode != null && !string.IsNullOrEmpty(name))
-            {
                 try
                 {
                     parentLoc.Dentry.Inode.Unlink(name);
@@ -1521,7 +1519,6 @@ internal class Program
                 catch
                 {
                 }
-            }
         }
     }
 }
@@ -1540,7 +1537,7 @@ internal static class ContainerLogDriverExtensions
 file class FileLoggerProvider : ILoggerProvider
 {
     private readonly string _filePath;
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private StreamWriter? _writer;
 
     public FileLoggerProvider(string filePath)

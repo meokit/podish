@@ -112,7 +112,7 @@ public sealed class PodishContainerSession
 
 public sealed class ContainerProcessController
 {
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly Queue<int> _pendingSignals = [];
     private Action? _forceStop;
     private Action<int>? _signalInit;
@@ -193,7 +193,7 @@ public sealed class ContainerProcessController
 public sealed class PodishTerminalBridge
 {
     private const int MaxBufferedBytes = 64 * 1024;
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly Queue<byte> _outputBuffer = [];
     private readonly AutoResetEvent _outputEvent = new(false);
     private Action<TtyEndpointKind, byte[]>? _outputHandler;
@@ -432,7 +432,7 @@ public sealed class PodishContext : IDisposable
         var bridge = attachTerminalBridge && spec.Interactive && spec.Tty ? new PodishTerminalBridge() : null;
         var processController = new ContainerProcessController();
         var runtimeThread = new ContainerRuntimeThread(_logger, LoggerFactory);
-        Task<int> runTask = runtimeThread.Start(new ContainerRunRequest
+        var runTask = runtimeThread.Start(new ContainerRunRequest
         {
             RootfsPath = rootfsPath,
             Exe = spec.Exe ?? string.Empty,
@@ -503,7 +503,7 @@ public sealed class PodishContext : IDisposable
 
 internal sealed class PodishFileLoggerProvider : ILoggerProvider
 {
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly StreamWriter _writer;
     private Action<LogLevel, string>? _observer;
 

@@ -4,16 +4,24 @@ namespace Podish.Core;
 
 public sealed class ContainerRuntimeThread : IDisposable
 {
+    private readonly Lock _lock = new();
     private readonly ILogger _logger;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly object _lock = new();
-    private Task<int>? _runTask;
     private bool _disposed;
+    private Task<int>? _runTask;
 
     public ContainerRuntimeThread(ILogger logger, ILoggerFactory loggerFactory)
     {
         _logger = logger;
         _loggerFactory = loggerFactory;
+    }
+
+    public void Dispose()
+    {
+        lock (_lock)
+        {
+            _disposed = true;
+        }
     }
 
     public Task<int> Start(ContainerRunRequest request)
@@ -47,14 +55,6 @@ public sealed class ContainerRuntimeThread : IDisposable
         {
             ThrowIfDisposed();
             return _runTask ?? throw new InvalidOperationException("Container runtime thread has not been started.");
-        }
-    }
-
-    public void Dispose()
-    {
-        lock (_lock)
-        {
-            _disposed = true;
         }
     }
 

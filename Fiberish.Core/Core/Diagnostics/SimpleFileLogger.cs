@@ -4,7 +4,7 @@ namespace Fiberish.Diagnostics;
 
 public class SimpleFileLoggerProvider : ILoggerProvider
 {
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly StreamWriter _writer;
 
     public SimpleFileLoggerProvider(string filePath)
@@ -23,7 +23,8 @@ public class SimpleFileLoggerProvider : ILoggerProvider
         _writer.Dispose();
     }
 
-    private class SimpleFileLogger(string categoryName, StreamWriter writer, object lockObj) : ILogger
+    private class SimpleFileLogger(string categoryName, StreamWriter writer, Lock lockObj) : ILogger
+
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull
         {

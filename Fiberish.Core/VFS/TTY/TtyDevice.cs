@@ -15,7 +15,7 @@ public class TtyDevice
     public const int DefaultInputCapacityBytes = 64 * 1024;
     private readonly byte[] _hardwareBuffer;
 
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private int _count;
     private int _head;
 

@@ -66,6 +66,7 @@ public readonly record struct InodeKey(uint Dev, ulong Ino);
 public class OverlaySuperBlock : SuperBlock
 {
     private readonly Dictionary<InodeKey, OverlayFileLockState> _flocks = new();
+    private readonly object _flockSync = new();
     private readonly HashSet<InodeKey> _opaqueDirs = new();
     private readonly Dictionary<InodeKey, HashSet<string>> _whiteouts = new();
 
@@ -155,7 +156,7 @@ public class OverlaySuperBlock : SuperBlock
         var nonBlock = (operation & LinuxConstants.LOCK_NB) != 0;
         var op = operation & ~LinuxConstants.LOCK_NB;
 
-        lock (Lock)
+        lock (_flockSync)
         {
             while (true)
             {
@@ -172,7 +173,7 @@ public class OverlaySuperBlock : SuperBlock
                         _flocks.Remove(fileKey);
                     }
 
-                    Monitor.PulseAll(Lock);
+                    Monitor.PulseAll(_flockSync);
                     return 0;
                 }
 
@@ -216,7 +217,7 @@ public class OverlaySuperBlock : SuperBlock
                 }
 
                 if (nonBlock) return -(int)Errno.EAGAIN;
-                Monitor.Wait(Lock);
+                Monitor.Wait(_flockSync);
             }
         }
     }
