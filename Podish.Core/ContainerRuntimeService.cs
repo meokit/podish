@@ -17,8 +17,6 @@ namespace Podish.Core;
 
 public sealed class ContainerRunRequest
 {
-    public const string TestVirtualEchoSocketPath = "/podish-test-echo.sock";
-    public const string TestVirtualEchoSocketEnvVar = "PODISH_TEST_VIRT_ECHO_SOCK";
     public const string PulseServerSocketPath = "/run/pulse/native";
     public const string PulseServerEnvVar = "PULSE_SERVER";
     public const string PulseRuntimePathEnvVar = "PULSE_RUNTIME_PATH";
@@ -50,7 +48,6 @@ public sealed class ContainerRunRequest
     public bool UseEngineInit { get; init; }
     public long? MemoryQuotaBytes { get; init; }
     public string? GuestStatsExportDir { get; init; }
-    public bool EnableTestVirtualEchoServer { get; init; }
     public bool EnablePulseServer { get; init; }
     public bool EnableWaylandServer { get; init; }
     public int WaylandDesktopWidth { get; init; } = 1024;
@@ -366,9 +363,6 @@ public sealed class ContainerRuntimeService
                 finalEnvs.Add("TERM=xterm");
             foreach (var env in request.GuestEnvs)
                 finalEnvs.Add(env);
-            if (request.EnableTestVirtualEchoServer)
-                finalEnvs.Add(
-                    $"{ContainerRunRequest.TestVirtualEchoSocketEnvVar}={ContainerRunRequest.TestVirtualEchoSocketPath}");
             if (request.EnablePulseServer)
             {
                 finalEnvs.Add(
@@ -402,7 +396,7 @@ public sealed class ContainerRuntimeService
             var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs,
                 finalEnvs.ToArray(),
                 scheduler, ttyDiag, loc.Mount!, uts, engineInitProc?.TGID ?? 0);
-            if (request.EnableTestVirtualEchoServer || request.EnablePulseServer || request.EnableWaylandServer)
+            if (request.EnablePulseServer || request.EnableWaylandServer)
                 request.ConfigureVirtualDaemons?.Invoke(runtime, scheduler, uts, mainTask.Process.TGID);
             initProcessStarted = true;
             startupPhase = "running";

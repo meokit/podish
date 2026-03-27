@@ -29,7 +29,6 @@ public sealed class PodishRunSpec
     public bool Tty { get; init; }
     public bool Strace { get; init; }
     public bool Init { get; init; }
-    public bool TestVirtualEchoServer { get; init; }
     public bool PulseServer { get; init; }
     public bool WaylandServer { get; init; }
     public int WaylandDesktopWidth { get; init; } = 1024;
@@ -458,7 +457,6 @@ public sealed class PodishContext : IDisposable
             PublishedPorts = spec.PublishedPorts,
             UseEngineInit = spec.Init,
             MemoryQuotaBytes = spec.MemoryQuotaBytes,
-            EnableTestVirtualEchoServer = spec.TestVirtualEchoServer,
             EnablePulseServer = spec.PulseServer,
             EnableWaylandServer = spec.WaylandServer,
             WaylandDesktopWidth = spec.WaylandDesktopWidth,

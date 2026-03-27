@@ -101,14 +101,11 @@ internal class Program
             new[] { "--guest-stats-dir" },
             () => null,
             "Export guest stats before teardown into this directory");
-        var testVirtEchoOption = new Option<bool>(
-            new[] { "--test-virt-echo" },
-            "Enable a test-only virtual echo server inside the guest at /podish-test-echo.sock");
         var pulseServerOption = new Option<bool>(
-            new[] { "--pulse-server", "--virt-pulse" },
+            new[] { "--pulse-server" },
             "Enable a virtual PulseAudio server inside the guest at /run/pulse/native");
         var waylandServerOption = new Option<bool>(
-            new[] { "--wayland-server", "--virt-wayland" },
+            new[] { "--wayland-server" },
             "Enable a virtual Wayland compositor inside the guest at /run/wayland-0");
         var waylandDesktopSizeOption = new Option<string>(
             new[] { "--wayland-desktop-size" },
@@ -138,7 +135,6 @@ internal class Program
         runCommand.AddOption(networkOption);
         runCommand.AddOption(publishOption);
         runCommand.AddOption(guestStatsExportDirOption);
-        runCommand.AddOption(testVirtEchoOption);
         runCommand.AddOption(pulseServerOption);
         runCommand.AddOption(waylandServerOption);
         runCommand.AddOption(waylandDesktopSizeOption);
@@ -162,7 +158,6 @@ internal class Program
             var networkRaw = context.ParseResult.GetValueForOption(networkOption) ?? "host";
             var publishRaw = context.ParseResult.GetValueForOption(publishOption) ?? Array.Empty<string>();
             var guestStatsExportDir = context.ParseResult.GetValueForOption(guestStatsExportDirOption);
-            var enableTestVirtEcho = context.ParseResult.GetValueForOption(testVirtEchoOption);
             var enablePulseServer = context.ParseResult.GetValueForOption(pulseServerOption);
             var enableWaylandServer = context.ParseResult.GetValueForOption(waylandServerOption);
             var waylandDesktopSizeRaw = context.ParseResult.GetValueForOption(waylandDesktopSizeOption) ?? "1024x768";
@@ -371,7 +366,6 @@ internal class Program
                 Tty = tty,
                 Strace = strace,
                 Init = useInit,
-                TestVirtualEchoServer = enableTestVirtEcho,
                 PulseServer = enablePulseServer,
                 WaylandServer = enableWaylandServer,
                 WaylandDesktopWidth = waylandDesktopSize.Width,
@@ -423,7 +417,6 @@ internal class Program
                 publishedPorts,
                 guestStatsExportDir,
                 memoryQuotaBytes,
-                enableTestVirtEcho,
                 enablePulseServer,
                 enableWaylandServer,
                 waylandDesktopSize);
@@ -580,7 +573,6 @@ internal class Program
                 spec.PublishedPorts,
                 guestStatsExportDir,
                 spec.MemoryQuotaBytes,
-                spec.TestVirtualEchoServer,
                 spec.PulseServer,
                 spec.WaylandServer,
                 new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight));
@@ -1182,7 +1174,11 @@ internal class Program
             "--rootfs",
             "--name",
             "--hostname",
-            "--network"
+            "--network",
+            "-p",
+            "--publish",
+            "--guest-stats-dir",
+            "--wayland-desktop-size"
         };
         var optionsNoValue = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -1192,7 +1188,12 @@ internal class Program
             "--tty",
             "-s",
             "--strace",
-            "--rm"
+            "--rm",
+            "--init",
+            "--pulse-server",
+            "--virt-pulse",
+            "--wayland-server",
+            "--virt-wayland"
         };
 
         var hasRootfs = false;
@@ -1206,7 +1207,19 @@ internal class Program
                 continue;
             }
 
-            if (token.StartsWith("--memory=", StringComparison.Ordinal))
+            if (token.StartsWith("--memory=", StringComparison.Ordinal) ||
+                token.StartsWith("--log-level=", StringComparison.Ordinal) ||
+                token.StartsWith("--log-file=", StringComparison.Ordinal) ||
+                token.StartsWith("--volume=", StringComparison.Ordinal) ||
+                token.StartsWith("--env=", StringComparison.Ordinal) ||
+                token.StartsWith("--dns=", StringComparison.Ordinal) ||
+                token.StartsWith("--log-driver=", StringComparison.Ordinal) ||
+                token.StartsWith("--name=", StringComparison.Ordinal) ||
+                token.StartsWith("--hostname=", StringComparison.Ordinal) ||
+                token.StartsWith("--network=", StringComparison.Ordinal) ||
+                token.StartsWith("--publish=", StringComparison.Ordinal) ||
+                token.StartsWith("--guest-stats-dir=", StringComparison.Ordinal) ||
+                token.StartsWith("--wayland-desktop-size=", StringComparison.Ordinal))
                 continue;
 
             if (token.StartsWith("-", StringComparison.Ordinal))
@@ -1382,7 +1395,7 @@ internal class Program
         string containerId, string? containerName, string hostname, NetworkMode networkMode, string image,
         string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts, string? guestStatsExportDir,
-        long? memoryQuotaBytes, bool enableTestVirtEcho, bool enablePulseServer, bool enableWaylandServer,
+        long? memoryQuotaBytes, bool enablePulseServer, bool enableWaylandServer,
         WaylandDesktopOptions waylandDesktopOptions)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
@@ -1416,16 +1429,14 @@ internal class Program
                 PublishedPorts = publishedPorts,
                 GuestStatsExportDir = guestStatsExportDir,
                 MemoryQuotaBytes = memoryQuotaBytes,
-                EnableTestVirtualEchoServer = enableTestVirtEcho,
                 EnablePulseServer = enablePulseServer,
                 EnableWaylandServer = enableWaylandServer,
                 WaylandDesktopWidth = waylandDesktopOptions.Width,
                 WaylandDesktopHeight = waylandDesktopOptions.Height,
-                ConfigureVirtualDaemons = enableTestVirtEcho || enablePulseServer || enableWaylandServer
+                ConfigureVirtualDaemons = enablePulseServer || enableWaylandServer
                     ? (runtime, scheduler, uts, parentPid) =>
-                        RegisterVirtualDaemons(rootfsPath, runtime, scheduler, uts, parentPid, enableTestVirtEcho,
-                            enablePulseServer, enableWaylandServer, waylandDesktopOptions, waylandDisplayState,
-                            waylandIngressBridge)
+                        RegisterVirtualDaemons(rootfsPath, runtime, scheduler, uts, parentPid, enablePulseServer,
+                            enableWaylandServer, waylandDesktopOptions, waylandDisplayState, waylandIngressBridge)
                     : null
             });
 
@@ -1449,23 +1460,11 @@ internal class Program
     }
 
     private static void RegisterVirtualDaemons(string rootfsPath, KernelRuntime runtime, KernelScheduler scheduler,
-        UTSNamespace? uts, int ownerPid, bool enableTestVirtEcho, bool enablePulseServer, bool enableWaylandServer,
+        UTSNamespace? uts, int ownerPid, bool enablePulseServer, bool enableWaylandServer,
         WaylandDesktopOptions waylandDesktopOptions, WaylandDisplayServerState? waylandDisplayState,
         WaylandDisplayIngressBridge? waylandIngressBridge)
     {
         var registry = new VirtualDaemonRegistry(runtime.Syscalls, scheduler);
-        if (enableTestVirtEcho)
-        {
-            CleanupVirtualSocket(rootfsPath, runtime, ContainerRunRequest.TestVirtualEchoSocketPath,
-                "Podish.RegisterVirtualDaemons.echo.cleanup");
-            var echoDaemon = new PodishTestVirtualEchoDaemon(ContainerRunRequest.TestVirtualEchoSocketPath,
-                ownerPid,
-                ProgramLoggerFactory.CreateLogger<PodishTestVirtualEchoDaemon>());
-            var echoRuntime = registry.Spawn(echoDaemon, parentPid: ownerPid, uts: uts);
-            Logger.LogInformation("Registered Podish test virtual echo daemon pid={Pid} ownerPid={OwnerPid} path={Path}",
-                echoRuntime.Process.TGID, ownerPid, echoDaemon.UnixPath);
-        }
-
         if (enablePulseServer)
         {
             CleanupVirtualSocket(rootfsPath, runtime, ContainerRunRequest.PulseServerSocketPath,
