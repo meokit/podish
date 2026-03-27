@@ -1617,10 +1617,10 @@ public class LinuxFile
 
     private int _refCount = 1;
 
-    public LinuxFile(Dentry dentry, FileFlags flags, Mount mount, ReferenceKind referenceKind = ReferenceKind.Normal)
+    public LinuxFile(Dentry dentry, FileFlags flags, Mount mount, ReferenceKind referenceKind = ReferenceKind.Normal, Inode? openedInode = null)
     {
         Dentry = dentry;
-        OpenedInode = dentry.Inode;
+        OpenedInode = openedInode ?? dentry.Inode;
         Flags = flags;
         Mount = mount; // The mount this file was opened through
         Kind = referenceKind;

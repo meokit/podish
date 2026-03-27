@@ -2,6 +2,7 @@ using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.VFS;
+using Microsoft.Extensions.Logging;
 
 namespace Fiberish.Syscalls;
 
@@ -112,15 +113,16 @@ public partial class SyscallManager
         try
         {
             if (f != null)
-                mmapFile = new LinuxFile(f.Dentry, f.Flags, f.Mount, LinuxFile.ReferenceKind.MmapHold);
+                mmapFile = new LinuxFile(f.Dentry, f.Flags, f.Mount, LinuxFile.ReferenceKind.MmapHold, f.OpenedInode);
 
             var res = ProcessAddressSpaceSync.Mmap(Mem, engine, addr, len, (Protection)prot, (MapFlags)flags,
                 mmapFile, offset, "MMAP2");
             mmapFile = null; // ownership transferred to VMAs
             return (int)res;
         }
-        catch
+        catch (Exception ex)
         {
+            Logger.LogError(ex, "[SysMmap2] Unexpected exception during mmap: {Message}", ex.Message);
             return -(int)Errno.ENOMEM;
         }
         finally
