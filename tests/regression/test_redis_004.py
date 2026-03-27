@@ -62,9 +62,9 @@ def test_id_266_movdqa_m128_r128():
     assert runner.run_test_bytes(
         name='ID_266: movdqa xmmword ptr [ebp - 0x78], xmm0',
         code=binascii.unhexlify('660f7f4588'),
-        initial_regs={'EBP': 0x8800, 'XMM0': 0xFEDCBA98765432100123456789ABCDEF, 'EIP': 0x1000},
+        initial_regs={'EBP': 0x8878, 'XMM0': 0xFEDCBA98765432100123456789ABCDEF, 'EIP': 0x1000},
         expected_regs={'EIP': 0x1005},
-        expected_write={0x8788: 0xFEDCBA98765432100123456789ABCDEF}
+        expected_write={0x8800: 0xFEDCBA98765432100123456789ABCDEF}
     )
 
 @pytest.mark.regression
@@ -650,4 +650,3 @@ def test_id_133_not_r8():
         initial_regs={'EDX': 0xFF, 'EIP': 0x1000},
         expected_regs={'EDX': 0x0, 'EIP': 0x1002}
     )
-

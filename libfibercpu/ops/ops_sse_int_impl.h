@@ -17,6 +17,13 @@ namespace fiberish {
 
 namespace op {
 
+FORCE_INLINE void DecodeShuffleControl(uint8_t imm8, uint8_t selectors[4]) {
+    selectors[0] = (imm8 >> 0) & 0x3;
+    selectors[1] = (imm8 >> 2) & 0x3;
+    selectors[2] = (imm8 >> 4) & 0x3;
+    selectors[3] = (imm8 >> 6) & 0x3;
+}
+
 // Shifts
 template <bool IsGroup>
 FORCE_INLINE LogicFlow OpPsllw_Sse_Internal(LogicFuncParams) {
@@ -594,17 +601,18 @@ FORCE_INLINE LogicFlow OpPsrldq_Sse(LogicFuncParams) {
     // 0F 73 /3: PSRLDQ xmm, imm8
     uint8_t reg = op->modrm & 7;
     simde__m128i dst_val = simde_mm_castps_si128(state->ctx.xmm[reg]);
+    uint8_t imm8 = static_cast<uint8_t>(imm);
 
     uint8_t bytes[16];
     std::memcpy(bytes, &dst_val, 16);
 
-    if (imm >= 16) {
+    if (imm8 >= 16) {
         std::memset(bytes, 0, 16);
     } else {
         // Shift right (move to lower index)
         for (int i = 0; i < 16; ++i) {
-            if (i + imm < 16)
-                bytes[i] = bytes[i + imm];
+            if (i + imm8 < 16)
+                bytes[i] = bytes[i + imm8];
             else
                 bytes[i] = 0;
         }
@@ -621,13 +629,17 @@ FORCE_INLINE LogicFlow OpPshufd_Sse(LogicFuncParams) {
     if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i src = simde_mm_castps_si128(*src_res);
     uint8_t imm_u8 = (uint8_t)imm;
+    uint8_t selectors[4];
+    DecodeShuffleControl(imm_u8, selectors);
 
-    int32_t* s = (int32_t*)&src;
+    int32_t src_lanes[4];
+    std::memcpy(src_lanes, &src, sizeof(src_lanes));
+
     int32_t res[4];
-    res[0] = s[(imm_u8 >> 0) & 3];
-    res[1] = s[(imm_u8 >> 2) & 3];
-    res[2] = s[(imm_u8 >> 4) & 3];
-    res[3] = s[(imm_u8 >> 6) & 3];
+    res[0] = src_lanes[selectors[0]];
+    res[1] = src_lanes[selectors[1]];
+    res[2] = src_lanes[selectors[2]];
+    res[3] = src_lanes[selectors[3]];
 
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_setr_epi32(res[0], res[1], res[2], res[3]));
     return LogicFlow::Continue;
@@ -639,19 +651,22 @@ FORCE_INLINE LogicFlow OpPshufhw_Sse(LogicFuncParams) {
     if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i src = simde_mm_castps_si128(*src_res);
     uint8_t imm_u8 = (uint8_t)imm;
+    uint8_t selectors[4];
+    DecodeShuffleControl(imm_u8, selectors);
 
-    int16_t* s = (int16_t*)&src;
+    int16_t src_words[8];
+    std::memcpy(src_words, &src, sizeof(src_words));
     int16_t res[8];
     // Low words (0-3) copied
-    res[0] = s[0];
-    res[1] = s[1];
-    res[2] = s[2];
-    res[3] = s[3];
+    res[0] = src_words[0];
+    res[1] = src_words[1];
+    res[2] = src_words[2];
+    res[3] = src_words[3];
     // High words (4-7) shuffled
-    res[4] = s[4 + ((imm_u8 >> 0) & 3)];
-    res[5] = s[4 + ((imm_u8 >> 2) & 3)];
-    res[6] = s[4 + ((imm_u8 >> 4) & 3)];
-    res[7] = s[4 + ((imm_u8 >> 6) & 3)];
+    res[4] = src_words[4 + selectors[0]];
+    res[5] = src_words[4 + selectors[1]];
+    res[6] = src_words[4 + selectors[2]];
+    res[7] = src_words[4 + selectors[3]];
 
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_loadu_si128((const simde__m128i*)res));
     return LogicFlow::Continue;
@@ -663,19 +678,22 @@ FORCE_INLINE LogicFlow OpPshuflw_Sse(LogicFuncParams) {
     if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128i src = simde_mm_castps_si128(*src_res);
     uint8_t imm_u8 = (uint8_t)imm;
+    uint8_t selectors[4];
+    DecodeShuffleControl(imm_u8, selectors);
 
-    int16_t* s = (int16_t*)&src;
+    int16_t src_words[8];
+    std::memcpy(src_words, &src, sizeof(src_words));
     int16_t res[8];
     // Low words (0-3) shuffled
-    res[0] = s[((imm_u8 >> 0) & 3)];
-    res[1] = s[((imm_u8 >> 2) & 3)];
-    res[2] = s[((imm_u8 >> 4) & 3)];
-    res[3] = s[((imm_u8 >> 6) & 3)];
+    res[0] = src_words[selectors[0]];
+    res[1] = src_words[selectors[1]];
+    res[2] = src_words[selectors[2]];
+    res[3] = src_words[selectors[3]];
     // High words (4-7) copied
-    res[4] = s[4];
-    res[5] = s[5];
-    res[6] = s[6];
-    res[7] = s[7];
+    res[4] = src_words[4];
+    res[5] = src_words[5];
+    res[6] = src_words[6];
+    res[7] = src_words[7];
 
     state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_loadu_si128((const simde__m128i*)res));
     return LogicFlow::Continue;

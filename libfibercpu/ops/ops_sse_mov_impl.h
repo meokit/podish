@@ -13,6 +13,21 @@
 namespace fiberish {
 namespace op {
 
+FORCE_INLINE bool CheckAlignedSseMemoryOperand(EmuState* state, const DecodedOp* op, uint32_t alignment) {
+    if (((op->modrm >> 6) & 3) == 3) {
+        return true;
+    }
+
+    const uint32_t addr = ComputeLinearAddress(state, op);
+    if ((addr & (alignment - 1)) == 0) {
+        return true;
+    }
+
+    state->status = EmuStatus::Fault;
+    state->fault_vector = 13;  // #GP
+    return false;
+}
+
 FORCE_INLINE LogicFlow OpMov_Sse_Load(LogicFuncParams) {
     // 0F 10: MOVUPS/MOVUPD/MOVSS/MOVSD
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -191,6 +206,9 @@ FORCE_INLINE LogicFlow OpMovdq2q(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpMovdqa_Load(LogicFuncParams) {
     // 66 0F 6F: MOVDQA xmm, xmm/m128
+    if (!CheckAlignedSseMemoryOperand(state, op, 16)) {
+        return LogicFlow::ExitOnCurrentEIP;
+    }
     auto val_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -200,6 +218,9 @@ FORCE_INLINE LogicFlow OpMovdqa_Load(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpMovdqa_Store(LogicFuncParams) {
     // 66 0F 7F: MOVDQA xmm/m128, xmm
+    if (!CheckAlignedSseMemoryOperand(state, op, 16)) {
+        return LogicFlow::ExitOnCurrentEIP;
+    }
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 val = state->ctx.xmm[reg];
     if (!WriteModRM<simde__m128, OpOnTLBMiss::Retry>(state, op, val, utlb)) return LogicFlow::RetryMemoryOp;
