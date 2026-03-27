@@ -450,7 +450,7 @@ internal sealed class PulseServerSession
             written += chunk.Length;
         }
 
-        if (!segments.Succeeded || written != length)
+        if (written != length)
             return false;
 
         buffered = currentBuffered;

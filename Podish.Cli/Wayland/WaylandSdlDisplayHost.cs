@@ -596,7 +596,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
             written += chunk.Length;
         }
 
-        if (!segments.Succeeded || written != length)
+        if (written != length)
             throw new InvalidOperationException("Failed to read complete shm frame contents.");
     }
 

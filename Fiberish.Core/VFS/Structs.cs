@@ -1229,9 +1229,8 @@ public interface ITaskContextBoundInode
 public ref struct ReadableSegmentEnumerator
 {
     // Sentinel factory methods — ref structs cannot have static fields of their own type.
-    internal static ReadableSegmentEnumerator Empty => new() { _remaining = 0, _succeeded = true };
-    internal static ReadableSegmentEnumerator Failed => new() { _remaining = 0, _succeeded = false };
-
+    internal static ReadableSegmentEnumerator Empty => new() { _remaining = 0, Succeeded = true };
+    internal static ReadableSegmentEnumerator Failed => new() { _remaining = 0, Succeeded = false };
 
     private readonly Inode? _inode;
     private readonly LinuxFile? _linuxFile;
@@ -1240,11 +1239,6 @@ public ref struct ReadableSegmentEnumerator
 
     private long _absolute;
     private int _remaining;
-    private bool _succeeded;
-
-    // Current chunk — backed by either an unmanaged page pointer or a managed temp buffer.
-    // Temp buffer used when the page is not in cache (no-cache path or OOM).
-    private byte[]? _tempBuffer;
 
     internal ReadableSegmentEnumerator(
         Inode inode, LinuxFile? linuxFile, AddressSpace? pageCache,
@@ -1256,22 +1250,17 @@ public ref struct ReadableSegmentEnumerator
         _absolute = offset;
         _remaining = length;
         _fileSize = fileSize;
-        _succeeded = true;
+        Succeeded = true;
         Current = default;
-        _tempBuffer = null;
     }
 
     /// <summary>The current byte segment. Valid only inside a <c>foreach</c> body.</summary>
     public ReadOnlySpan<byte> Current { get; private set; }
 
-    /// <summary>
-    ///     <c>true</c> if the entire requested range was iterated without error.
-    ///     Always check this after the <c>foreach</c> loop.
-    /// </summary>
-    public readonly bool Succeeded => _succeeded && _remaining == 0;
+    public bool Succeeded { get; private set; }
 
     /// <summary>Number of bytes successfully yielded so far.</summary>
-    public int TotalBytes { get; private set; }
+    private int TotalBytes { get; set; }
 
     /// <summary>Enables <c>foreach</c> without boxing — returns <c>this</c>.</summary>
     public readonly ReadableSegmentEnumerator GetEnumerator()
@@ -1281,7 +1270,7 @@ public ref struct ReadableSegmentEnumerator
 
     public bool MoveNext()
     {
-        if (_remaining <= 0 || !_succeeded)
+        if (_remaining <= 0 || !Succeeded)
             return false;
 
         var pageIndex = (uint)(_absolute / LinuxConstants.PageSize);
@@ -1292,18 +1281,16 @@ public ref struct ReadableSegmentEnumerator
             _inode!.LoadPageIntoCacheWithFallback(_pageCache, _linuxFile, pageIndex, _fileSize);
         if (pagePtr == IntPtr.Zero && tempFallback == null)
         {
-            _succeeded = false;
+            Succeeded = false;
             return false;
         }
 
         if (tempFallback != null)
         {
-            _tempBuffer = tempFallback;
             Current = tempFallback.AsSpan(pageOffset, chunk);
         }
         else
         {
-            _tempBuffer = null;
             unsafe
             {
                 Current = new ReadOnlySpan<byte>((byte*)pagePtr + pageOffset, chunk);
