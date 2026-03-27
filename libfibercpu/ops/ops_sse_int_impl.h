@@ -24,20 +24,33 @@ FORCE_INLINE void DecodeShuffleControl(uint8_t imm8, uint8_t selectors[4]) {
     selectors[3] = (imm8 >> 6) & 0x3;
 }
 
+FORCE_INLINE simde__m128i MakeShiftCount128(uint8_t imm8) { return simde_mm_cvtsi32_si128(static_cast<int32_t>(imm8)); }
+
 // Shifts
 template <bool IsGroup>
 FORCE_INLINE LogicFlow OpPsllw_Sse_Internal(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
-    simde__m128i count;
     if constexpr (!IsGroup) {  // PSLLW xmm, xmm/m128
+        simde__m128i count;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         count = simde_mm_castps_si128(*src_res);
-    } else {  // Group 0F 71 /6
-        count = simde_mm_set_epi64x(0, imm);
+        simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
+        state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_sll_epi16(dst, count));
+        return LogicFlow::Continue;
     }
-    simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
-    state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_sll_epi16(dst, count));
+
+    reg = op->modrm & 7;  // Group 0F 71 /6 uses ModRM.rm as destination
+    alignas(16) uint16_t lanes[8];
+    std::memcpy(lanes, &state->ctx.xmm[reg], sizeof(lanes));
+    if (imm > 15) {
+        std::memset(lanes, 0, sizeof(lanes));
+    } else {
+        for (auto& lane : lanes) {
+            lane = static_cast<uint16_t>(lane << imm);
+        }
+    }
+    std::memcpy(&state->ctx.xmm[reg], lanes, sizeof(lanes));
     return LogicFlow::Continue;
 }
 
@@ -47,7 +60,7 @@ FORCE_INLINE LogicFlow OpPslld_Sse_Internal(LogicFuncParams) {
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 13
         dst_idx = op->modrm & 7;
-        count = simde_mm_set_epi64x(0, imm);
+        count = MakeShiftCount128(imm);
     } else {  // 0F F2
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
@@ -65,7 +78,7 @@ FORCE_INLINE LogicFlow OpPsllq_Sse_Internal(LogicFuncParams) {
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 14 /6
         dst_idx = op->modrm & 7;
-        count = simde_mm_set_epi64x(0, imm);
+        count = MakeShiftCount128(imm);
     } else {  // 0F F3
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
@@ -83,7 +96,7 @@ FORCE_INLINE LogicFlow OpPsraw_Sse_Internal(LogicFuncParams) {
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 12 /4
         dst_idx = op->modrm & 7;
-        count = simde_mm_set_epi64x(0, imm);
+        count = MakeShiftCount128(imm);
     } else {  // 0F E1
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
@@ -101,7 +114,7 @@ FORCE_INLINE LogicFlow OpPsrad_Sse_Internal(LogicFuncParams) {
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 13 /4
         dst_idx = op->modrm & 7;
-        count = simde_mm_set_epi64x(0, imm);
+        count = MakeShiftCount128(imm);
     } else {  // 0F E2
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
@@ -119,7 +132,7 @@ FORCE_INLINE LogicFlow OpPsrlw_Sse_Internal(LogicFuncParams) {
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 12 /2
         dst_idx = op->modrm & 7;
-        count = simde_mm_set_epi64x(0, imm);
+        count = MakeShiftCount128(imm);
     } else {  // 0F D1
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
@@ -137,7 +150,7 @@ FORCE_INLINE LogicFlow OpPsrld_Sse_Internal(LogicFuncParams) {
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 13 /2
         dst_idx = op->modrm & 7;
-        count = simde_mm_set_epi64x(0, imm);
+        count = MakeShiftCount128(imm);
     } else {  // 0F D2
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
@@ -155,7 +168,7 @@ FORCE_INLINE LogicFlow OpPsrlq_Sse_Internal(LogicFuncParams) {
     simde__m128i count;
     if constexpr (IsGroup) {  // Group 14 /2
         dst_idx = op->modrm & 7;
-        count = simde_mm_set_epi64x(0, imm);
+        count = MakeShiftCount128(imm);
     } else {  // 0F D3
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
