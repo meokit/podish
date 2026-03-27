@@ -1,26 +1,25 @@
 using System.Buffers.Binary;
-using Podish.Pulse.Protocol;
 
 namespace Podish.Pulse.Audio;
 
 public sealed class AudioStream
 {
-    private readonly object _gate = new();
-    private readonly byte[] _ring;
+    private readonly Lock _gate = new();
     private readonly int _inputBytesPerFrame;
     private readonly byte _inputChannels;
     private readonly uint _inputRate;
     private readonly byte _outputChannels;
     private readonly uint _outputRate;
-    private int _readOffset;
-    private int _writeOffset;
-    private int _queuedBytes;
-    private double _sourcePosition;
-    private bool _paused;
+    private readonly byte[] _ring;
     private float _gain;
     private bool _hasPreviousFrame;
+    private bool _paused;
     private float _previousLeft;
     private float _previousRight;
+    private int _queuedBytes;
+    private int _readOffset;
+    private double _sourcePosition;
+    private int _writeOffset;
 
     public AudioStream(
         uint channelIndex,
@@ -39,8 +38,9 @@ public sealed class AudioStream
         if (inputSpec.SampleRate == 0)
             throw new ArgumentOutOfRangeException(nameof(inputSpec), "Sample rate must be positive");
 
-        SampleSpec resolvedOutput = outputSpec ?? new SampleSpec(SampleFormat.S16Le, 2, 48000);
-        if (resolvedOutput.Format != SampleFormat.S16Le || resolvedOutput.Channels != 2 || resolvedOutput.SampleRate == 0)
+        var resolvedOutput = outputSpec ?? new SampleSpec(SampleFormat.S16Le, 2, 48000);
+        if (resolvedOutput.Format != SampleFormat.S16Le || resolvedOutput.Channels != 2 ||
+            resolvedOutput.SampleRate == 0)
             throw new ArgumentOutOfRangeException(nameof(outputSpec), "Output spec must be S16Le stereo");
 
         ChannelIndex = channelIndex;
@@ -67,7 +67,9 @@ public sealed class AudioStream
         get
         {
             lock (_gate)
+            {
                 return _queuedBytes;
+            }
         }
     }
 
@@ -77,12 +79,12 @@ public sealed class AudioStream
         {
             lock (_gate)
             {
-                int availableFrames = _queuedBytes / _inputBytesPerFrame;
+                var availableFrames = _queuedBytes / _inputBytesPerFrame;
                 if (availableFrames <= 0)
                     return 0;
 
-                double remainingInputFrames = Math.Max(0.0, availableFrames - _sourcePosition);
-                int estimatedOutputFrames = (int)Math.Ceiling(remainingInputFrames * _outputRate / _inputRate);
+                var remainingInputFrames = Math.Max(0.0, availableFrames - _sourcePosition);
+                var estimatedOutputFrames = (int)Math.Ceiling(remainingInputFrames * _outputRate / _inputRate);
                 return estimatedOutputFrames * _outputChannels * sizeof(short);
             }
         }
@@ -93,13 +95,17 @@ public sealed class AudioStream
     public void SetPaused(bool paused)
     {
         lock (_gate)
+        {
             _paused = paused;
+        }
     }
 
     public void SetGain(float gain)
     {
         lock (_gate)
+        {
             _gain = gain;
+        }
     }
 
     public int PutData(ReadOnlySpan<byte> data)
@@ -109,15 +115,15 @@ public sealed class AudioStream
 
         lock (_gate)
         {
-            int writable = Capacity - _queuedBytes;
-            int bytesToWrite = Math.Min(writable, data.Length);
+            var writable = Capacity - _queuedBytes;
+            var bytesToWrite = Math.Min(writable, data.Length);
             bytesToWrite -= bytesToWrite % _inputBytesPerFrame;
             if (bytesToWrite <= 0)
                 return 0;
 
-            int first = Math.Min(bytesToWrite, Capacity - _writeOffset);
+            var first = Math.Min(bytesToWrite, Capacity - _writeOffset);
             data.Slice(0, first).CopyTo(_ring.AsSpan(_writeOffset, first));
-            int remaining = bytesToWrite - first;
+            var remaining = bytesToWrite - first;
             if (remaining > 0)
                 data.Slice(first, remaining).CopyTo(_ring.AsSpan(0, remaining));
 
@@ -137,19 +143,19 @@ public sealed class AudioStream
             if (_paused)
                 return 0;
 
-            int mixedFrames = 0;
-            double step = (double)_inputRate / _outputRate;
+            var mixedFrames = 0;
+            var step = (double)_inputRate / _outputRate;
             for (; mixedFrames < frames; mixedFrames++)
             {
-                int availableFrames = _queuedBytes / _inputBytesPerFrame;
+                var availableFrames = _queuedBytes / _inputBytesPerFrame;
                 if (availableFrames <= 0)
                     break;
 
                 if (_sourcePosition >= availableFrames)
                     break;
 
-                ReadInterpolatedStereoFrame(_sourcePosition, availableFrames, out float left, out float right);
-                int sampleIndex = mixedFrames * _outputChannels;
+                ReadInterpolatedStereoFrame(_sourcePosition, availableFrames, out var left, out var right);
+                var sampleIndex = mixedFrames * _outputChannels;
                 mixBuffer[sampleIndex] += left * _gain;
                 mixBuffer[sampleIndex + 1] += right * _gain;
 
@@ -177,15 +183,15 @@ public sealed class AudioStream
 
     private void DiscardFullyConsumedFrames()
     {
-        int availableFrames = _queuedBytes / _inputBytesPerFrame;
-        int framesToDrop = Math.Min((int)Math.Floor(_sourcePosition), availableFrames);
+        var availableFrames = _queuedBytes / _inputBytesPerFrame;
+        var framesToDrop = Math.Min((int)Math.Floor(_sourcePosition), availableFrames);
         if (framesToDrop <= 0)
             return;
 
         ReadFrameStereo(framesToDrop - 1, out _previousLeft, out _previousRight);
         _hasPreviousFrame = true;
 
-        int bytesToDrop = framesToDrop * _inputBytesPerFrame;
+        var bytesToDrop = framesToDrop * _inputBytesPerFrame;
         _readOffset = (_readOffset + bytesToDrop) % Capacity;
         _queuedBytes -= bytesToDrop;
         _sourcePosition -= framesToDrop;
@@ -201,13 +207,13 @@ public sealed class AudioStream
 
     private void ReadInterpolatedStereoFrame(double position, int availableFrames, out float left, out float right)
     {
-        int baseFrame = (int)Math.Floor(position);
-        float t = (float)(position - baseFrame);
+        var baseFrame = (int)Math.Floor(position);
+        var t = (float)(position - baseFrame);
 
-        ReadSampleWithBoundary(baseFrame - 1, availableFrames, out float p0L, out float p0R);
-        ReadSampleWithBoundary(baseFrame, availableFrames, out float p1L, out float p1R);
-        ReadSampleWithBoundary(baseFrame + 1, availableFrames, out float p2L, out float p2R);
-        ReadSampleWithBoundary(baseFrame + 2, availableFrames, out float p3L, out float p3R);
+        ReadSampleWithBoundary(baseFrame - 1, availableFrames, out var p0L, out var p0R);
+        ReadSampleWithBoundary(baseFrame, availableFrames, out var p1L, out var p1R);
+        ReadSampleWithBoundary(baseFrame + 1, availableFrames, out var p2L, out var p2R);
+        ReadSampleWithBoundary(baseFrame + 2, availableFrames, out var p3L, out var p3R);
 
         left = AudioMixer.CubicInterpolate(p0L, p1L, p2L, p3L, t);
         right = AudioMixer.CubicInterpolate(p0R, p1R, p2R, p3R, t);
@@ -243,8 +249,8 @@ public sealed class AudioStream
 
     private void ReadFrameStereo(int frameIndex, out float left, out float right)
     {
-        int byteIndex = (_readOffset + (frameIndex * _inputBytesPerFrame)) % Capacity;
-        short sample0 = ReadInt16(byteIndex);
+        var byteIndex = (_readOffset + frameIndex * _inputBytesPerFrame) % Capacity;
+        var sample0 = ReadInt16(byteIndex);
         if (_inputChannels == 1)
         {
             left = sample0 / 32768.0f;
@@ -252,7 +258,7 @@ public sealed class AudioStream
             return;
         }
 
-        short sample1 = ReadInt16((byteIndex + sizeof(short)) % Capacity);
+        var sample1 = ReadInt16((byteIndex + sizeof(short)) % Capacity);
         left = sample0 / 32768.0f;
         right = sample1 / 32768.0f;
     }
@@ -270,7 +276,7 @@ public sealed class AudioStream
 
     private static int AlignToFrame(int bytes, int frameSize)
     {
-        int remainder = bytes % frameSize;
+        var remainder = bytes % frameSize;
         return remainder == 0 ? bytes : bytes + (frameSize - remainder);
     }
 }

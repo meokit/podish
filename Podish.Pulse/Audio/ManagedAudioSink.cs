@@ -1,15 +1,11 @@
-using Podish.Pulse.Protocol;
-
 namespace Podish.Pulse.Audio;
 
 public abstract class ManagedAudioSink : IPulseAudioSink
 {
-    private sealed record StreamRegistration(PlaybackStreamState State, Action ProgressCallback);
-
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly Dictionary<uint, StreamRegistration> _streams = new();
-    private float[] _mixScratch = Array.Empty<float>();
     private float _masterGain = 1.0f;
+    private float[] _mixScratch = Array.Empty<float>();
     private bool _muted;
 
     protected ManagedAudioSink(SampleSpec defaultSampleSpec)
@@ -22,10 +18,8 @@ public abstract class ManagedAudioSink : IPulseAudioSink
     public void EnsureFormat(SampleSpec sampleSpec)
     {
         if (!PulseAudioFormats.IsSupported(sampleSpec))
-        {
             throw new InvalidOperationException(
                 $"Unsupported playback format: {sampleSpec.Format}/{sampleSpec.Channels}/{sampleSpec.SampleRate}");
-        }
 
         lock (_gate)
         {
@@ -55,7 +49,9 @@ public abstract class ManagedAudioSink : IPulseAudioSink
     public void NotifyStreamStateChanged()
     {
         lock (_gate)
+        {
             UpdateBackendPausedLocked();
+        }
     }
 
     public void SetMasterVolume(ChannelVolume volume, bool muted)
@@ -84,36 +80,33 @@ public abstract class ManagedAudioSink : IPulseAudioSink
             if (_streams.Count == 0)
                 return;
 
-            int frames = destination.Length / (DefaultSampleSpec.Channels * sizeof(short));
-            int sampleCount = frames * DefaultSampleSpec.Channels;
+            var frames = destination.Length / (DefaultSampleSpec.Channels * sizeof(short));
+            var sampleCount = frames * DefaultSampleSpec.Channels;
             if (_mixScratch.Length < sampleCount)
                 _mixScratch = new float[sampleCount];
 
-            Span<float> mix = _mixScratch.AsSpan(0, sampleCount);
+            var mix = _mixScratch.AsSpan(0, sampleCount);
             mix.Clear();
 
-            bool anyMixed = false;
-            foreach (StreamRegistration registration in _streams.Values)
+            var anyMixed = false;
+            foreach (var registration in _streams.Values)
             {
-                int mixedFrames = registration.State.AudioStream.MixInto(mix, frames);
+                var mixedFrames = registration.State.AudioStream.MixInto(mix, frames);
                 if (mixedFrames > 0)
                     anyMixed = true;
             }
 
             if (anyMixed && (_muted || _masterGain != 1.0f))
-            {
-                for (int i = 0; i < sampleCount; i++)
+                for (var i = 0; i < sampleCount; i++)
                     mix[i] *= _masterGain;
-            }
 
             if (anyMixed)
                 AudioMixer.WriteS16LeStereo(destination, mix, frames);
 
-            foreach (StreamRegistration registration in _streams.Values)
-            {
-                if (anyMixed || registration.State.PendingDrainSequence != null || registration.State.ShouldRequestMore())
+            foreach (var registration in _streams.Values)
+                if (anyMixed || registration.State.PendingDrainSequence != null ||
+                    registration.State.ShouldRequestMore())
                     registration.ProgressCallback();
-            }
 
             UpdateBackendPausedLocked();
         }
@@ -125,15 +118,13 @@ public abstract class ManagedAudioSink : IPulseAudioSink
 
     private void UpdateBackendPausedLocked()
     {
-        bool shouldPause = true;
-        foreach (StreamRegistration registration in _streams.Values)
-        {
+        var shouldPause = true;
+        foreach (var registration in _streams.Values)
             if (!registration.State.Corked && registration.State.HasPendingOutput)
             {
                 shouldPause = false;
                 break;
             }
-        }
 
         SetBackendPausedCore(shouldPause);
     }
@@ -144,8 +135,10 @@ public abstract class ManagedAudioSink : IPulseAudioSink
             return 1.0f;
 
         float total = 0;
-        for (int i = 0; i < volume.Channels; i++)
+        for (var i = 0; i < volume.Channels; i++)
             total += volume[i].ToLinear();
         return total / volume.Channels;
     }
+
+    private sealed record StreamRegistration(PlaybackStreamState State, Action ProgressCallback);
 }

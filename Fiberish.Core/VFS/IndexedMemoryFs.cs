@@ -47,13 +47,12 @@ public abstract class IndexedMemorySuperBlock : SuperBlock
 /// </summary>
 public abstract class IndexedMemoryInode : Inode
 {
+    private readonly object _flockGate = new();
     private readonly HashSet<LinuxFile> _sharedHolders = [];
     protected readonly HashSet<string> ChildNames = [];
     protected readonly HashSet<long> DirtyPageIndexes = [];
     protected readonly Dictionary<string, byte[]> XAttrs = new(StringComparer.Ordinal);
     private LinuxFile? _exclusiveHolder;
-
-    // Flock state
     private int _lockType; // 0: None, 1: Shared, 2: Exclusive
     protected bool OwnsPageCache;
     protected byte[]? SymlinkData;
@@ -484,56 +483,27 @@ public abstract class IndexedMemoryInode : Inode
         return BackendRead(linuxFile, buffer, offset);
     }
 
-    public override bool VisitReadableSegments(LinuxFile? linuxFile, long offset, int length, ReadOnlySpanVisitor visitor)
+    public override ReadableSegmentEnumerator GetReadableSegments(LinuxFile? linuxFile, long offset, int length)
     {
-        ArgumentNullException.ThrowIfNull(visitor);
-
         if (offset < 0 || length < 0)
-            return false;
+            return ReadableSegmentEnumerator.Failed;
         if (length == 0)
-            return true;
+            return ReadableSegmentEnumerator.Empty;
 
         lock (Lock)
         {
             if (Type != InodeType.File)
-                return false;
+                return ReadableSegmentEnumerator.Failed;
 
-            long fileSize = (long)Size;
+            var fileSize = (long)Size;
             if (offset > fileSize || length > fileSize - offset)
-                return false;
+                return ReadableSegmentEnumerator.Failed;
 
-            AddressSpace pageCache = EnsurePageCacheLocked();
-            int remaining = length;
-            long absolute = offset;
-            while (remaining > 0)
-            {
-                uint pageIndex = (uint)(absolute / LinuxConstants.PageSize);
-                int pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
-                int chunk = Math.Min(remaining, LinuxConstants.PageSize - pageOffset);
-                IntPtr pagePtr = pageCache.GetOrCreatePage(pageIndex, ptr =>
-                {
-                    unsafe
-                    {
-                        new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
-                    }
-
-                    return true;
-                }, out _, true, AllocationClass.PageCache);
-                if (pagePtr == IntPtr.Zero)
-                    return false;
-
-                unsafe
-                {
-                    ReadOnlySpan<byte> span = new((void*)((byte*)pagePtr + pageOffset), chunk);
-                    if (!visitor(span))
-                        return false;
-                }
-
-                absolute += chunk;
-                remaining -= chunk;
-            }
-
-            return true;
+            // EnsurePageCacheLocked allocates the address space if not yet present.
+            // The returned AddressSpace is safe to iterate after releasing the lock
+            // because in-memory pages are never evicted or moved.
+            var pageCache = EnsurePageCacheLocked();
+            return new ReadableSegmentEnumerator(this, linuxFile, pageCache, offset, length, fileSize);
         }
     }
 
@@ -542,7 +512,7 @@ public abstract class IndexedMemoryInode : Inode
         var nonBlock = (operation & LinuxConstants.LOCK_NB) != 0;
         var op = operation & ~LinuxConstants.LOCK_NB;
 
-        lock (Lock)
+        lock (_flockGate)
         {
             while (true)
             {
@@ -551,7 +521,7 @@ public abstract class IndexedMemoryInode : Inode
                     if (_exclusiveHolder == linuxFile) _exclusiveHolder = null;
                     _sharedHolders.Remove(linuxFile);
                     if (_exclusiveHolder == null && _sharedHolders.Count == 0) _lockType = 0;
-                    Monitor.PulseAll(Lock);
+                    Monitor.PulseAll(_flockGate);
                     return 0;
                 }
 
@@ -588,7 +558,7 @@ public abstract class IndexedMemoryInode : Inode
                 }
 
                 if (nonBlock) return -(int)Errno.EAGAIN;
-                Monitor.Wait(Lock);
+                Monitor.Wait(_flockGate);
             }
         }
     }
@@ -902,18 +872,18 @@ public abstract class IndexedMemoryInode : Inode
             if (Type != InodeType.File)
                 return false;
 
-            long fileSize = (long)Size;
+            var fileSize = (long)Size;
             if (offset > fileSize || length > fileSize - offset)
                 return false;
 
-            AddressSpace pageCache = EnsurePageCacheLocked();
-            int probeRemaining = length;
-            long probeAbsolute = offset;
+            var pageCache = EnsurePageCacheLocked();
+            var probeRemaining = length;
+            var probeAbsolute = offset;
             while (probeRemaining > 0)
             {
-                uint pageIndex = (uint)(probeAbsolute / LinuxConstants.PageSize);
-                int pageOffset = (int)(probeAbsolute & LinuxConstants.PageOffsetMask);
-                int chunk = Math.Min(probeRemaining, LinuxConstants.PageSize - pageOffset);
+                var pageIndex = (uint)(probeAbsolute / LinuxConstants.PageSize);
+                var pageOffset = (int)(probeAbsolute & LinuxConstants.PageOffsetMask);
+                var chunk = Math.Min(probeRemaining, LinuxConstants.PageSize - pageOffset);
                 if (pageCache.GetPage(pageIndex) == IntPtr.Zero)
                     return false;
 
@@ -921,18 +891,18 @@ public abstract class IndexedMemoryInode : Inode
                 probeRemaining -= chunk;
             }
 
-            int remaining = length;
-            long absolute = offset;
+            var remaining = length;
+            var absolute = offset;
             while (remaining > 0)
             {
-                uint pageIndex = (uint)(absolute / LinuxConstants.PageSize);
-                int pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
-                int chunk = Math.Min(remaining, LinuxConstants.PageSize - pageOffset);
-                IntPtr pagePtr = pageCache.GetPage(pageIndex);
+                var pageIndex = (uint)(absolute / LinuxConstants.PageSize);
+                var pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
+                var chunk = Math.Min(remaining, LinuxConstants.PageSize - pageOffset);
+                var pagePtr = pageCache.GetPage(pageIndex);
                 if (pagePtr == IntPtr.Zero)
                     return false;
 
-                IntPtr chunkPtr = IntPtr.Add(pagePtr, pageOffset);
+                var chunkPtr = IntPtr.Add(pagePtr, pageOffset);
                 if (!visitor(chunkPtr, chunk))
                     return false;
 

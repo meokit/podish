@@ -148,7 +148,7 @@ public abstract class SuperBlock
     public Dentry Root { get; set; } = null!;
     public int BlockSize { get; set; } = 4096;
     public List<Inode> Inodes { get; set; } = [];
-    public object Lock { get; } = new();
+    public Lock Lock { get; } = new();
     public MemoryRuntimeContext MemoryContext { get; internal set; }
 
     /// <summary>
@@ -331,7 +331,7 @@ public abstract class Inode : IAddressSpaceOperations
 
     public SuperBlock SuperBlock { get; set; } = null!;
     public IReadOnlyList<Dentry> Dentries => _dentries;
-    public object Lock { get; } = new();
+    public Lock Lock { get; } = new();
 
     // Reference counting for lifecycle management
     public int RefCount { get; set; }
@@ -800,102 +800,23 @@ public abstract class Inode : IAddressSpaceOperations
         return 0;
     }
 
-    public virtual bool VisitReadableSegments(LinuxFile? linuxFile, long offset, int length, ReadOnlySpanVisitor visitor)
+    /// <summary>
+    ///     Returns an enumerator over the readable byte segments in [<paramref name="offset" />, <paramref name="offset" />+
+    ///     <paramref name="length" />).
+    ///     Use with <c>foreach</c>; check <see cref="ReadableSegmentEnumerator.Succeeded" /> after the loop.
+    /// </summary>
+    public virtual ReadableSegmentEnumerator GetReadableSegments(LinuxFile? linuxFile, long offset, int length)
     {
-        ArgumentNullException.ThrowIfNull(visitor);
-
-        if (offset < 0 || length < 0)
-            return false;
+        if (offset < 0 || length < 0 || Type == InodeType.Directory)
+            return ReadableSegmentEnumerator.Failed;
         if (length == 0)
-            return true;
-        if (Type == InodeType.Directory)
-            return false;
+            return ReadableSegmentEnumerator.Empty;
 
-        long fileSize = (long)Size;
+        var fileSize = (long)Size;
         if (offset > fileSize || length > fileSize - offset)
-            return false;
+            return ReadableSegmentEnumerator.Failed;
 
-        AddressSpace? pageCache = Mapping;
-        if (pageCache == null)
-        {
-            if (linuxFile == null)
-                return false;
-
-            byte[] tempPage = new byte[LinuxConstants.PageSize];
-            int remainingNoCache = length;
-            long absoluteNoCache = offset;
-            while (remainingNoCache > 0)
-            {
-                uint pageIndex = (uint)(absoluteNoCache / LinuxConstants.PageSize);
-                int pageOffset = (int)(absoluteNoCache & LinuxConstants.PageOffsetMask);
-                int chunk = Math.Min(remainingNoCache, LinuxConstants.PageSize - pageOffset);
-                long pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
-                int pageReadLen = (int)Math.Min(LinuxConstants.PageSize, Math.Max(0, fileSize - pageFileOffset));
-                tempPage.AsSpan().Clear();
-                if (pageReadLen > 0)
-                {
-                    int rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
-                    if (rc < 0)
-                        return false;
-                }
-
-                if (!visitor(tempPage.AsSpan(pageOffset, chunk)))
-                    return false;
-
-                absoluteNoCache += chunk;
-                remainingNoCache -= chunk;
-            }
-
-            return true;
-        }
-
-        int remaining = length;
-        long absolute = offset;
-        while (remaining > 0)
-        {
-            uint pageIndex = (uint)(absolute / LinuxConstants.PageSize);
-            int pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
-            int chunk = Math.Min(remaining, LinuxConstants.PageSize - pageOffset);
-            IntPtr pagePtr = pageCache.GetPage(pageIndex);
-            if (pagePtr == IntPtr.Zero)
-            {
-                if (linuxFile == null)
-                    return false;
-
-                long pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
-                int pageReadLen = (int)Math.Min(LinuxConstants.PageSize, Math.Max(0, fileSize - pageFileOffset));
-                pagePtr = pageCache.GetOrCreatePage(pageIndex, ptr =>
-                {
-                    unsafe
-                    {
-                        Span<byte> dst = new((void*)ptr, LinuxConstants.PageSize);
-                        dst.Clear();
-                        if (pageReadLen > 0)
-                        {
-                            int rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), dst);
-                            if (rc < 0)
-                                return false;
-                        }
-                    }
-
-                    return true;
-                }, out _, true, AllocationClass.PageCache);
-                if (pagePtr == IntPtr.Zero)
-                    return false;
-            }
-
-            unsafe
-            {
-                ReadOnlySpan<byte> span = new((void*)((byte*)pagePtr + pageOffset), chunk);
-                if (!visitor(span))
-                    return false;
-            }
-
-            absolute += chunk;
-            remaining -= chunk;
-        }
-
-        return true;
+        return new ReadableSegmentEnumerator(this, linuxFile, Mapping, offset, length, fileSize);
     }
 
     protected int ReadWithPageCache(
@@ -912,20 +833,25 @@ public abstract class Inode : IAddressSpaceOperations
         var total = 0;
         var cursor = offset;
         var fileSize = (long)Size;
-        var tempPage = new byte[LinuxConstants.PageSize];
         while (total < buffer.Length)
         {
             var fileRemaining = fileSize - cursor;
-            if (fileRemaining <= 0) break; // EOF
+            if (fileRemaining <= 0) break;
 
             var pageIndex = (uint)(cursor / LinuxConstants.PageSize);
             var pageOffset = (int)(cursor & LinuxConstants.PageOffsetMask);
-            var toCopy = Math.Min(buffer.Length - total, LinuxConstants.PageSize - pageOffset);
-            if (toCopy > fileRemaining) toCopy = (int)fileRemaining;
+            var toCopy = (int)Math.Min(Math.Min(buffer.Length - total, LinuxConstants.PageSize - pageOffset),
+                fileRemaining);
             if (toCopy <= 0) break;
-            var pagePtr = pageCache.GetPage(pageIndex);
-            if (pagePtr != IntPtr.Zero)
-            {
+
+            var (pagePtr, tempFallback) = LoadPageIntoCacheWithFallback(pageCache, linuxFile, pageIndex, fileSize);
+            if (pagePtr == IntPtr.Zero && tempFallback == null)
+                return total > 0 ? total : -(int)Errno.EIO;
+
+            if (tempFallback != null)
+                // OOM fallback: serve directly from temp buffer without caching.
+                tempFallback.AsSpan(pageOffset, toCopy).CopyTo(buffer[total..]);
+            else
                 unsafe
                 {
                     var src = (byte*)pagePtr + pageOffset;
@@ -934,47 +860,6 @@ public abstract class Inode : IAddressSpaceOperations
                         Buffer.MemoryCopy(src, dst, toCopy, toCopy);
                     }
                 }
-
-                total += toCopy;
-                cursor += toCopy;
-                continue;
-            }
-
-            tempPage.AsSpan().Clear();
-            var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
-            var pageReadLen = (int)Math.Min(LinuxConstants.PageSize, Math.Max(0, fileSize - pageFileOffset));
-            var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
-            if (rc < 0) return total > 0 ? total : rc;
-
-            pagePtr = pageCache.GetOrCreatePage(pageIndex, p =>
-            {
-                unsafe
-                {
-                    var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
-                    dst.Clear();
-                    if (pageReadLen > 0) tempPage.AsSpan(0, pageReadLen).CopyTo(dst);
-                }
-
-                return true;
-            }, out _, true, AllocationClass.PageCache);
-
-            if (pagePtr == IntPtr.Zero)
-            {
-                // OOM on cache population: serve data without caching.
-                tempPage.AsSpan(pageOffset, toCopy).CopyTo(buffer[total..]);
-                total += toCopy;
-                cursor += toCopy;
-                continue;
-            }
-
-            unsafe
-            {
-                var src = (byte*)pagePtr + pageOffset;
-                fixed (byte* dst = &buffer[total])
-                {
-                    Buffer.MemoryCopy(src, dst, toCopy, toCopy);
-                }
-            }
 
             total += toCopy;
             cursor += toCopy;
@@ -997,46 +882,20 @@ public abstract class Inode : IAddressSpaceOperations
 
         var consumed = 0;
         var cursor = offset;
-        var tempPage = new byte[LinuxConstants.PageSize];
         while (consumed < buffer.Length)
         {
             var pageIndex = (uint)(cursor / LinuxConstants.PageSize);
             var pageOffset = (int)(cursor & LinuxConstants.PageOffsetMask);
             var chunk = Math.Min(buffer.Length - consumed, LinuxConstants.PageSize - pageOffset);
-            var pagePtr = pageCache.GetPage(pageIndex);
-            if (pagePtr == IntPtr.Zero)
-            {
-                var fullPageWrite = pageOffset == 0 && chunk == LinuxConstants.PageSize;
-                var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
-                var pageReadLen = 0;
-                if (!fullPageWrite && pageFileOffset < (long)Size)
-                {
-                    tempPage.AsSpan().Clear();
-                    pageReadLen = (int)Math.Min(LinuxConstants.PageSize, (long)Size - pageFileOffset);
-                    var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
-                    if (rc < 0) return consumed > 0 ? consumed : rc;
-                }
 
-                pagePtr = pageCache.GetOrCreatePage(pageIndex, p =>
-                {
-                    unsafe
-                    {
-                        var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
-                        dst.Clear();
-                        if (pageReadLen > 0) tempPage.AsSpan(0, pageReadLen).CopyTo(dst);
-                    }
-
-                    return true;
-                }, out _, true, AllocationClass.PageCache);
-                if (pagePtr == IntPtr.Zero) return consumed > 0 ? consumed : -(int)Errno.ENOMEM;
-            }
+            var pagePtr = EnsurePageInCacheForWrite(pageCache, linuxFile, pageIndex, pageOffset, chunk);
+            if (pagePtr == IntPtr.Zero) return consumed > 0 ? consumed : -(int)Errno.ENOMEM;
 
             unsafe
             {
                 fixed (byte* src = &buffer[consumed])
                 {
-                    var dst = (byte*)pagePtr + pageOffset;
-                    Buffer.MemoryCopy(src, dst, chunk, chunk);
+                    Buffer.MemoryCopy(src, (byte*)pagePtr + pageOffset, chunk, chunk);
                 }
             }
 
@@ -1044,7 +903,6 @@ public abstract class Inode : IAddressSpaceOperations
             if (dirtyRc < 0) return consumed > 0 ? consumed : dirtyRc;
             pageCache.MarkDirty(pageIndex);
 
-            // Route through page-level op for filesystem-specific bookkeeping.
             var writeRc = WritePage(linuxFile, new PageIoRequest(pageIndex, cursor, chunk),
                 buffer.Slice(consumed, chunk), false);
             if (writeRc < 0) return consumed > 0 ? consumed : writeRc;
@@ -1057,6 +915,93 @@ public abstract class Inode : IAddressSpaceOperations
         if (end > (long)Size) Size = (ulong)end;
         MTime = DateTime.Now;
         return consumed;
+    }
+
+
+    /// <summary>
+    ///     Loads <paramref name="pageIndex" /> into the page cache if not already present.
+    ///     Returns <c>(ptr, null)</c> on a cache hit or after a successful populate,
+    ///     <c>(Zero, tempPage)</c> when the page was read but could not be cached (OOM or no cache),
+    ///     or <c>(Zero, null)</c> on a hard read error or missing <paramref name="linuxFile" />.
+    /// </summary>
+    internal (IntPtr PagePtr, byte[]? TempFallback) LoadPageIntoCacheWithFallback(
+        AddressSpace? pageCache, LinuxFile? linuxFile, uint pageIndex, long fileSize)
+    {
+        if (pageCache != null)
+        {
+            var pagePtr = pageCache.GetPage(pageIndex);
+            if (pagePtr != IntPtr.Zero) return (pagePtr, null);
+        }
+
+        if (linuxFile == null) return (IntPtr.Zero, null);
+
+        var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
+        var pageReadLen = (int)Math.Min(LinuxConstants.PageSize, Math.Max(0, fileSize - pageFileOffset));
+
+        var tempPage = new byte[LinuxConstants.PageSize];
+        tempPage.AsSpan().Clear();
+        if (pageReadLen > 0)
+        {
+            var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
+            if (rc < 0) return (IntPtr.Zero, null);
+        }
+
+        if (pageCache == null)
+            return (IntPtr.Zero, tempPage); // No cache: return temp buffer directly.
+
+        var populatedPtr = pageCache.GetOrCreatePage(pageIndex, p =>
+        {
+            unsafe
+            {
+                var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
+                dst.Clear();
+                if (pageReadLen > 0) tempPage.AsSpan(0, pageReadLen).CopyTo(dst);
+            }
+
+            return true;
+        }, out _, true, AllocationClass.PageCache);
+
+        return populatedPtr != IntPtr.Zero ? (populatedPtr, null) : (IntPtr.Zero, tempPage);
+    }
+
+    /// <summary>
+    ///     Ensures the page at <paramref name="pageIndex" /> is present in the page cache and ready
+    ///     for a partial or full write. Performs a read-modify-write pre-fill when needed.
+    ///     Returns <see cref="IntPtr.Zero" /> on OOM or backend read failure.
+    /// </summary>
+    private IntPtr EnsurePageInCacheForWrite(
+        AddressSpace pageCache, LinuxFile linuxFile, uint pageIndex, int pageOffset, int chunk)
+    {
+        var pagePtr = pageCache.GetPage(pageIndex);
+        if (pagePtr != IntPtr.Zero) return pagePtr;
+
+        var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
+        var pageReadLen = 0;
+        byte[]? tempPage = null;
+
+        var fullPageWrite = pageOffset == 0 && chunk == LinuxConstants.PageSize;
+        if (!fullPageWrite && pageFileOffset < (long)Size)
+        {
+            tempPage = new byte[LinuxConstants.PageSize];
+            tempPage.AsSpan().Clear();
+            pageReadLen = (int)Math.Min(LinuxConstants.PageSize, (long)Size - pageFileOffset);
+            var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
+            if (rc < 0) return IntPtr.Zero;
+        }
+
+        var captured = tempPage;
+        var capturedReadLen = pageReadLen;
+        return pageCache.GetOrCreatePage(pageIndex, p =>
+        {
+            unsafe
+            {
+                var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
+                dst.Clear();
+                if (capturedReadLen > 0) captured!.AsSpan(0, capturedReadLen).CopyTo(dst);
+            }
+
+            return true;
+        }, out _, true, AllocationClass.PageCache);
     }
 
     protected virtual int AopsReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
@@ -1264,6 +1209,112 @@ public interface IContextualDirectoryInode
 public interface ITaskContextBoundInode
 {
     void BindTaskContext(LinuxFile linuxFile, FiberTask task);
+}
+
+/// <summary>
+///     A zero-GC enumerator over the readable byte segments of an <see cref="Inode" /> region.
+///     Returned by <see cref="Inode.GetReadableSegments" />; use with <c>foreach</c>.
+///     <para>
+///         Check <see cref="Succeeded" /> after the loop to distinguish a clean EOF from an I/O error.
+///     </para>
+/// </summary>
+/// <example>
+///     <code>
+/// var segments = inode.GetReadableSegments(file, offset, length);
+/// foreach (ReadOnlySpan&lt;byte&gt; chunk in segments)
+///     sink.Write(chunk);
+/// if (!segments.Succeeded) return false;
+/// </code>
+/// </example>
+public ref struct ReadableSegmentEnumerator
+{
+    // Sentinel factory methods — ref structs cannot have static fields of their own type.
+    internal static ReadableSegmentEnumerator Empty => new() { _remaining = 0, _succeeded = true };
+    internal static ReadableSegmentEnumerator Failed => new() { _remaining = 0, _succeeded = false };
+
+
+    private readonly Inode? _inode;
+    private readonly LinuxFile? _linuxFile;
+    private readonly AddressSpace? _pageCache;
+    private readonly long _fileSize;
+
+    private long _absolute;
+    private int _remaining;
+    private bool _succeeded;
+
+    // Current chunk — backed by either an unmanaged page pointer or a managed temp buffer.
+    // Temp buffer used when the page is not in cache (no-cache path or OOM).
+    private byte[]? _tempBuffer;
+
+    internal ReadableSegmentEnumerator(
+        Inode inode, LinuxFile? linuxFile, AddressSpace? pageCache,
+        long offset, int length, long fileSize)
+    {
+        _inode = inode;
+        _linuxFile = linuxFile;
+        _pageCache = pageCache;
+        _absolute = offset;
+        _remaining = length;
+        _fileSize = fileSize;
+        _succeeded = true;
+        Current = default;
+        _tempBuffer = null;
+    }
+
+    /// <summary>The current byte segment. Valid only inside a <c>foreach</c> body.</summary>
+    public ReadOnlySpan<byte> Current { get; private set; }
+
+    /// <summary>
+    ///     <c>true</c> if the entire requested range was iterated without error.
+    ///     Always check this after the <c>foreach</c> loop.
+    /// </summary>
+    public readonly bool Succeeded => _succeeded && _remaining == 0;
+
+    /// <summary>Number of bytes successfully yielded so far.</summary>
+    public int TotalBytes { get; private set; }
+
+    /// <summary>Enables <c>foreach</c> without boxing — returns <c>this</c>.</summary>
+    public readonly ReadableSegmentEnumerator GetEnumerator()
+    {
+        return this;
+    }
+
+    public bool MoveNext()
+    {
+        if (_remaining <= 0 || !_succeeded)
+            return false;
+
+        var pageIndex = (uint)(_absolute / LinuxConstants.PageSize);
+        var pageOffset = (int)(_absolute & LinuxConstants.PageOffsetMask);
+        var chunk = Math.Min(_remaining, LinuxConstants.PageSize - pageOffset);
+
+        var (pagePtr, tempFallback) =
+            _inode!.LoadPageIntoCacheWithFallback(_pageCache, _linuxFile, pageIndex, _fileSize);
+        if (pagePtr == IntPtr.Zero && tempFallback == null)
+        {
+            _succeeded = false;
+            return false;
+        }
+
+        if (tempFallback != null)
+        {
+            _tempBuffer = tempFallback;
+            Current = tempFallback.AsSpan(pageOffset, chunk);
+        }
+        else
+        {
+            _tempBuffer = null;
+            unsafe
+            {
+                Current = new ReadOnlySpan<byte>((byte*)pagePtr + pageOffset, chunk);
+            }
+        }
+
+        _absolute += chunk;
+        _remaining -= chunk;
+        TotalBytes += chunk;
+        return true;
+    }
 }
 
 public class Dentry
@@ -1576,7 +1627,7 @@ public static class VfsDebugTrace
 {
     private const int MaxTraceEntries = 4096;
     private static readonly ILogger Logger = Logging.CreateLogger("Fiberish.VFS.RefTrace");
-    private static readonly object TraceLock = new();
+    private static readonly Lock TraceLock = new();
     private static readonly Queue<InodeRefTrace> RefTraceQueue = [];
 
     public static bool Enabled { get; set; } =
@@ -1717,7 +1768,8 @@ public class LinuxFile
 
     private int _refCount = 1;
 
-    public LinuxFile(Dentry dentry, FileFlags flags, Mount mount, ReferenceKind referenceKind = ReferenceKind.Normal, Inode? openedInode = null)
+    public LinuxFile(Dentry dentry, FileFlags flags, Mount mount, ReferenceKind referenceKind = ReferenceKind.Normal,
+        Inode? openedInode = null)
     {
         Dentry = dentry;
         OpenedInode = openedInode ?? dentry.Inode;

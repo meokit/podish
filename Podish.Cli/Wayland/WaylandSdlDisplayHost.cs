@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
-using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Podish.Cli.Display;
 using Podish.Display;
@@ -11,19 +10,19 @@ namespace Podish.Cli.Wayland;
 
 internal sealed class WaylandSdlDisplayHost : IDisposable
 {
+    private readonly WaylandDesktopOptions _desktopOptions;
     private readonly ILogger _logger;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly WaylandDesktopOptions _desktopOptions;
+    private readonly Dictionary<ulong, SurfaceTextureState> _surfaces = [];
     private readonly WaylandUiTheme _theme;
+    private readonly List<ulong> _zOrder = [];
     private SdlDisplayBackend? _backend;
-    private IDisplayOutput? _output;
-    private IDisplayRenderer? _renderer;
     private IDisplayTexture? _closeButtonIcon;
     private IDisplayTexture? _maximizeButtonIcon;
     private IDisplayTexture? _minimizeButtonIcon;
+    private IDisplayOutput? _output;
+    private IDisplayRenderer? _renderer;
     private SKTypeface? _titleTypeface;
-    private readonly Dictionary<ulong, SurfaceTextureState> _surfaces = [];
-    private readonly List<ulong> _zOrder = [];
 
     public WaylandSdlDisplayHost(ILoggerFactory loggerFactory, WaylandDesktopOptions desktopOptions)
     {
@@ -34,6 +33,28 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     }
 
     public bool IsClosed => _output?.IsClosed ?? false;
+
+    public void Dispose()
+    {
+        foreach (var surface in _surfaces.Values)
+        {
+            surface.Texture?.Dispose();
+            surface.TitleTexture?.Dispose();
+        }
+
+        _surfaces.Clear();
+        _zOrder.Clear();
+        _closeButtonIcon?.Dispose();
+        _maximizeButtonIcon?.Dispose();
+        _minimizeButtonIcon?.Dispose();
+        _titleTypeface?.Dispose();
+        _output?.ClearCursor();
+        _output?.Dispose();
+        _output = null;
+        _renderer = null;
+        _backend?.Dispose();
+        _backend = null;
+    }
 
     public void Start()
     {
@@ -46,21 +67,21 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
             _desktopOptions.Height,
             "Podish Wayland",
             DisplayVSyncMode.Enabled,
-            AllowHighDpi: true,
-            Resizable: true));
+            true));
         _renderer = _output.Renderer;
-        _logger.LogInformation("Wayland SDL host started desktop={Width}x{Height}", _desktopOptions.Width, _desktopOptions.Height);
+        _logger.LogInformation("Wayland SDL host started desktop={Width}x{Height}", _desktopOptions.Width,
+            _desktopOptions.Height);
         EnsureButtonTextures();
     }
 
-    public bool DrainCommands(IEnumerable<WaylandDisplayCommand> commands, List<ulong> consumedLeases, out bool shutdownRequested)
+    public bool DrainCommands(IEnumerable<WaylandDisplayCommand> commands, List<ulong> consumedLeases,
+        out bool shutdownRequested)
     {
         EnsureStarted();
         shutdownRequested = false;
-        bool dirty = false;
+        var dirty = false;
 
-        foreach (WaylandDisplayCommand command in commands)
-        {
+        foreach (var command in commands)
             switch (command.Kind)
             {
                 case WaylandDisplayCommandKind.PresentSurface:
@@ -107,7 +128,6 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
                     shutdownRequested = true;
                     break;
             }
-        }
 
         return dirty;
     }
@@ -128,21 +148,24 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     public void Render()
     {
         EnsureStarted();
-        _logger.LogDebug("Wayland SDL host render surfaces={Count} zOrder={ZOrderCount}", _surfaces.Count, _zOrder.Count);
+        _logger.LogDebug("Wayland SDL host render surfaces={Count} zOrder={ZOrderCount}", _surfaces.Count,
+            _zOrder.Count);
         _renderer!.Clear(ToDisplayColor(_theme.Desktop.Background));
 
-        foreach (ulong sceneSurfaceId in _zOrder)
+        foreach (var sceneSurfaceId in _zOrder)
         {
-            if (!_surfaces.TryGetValue(sceneSurfaceId, out SurfaceTextureState? surface))
+            if (!_surfaces.TryGetValue(sceneSurfaceId, out var surface))
                 continue;
             if (surface.Hidden)
             {
                 _logger.LogDebug("Wayland SDL host skip hidden sceneSurfaceId={SceneSurfaceId}", sceneSurfaceId);
                 continue;
             }
+
             if (surface.Texture == null)
             {
-                _logger.LogDebug("Wayland SDL host skip missing texture sceneSurfaceId={SceneSurfaceId}", sceneSurfaceId);
+                _logger.LogDebug("Wayland SDL host skip missing texture sceneSurfaceId={SceneSurfaceId}",
+                    sceneSurfaceId);
                 continue;
             }
 
@@ -153,41 +176,20 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         _output!.Present();
     }
 
-    public void Dispose()
-    {
-        foreach (SurfaceTextureState surface in _surfaces.Values)
-        {
-            surface.Texture?.Dispose();
-            surface.TitleTexture?.Dispose();
-        }
-        _surfaces.Clear();
-        _zOrder.Clear();
-        _closeButtonIcon?.Dispose();
-        _maximizeButtonIcon?.Dispose();
-        _minimizeButtonIcon?.Dispose();
-        _titleTypeface?.Dispose();
-        _output?.ClearCursor();
-        _output?.Dispose();
-        _output = null;
-        _renderer = null;
-        _backend?.Dispose();
-        _backend = null;
-    }
-
     private void UpsertSurface(ulong sceneSurfaceId, WaylandShmFrame frame, WaylandSurfaceBounds bounds)
     {
         if (frame.Width <= 0 || frame.Height <= 0 || frame.Stride <= 0)
             throw new InvalidOperationException(
                 $"Invalid Wayland shm frame geometry: {frame.Width}x{frame.Height} stride={frame.Stride}.");
 
-        DisplayPixelFormat pixelFormat = frame.Format switch
+        var pixelFormat = frame.Format switch
         {
             WlShmFormat.Argb8888 => DisplayPixelFormat.Argb8888,
             WlShmFormat.Xrgb8888 => DisplayPixelFormat.Xrgb8888,
             _ => throw new NotSupportedException($"Unsupported wl_shm format {frame.Format}.")
         };
 
-        SurfaceTextureState state = EnsureSurfaceTexture(sceneSurfaceId, frame.Width, frame.Height, pixelFormat);
+        var state = EnsureSurfaceTexture(sceneSurfaceId, frame.Width, frame.Height, pixelFormat);
         UpdateTexture(sceneSurfaceId, state.Texture!, frame);
         state.Width = frame.Width;
         state.Height = frame.Height;
@@ -199,14 +201,14 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
     private void UpdateSurfaceBounds(ulong sceneSurfaceId, WaylandSurfaceBounds bounds)
     {
-        SurfaceTextureState state = EnsureSurfaceState(sceneSurfaceId);
+        var state = EnsureSurfaceState(sceneSurfaceId);
         state.Bounds = bounds;
         InvalidateTitleTexture(state);
     }
 
     private void UpdateDecoration(ulong sceneSurfaceId, WaylandDecorationSceneState decoration)
     {
-        SurfaceTextureState state = EnsureSurfaceState(sceneSurfaceId);
+        var state = EnsureSurfaceState(sceneSurfaceId);
         state.Decoration = decoration;
         InvalidateTitleTexture(state);
     }
@@ -227,7 +229,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
     private void RemoveSurface(ulong sceneSurfaceId)
     {
-        if (!_surfaces.Remove(sceneSurfaceId, out SurfaceTextureState? surface))
+        if (!_surfaces.Remove(sceneSurfaceId, out var surface))
             return;
 
         _zOrder.Remove(sceneSurfaceId);
@@ -239,41 +241,45 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         DisplayPixelFormat format)
     {
         EnsureStarted();
-        if (_surfaces.TryGetValue(sceneSurfaceId, out SurfaceTextureState? existing) &&
+        if (_surfaces.TryGetValue(sceneSurfaceId, out var existing) &&
             existing.Texture != null &&
             existing.Width == width &&
             existing.Height == height &&
             existing.Format == format)
             return existing;
 
-        SurfaceTextureState state = EnsureSurfaceState(sceneSurfaceId);
+        var state = EnsureSurfaceState(sceneSurfaceId);
         state.Texture?.Dispose();
-        state.Texture = _renderer!.CreateTexture(new DisplayTextureDescriptor(width, height, format, DisplayTextureAccess.Streaming));
+        state.Texture = _renderer!.CreateTexture(new DisplayTextureDescriptor(width, height, format));
         state.Width = width;
         state.Height = height;
         state.Format = format;
         return state;
     }
 
-    private static DisplayRect ToDisplayRect(WaylandSurfaceBounds bounds) =>
-        new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
+    private static DisplayRect ToDisplayRect(WaylandSurfaceBounds bounds)
+    {
+        return new DisplayRect(bounds.X, bounds.Y, bounds.Width, bounds.Height);
+    }
 
     private void DrawDecoration(SurfaceTextureState surface)
     {
         if (!surface.Decoration.Visible || surface.Decoration.Minimized)
             return;
 
-        WaylandSurfaceBounds windowBounds = WaylandDecorationLayout.GetWindowBounds(surface.Bounds, surface.Decoration, _theme);
-        WaylandSurfaceChromeTheme chrome = surface.Decoration.Active
+        var windowBounds = WaylandDecorationLayout.GetWindowBounds(surface.Bounds, surface.Decoration, _theme);
+        var chrome = surface.Decoration.Active
             ? _theme.WindowDecoration.Active
             : _theme.WindowDecoration.Inactive;
 
-        _renderer!.FillRect(ToDisplayRect(windowBounds), ToDisplayColor(surface.Decoration.Active ? chrome.BorderActive : chrome.Border));
-        _renderer.FillRect(ToDisplayRect(WaylandDecorationLayout.GetTitlebarBounds(windowBounds, _theme)), ToDisplayColor(chrome.Background));
+        _renderer!.FillRect(ToDisplayRect(windowBounds),
+            ToDisplayColor(surface.Decoration.Active ? chrome.BorderActive : chrome.Border));
+        _renderer.FillRect(ToDisplayRect(WaylandDecorationLayout.GetTitlebarBounds(windowBounds, _theme)),
+            ToDisplayColor(chrome.Background));
 
-        DisplayRect minimizeRect = ToDisplayRect(WaylandDecorationLayout.GetMinimizeButtonBounds(windowBounds, _theme));
-        DisplayRect maximizeRect = ToDisplayRect(WaylandDecorationLayout.GetMaximizeButtonBounds(windowBounds, _theme));
-        DisplayRect closeRect = ToDisplayRect(WaylandDecorationLayout.GetCloseButtonBounds(windowBounds, _theme));
+        var minimizeRect = ToDisplayRect(WaylandDecorationLayout.GetMinimizeButtonBounds(windowBounds, _theme));
+        var maximizeRect = ToDisplayRect(WaylandDecorationLayout.GetMaximizeButtonBounds(windowBounds, _theme));
+        var closeRect = ToDisplayRect(WaylandDecorationLayout.GetCloseButtonBounds(windowBounds, _theme));
         _renderer.FillRect(minimizeRect, ToDisplayColor(_theme.WindowDecoration.Buttons.BackgroundMinimize));
         _renderer.FillRect(maximizeRect, ToDisplayColor(_theme.WindowDecoration.Buttons.BackgroundMaximize));
         _renderer.FillRect(closeRect, ToDisplayColor(_theme.WindowDecoration.Buttons.BackgroundClose));
@@ -291,13 +297,14 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         EnsureStarted();
         try
         {
-            DisplayCursorDescriptor descriptor = ReadCursor(cursor);
+            var descriptor = ReadCursor(cursor);
             _output!.SetCursor(descriptor);
         }
         catch (Exception ex)
         {
             _loggerFactory.CreateLogger<WaylandSdlDisplayHost>()
-                .LogWarning(ex, "Failed to bridge Wayland cursor sceneSurfaceId={SceneSurfaceId}; ignoring cursor update",
+                .LogWarning(ex,
+                    "Failed to bridge Wayland cursor sceneSurfaceId={SceneSurfaceId}; ignoring cursor update",
                     cursor.SceneSurfaceId);
         }
     }
@@ -355,7 +362,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
     private SurfaceTextureState EnsureSurfaceState(ulong sceneSurfaceId)
     {
-        if (_surfaces.TryGetValue(sceneSurfaceId, out SurfaceTextureState? existing))
+        if (_surfaces.TryGetValue(sceneSurfaceId, out var existing))
             return existing;
 
         var state = new SurfaceTextureState(null, 1, 1, DisplayPixelFormat.Argb8888);
@@ -368,18 +375,19 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         if (_renderer == null || _closeButtonIcon != null)
             return;
 
-        int size = _theme.Spacing.ButtonSize;
+        var size = _theme.Spacing.ButtonSize;
         _closeButtonIcon = CreateButtonIconTexture(size, DrawCloseIcon);
         _maximizeButtonIcon = CreateButtonIconTexture(size, DrawMaximizeIcon);
         _minimizeButtonIcon = CreateButtonIconTexture(size, DrawMinimizeIcon);
     }
 
-    private void DrawTitle(SurfaceTextureState surface, WaylandSurfaceBounds windowBounds, WaylandSurfaceChromeTheme chrome)
+    private void DrawTitle(SurfaceTextureState surface, WaylandSurfaceBounds windowBounds,
+        WaylandSurfaceChromeTheme chrome)
     {
         if (string.IsNullOrWhiteSpace(surface.Decoration.Title))
             return;
 
-        WaylandSurfaceBounds titleBounds = WaylandDecorationLayout.GetTitleTextBounds(windowBounds, _theme);
+        var titleBounds = WaylandDecorationLayout.GetTitleTextBounds(windowBounds, _theme);
         if (titleBounds.Width <= 0 || titleBounds.Height <= 0)
             return;
 
@@ -390,7 +398,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
     private void EnsureTitleTexture(SurfaceTextureState surface, WaylandSurfaceBounds titleBounds, WaylandColor color)
     {
-        string title = surface.Decoration.Title.Trim();
+        var title = surface.Decoration.Title.Trim();
         if (surface.TitleTexture != null &&
             surface.CachedTitle == title &&
             surface.CachedTitleBounds == titleBounds &&
@@ -405,14 +413,13 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         if (string.IsNullOrEmpty(title))
             return;
 
-        int width = Math.Max(1, titleBounds.Width);
-        int height = Math.Max(1, titleBounds.Height);
-        byte[] pixels = RasterizeTitle(title, width, height, color);
-        IDisplayTexture texture = _renderer!.CreateTexture(new DisplayTextureDescriptor(
+        var width = Math.Max(1, titleBounds.Width);
+        var height = Math.Max(1, titleBounds.Height);
+        var pixels = RasterizeTitle(title, width, height, color);
+        var texture = _renderer!.CreateTexture(new DisplayTextureDescriptor(
             width,
             height,
-            DisplayPixelFormat.Argb8888,
-            DisplayTextureAccess.Streaming));
+            DisplayPixelFormat.Argb8888));
         texture.Update(pixels, width * 4);
         surface.TitleTexture = texture;
     }
@@ -428,7 +435,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
     private byte[] RasterizeTitle(string title, int width, int height, WaylandColor color)
     {
-        byte[] pixels = GC.AllocateUninitializedArray<byte>(width * height * 4);
+        var pixels = GC.AllocateUninitializedArray<byte>(width * height * 4);
         var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
         using var bitmap = new SKBitmap(info);
         using var canvas = new SKCanvas(bitmap);
@@ -443,9 +450,9 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
             Typeface = GetTitleTypeface(title)
         };
 
-        string fittedTitle = EllipsizeTitle(title, paint, width);
-        paint.GetFontMetrics(out SKFontMetrics metrics);
-        float baseline = ((height - (metrics.Descent - metrics.Ascent)) * 0.5f) - metrics.Ascent;
+        var fittedTitle = EllipsizeTitle(title, paint, width);
+        paint.GetFontMetrics(out var metrics);
+        var baseline = (height - (metrics.Descent - metrics.Ascent)) * 0.5f - metrics.Ascent;
         canvas.DrawText(fittedTitle, 0, baseline, paint);
         canvas.Flush();
         Marshal.Copy(bitmap.GetPixels(), pixels, 0, pixels.Length);
@@ -457,8 +464,8 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         if (_titleTypeface != null)
             return _titleTypeface;
 
-        SKFontManager fontManager = SKFontManager.Default;
-        char candidate = title.FirstOrDefault(c => !char.IsWhiteSpace(c) && c > 127);
+        var fontManager = SKFontManager.Default;
+        var candidate = title.FirstOrDefault(c => !char.IsWhiteSpace(c) && c > 127);
         _titleTypeface = candidate != default
             ? fontManager.MatchCharacter(candidate)
             : fontManager.MatchCharacter('中');
@@ -475,9 +482,9 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         if (paint.MeasureText(ellipsis) > maxWidth)
             return string.Empty;
 
-        for (int length = title.Length - 1; length >= 0; length--)
+        for (var length = title.Length - 1; length >= 0; length--)
         {
-            string candidate = string.Concat(title.AsSpan(0, length), ellipsis);
+            var candidate = string.Concat(title.AsSpan(0, length), ellipsis);
             if (paint.MeasureText(candidate) <= maxWidth)
                 return candidate;
         }
@@ -487,8 +494,8 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
     private IDisplayTexture CreateButtonIconTexture(int size, Action<Span<byte>, int, int, WaylandColor, int> draw)
     {
-        IDisplayTexture texture = _renderer!.CreateTexture(new DisplayTextureDescriptor(size, size, DisplayPixelFormat.Argb8888, DisplayTextureAccess.Streaming));
-        byte[] pixels = new byte[size * size * 4];
+        var texture = _renderer!.CreateTexture(new DisplayTextureDescriptor(size, size, DisplayPixelFormat.Argb8888));
+        var pixels = new byte[size * size * 4];
         draw(pixels, size, size * 4, _theme.WindowDecoration.Buttons.Foreground, _theme.Spacing.IconStrokeWidth);
         texture.Update(pixels, size * 4);
         return texture;
@@ -496,7 +503,7 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
     private static void DrawCloseIcon(Span<byte> pixels, int size, int pitch, WaylandColor color, int stroke)
     {
-        for (int i = 3; i < size - 3; i++)
+        for (var i = 3; i < size - 3; i++)
         {
             DrawDot(pixels, pitch, i, i, stroke, color);
             DrawDot(pixels, pitch, size - 1 - i, i, stroke, color);
@@ -505,13 +512,13 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
     private static void DrawMaximizeIcon(Span<byte> pixels, int size, int pitch, WaylandColor color, int stroke)
     {
-        for (int x = 4; x < size - 4; x++)
+        for (var x = 4; x < size - 4; x++)
         {
             DrawDot(pixels, pitch, x, 4, stroke, color);
             DrawDot(pixels, pitch, x, size - 5, stroke, color);
         }
 
-        for (int y = 4; y < size - 4; y++)
+        for (var y = 4; y < size - 4; y++)
         {
             DrawDot(pixels, pitch, 4, y, stroke, color);
             DrawDot(pixels, pitch, size - 5, y, stroke, color);
@@ -520,13 +527,13 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
     private static void DrawMinimizeIcon(Span<byte> pixels, int size, int pitch, WaylandColor color, int stroke)
     {
-        for (int x = 4; x < size - 4; x++)
+        for (var x = 4; x < size - 4; x++)
             DrawDot(pixels, pitch, x, size - 6, stroke, color);
     }
 
     private static void PutPixel(Span<byte> pixels, int pitch, int x, int y, byte r, byte g, byte b, byte a)
     {
-        int offset = y * pitch + x * 4;
+        var offset = y * pitch + x * 4;
         pixels[offset] = b;
         pixels[offset + 1] = g;
         pixels[offset + 2] = r;
@@ -535,12 +542,12 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
     private static void DrawDot(Span<byte> pixels, int pitch, int centerX, int centerY, int stroke, WaylandColor color)
     {
-        int radius = Math.Max(0, stroke - 1);
-        for (int dy = -radius; dy <= radius; dy++)
-        for (int dx = -radius; dx <= radius; dx++)
+        var radius = Math.Max(0, stroke - 1);
+        for (var dy = -radius; dy <= radius; dy++)
+        for (var dx = -radius; dx <= radius; dx++)
         {
-            int x = centerX + dx;
-            int y = centerY + dy;
+            var x = centerX + dx;
+            var y = centerY + dy;
             if (x < 0 || y < 0)
                 continue;
             if (y * pitch + x * 4 + 3 >= pixels.Length)
@@ -549,19 +556,22 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         }
     }
 
-    private static DisplayColor ToDisplayColor(WaylandColor color) => new(color.R, color.G, color.B, color.A);
+    private static DisplayColor ToDisplayColor(WaylandColor color)
+    {
+        return new DisplayColor(color.R, color.G, color.B, color.A);
+    }
 
     private void UpdateTexture(ulong sceneSurfaceId, IDisplayTexture texture, WaylandShmFrame frame)
     {
         const int maxChunkRows = 64;
-        int maxChunkBytes = frame.Stride * Math.Min(frame.Height, maxChunkRows);
-        byte[] scratch = ArrayPool<byte>.Shared.Rent(maxChunkBytes);
+        var maxChunkBytes = frame.Stride * Math.Min(frame.Height, maxChunkRows);
+        var scratch = ArrayPool<byte>.Shared.Rent(maxChunkBytes);
         try
         {
-            for (int y = 0; y < frame.Height; y += maxChunkRows)
+            for (var y = 0; y < frame.Height; y += maxChunkRows)
             {
-                int rows = Math.Min(maxChunkRows, frame.Height - y);
-                int chunkBytes = frame.Stride * rows;
+                var rows = Math.Min(maxChunkRows, frame.Height - y);
+                var chunkBytes = frame.Stride * rows;
                 ReadExactly(frame, y, scratch, chunkBytes);
                 texture.Update(new DisplayRect(0, y, frame.Width, rows), scratch.AsSpan(0, chunkBytes), frame.Stride);
             }
@@ -577,30 +587,29 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
         if (frame.File.OpenedInode == null)
             throw new InvalidOperationException("Wayland shm file has no inode.");
 
-        long offset = frame.Offset + (long)rowOffset * frame.Stride;
-        int written = 0;
-        bool ok = frame.File.OpenedInode.VisitReadableSegments(frame.File, offset, length, chunk =>
+        var offset = frame.Offset + (long)rowOffset * frame.Stride;
+        var written = 0;
+        var segments = frame.File.OpenedInode.GetReadableSegments(frame.File, offset, length);
+        foreach (var chunk in segments)
         {
             chunk.CopyTo(destination.AsSpan(written, chunk.Length));
             written += chunk.Length;
-            return true;
-        });
-        if (!ok || written != length)
+        }
+
+        if (!segments.Succeeded || written != length)
             throw new InvalidOperationException("Failed to read complete shm frame contents.");
     }
 
     private static DisplayCursorDescriptor ReadCursor(WaylandCursorFrame cursor)
     {
-        WaylandShmFrame frame = cursor.Frame;
-        int byteLength = checked(frame.Stride * frame.Height);
-        byte[] pixels = GC.AllocateUninitializedArray<byte>(byteLength);
+        var frame = cursor.Frame;
+        var byteLength = checked(frame.Stride * frame.Height);
+        var pixels = GC.AllocateUninitializedArray<byte>(byteLength);
         ReadExactly(frame, 0, pixels, byteLength);
 
         if (frame.Format == WlShmFormat.Xrgb8888)
-        {
-            for (int i = 0; i < byteLength; i += 4)
+            for (var i = 0; i < byteLength; i += 4)
                 pixels[i + 3] = 0xFF;
-        }
 
         return new DisplayCursorDescriptor(
             frame.Width,
