@@ -1,4 +1,5 @@
 using System.Text;
+using Fiberish.Core.Utils;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Loader;
 using Fiberish.Memory;
@@ -59,6 +60,10 @@ public class Process
 {
     public const int CapabilitySysAdmin = 21;
     private static readonly byte[] EmptyCmdline = [];
+
+    // Event signaled when process state changes (exit, stop, continue)
+    // Used by parent's wait4() to avoid busy-polling
+    private AsyncWaitQueue? _stateChangeEvent;
 
     public Process(int tgid, VMAManager mem, SyscallManager syscalls, UTSNamespace? uts = null)
     {
@@ -137,19 +142,79 @@ public class Process
         set => Comm = value;
     }
 
-    // Event signaled when process state changes (exit, stop, continue)
-    // Used by parent's wait4() to avoid busy-polling
-    private AsyncWaitQueue? _stateChangeEvent;
     public AsyncWaitQueue StateChangeEvent => _stateChangeEvent
                                               ?? throw new InvalidOperationException(
                                                   $"Process {TGID} state-change queue is not bound to a scheduler.");
+
+    public Dictionary<int, SigAction> SignalActions { get; } = [];
+    public ulong PendingProcessSignals { get; set; }
+    public Locked<List<SigInfo>> PendingProcessSignalQueue { get; } = new(new List<SigInfo>());
 
     internal void BindScheduler(KernelScheduler scheduler)
     {
         _stateChangeEvent ??= new AsyncWaitQueue(scheduler);
     }
 
-    public Dictionary<int, SigAction> SignalActions { get; } = [];
+    public bool EnqueueProcessSignal(SigInfo info)
+    {
+        var sig = info.Signo;
+        if (sig < 1 || sig > 64) return false;
+
+        var mask = 1UL << (sig - 1);
+        PendingProcessSignals |= mask;
+
+        PendingProcessSignalQueue.Lock(q =>
+        {
+            if (sig < 32)
+                foreach (var queued in q)
+                    if (queued.Signo == sig)
+                        return;
+
+            q.Add(info);
+        });
+
+        return true;
+    }
+
+    public SigInfo? DequeueProcessSignalUnsafe(int sig)
+    {
+        return PendingProcessSignalQueue.Lock(list =>
+        {
+            for (var i = 0; i < list.Count; i++)
+                if (list[i].Signo == sig)
+                {
+                    var info = list[i];
+                    list.RemoveAt(i);
+
+                    if (sig >= 32)
+                    {
+                        var stillPending = false;
+                        foreach (var queued in list)
+                            if (queued.Signo == sig)
+                            {
+                                stillPending = true;
+                                break;
+                            }
+
+                        if (!stillPending) PendingProcessSignals &= ~(1UL << (sig - 1));
+                    }
+                    else
+                    {
+                        PendingProcessSignals &= ~(1UL << (sig - 1));
+                    }
+
+                    return (SigInfo?)info;
+                }
+
+            return null;
+        });
+    }
+
+    public void ClearPendingProcessSignals()
+    {
+        PendingProcessSignals = 0;
+        PendingProcessSignalQueue.Lock(q => q.Clear());
+    }
 
     public void SetCapability(int capability, bool effective, bool permitted, bool inheritable)
     {

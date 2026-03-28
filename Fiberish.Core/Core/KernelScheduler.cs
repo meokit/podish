@@ -2,8 +2,8 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
-using Fiberish.Diagnostics;
 using Fiberish.Core.VFS.TTY;
+using Fiberish.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Microsoft.Extensions.Logging;
@@ -13,8 +13,9 @@ namespace Fiberish.Core;
 
 public class KernelScheduler
 {
-    private static readonly ILogger Logger = Logging.CreateLogger<KernelScheduler>();
     private const int RunQueueDrainEventBudget = 64;
+    private static readonly ILogger Logger = Logging.CreateLogger<KernelScheduler>();
+    private readonly Stack<AsyncWaitQueue> _asyncWaitQueuePool = new();
 
     // Global instance (or dependency injected)
     // public static KernelScheduler Instance { get; set; } = new();
@@ -29,7 +30,6 @@ public class KernelScheduler
 
     // Process Management
     private readonly Dictionary<int, Process> _processes = [];
-    private readonly Stack<AsyncWaitQueue> _asyncWaitQueuePool = new();
 
     private readonly Queue<FiberTask> _runQueue = new();
     private readonly Stopwatch _sw = Stopwatch.StartNew();
@@ -279,7 +279,7 @@ public class KernelScheduler
         var initTask = GetTask(toPid);
         if (initTask != null)
         {
-            initTask.PostSignal((int)Signal.SIGCHLD);
+            SignalProcess(initTask.Process.TGID, (int)Signal.SIGCHLD);
             initTask.TrySetActiveWaitReason(WakeReason.Event);
             Schedule(initTask);
         }
@@ -360,7 +360,7 @@ public class KernelScheduler
         AssertSchedulerThread();
         if (exitingPid <= 0 || exitingPid != InitPid) return 0;
 
-        return SignalAllProcesses((int)Signal.SIGKILL, excludePid: exitingPid, skipInit: false);
+        return SignalAllProcesses((int)Signal.SIGKILL, exitingPid, false);
     }
 
     public int ClearControllingTerminalForSession(TtyDiscipline tty, int sessionId)
@@ -697,7 +697,9 @@ public class KernelScheduler
                     // _timerSystem.Advance(1); // Removed: Time is driven by _sw.ElapsedMilliseconds
                 }
                 else if (TryFindReadyTask(out var readyTaskAfterDequeueMiss))
+                {
                     EnqueueTask(readyTaskAfterDequeueMiss!);
+                }
             }
         }
         catch (Exception ex)
@@ -907,12 +909,11 @@ public class KernelScheduler
             return false;
 
         if (task != null)
-        {
             // Dequeue consumes the single queued wake token for this task. The task may still be
             // Waiting here because the queue item can be stale; callers decide whether to run it
             // based on the current Status.
             task.IsReadyQueued = false;
-        }
+
         return true;
     }
 
@@ -943,12 +944,8 @@ public class KernelScheduler
         var count = 0;
         foreach (var p in _processes.Values)
             if (p.PGID == pgid)
-            {
-                var target = SelectSignalTarget(p, signal);
-                if (target == null) continue;
-                target.PostSignal(signal);
-                count++;
-            }
+                if (PostProcessSignalInfo(p, new SigInfo { Signo = signal, Code = 0 }))
+                    count++;
 
         return count;
     }
@@ -958,12 +955,11 @@ public class KernelScheduler
         AssertSchedulerThread();
         if (!_processes.TryGetValue(pid, out var proc)) return false;
 
-        var target = SelectSignalTarget(proc, signal);
-        if (target != null)
-        {
-            target.PostSignal(signal);
+        if (EngineInitReaperEnabled && pid == InitPid && SelectSignalWakeTarget(proc, signal) == null)
+            return ForwardSignalFromEngineInit(signal) > 0;
+
+        if (PostProcessSignalInfo(proc, new SigInfo { Signo = signal, Code = 0 }))
             return true;
-        }
 
         // Engine-managed init has no FiberTask. In --init mode, forward init's signals
         // to its direct children so kill(1, sig) semantics remain usable.
@@ -977,19 +973,49 @@ public class KernelScheduler
         AssertSchedulerThread();
         if (!_processes.TryGetValue(pid, out var proc)) return false;
 
-        var target = SelectSignalTarget(proc, signal);
-        if (target != null)
-        {
-            target.PostSignalInfo(info);
+        if (EngineInitReaperEnabled && pid == InitPid && SelectSignalWakeTarget(proc, signal) == null)
+            return ForwardSignalFromEngineInit(signal) > 0;
+
+        if (PostProcessSignalInfo(proc, info))
             return true;
-        }
 
         if (EngineInitReaperEnabled && pid == InitPid) return ForwardSignalFromEngineInit(signal) > 0;
 
         return false;
     }
 
-    private static FiberTask? SelectSignalTarget(Process process, int signal)
+    internal bool PostProcessSignalInfo(Process process, SigInfo info)
+    {
+        var signal = info.Signo;
+        if (signal < 1 || signal > 64) return false;
+
+        if (signal != (int)Signal.SIGKILL && signal != (int)Signal.SIGSTOP)
+        {
+            if (process.SignalActions.TryGetValue(signal, out var action))
+            {
+                if (action.Handler == 1) return true;
+            }
+            else
+            {
+                var defaultAction = signal switch
+                {
+                    (int)Signal.SIGCHLD or (int)Signal.SIGURG or (int)Signal.SIGWINCH => true,
+                    _ => false
+                };
+                if (defaultAction) return true;
+            }
+        }
+
+        if (!process.EnqueueProcessSignal(info)) return false;
+
+        var target = SelectSignalWakeTarget(process, signal);
+        if (target == null) return true;
+
+        target.NotifyPendingSignal(signal);
+        return true;
+    }
+
+    private static FiberTask? SelectSignalWakeTarget(Process process, int signal)
     {
         FiberTask? leader = null;
         FiberTask? eligible = null;
@@ -1009,7 +1035,7 @@ public class KernelScheduler
             }
         }
 
-        return leader ?? eligible ?? fallback;
+        return eligible ?? leader ?? fallback;
     }
 
     public int SignalAllProcesses(int signal, int? excludePid = null, bool skipInit = true)
