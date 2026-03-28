@@ -82,6 +82,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.wait4, SysWait4);
         Register(X86SyscallNumbers.vfork, SysVfork);
         Register(X86SyscallNumbers.futex, SysFutex);
+        Register(X86SyscallNumbers.sigpending, SysSigPending);
         Register(X86SyscallNumbers.set_thread_area, SysSetThreadArea);
         Register(X86SyscallNumbers.set_robust_list, SysSetRobustList);
         Register(X86SyscallNumbers.get_robust_list, SysGetRobustList);
@@ -175,6 +176,7 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.nanosleep, SysNanosleep);
 
         Register(X86SyscallNumbers.rt_sigreturn, SysRtSigReturn);
+        Register(X86SyscallNumbers.rt_sigpending, SysRtSigPending);
         Register(X86SyscallNumbers.rt_sigsuspend, SysRtSigSuspend);
 
         Register(X86SyscallNumbers.gettid, SysGettid);

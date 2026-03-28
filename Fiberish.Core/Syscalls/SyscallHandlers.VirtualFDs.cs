@@ -119,6 +119,8 @@ public partial class SyscallManager
         if (!engine.CopyFromUser(maskPtr, maskBuf)) return -(int)Errno.EFAULT;
 
         var mask = BinaryPrimitives.ReadUInt64LittleEndian(maskBuf);
+        mask &= ~(1UL << ((int)Signal.SIGKILL - 1));
+        mask &= ~(1UL << ((int)Signal.SIGSTOP - 1));
 
         // If fd == -1, create a new signalfd
         if (fd == unchecked((uint)-1))

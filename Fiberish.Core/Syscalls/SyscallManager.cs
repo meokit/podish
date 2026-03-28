@@ -1193,7 +1193,7 @@ public partial class SyscallManager
             {
                 if (fiberTask.PendingSyscall != null) shouldYield = true;
                 if (fiberTask.Exited) shouldYield = true;
-                if ((fiberTask.PendingSignals & ~fiberTask.SignalMask) != 0) shouldYield = true;
+                if ((fiberTask.GetVisiblePendingSignals() & ~fiberTask.SignalMask) != 0) shouldYield = true;
 
                 // Force Yield if specific syscalls
                 switch ((int)eax)

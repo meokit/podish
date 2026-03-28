@@ -62,6 +62,7 @@ public partial class SyscallManager
             var count = (int)val;
             if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var wakeKey, out var error))
                 return error;
+
             return Futex.Wake(wakeKey, count);
         }
 
