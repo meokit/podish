@@ -46,7 +46,6 @@ public sealed class NetstackSocketInode : Inode, ISocketEndpointOps, ISocketData
 
     public bool IsListener => _listener != null;
     public bool IsStream => _stream != null;
-    public AddressFamily SocketAddressFamily => AddressFamily.InterNetwork;
 
     public IPEndPoint? LocalEndPoint =>
         _stream?.LocalEndPoint ??
@@ -80,7 +79,7 @@ public sealed class NetstackSocketInode : Inode, ISocketEndpointOps, ISocketData
         {
             var ok = await WaitForAsync(task, PollEvents.POLLOUT, () => _stream.CanWrite || IsTerminalWriteClosed());
             if (!ok)
-                return -(int)Errno.ERESTARTSYS;
+                return _sendTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
             if (_shutdownWrite || IsTerminalWriteClosed())
                 return -(int)Errno.EPIPE;
         }
@@ -123,7 +122,7 @@ public sealed class NetstackSocketInode : Inode, ISocketEndpointOps, ISocketData
         {
             var ok = await WaitForAsync(task, PollEvents.POLLIN, () => _stream.CanRead || HasReadEof());
             if (!ok)
-                return -(int)Errno.ERESTARTSYS;
+                return _receiveTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
             if (HasReadEof())
                 return 0;
         }
@@ -155,18 +154,12 @@ public sealed class NetstackSocketInode : Inode, ISocketEndpointOps, ISocketData
     public ValueTask<RecvMessageResult> RecvMsgAsync(LinuxFile file, FiberTask task, byte[] buffer, int flags,
         int maxBytes = -1)
     {
-        if (_socketType == SocketType.Stream)
-        {
-            return RecvStreamAsRecvResult(file, task, buffer, flags, maxBytes);
-        }
+        if (_socketType == SocketType.Stream) return RecvStreamAsRecvResult(file, task, buffer, flags, maxBytes);
+
         return RecvFromAsync(file, task, buffer, flags, maxBytes);
     }
 
-    private async ValueTask<RecvMessageResult> RecvStreamAsRecvResult(LinuxFile file, FiberTask task, byte[] buffer, int flags, int maxBytes)
-    {
-        var n = await RecvAsync(file, task, buffer, flags, maxBytes);
-        return new RecvMessageResult(n, null, null);
-    }
+    public AddressFamily SocketAddressFamily => AddressFamily.InterNetwork;
 
     public int Bind(LinuxFile file, FiberTask task, object endpoint)
     {
@@ -210,7 +203,8 @@ public sealed class NetstackSocketInode : Inode, ISocketEndpointOps, ISocketData
         {
             var ok = await WaitForAsync(task, PollEvents.POLLIN, () => _listener.AcceptPending);
             if (!ok)
-                return new AcceptedSocketResult(-(int)Errno.ERESTARTSYS, null);
+                return new AcceptedSocketResult(_receiveTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS,
+                    null);
         }
 
         var accepted = _listener.Accept();
@@ -315,6 +309,13 @@ public sealed class NetstackSocketInode : Inode, ISocketEndpointOps, ISocketData
         }
     }
 
+    private async ValueTask<RecvMessageResult> RecvStreamAsRecvResult(LinuxFile file, FiberTask task, byte[] buffer,
+        int flags, int maxBytes)
+    {
+        var n = await RecvAsync(file, task, buffer, flags, maxBytes);
+        return new RecvMessageResult(n);
+    }
+
     private int BindImpl(IPEndPoint endpoint)
     {
         if (!IsValidBindAddress(endpoint.Address))
@@ -360,7 +361,11 @@ public sealed class NetstackSocketInode : Inode, ISocketEndpointOps, ISocketData
         if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
             return _stream.State == 4 ? 0 : -(int)Errno.EINPROGRESS;
 
-        return await WaitForAsync(task, PollEvents.POLLOUT, () => _stream.State == 4) ? 0 : -(int)Errno.ERESTARTSYS;
+        return await WaitForAsync(task, PollEvents.POLLOUT, () => _stream.State == 4)
+            ? 0
+            : _sendTimeoutMs > 0
+                ? -(int)Errno.EINTR
+                : -(int)Errno.ERESTARTSYS;
     }
 
     private async ValueTask<int> SendToAsyncImpl(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer,
@@ -384,7 +389,7 @@ public sealed class NetstackSocketInode : Inode, ISocketEndpointOps, ISocketData
         {
             var ok = await WaitForAsync(task, PollEvents.POLLOUT, () => _udp.CanWrite);
             if (!ok)
-                return -(int)Errno.ERESTARTSYS;
+                return _sendTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
         }
 
         _lastDatagramPeer = endpoint;
@@ -408,7 +413,7 @@ public sealed class NetstackSocketInode : Inode, ISocketEndpointOps, ISocketData
         {
             var ok = await WaitForAsync(task, PollEvents.POLLIN, () => _udp.CanRead);
             if (!ok)
-                return (-(int)Errno.ERESTARTSYS, null);
+                return (_receiveTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS, null);
         }
 
         var bytes = _udp.ReceiveFrom(buffer.AsSpan(0, recvLen), out var remoteEndPoint);

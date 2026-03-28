@@ -12,10 +12,159 @@ internal interface ITaskWaitSource
     IDisposable? RegisterWaitHandle(LinuxFile linuxFile, FiberTask task, Action callback, short events);
 }
 
+internal interface ITaskPollSource
+{
+    short Poll(LinuxFile linuxFile, FiberTask task, short events);
+}
+
 internal interface IDispatcherWaitSource
 {
     bool RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback, short events);
     IDisposable? RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback, short events);
+}
+
+internal readonly struct QueueReadinessWatch
+{
+    public QueueReadinessWatch(short eventMask, bool isReady, AsyncWaitQueue? queue, Action? resetStaleSignal = null)
+    {
+        EventMask = eventMask;
+        IsReady = isReady;
+        Queue = queue;
+        ResetStaleSignal = resetStaleSignal;
+    }
+
+    public short EventMask { get; }
+    public bool IsReady { get; }
+    public AsyncWaitQueue? Queue { get; }
+    public Action? ResetStaleSignal { get; }
+
+    public bool ShouldObserve(short requestedEvents)
+    {
+        return Queue != null && (requestedEvents & EventMask) != 0;
+    }
+
+    public void ResetIfStale()
+    {
+        if (!IsReady && Queue != null && Queue.IsSignaled)
+            ResetStaleSignal?.Invoke();
+    }
+}
+
+internal static class QueueReadinessRegistration
+{
+    public static short ComputeRevents(short events, in QueueReadinessWatch first,
+        in QueueReadinessWatch second = default)
+    {
+        short revents = 0;
+        revents |= ComputeWatchRevents(events, first);
+        revents |= ComputeWatchRevents(events, second);
+        return revents;
+    }
+
+    public static bool Register(Action callback, FiberTask task, short events, in QueueReadinessWatch first,
+        in QueueReadinessWatch second = default)
+    {
+        var registered = false;
+        registered |= RegisterWatch(callback, task, events, first);
+        registered |= RegisterWatch(callback, task, events, second);
+        return registered;
+    }
+
+    public static bool Register(Action callback, KernelScheduler scheduler, short events, in QueueReadinessWatch first,
+        in QueueReadinessWatch second = default)
+    {
+        var registered = false;
+        registered |= RegisterWatch(callback, scheduler, events, first);
+        registered |= RegisterWatch(callback, scheduler, events, second);
+        return registered;
+    }
+
+    public static IDisposable? RegisterHandle(Action callback, FiberTask task, short events,
+        in QueueReadinessWatch first, in QueueReadinessWatch second = default)
+    {
+        return RegisterHandleCore(callback, events, task, null, first, second);
+    }
+
+    public static IDisposable? RegisterHandle(Action callback, KernelScheduler scheduler, short events,
+        in QueueReadinessWatch first, in QueueReadinessWatch second = default)
+    {
+        return RegisterHandleCore(callback, events, null, scheduler, first, second);
+    }
+
+    private static short ComputeWatchRevents(short requestedEvents, in QueueReadinessWatch watch)
+    {
+        return watch.ShouldObserve(requestedEvents) && watch.IsReady ? watch.EventMask : (short)0;
+    }
+
+    private static bool RegisterWatch(Action callback, FiberTask task, short requestedEvents,
+        in QueueReadinessWatch watch)
+    {
+        if (!watch.ShouldObserve(requestedEvents))
+            return false;
+
+        watch.ResetIfStale();
+        watch.Queue!.Register(callback, task);
+        return true;
+    }
+
+    private static bool RegisterWatch(Action callback, KernelScheduler scheduler, short requestedEvents,
+        in QueueReadinessWatch watch)
+    {
+        if (!watch.ShouldObserve(requestedEvents))
+            return false;
+
+        watch.ResetIfStale();
+        watch.Queue!.Register(callback, scheduler);
+        return true;
+    }
+
+    private static IDisposable? RegisterHandleCore(Action callback, short requestedEvents, FiberTask? task,
+        KernelScheduler? scheduler, in QueueReadinessWatch first, in QueueReadinessWatch second)
+    {
+        List<IDisposable>? registrations = null;
+        TryRegisterHandle(callback, requestedEvents, task, scheduler, first, ref registrations);
+        TryRegisterHandle(callback, requestedEvents, task, scheduler, second, ref registrations);
+        if (registrations == null || registrations.Count == 0)
+            return null;
+        if (registrations.Count == 1)
+            return registrations[0];
+        return new CompositeWaitRegistration(registrations);
+    }
+
+    private static void TryRegisterHandle(Action callback, short requestedEvents, FiberTask? task,
+        KernelScheduler? scheduler, in QueueReadinessWatch watch, ref List<IDisposable>? registrations)
+    {
+        if (!watch.ShouldObserve(requestedEvents))
+            return;
+
+        watch.ResetIfStale();
+
+        var registration = task != null
+            ? watch.Queue!.RegisterCancelable(callback, task)
+            : watch.Queue!.RegisterCancelable(callback,
+                scheduler ?? throw new InvalidOperationException("Scheduler is required for wait registration."));
+        if (registration == null)
+            return;
+
+        registrations ??= [];
+        registrations.Add(registration);
+    }
+
+    private sealed class CompositeWaitRegistration : IDisposable
+    {
+        private readonly List<IDisposable> _registrations;
+
+        public CompositeWaitRegistration(List<IDisposable> registrations)
+        {
+            _registrations = registrations;
+        }
+
+        public void Dispose()
+        {
+            foreach (var registration in _registrations)
+                registration.Dispose();
+        }
+    }
 }
 
 internal interface IHostMappedCacheDropper
@@ -1286,16 +1435,12 @@ public ref struct ReadableSegmentEnumerator
         }
 
         if (tempFallback != null)
-        {
             Current = tempFallback.AsSpan(pageOffset, chunk);
-        }
         else
-        {
             unsafe
             {
                 Current = new ReadOnlySpan<byte>((byte*)pagePtr + pageOffset, chunk);
             }
-        }
 
         _absolute += chunk;
         _remaining -= chunk;
@@ -1445,11 +1590,6 @@ public class Dentry
         removed.SetHashedState(false);
         VfsDebugTrace.RecordDentryCacheUpdate(this, removed, "cache-remove", reason);
         return true;
-    }
-
-    public void ClearCachedChildren(string reason)
-    {
-        _ = PruneCachedChildren(_ => true, reason);
     }
 
     public int PruneCachedChildren(Predicate<Dentry> shouldRemove, string reason)
@@ -1825,6 +1965,57 @@ public class LinuxFile
         Dentry.Put("LinuxFile.Close");
         // Note: Mount reference is not released here as it's typically
         // managed by the filesystem/superblock lifecycle
+    }
+
+    public string GetBestEffortPath()
+    {
+        var guestPath = TryBuildGuestPath(Dentry, Mount, out var builtGuestPath)
+            ? builtGuestPath
+            : Dentry?.Name ?? "<unknown>";
+
+        if (Dentry?.SuperBlock is HostSuperBlock hostSb && hostSb.TryGetPathForDentry(Dentry, out var hostPath))
+            return $"{guestPath} (host:{hostPath})";
+
+        if (OpenedInode is HostInode hostInode)
+            return $"{guestPath} (host:{hostInode.HostPath})";
+
+        return guestPath;
+    }
+
+    private static bool TryBuildGuestPath(Dentry? dentry, Mount? mount, out string path)
+    {
+        path = string.Empty;
+        if (dentry == null)
+            return false;
+
+        var components = new List<string>();
+        var currentDentry = dentry;
+        var currentMount = mount;
+
+        while (true)
+        {
+            if (currentMount != null && ReferenceEquals(currentDentry, currentMount.Root))
+            {
+                if (currentMount.Parent == null || currentMount.MountPoint == null)
+                    break;
+
+                currentDentry = currentMount.MountPoint;
+                currentMount = currentMount.Parent;
+                continue;
+            }
+
+            if (currentDentry.Parent == null || ReferenceEquals(currentDentry.Parent, currentDentry))
+                break;
+
+            if (!string.IsNullOrEmpty(currentDentry.Name) && currentDentry.Name != "/")
+                components.Add(currentDentry.Name);
+
+            currentDentry = currentDentry.Parent;
+        }
+
+        components.Reverse();
+        path = components.Count == 0 ? "/" : "/" + string.Join("/", components);
+        return true;
     }
 }
 

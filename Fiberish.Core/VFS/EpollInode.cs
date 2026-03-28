@@ -139,9 +139,10 @@ public class EpollInode : TmpfsInode
         return 0;
     }
 
-    public EpollAwaitable WaitAsync(FiberTask task, byte[] eventsBuffer, int maxEvents, int timeout)
+    public EpollAwaitable WaitAsync(FiberTask task, byte[] eventsBuffer, int maxEvents, int timeout,
+        uint syscallNr = 0)
     {
-        return new EpollAwaitable(task, this, eventsBuffer, maxEvents, timeout);
+        return new EpollAwaitable(task, this, eventsBuffer, maxEvents, timeout, syscallNr);
     }
 
     private int HarvestEvents(byte[] buffer, int maxEvents)
@@ -214,9 +215,10 @@ public class EpollInode : TmpfsInode
     {
         private readonly EpollAwaitState _state;
 
-        public EpollAwaitable(FiberTask task, EpollInode inode, byte[] buffer, int maxEvents, int timeoutMs)
+        public EpollAwaitable(FiberTask task, EpollInode inode, byte[] buffer, int maxEvents, int timeoutMs,
+            uint syscallNr)
         {
-            _state = new EpollAwaitState(task, inode, buffer, maxEvents, timeoutMs);
+            _state = new EpollAwaitState(task, inode, buffer, maxEvents, timeoutMs, syscallNr);
         }
 
         public EpollAwaiter GetAwaiter()
@@ -265,7 +267,8 @@ public class EpollInode : TmpfsInode
         private Timer? _timer;
         private FiberTask.WaitToken? _token;
 
-        public EpollAwaitState(FiberTask task, EpollInode inode, byte[] buffer, int maxEvents, int timeoutMs)
+        public EpollAwaitState(FiberTask task, EpollInode inode, byte[] buffer, int maxEvents, int timeoutMs,
+            uint syscallNr)
         {
             _task = task;
             _scheduler = task.CommonKernel;

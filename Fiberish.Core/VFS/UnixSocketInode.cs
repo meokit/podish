@@ -44,8 +44,8 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
 
     // For AF_UNIX
     private readonly Queue<UnixMessage> _receiveQueue = new();
-    private readonly AsyncWaitQueue _writeWaitQueue;
     private readonly KernelScheduler _scheduler;
+    private readonly AsyncWaitQueue _writeWaitQueue;
     private bool _lifecycleClosed;
     private int _listenBacklog = 1;
     private bool _listening;
@@ -54,14 +54,14 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
     // Buffer for stream mode partial reads
     private byte[]? _partialBuffer;
     private int _partialOffset;
+    private bool _passCred;
     private UnixSocketInode? _peer;
+    private UnixCredentials? _peerCredentials;
     private byte[]? _peerSunPathRaw;
     private bool _peerWriteClosed;
-    private bool _passCred;
-    private UnixCredentials? _peerCredentials;
-    private UnixCredentials? _sendCredentialsOverride;
     private int _queuedBytes;
     private Action<UnixSocketInode>? _releaseUnbindCallback;
+    private UnixCredentials? _sendCredentialsOverride;
     private bool _shutDownRead;
     private bool _shutDownWrite;
 
@@ -113,91 +113,19 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         }
     }
 
-    internal UnixSocketDebugState GetDebugState()
-    {
-        using (EnterStateScope())
-        {
-            return new UnixSocketDebugState(
-                _queuedBytes,
-                _receiveQueue.Count,
-                _partialBuffer == null ? 0 : _partialBuffer.Length - _partialOffset,
-                _peerWriteClosed,
-                _shutDownRead,
-                _shutDownWrite,
-                _peer != null,
-                _listening,
-                _readWaitQueue.IsSignaled,
-                _writeWaitQueue.IsSignaled);
-        }
-    }
-
-    internal UnixSocketDebugDequeueResult? DebugTryDequeue(int maxBytes)
-    {
-        using (EnterStateScope())
-        {
-            if (_partialBuffer != null)
-            {
-                var toCopy = Math.Min(maxBytes, _partialBuffer.Length - _partialOffset);
-                byte[] data = new byte[toCopy];
-                Array.Copy(_partialBuffer, _partialOffset, data, 0, toCopy);
-                _partialOffset += toCopy;
-                if (_partialOffset >= _partialBuffer.Length)
-                {
-                    _partialBuffer = null;
-                    _partialOffset = 0;
-                }
-
-                if (_receiveQueue.Count == 0 && _partialBuffer == null)
-                    _readWaitQueue.Reset();
-                _queuedBytes -= toCopy;
-                UpdateWriteWaitQueueState();
-                _writeWaitQueue.Set();
-                return new UnixSocketDebugDequeueResult(toCopy, data, 0, GetDebugState());
-            }
-
-            if (!_receiveQueue.TryDequeue(out var msg))
-                return null;
-
-            var bytes = Math.Min(maxBytes, msg.Data.Length);
-            byte[] copied = new byte[bytes];
-            Array.Copy(msg.Data, 0, copied, 0, bytes);
-
-            if (UnixSocketType == SocketType.Stream && bytes < msg.Data.Length)
-            {
-                _partialBuffer = msg.Data;
-                _partialOffset = bytes;
-            }
-
-            _queuedBytes -= bytes;
-            if (UnixSocketType != SocketType.Stream || bytes >= msg.Data.Length)
-                _queuedBytes -= msg.Data.Length - bytes;
-            UpdateWriteWaitQueueState();
-            if (_receiveQueue.Count == 0 && _partialBuffer == null)
-                _readWaitQueue.Reset();
-            return new UnixSocketDebugDequeueResult(bytes, copied, msg.Fds.Count, GetDebugState());
-        }
-    }
-
     bool IDispatcherWaitSource.RegisterWait(LinuxFile file, IReadyDispatcher dispatcher, Action callback,
         short events)
     {
         var scheduler = dispatcher.Scheduler
                         ?? throw new InvalidOperationException(
                             "Unix socket readiness wait requires an explicit scheduler.");
-        var registered = false;
-        if ((events & PollEvents.POLLIN) != 0)
+        using (EnterStateScope())
         {
-            _readWaitQueue.Register(callback, scheduler);
-            registered = true;
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady(), _readWaitQueue,
+                _readWaitQueue.Reset);
+            var writeWatch = BuildWriteWatch(events);
+            return QueueReadinessRegistration.Register(callback, scheduler, events, readWatch, writeWatch);
         }
-
-        if ((events & PollEvents.POLLOUT) != 0)
-        {
-            _writeWaitQueue.Register(callback, scheduler);
-            registered = true;
-        }
-
-        return registered;
     }
 
     IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile file, IReadyDispatcher dispatcher,
@@ -206,25 +134,13 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         var scheduler = dispatcher.Scheduler
                         ?? throw new InvalidOperationException(
                             "Unix socket readiness wait requires an explicit scheduler.");
-        var registrations = new List<IDisposable>(2);
-        if ((events & PollEvents.POLLIN) != 0)
+        using (EnterStateScope())
         {
-            var reg = _readWaitQueue.RegisterCancelable(callback, scheduler);
-            if (reg != null) registrations.Add(reg);
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady(), _readWaitQueue,
+                _readWaitQueue.Reset);
+            var writeWatch = BuildWriteWatch(events);
+            return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch, writeWatch);
         }
-
-        if ((events & PollEvents.POLLOUT) != 0)
-        {
-            var reg = _writeWaitQueue.RegisterCancelable(callback, scheduler);
-            if (reg != null) registrations.Add(reg);
-        }
-
-        return registrations.Count switch
-        {
-            0 => null,
-            1 => registrations[0],
-            _ => new CompositeDisposable(registrations)
-        };
     }
 
     public async ValueTask<int> SendAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags)
@@ -540,43 +456,89 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
 
     public bool RegisterWait(LinuxFile file, FiberTask task, Action callback, short events)
     {
-        var registered = false;
-        if ((events & PollEvents.POLLIN) != 0)
+        using (EnterStateScope())
         {
-            _readWaitQueue.Register(callback, task);
-            registered = true;
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady(), _readWaitQueue,
+                _readWaitQueue.Reset);
+            var writeWatch = BuildWriteWatch(events);
+            return QueueReadinessRegistration.Register(callback, task, events, readWatch, writeWatch);
         }
-
-        if ((events & PollEvents.POLLOUT) != 0)
-        {
-            _writeWaitQueue.Register(callback, task);
-            registered = true;
-        }
-
-        return registered;
     }
 
     public IDisposable? RegisterWaitHandle(LinuxFile file, FiberTask task, Action callback, short events)
     {
-        var registrations = new List<IDisposable>(2);
-        if ((events & PollEvents.POLLIN) != 0)
+        using (EnterStateScope())
         {
-            var reg = _readWaitQueue.RegisterCancelable(callback, task);
-            if (reg != null) registrations.Add(reg);
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady(), _readWaitQueue,
+                _readWaitQueue.Reset);
+            var writeWatch = BuildWriteWatch(events);
+            return QueueReadinessRegistration.RegisterHandle(callback, task, events, readWatch, writeWatch);
         }
+    }
 
-        if ((events & PollEvents.POLLOUT) != 0)
+    internal UnixSocketDebugState GetDebugState()
+    {
+        using (EnterStateScope())
         {
-            var reg = _writeWaitQueue.RegisterCancelable(callback, task);
-            if (reg != null) registrations.Add(reg);
+            return new UnixSocketDebugState(
+                _queuedBytes,
+                _receiveQueue.Count,
+                _partialBuffer == null ? 0 : _partialBuffer.Length - _partialOffset,
+                _peerWriteClosed,
+                _shutDownRead,
+                _shutDownWrite,
+                _peer != null,
+                _listening,
+                _readWaitQueue.IsSignaled,
+                _writeWaitQueue.IsSignaled);
         }
+    }
 
-        return registrations.Count switch
+    internal UnixSocketDebugDequeueResult? DebugTryDequeue(int maxBytes)
+    {
+        using (EnterStateScope())
         {
-            0 => null,
-            1 => registrations[0],
-            _ => new CompositeDisposable(registrations)
-        };
+            if (_partialBuffer != null)
+            {
+                var toCopy = Math.Min(maxBytes, _partialBuffer.Length - _partialOffset);
+                var data = new byte[toCopy];
+                Array.Copy(_partialBuffer, _partialOffset, data, 0, toCopy);
+                _partialOffset += toCopy;
+                if (_partialOffset >= _partialBuffer.Length)
+                {
+                    _partialBuffer = null;
+                    _partialOffset = 0;
+                }
+
+                if (_receiveQueue.Count == 0 && _partialBuffer == null)
+                    _readWaitQueue.Reset();
+                _queuedBytes -= toCopy;
+                UpdateWriteWaitQueueState();
+                _writeWaitQueue.Set();
+                return new UnixSocketDebugDequeueResult(toCopy, data, 0, GetDebugState());
+            }
+
+            if (!_receiveQueue.TryDequeue(out var msg))
+                return null;
+
+            var bytes = Math.Min(maxBytes, msg.Data.Length);
+            var copied = new byte[bytes];
+            Array.Copy(msg.Data, 0, copied, 0, bytes);
+
+            if (UnixSocketType == SocketType.Stream && bytes < msg.Data.Length)
+            {
+                _partialBuffer = msg.Data;
+                _partialOffset = bytes;
+            }
+
+            _queuedBytes -= bytes;
+            if (UnixSocketType != SocketType.Stream || bytes >= msg.Data.Length)
+                _queuedBytes -= msg.Data.Length - bytes;
+            UpdateWriteWaitQueueState();
+            if (_receiveQueue.Count == 0 && _partialBuffer == null)
+                _readWaitQueue.Reset();
+            return new UnixSocketDebugDequeueResult(bytes, copied, msg.Fds.Count, GetDebugState());
+        }
     }
 
     private StateScope EnterStateScope([CallerMemberName] string? caller = null)
@@ -801,39 +763,36 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         short revents = 0;
         using (EnterStateScope())
         {
-            if ((events & PollEvents.POLLIN) != 0)
-            {
-                if (_listening)
-                {
-                    if (_pendingConnections.Count > 0)
-                        revents |= PollEvents.POLLIN;
-                }
-                else if (_receiveQueue.Count > 0 || _partialBuffer != null || _shutDownRead || _peerWriteClosed)
-                {
-                    revents |= PollEvents.POLLIN;
-                }
-            }
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady(), _readWaitQueue,
+                _readWaitQueue.Reset);
+            var writeWatch = BuildWriteWatch(events);
+            revents |= QueueReadinessRegistration.ComputeRevents(events, readWatch, writeWatch);
 
-            if ((events & PollEvents.POLLOUT) != 0)
-            {
-                if (_listening)
-                {
-                    // listening sockets are not writable
-                }
-                else if (_shutDownWrite || _peer == null || _peer._shutDownRead)
-                {
-                    revents |= PollEvents.POLLERR;
-                }
-                else if (_peer._queuedBytes < MaxSendBuffer)
-                {
-                    revents |= PollEvents.POLLOUT;
-                }
-            }
+            if ((events & PollEvents.POLLOUT) != 0 && !_listening &&
+                (_shutDownWrite || _peer == null || _peer._shutDownRead))
+                revents |= PollEvents.POLLERR;
 
             if (_shutDownRead && _shutDownWrite) revents |= PollEvents.POLLHUP;
         }
 
         return revents;
+    }
+
+    private bool IsReadReady()
+    {
+        if (_listening)
+            return _pendingConnections.Count > 0;
+
+        return _receiveQueue.Count > 0 || _partialBuffer != null || _shutDownRead || _peerWriteClosed;
+    }
+
+    private QueueReadinessWatch BuildWriteWatch(short events)
+    {
+        if ((events & PollEvents.POLLOUT) == 0 || _listening || _shutDownWrite || _peer == null || _peer._shutDownRead)
+            return default;
+
+        return new QueueReadinessWatch(PollEvents.POLLOUT, _peer._queuedBytes < MaxSendBuffer, _writeWaitQueue,
+            _writeWaitQueue.Reset);
     }
 
     public override bool RegisterWait(LinuxFile file, Action callback, short events)
@@ -879,9 +838,11 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         _writeWaitQueue.Signal();
     }
 
-    public async ValueTask<(int BytesRead, List<LinuxFile>? Fds, byte[]? SourceSunPathRaw, UnixCredentials? Credentials)> RecvMessageAsync(
-        LinuxFile file, FiberTask task,
-        byte[] buffer, int flags, int maxBytes = -1)
+    public async
+        ValueTask<(int BytesRead, List<LinuxFile>? Fds, byte[]? SourceSunPathRaw, UnixCredentials? Credentials)>
+        RecvMessageAsync(
+            LinuxFile file, FiberTask task,
+            byte[] buffer, int flags, int maxBytes = -1)
     {
         var recvLen = maxBytes > 0 ? Math.Min(maxBytes, buffer.Length) : buffer.Length;
         if (recvLen <= 0) return (0, null, null, null);
@@ -993,12 +954,11 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
             }
         }
 
-        byte[] clonedData = data.ToArray();
+        var clonedData = data.ToArray();
         UnixCredentials? credentials = null;
         if (peer._passCred)
-        {
-            credentials = _sendCredentialsOverride ?? new UnixCredentials(task.Process.TGID, task.Process.EUID, task.Process.EGID);
-        }
+            credentials = _sendCredentialsOverride ??
+                          new UnixCredentials(task.Process.TGID, task.Process.EUID, task.Process.EGID);
 
         var msg = new UnixMessage
         {
@@ -1169,23 +1129,6 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
     {
         public void Dispose()
         {
-        }
-    }
-
-    private sealed class CompositeDisposable : IDisposable
-    {
-        private List<IDisposable>? _items;
-
-        public CompositeDisposable(List<IDisposable> items)
-        {
-            _items = items;
-        }
-
-        public void Dispose()
-        {
-            var items = Interlocked.Exchange(ref _items, null);
-            if (items == null) return;
-            foreach (var item in items) item.Dispose();
         }
     }
 }

@@ -572,7 +572,15 @@ public class OverlayInode : Inode
 
         // Delegate to Upper
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
-        UpperInode!.Create(upperDentry, mode, uid, gid);
+        try
+        {
+            UpperInode!.Create(upperDentry, mode, uid, gid);
+        }
+        catch (Exception ex)
+        {
+            throw new IOException(
+                $"OverlayInode.Create failed for '{dentry.Name}' under upper '{UpperDentry?.Name ?? "<null>"}'", ex);
+        }
 
         // Now update the overlay dentry's inode
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry); // Created only in upper
@@ -593,7 +601,15 @@ public class OverlayInode : Inode
         }
 
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
-        UpperInode!.Mkdir(upperDentry, mode, uid, gid);
+        try
+        {
+            UpperInode!.Mkdir(upperDentry, mode, uid, gid);
+        }
+        catch (Exception ex)
+        {
+            throw new IOException(
+                $"OverlayInode.Mkdir failed for '{dentry.Name}' under upper '{UpperDentry?.Name ?? "<null>"}'", ex);
+        }
 
         var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
         dentry.Instantiate(newOverlayInode);
@@ -828,7 +844,16 @@ public class OverlayInode : Inode
             throw new InvalidOperationException("Upper directory is unavailable for mknod");
 
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
-        UpperInode.Mknod(upperDentry, mode, uid, gid, type, rdev);
+        try
+        {
+            UpperInode.Mknod(upperDentry, mode, uid, gid, type, rdev);
+        }
+        catch (Exception ex)
+        {
+            throw new IOException(
+                $"OverlayInode.Mknod failed for '{dentry.Name}' under upper '{UpperDentry?.Name ?? "<null>"}' type={type} rdev={rdev}",
+                ex);
+        }
 
         var osb = (OverlaySuperBlock)SuperBlock;
         if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name))

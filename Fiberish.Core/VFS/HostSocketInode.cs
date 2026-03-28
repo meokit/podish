@@ -19,6 +19,8 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
     [ThreadStatic] private static StringBuilder? CachedHexBuilder;
     private readonly HostSocketReadiness _readiness;
     private int _cachedSocketError;
+    private int _receiveTimeoutMs;
+    private int _sendTimeoutMs;
 
     // AF_INET = 2, AF_INET6 = 10 (Linux)
     // SOCK_STREAM = 1, SOCK_DGRAM = 2
@@ -53,7 +55,8 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
     public AddressFamily HostAddressFamily => NativeSocket.AddressFamily;
     public ProtocolType HostProtocolType => NativeSocket.ProtocolType;
     public SocketType HostSocketType => NativeSocket.SocketType;
-    public AddressFamily SocketAddressFamily => HostAddressFamily;
+    public bool HasReceiveTimeout => _receiveTimeoutMs > 0;
+    public bool HasSendTimeout => _sendTimeoutMs > 0;
 
     bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
         short events)
@@ -97,7 +100,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
 
                 var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
                 if (!ready)
-                    return -(int)Errno.ERESTARTSYS;
+                    return _receiveTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
             }
             catch (SocketException ex)
             {
@@ -106,6 +109,10 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
             catch (ObjectDisposedException)
             {
                 return -(int)Errno.ENOTCONN;
+            }
+            catch (InvalidOperationException)
+            {
+                return -(int)Errno.EINVAL;
             }
     }
 
@@ -140,7 +147,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
 
                 var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
                 if (!ready)
-                    return new RecvMessageResult(-(int)Errno.ERESTARTSYS);
+                    return new RecvMessageResult(_receiveTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS);
             }
             catch (SocketException ex)
             {
@@ -149,6 +156,10 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
             catch (ObjectDisposedException)
             {
                 return new RecvMessageResult(-(int)Errno.ENOTCONN);
+            }
+            catch (InvalidOperationException)
+            {
+                return new RecvMessageResult(-(int)Errno.EINVAL);
             }
     }
 
@@ -192,7 +203,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
 
                     var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
                     if (!ready)
-                        return -(int)Errno.ERESTARTSYS;
+                        return _sendTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
                 }
                 catch (SocketException ex)
                 {
@@ -248,7 +259,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
 
                     var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
                     if (!ready)
-                        return -(int)Errno.ERESTARTSYS;
+                        return _sendTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
                 }
                 catch (SocketException ex)
                 {
@@ -280,6 +291,8 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
         return RecvFromAsync(file, task, buffer, flags, maxBytes);
     }
 
+    public AddressFamily SocketAddressFamily => HostAddressFamily;
+
     public async ValueTask<int> ConnectAsync(LinuxFile file, FiberTask task, object endpointObj)
     {
         if (endpointObj is not EndPoint endpoint) return -(int)Errno.EAFNOSUPPORT;
@@ -304,7 +317,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
 
                 var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
                 if (!ready)
-                    return -(int)Errno.ERESTARTSYS;
+                    return _sendTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
 
                 var so = NativeSocket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
                 if (so is not int soInt)
@@ -354,7 +367,8 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
 
                 var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
                 if (!ready)
-                    return new AcceptedSocketResult(-(int)Errno.ERESTARTSYS, null);
+                    return new AcceptedSocketResult(_receiveTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS,
+                        null);
             }
             catch (SocketException ex)
             {
@@ -502,7 +516,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
                         {
                             long sec = BinaryPrimitives.ReadInt32LittleEndian(optval.Slice(0, 4));
                             long usec = BinaryPrimitives.ReadInt32LittleEndian(optval.Slice(4, 4));
-                            NativeSocket.ReceiveTimeout = (int)(sec * 1000 + usec / 1000);
+                            _receiveTimeoutMs = (int)(sec * 1000 + usec / 1000);
                         }
 
                         return 0;
@@ -511,7 +525,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
                         {
                             long sec = BinaryPrimitives.ReadInt32LittleEndian(optval.Slice(0, 4));
                             long usec = BinaryPrimitives.ReadInt32LittleEndian(optval.Slice(4, 4));
-                            NativeSocket.SendTimeout = (int)(sec * 1000 + usec / 1000);
+                            _sendTimeoutMs = (int)(sec * 1000 + usec / 1000);
                         }
 
                         return 0;

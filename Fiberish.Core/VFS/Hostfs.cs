@@ -1517,9 +1517,16 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         var sb = (HostSuperBlock)SuperBlock;
         if (sb.PathExistsOnHostRaw(subPath)) throw new InvalidOperationException("Exists");
 
-        using (File.Create(subPath))
+        try
         {
-        } // Create empty file
+            using (File.Create(subPath))
+            {
+            } // Create empty file
+        }
+        catch (Exception ex)
+        {
+            throw new IOException($"HostInode.Create failed for '{subPath}'", ex);
+        }
 
         sb.MetadataStore.RemovePath(subPath);
         sb.InstantiateDentry(dentry, subPath, false, mode);
@@ -1533,7 +1540,14 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         var sb = (HostSuperBlock)SuperBlock;
         if (sb.PathExistsOnHostRaw(subPath)) throw new InvalidOperationException("Exists");
 
-        Directory.CreateDirectory(subPath);
+        try
+        {
+            Directory.CreateDirectory(subPath);
+        }
+        catch (Exception ex)
+        {
+            throw new IOException($"HostInode.Mkdir failed for '{subPath}'", ex);
+        }
 
         sb.MetadataStore.RemovePath(subPath);
         sb.InstantiateDentry(dentry, subPath, true, mode);
@@ -1549,12 +1563,20 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         var sb = (HostSuperBlock)SuperBlock;
         if (sb.PathExistsOnHostRaw(subPath)) throw new InvalidOperationException("Exists");
 
-        // Hostfs fallback: materialize a placeholder and persist node semantics in sidecar metadata.
-        using (File.Create(subPath))
+        try
         {
+            // Hostfs fallback: materialize a placeholder and persist node semantics in sidecar metadata.
+            using (File.Create(subPath))
+            {
+            }
+
+            sb.MetadataStore.WriteMknod(subPath, type, rdev);
+        }
+        catch (Exception ex)
+        {
+            throw new IOException($"HostInode.Mknod failed for '{subPath}' type={type} rdev={rdev}", ex);
         }
 
-        sb.MetadataStore.WriteMknod(subPath, type, rdev);
         sb.InstantiateDentry(dentry, subPath, false, mode);
         if (dentry.Inode != null)
         {

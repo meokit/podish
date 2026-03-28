@@ -10,9 +10,9 @@ namespace Fiberish.VFS;
 
 public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 {
+    private readonly AsyncWaitQueue _readWaitQueue;
     private readonly Queue<byte[]> _responses = new();
     private readonly Func<NetDeviceSetSnapshot> _snapshotProvider;
-    private readonly AsyncWaitQueue _readWaitQueue;
 
     public NetlinkRouteSocketInode(ulong ino, SuperBlock sb, KernelScheduler scheduler,
         Func<NetDeviceSetSnapshot> snapshotProvider)
@@ -25,9 +25,49 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
         _snapshotProvider = snapshotProvider;
     }
 
+    bool IDispatcherWaitSource.RegisterWait(LinuxFile file, IReadyDispatcher dispatcher, Action callback,
+        short events)
+    {
+        return ((IDispatcherWaitSource)this).RegisterWaitHandle(file, dispatcher, callback, events) != null;
+    }
+
+    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile file, IReadyDispatcher dispatcher,
+        Action callback, short events)
+    {
+        if ((events & PollEvents.POLLIN) == 0)
+            return null;
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException(
+                            "Netlink readiness wait requires an explicit scheduler.");
+        using (EnterStateScope())
+        {
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, _responses.Count > 0, _readWaitQueue,
+                _readWaitQueue.Reset);
+            return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch);
+        }
+    }
+
+    public bool RegisterWait(LinuxFile file, FiberTask task, Action callback, short events)
+    {
+        _ = task;
+        return RegisterWaitHandle(file, task, callback, events) != null;
+    }
+
+    public IDisposable? RegisterWaitHandle(LinuxFile file, FiberTask task, Action callback, short events)
+    {
+        _ = task;
+        if ((events & PollEvents.POLLIN) == 0)
+            return null;
+        using (EnterStateScope())
+        {
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, _responses.Count > 0, _readWaitQueue,
+                _readWaitQueue.Reset);
+            return QueueReadinessRegistration.RegisterHandle(callback, task, events, readWatch);
+        }
+    }
+
     private StateScope EnterStateScope([CallerMemberName] string? caller = null)
     {
-        
         return default;
     }
 
@@ -101,14 +141,13 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
 
     public override short Poll(LinuxFile file, short events)
     {
-        short revents = 0;
-        if ((events & PollEvents.POLLOUT) != 0)
-            revents |= PollEvents.POLLOUT;
+        var revents = (events & PollEvents.POLLOUT) != 0 ? PollEvents.POLLOUT : (short)0;
 
         using (EnterStateScope())
         {
-            if ((events & PollEvents.POLLIN) != 0 && _responses.Count > 0)
-                revents |= PollEvents.POLLIN;
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, _responses.Count > 0, _readWaitQueue,
+                _readWaitQueue.Reset);
+            revents |= QueueReadinessRegistration.ComputeRevents(events, readWatch);
         }
 
         return revents;
@@ -117,43 +156,6 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
     {
         return null;
-    }
-
-    public bool RegisterWait(LinuxFile file, FiberTask task, Action callback, short events)
-    {
-        _ = task;
-        return RegisterWaitHandle(file, task, callback, events) != null;
-    }
-
-    bool IDispatcherWaitSource.RegisterWait(LinuxFile file, IReadyDispatcher dispatcher, Action callback,
-        short events)
-    {
-        return ((IDispatcherWaitSource)this).RegisterWaitHandle(file, dispatcher, callback, events) != null;
-    }
-
-    public IDisposable? RegisterWaitHandle(LinuxFile file, FiberTask task, Action callback, short events)
-    {
-        _ = task;
-        if ((events & PollEvents.POLLIN) == 0)
-            return null;
-        using (EnterStateScope())
-        {
-            return _readWaitQueue.RegisterCancelable(callback, task);
-        }
-    }
-
-    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile file, IReadyDispatcher dispatcher,
-        Action callback, short events)
-    {
-        if ((events & PollEvents.POLLIN) == 0)
-            return null;
-        var scheduler = dispatcher.Scheduler
-                        ?? throw new InvalidOperationException(
-                            "Netlink readiness wait requires an explicit scheduler.");
-        using (EnterStateScope())
-        {
-            return _readWaitQueue.RegisterCancelable(callback, scheduler);
-        }
     }
 
     private static void BuildLinkDump(NetDeviceSetSnapshot snapshot, uint seq, List<byte[]> responses)
