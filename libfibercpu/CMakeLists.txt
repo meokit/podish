@@ -122,6 +122,8 @@ if(NOT MSVC)
     )
 endif()
 
+
+
 # SoftFloat library
 if(USE_SOFTFLOAT)
     add_definitions(-DX86EMU_USE_SOFTFLOAT)
@@ -247,6 +249,8 @@ if(NOT MSVC)
         $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
     )
 endif()
+
+
 
 # Link libraries
 if(USE_SOFTFLOAT)
