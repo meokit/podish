@@ -351,9 +351,12 @@ public partial class SyscallManager
             if (checkWrite) pollEvents |= PollEvents.POLLOUT;
             if (checkEx) pollEvents |= PollEvents.POLLPRI;
 
-            var revents = file.OpenedInode is SignalFdInode signalfd && task != null
-                ? signalfd.Poll(task, pollEvents)
-                : file.OpenedInode!.Poll(file, pollEvents);
+            var revents = file.OpenedInode switch
+            {
+                SignalFdInode signalfd when task != null => signalfd.Poll(task, pollEvents),
+                ITaskPollSource taskPollSource when task != null => taskPollSource.Poll(file, task, pollEvents),
+                _ => file.OpenedInode!.Poll(file, pollEvents)
+            };
 
             if ((revents & (PollEvents.POLLIN | PollEvents.POLLHUP | PollEvents.POLLERR)) != 0 && checkRead)
             {
@@ -407,9 +410,12 @@ public partial class SyscallManager
             {
                 if (fds.TryGetValue(pfd.Fd, out var file))
                 {
-                    var revents = file.OpenedInode is SignalFdInode signalfd && task != null
-                        ? signalfd.Poll(task, pfd.Events)
-                        : file.OpenedInode!.Poll(file, pfd.Events);
+                    var revents = file.OpenedInode switch
+                    {
+                        SignalFdInode signalfd when task != null => signalfd.Poll(task, pfd.Events),
+                        ITaskPollSource taskPollSource when task != null => taskPollSource.Poll(file, task, pfd.Events),
+                        _ => file.OpenedInode!.Poll(file, pfd.Events)
+                    };
                     Logger.LogTrace("[ScanPoll] FD={Fd} Events={Events} Revents={Revents} Type={Type}", pfd.Fd,
                         pfd.Events, revents, file.OpenedInode!.GetType().Name);
 
@@ -685,6 +691,8 @@ public partial class SyscallManager
                         IDisposable? registration;
                         if (file.OpenedInode is SignalFdInode signalfd)
                             registration = signalfd.RegisterWaitHandle(_task, ScheduleRePoll, events);
+                        else if (file.OpenedInode is ITaskWaitSource taskWaitSource)
+                            registration = taskWaitSource.RegisterWaitHandle(file, _task, ScheduleRePoll, events);
                         else if (file.OpenedInode is IDispatcherWaitSource dispatcherWaitSource)
                             registration =
                                 dispatcherWaitSource.RegisterWaitHandle(file, dispatcher, ScheduleRePoll, events);
@@ -872,6 +880,8 @@ public partial class SyscallManager
                     IDisposable? registration;
                     if (file.OpenedInode is SignalFdInode signalfd)
                         registration = signalfd.RegisterWaitHandle(_task, ScheduleRePoll, pfd.Events);
+                    else if (file.OpenedInode is ITaskWaitSource taskWaitSource)
+                        registration = taskWaitSource.RegisterWaitHandle(file, _task, ScheduleRePoll, pfd.Events);
                     else if (file.OpenedInode is IDispatcherWaitSource dispatcherWaitSource)
                         registration = dispatcherWaitSource.RegisterWaitHandle(file, dispatcher, ScheduleRePoll,
                             pfd.Events);

@@ -79,7 +79,7 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysEpollWait(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        return await DoEpollWait(this, engine, a1, a2, a3, (int)a4);
+        return await DoEpollWait(this, engine, a1, a2, a3, (int)a4, X86SyscallNumbers.epoll_wait);
     }
 
     private async ValueTask<int> SysEpollPwait(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -93,7 +93,7 @@ public partial class SyscallManager
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
-        var result = await DoEpollWait(this, engine, a1, a2, a3, (int)a4);
+        var result = await DoEpollWait(this, engine, a1, a2, a3, (int)a4, X86SyscallNumbers.epoll_pwait);
         if (hasMask)
             if (result == -(int)Errno.ERESTARTSYS)
                 task.DeferSignalMaskRestore(oldMask);
@@ -114,7 +114,7 @@ public partial class SyscallManager
 
         var oldMask = task.SignalMask;
         if (hasMask) task.SignalMask = newMask;
-        var result = await DoEpollWait(this, engine, a1, a2, a3, timeoutMs);
+        var result = await DoEpollWait(this, engine, a1, a2, a3, timeoutMs, X86SyscallNumbers.epoll_pwait2);
         if (hasMask)
             if (result == -(int)Errno.ERESTARTSYS)
                 task.DeferSignalMaskRestore(oldMask);
@@ -125,7 +125,7 @@ public partial class SyscallManager
     }
 
     private static async ValueTask<int> DoEpollWait(SyscallManager sm, Engine engine, uint epfdArg, uint eventsPtr,
-        uint maxeventsArg, int timeoutMs)
+        uint maxeventsArg, int timeoutMs, uint syscallNr)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -149,7 +149,7 @@ public partial class SyscallManager
             return ready;
         }
 
-        var result = await epollInode.WaitAsync(task, buf, maxevents, timeoutMs);
+        var result = await epollInode.WaitAsync(task, buf, maxevents, timeoutMs, syscallNr);
         if (result > 0 && !task.CPU.CopyToUser(eventsPtr, buf.AsSpan(0, result * 12)))
             return -(int)Errno.EFAULT;
 

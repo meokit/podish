@@ -144,16 +144,36 @@ public partial class SyscallManager
 
     private static void CheckAndTriggerPendingSignals(FiberTask task)
     {
-        var unblocked = task.PendingSignals & ~task.SignalMask;
+        var unblocked = task.GetVisiblePendingSignals() & ~task.SignalMask;
         if (unblocked != 0)
             // Find the first unblocked pending signal and mark as interrupting
             // so the guest execution loop will pick it up after the syscall returns
             for (var i = 1; i <= 64; i++)
                 if ((unblocked & (1UL << (i - 1))) != 0)
                 {
-                    task.TrySetActiveWaitReason(WakeReason.Signal);
+                    task.NotifyPendingSignal(i);
                     break;
                 }
+    }
+
+    private async ValueTask<int> SysSigPending(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        var buf = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(buf, (uint)task.GetVisiblePendingSignals());
+        return engine.CopyToUser(a1, buf) ? 0 : -(int)Errno.EFAULT;
+    }
+
+    private async ValueTask<int> SysRtSigPending(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (a2 != 8) return -(int)Errno.EINVAL;
+
+        var buf = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(buf, task.GetVisiblePendingSignals());
+        return engine.CopyToUser(a1, buf) ? 0 : -(int)Errno.EFAULT;
     }
 
     private async ValueTask<int> SysKill(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -247,6 +267,7 @@ public partial class SyscallManager
         // On i386 sigreturn, ESP points to the saved sigcontext
         // (after popl %eax which was done in __restore)
         task.RestoreSigContext(sp);
+        task.RestoreDeferredSignalMaskIfAny();
 
         return (int)task.CPU.RegRead(Reg.EAX);
     }
@@ -286,6 +307,7 @@ public partial class SyscallManager
         var maskBuf = new byte[8];
         if (task.CPU.CopyFromUser(ucontextAddr + 108, maskBuf))
             task.SignalMask = BinaryPrimitives.ReadUInt64LittleEndian(maskBuf);
+        task.RestoreDeferredSignalMaskIfAny();
 
         return (int)task.CPU.RegRead(Reg.EAX);
     }
@@ -311,6 +333,7 @@ public partial class SyscallManager
 
         var oldMask = task.SignalMask;
         task.SignalMask = mask;
+        task.DeferSignalMaskRestore(oldMask);
 
         // Log
         if (Strace) Logger.LogTrace(" [rt_sigsuspend] Mask set to {Mask:X}, waiting...", mask);
@@ -318,26 +341,9 @@ public partial class SyscallManager
         // Pre-set EAX to -EINTR so if signal handler runs (even with SA_RESTART), it saves -EINTR
         task.CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
 
-        // Check for pending signals immediately (unblocked by new mask)
-        var hasPending = (task.PendingSignals & ~mask) != 0;
-
-        if (hasPending)
-        {
-            task.SignalMask = oldMask;
-            return -(int)Errno.EINTR;
-        }
-
-        try
-        {
-            await SysPause(engine, 0, 0, 0, 0, 0, 0); // Reuse SysPause which now uses PauseAwaiter
-        }
-        finally
-        {
-            task.SignalMask = oldMask;
-            if (Strace) Logger.LogTrace(" [rt_sigsuspend] Restored mask to {Mask:X}", oldMask);
-        }
-
-        return -(int)Errno.EINTR;
+        var rc = await SysPause(engine, 0, 0, 0, 0, 0, 0); // Reuse SysPause which now uses PauseAwaiter
+        if (rc >= 0) task.RestoreDeferredSignalMaskIfAny();
+        return rc;
     }
 
     private async ValueTask<int> SysRtSigQueueInfo(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,

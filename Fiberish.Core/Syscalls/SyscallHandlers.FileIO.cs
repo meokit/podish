@@ -373,9 +373,11 @@ public partial class SyscallManager
                 };
                 return sm.AllocFD(f);
             }
-            catch
+            catch (Exception ex)
             {
-                return -(int)Errno.EIO;
+                Logger.LogInformation(ex,
+                    "[Open] O_TMPFILE create failed path='{Path}' flags={Flags} mode={Mode}", path, flags, mode);
+                return MapFsExceptionToErrno(ex);
             }
         }
 
@@ -408,14 +410,23 @@ public partial class SyscallManager
                     createdHere = true;
                     mount = parentMount;
                 }
-                catch (InvalidOperationException)
+                catch (InvalidOperationException ex)
                 {
                     // Hostfs uses InvalidOperationException("Exists") for collisions.
-                    return -(int)Errno.EEXIST;
+                    if (ex.Message.Contains("Exists", StringComparison.OrdinalIgnoreCase))
+                        return -(int)Errno.EEXIST;
+
+                    Logger.LogInformation(ex,
+                        "[Open] create failed path='{Path}' parent='{ParentPath}' flags={Flags} mode={Mode}", path,
+                        parentPath, flags, mode);
+                    return MapFsExceptionToErrno(ex);
                 }
-                catch
+                catch (Exception ex)
                 {
-                    return -(int)Errno.EACCES;
+                    Logger.LogInformation(ex,
+                        "[Open] create failed path='{Path}' parent='{ParentPath}' flags={Flags} mode={Mode}", path,
+                        parentPath, flags, mode);
+                    return MapFsExceptionToErrno(ex);
                 }
             }
             else
@@ -467,9 +478,11 @@ public partial class SyscallManager
                 taskBoundInode.BindTaskContext(f, task);
             return sm.AllocFD(f);
         }
-        catch
+        catch (Exception ex)
         {
-            return -1;
+            Logger.LogInformation(ex, "[Open] final open failed path='{Path}' flags={Flags} mode={Mode}", path, flags,
+                mode);
+            return MapFsExceptionToErrno(ex);
         }
     }
 

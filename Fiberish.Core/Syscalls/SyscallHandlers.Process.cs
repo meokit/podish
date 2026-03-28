@@ -409,7 +409,7 @@ public partial class SyscallManager
         if (ppid > 0)
         {
             var parentTask = task.CommonKernel.GetTask(ppid);
-            parentTask?.PostSignal((int)Signal.SIGCHLD);
+            if (parentTask != null) parentTask.CommonKernel.SignalProcess(parentTask.Process.TGID, (int)Signal.SIGCHLD);
         }
     }
 
@@ -572,7 +572,6 @@ public partial class SyscallManager
                 .ToDictionary(kv => kv.Key, kv => kv.Value);
             task.Process.SignalActions.Clear();
             foreach (var kv in ignoredShebang) task.Process.SignalActions[kv.Key] = kv.Value;
-            task.PendingSignals = 0;
             task.AltStackSp = 0;
             task.AltStackSize = 0;
             task.AltStackFlags = 0;
@@ -661,8 +660,7 @@ public partial class SyscallManager
         task.Process.SignalActions.Clear();
         foreach (var kv in ignored) task.Process.SignalActions[kv.Key] = kv.Value;
 
-        // SignalMask is preserved across execve
-        task.PendingSignals = 0;
+        // SignalMask and pending signals are preserved across execve
         task.AltStackSp = 0;
         task.AltStackSize = 0;
         task.AltStackFlags = 0;

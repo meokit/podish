@@ -75,7 +75,7 @@ public readonly struct SemWaitAwaiter : INotifyCompletion
             return;
 
         state.Operation = operation;
-        var asyncState = new SemWaitOperation(state.Task, continuation, operation);
+        var asyncState = new SemWaitOperation(state, continuation, operation);
         state.Task.ArmInterruptingSignalSafetyNet(state.Token, asyncState.OnSignal);
     }
 
@@ -89,9 +89,11 @@ public readonly struct SemWaitAwaiter : INotifyCompletion
     private sealed class SemWaitOperation
     {
         private readonly TaskAsyncOperationHandle _operation;
+        private readonly SemWaitState _state;
 
-        public SemWaitOperation(FiberTask task, Action continuation, TaskAsyncOperationHandle operation)
+        public SemWaitOperation(SemWaitState state, Action continuation, TaskAsyncOperationHandle operation)
         {
+            _state = state;
             _operation = operation;
             _operation.TryInitialize(continuation);
         }

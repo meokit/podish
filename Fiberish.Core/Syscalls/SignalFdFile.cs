@@ -140,25 +140,28 @@ public class SignalFdInode : TmpfsInode, ITaskWaitSource
 
     private SigInfo? TryConsumeNextSignalUnsafe(FiberTask task)
     {
-        var pendingMatched = FindNextMatchedSignalUnsafe(task);
-        if (pendingMatched == 0)
-            return null;
-        return task.DequeueSignalUnsafe(pendingMatched);
+        return task.TryTakeVisibleSignalForSignalfd(GetMask(), out var info) ? info : null;
     }
 
     private bool HasPendingMatchedSignalUnsafe(FiberTask task)
     {
-        return FindNextMatchedSignalUnsafe(task) != 0;
+        return task.HasVisiblePendingSignalForSignalfd(GetMask());
     }
 
     private int FindNextMatchedSignalUnsafe(FiberTask task)
     {
-        if (task.PendingSignals == 0)
+        var visiblePending = task.GetVisiblePendingSignals();
+        if (visiblePending == 0)
             return 0;
 
         for (var i = 1; i <= 64; i++)
         {
-            if ((task.PendingSignals & (1UL << (i - 1))) == 0)
+            if ((visiblePending & (1UL << (i - 1))) == 0)
+                continue;
+            if (i == (int)Signal.SIGKILL || i == (int)Signal.SIGSTOP)
+                continue;
+            if (i == (int)Signal.SIGBUS || i == (int)Signal.SIGFPE || i == (int)Signal.SIGILL ||
+                i == (int)Signal.SIGSEGV)
                 continue;
             if (IsSignalInMask((ulong)i, _sigMask))
                 return i;
