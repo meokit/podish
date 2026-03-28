@@ -1,4 +1,5 @@
-using System.Formats.Tar;
+using System.IO.Compression;
+using System.Text;
 using Fiberish.Native;
 using Fiberish.VFS;
 
@@ -6,6 +7,8 @@ namespace Podish.Core;
 
 internal static class RootfsArchiveLoader
 {
+    private const int TarBlockSize = 512;
+
     public static SuperBlock LoadTmpfsFromTar(Stream tarStream, DeviceNumberManager deviceNumbers, string sourceName)
     {
         if (tarStream == null) throw new ArgumentNullException(nameof(tarStream));
@@ -15,37 +18,68 @@ internal static class RootfsArchiveLoader
         var sb = fsType.CreateFileSystem(deviceNumbers).ReadSuper(fsType, 0, sourceName, null);
         var root = sb.Root ?? throw new InvalidOperationException("tmpfs root was not created.");
 
-        using var reader = new TarReader(tarStream, leaveOpen: true);
+        using var archiveStream = OpenPossiblyCompressedTarStream(tarStream);
         var pendingHardLinks = new List<(string Path, string Target)>();
+        string? nextPathOverride = null;
+        string? nextLinkOverride = null;
 
-        TarEntry? entry;
-        while ((entry = reader.GetNextEntry()) != null)
+        while (true)
         {
-            var relativePath = NormalizeEntryPath(entry.Name);
+            var header = ReadExactOrNull(archiveStream, TarBlockSize);
+            if (header == null || IsZeroBlock(header))
+                break;
+
+            var entryName = ReadHeaderString(header, 0, 100);
+            var prefix = ReadHeaderString(header, 345, 155);
+            if (!string.IsNullOrEmpty(prefix))
+                entryName = string.IsNullOrEmpty(entryName) ? prefix : $"{prefix}/{entryName}";
+
+            var typeFlag = header[156];
+            var size = ReadOctal(header, 124, 12);
+            var mode = (int)(ReadOctal(header, 100, 8) is var parsedMode && parsedMode != 0 ? parsedMode : 0);
+            var linkName = ReadHeaderString(header, 157, 100);
+
+            var payloadBytes = size > 0 ? ReadExact(archiveStream, checked((int)size)) : Array.Empty<byte>();
+            SkipPadding(archiveStream, size);
+
+            switch ((char)(typeFlag == 0 ? (byte)'0' : typeFlag))
+            {
+                case 'x':
+                case 'g':
+                    ApplyPaxHeaders(payloadBytes, ref nextPathOverride, ref nextLinkOverride);
+                    continue;
+                case 'L':
+                    nextPathOverride = ReadNullTerminated(payloadBytes);
+                    continue;
+                case 'K':
+                    nextLinkOverride = ReadNullTerminated(payloadBytes);
+                    continue;
+            }
+
+            var rawPath = nextPathOverride ?? entryName;
+            var rawLink = nextLinkOverride ?? linkName;
+            nextPathOverride = null;
+            nextLinkOverride = null;
+
+            var relativePath = NormalizeEntryPath(rawPath);
             if (string.IsNullOrEmpty(relativePath))
                 continue;
 
-            var mode = GetEntryMode(entry, entry.EntryType == TarEntryType.Directory ? 0x1FF : 0x1A4);
-            switch (entry.EntryType)
+            var effectiveMode = mode != 0 ? mode : IsDirectoryType(typeFlag) ? 0x1FF : 0x1A4;
+            switch ((char)(typeFlag == 0 ? (byte)'0' : typeFlag))
             {
-                case TarEntryType.Directory:
-                    EnsureDirectory(root, relativePath, mode);
+                case '5':
+                    EnsureDirectory(root, relativePath, effectiveMode);
                     break;
-
-                case TarEntryType.RegularFile:
-                case TarEntryType.V7RegularFile:
-                    CreateOrReplaceFile(root, relativePath, mode, entry.DataStream);
+                case '0':
+                case '7':
+                    CreateOrReplaceFile(root, relativePath, effectiveMode, payloadBytes);
                     break;
-
-                case TarEntryType.SymbolicLink:
-                    CreateSymlink(root, relativePath, entry.LinkName ?? string.Empty);
+                case '2':
+                    CreateSymlink(root, relativePath, rawLink ?? string.Empty);
                     break;
-
-                case TarEntryType.HardLink:
-                    pendingHardLinks.Add((relativePath, NormalizeEntryPath(entry.LinkName ?? string.Empty)));
-                    break;
-
-                default:
+                case '1':
+                    pendingHardLinks.Add((relativePath, NormalizeEntryPath(rawLink ?? string.Empty)));
                     break;
             }
         }
@@ -56,16 +90,155 @@ internal static class RootfsArchiveLoader
         return sb;
     }
 
-    private static int GetEntryMode(TarEntry entry, int fallbackMode)
+    private static Stream OpenPossiblyCompressedTarStream(Stream stream)
     {
-        try
+        if (!stream.CanSeek)
+            return stream;
+
+        var origin = stream.Position;
+        Span<byte> header = stackalloc byte[2];
+        var read = stream.Read(header);
+        stream.Position = origin;
+
+        if (read == 2 && header[0] == 0x1F && header[1] == 0x8B)
+            return new GZipStream(stream, CompressionMode.Decompress, leaveOpen: true);
+
+        return stream;
+    }
+
+    private static bool IsDirectoryType(byte typeFlag)
+    {
+        return (char)(typeFlag == 0 ? (byte)'0' : typeFlag) == '5';
+    }
+
+    private static void ApplyPaxHeaders(byte[] payload, ref string? pathOverride, ref string? linkOverride)
+    {
+        var text = Encoding.UTF8.GetString(payload);
+        var index = 0;
+        while (index < text.Length)
         {
-            return Convert.ToInt32(entry.Mode);
+            var spaceIndex = text.IndexOf(' ', index);
+            if (spaceIndex <= index)
+                break;
+
+            if (!int.TryParse(text[index..spaceIndex], out var recordLength) || recordLength <= 0)
+                break;
+
+            var recordEnd = index + recordLength;
+            if (recordEnd > text.Length)
+                break;
+
+            var record = text[(spaceIndex + 1)..recordEnd];
+            if (record.EndsWith('\n'))
+                record = record[..^1];
+
+            var equalsIndex = record.IndexOf('=');
+            if (equalsIndex > 0)
+            {
+                var key = record[..equalsIndex];
+                var value = record[(equalsIndex + 1)..];
+                if (key == "path")
+                    pathOverride = value;
+                else if (key is "linkpath" or "SCHILY.linkpath")
+                    linkOverride = value;
+            }
+
+            index = recordEnd;
         }
-        catch
+    }
+
+    private static string ReadNullTerminated(byte[] payload)
+    {
+        var length = Array.IndexOf(payload, (byte)0);
+        if (length < 0)
+            length = payload.Length;
+        return Encoding.UTF8.GetString(payload, 0, length);
+    }
+
+    private static string ReadHeaderString(byte[] header, int offset, int length)
+    {
+        var end = offset + length;
+        var actualEnd = offset;
+        while (actualEnd < end && header[actualEnd] != 0)
+            actualEnd++;
+        return Encoding.UTF8.GetString(header, offset, actualEnd - offset).Trim();
+    }
+
+    private static long ReadOctal(byte[] buffer, int offset, int length)
+    {
+        var end = offset + length;
+        while (offset < end && (buffer[offset] == 0 || buffer[offset] == (byte)' '))
+            offset++;
+
+        long value = 0;
+        for (var index = offset; index < end; index++)
         {
-            return fallbackMode;
+            var current = buffer[index];
+            if (current is 0 or (byte)' ' or (byte)'\0')
+                break;
+            if (current < '0' || current > '7')
+                break;
+            value = (value << 3) + (current - '0');
         }
+
+        return value;
+    }
+
+    private static void SkipPadding(Stream stream, long size)
+    {
+        var padding = (TarBlockSize - (size % TarBlockSize)) % TarBlockSize;
+        if (padding == 0)
+            return;
+
+        var skipped = ReadExact(stream, (int)padding);
+        if (skipped.Length != padding)
+            throw new EndOfStreamException("Unexpected end of tar archive while skipping padding.");
+    }
+
+    private static byte[]? ReadExactOrNull(Stream stream, int count)
+    {
+        var buffer = new byte[count];
+        var offset = 0;
+        while (offset < count)
+        {
+            var read = stream.Read(buffer, offset, count - offset);
+            if (read == 0)
+            {
+                if (offset == 0)
+                    return null;
+                throw new EndOfStreamException("Unexpected end of tar archive.");
+            }
+
+            offset += read;
+        }
+
+        return buffer;
+    }
+
+    private static byte[] ReadExact(Stream stream, int count)
+    {
+        var buffer = new byte[count];
+        var offset = 0;
+        while (offset < count)
+        {
+            var read = stream.Read(buffer, offset, count - offset);
+            if (read == 0)
+                throw new EndOfStreamException("Unexpected end of tar archive.");
+            offset += read;
+        }
+
+        return buffer;
+    }
+
+    private static bool IsZeroBlock(byte[] block)
+    {
+        for (var index = 0; index < block.Length; index++)
+        {
+            if (block[index] != 0)
+                return false;
+        }
+
+        return true;
     }
 
     private static string NormalizeEntryPath(string path)
@@ -117,7 +290,7 @@ internal static class RootfsArchiveLoader
         return current;
     }
 
-    private static void CreateOrReplaceFile(Dentry root, string relativePath, int mode, Stream? dataStream)
+    private static void CreateOrReplaceFile(Dentry root, string relativePath, int mode, byte[] data)
     {
         var (parent, name) = ResolveParent(root, relativePath);
         var existing = parent.Inode!.Lookup(name);
@@ -131,19 +304,13 @@ internal static class RootfsArchiveLoader
         var fileDentry = new Dentry(name, null, parent, parent.SuperBlock);
         parent.Inode.Create(fileDentry, mode, 0, 0);
 
-        if (dataStream == null)
-            return;
-
-        using var ms = new MemoryStream();
-        dataStream.CopyTo(ms);
-        var bytes = ms.ToArray();
-        if (bytes.Length == 0)
+        if (data.Length == 0)
             return;
 
         var file = new LinuxFile(fileDentry, FileFlags.O_WRONLY, null!);
         try
         {
-            var rc = fileDentry.Inode!.Write(file, bytes, 0);
+            var rc = fileDentry.Inode!.Write(file, data, 0);
             if (rc < 0)
                 throw new IOException($"Failed to write rootfs file '{relativePath}': rc={rc}");
         }
