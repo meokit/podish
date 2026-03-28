@@ -6,62 +6,81 @@
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
-        <NativeBuildDir Condition="'$(RuntimeIdentifier)' != ''">build_native/$(RuntimeIdentifier)</NativeBuildDir>
-        <NativeBuildDir Condition="'$(RuntimeIdentifier)' == ''">build_native/host</NativeBuildDir>
+        <IsBrowserWasm Condition="'$(RuntimeIdentifier)' == 'browser-wasm' Or '$(FiberishForceBrowserWasm)' == 'true'">true</IsBrowserWasm>
+        <NativeBuildDir Condition="'$(IsBrowserWasm)' == 'true'">build_native/browser-wasm</NativeBuildDir>
+        <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' != ''">build_native/$(RuntimeIdentifier)</NativeBuildDir>
+        <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' == ''">build_native/host</NativeBuildDir>
+        <EmscriptenToolchainFile Condition="'$(EmscriptenToolchainFile)' == '' and Exists('/opt/homebrew/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake')">/opt/homebrew/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake</EmscriptenToolchainFile>
+        <EmscriptenToolchainFile Condition="'$(EmscriptenToolchainFile)' == '' and Exists('/usr/local/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake')">/usr/local/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake</EmscriptenToolchainFile>
+        <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/opt/homebrew/opt/node/bin/node')">/opt/homebrew/opt/node/bin/node</BrowserWasmNodeExecutable>
+        <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/opt/homebrew/bin/node')">/opt/homebrew/bin/node</BrowserWasmNodeExecutable>
+        <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/usr/local/bin/node')">/usr/local/bin/node</BrowserWasmNodeExecutable>
+        <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == ''">node</BrowserWasmNodeExecutable>
     </PropertyGroup>
 
-    <Target Name="BuildNativeLib" BeforeTargets="BeforeBuild">
+    <Target Name="BuildNativeLib" BeforeTargets="BeforeBuild" Condition="'$(DesignTimeBuild)' != 'true'">
         <Message Text="Building libfibercpu with CMake..." Importance="High"/>
         <PropertyGroup>
-            <BuildFibercpuStatic Condition="'$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true'">true</BuildFibercpuStatic>
+            <BuildFibercpuStatic Condition="'$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true' Or '$(IsBrowserWasm)' == 'true'">true</BuildFibercpuStatic>
             <BuildFibercpuStatic Condition="'$(BuildFibercpuStatic)' == ''">false</BuildFibercpuStatic>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true'">-DCMAKE_BUILD_TYPE=Release -DFIBERCPU_BUILD_STATIC=ON -DFIBERCPU_ENABLE_LTO=OFF</CMakeArgs>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('ios'))">$(CMakeArgs) -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64</CMakeArgs>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('ios-'))">$(CMakeArgs) -DCMAKE_OSX_SYSROOT=iphoneos</CMakeArgs>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('iossimulator-'))">$(CMakeArgs) -DCMAKE_OSX_SYSROOT=iphonesimulator</CMakeArgs>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' != 'true'">-DCMAKE_BUILD_TYPE=Release -DFIBERCPU_BUILD_STATIC=OFF</CMakeArgs>
-            <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('OSX'))">$(CMakeArgs) -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++</CMakeArgs>
+            <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('OSX')) And '$(IsBrowserWasm)' != 'true'">$(CMakeArgs) -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++</CMakeArgs>
             <CMakeHandlerProfile Condition="'$(EnableHandlerProfile)' == 'true'">ON</CMakeHandlerProfile>
             <CMakeHandlerProfile Condition="'$(CMakeHandlerProfile)' == ''">OFF</CMakeHandlerProfile>
             <CMakeJccProfile Condition="'$(EnableJccProfile)' == 'true'">ON</CMakeJccProfile>
             <CMakeJccProfile Condition="'$(CMakeJccProfile)' == ''">OFF</CMakeJccProfile>
             <CMakeSuperOpcodes Condition="'$(EnableSuperOpcodes)' == 'false'">OFF</CMakeSuperOpcodes>
             <CMakeSuperOpcodes Condition="'$(CMakeSuperOpcodes)' == ''">ON</CMakeSuperOpcodes>
+            <CMakeJit Condition="'$(EnableJit)' == 'false' Or '$(IsBrowserWasm)' == 'true'">OFF</CMakeJit>
+            <CMakeJit Condition="'$(CMakeJit)' == ''">ON</CMakeJit>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_HANDLER_PROFILE=$(CMakeHandlerProfile)</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_JCC_PROFILE=$(CMakeJccProfile)</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_SUPEROPCODES=$(CMakeSuperOpcodes)</CMakeArgs>
+            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_JIT=$(CMakeJit)</CMakeArgs>
+            <CMakeGeneratorArgs Condition="'$(IsBrowserWasm)' == 'true'">-G Ninja</CMakeGeneratorArgs>
+            <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_TOOLCHAIN_FILE=&quot;$(EmscriptenToolchainFile)&quot; -DCMAKE_CROSSCOMPILING_EMULATOR=&quot;$(BrowserWasmNodeExecutable)&quot;</CMakeArgs>
         </PropertyGroup>
-        <Exec Command="cmake -S ../libfibercpu -B $(NativeBuildDir) $(CMakeArgs)" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
+        <Error Condition="'$(IsBrowserWasm)' == 'true' And '$(EmscriptenToolchainFile)' == ''"
+               Text="browser-wasm build requires Emscripten. Set EmscriptenToolchainFile to your Emscripten.cmake path." />
+        <Exec Command="cmake -S ../libfibercpu -B $(NativeBuildDir) $(CMakeGeneratorArgs) $(CMakeArgs)" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
         <Exec Command="cmake --build $(NativeBuildDir) --config Release" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
     </Target>
 
-    <ItemGroup Condition="('$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true') And $([MSBuild]::IsOsPlatform('OSX'))">
+    <ItemGroup Condition="'$(IsBrowserWasm)' == 'true'">
+        <NativeFileReference Include="$(NativeBuildDir)/libfibercpu.a"/>
+    </ItemGroup>
+
+    <ItemGroup Condition="('$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true') And '$(IsBrowserWasm)' != 'true' And $([MSBuild]::IsOsPlatform('OSX'))">
         <NativeLibrary Include="$(NativeBuildDir)/libfibercpu.a"/>
     </ItemGroup>
 
-    <ItemGroup Condition="('$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true') And $([MSBuild]::IsOsPlatform('Linux'))">
+    <ItemGroup Condition="('$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true') And '$(IsBrowserWasm)' != 'true' And $([MSBuild]::IsOsPlatform('Linux'))">
         <NativeLibrary Include="$(NativeBuildDir)/libfibercpu.a"/>
     </ItemGroup>
 
-    <ItemGroup Condition="('$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true') And $([MSBuild]::IsOsPlatform('Windows'))">
+    <ItemGroup Condition="('$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true') And '$(IsBrowserWasm)' != 'true' And $([MSBuild]::IsOsPlatform('Windows'))">
         <NativeLibrary Include="$(NativeBuildDir)/Release/fibercpu.lib"/>
     </ItemGroup>
 
-    <ItemGroup Condition="$([MSBuild]::IsOsPlatform('OSX')) And '$(PublishAot)' != 'true' And '$(PodishStaticNative)' != 'true'">
+    <ItemGroup Condition="$([MSBuild]::IsOsPlatform('OSX')) And '$(PublishAot)' != 'true' And '$(PodishStaticNative)' != 'true' And '$(IsBrowserWasm)' != 'true'">
         <Content Include="$(NativeBuildDir)/libfibercpu.dylib">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <Link>libfibercpu.dylib</Link>
         </Content>
     </ItemGroup>
 
-    <ItemGroup Condition="$([MSBuild]::IsOsPlatform('Linux')) And '$(PublishAot)' != 'true' And '$(PodishStaticNative)' != 'true'">
+    <ItemGroup Condition="$([MSBuild]::IsOsPlatform('Linux')) And '$(PublishAot)' != 'true' And '$(PodishStaticNative)' != 'true' And '$(IsBrowserWasm)' != 'true'">
         <Content Include="$(NativeBuildDir)/libfibercpu.so">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <Link>libfibercpu.so</Link>
         </Content>
     </ItemGroup>
 
-    <ItemGroup Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(PublishAot)' != 'true' And '$(PodishStaticNative)' != 'true'">
+    <ItemGroup Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(PublishAot)' != 'true' And '$(PodishStaticNative)' != 'true' And '$(IsBrowserWasm)' != 'true'">
         <Content Include="$(NativeBuildDir)/Release/fibercpu.dll">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <Link>fibercpu.dll</Link>

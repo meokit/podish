@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PodishApp.BrowserWasm</RootNamespace>
+    <AssemblyName>PodishApp.BrowserWasm</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
+    <RunAOTCompilation>true</RunAOTCompilation>
+    <WasmBuildNative>true</WasmBuildNative>
+    <WasmRunWasmOpt>false</WasmRunWasmOpt>
+    <FiberishForceBrowserWasm>true</FiberishForceBrowserWasm>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <WasmMainJSPath>$(MSBuildProjectDirectory)/wwwroot/main.mjs</WasmMainJSPath>
+    <WasmMainHTMLPath>$(MSBuildProjectDirectory)/wwwroot/index.html</WasmMainHTMLPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../Podish.Core/Podish.Core.csproj">
+      <AdditionalProperties>FiberishForceBrowserWasm=true;WasmBuildNative=true</AdditionalProperties>
+    </ProjectReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <TrimmerRootAssembly Include="Podish.Core" RootMode="all" />
+    <TrimmerRootAssembly Include="Fiberish.Core" RootMode="all" />
+    <TrimmerRootAssembly Include="Fiberish.X86" RootMode="all" />
+  </ItemGroup>
+
+</Project>

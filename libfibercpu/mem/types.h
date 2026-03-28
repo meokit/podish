@@ -6,6 +6,14 @@
 
 namespace fiberish::mem {
 
+#ifdef PAGE_SIZE
+#undef PAGE_SIZE
+#endif
+
+#ifdef PAGE_MASK
+#undef PAGE_MASK
+#endif
+
 enum class FaultCode : uint8_t {
     None = 0,
     PageFault = 14,

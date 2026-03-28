@@ -1,5 +1,7 @@
 #include "bindings.h"
+#if !defined(__EMSCRIPTEN__)
 #include <execinfo.h>
+#endif
 #include <unistd.h>
 #include <algorithm>
 #include <csignal>
@@ -322,6 +324,7 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
 }
 
 // Signal Handler for safety
+#if !defined(__EMSCRIPTEN__)
 void SignalHandler(int sig) {
     void* array[20];
     size_t size;
@@ -330,6 +333,7 @@ void SignalHandler(int sig) {
     backtrace_symbols_fd(array, size, STDERR_FILENO);
     _exit(1);
 }
+#endif
 
 static bool g_SignalRegistered = false;
 
@@ -354,9 +358,11 @@ static void InitializeDummyInvalidBlock(EmuState* state) {
 
 EmuState* X86_Create() {
     if (!g_SignalRegistered) {
+#if !defined(__EMSCRIPTEN__)
         signal(SIGSEGV, SignalHandler);
         signal(SIGILL, SignalHandler);
         signal(SIGBUS, SignalHandler);
+#endif
         g_SignalRegistered = true;
     }
 
@@ -1218,7 +1224,9 @@ int32_t X86_GetOpIdForHandler(void* handler) {
 }
 
 void* X86_GetLibAddress() {
-#if defined(_WIN32)
+#if defined(__EMSCRIPTEN__)
+    return nullptr;
+#elif defined(_WIN32)
     HMODULE hModule = NULL;
     GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                       (LPCTSTR)X86_Create, &hModule);

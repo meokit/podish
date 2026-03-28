@@ -20,9 +20,18 @@
 #endif
 
 #ifndef __builtin_assume
-#define __builtin_assume(expr) do { \
-    if (!(expr)) __builtin_unreachable(); \
-} while (0)
+#define __builtin_assume(expr)                \
+    do {                                      \
+        if (!(expr)) __builtin_unreachable(); \
+    } while (0)
+#endif
+
+#ifndef PREFETCH
+#if defined(__GNUC__) || defined(__clang__)
+#define PREFETCH(addr) __builtin_prefetch((addr))
+#else
+#define PREFETCH(addr) ((void)0)
+#endif
 #endif
 
 namespace fiberish {

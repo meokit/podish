@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Podish Browser Wasm</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, system-ui, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+
+      #app {
+        min-height: 100vh;
+      }
+
+      .shell {
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-height: 100vh;
+      }
+
+      .toolbar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 16px 20px;
+        border-bottom: 1px solid #1e293b;
+        background: #111827;
+      }
+
+      .toolbar h1 {
+        margin: 0;
+        font-size: 16px;
+      }
+
+      .toolbar button {
+        border: 0;
+        border-radius: 8px;
+        padding: 8px 12px;
+        background: #2563eb;
+        color: white;
+        cursor: pointer;
+      }
+
+      .toolbar button.secondary {
+        background: #334155;
+      }
+
+      .terminal-host {
+        padding: 16px;
+      }
+
+      .terminal {
+        width: 100%;
+        height: calc(100vh - 82px);
+        border: 1px solid #1e293b;
+        border-radius: 12px;
+        overflow: hidden;
+        background: #020617;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script crossorigin src="https://unpkg.com/react@19/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@19/umd/react-dom.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+    <script type="module" src="./main.mjs"></script>
+  </body>
+</html>

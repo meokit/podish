@@ -306,7 +306,7 @@ if(FIBERCPU_ENABLE_LTO)
     endif()
 endif()
 
-if(NOT MSVC)
+if(NOT MSVC AND NOT EMSCRIPTEN)
     add_compile_options(
         "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-O3>"
         "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fomit-frame-pointer>"

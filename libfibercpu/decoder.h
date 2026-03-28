@@ -184,12 +184,19 @@ struct alignas(16) DecodedInstTmp {
 
 static_assert(sizeof(DecodedOp) == 32, "DecodedOp must be exactly 32 bytes");
 static_assert(sizeof(DecodedMemData) == 16, "DecodedMemData must be exactly 16 bytes");
-static_assert(sizeof(DecodedControlFlowData) == 16, "DecodedControlFlowData must be exactly 16 bytes");
 static_assert(sizeof(DecodedInstTmp) == 32, "DecodedInstTmp must be exactly 32 bytes");
 static_assert(offsetof(DecodedOp, handler) == 0, "DecodedOp: handler must start at offset 0");
+static_assert(offsetof(DecodedOp, ext) == 16, "DecodedOp: ext must start at offset 16");
+
+#if INTPTR_MAX == INT32_MAX
+static_assert(sizeof(DecodedControlFlowData) == 12, "DecodedControlFlowData must be exactly 12 bytes on 32-bit");
+static_assert(offsetof(DecodedOp, next_eip) == 4, "DecodedOp: next_eip must start at offset 4 on 32-bit");
+static_assert(offsetof(DecodedOp, meta) == 11, "DecodedOp: meta must start at offset 11 on 32-bit");
+#else
+static_assert(sizeof(DecodedControlFlowData) == 16, "DecodedControlFlowData must be exactly 16 bytes");
 static_assert(offsetof(DecodedOp, next_eip) == 8, "DecodedOp: next_eip must start at offset 8");
 static_assert(offsetof(DecodedOp, meta) == 15, "DecodedOp: meta must start at offset 15");
-static_assert(offsetof(DecodedOp, ext) == 16, "DecodedOp: ext must start at offset 16");
+#endif
 
 template <typename OpT>
 FORCE_INLINE bool HasExt(const OpT* op) {
@@ -326,9 +333,15 @@ struct alignas(16) BasicBlock {
 
 static_assert(offsetof(BasicBlock, chain) == 0, "BasicBlock: chain must start at offset 0");
 static_assert(offsetof(BasicBlock, entry) == 8, "BasicBlock: entry must start at offset 8");
-static_assert(offsetof(BasicBlock, jit_code) == 16, "BasicBlock: jit_code must start at offset 16");
 static_assert(sizeof(BasicBlockChainPrefix) == 8, "BasicBlockChainPrefix must be exactly 8 bytes");
+
+#if INTPTR_MAX == INT32_MAX
+static_assert(offsetof(BasicBlock, jit_code) == 12, "BasicBlock: jit_code must start at offset 12 on 32-bit");
+static_assert(offsetof(BasicBlock, slots) == 48, "BasicBlock: slots must start at offset 48 on 32-bit");
+#else
+static_assert(offsetof(BasicBlock, jit_code) == 16, "BasicBlock: jit_code must start at offset 16");
 static_assert(offsetof(BasicBlock, slots) == 64, "BasicBlock: slots must start at offset 64");
+#endif
 
 // Decoder Logic
 bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index);
