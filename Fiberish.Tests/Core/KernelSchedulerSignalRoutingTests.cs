@@ -32,6 +32,8 @@ public class KernelSchedulerSignalRoutingTests
         Assert.True(delivered);
 
         var sigMask = 1UL << ((int)Signal.SIGUSR1 - 1);
-        Assert.True((worker.PendingSignals & sigMask) != 0);
+        Assert.True((process.PendingProcessSignals & sigMask) != 0);
+        Assert.True((worker.GetVisiblePendingSignals() & sigMask) != 0);
+        Assert.Equal((int)Signal.SIGUSR1, worker.InterruptingSignal);
     }
 }

@@ -11,6 +11,12 @@ namespace Fiberish.Tests.Syscalls;
 
 public class PipeTests
 {
+    private static readonly FieldInfo ReadHandleField =
+        typeof(PipeInode).GetField("_readHandle", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+    private static readonly MethodInfo DrainEventsMethod =
+        typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
     private static ValueTask<int> CallSysRead(TestEnv env, uint fd, uint bufAddr, uint count)
     {
         var method = typeof(SyscallManager).GetMethod("SysRead", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -136,7 +142,7 @@ public class PipeTests
     [Fact]
     public async Task Pipe2_Efault_WithTaskOwner_DoesNotRecurseAndRollsBack()
     {
-        using var env = new TestEnv(true);
+        using var env = new TestEnv();
         const uint invalidFdsAddr = 0xDEAD0000;
         var before = env.SyscallManager.FDs.Count;
 
@@ -190,7 +196,7 @@ public class PipeTests
     [Fact(Timeout = 1000)]
     public async Task Pipe_Poll_ReadEndWithBufferedDataAndClosedWriter_HasPollhup()
     {
-        using var env = new TestEnv(true);
+        using var env = new TestEnv();
         const uint fdsAddr = 0x16000;
         const uint dataAddr = 0x17000;
         env.MapUserPage(fdsAddr);
@@ -209,9 +215,35 @@ public class PipeTests
     }
 
     [Fact(Timeout = 1000)]
+    public async Task Pipe_RegisterWaitHandle_StaleReadableSignal_DoesNotSpuriouslyFire()
+    {
+        using var env = new TestEnv();
+        const uint fdsAddr = 0x161000;
+        env.MapUserPage(fdsAddr);
+
+        Assert.Equal(0, await CallSysPipe(env, fdsAddr));
+        var (rfd, _) = env.ReadPipeFds(fdsAddr);
+
+        var rFile = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(rfd));
+        var inode = Assert.IsType<PipeInode>(rFile.Dentry.Inode);
+        var readHandle = Assert.IsType<AsyncWaitQueue>(ReadHandleField.GetValue(inode));
+
+        readHandle.Signal();
+        Assert.True(readHandle.IsSignaled);
+
+        var fired = 0;
+        using var reg = inode.RegisterWaitHandle(rFile, env.Task!, () => fired++, LinuxConstants.POLLIN);
+        env.DrainEvents();
+
+        Assert.NotNull(reg);
+        Assert.False(readHandle.IsSignaled);
+        Assert.Equal(0, fired);
+    }
+
+    [Fact(Timeout = 1000)]
     public async Task Splice_PipeWithNonNullOffsets_ReturnsEspipe()
     {
-        using var env = new TestEnv(true);
+        using var env = new TestEnv();
         const uint inPipeAddr = 0x18000;
         const uint outPipeAddr = 0x19000;
         const uint offPtr = 0x1A000;
@@ -265,6 +297,12 @@ public class PipeTests
         {
             if (Scheduler != null)
                 GC.KeepAlive(Task);
+        }
+
+        public void DrainEvents()
+        {
+            Assert.NotNull(Scheduler);
+            _ = (bool)DrainEventsMethod.Invoke(Scheduler, null)!;
         }
 
         public void MapUserPage(uint addr)

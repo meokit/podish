@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
@@ -1114,9 +1115,9 @@ public class TtyDisciplineTests
         var hupMask = 1UL << ((int)Signal.SIGHUP - 1);
         var contMask = 1UL << ((int)Signal.SIGCONT - 1);
 
-        Assert.NotEqual(0UL, _task.PendingSignals & hupMask);
-        Assert.NotEqual(0UL, fgTask.PendingSignals & hupMask);
-        Assert.NotEqual(0UL, fgTask.PendingSignals & contMask);
+        Assert.NotEqual(0UL, _task.GetVisiblePendingSignals() & hupMask);
+        Assert.NotEqual(0UL, fgTask.GetVisiblePendingSignals() & hupMask);
+        Assert.NotEqual(0UL, fgTask.GetVisiblePendingSignals() & contMask);
         Assert.Null(_task.Process.ControllingTty);
         Assert.Null(fgProcess.ControllingTty);
         Assert.Equal(0, _tty.SessionId);
@@ -1143,8 +1144,52 @@ public class TtyDisciplineTests
         Assert.Equal(22, _broadcaster.LastSignal);
     }
 
+    [Fact]
+    public void ControllingTtyInode_Poll_without_controlling_tty_reports_hup_and_err()
+    {
+        var inode = new ControllingTtyInode(_taskContext.SyscallManager.MemfdSuperBlock);
+        var file = new LinuxFile(new Dentry("tty", inode, null, _taskContext.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, _taskContext.SyscallManager.AnonMount);
+
+        var revents = ((ITaskPollSource)inode).Poll(file, _task, LinuxConstants.POLLIN | LinuxConstants.POLLOUT);
+
+        Assert.True((revents & PollEvents.POLLHUP) != 0);
+        Assert.True((revents & PollEvents.POLLERR) != 0);
+    }
+
+    [Fact]
+    public void ControllingTtyInode_RegisterWaitHandle_resets_stale_signal_without_spurious_callback()
+    {
+        _task.Process.ControllingTty = _tty;
+
+        var inode = new ControllingTtyInode(_taskContext.SyscallManager.MemfdSuperBlock);
+        var file = new LinuxFile(new Dentry("tty", inode, null, _taskContext.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, _taskContext.SyscallManager.AnonMount);
+
+        Assert.False(_tty.HasDataAvailable);
+        _tty.DataAvailable.Signal();
+        Assert.True(_tty.DataAvailable.IsSignaled);
+
+        var fired = 0;
+        using var reg = inode.RegisterWaitHandle(file, _task, () => fired++, LinuxConstants.POLLIN);
+
+        _taskContext.DrainEvents();
+
+        Assert.NotNull(reg);
+        Assert.False(_tty.DataAvailable.IsSignaled);
+        Assert.Equal(0, fired);
+
+        _tty.Input(Encoding.ASCII.GetBytes("x\n"));
+        _taskContext.DrainEvents();
+
+        Assert.True(fired > 0);
+    }
+
     private sealed class TtyTaskContext : IDisposable
     {
+        private static readonly MethodInfo DrainEventsMethod =
+            typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
         public TtyTaskContext()
         {
             Engine = new Engine();
@@ -1171,6 +1216,11 @@ public class TtyDisciplineTests
         {
             SyscallManager.Close();
             GC.KeepAlive(Task);
+        }
+
+        public void DrainEvents()
+        {
+            _ = (bool)DrainEventsMethod.Invoke(Scheduler, null)!;
         }
     }
 

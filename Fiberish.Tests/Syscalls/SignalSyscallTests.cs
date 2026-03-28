@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Reflection;
 using Fiberish.Core;
 using Fiberish.Memory;
@@ -20,7 +21,44 @@ public class SignalSyscallTests
         Assert.Equal(0, result);
 
         var sigMask = 1UL << ((int)Signal.SIGHUP - 1);
-        Assert.True((env.TargetTask.PendingSignals & sigMask) != 0);
+        Assert.True((env.TargetGroupProcess.PendingProcessSignals & sigMask) != 0);
+        Assert.True((env.TargetTask.GetVisiblePendingSignals() & sigMask) != 0);
+    }
+
+    [Fact]
+    public async Task SigPending_LegacyI386WritesOnlyOldSigsetWidth()
+    {
+        using var env = new SignalEnv();
+        const uint pendingPtr = 0x10000;
+        env.MapUserPage(pendingPtr);
+        env.Write(pendingPtr, new byte[] { 0, 0, 0, 0, 0xAA, 0xBB, 0xCC, 0xDD });
+
+        env.TargetTask.PostSignal((int)Signal.SIGUSR1);
+        env.TargetGroupProcess.EnqueueProcessSignal(new SigInfo { Signo = (int)Signal.SIGHUP, Code = 0 });
+
+        var rc = await InvokeSys(env.TargetSys, env.TargetEngine, "SysSigPending", pendingPtr, 0, 0, 0, 0, 0);
+
+        Assert.Equal(0, rc);
+        var result = env.Read(pendingPtr, 8);
+        Assert.Equal(0x00000201u, BinaryPrimitives.ReadUInt32LittleEndian(result.AsSpan(0, 4)));
+        Assert.Equal(0xDDCCBBAAu, BinaryPrimitives.ReadUInt32LittleEndian(result.AsSpan(4, 4)));
+    }
+
+    [Fact]
+    public async Task RtSigPending_ReportsVisibleThreadAndProcessPendingSet()
+    {
+        using var env = new SignalEnv();
+        const uint pendingPtr = 0x11000;
+        env.MapUserPage(pendingPtr);
+
+        env.TargetTask.PostSignal((int)Signal.SIGUSR1);
+        env.TargetGroupProcess.EnqueueProcessSignal(new SigInfo { Signo = (int)Signal.SIGRTMIN, Code = 0 });
+
+        var rc = await InvokeSys(env.TargetSys, env.TargetEngine, "SysRtSigPending", pendingPtr, 8, 0, 0, 0, 0);
+
+        Assert.Equal(0, rc);
+        var visible = BinaryPrimitives.ReadUInt64LittleEndian(env.Read(pendingPtr, 8));
+        Assert.Equal((1UL << ((int)Signal.SIGUSR1 - 1)) | (1UL << ((int)Signal.SIGRTMIN - 1)), visible);
     }
 
     private static ValueTask<int> InvokeSys(SyscallManager sm, Engine engine, string methodName, uint a1, uint a2,
@@ -79,6 +117,25 @@ public class SignalSyscallTests
         public void Dispose()
         {
             Scheduler.CurrentTask = null;
+        }
+
+        public void MapUserPage(uint addr)
+        {
+            TargetMem.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[test]", TargetEngine);
+            Assert.True(TargetMem.HandleFault(addr, true, TargetEngine));
+        }
+
+        public void Write(uint addr, ReadOnlySpan<byte> data)
+        {
+            Assert.True(TargetEngine.CopyToUser(addr, data));
+        }
+
+        public byte[] Read(uint addr, int count)
+        {
+            var buffer = new byte[count];
+            Assert.True(TargetEngine.CopyFromUser(addr, buffer));
+            return buffer;
         }
     }
 }

@@ -12,6 +12,9 @@ namespace Fiberish.Tests.VFS;
 
 public class NetworkTests
 {
+    private static readonly MethodInfo DrainEventsMethod =
+        typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
     [Fact]
     public async Task EpollInode_ShouldRegisterAndTriggerEvents()
     {
@@ -108,6 +111,34 @@ public class NetworkTests
 
         // After draining the only queued packet, future waits must block until new data arrives.
         Assert.False(readWaitQueue.IsSignaled);
+    }
+
+    [Fact]
+    public void UnixSocketInode_RegisterWaitHandle_StaleReadableSignal_DoesNotSpuriouslyFire()
+    {
+        using var env = new TestEnv();
+        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Dgram, env.Scheduler);
+        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Dgram, env.Scheduler);
+        sock1.ConnectPair(sock2);
+        sock2.ConnectPair(sock1);
+
+        var file2 = new LinuxFile(new Dentry("s2", sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
+
+        var readWaitField =
+            typeof(UnixSocketInode).GetField("_readWaitQueue", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(readWaitField);
+        var readWaitQueue = Assert.IsType<AsyncWaitQueue>(readWaitField!.GetValue(sock2));
+
+        readWaitQueue.Signal();
+        Assert.True(readWaitQueue.IsSignaled);
+
+        var fired = 0;
+        using var reg = sock2.RegisterWaitHandle(file2, env.Task, () => fired++, PollEvents.POLLIN);
+        env.DrainEvents();
+
+        Assert.NotNull(reg);
+        Assert.False(readWaitQueue.IsSignaled);
+        Assert.Equal(0, fired);
     }
 
     [Fact]
@@ -219,9 +250,9 @@ public class NetworkTests
         }).WaitAsync(TimeSpan.FromSeconds(5));
 
         var result = await pending.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal((uint)LinuxConstants.EPOLLIN, result.firstEvent.Events);
+        Assert.Equal(LinuxConstants.EPOLLIN, result.firstEvent.Events);
         Assert.Equal(data, result.firstEvent.Data);
-        Assert.Equal((uint)LinuxConstants.EPOLLIN, result.secondEvent.Events);
+        Assert.Equal(LinuxConstants.EPOLLIN, result.secondEvent.Events);
         Assert.Equal(data, result.secondEvent.Data);
     }
 
@@ -304,7 +335,7 @@ public class NetworkTests
         public TestEnv()
         {
             Scheduler = new KernelScheduler();
-            
+
 
             var fs = new Tmpfs();
             MemfdSuperBlock = fs.ReadSuper(new FileSystemType { Name = "tmpfs" }, 0, "", null);
@@ -324,7 +355,11 @@ public class NetworkTests
 
         public void Dispose()
         {
-            
+        }
+
+        public void DrainEvents()
+        {
+            _ = (bool)DrainEventsMethod.Invoke(Scheduler, null)!;
         }
 
         public Task<T> StartOnScheduler<T>(Func<ValueTask<T>> action)

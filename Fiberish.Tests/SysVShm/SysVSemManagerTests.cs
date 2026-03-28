@@ -152,6 +152,20 @@ public class SysVSemManagerTests
         Assert.Equal(-(int)Errno.EINTR, rc);
     }
 
+    [Fact]
+    public void SemOp_BlockingWait_StopThenSigcont_ReturnsEintr()
+    {
+        using var ctx = new TestContext();
+        var method = typeof(FiberTask).GetMethod("IsSyscallInterruptedByStopSignal",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var stopInterrupted = (bool)method!.Invoke(null,
+            [ctx.Task, (uint)X86SyscallNumbers.semop, 0u])!;
+
+        Assert.True(stopInterrupted);
+    }
+
     private sealed class TestContext : IDisposable
     {
         private static readonly MethodInfo DrainEventsMethod =
@@ -167,7 +181,7 @@ public class SysVSemManagerTests
             Manager = manager ?? new SysVSemManager();
 
             _kernel = new KernelScheduler();
-            
+
             var process = new Process(processId, Vma, null!)
             {
                 EUID = 0,
@@ -183,7 +197,6 @@ public class SysVSemManagerTests
 
         public void Dispose()
         {
-            
             GC.KeepAlive(Task);
         }
 

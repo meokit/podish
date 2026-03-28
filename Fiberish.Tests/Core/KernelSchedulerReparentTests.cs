@@ -77,8 +77,10 @@ public class KernelSchedulerReparentTests
         Assert.Equal(1, child.PPID);
         var hupMask = 1UL << ((int)Signal.SIGHUP - 1);
         var contMask = 1UL << ((int)Signal.SIGCONT - 1);
-        Assert.NotEqual(0UL, childTask.PendingSignals & hupMask);
-        Assert.NotEqual(0UL, childTask.PendingSignals & contMask);
+        Assert.NotEqual(0UL, child.PendingProcessSignals & hupMask);
+        Assert.NotEqual(0UL, child.PendingProcessSignals & contMask);
+        Assert.NotEqual(0UL, childTask.GetVisiblePendingSignals() & hupMask);
+        Assert.NotEqual(0UL, childTask.GetVisiblePendingSignals() & contMask);
     }
 
     [Fact]
@@ -110,8 +112,10 @@ public class KernelSchedulerReparentTests
         Assert.Equal(1, child.PPID);
         var hupMask = 1UL << ((int)Signal.SIGHUP - 1);
         var contMask = 1UL << ((int)Signal.SIGCONT - 1);
-        Assert.Equal(0UL, childTask.PendingSignals & hupMask);
-        Assert.Equal(0UL, childTask.PendingSignals & contMask);
+        Assert.Equal(0UL, child.PendingProcessSignals & hupMask);
+        Assert.Equal(0UL, child.PendingProcessSignals & contMask);
+        Assert.Equal(0UL, childTask.GetVisiblePendingSignals() & hupMask);
+        Assert.Equal(0UL, childTask.GetVisiblePendingSignals() & contMask);
     }
 
     [Fact]
@@ -178,13 +182,14 @@ public class KernelSchedulerReparentTests
         scheduler.SetEngineInitReaperEnabled(true);
 
         var childTask = new FiberTask(2, child, new MockEngine(), scheduler);
-        Assert.Equal(0UL, childTask.PendingSignals);
+        Assert.Equal(0UL, childTask.GetVisiblePendingSignals());
 
         var ok = scheduler.SignalProcess(1, (int)Signal.SIGTERM);
 
         Assert.True(ok);
         var sigMask = 1UL << ((int)Signal.SIGTERM - 1);
-        Assert.NotEqual(0UL, childTask.PendingSignals & sigMask);
+        Assert.NotEqual(0UL, child.PendingProcessSignals & sigMask);
+        Assert.NotEqual(0UL, childTask.GetVisiblePendingSignals() & sigMask);
     }
 
     private sealed class MockEngine : Engine

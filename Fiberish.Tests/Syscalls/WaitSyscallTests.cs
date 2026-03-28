@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using Fiberish.Core;
+using Fiberish.Core.Net;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
@@ -137,6 +138,27 @@ public class WaitSyscallTests
 
         var pfd = env.ReadStruct<PollFd>(pollfdPtr);
         Assert.Equal(LinuxConstants.POLLIN, pfd.Revents);
+    }
+
+    [Fact]
+    public async Task Ppoll_ControllingTtyWithoutBackingTty_ReportsHupAndErrImmediately()
+    {
+        using var env = new TestEnv();
+        const uint pollfdPtr = 0x181000;
+        env.MapUserPage(pollfdPtr);
+
+        var inode = new ControllingTtyInode(env.SyscallManager.MemfdSuperBlock);
+        var file = new LinuxFile(new Dentry("tty", inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLIN, Revents = 0 });
+
+        var rc = await env.Invoke("SysPpoll", pollfdPtr, 1, 0, 0, 0, 0);
+        Assert.Equal(1, rc);
+
+        var pfd = env.ReadStruct<PollFd>(pollfdPtr);
+        Assert.Equal((short)(PollEvents.POLLHUP | PollEvents.POLLERR), pfd.Revents);
     }
 
     [Fact]
@@ -417,6 +439,149 @@ public class WaitSyscallTests
         Assert.True((pfd.Revents & PollEvents.POLLERR) == 0);
     }
 
+    private static void WriteSockaddrIn(TestEnv env, uint addr, uint ipv4Be, ushort port)
+    {
+        Span<byte> buf = stackalloc byte[16];
+        BinaryPrimitives.WriteUInt16LittleEndian(buf[..2], LinuxConstants.AF_INET);
+        BinaryPrimitives.WriteUInt16BigEndian(buf[2..4], port);
+        BinaryPrimitives.WriteUInt32BigEndian(buf[4..8], ipv4Be);
+        env.Write(addr, buf);
+    }
+
+    [Fact]
+    public async Task Socket_Host_RecvTimeout_Interrupted_ReturnsEintr()
+    {
+        using var env = new TestEnv();
+        const uint optvalPtr = 0x30000;
+        const uint bufPtr = 0x31000;
+        env.MapUserPage(optvalPtr);
+        env.MapUserPage(bufPtr);
+
+        // Create Host socket
+        var fd = await env.Invoke("SysSocket", LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0, 0, 0, 0);
+        Assert.True(fd >= 0);
+
+        // Set SO_RCVTIMEO
+        var ts = new byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(0, 4), 10); // 10 seconds
+        BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(4, 4), 0);
+        env.Write(optvalPtr, ts);
+        Assert.Equal(0,
+            await env.Invoke("SysSetSockOpt", (uint)fd, LinuxConstants.SOL_SOCKET, LinuxConstants.SO_RCVTIMEO,
+                optvalPtr, 8, 0));
+
+        // Bind to any port so ReceiveFrom doesn't throw InvalidOperationException
+        const uint bindAddrPtr = 0x34000;
+        env.MapUserPage(bindAddrPtr);
+        WriteSockaddrIn(env, bindAddrPtr, 0, 0); // INADDR_ANY:0
+        Assert.Equal(0, await env.Invoke("SysBind", (uint)fd, bindAddrPtr, 16, 0, 0, 0));
+
+        var pending = env.StartOnScheduler(() => env.Invoke("SysRecvFrom", (uint)fd, bufPtr, 64, 0, 0, 0));
+        Assert.False(pending.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.PostSignalAsync((int)Signal.SIGUSR1);
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(-(int)Errno.EINTR, rc);
+    }
+
+    [Fact]
+    public async Task Socket_Netstack_RecvTimeout_Interrupted_ReturnsEintr()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        const uint optvalPtr = 0x32000;
+        const uint bufPtr = 0x33000;
+        env.MapUserPage(optvalPtr);
+        env.MapUserPage(bufPtr);
+
+        // Create Netstack socket
+        var fd = await env.Invoke("SysSocket", LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0, 0, 0, 0);
+        Assert.True(fd >= 0);
+
+        // Set SO_RCVTIMEO
+        var ts = new byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(0, 4), 10); // 10 seconds
+        BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(4, 4), 0);
+        env.Write(optvalPtr, ts);
+        Assert.Equal(0,
+            await env.Invoke("SysSetSockOpt", (uint)fd, LinuxConstants.SOL_SOCKET, LinuxConstants.SO_RCVTIMEO,
+                optvalPtr, 8, 0));
+
+        // Bind to any port
+        const uint bindAddrPtr = 0x35000;
+        env.MapUserPage(bindAddrPtr);
+        WriteSockaddrIn(env, bindAddrPtr, 0, 0);
+        Assert.Equal(0, await env.Invoke("SysBind", (uint)fd, bindAddrPtr, 16, 0, 0, 0));
+
+        var pending = env.StartOnScheduler(() => env.Invoke("SysRecvFrom", (uint)fd, bufPtr, 64, 0, 0, 0));
+        Assert.False(pending.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.PostSignalAsync((int)Signal.SIGUSR1);
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(-(int)Errno.EINTR, rc);
+    }
+
+    [Fact]
+    public void FutexWait_IsNotInNeverRestartList()
+    {
+        using var env = new TestEnv();
+        var method = typeof(FiberTask).GetMethod("IsSyscallNeverRestart",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var restartNever = (bool)method!.Invoke(null,
+            [env.Task, (uint)X86SyscallNumbers.futex, 0u, (uint)LinuxConstants.FUTEX_WAIT])!;
+
+        Assert.False(restartNever);
+    }
+
+    [Fact]
+    public async Task RecvTimeoutSocket_IsInNeverRestartList()
+    {
+        using var env = new TestEnv();
+        const uint optvalPtr = 0x36000;
+        env.MapUserPage(optvalPtr);
+        env.Process.Syscalls = env.SyscallManager;
+
+        var fd = await env.Invoke("SysSocket", LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0, 0, 0, 0);
+        Assert.True(fd >= 0);
+
+        var ts = new byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(0, 4), 10);
+        BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(4, 4), 0);
+        env.Write(optvalPtr, ts);
+        Assert.Equal(0,
+            await env.Invoke("SysSetSockOpt", (uint)fd, LinuxConstants.SOL_SOCKET, LinuxConstants.SO_RCVTIMEO,
+                optvalPtr, 8, 0));
+
+        var method = typeof(FiberTask).GetMethod("IsSyscallNeverRestart",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var restartNever = (bool)method!.Invoke(null,
+            [env.Task, (uint)X86SyscallNumbers.recvfrom, (uint)fd, 0u])!;
+
+        Assert.True(restartNever);
+    }
+
+    [Fact]
+    public void EpollWait_IsInStopSignalEintrList()
+    {
+        using var env = new TestEnv();
+        var method = typeof(FiberTask).GetMethod("IsSyscallInterruptedByStopSignal",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var stopInterrupted = (bool)method!.Invoke(null,
+            [env.Task, (uint)X86SyscallNumbers.epoll_wait, 0u])!;
+
+        Assert.True(stopInterrupted);
+    }
+
     private static void WriteTimespecSec(TestEnv env, uint tsPtr, int seconds)
     {
         var ts = new byte[8];
@@ -449,6 +614,7 @@ public class WaitSyscallTests
             Task.Status = FiberTaskStatus.Waiting;
 
             SyscallManager = new SyscallManager(Engine, Vma, 0);
+            Process.Syscalls = SyscallManager;
             SyscallManager.MountRootHostfs(".");
         }
 
@@ -598,6 +764,25 @@ public class WaitSyscallTests
                 {
                     action();
                     tcs.TrySetResult();
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            });
+
+            return tcs.Task;
+        }
+
+        public Task<T> InvokeOnSchedulerAsync<T>(Func<T> action)
+        {
+            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            Scheduler.ScheduleFromAnyThread(() =>
+            {
+                try
+                {
+                    tcs.TrySetResult(action());
                 }
                 catch (Exception ex)
                 {
