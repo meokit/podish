@@ -288,6 +288,10 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
         return nullptr;
     }
 
+    if constexpr (kUseRunLoopTrampoline) {
+        return CacheDecodedBlock(state, eip, new_block);
+    }
+
     if (!BlockIsConcatCandidateTerminal(new_block)) {
         state->block_stats.block_concat_reject_not_concat_terminal++;
         return CacheDecodedBlock(state, eip, new_block);

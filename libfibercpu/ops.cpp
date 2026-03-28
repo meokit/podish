@@ -134,6 +134,12 @@ static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT
         return instr_limit;
     }
 
+    if constexpr (kUseRunLoopTrampoline) {
+        CommitFlagsCache(state, flags_cache);
+        state->ctx.eip = target_eip;
+        return instr_limit;
+    }
+
     if constexpr (Kind == ExtKind::Link) {
         SetNextBlock(op, next_block);
     } else {
