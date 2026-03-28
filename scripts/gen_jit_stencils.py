@@ -177,8 +177,6 @@ def generate(input_paths, out_cpp_path, mode, usage_path=None):
             f.write('    if constexpr (UseQword2) *reinterpret_cast<uint64_t*>(reinterpret_cast<uint8_t*>(&op) + 16) = PatchMagic64<PatchKind::OpQword64, 2>();\n')
             f.write('    if constexpr (UseQword3) *reinterpret_cast<uint64_t*>(reinterpret_cast<uint8_t*>(&op) + 24) = PatchMagic64<PatchKind::OpQword64, 3>();\n')
             
-            f.write('\n    PREFETCH(reinterpret_cast<const std::byte*>(runtime_op) + 128);\n')
-            f.write('    PREFETCH(reinterpret_cast<const std::byte*>(runtime_op) + 256);\n')
             f.write('\n    for (;;) {\n')
             f.write('        auto flow = Target(state, &op, &utlb, GetImm(&op), &branch, flags_cache);\n')
             f.write('        switch (flow) {\n')
