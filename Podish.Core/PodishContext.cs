@@ -1,5 +1,6 @@
 using Fiberish.Core.Net;
 using Fiberish.Core.VFS.TTY;
+using Fiberish.VFS;
 using Fiberish.Diagnostics;
 using Microsoft.Extensions.Logging;
 
@@ -384,16 +385,83 @@ public sealed class PodishContext : IDisposable
         return await StartInternalAsync(spec, true, containerIdOverride);
     }
 
-    private async Task<PodishContainerSession> StartInternalAsync(PodishRunSpec spec, bool attachTerminalBridge,
-        string? containerIdOverride = null)
+    public async Task<PodishRunResult> RunRootfsTarAsync(Stream rootfsTarStream, PodishRunSpec spec,
+        string rootfsName = "in-memory-rootfs", string? containerIdOverride = null)
     {
-        var useRootfs = !string.IsNullOrWhiteSpace(spec.Rootfs);
+        using var _ = Logging.BeginScope(LoggerFactory);
+        var session = await StartRootfsTarAsync(rootfsTarStream, spec, rootfsName, containerIdOverride);
+        var exitCode = await session.WaitAsync();
+
+        return new PodishRunResult
+        {
+            ContainerId = session.ContainerId,
+            ImageRef = session.ImageRef,
+            ExitCode = exitCode
+        };
+    }
+
+    public async Task<PodishContainerSession> StartRootfsTarAsync(Stream rootfsTarStream, PodishRunSpec spec,
+        string rootfsName = "in-memory-rootfs", string? containerIdOverride = null)
+    {
+        using var _ = Logging.BeginScope(LoggerFactory);
+        ArgumentNullException.ThrowIfNull(rootfsTarStream);
+
+        await using var copy = new MemoryStream();
+        await rootfsTarStream.CopyToAsync(copy);
+        var tarBytes = copy.ToArray();
+
+        var rootfsSpec = new PodishRunSpec
+        {
+            Name = spec.Name,
+            Hostname = spec.Hostname,
+            AutoRemove = spec.AutoRemove,
+            NetworkMode = spec.NetworkMode,
+            Image = spec.Image,
+            Rootfs = rootfsName,
+            Exe = spec.Exe,
+            ExeArgs = spec.ExeArgs,
+            Volumes = spec.Volumes,
+            Env = spec.Env,
+            Dns = spec.Dns,
+            Interactive = spec.Interactive,
+            Tty = spec.Tty,
+            Strace = spec.Strace,
+            Init = spec.Init,
+            PulseServer = spec.PulseServer,
+            WaylandServer = spec.WaylandServer,
+            WaylandDesktopWidth = spec.WaylandDesktopWidth,
+            WaylandDesktopHeight = spec.WaylandDesktopHeight,
+            MemoryQuotaBytes = spec.MemoryQuotaBytes,
+            LogDriver = spec.LogDriver,
+            PublishedPorts = spec.PublishedPorts
+        };
+
+        return await StartInternalAsync(
+            rootfsSpec,
+            true,
+            containerIdOverride,
+            devNumbers => RootfsArchiveLoader.LoadTmpfsFromTar(new MemoryStream(tarBytes, writable: false), devNumbers,
+                rootfsName),
+            rootfsName);
+    }
+
+    private async Task<PodishContainerSession> StartInternalAsync(PodishRunSpec spec, bool attachTerminalBridge,
+        string? containerIdOverride = null,
+        Func<DeviceNumberManager, SuperBlock>? rootFileSystemFactory = null,
+        string? rootFileSystemSource = null)
+    {
+        var useRootfs = !string.IsNullOrWhiteSpace(spec.Rootfs) || rootFileSystemFactory != null;
         if (!ContainerLogDriverParser.TryParse(spec.LogDriver, out var containerLogDriver))
             throw new InvalidOperationException($"invalid log driver: {spec.LogDriver}");
 
         string? image = null;
         var rootfsPath = spec.Rootfs ?? string.Empty;
-        if (!useRootfs)
+        if (rootFileSystemFactory != null)
+        {
+            rootfsPath = rootFileSystemSource ?? spec.Rootfs ?? "in-memory-rootfs";
+            image = rootfsPath;
+        }
+        else if (!useRootfs)
         {
             if (string.IsNullOrWhiteSpace(spec.Image))
                 throw new InvalidOperationException("image is required unless rootfs is set");
@@ -435,6 +503,7 @@ public sealed class PodishContext : IDisposable
         var runTask = runtimeThread.Start(new ContainerRunRequest
         {
             RootfsPath = rootfsPath,
+            RootFileSystemFactory = rootFileSystemFactory,
             Exe = spec.Exe ?? string.Empty,
             ExeArgs = spec.ExeArgs,
             Volumes = spec.Volumes,
@@ -442,7 +511,7 @@ public sealed class PodishContext : IDisposable
             DnsServers = spec.Dns,
             UseTty = spec.Interactive && spec.Tty,
             Strace = spec.Strace,
-            UseOverlay = !useRootfs,
+            UseOverlay = !useRootfs && rootFileSystemFactory == null,
             NetworkMode = spec.NetworkMode,
             Hostname = spec.Hostname ?? spec.Name ?? containerId,
             ContainerName = spec.Name,

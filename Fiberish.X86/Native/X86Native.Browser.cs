@@ -1,4 +1,4 @@
-#if !FIBERISH_BROWSER_WASM
+#if FIBERISH_BROWSER_WASM
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -36,6 +36,8 @@ public enum Seg
 
 public unsafe partial class X86Native
 {
+    private const string LibName = "libfibercpu";
+
     [Flags]
     public enum PageMappingFlags : byte
     {
@@ -44,22 +46,10 @@ public unsafe partial class X86Native
         External = 1 << 1
     }
 
-    private const string LibName =
-#if FIBERISH_BROWSER_WASM
-        "__Internal";
-#else
-        "fibercpu";
-#endif
-
-#pragma warning disable CA2255
     [ModuleInitializer]
     internal static void Initialize()
     {
-#if !FIBERISH_BROWSER_WASM
-        NativeLibraryResolver.Register(typeof(X86Native), LibName);
-#endif
     }
-#pragma warning restore CA2255
 
     [LibraryImport(LibName, EntryPoint = "X86_Create")]
     public static partial IntPtr Create();
@@ -145,11 +135,6 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_GetStatus")]
     [SuppressGCTransition]
     public static partial int GetStatus(IntPtr state);
-
-    // Callbacks
-    // public delegate bool FaultHandler(IntPtr state, uint addr, int isWrite, IntPtr userdata);
-    // public delegate void MemHook(IntPtr state, uint addr, uint size, int isWrite, ulong val, IntPtr userdata);
-    // public delegate int InterruptHandler(IntPtr state, uint vector, IntPtr userdata);
 
     [LibraryImport(LibName, EntryPoint = "X86_SetFaultCallback")]
     public static partial void SetFaultCallback(IntPtr state,
@@ -275,8 +260,7 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial int GetOpIdForHandler(IntPtr handler);
 
-    [LibraryImport(LibName, EntryPoint = "X86_GetLibAddress")]
-    public static partial IntPtr GetLibAddress();
+    public static IntPtr GetLibAddress() => IntPtr.Zero;
 
     [StructLayout(LayoutKind.Explicit, Size = 32)]
     public struct DecodedOp
@@ -298,10 +282,6 @@ public unsafe partial class X86Native
     public struct BasicBlockChainPrefix
     {
         public ulong packed;
-        // Bit layout:
-        // [0-31]: start_eip (32 bits)
-        // [32-39]: inst_count (8 bits)
-        // [40-63]: reserved (24 bits)
 
         public uint start_eip
         {
@@ -331,9 +311,7 @@ public unsafe partial class X86Native
         private byte block_padding0;
         private ushort block_padding1;
         public ulong exec_count;
-        // Native BasicBlock::slots is alignas(16), so decoded ops start at offset 64.
 
-        // Convenience properties for start_eip and inst_count
         public uint start_eip
         {
             get => chain.start_eip;

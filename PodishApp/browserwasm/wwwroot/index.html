@@ -54,6 +54,15 @@
         cursor: pointer;
       }
 
+      .toolbar input[type="file"] {
+        max-width: 280px;
+      }
+
+      .toolbar button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
       .toolbar button.secondary {
         background: #334155;
       }
@@ -74,8 +83,8 @@
   </head>
   <body>
     <div id="app"></div>
-    <script crossorigin src="https://unpkg.com/react@19/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@19/umd/react-dom.development.js"></script>
+    <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.development.js"></script>
+    <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.development.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
     <script type="module" src="./main.mjs"></script>

@@ -25,6 +25,7 @@ public sealed class ContainerRunRequest
     public const string XdgRuntimeDirEnvVar = "XDG_RUNTIME_DIR";
 
     public required string RootfsPath { get; init; }
+    public Func<DeviceNumberManager, SuperBlock>? RootFileSystemFactory { get; init; }
     public string Hostname { get; init; } = string.Empty;
     public string? ContainerName { get; init; }
     public NetworkMode NetworkMode { get; init; } = NetworkMode.Host;
@@ -177,12 +178,15 @@ public sealed class ContainerRuntimeService
 
         INetworkBackend? networkBackend = null;
         ContainerNetworkContext? networkContext = null;
+        var effectiveNetworkMode = OperatingSystem.IsBrowser() && request.NetworkMode == NetworkMode.Private
+            ? NetworkMode.Host
+            : request.NetworkMode;
         var actualExe = string.IsNullOrEmpty(request.Exe) ? "/bin/sh" : request.Exe;
         var initProcessStarted = false;
         var startupPhase = "bootstrap";
         try
         {
-            if (!Directory.Exists(request.RootfsPath))
+            if (request.RootFileSystemFactory == null && !Directory.Exists(request.RootfsPath))
             {
                 Console.Error.WriteLine($"[Podish Error] RootFS path not found: {request.RootfsPath}");
                 request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit",
@@ -210,12 +214,12 @@ public sealed class ContainerRuntimeService
 
             runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag);
 
-            if (request.NetworkMode == NetworkMode.Private)
+            if (effectiveNetworkMode == NetworkMode.Private)
                 networkBackend = new PrivateNetworkBackend(new DummySwitch());
             else
                 networkBackend = new HostNetworkBackend();
 
-            if (request.NetworkMode == NetworkMode.Private)
+            if (effectiveNetworkMode == NetworkMode.Private)
             {
                 networkContext = networkBackend.CreateContainerNetwork(new ContainerNetworkSpec
                     { ContainerId = request.ContainerId });
@@ -228,7 +232,7 @@ public sealed class ContainerRuntimeService
                 runtime.Syscalls.SetPrivateNetNamespace(networkContext.SharedNamespace);
             }
 
-            runtime.Syscalls.NetworkMode = request.NetworkMode;
+            runtime.Syscalls.NetworkMode = effectiveNetworkMode;
             if (request.UseOverlay)
             {
                 if (!TryCreateLayerLower(runtime.DeviceNumbers, request.RootfsPath, out var layerLowerSb,
@@ -272,14 +276,30 @@ public sealed class ContainerRuntimeService
             }
             else
             {
-                var hostType = FileSystemRegistry.Get("hostfs")
-                               ?? throw new InvalidOperationException("hostfs is not registered");
-                var hostSb = hostType.CreateFileSystem(runtime.DeviceNumbers)
-                    .ReadSuper(hostType, 0, request.RootfsPath, null);
-                runtime.Syscalls.MountRoot(hostSb, new SyscallManager.RootMountOptions
+                SuperBlock rootSb;
+                string fsType;
+                string source;
+
+                if (request.RootFileSystemFactory != null)
                 {
-                    Source = request.RootfsPath,
-                    FsType = "hostfs",
+                    rootSb = request.RootFileSystemFactory(runtime.DeviceNumbers);
+                    fsType = rootSb.Type?.Name ?? "tmpfs";
+                    source = request.RootfsPath;
+                }
+                else
+                {
+                    var hostType = FileSystemRegistry.Get("hostfs")
+                                   ?? throw new InvalidOperationException("hostfs is not registered");
+                    rootSb = hostType.CreateFileSystem(runtime.DeviceNumbers)
+                        .ReadSuper(hostType, 0, request.RootfsPath, null);
+                    fsType = "hostfs";
+                    source = request.RootfsPath;
+                }
+
+                runtime.Syscalls.MountRoot(rootSb, new SyscallManager.RootMountOptions
+                {
+                    Source = source,
+                    FsType = fsType,
                     Options = "rw,relatime"
                 });
                 runtime.Syscalls.MountStandardDev(ttyDiag);

@@ -205,6 +205,9 @@ public partial class SyscallManager
 
     public LoopbackNetNamespace GetOrCreatePrivateNetNamespace()
     {
+        if (OperatingSystem.IsBrowser())
+            throw new PlatformNotSupportedException("Private netstack is not supported on browser-wasm.");
+
         return (_privateNetNamespace ??= new SharedLoopbackNetNamespace(LoopbackNetNamespace.Create(0x0A590002u, 24)))
             .Namespace;
     }
@@ -276,6 +279,7 @@ public partial class SyscallManager
 
     public void MountRoot(SuperBlock sb, RootMountOptions? options = null)
     {
+        sb.MemoryContext = CurrentSyscallEngine.MemoryContext;
         MountRoot(CreateRootMount(sb, options));
     }
 

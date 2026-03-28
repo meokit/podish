@@ -46,7 +46,7 @@ internal static class NativeLibraryResolver
                 return IntPtr.Zero;
         }
 
-        if (!RuntimeFeature.IsDynamicCodeSupported &&
+        if ((OperatingSystem.IsBrowser() || !RuntimeFeature.IsDynamicCodeSupported) &&
             NativeLibrary.TryLoad("__Internal", assembly, searchPath, out var internalHandle))
             return internalHandle;
 

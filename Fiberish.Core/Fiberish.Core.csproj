@@ -2,7 +2,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\Fiberish.X86\Fiberish.X86.csproj">
-            <AdditionalProperties Condition="'$(FiberishForceBrowserWasm)' != ''">FiberishForceBrowserWasm=$(FiberishForceBrowserWasm)</AdditionalProperties>
+            <AdditionalProperties Condition="'$(FiberishForceBrowserWasm)' != ''">FiberishForceBrowserWasm=$(FiberishForceBrowserWasm);RuntimeIdentifier=browser-wasm</AdditionalProperties>
         </ProjectReference>
         <ProjectReference Include="..\Fiberish.SilkFS\Fiberish.SilkFS.csproj"/>
     </ItemGroup>
@@ -19,6 +19,7 @@
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+        <RuntimeIdentifiers>browser-wasm</RuntimeIdentifiers>
         <IsBrowserWasm Condition="'$(RuntimeIdentifier)' == 'browser-wasm' Or '$(FiberishForceBrowserWasm)' == 'true'">true</IsBrowserWasm>
         <DefineConstants Condition="'$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true'">$(DefineConstants);PODISH_STATIC_NATIVE</DefineConstants>
         <DefineConstants Condition="'$(RuntimeIdentifier)' == 'osx-arm64' Or '$(RuntimeIdentifier)' == 'ios-arm64' Or '$(RuntimeIdentifier)' == 'iossimulator-arm64'">$(DefineConstants);HOSTFS_DARWIN;HOSTFS_ARCH_ARM64</DefineConstants>
@@ -50,6 +51,11 @@
         <NetstackStaticLibName Condition="$([MSBuild]::IsOsPlatform('Windows'))">fiberish_netstack.lib</NetstackStaticLibName>
         <NetstackStaticLibPath Condition="'$(NetstackCargoTarget)' != ''">$(NetstackTargetDir)\$(NetstackCargoTarget)\$(NetstackProfile)\$(NetstackStaticLibName)</NetstackStaticLibPath>
         <NetstackStaticLibPath Condition="'$(NetstackCargoTarget)' == ''">$(NetstackTargetDir)\$(NetstackProfile)\$(NetstackStaticLibName)</NetstackStaticLibPath>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(IsBrowserWasm)' == 'true'">
+        <OutputPath>bin/$(Configuration)/$(TargetFramework)/browser-wasm/</OutputPath>
+        <IntermediateOutputPath>obj/$(Configuration)/$(TargetFramework)/browser-wasm/</IntermediateOutputPath>
     </PropertyGroup>
 
     <Target Name="BuildNetstackNative" BeforeTargets="BeforeBuild" Condition="'$(DesignTimeBuild)' != 'true' And '$(IsBrowserWasm)' != 'true'">

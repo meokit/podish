@@ -6,7 +6,10 @@
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+        <RuntimeIdentifiers>browser-wasm</RuntimeIdentifiers>
         <IsBrowserWasm Condition="'$(RuntimeIdentifier)' == 'browser-wasm' Or '$(FiberishForceBrowserWasm)' == 'true'">true</IsBrowserWasm>
+        <RuntimeIdentifier Condition="'$(IsBrowserWasm)' == 'true' and '$(RuntimeIdentifier)' == ''">browser-wasm</RuntimeIdentifier>
+        <DefineConstants Condition="'$(IsBrowserWasm)' == 'true'">$(DefineConstants);FIBERISH_BROWSER_WASM</DefineConstants>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' == 'true'">build_native/browser-wasm</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' != ''">build_native/$(RuntimeIdentifier)</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' == ''">build_native/host</NativeBuildDir>
@@ -16,6 +19,11 @@
         <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/opt/homebrew/bin/node')">/opt/homebrew/bin/node</BrowserWasmNodeExecutable>
         <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/usr/local/bin/node')">/usr/local/bin/node</BrowserWasmNodeExecutable>
         <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == ''">node</BrowserWasmNodeExecutable>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(IsBrowserWasm)' == 'true'">
+        <OutputPath>bin/$(Configuration)/$(TargetFramework)/browser-wasm/</OutputPath>
+        <IntermediateOutputPath>obj/$(Configuration)/$(TargetFramework)/browser-wasm/</IntermediateOutputPath>
     </PropertyGroup>
 
     <Target Name="BuildNativeLib" BeforeTargets="BeforeBuild" Condition="'$(DesignTimeBuild)' != 'true'">

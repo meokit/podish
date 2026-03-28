@@ -47,7 +47,7 @@ internal static class NativeLibraryResolver
         }
 
         // Unified strategy: NativeAOT/static host -> __Internal first.
-        if (!RuntimeFeature.IsDynamicCodeSupported &&
+        if ((OperatingSystem.IsBrowser() || !RuntimeFeature.IsDynamicCodeSupported) &&
             NativeLibrary.TryLoad("__Internal", assembly, searchPath, out var internalHandle))
             return internalHandle;
 
