@@ -291,17 +291,12 @@ public class Engine : IDisposable
         return 0;
     }
 
-    public Engine Clone(bool shareMem)
-    {
-        return Clone(shareMem, EngineCloneMemoryMode.InlineClone);
-    }
-
     /// <summary>
     ///     Clone engine execution state.
     ///     If <paramref name="shareMem" /> is false, MMU cloning copies owned pages and preserves External mappings.
     ///     External pages are never converted into owned pages.
     /// </summary>
-    public Engine Clone(bool shareMem, EngineCloneMemoryMode memoryMode)
+    public Engine Clone(bool shareMem, EngineCloneMemoryMode memoryMode = EngineCloneMemoryMode.InlineClone)
     {
         AssertSchedulerThread();
         if (shareMem && memoryMode != EngineCloneMemoryMode.InlineClone)
@@ -359,8 +354,7 @@ public class Engine : IDisposable
                 if (rollbackRc == 0)
                     throw new InvalidOperationException(
                         $"MMU attach swap failed and rollback failed: {swapError}");
-                if (rollbackRc != 0)
-                    Debug.Assert(_currentMmu.Identity == previous.Identity);
+                Debug.Assert(_currentMmu.Identity == previous.Identity);
                 throw new InvalidOperationException(
                     $"MMU attach succeeded but managed state swap failed: {swapError}");
             }
@@ -447,31 +441,10 @@ public class Engine : IDisposable
         }
     }
 
-    /// <summary>
-    ///     DEPRECATED: Use CopyFromUser instead. This is slow (byte-by-byte native calls) and has recursive fault risk.
-    /// </summary>
-    [Obsolete("Use CopyFromUser instead. MemRead is slow and risks recursive faults.")]
-    public unsafe byte[] MemRead(uint addr, uint size)
-    {
-        EnsureAddressSpaceSynchronized();
-        var buf = new byte[size];
-        fixed (byte* p = buf)
-        {
-            X86Native.MemRead(State, addr, p, size);
-        }
-
-        return buf;
-    }
-
     public unsafe IntPtr GetPhysicalAddressSafe(uint vaddr, bool isWrite)
     {
         EnsureAddressSpaceSynchronized();
         return (IntPtr)X86Native.ResolvePtr(State, vaddr, isWrite ? 1 : 0);
-    }
-
-    public IntPtr GetPhysicalAddress(uint vaddr)
-    {
-        return GetPhysicalAddressSafe(vaddr, false);
     }
 
     public unsafe bool CopyToUser(uint vaddr, ReadOnlySpan<byte> data)

@@ -71,7 +71,10 @@ public enum Errno
     EHOSTUNREACH = 113, /* No route to host */
     EALREADY = 114, /* Operation already in progress */
     EINPROGRESS = 115, /* Operation now in progress */
-    ERESTARTSYS = 512
+    ERESTARTSYS = 512,
+    ERESTARTNOINTR = 513,
+    ERESTARTNOHAND = 514,
+    ERESTART_RESTARTBLOCK = 516
 }
 
 public enum Signal
@@ -138,6 +141,7 @@ public static class LinuxConstants
     public const int WINSIZE_SIZE = 8;
 
     public const uint MinMmapAddr = 0x10000;
+
     // Simulate a 2G/2G split: user mappings stay in the low 2 GiB.
     public const uint TaskSize32 = 0x80000000;
 
