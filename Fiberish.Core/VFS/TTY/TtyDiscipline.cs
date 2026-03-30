@@ -100,6 +100,9 @@ public class TtyDiscipline
     private bool _lnextPending;
     private uint _oflag = 0x5; // OPOST | ONLCR
 
+    // Persistent output buffer for OPOST expansion to achieve Zero-GC
+    private byte[]? _outputBuffer;
+
     // Flow control state
     private bool _outputStopped;
 
@@ -1015,68 +1018,107 @@ public class TtyDiscipline
 
         if ((_oflag & OPOST) == 0) return _driver.Write(kind, buffer);
 
-        List<byte> expanded = new(buffer.Length + 16);
+        // Fixed-size reusable buffer to achieve Zero-GC without large permanent allocations
+        _outputBuffer ??= new byte[64 * 1024];
 
-        foreach (var b in buffer)
-            if (b == 10) // NL
+        var expanded = _outputBuffer;
+        var inputOffset = 0;
+        var totalInputConsumed = 0;
+
+        while (inputOffset < buffer.Length)
+        {
+            var pos = 0;
+            var inputConsumedInThisChunk = 0;
+
+            // Process a chunk of input. Max expansion is 2x (NL -> CRNL), 
+            // so we can safely process until expanded buffer is almost full.
+            while (inputOffset + inputConsumedInThisChunk < buffer.Length && pos < expanded.Length - 2)
             {
-                // ONLCR - map NL to CR-NL
-                if ((_oflag & ONLCR) != 0)
+                var b = buffer[inputOffset + inputConsumedInThisChunk];
+                if (b == 10) // NL
                 {
-                    expanded.Add(13);
-                    expanded.Add(10);
+                    // ONLCR - map NL to CR-NL
+                    if ((_oflag & ONLCR) != 0)
+                    {
+                        expanded[pos++] = 13;
+                        expanded[pos++] = 10;
+                    }
+                    // ONLRET - NL performs CR function (don't output CR, but move to col 0)
+                    else if ((_oflag & ONLRET) != 0)
+                    {
+                        expanded[pos++] = 10;
+                    }
+                    else
+                    {
+                        expanded[pos++] = b;
+                    }
                 }
-                // ONLRET - NL performs CR function (don't output CR, but move to col 0)
-                else if ((_oflag & ONLRET) != 0)
+                else if (b == 13) // CR
                 {
-                    expanded.Add(10);
+                    // OCRNL - map CR to NL
+                    if ((_oflag & OCRNL) != 0)
+                        expanded[pos++] = 10;
+                    else if ((_oflag & ONOCR) != 0)
+                        // In a full implementation, we'd track column position
+                        // For now, output the CR
+                        expanded[pos++] = 13;
+                    else
+                        expanded[pos++] = 13;
+                }
+                else if (b == 9) // TAB
+                {
+                    // TABDLY - tab expansion (simplified)
+                    if ((_oflag & TABDLY) != 0)
+                        // In a full implementation, expand to spaces based on column
+                        // For now, just output the tab
+                        expanded[pos++] = 9;
+                    else
+                        expanded[pos++] = 9;
                 }
                 else
                 {
-                    expanded.Add(b);
+                    // OLCUC - map lowercase to uppercase
+                    if ((_oflag & OLCUC) != 0 && b >= 'a' && b <= 'z')
+                        expanded[pos++] = (byte)(b - 32);
+                    else
+                        expanded[pos++] = b;
                 }
-            }
-            else if (b == 13) // CR
-            {
-                // OCRNL - map CR to NL
-                if ((_oflag & OCRNL) != 0)
-                    expanded.Add(10);
-                else if ((_oflag & ONOCR) != 0)
-                    // In a full implementation, we'd track column position
-                    // For now, output the CR
-                    expanded.Add(13);
-                else
-                    expanded.Add(13);
-            }
-            else if (b == 9) // TAB
-            {
-                // TABDLY - tab expansion (simplified)
-                if ((_oflag & TABDLY) != 0)
-                    // In a full implementation, expand to spaces based on column
-                    // For now, just output the tab
-                    expanded.Add(9);
-                else
-                    expanded.Add(9);
-            }
-            else
-            {
-                // OLCUC - map lowercase to uppercase
-                if ((_oflag & OLCUC) != 0 && b >= 'a' && b <= 'z')
-                    expanded.Add((byte)(b - 32));
-                else
-                    expanded.Add(b);
+
+                inputConsumedInThisChunk++;
             }
 
-        var expandedArray = expanded.ToArray();
-        var written = _driver.Write(kind, expandedArray);
-        if (written < 0) return written;
+            var written = _driver.Write(kind, expanded.AsSpan(0, pos));
+            if (written < 0) return totalInputConsumed > 0 ? totalInputConsumed : written;
 
-        // If partial write, mapping back is complex.
-        // Assuming blocking write or full write for now.
-        // If driver wrote everything, return original buffer length
-        if (written == expandedArray.Length) return buffer.Length;
+            // If the driver couldn't take the whole expanded chunk, we need to determine 
+            // how many input bytes were actually fully processed.
+            if (written < pos)
+            {
+                // Re-trace the expansion to find the input boundary corresponding to 'written' output bytes.
+                var reTraceOutputPos = 0;
+                var reTraceInputConsumed = 0;
+                for (var i = 0; i < inputConsumedInThisChunk; i++)
+                {
+                    var b = buffer[inputOffset + i];
+                    var expansionSize = 1;
+                    if (b == 10 && (_oflag & ONLCR) != 0) expansionSize = 2;
+                    // (Simplified check: other OPOST flags like OLCUC are 1-to-1)
 
-        return written; // Approximate
+                    if (reTraceOutputPos + expansionSize > written) break;
+                    reTraceOutputPos += expansionSize;
+                    reTraceInputConsumed++;
+                }
+
+                totalInputConsumed += reTraceInputConsumed;
+                return totalInputConsumed;
+            }
+
+            // Full chunk was written
+            inputOffset += inputConsumedInThisChunk;
+            totalInputConsumed += inputConsumedInThisChunk;
+        }
+
+        return totalInputConsumed;
     }
 
     private void SendSignal(int sig, FiberTask? task)

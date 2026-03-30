@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
-using System.Threading.Tasks;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
 using Fiberish.Memory;
@@ -40,11 +39,11 @@ public class KernelScheduler
     private readonly ManualResetEventSlim _wakeEvent = new(false);
     private int _engineInitReaperEnabled;
     private int _initPid;
+    private bool _isInsideRunLoop = true;
     private int _nextTaskId;
     private int _ownerThreadId;
 
     private int _wakePending;
-    private bool _isInsideRunLoop = true;
 
     public KernelScheduler()
     {
@@ -668,7 +667,8 @@ public class KernelScheduler
                     if (waitTime == 0) waitTime = 1;
 
                     if (OperatingSystem.IsBrowser())
-                        throw new PlatformNotSupportedException("Synchronous Run is not supported on Browser Wasm. Use RunAsync instead.");
+                        throw new PlatformNotSupportedException(
+                            "Synchronous Run is not supported on Browser Wasm. Use RunAsync instead.");
 
                     _isInsideRunLoop = false;
                     WaitForEvent((int)waitTime);
@@ -733,6 +733,7 @@ public class KernelScheduler
         var exitReason = "running=false";
 
         var startTick = _timerSystem.CurrentTick;
+        var lastYieldMs = _sw.ElapsedMilliseconds;
 
         try
         {
@@ -824,10 +825,12 @@ public class KernelScheduler
                 {
                     EnqueueTask(readyTaskAfterDequeueMiss!);
                 }
-                
+
                 // Cooperative yield every so often to keep JS event loop responsive
-                if (_sw.ElapsedMilliseconds % 50 == 0 && _runQueue.Count > 0)
+                var currentMs = _sw.ElapsedMilliseconds;
+                if (currentMs - lastYieldMs >= 50 && _runQueue.Count > 0)
                 {
+                    lastYieldMs = currentMs;
                     _isInsideRunLoop = false;
                     SynchronizationContext.SetSynchronizationContext(previousSyncContext);
                     await Task.Yield();
@@ -844,7 +847,8 @@ public class KernelScheduler
         finally
         {
             SynchronizationContext.SetSynchronizationContext(previousSyncContext);
-            Logger.LogInformation("KernelScheduler async loop stopped. reason={Reason} running={Running} tick={Tick}", exitReason,
+            Logger.LogInformation("KernelScheduler async loop stopped. reason={Reason} running={Running} tick={Tick}",
+                exitReason,
                 Running, CurrentTick);
         }
     }
@@ -916,6 +920,7 @@ public class KernelScheduler
                 // Timeout elapsed
             }
         }
+
         _wakeEvent.Reset();
     }
 
