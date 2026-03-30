@@ -22,8 +22,7 @@
     <WasmBitcodeCompileOptimizationFlag>-O0</WasmBitcodeCompileOptimizationFlag>
     <FiberishForceBrowserWasm>true</FiberishForceBrowserWasm>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <WasmMainJSPath>$(MSBuildProjectDirectory)/wwwroot/main.mjs</WasmMainJSPath>
-    <WasmMainHTMLPath>$(MSBuildProjectDirectory)/wwwroot/index.html</WasmMainHTMLPath>
+
   </PropertyGroup>
 
   <ItemGroup>

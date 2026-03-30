@@ -36,7 +36,7 @@ public static partial class BrowserExports
     }
 
     [JSExport]
-    public static async Task<string> StartRootfsTarShell(byte[] rootfsTarBytes)
+    public static async Task<string> StartRootfsTarShell(byte[] rootfsTarBytes, int rows = 24, int cols = 80)
     {
         if (rootfsTarBytes.Length == 0)
             return Json(ok: false, error: "rootfs tar is empty");
@@ -74,6 +74,8 @@ public static partial class BrowserExports
                 ExeArgs = [],
                 Interactive = true,
                 Tty = true,
+                TerminalRows = (ushort)rows,
+                TerminalCols = (ushort)cols,
                 Strace = true,
                 Init = false,
                 NetworkMode = Fiberish.Core.Net.NetworkMode.Host
@@ -102,12 +104,22 @@ public static partial class BrowserExports
         if (session == null || maxBytes <= 0)
             return [];
 
-        var buffer = new byte[maxBytes];
-        var read = session.Session.ReadOutput(buffer, 0);
-        if (read <= 0)
-            return [];
+        var pool = System.Buffers.ArrayPool<byte>.Shared;
+        var buffer = pool.Rent(maxBytes);
+        try
+        {
+            var read = session.Session.ReadOutput(buffer.AsSpan(0, maxBytes), 0);
+            if (read <= 0)
+                return [];
 
-        return read == buffer.Length ? buffer : buffer[..read];
+            var result = new byte[read];
+            buffer.AsSpan(0, read).CopyTo(result);
+            return result;
+        }
+        finally
+        {
+            pool.Return(buffer);
+        }
     }
 
     [JSExport]
