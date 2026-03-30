@@ -93,7 +93,7 @@ public partial class SyscallManager
             while (remaining > 0)
             {
                 var toRead = Math.Min(remaining, bufLen);
-                var bytesRead = inFile.OpenedInode!.Read(task, inFile, buffer.AsSpan(0, toRead), readOffset);
+                var bytesRead = inFile.OpenedInode!.ReadToHost(task, inFile, buffer.AsSpan(0, toRead), readOffset);
 
                 if (bytesRead <= 0)
                 {
@@ -118,7 +118,7 @@ public partial class SyscallManager
 
                 // Write to out_fd
                 var bytesWritten =
-                    outFile.OpenedInode!.Write(task, outFile, buffer.AsSpan(0, bytesRead), outFile.Position);
+                    outFile.OpenedInode!.WriteFromHost(task, outFile, buffer.AsSpan(0, bytesRead), outFile.Position);
 
                 if (bytesWritten < 0)
                 {
@@ -589,13 +589,6 @@ public partial class SyscallManager
         return rc;
     }
 
-
-    private struct Iovec
-    {
-        public uint BaseAddr;
-        public uint Len;
-    }
-
     private static async ValueTask<int> DoReadV(SyscallManager sm, Engine engine, int fd, Iovec[] iovs, int iovCnt,
         long offset, int flags)
     {
@@ -606,79 +599,11 @@ public partial class SyscallManager
         if (((int)f.Flags & O_ACCMODE) == (int)FileFlags.O_WRONLY)
             return -(int)Errno.EBADF;
 
-        if (f.OpenedInode is SignalFdInode signalfd)
-        {
-            if (offset != -1) return -(int)Errno.ESPIPE;
-            return await DoReadVSignalFd(sm, engine, f, signalfd, iovs, iovCnt, flags);
-        }
+        if (f.OpenedInode == null)
+            return -(int)Errno.EINVAL;
 
-        if (f.TryGetSocketDataOps(out _) || f.OpenedInode is NetlinkRouteSocketInode)
-        {
-            if (offset != -1) return -(int)Errno.ESPIPE;
-            return await DoReadVSocket(sm, engine, f, iovs, iovCnt, flags);
-        }
-
-        var updatePosition = offset == -1;
-        var currentOffset = updatePosition ? f.Position : offset;
-        var totalRead = 0;
-
-        for (var i = 0; i < iovCnt; i++)
-        {
-            var iov = iovs[i];
-            if (iov.Len == 0) continue;
-
-            var buf = ArrayPool<byte>.Shared.Rent((int)iov.Len);
-            try
-            {
-                while (true)
-                {
-                    var n = f.OpenedInode!.Read(task, f, buf.AsSpan(0, (int)iov.Len), currentOffset);
-
-                    if (n == -(int)Errno.EAGAIN)
-                    {
-                        if ((f.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0 /* RWF_NOWAIT */)
-                            return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
-
-                        if (task == null)
-                            return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
-
-                        if (await new IOAwaitable(f, true, task) == AwaitResult.Interrupted)
-                            return totalRead > 0 ? totalRead : -(int)Errno.ERESTARTSYS;
-                        continue;
-                    }
-
-                    if (n > 0)
-                    {
-                        if (!engine.CopyToUser(iov.BaseAddr, buf.AsSpan(0, n))) return -(int)Errno.EFAULT;
-                        totalRead += n;
-                        currentOffset += n;
-                        if (n < iov.Len)
-                        {
-                            if (updatePosition) f.Position = currentOffset;
-                            return totalRead;
-                        }
-
-                        break;
-                    }
-
-                    if (n == 0) // EOF
-                    {
-                        if (updatePosition) f.Position = currentOffset;
-                        return totalRead;
-                    }
-
-                    return totalRead > 0 ? totalRead : n;
-                }
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buf);
-            }
-        }
-
-        if (updatePosition) f.Position = currentOffset;
-
-        return totalRead;
+        var iovList = new ArraySegment<Iovec>(iovs, 0, iovCnt);
+        return await f.OpenedInode.ReadV(engine, f, task, iovList, offset, flags);
     }
 
     private static async ValueTask<int> DoWriteV(SyscallManager sm, Engine engine, int fd, Iovec[] iovs, int iovCnt,
@@ -688,224 +613,24 @@ public partial class SyscallManager
         if (f == null) return -(int)Errno.EBADF;
         var task = engine.Owner as FiberTask;
 
-        if (f.TryGetSocketDataOps(out _) || f.OpenedInode is NetlinkRouteSocketInode)
-        {
-            if (offset != -1) return -(int)Errno.ESPIPE;
-            return await DoWriteVSocket(sm, engine, f, iovs, iovCnt, flags);
-        }
-
         // Check mount read-only status (like Linux mnt_want_write)
         var wantWrite = f.WantWrite();
         if (wantWrite < 0) return wantWrite;
 
-        var updatePosition = offset == -1;
-        var append = (f.Flags & FileFlags.O_APPEND) != 0;
-        var currentOffset = updatePosition
-            ? append ? (long)(f.OpenedInode?.Size ?? 0) : f.Position
-            : offset;
-        var inode = f.OpenedInode;
-        var sizeBeforeWrite = (long)(inode?.Size ?? 0);
-        var totalWritten = 0;
+        if (f.OpenedInode == null)
+            return -(int)Errno.EINVAL;
 
-        int FinalizeWriteResult(int rc)
+        var iovList = new ArraySegment<Iovec>(iovs, 0, iovCnt);
+        var rc = await f.OpenedInode.WriteV(engine, f, task, iovList, offset, flags);
+
+        // Truncation check happens natively on writing but if we need ProcessAddressSpaceSync.NotifyInodeTruncated:
+        if (rc > 0 && f.OpenedInode is Inode inode)
         {
-            if (rc > 0 && inode != null)
-            {
-                var sizeAfterWrite = (long)inode.Size;
-                if (sizeAfterWrite > sizeBeforeWrite)
-                    ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, engine, inode, sizeAfterWrite);
-            }
-
-            return rc;
+            var sizeAfterWrite = (long)inode.Size;
+            ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, engine, inode, sizeAfterWrite);
         }
 
-        for (var i = 0; i < iovCnt; i++)
-        {
-            var iov = iovs[i];
-            if (iov.Len == 0) continue;
-
-            var data = ArrayPool<byte>.Shared.Rent((int)iov.Len);
-            try
-            {
-                if (!engine.CopyFromUser(iov.BaseAddr, data.AsSpan(0, (int)iov.Len))) return -(int)Errno.EFAULT;
-
-                while (true)
-                {
-                    var n = f.OpenedInode!.Write(task, f, data.AsSpan(0, (int)iov.Len), currentOffset);
-
-                    if (n == -(int)Errno.EPIPE)
-                    {
-                        task?.PostSignal((int)Signal.SIGPIPE);
-                        return FinalizeWriteResult(n);
-                    }
-
-                    if (n == -(int)Errno.EAGAIN)
-                    {
-                        if ((f.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0 /* RWF_NOWAIT */)
-                            return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN);
-
-                        if (task == null)
-                            return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN);
-
-                        if (await new IOAwaitable(f, false, task) == AwaitResult.Interrupted)
-                            return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.ERESTARTSYS);
-                        continue;
-                    }
-
-                    if (n > 0)
-                    {
-                        totalWritten += n;
-                        currentOffset += n;
-                        if (n < iov.Len)
-                        {
-                            if (updatePosition) f.Position = currentOffset;
-                            return FinalizeWriteResult(totalWritten);
-                        }
-
-                        break;
-                    }
-
-                    return FinalizeWriteResult(totalWritten > 0 ? totalWritten : n);
-                }
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(data);
-            }
-        }
-
-        if (updatePosition) f.Position = currentOffset;
-
-        return FinalizeWriteResult(totalWritten);
-    }
-
-    private static async ValueTask<int> DoReadVSignalFd(SyscallManager sm, Engine engine, LinuxFile file,
-        SignalFdInode inode, Iovec[] iovs, int iovCnt, int flags)
-    {
-        var task = engine.Owner as FiberTask;
-        if (task == null) return -(int)Errno.EPERM;
-
-        var totalRead = 0;
-        for (var i = 0; i < iovCnt; i++)
-        {
-            var iov = iovs[i];
-            if (iov.Len == 0) continue;
-
-            var buf = ArrayPool<byte>.Shared.Rent((int)iov.Len);
-            try
-            {
-                while (true)
-                {
-                    var n = inode.Read(task, file, buf.AsSpan(0, (int)iov.Len));
-
-                    if (n == 0)
-                    {
-                        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0)
-                            return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
-
-                        await inode.WaitAsync(task);
-                        continue;
-                    }
-
-                    if (n < 0)
-                        return totalRead > 0 ? totalRead : n;
-
-                    if (!engine.CopyToUser(iov.BaseAddr, buf.AsSpan(0, n))) return -(int)Errno.EFAULT;
-                    totalRead += n;
-                    if (n < iov.Len)
-                        return totalRead;
-                    break;
-                }
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buf);
-            }
-        }
-
-        return totalRead;
-    }
-
-    private static async ValueTask<int> DoWriteVSocket(SyscallManager sm, Engine engine, LinuxFile file,
-        Iovec[] iovs, int iovCnt, int flags)
-    {
-        var task = engine.Owner as FiberTask;
-        if (task == null) return -(int)Errno.EPERM;
-        var totalWritten = 0;
-        for (var i = 0; i < iovCnt; i++)
-        {
-            var iov = iovs[i];
-            if (iov.Len == 0) continue;
-
-            var data = ArrayPool<byte>.Shared.Rent((int)iov.Len);
-            try
-            {
-                if (!engine.CopyFromUser(iov.BaseAddr, data.AsSpan(0, (int)iov.Len)))
-                    return -(int)Errno.EFAULT;
-
-                var payload = data.AsMemory(0, (int)iov.Len);
-                var n = -(int)Errno.ENOTSOCK;
-                if (file.TryGetSocketDataOps(out var ops))
-                    n = await ops.SendAsync(file, task, payload, flags);
-                else if (file.OpenedInode is NetlinkRouteSocketInode netlink)
-                    n = await netlink.SendAsync(file, payload, flags);
-
-                if (n == -(int)Errno.EPIPE)
-                    task.PostSignal((int)Signal.SIGPIPE);
-                if (n < 0)
-                    return totalWritten > 0 ? totalWritten : n;
-
-                totalWritten += n;
-                if (n < iov.Len)
-                    return totalWritten;
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(data);
-            }
-        }
-
-        return totalWritten;
-    }
-
-    private static async ValueTask<int> DoReadVSocket(SyscallManager sm, Engine engine, LinuxFile file, Iovec[] iovs,
-        int iovCnt, int flags)
-    {
-        var task = engine.Owner as FiberTask;
-        if (task == null) return -(int)Errno.EPERM;
-        var totalRead = 0;
-        for (var i = 0; i < iovCnt; i++)
-        {
-            var iov = iovs[i];
-            if (iov.Len == 0) continue;
-
-            var buffer = ArrayPool<byte>.Shared.Rent((int)iov.Len);
-            try
-            {
-                var n = -(int)Errno.ENOTSOCK;
-                if (file.TryGetSocketDataOps(out var ops))
-                    n = await ops.RecvAsync(file, task, buffer, flags, (int)iov.Len);
-                else if (file.OpenedInode is NetlinkRouteSocketInode netlink)
-                    n = await netlink.RecvAsync(file, task, buffer, flags, (int)iov.Len);
-
-                if (n < 0)
-                    return totalRead > 0 ? totalRead : n;
-                if (n == 0)
-                    return totalRead;
-                if (!engine.CopyToUser(iov.BaseAddr, buffer.AsSpan(0, n)))
-                    return -(int)Errno.EFAULT;
-
-                totalRead += n;
-                if (n < iov.Len)
-                    return totalRead;
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buffer);
-            }
-        }
-
-        return totalRead;
+        return rc;
     }
 
     private static Iovec[]? ReadIovecs(SyscallManager sm, Engine engine, uint iovAddr, int iovCnt)

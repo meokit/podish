@@ -38,15 +38,16 @@ public class SignalFdInode : TmpfsInode, ITaskWaitSource
         }
     }
 
-    public int Read(FiberTask task, LinuxFile file, Span<byte> buffer)
+    protected internal override int ReadSpan(FiberTask? task, LinuxFile file, Span<byte> buffer, long offset)
     {
+        if (task == null) return -(int)Errno.EPERM;
         if (buffer.Length < 128) return -(int)Errno.EINVAL;
 
         using (EnterStateScope())
         {
             var sigInfo = TryConsumeNextSignalUnsafe(task);
             if (!sigInfo.HasValue)
-                return (file.Flags & FileFlags.O_NONBLOCK) != 0 ? -(int)Errno.EAGAIN : 0;
+                return -(int)Errno.EAGAIN;
 
             var info = sigInfo.Value;
             buffer.Clear();
@@ -105,12 +106,8 @@ public class SignalFdInode : TmpfsInode, ITaskWaitSource
         return new SignalFdAwaitable(this, task);
     }
 
-    public override int Read(LinuxFile file, Span<byte> buffer, long offset)
-    {
-        return -(int)Errno.EINVAL;
-    }
 
-    public override int Write(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
     {
         return -(int)Errno.EINVAL;
     }
@@ -128,6 +125,11 @@ public class SignalFdInode : TmpfsInode, ITaskWaitSource
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
     {
         return null;
+    }
+
+    public override async ValueTask WaitForRead(LinuxFile file, FiberTask task)
+    {
+        await WaitAsync(task);
     }
 
     private ulong GetMask()

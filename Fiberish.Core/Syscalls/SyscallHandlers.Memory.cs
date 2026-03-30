@@ -1,3 +1,4 @@
+using System.Buffers;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -263,19 +264,34 @@ public partial class SyscallManager
 
         var copyLen = Math.Min(oldLenAligned, newLenAligned);
         if (NeedsMoveCopy(oldVma, oldAddr, copyLen))
+        {
+            const int ChunkSize = 64 * 1024;
+            var pool = ArrayPool<byte>.Shared;
+            var buf = pool.Rent(ChunkSize);
             try
             {
-                var buf = new byte[copyLen];
-                if (!engine.CopyFromUser(oldAddr, buf))
-                {
-                    ProcessAddressSpaceSync.Munmap(Mem, engine, targetAddr, newLenAligned);
-                    return -(int)Errno.EFAULT;
-                }
+                var remaining = copyLen;
+                var currentOld = oldAddr;
+                var currentTarget = targetAddr;
 
-                if (!engine.CopyToUser(targetAddr, buf))
+                while (remaining > 0)
                 {
-                    ProcessAddressSpaceSync.Munmap(Mem, engine, targetAddr, newLenAligned);
-                    return -(int)Errno.EFAULT;
+                    var toCopy = (int)Math.Min(remaining, ChunkSize);
+                    if (!engine.CopyFromUser(currentOld, buf.AsSpan(0, toCopy)))
+                    {
+                        ProcessAddressSpaceSync.Munmap(Mem, engine, targetAddr, newLenAligned);
+                        return -(int)Errno.EFAULT;
+                    }
+
+                    if (!engine.CopyToUser(currentTarget, buf.AsSpan(0, toCopy)))
+                    {
+                        ProcessAddressSpaceSync.Munmap(Mem, engine, targetAddr, newLenAligned);
+                        return -(int)Errno.EFAULT;
+                    }
+
+                    currentOld += (uint)toCopy;
+                    currentTarget += (uint)toCopy;
+                    remaining -= (uint)toCopy;
                 }
             }
             catch (OutOfMemoryException)
@@ -283,6 +299,11 @@ public partial class SyscallManager
                 ProcessAddressSpaceSync.Munmap(Mem, engine, targetAddr, newLenAligned);
                 return -(int)Errno.ENOMEM;
             }
+            finally
+            {
+                pool.Return(buf);
+            }
+        }
 
         // Unmap old region
         ProcessAddressSpaceSync.Munmap(Mem, engine, oldAddr, oldLenAligned);

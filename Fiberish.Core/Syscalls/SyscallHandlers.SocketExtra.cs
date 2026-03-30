@@ -79,7 +79,8 @@ public partial class SyscallManager
         if (file.TryGetSocketOptionOps(out var ops))
         {
             var rc = ops.GetSocketOption(file, task, level, optname, optval, out var written);
-            Logger.LogTrace("[SysGetSockOpt] fd={Fd} inode={Inode} level={Level} optname={Optname} requestedLen={Len} rc={Rc} written={Written}",
+            Logger.LogTrace(
+                "[SysGetSockOpt] fd={Fd} inode={Inode} level={Level} optname={Optname} requestedLen={Len} rc={Rc} written={Written}",
                 fd, file.OpenedInode?.GetType().Name, level, optname, optlen, rc, written);
             if (rc < 0) return rc;
 
@@ -257,7 +258,7 @@ public partial class SyscallManager
             while (remaining > 0)
             {
                 var toRead = Math.Min(remaining, bufSize);
-                var bytesRead = fileIn.OpenedInode!.Read(task, fileIn, buf.AsSpan(0, toRead), readOffset);
+                var bytesRead = fileIn.OpenedInode!.ReadToHost(task, fileIn, buf.AsSpan(0, toRead), readOffset);
 
                 if (bytesRead == 0) break; // EOF
                 if (bytesRead == -(int)Errno.EAGAIN)
@@ -276,7 +277,7 @@ public partial class SyscallManager
                 var writeConsumed = 0;
                 while (writeConsumed < bytesRead)
                 {
-                    var bytesWritten = fileOut.OpenedInode!.Write(task, fileOut,
+                    var bytesWritten = fileOut.OpenedInode!.WriteFromHost(task, fileOut,
                         buf.AsSpan(writeConsumed, bytesRead - writeConsumed), writeOffset);
 
                     if (bytesWritten == -(int)Errno.EPIPE)
@@ -377,7 +378,8 @@ public partial class SyscallManager
 
                 if (bytesRead < 0) return bytesRead;
 
-                var bytesWritten = fileOut.OpenedInode!.Write(task, fileOut, buf.AsSpan(0, bytesRead), fileOut.Position);
+                var bytesWritten =
+                    fileOut.OpenedInode!.WriteFromHost(task, fileOut, buf.AsSpan(0, bytesRead), fileOut.Position);
                 if (bytesWritten == -(int)Errno.EAGAIN)
                 {
                     if ((flags & 2) != 0 || (fileOut.Flags & FileFlags.O_NONBLOCK) != 0)

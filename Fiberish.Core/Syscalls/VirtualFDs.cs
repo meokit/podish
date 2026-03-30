@@ -24,7 +24,7 @@ public class EventFdInode : TmpfsInode
         return default;
     }
 
-    public override int Read(LinuxFile file, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(LinuxFile file, Span<byte> buffer, long offset)
     {
         if (buffer.Length < 8) return -(int)Errno.EINVAL;
 
@@ -57,7 +57,7 @@ public class EventFdInode : TmpfsInode
         }
     }
 
-    public override int Write(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
     {
         if (buffer.Length < 8) return -(int)Errno.EINVAL;
 
@@ -263,7 +263,7 @@ public class TimerFdInode : TmpfsInode
         foreach (var w in toWake) w();
     }
 
-    public override int Read(LinuxFile file, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(LinuxFile file, Span<byte> buffer, long offset)
     {
         if (buffer.Length < 8) return -(int)Errno.EINVAL;
 
@@ -282,7 +282,7 @@ public class TimerFdInode : TmpfsInode
         }
     }
 
-    public override int Write(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
     {
         return -(int)Errno.EINVAL;
     }

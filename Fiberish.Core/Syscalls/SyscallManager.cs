@@ -611,7 +611,7 @@ public partial class SyscallManager
             try
             {
                 fileDentry.Inode!.Open(file);
-                var rc = fileDentry.Inode.Write(file, content, 0);
+                var rc = fileDentry.Inode.WriteFromHost(null, file, content, 0);
                 if (rc < 0) throw new IOException($"Failed to write detached tmpfs file: rc={rc}");
             }
             finally
