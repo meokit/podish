@@ -1,7 +1,7 @@
 using Fiberish.Core.Net;
 using Fiberish.Core.VFS.TTY;
-using Fiberish.VFS;
 using Fiberish.Diagnostics;
+using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 
 namespace Podish.Core;
@@ -36,6 +36,8 @@ public sealed class PodishRunSpec
     public int WaylandDesktopHeight { get; init; } = 768;
     public long? MemoryQuotaBytes { get; init; }
     public string LogDriver { get; init; } = "json-file";
+    public ushort? TerminalRows { get; init; }
+    public ushort? TerminalCols { get; init; }
     public IReadOnlyList<PublishedPortSpec> PublishedPorts { get; init; } = Array.Empty<PublishedPortSpec>();
 }
 
@@ -68,7 +70,7 @@ public sealed class PodishContainerSession
     public bool IsCompleted => _runTask.IsCompleted;
     public int? InitPid => _processController.InitPid;
 
-    public void SetOutputHandler(Action<TtyEndpointKind, byte[]>? handler)
+    public void SetOutputHandler(Action<TtyEndpointKind, ReadOnlySpan<byte>>? handler)
     {
         _terminalBridge?.SetOutputHandler(handler);
     }
@@ -197,18 +199,25 @@ public sealed class PodishTerminalBridge
     private readonly Lock _lock = new();
     private readonly Queue<byte> _outputBuffer = [];
     private readonly AutoResetEvent _outputEvent = new(false);
-    private Action<TtyEndpointKind, byte[]>? _outputHandler;
+    private Action<TtyEndpointKind, ReadOnlySpan<byte>>? _outputHandler;
+    private ushort? _pendingCols;
+    private ushort? _pendingRows;
     private TtyDiscipline? _tty;
 
     public void BindTty(TtyDiscipline tty)
     {
+        ushort? r, c;
         lock (_lock)
         {
             _tty = tty;
+            r = _pendingRows;
+            c = _pendingCols;
         }
+
+        if (r.HasValue && c.HasValue) tty.Device.EnqueueResize(r.Value, c.Value);
     }
 
-    public void SetOutputHandler(Action<TtyEndpointKind, byte[]>? handler)
+    public void SetOutputHandler(Action<TtyEndpointKind, ReadOnlySpan<byte>>? handler)
     {
         lock (_lock)
         {
@@ -239,6 +248,8 @@ public sealed class PodishTerminalBridge
         TtyDiscipline? tty;
         lock (_lock)
         {
+            _pendingRows = rows;
+            _pendingCols = cols;
             tty = _tty;
         }
 
@@ -247,17 +258,14 @@ public sealed class PodishTerminalBridge
 
     public void EmitOutput(TtyEndpointKind kind, ReadOnlySpan<byte> data)
     {
-        Action<TtyEndpointKind, byte[]>? handler;
+        Action<TtyEndpointKind, ReadOnlySpan<byte>>? handler;
         lock (_lock)
         {
             EnqueueOutputLocked(data);
             handler = _outputHandler;
         }
 
-        if (handler == null)
-            return;
-
-        handler(kind, data.ToArray());
+        handler?.Invoke(kind, data);
     }
 
     public int ReadOutput(Span<byte> buffer, int timeoutMs)
@@ -440,7 +448,7 @@ public sealed class PodishContext : IDisposable
             rootfsSpec,
             true,
             containerIdOverride,
-            devNumbers => RootfsArchiveLoader.LoadTmpfsFromTar(new MemoryStream(tarBytes, writable: false), devNumbers,
+            devNumbers => RootfsArchiveLoader.LoadTmpfsFromTar(new MemoryStream(tarBytes, false), devNumbers,
                 rootfsName),
             rootfsName);
     }
@@ -498,6 +506,8 @@ public sealed class PodishContext : IDisposable
         eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-create", containerId, imageRef));
 
         var bridge = attachTerminalBridge && spec.Interactive && spec.Tty ? new PodishTerminalBridge() : null;
+        if (bridge != null && spec.TerminalRows.HasValue && spec.TerminalCols.HasValue)
+            bridge.Resize(spec.TerminalRows.Value, spec.TerminalCols.Value);
         var processController = new ContainerProcessController();
         var runtimeThread = new ContainerRuntimeThread(_logger, LoggerFactory);
         var runTask = runtimeThread.Start(new ContainerRunRequest
@@ -529,7 +539,9 @@ public sealed class PodishContext : IDisposable
             EnablePulseServer = spec.PulseServer,
             EnableWaylandServer = spec.WaylandServer,
             WaylandDesktopWidth = spec.WaylandDesktopWidth,
-            WaylandDesktopHeight = spec.WaylandDesktopHeight
+            WaylandDesktopHeight = spec.WaylandDesktopHeight,
+            TerminalRows = spec.TerminalRows,
+            TerminalCols = spec.TerminalCols
         });
         runTask = runTask.ContinueWith(static (task, state) =>
         {

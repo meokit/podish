@@ -163,7 +163,7 @@ public class OverlayTests
             Assert.NotNull(initialHandle);
 
             // Trigger CopyUp via Write
-            overlayInode.Write(linuxFile, "world"u8.ToArray(), 5);
+            overlayInode.WriteFromHost(null, linuxFile, "world"u8.ToArray(), 5);
 
             Assert.NotNull(overlayInode.UpperDentry);
             Assert.NotEqual(initialHandle, linuxFile.PrivateData); // Handle should have been redirected
@@ -218,7 +218,7 @@ public class OverlayTests
 
             // Trigger copy-up, so the same overlay inode now points to upper.
             var linuxFile = new LinuxFile(fileOv, FileFlags.O_WRONLY, null!);
-            var rc = overlayInode.Write(linuxFile, "x"u8.ToArray(), 0);
+            var rc = overlayInode.WriteFromHost(null, linuxFile, "x"u8.ToArray(), 0);
             Assert.True(rc >= 0);
             Assert.NotNull(overlayInode.UpperInode);
 
@@ -409,7 +409,7 @@ public class OverlayTests
             Assert.NotNull(d);
             var f = new LinuxFile(d!, FileFlags.O_RDONLY, null!);
             var buf = new byte[16];
-            var n = d!.Inode!.Read(f, buf, 0);
+            var n = d!.Inode!.ReadToHost(null, f, buf, 0);
             Assert.True(n > 0);
             Assert.Equal("top", Encoding.UTF8.GetString(buf, 0, n));
             f.Close();
@@ -679,7 +679,7 @@ public class OverlayTests
             Assert.NotNull(dst);
             var file = new LinuxFile(dst!, FileFlags.O_RDONLY, null!);
             var buf = new byte[8];
-            var n = dst!.Inode!.Read(file, buf, 0);
+            var n = dst!.Inode!.ReadToHost(null, file, buf, 0);
             Assert.Equal("src", Encoding.UTF8.GetString(buf, 0, n));
             file.Close();
         }
@@ -768,11 +768,11 @@ public class OverlayTests
             var truncateRc = file.OpenedInode!.Truncate(4096);
             Assert.Equal(0, truncateRc);
 
-            var writeRc = file.OpenedInode.Write(file, "Z"u8.ToArray(), 0);
+            var writeRc = file.OpenedInode.WriteFromHost(null, file, "Z"u8.ToArray(), 0);
             Assert.Equal(1, writeRc);
 
             var readBuf = new byte[1];
-            var readRc = file.OpenedInode.Read(file, readBuf, 0);
+            var readRc = file.OpenedInode.ReadToHost(null, file, readBuf, 0);
             Assert.Equal(1, readRc);
             Assert.Equal((byte)'Z', readBuf[0]);
         }
@@ -793,7 +793,7 @@ public class OverlayTests
             long offset = 0;
             while (true)
             {
-                var n = loc.Dentry!.Inode!.Read(file, buffer, offset);
+                var n = loc.Dentry!.Inode!.ReadToHost(null, file, buffer, offset);
                 Assert.True(n >= 0);
                 if (n == 0) break;
                 sb.Append(Encoding.UTF8.GetString(buffer, 0, n));

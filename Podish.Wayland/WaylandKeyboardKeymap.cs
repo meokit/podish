@@ -1,15 +1,17 @@
+using System.Text;
+
 namespace Podish.Wayland;
 
 internal sealed class WaylandKeyboardKeymap
 {
-    private readonly Mount _mount;
     private readonly Dentry _fileDentry;
+    private readonly Mount _mount;
     private readonly LinuxFile _readOnlyFile;
 
     public WaylandKeyboardKeymap()
     {
-        string keymap = WaylandKeyboardLayout.GenerateXkbKeymap();
-        byte[] keymapBytes = System.Text.Encoding.UTF8.GetBytes(keymap);
+        var keymap = WaylandKeyboardLayout.GenerateXkbKeymap();
+        var keymapBytes = Encoding.UTF8.GetBytes(keymap);
         if (keymapBytes.Length == 0 || keymapBytes[^1] != 0)
             keymapBytes = [.. keymapBytes, 0];
 
@@ -18,8 +20,8 @@ internal sealed class WaylandKeyboardKeymap
             Name = "tmpfs",
             Factory = static devMgr => new Tmpfs(devMgr)
         };
-        FileSystem fs = fsType.CreateAnonymousFileSystem();
-        SuperBlock sb = fs.ReadSuper(fsType, 0, "wayland-keymap", null);
+        var fs = fsType.CreateAnonymousFileSystem();
+        var sb = fs.ReadSuper(fsType, 0, "wayland-keymap", null);
         _mount = new Mount(sb, sb.Root);
 
         _fileDentry = new Dentry("keymap.xkb", null, sb.Root, sb);
@@ -28,7 +30,7 @@ internal sealed class WaylandKeyboardKeymap
         var writer = new LinuxFile(_fileDentry, FileFlags.O_RDWR, _mount);
         try
         {
-            int rc = _fileDentry.Inode!.Write(writer, keymapBytes, 0);
+            var rc = _fileDentry.Inode!.WriteFromHost(null, writer, keymapBytes, 0);
             if (rc < 0)
                 throw new IOException($"Failed to write Wayland keymap: rc={rc}");
         }

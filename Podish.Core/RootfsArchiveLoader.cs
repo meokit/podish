@@ -1,6 +1,5 @@
 using System.IO.Compression;
 using System.Text;
-using Fiberish.Native;
 using Fiberish.VFS;
 
 namespace Podish.Core;
@@ -101,7 +100,7 @@ internal static class RootfsArchiveLoader
         stream.Position = origin;
 
         if (read == 2 && header[0] == 0x1F && header[1] == 0x8B)
-            return new GZipStream(stream, CompressionMode.Decompress, leaveOpen: true);
+            return new GZipStream(stream, CompressionMode.Decompress, true);
 
         return stream;
     }
@@ -186,7 +185,7 @@ internal static class RootfsArchiveLoader
 
     private static void SkipPadding(Stream stream, long size)
     {
-        var padding = (TarBlockSize - (size % TarBlockSize)) % TarBlockSize;
+        var padding = (TarBlockSize - size % TarBlockSize) % TarBlockSize;
         if (padding == 0)
             return;
 
@@ -233,10 +232,8 @@ internal static class RootfsArchiveLoader
     private static bool IsZeroBlock(byte[] block)
     {
         for (var index = 0; index < block.Length; index++)
-        {
             if (block[index] != 0)
                 return false;
-        }
 
         return true;
     }
@@ -310,7 +307,7 @@ internal static class RootfsArchiveLoader
         var file = new LinuxFile(fileDentry, FileFlags.O_WRONLY, null!);
         try
         {
-            var rc = fileDentry.Inode!.Write(file, data, 0);
+            var rc = fileDentry.Inode!.WriteFromHost(null, file, data, 0);
             if (rc < 0)
                 throw new IOException($"Failed to write rootfs file '{relativePath}': rc={rc}");
         }

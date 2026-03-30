@@ -35,7 +35,7 @@ public class NetworkTests
         // Trigger eventfd
         var writeBuf = new byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(writeBuf, 1);
-        eventFd.Write(file, writeBuf, 0); // This signals POLLIN
+        eventFd.WriteFromHost(null, file, writeBuf, 0); // This signals POLLIN
 
         // Read Epoll
         var buffer = new byte[16];

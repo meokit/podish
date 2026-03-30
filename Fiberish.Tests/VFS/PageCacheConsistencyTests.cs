@@ -30,7 +30,7 @@ public class PageCacheConsistencyTests
             Assert.True(engine.CopyToUser(mapAddr + 1, "ZZ"u8.ToArray()));
 
             var buf = new byte[5];
-            var n = file.Dentry.Inode!.Read(file, buf, 0);
+            var n = file.Dentry.Inode!.ReadToHost(null, file, buf, 0);
             Assert.Equal(5, n);
             Assert.Equal("hZZlo", Encoding.ASCII.GetString(buf));
             Assert.Equal("hZZlo", File.ReadAllText(hostFile));
@@ -53,7 +53,7 @@ public class PageCacheConsistencyTests
         root.Inode!.Create(dentry, 0x1B6, 0, 0);
 
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, null!);
-        Assert.Equal(5, dentry.Inode!.Write(file, "hello"u8.ToArray(), 0));
+        Assert.Equal(5, dentry.Inode!.WriteFromHost(null, file, "hello"u8.ToArray(), 0));
 
         const uint mapAddr = 0x46000000;
         mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write, MapFlags.Shared | MapFlags.Fixed,
@@ -62,7 +62,7 @@ public class PageCacheConsistencyTests
         Assert.True(engine.CopyToUser(mapAddr + 2, "XY"u8.ToArray()));
 
         var buf = new byte[5];
-        var n = dentry.Inode.Read(file, buf, 0);
+        var n = dentry.Inode.ReadToHost(null, file, buf, 0);
         Assert.Equal(5, n);
         Assert.Equal("heXYo", Encoding.ASCII.GetString(buf));
     }
@@ -105,7 +105,7 @@ public class PageCacheConsistencyTests
             Assert.True(engine.CopyToUser(mapAddr + 3, "PQ"u8.ToArray()));
 
             var buf = new byte[5];
-            var n = file.Dentry.Inode!.Read(file, buf, 0);
+            var n = file.Dentry.Inode!.ReadToHost(null, file, buf, 0);
             Assert.Equal(5, n);
             Assert.Equal("helPQ", Encoding.ASCII.GetString(buf));
             Assert.Equal("hello", File.ReadAllText(lowerFile));
@@ -135,7 +135,7 @@ public class PageCacheConsistencyTests
                 MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, false, engine));
 
-            var rc = file.Dentry.Inode!.Write(file, "XY"u8.ToArray(), 1);
+            var rc = file.Dentry.Inode!.WriteFromHost(null, file, "XY"u8.ToArray(), 1);
             Assert.Equal(2, rc);
 
             Assert.Equal("hXYlo", File.ReadAllText(hostFile));
@@ -160,14 +160,14 @@ public class PageCacheConsistencyTests
         var dentry = new Dentry("data.bin", null, root, sb);
         root.Inode!.Create(dentry, 0x1B6, 0, 0);
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, null!);
-        Assert.Equal(5, dentry.Inode!.Write(file, "hello"u8.ToArray(), 0));
+        Assert.Equal(5, dentry.Inode!.WriteFromHost(null, file, "hello"u8.ToArray(), 0));
 
         const uint mapAddr = 0x49000000;
         mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write, MapFlags.Shared | MapFlags.Fixed,
             file, 0, "MAP_SHARED", engine);
         Assert.True(mm.HandleFault(mapAddr, false, engine));
 
-        var rc = dentry.Inode.Write(file, "MN"u8.ToArray(), 2);
+        var rc = dentry.Inode.WriteFromHost(null, file, "MN"u8.ToArray(), 2);
         Assert.Equal(2, rc);
 
         var mapped = new byte[5];
@@ -187,7 +187,7 @@ public class PageCacheConsistencyTests
         root.Inode!.Create(dentry, 0x1B6, 0, 0);
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, null!);
 
-        Assert.Equal(5, dentry.Inode!.Write(file, "hello"u8.ToArray(), 0));
+        Assert.Equal(5, dentry.Inode!.WriteFromHost(null, file, "hello"u8.ToArray(), 0));
         var beforeMapCache = dentry.Inode.Mapping;
         Assert.NotNull(beforeMapCache);
 
@@ -238,7 +238,7 @@ public class PageCacheConsistencyTests
                 MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, false, engine));
 
-            var rc = file.Dentry.Inode!.Write(file, "UV"u8.ToArray(), 3);
+            var rc = file.Dentry.Inode!.WriteFromHost(null, file, "UV"u8.ToArray(), 3);
             Assert.Equal(2, rc);
 
             var mapped = new byte[5];
@@ -269,7 +269,7 @@ public class PageCacheConsistencyTests
             var inode = file.Dentry.Inode!;
             cache = manager.GetOrCreateMapping(inode);
 
-            var rc = inode.Write(file, "XY"u8.ToArray(), 1);
+            var rc = inode.WriteFromHost(null, file, "XY"u8.ToArray(), 1);
             Assert.Equal(2, rc);
             Assert.Equal("hello", File.ReadAllText(hostFile));
 
@@ -278,7 +278,7 @@ public class PageCacheConsistencyTests
             Assert.False(cache.TryEvictCleanPage(0));
 
             var buf = new byte[5];
-            var n = inode.Read(file, buf, 0);
+            var n = inode.ReadToHost(null, file, buf, 0);
             Assert.Equal(5, n);
             Assert.Equal("hXYlo", Encoding.ASCII.GetString(buf));
         }
@@ -302,7 +302,7 @@ public class PageCacheConsistencyTests
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, null!);
 
         var inode = dentry.Inode!;
-        var rc = inode.Write(file, "hello"u8.ToArray(), 0);
+        var rc = inode.WriteFromHost(null, file, "hello"u8.ToArray(), 0);
         Assert.Equal(5, rc);
         var cache = Assert.IsType<AddressSpace>(inode.Mapping);
 
@@ -311,7 +311,7 @@ public class PageCacheConsistencyTests
         Assert.False(cache.TryEvictCleanPage(0));
 
         var buf = new byte[5];
-        var n = inode.Read(file, buf, 0);
+        var n = inode.ReadToHost(null, file, buf, 0);
         Assert.Equal(5, n);
         Assert.Equal("hello", Encoding.ASCII.GetString(buf));
     }
@@ -334,7 +334,7 @@ public class PageCacheConsistencyTests
             cache = manager.GetOrCreateMapping(inode);
 
             var warm = new byte[5];
-            var warmN = inode.Read(file, warm, 0);
+            var warmN = inode.ReadToHost(null, file, warm, 0);
             Assert.Equal(5, warmN);
             Assert.Equal("hello", Encoding.ASCII.GetString(warm));
             Assert.NotEqual(IntPtr.Zero, cache.GetPage(0));
@@ -344,7 +344,7 @@ public class PageCacheConsistencyTests
             Assert.Equal(5, File.ReadAllBytes(hostFile).Length);
 
             var readBack = new byte[5];
-            var n = inode.Read(file, readBack, 0);
+            var n = inode.ReadToHost(null, file, readBack, 0);
             Assert.Equal(5, n);
             Assert.Equal(new byte[5], readBack);
         }

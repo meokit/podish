@@ -53,6 +53,8 @@ public sealed class ContainerRunRequest
     public bool EnableWaylandServer { get; init; }
     public int WaylandDesktopWidth { get; init; } = 1024;
     public int WaylandDesktopHeight { get; init; } = 768;
+    public ushort? TerminalRows { get; init; }
+    public ushort? TerminalCols { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
 }
 
@@ -460,13 +462,9 @@ public sealed class ContainerRuntimeService
                 request.Volumes.Length,
                 request.LogDriver, publishedPorts.Count);
             if (OperatingSystem.IsBrowser())
-            {
                 await scheduler.RunAsync();
-            }
             else
-            {
                 scheduler.Run();
-            }
             _logger.LogDebug(
                 "Scheduler run returned containerId={ContainerId} mainExited={MainExited}",
                 request.ContainerId, mainTask.Exited);
@@ -1189,8 +1187,8 @@ public sealed class ContainerRuntimeService
         private readonly IContainerLogSink _containerLogSink;
         private readonly Lock _lock = new();
         private readonly AsyncWaitQueue _writeReady;
-        private int _queuedBytes;
         private bool _disposed;
+        private int _queuedBytes;
 
         public BridgeTtyDriver(PodishTerminalBridge bridge, IContainerLogSink containerLogSink,
             KernelScheduler scheduler)
@@ -1213,7 +1211,7 @@ public sealed class ContainerRuntimeService
             if (buffer.Length == 0)
                 return 0;
 
-            byte[] payload;
+            ReadOnlySpan<byte> payload;
             lock (_lock)
             {
                 if (_disposed)
@@ -1227,7 +1225,7 @@ public sealed class ContainerRuntimeService
                 }
 
                 var written = Math.Min(space, buffer.Length);
-                payload = buffer[..written].ToArray();
+                payload = buffer[..written];
                 _queuedBytes += written;
             }
 

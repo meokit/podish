@@ -120,7 +120,7 @@ public class HostMappedPageCacheGeometryTests
                 var initial = new byte[LinuxConstants.PageSize * 4];
                 Array.Fill(initial, (byte)'s');
                 var wf = new LinuxFile(file, FileFlags.O_WRONLY, mountLoc.Mount!);
-                Assert.Equal(initial.Length, file.Inode!.Write(wf, initial, 0));
+                Assert.Equal(initial.Length, file.Inode!.WriteFromHost(null, wf, initial, 0));
                 wf.Close();
                 sm.Close();
             }
@@ -165,7 +165,7 @@ public class HostMappedPageCacheGeometryTests
                 Assert.True(fileLoc.IsValid);
                 var rf = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDONLY, fileLoc.Mount!);
                 var data = new byte[LinuxConstants.PageSize * 4];
-                var n = fileLoc.Dentry!.Inode!.Read(rf, data, 0);
+                var n = fileLoc.Dentry!.Inode!.ReadToHost(null, rf, data, 0);
                 rf.Close();
                 Assert.Equal(data.Length, n);
                 Assert.Equal((byte)'U', data[1]);

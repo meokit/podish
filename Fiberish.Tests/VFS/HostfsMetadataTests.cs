@@ -251,7 +251,7 @@ public class HostfsMetadataTests
 
             var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount);
             var buf = new byte[16];
-            var n = loc.Dentry!.Inode!.Read(file, buf, 0);
+            var n = loc.Dentry!.Inode!.ReadToHost(null, file, buf, 0);
             Assert.Equal("hello", Encoding.UTF8.GetString(buf, 0, n));
 
             Assert.False(Directory.Exists(Path.Combine(hostDir, ".fiberish_meta")));
@@ -285,7 +285,7 @@ public class HostfsMetadataTests
 
             var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount);
             var buf = new byte[32];
-            var n = loc.Dentry!.Inode!.Read(file, buf, 0);
+            var n = loc.Dentry!.Inode!.ReadToHost(null, file, buf, 0);
             Assert.Equal("hello-root", Encoding.UTF8.GetString(buf, 0, n));
 
             Assert.False(Directory.Exists(Path.Combine(hostDir, ".fiberish_meta")));
@@ -520,7 +520,7 @@ public class HostfsMetadataTests
                 Assert.Equal(Path.GetFullPath(hostPath), afterPath);
 
                 var buffer = new byte[16];
-                var read = dentry!.Inode!.Read(file, buffer, 0);
+                var read = dentry!.Inode!.ReadToHost(null, file, buffer, 0);
                 Assert.Equal("active", Encoding.UTF8.GetString(buffer, 0, read));
             }
             finally

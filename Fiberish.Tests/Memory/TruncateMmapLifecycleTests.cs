@@ -190,7 +190,7 @@ public class TruncateMmapLifecycleTests
             var payload = new byte[LinuxConstants.PageSize * 2];
             payload.AsSpan(0, 4).Fill((byte)'A');
             payload.AsSpan(LinuxConstants.PageSize, 4).Fill((byte)'B');
-            Assert.Equal(payload.Length, inode.Write(file, payload, 0));
+            Assert.Equal(payload.Length, inode.WriteFromHost(null, file, payload, 0));
 
             var map = mm.Mmap(0x45000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
                 MapFlags.Shared, file, 0, "shared-mm-map", engine);
@@ -283,7 +283,7 @@ public class TruncateMmapLifecycleTests
             var payload = new byte[LinuxConstants.PageSize * 2];
             payload.AsSpan(0, 4).Fill((byte)'A');
             payload.AsSpan(LinuxConstants.PageSize, 4).Fill((byte)'B');
-            Assert.Equal(payload.Length, dentry.Inode!.Write(file, payload, 0));
+            Assert.Equal(payload.Length, dentry.Inode!.WriteFromHost(null, file, payload, 0));
         }
 
         public Engine Engine { get; }
@@ -347,7 +347,7 @@ public class TruncateMmapLifecycleTests
             var payload = new byte[LinuxConstants.PageSize * 2];
             payload.AsSpan(0, 4).Fill((byte)'A');
             payload.AsSpan(LinuxConstants.PageSize, 4).Fill((byte)'B');
-            Assert.Equal(payload.Length, Inode.Write(File1, payload, 0));
+            Assert.Equal(payload.Length, Inode.WriteFromHost(null, File1, payload, 0));
 
             Map1 = Mm1.Mmap(0x42000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
                 MapFlags.Shared, File1, 0, "p1-map", Engine1);
@@ -415,7 +415,7 @@ public class TruncateMmapLifecycleTests
 
             File1 = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
             File2 = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
-            Assert.Equal(1, Inode.Write(File1, new[] { (byte)'A' }, 0));
+            Assert.Equal(1, Inode.WriteFromHost(null, File1, new[] { (byte)'A' }, 0));
 
             Map1 = Mm1.Mmap(0x46000000, LinuxConstants.PageSize, Protection.Read | Protection.Write, flags1, File1, 0,
                 "map1", Engine1);

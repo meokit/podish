@@ -30,18 +30,20 @@ public sealed class TmpfsSizeLimitTests
         var file = new LinuxFile(fileDentry, FileFlags.O_RDWR, mount);
 
         var fill = new byte[LinuxConstants.PageSize];
-        Assert.Equal(fill.Length, fileDentry.Inode!.Write(file, fill, 0));
+        Assert.Equal(fill.Length, fileDentry.Inode!.WriteFromHost(null, file, fill, 0));
         Assert.Equal(LinuxConstants.PageSize, sb.UsedDataBytes);
         Assert.Equal(-(int)Errno.ENOSPC, fileDentry.Inode!.Truncate(LinuxConstants.PageSize + 1));
 
-        Assert.Equal(-(int)Errno.ENOSPC, fileDentry.Inode!.Write(file, new byte[] { 0x1 }, LinuxConstants.PageSize));
+        Assert.Equal(-(int)Errno.ENOSPC,
+            fileDentry.Inode!.WriteFromHost(null, file, new byte[] { 0x1 }, LinuxConstants.PageSize));
 
         Assert.Equal(0, fileDentry.Inode!.Truncate(2048));
         Assert.Equal(2048, sb.UsedDataBytes);
 
         var refill = new byte[2048];
-        Assert.Equal(refill.Length, fileDentry.Inode!.Write(file, refill, 2048));
+        Assert.Equal(refill.Length, fileDentry.Inode!.WriteFromHost(null, file, refill, 2048));
         Assert.Equal(LinuxConstants.PageSize, sb.UsedDataBytes);
-        Assert.Equal(-(int)Errno.ENOSPC, fileDentry.Inode!.Write(file, new byte[] { 0x2 }, LinuxConstants.PageSize));
+        Assert.Equal(-(int)Errno.ENOSPC,
+            fileDentry.Inode!.WriteFromHost(null, file, new byte[] { 0x2 }, LinuxConstants.PageSize));
     }
 }

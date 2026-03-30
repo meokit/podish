@@ -455,7 +455,7 @@ public class CrossMountBehaviorTests
             {
                 var file = new LinuxFile(created, FileFlags.O_RDWR, parentLoc.Mount!);
                 var bytes = Encoding.UTF8.GetBytes(contents);
-                Assert.True(created.Inode!.Write(file, bytes, 0) >= 0);
+                Assert.True(created.Inode!.WriteFromHost(null, file, bytes, 0) >= 0);
             }
         }
 
@@ -487,7 +487,7 @@ public class CrossMountBehaviorTests
             Assert.True(loc.IsValid);
             var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
             var buffer = new byte[64];
-            var read = loc.Dentry!.Inode!.Read(file, buffer, 0);
+            var read = loc.Dentry!.Inode!.ReadToHost(null, file, buffer, 0);
             Assert.True(read >= 0);
             return Encoding.UTF8.GetString(buffer, 0, read);
         }

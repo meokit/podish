@@ -231,7 +231,7 @@ public class CloneThreadLifecycleTests
         var file1 = env.CreateTmpfsFile("futex-shared");
         var file2 = new LinuxFile(file1.Dentry, FileFlags.O_RDWR, null!);
         Assert.Equal(file1.Dentry.Inode, file2.Dentry.Inode);
-        Assert.Equal(4, file1.Dentry.Inode!.Write(file1, BitConverter.GetBytes(2u), 0));
+        Assert.Equal(4, file1.Dentry.Inode!.WriteFromHost(null, file1, BitConverter.GetBytes(2u), 0));
 
         const uint parentAddr = 0x00630000;
         const uint childAddr = 0x00634000;
@@ -279,7 +279,7 @@ public class CloneThreadLifecycleTests
 
         var file1 = env.CreateTmpfsFile("futex-shared-nonprivate");
         var file2 = new LinuxFile(file1.Dentry, FileFlags.O_RDWR, null!);
-        Assert.Equal(4, file1.Dentry.Inode!.Write(file1, BitConverter.GetBytes(0u), 0));
+        Assert.Equal(4, file1.Dentry.Inode!.WriteFromHost(null, file1, BitConverter.GetBytes(0u), 0));
 
         const uint parentAddr = 0x0063C000;
         const uint childAddr = 0x00640000;

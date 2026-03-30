@@ -131,7 +131,7 @@ public class WaitSyscallTests
         var payload = new byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(payload, 1);
         await env.WaitForBackgroundSchedulerAsync();
-        await env.InvokeOnSchedulerAsync(() => Assert.Equal(8, eventFd.Write(file, payload, 0)));
+        await env.InvokeOnSchedulerAsync(() => Assert.Equal(8, eventFd.WriteFromHost(null, file, payload, 0)));
 
         var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, rc);
@@ -189,7 +189,7 @@ public class WaitSyscallTests
 
         var payload = new byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(payload, 1);
-        Assert.Equal(8, eventFd.Write(file, payload, 0));
+        Assert.Equal(8, eventFd.WriteFromHost(null, file, payload, 0));
 
         var rc = await Invoke(env, "SysEpollPwait2", (uint)epfd, eventsPtr, 1, 0, 0, 0);
         Assert.Equal(1, rc);
@@ -243,7 +243,7 @@ public class WaitSyscallTests
 
         var payload = new byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(payload, 1);
-        await env.InvokeOnSchedulerAsync(() => Assert.Equal(8, eventFd.Write(file, payload, 0)));
+        await env.InvokeOnSchedulerAsync(() => Assert.Equal(8, eventFd.WriteFromHost(null, file, payload, 0)));
 
         var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, rc);
@@ -317,7 +317,7 @@ public class WaitSyscallTests
 
         var payload = new byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(payload, 1);
-        await env.InvokeOnSchedulerAsync(() => Assert.Equal(8, eventFd.Write(file, payload, 0)));
+        await env.InvokeOnSchedulerAsync(() => Assert.Equal(8, eventFd.WriteFromHost(null, file, payload, 0)));
 
         var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, rc);

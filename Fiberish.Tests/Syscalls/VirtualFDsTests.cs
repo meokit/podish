@@ -21,22 +21,22 @@ public class VirtualFDsTests
 
         // Read initial value 5
         var buf = new byte[8];
-        var readLen = inode.Read(efd, buf, 0);
+        var readLen = inode.ReadToHost(null, efd, buf, 0);
         Assert.Equal(8, readLen);
         Assert.Equal(5UL, BinaryPrimitives.ReadUInt64LittleEndian(buf));
 
         // Read again should return 0 (simulated block) or EAGAIN if NONBLOCK
         efd.Flags |= FileFlags.O_NONBLOCK;
-        readLen = inode.Read(efd, buf, 0);
+        readLen = inode.ReadToHost(null, efd, buf, 0);
         Assert.Equal(-(int)Errno.EAGAIN, readLen);
 
         // Write 10
         BinaryPrimitives.WriteUInt64LittleEndian(buf, 10UL);
-        var writeLen = inode.Write(efd, buf, 0);
+        var writeLen = inode.WriteFromHost(null, efd, buf, 0);
         Assert.Equal(8, writeLen);
 
         // Read should return 10
-        readLen = inode.Read(efd, buf, 0);
+        readLen = inode.ReadToHost(null, efd, buf, 0);
         Assert.Equal(8, readLen);
         Assert.Equal(10UL, BinaryPrimitives.ReadUInt64LittleEndian(buf));
     }
@@ -53,19 +53,19 @@ public class VirtualFDsTests
         // Read should return 1 and decrement counter
         for (var i = 0; i < 5; i++)
         {
-            var readLen = inode.Read(efd, buf, 0);
+            var readLen = inode.ReadToHost(null, efd, buf, 0);
             Assert.Equal(8, readLen);
             Assert.Equal(1UL, BinaryPrimitives.ReadUInt64LittleEndian(buf));
         }
 
         // 6th read should block/EAGAIN
         efd.Flags |= FileFlags.O_NONBLOCK;
-        var err = inode.Read(efd, buf, 0);
+        var err = inode.ReadToHost(null, efd, buf, 0);
         Assert.Equal(-(int)Errno.EAGAIN, err);
 
         // Write 2
         BinaryPrimitives.WriteUInt64LittleEndian(buf, 2UL);
-        inode.Write(efd, buf, 0);
+        inode.WriteFromHost(null, efd, buf, 0);
 
         // Poll should show POLLIN
         Assert.Equal(LinuxConstants.POLLIN | LinuxConstants.POLLOUT,
@@ -104,12 +104,12 @@ public class VirtualFDsTests
 
         // Should have 2 expirations
         var buf = new byte[8];
-        var readLen = inode.Read(tfd, buf, 0);
+        var readLen = inode.ReadToHost(null, tfd, buf, 0);
         Assert.Equal(8, readLen);
         Assert.Equal(2UL, BinaryPrimitives.ReadUInt64LittleEndian(buf));
 
         // Next read should EAGAIN
-        readLen = inode.Read(tfd, buf, 0);
+        readLen = inode.ReadToHost(null, tfd, buf, 0);
         Assert.Equal(-(int)Errno.EAGAIN, readLen);
     }
 
@@ -133,7 +133,7 @@ public class VirtualFDsTests
 
         // Reading should return siginfo
         var buf = new byte[128];
-        var readLen = inode.Read(env.Task, sfd, buf);
+        var readLen = inode.ReadToHost(env.Task, sfd, buf, 0);
         Assert.Equal(128, readLen);
 
         Assert.Equal((uint)Signal.SIGUSR1, BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4)));
@@ -143,7 +143,7 @@ public class VirtualFDsTests
         Assert.Equal(42UL, BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(56, 8)));
 
         // Next read should EAGAIN
-        readLen = inode.Read(env.Task, sfd, buf);
+        readLen = inode.ReadToHost(env.Task, sfd, buf, 0);
         Assert.Equal(-(int)Errno.EAGAIN, readLen);
     }
 
@@ -223,13 +223,13 @@ public class VirtualFDsTests
         env.Task.PostSignalInfo(new SigInfo { Signo = (int)Signal.SIGUSR1, Code = 0, Value = 2 });
 
         var buf = new byte[128];
-        var readLen = inode.Read(env.Task, sfd, buf);
+        var readLen = inode.ReadToHost(env.Task, sfd, buf, 0);
         Assert.Equal(128, readLen);
         Assert.Equal((uint)Signal.SIGUSR1, BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4)));
         Assert.Equal(2UL, BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(56, 8)));
 
         Assert.True((env.Task.PendingSignals & (1UL << ((int)Signal.SIGUSR2 - 1))) != 0);
-        Assert.Equal(-(int)Errno.EAGAIN, inode.Read(env.Task, sfd, buf));
+        Assert.Equal(-(int)Errno.EAGAIN, inode.ReadToHost(env.Task, sfd, buf, 0));
     }
 
     [Fact]
@@ -265,6 +265,7 @@ public class VirtualFDsTests
     {
         private static readonly FieldInfo OwnerThreadIdField =
             typeof(KernelScheduler).GetField("_ownerThreadId", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
         private static readonly MethodInfo DrainEventsMethod =
             typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic)!;
 

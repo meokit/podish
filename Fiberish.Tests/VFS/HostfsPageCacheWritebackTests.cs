@@ -463,7 +463,7 @@ public class HostfsPageCacheWritebackTests
             var fd = sm.AllocFD(file);
 
             _ = manager.GetOrCreateMapping(file.Dentry.Inode!);
-            var writeRc = file.Dentry.Inode!.Write(file, "XY"u8.ToArray(), 1);
+            var writeRc = file.Dentry.Inode!.WriteFromHost(null, file, "XY"u8.ToArray(), 1);
             Assert.Equal(2, writeRc);
             Assert.Equal("abcde", File.ReadAllText(hostFile));
 

@@ -178,7 +178,7 @@ public class FiberTaskCloneTests
             var file = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
             _files.Add(file);
 
-            Assert.Equal(1, dentry.Inode!.Write(file, new[] { initialByte }, 0));
+            Assert.Equal(1, dentry.Inode!.WriteFromHost(null, file, new[] { initialByte }, 0));
             Vma.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
                 MapFlags.Private | MapFlags.Fixed, file, 0, "[private-file]", Engine);
         }

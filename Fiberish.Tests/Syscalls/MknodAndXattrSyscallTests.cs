@@ -147,7 +147,7 @@ public class MknodAndXattrSyscallTests
 
         var f = new LinuxFile(loc.Dentry, FileFlags.O_RDONLY, loc.Mount);
         var buf = new byte[64];
-        var n = loc.Dentry.Inode.Read(f, buf, 0);
+        var n = loc.Dentry.Inode.ReadToHost(null, f, buf, 0);
         Assert.True(n > 0);
         var text = Encoding.UTF8.GetString(buf, 0, n);
         Assert.Contains("nameserver 8.8.8.8", text);

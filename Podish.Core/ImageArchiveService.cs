@@ -531,7 +531,7 @@ public sealed class ImageArchiveService
             var buf = new byte[64 * 1024];
             while (true)
             {
-                var n = inode.Read(lf, buf, offset);
+                var n = inode.ReadToHost(null, lf, buf, offset);
                 if (n <= 0)
                     break;
                 ms.Write(buf, 0, n);

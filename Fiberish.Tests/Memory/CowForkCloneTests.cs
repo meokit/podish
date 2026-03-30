@@ -275,6 +275,16 @@ public class CowForkCloneTests
             Assert.Single(childMm.VMAs).VmAnonVma!.GetPage(pageIndex));
     }
 
+    private static void ReprotectPrivateMappings(VMAManager mm, Engine engine)
+    {
+        foreach (var vma in mm.VMAs)
+        {
+            if ((vma.Flags & MapFlags.Private) == 0 || vma.Length == 0) continue;
+            var readOnlyPerms = vma.Perms & ~Protection.Write;
+            mm.ReprotectNativeMappings(engine, vma.Start, vma.Length, readOnlyPerms, false);
+        }
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()
@@ -292,7 +302,7 @@ public class CowForkCloneTests
 
             File = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
             Inode = dentry.Inode!;
-            Assert.Equal(1, Inode.Write(File, new[] { (byte)'A' }, 0));
+            Assert.Equal(1, Inode.WriteFromHost(null, File, new[] { (byte)'A' }, 0));
         }
 
         public Engine ParentEngine { get; }
@@ -311,16 +321,6 @@ public class CowForkCloneTests
             var mapped = ParentMm.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
                 MapFlags.Private | MapFlags.Fixed, File, 0, "fork-cow", ParentEngine);
             Assert.Equal(addr, mapped);
-        }
-    }
-
-    private static void ReprotectPrivateMappings(VMAManager mm, Engine engine)
-    {
-        foreach (var vma in mm.VMAs)
-        {
-            if ((vma.Flags & MapFlags.Private) == 0 || vma.Length == 0) continue;
-            var readOnlyPerms = vma.Perms & ~Protection.Write;
-            mm.ReprotectNativeMappings(engine, vma.Start, vma.Length, readOnlyPerms, false);
         }
     }
 }

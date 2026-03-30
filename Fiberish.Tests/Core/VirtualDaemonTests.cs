@@ -1,7 +1,9 @@
+using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
+using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Xunit;
@@ -31,7 +33,7 @@ public sealed class VirtualDaemonTests
             var clientSocket = new UnixSocketInode(
                 0,
                 client.Syscalls.MemfdSuperBlock,
-                System.Net.Sockets.SocketType.Stream,
+                SocketType.Stream,
                 client.Task.CommonKernel);
             var clientFile = new LinuxFile(
                 new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, client.Syscalls.MemfdSuperBlock),
@@ -83,7 +85,7 @@ public sealed class VirtualDaemonTests
             var clientSocket = new UnixSocketInode(
                 0,
                 client.Syscalls.MemfdSuperBlock,
-                System.Net.Sockets.SocketType.Stream,
+                SocketType.Stream,
                 client.Task.CommonKernel);
             var clientFile = new LinuxFile(
                 new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, client.Syscalls.MemfdSuperBlock),
@@ -139,7 +141,7 @@ public sealed class VirtualDaemonTests
             var clientSocket = new UnixSocketInode(
                 0,
                 client.Syscalls.MemfdSuperBlock,
-                System.Net.Sockets.SocketType.Stream,
+                SocketType.Stream,
                 client.Task.CommonKernel);
             var clientFile = new LinuxFile(
                 new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, client.Syscalls.MemfdSuperBlock),
@@ -192,7 +194,7 @@ public sealed class VirtualDaemonTests
             var clientSocket = new UnixSocketInode(
                 0,
                 client.Syscalls.MemfdSuperBlock,
-                System.Net.Sockets.SocketType.Stream,
+                SocketType.Stream,
                 client.Task.CommonKernel);
             var clientFile = new LinuxFile(
                 new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, client.Syscalls.MemfdSuperBlock),
@@ -210,7 +212,8 @@ public sealed class VirtualDaemonTests
             Assert.Equal(0, await clientSocket.ConnectAsync(clientFile, client.Task, endpoint));
 
             step = "sendmsg";
-            Assert.Equal(payload.Length, await clientSocket.SendMsgAsync(clientFile, client.Task, payload, null, 0, null));
+            Assert.Equal(payload.Length,
+                await clientSocket.SendMsgAsync(clientFile, client.Task, payload, null, 0, null));
 
             step = "recv";
             var recvBuffer = new byte[128];
@@ -235,14 +238,15 @@ public sealed class VirtualDaemonTests
         var result = await env.InvokeOnSchedulerAsync(async () =>
         {
             step = "spawn daemon";
-            runtime = env.Registry.Spawn(new ReceiveReplySendMsgVirtualDaemon("/virt-sendmsg-out.sock", s => daemonStep = s));
+            runtime = env.Registry.Spawn(
+                new ReceiveReplySendMsgVirtualDaemon("/virt-sendmsg-out.sock", s => daemonStep = s));
 
             step = "create client";
             var client = env.CreateClientTask("virt-client-sendmsg-out");
             var clientSocket = new UnixSocketInode(
                 0,
                 client.Syscalls.MemfdSuperBlock,
-                System.Net.Sockets.SocketType.Stream,
+                SocketType.Stream,
                 client.Task.CommonKernel);
             var clientFile = new LinuxFile(
                 new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, client.Syscalls.MemfdSuperBlock),
@@ -270,7 +274,7 @@ public sealed class VirtualDaemonTests
             Assert.True(recv > 0);
             clientFile.Close();
             return Encoding.UTF8.GetString(recvBuffer, 0, recv);
-        }, () => $"{step} / {daemonStep} / failure={(runtime?.LastScheduledFailure?.GetType().Name ?? "none")}");
+        }, () => $"{step} / {daemonStep} / failure={runtime?.LastScheduledFailure?.GetType().Name ?? "none"}");
 
         Assert.Equal("daemon-sendmsg", result);
     }
@@ -291,7 +295,7 @@ public sealed class VirtualDaemonTests
             var clientSocket = new UnixSocketInode(
                 0,
                 client.Syscalls.MemfdSuperBlock,
-                System.Net.Sockets.SocketType.Stream,
+                SocketType.Stream,
                 client.Task.CommonKernel);
             var clientFile = new LinuxFile(
                 new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, client.Syscalls.MemfdSuperBlock),
@@ -351,7 +355,7 @@ public sealed class VirtualDaemonTests
             var clientSocket = new UnixSocketInode(
                 0,
                 client.Syscalls.MemfdSuperBlock,
-                System.Net.Sockets.SocketType.Stream,
+                SocketType.Stream,
                 client.Task.CommonKernel);
             var clientFile = new LinuxFile(
                 new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, client.Syscalls.MemfdSuperBlock),
@@ -419,10 +423,10 @@ public sealed class VirtualDaemonTests
                     var buffer = new byte[256];
                     var bytes = await connection.RecvAsync(buffer, 0, buffer.Length);
                     if (bytes > 0)
-                        await connection.SendAsync(buffer.AsMemory(0, bytes), 0);
+                        await connection.SendAsync(buffer.AsMemory(0, bytes));
                 }
 
-                ctx.Exit(0);
+                ctx.Exit();
             });
         }
 
@@ -466,9 +470,9 @@ public sealed class VirtualDaemonTests
                     {
                         var readBuffer = new byte[256];
                         var inode = Assert.IsAssignableFrom<Inode>(file.OpenedInode);
-                        var bytes = inode.Read(file, readBuffer, 0);
+                        var bytes = inode.ReadToHost(null, file, readBuffer, 0);
                         Assert.True(bytes > 0);
-                        await connection.SendAsync(readBuffer.AsMemory(0, bytes), 0);
+                        await connection.SendAsync(readBuffer.AsMemory(0, bytes));
                     }
                     finally
                     {
@@ -476,7 +480,7 @@ public sealed class VirtualDaemonTests
                     }
                 }
 
-                ctx.Exit(0);
+                ctx.Exit();
             });
         }
 
@@ -523,7 +527,7 @@ public sealed class VirtualDaemonTests
 
                     _setStep("daemon sendmsg");
                     var echo = recvBuffer[..recv.BytesRead];
-                    var sent = await connection.SendMsgAsync(echo, null, 0, null);
+                    var sent = await connection.SendMsgAsync(echo);
                     Assert.Equal(echo.Length, sent);
                     _setStep("daemon done");
                 }
@@ -571,15 +575,21 @@ public sealed class VirtualDaemonTests
                     Assert.True(recv.BytesRead > 0);
                     Assert.True(recv.Fds == null || recv.Fds.Count == 0);
                     _setStep("daemon send");
-                    var sent = await connection.SendAsync(recvBuffer.AsMemory(0, recv.BytesRead), 0);
+                    var sent = await connection.SendAsync(recvBuffer.AsMemory(0, recv.BytesRead));
                     Assert.Equal(recv.BytesRead, sent);
                     _setStep("daemon done");
                 }
             });
         }
 
-        public void OnSignal(VirtualDaemonContext context, int signo) => context.Exit(128 + signo);
-        public void OnStop(VirtualDaemonContext context) { }
+        public void OnSignal(VirtualDaemonContext context, int signo)
+        {
+            context.Exit(128 + signo);
+        }
+
+        public void OnStop(VirtualDaemonContext context)
+        {
+        }
     }
 
     private sealed class ReceiveReplySendMsgVirtualDaemon : IVirtualDaemon
@@ -618,15 +628,22 @@ public sealed class VirtualDaemonTests
                         .GetValue(acceptedSocket);
                     var peerState = clientPeer?.GetDebugState();
                     _setStep($"daemon sendmsg pre accepted={acceptedState} peer={peerState}");
-                    var sent = await connection.SendMsgAsync(recvBuffer[..recv], null, 0, null);
+                    var sent = await connection.SendMsgAsync(recvBuffer[..recv]);
                     Assert.Equal(recv, sent);
-                    _setStep($"daemon done accepted={acceptedSocket.GetDebugState()} peer={clientPeer?.GetDebugState()}");
+                    _setStep(
+                        $"daemon done accepted={acceptedSocket.GetDebugState()} peer={clientPeer?.GetDebugState()}");
                 }
             });
         }
 
-        public void OnSignal(VirtualDaemonContext context, int signo) => context.Exit(128 + signo);
-        public void OnStop(VirtualDaemonContext context) { }
+        public void OnSignal(VirtualDaemonContext context, int signo)
+        {
+            context.Exit(128 + signo);
+        }
+
+        public void OnStop(VirtualDaemonContext context)
+        {
+        }
     }
 
     private sealed class InterleavedFrameVirtualDaemon : IVirtualDaemon
@@ -655,15 +672,15 @@ public sealed class VirtualDaemonTests
                     await ReadExactAsync(connection, 20);
                     await ReadExactAsync(connection, 16384);
 
-                    Assert.Equal(20, await connection.SendAsync(new byte[20], 0));
+                    Assert.Equal(20, await connection.SendAsync(new byte[20]));
 
                     await ReadExactAsync(connection, 20);
                     await ReadExactAsync(connection, 16384);
 
-                    Assert.Equal(1, await connection.SendAsync(new byte[] { 1 }, 0));
+                    Assert.Equal(1, await connection.SendAsync(new byte[] { 1 }));
                 }
 
-                ctx.Exit(0);
+                ctx.Exit();
             });
         }
 
@@ -684,7 +701,7 @@ public sealed class VirtualDaemonTests
             {
                 var scratch = new byte[bytesNeeded - total];
                 var read = await connection.RecvAsync(scratch, 0, scratch.Length);
-                if (read == -(int)Native.Errno.EAGAIN || read == -(int)Native.Errno.EINTR)
+                if (read == -(int)Errno.EAGAIN || read == -(int)Errno.EINTR)
                 {
                     await new SleepAwaitable(1, connection.Task, connection.Runtime.Scheduler);
                     continue;
@@ -726,15 +743,15 @@ public sealed class VirtualDaemonTests
                         await ReadExactAsync(connection, 20);
                         await ReadExactAsync(connection, 16384);
 
-                        Assert.Equal(20, await connection.SendAsync(new byte[20], 0));
+                        Assert.Equal(20, await connection.SendAsync(new byte[20]));
 
                         await ReadExactAsync(connection, 20);
                         await ReadExactAsync(connection, 16384);
 
-                        Assert.Equal(1, await connection.SendAsync(new byte[] { 1 }, 0));
+                        Assert.Equal(1, await connection.SendAsync(new byte[] { 1 }));
                     }
 
-                    ctx.Exit(0);
+                    ctx.Exit();
                 });
 
                 while (!ctx.Task.Exited)
@@ -759,7 +776,7 @@ public sealed class VirtualDaemonTests
             {
                 var scratch = new byte[bytesNeeded - total];
                 var read = await connection.RecvAsync(scratch, 0, scratch.Length);
-                if (read == -(int)Native.Errno.EAGAIN || read == -(int)Native.Errno.EINTR)
+                if (read == -(int)Errno.EAGAIN || read == -(int)Errno.EINTR)
                 {
                     await new SleepAwaitable(1, connection.Task, connection.Runtime.Scheduler);
                     continue;
@@ -779,8 +796,8 @@ public sealed class VirtualDaemonTests
 
         private readonly ClientTaskHandle _anchor;
         private readonly List<ClientTaskHandle> _clients = [];
-        private Exception? _schedulerFailure;
         private readonly Thread _schedulerThread;
+        private Exception? _schedulerFailure;
 
         public TestEnv()
         {
@@ -797,7 +814,7 @@ public sealed class VirtualDaemonTests
             });
 
             Registry = new VirtualDaemonRegistry(Runtime.Syscalls, Scheduler);
-            _anchor = CreateClientTaskCore("scheduler-anchor", track: false);
+            _anchor = CreateClientTaskCore("scheduler-anchor", false);
             _anchor.Task.Status = FiberTaskStatus.Waiting;
             _schedulerThread = new Thread(() =>
             {
@@ -875,7 +892,7 @@ public sealed class VirtualDaemonTests
         public ClientTaskHandle CreateClientTask(string name)
         {
             Scheduler.AssertSchedulerThread();
-            return CreateClientTaskCore(name, track: true);
+            return CreateClientTaskCore(name, true);
         }
 
         private ClientTaskHandle CreateClientTaskCore(string name, bool track)
@@ -919,7 +936,7 @@ public sealed class VirtualDaemonTests
             var file = new LinuxFile(dentry, FileFlags.O_RDWR, syscalls.AnonMount);
 
             var payload = Encoding.UTF8.GetBytes(content);
-            var rc = inode.Write(file, payload, 0);
+            var rc = inode.WriteFromHost(null, file, payload, 0);
             Assert.Equal(payload.Length, rc);
             return file;
         }

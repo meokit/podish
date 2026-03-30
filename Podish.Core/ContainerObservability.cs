@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using Fiberish.Core.VFS.TTY;
 using Microsoft.Extensions.Logging;
@@ -53,6 +52,7 @@ public sealed class JsonFileContainerLogSink : IContainerLogSink
     private readonly Lock _gate = new();
     private readonly ILogger? _logger;
     private readonly StreamWriter _writer;
+    private Utf8JsonWriter? _jsonWriter;
 
     public JsonFileContainerLogSink(string logPath, ILogger? logger = null)
     {
@@ -80,18 +80,26 @@ public sealed class JsonFileContainerLogSink : IContainerLogSink
     {
         if (buffer.Length == 0) return;
 
-        var entry = new ContainerLogEntry(
-            DateTimeOffset.UtcNow,
-            kind == TtyEndpointKind.Stderr ? "stderr" : "stdout",
-            Encoding.UTF8.GetString(buffer));
-        var json = JsonSerializer.Serialize(entry, PodishJsonContext.Default.ContainerLogEntry);
-
         lock (_gate)
         {
-            _writer.WriteLine(json);
+            if (_jsonWriter == null)
+                _jsonWriter = new Utf8JsonWriter(_writer.BaseStream, new JsonWriterOptions { Indented = false });
+            else
+                _jsonWriter.Reset(_writer.BaseStream);
+
+            _jsonWriter.WriteStartObject();
+            _jsonWriter.WriteString("Time", DateTimeOffset.UtcNow);
+            _jsonWriter.WriteString("Stream", kind == TtyEndpointKind.Stderr ? "stderr" : "stdout");
+            _jsonWriter.WriteString("Log", buffer);
+            _jsonWriter.WriteEndObject();
+            _jsonWriter.Flush();
+
+            // Write newline directly to stream to avoid StreamWriter buffering issues
+            _writer.BaseStream.WriteByte(10);
         }
 
-        _logger?.LogTrace("Wrote container log entry stream={Stream} bytes={Bytes}", entry.Stream, buffer.Length);
+        _logger?.LogTrace("Wrote container log entry stream={Stream} bytes={Bytes}",
+            kind == TtyEndpointKind.Stderr ? "stderr" : "stdout", buffer.Length);
     }
 }
 

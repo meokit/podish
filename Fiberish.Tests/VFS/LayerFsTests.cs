@@ -47,7 +47,7 @@ public class LayerFsTests
         Assert.NotNull(d);
         var lf = new LinuxFile(d!, FileFlags.O_RDONLY, null!);
         var buf = new byte[8];
-        var n = d!.Inode!.Read(lf, buf, 0);
+        var n = d!.Inode!.ReadToHost(null, lf, buf, 0);
 
         Assert.Equal(3, n);
         Assert.Equal("abc", Encoding.UTF8.GetString(buf, 0, n));
@@ -85,7 +85,7 @@ public class LayerFsTests
         var d = sb.Root.Inode!.Lookup("x.txt");
         Assert.NotNull(d);
         var lf = new LinuxFile(d!, FileFlags.O_WRONLY, null!);
-        var rc = d!.Inode!.Write(lf, "z"u8.ToArray(), 0);
+        var rc = d!.Inode!.WriteFromHost(null, lf, "z"u8.ToArray(), 0);
 
         Assert.Equal(-(int)Errno.EROFS, rc);
     }
@@ -156,7 +156,7 @@ public class LayerFsTests
         Assert.NotNull(d);
         var lf = new LinuxFile(d!, FileFlags.O_RDONLY, null!);
         var buf = new byte[16];
-        var n = d!.Inode!.Read(lf, buf, 0);
+        var n = d!.Inode!.ReadToHost(null, lf, buf, 0);
 
         Assert.Equal(7, n);
         Assert.Equal("payload", Encoding.UTF8.GetString(buf, 0, n));
@@ -217,7 +217,7 @@ public class LayerFsTests
         try
         {
             var buffer = new byte[8];
-            var n = second.Inode.Read(file, buffer, 0);
+            var n = second.Inode.ReadToHost(null, file, buffer, 0);
             Assert.Equal(3, n);
             Assert.Equal("abc", Encoding.UTF8.GetString(buffer, 0, n));
         }
@@ -339,7 +339,7 @@ public class LayerFsTests
         try
         {
             var buf = new byte[16];
-            var n = inode.Read(rf, buf, 0);
+            var n = inode.ReadToHost(null, rf, buf, 0);
             Assert.Equal(5, n);
             Assert.Equal("hello", Encoding.UTF8.GetString(buf, 0, n));
         }
@@ -424,7 +424,7 @@ public class LayerFsTests
         try
         {
             var buffer = new byte[32];
-            var n = secondInode.Read(rf, buffer, 0);
+            var n = secondInode.ReadToHost(null, rf, buffer, 0);
             Assert.Equal(11, n);
             Assert.Equal("hello-layer", Encoding.UTF8.GetString(buffer, 0, n));
         }

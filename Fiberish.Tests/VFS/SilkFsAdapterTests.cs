@@ -119,7 +119,7 @@ public class SilkFsAdapterTests
                 loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
                 var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
                 var payload = Encoding.UTF8.GetBytes("hello-silk");
-                var wrote = file.Inode!.Write(wf, payload, 0);
+                var wrote = file.Inode!.WriteFromHost(null, wf, payload, 0);
                 Assert.Equal(payload.Length, wrote);
                 wf.Close();
                 Assert.Equal(0, file.Inode!.SetXAttr("user.test", "value"u8.ToArray(), 0));
@@ -159,7 +159,7 @@ public class SilkFsAdapterTests
                 Assert.True(fileLoc.IsValid);
                 var rf = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDONLY, fileLoc.Mount!);
                 var readBuf = new byte[64];
-                var n = fileLoc.Dentry!.Inode!.Read(rf, readBuf, 0);
+                var n = fileLoc.Dentry!.Inode!.ReadToHost(null, rf, readBuf, 0);
                 rf.Close();
                 Assert.Equal(10, n);
                 Assert.Equal("hello-silk", Encoding.UTF8.GetString(readBuf, 0, n));
@@ -406,7 +406,7 @@ public class SilkFsAdapterTests
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
 
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(1, file.Inode!.Write(wf, "A"u8.ToArray(), 0));
+            Assert.Equal(1, file.Inode!.WriteFromHost(null, wf, "A"u8.ToArray(), 0));
             wf.Close();
 
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
@@ -418,7 +418,7 @@ public class SilkFsAdapterTests
             Assert.Equal("A", File.ReadAllText(livePath));
 
             wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(1, file.Inode.Write(wf, "B"u8.ToArray(), 0));
+            Assert.Equal(1, file.Inode.WriteFromHost(null, wf, "B"u8.ToArray(), 0));
             wf.Close();
 
             Assert.True(File.Exists(livePath));
@@ -466,7 +466,7 @@ public class SilkFsAdapterTests
             var file = new Dentry("gone.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(4, file.Inode!.Write(wf, "data"u8.ToArray(), 0));
+            Assert.Equal(4, file.Inode!.WriteFromHost(null, wf, "data"u8.ToArray(), 0));
             wf.Close();
 
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
@@ -521,10 +521,10 @@ public class SilkFsAdapterTests
             loc.Dentry.Inode.Create(b, 0x1A4, 0, 0);
 
             var wa = new LinuxFile(a, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(1, a.Inode!.Write(wa, "A"u8.ToArray(), 0));
+            Assert.Equal(1, a.Inode!.WriteFromHost(null, wa, "A"u8.ToArray(), 0));
             wa.Close();
             var wb = new LinuxFile(b, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(1, b.Inode!.Write(wb, "B"u8.ToArray(), 0));
+            Assert.Equal(1, b.Inode!.WriteFromHost(null, wb, "B"u8.ToArray(), 0));
             wb.Close();
 
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
@@ -578,7 +578,7 @@ public class SilkFsAdapterTests
             var file = new Dentry("held.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(5, file.Inode!.Write(wf, "hello"u8.ToArray(), 0));
+            Assert.Equal(5, file.Inode!.WriteFromHost(null, wf, "hello"u8.ToArray(), 0));
             wf.Close();
 
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
@@ -593,7 +593,7 @@ public class SilkFsAdapterTests
 
             Assert.True(File.Exists(livePath));
             var readBuf = new byte[16];
-            var n = rf.OpenedInode!.Read(rf, readBuf, 0);
+            var n = rf.OpenedInode!.ReadToHost(null, rf, readBuf, 0);
             Assert.Equal(5, n);
             Assert.Equal("hello", Encoding.UTF8.GetString(readBuf, 0, n));
 
@@ -639,7 +639,7 @@ public class SilkFsAdapterTests
             var file = new Dentry("mapheld.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(5, file.Inode!.Write(wf, "hello"u8.ToArray(), 0));
+            Assert.Equal(5, file.Inode!.WriteFromHost(null, wf, "hello"u8.ToArray(), 0));
             wf.Close();
 
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
@@ -702,7 +702,7 @@ public class SilkFsAdapterTests
                 loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
                 var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
                 var payload = "hello"u8.ToArray();
-                Assert.Equal(payload.Length, file.Inode!.Write(wf, payload, 0));
+                Assert.Equal(payload.Length, file.Inode!.WriteFromHost(null, wf, payload, 0));
                 wf.Close();
 
                 var fileLoc = sm.PathWalkWithFlags("/mnt/map.txt", LookupFlags.FollowSymlink);
@@ -746,7 +746,7 @@ public class SilkFsAdapterTests
                 Assert.True(fileLoc.IsValid);
                 var rf = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDONLY, fileLoc.Mount!);
                 var buf = new byte[16];
-                var n = fileLoc.Dentry!.Inode!.Read(rf, buf, 0);
+                var n = fileLoc.Dentry!.Inode!.ReadToHost(null, rf, buf, 0);
                 rf.Close();
                 Assert.Equal(5, n);
                 Assert.Equal("hZZlo", Encoding.UTF8.GetString(buf, 0, n));
@@ -792,7 +792,7 @@ public class SilkFsAdapterTests
                 var file = new Dentry("write_flush.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
                 loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
                 var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-                Assert.Equal(5, file.Inode!.Write(wf, "hello"u8.ToArray(), 0));
+                Assert.Equal(5, file.Inode!.WriteFromHost(null, wf, "hello"u8.ToArray(), 0));
                 wf.Close();
 
                 var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
@@ -801,7 +801,7 @@ public class SilkFsAdapterTests
                     MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, "MAP_SHARED", engine);
                 Assert.True(mm.HandleFault(mapAddr, false, engine));
 
-                Assert.Equal(2, mappedFile.Dentry.Inode!.Write(mappedFile, "XY"u8.ToArray(), 1));
+                Assert.Equal(2, mappedFile.Dentry.Inode!.WriteFromHost(null, mappedFile, "XY"u8.ToArray(), 1));
                 mm.SyncAllMappedSharedFiles(engine);
                 mappedFile.Close();
                 sm.Close();
@@ -833,7 +833,7 @@ public class SilkFsAdapterTests
                 Assert.True(fileLoc.IsValid);
                 var rf = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDONLY, fileLoc.Mount!);
                 var buf = new byte[16];
-                var n = fileLoc.Dentry!.Inode!.Read(rf, buf, 0);
+                var n = fileLoc.Dentry!.Inode!.ReadToHost(null, rf, buf, 0);
                 rf.Close();
                 Assert.Equal(5, n);
                 Assert.Equal("hXYlo", Encoding.UTF8.GetString(buf, 0, n));
@@ -879,7 +879,7 @@ public class SilkFsAdapterTests
             var file = new Dentry("reclaim.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(5, file.Inode!.Write(wf, "hello"u8.ToArray(), 0));
+            Assert.Equal(5, file.Inode!.WriteFromHost(null, wf, "hello"u8.ToArray(), 0));
             wf.Close();
 
             var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
@@ -899,7 +899,7 @@ public class SilkFsAdapterTests
 
             var rf = new LinuxFile(file, FileFlags.O_RDONLY, loc.Mount!);
             var readBuf = new byte[16];
-            var n = file.Inode.Read(rf, readBuf, 0);
+            var n = file.Inode.ReadToHost(null, rf, readBuf, 0);
             rf.Close();
             Assert.Equal(5, n);
             Assert.Equal("hello", Encoding.UTF8.GetString(readBuf, 0, n));
@@ -951,7 +951,7 @@ public class SilkFsAdapterTests
             var file = new Dentry("auto_reclaim.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(5, file.Inode!.Write(wf, "hello"u8.ToArray(), 0));
+            Assert.Equal(5, file.Inode!.WriteFromHost(null, wf, "hello"u8.ToArray(), 0));
             wf.Close();
 
             var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
@@ -971,7 +971,7 @@ public class SilkFsAdapterTests
 
             var rf = new LinuxFile(file, FileFlags.O_RDONLY, loc.Mount!);
             var readBuf = new byte[16];
-            var n = file.Inode.Read(rf, readBuf, 0);
+            var n = file.Inode.ReadToHost(null, rf, readBuf, 0);
             rf.Close();
             Assert.Equal(5, n);
             Assert.Equal("hello", Encoding.UTF8.GetString(readBuf, 0, n));
@@ -1021,7 +1021,7 @@ public class SilkFsAdapterTests
 
             var payload = "hello-iget";
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(payload.Length, file.Inode!.Write(wf, Encoding.UTF8.GetBytes(payload), 0));
+            Assert.Equal(payload.Length, file.Inode!.WriteFromHost(null, wf, Encoding.UTF8.GetBytes(payload), 0));
             wf.Close();
 
             var before = sm.PathWalkWithFlags("/mnt/sub/data.txt", LookupFlags.FollowSymlink);
@@ -1040,7 +1040,7 @@ public class SilkFsAdapterTests
 
             var rf = new LinuxFile(after.Dentry, FileFlags.O_RDONLY, after.Mount!);
             var buffer = new byte[32];
-            var n = after.Dentry.Inode!.Read(rf, buffer, 0);
+            var n = after.Dentry.Inode!.ReadToHost(null, rf, buffer, 0);
             rf.Close();
 
             Assert.Equal(payload.Length, n);
@@ -1085,7 +1085,7 @@ public class SilkFsAdapterTests
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var payload = "keep-open";
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(payload.Length, file.Inode!.Write(wf, Encoding.UTF8.GetBytes(payload), 0));
+            Assert.Equal(payload.Length, file.Inode!.WriteFromHost(null, wf, Encoding.UTF8.GetBytes(payload), 0));
             wf.Close();
 
             var rf = new LinuxFile(file, FileFlags.O_RDONLY, loc.Mount!);
@@ -1094,7 +1094,7 @@ public class SilkFsAdapterTests
             Assert.True(file.DentryRefCount > 0);
 
             var buffer = new byte[32];
-            var n = rf.OpenedInode!.Read(rf, buffer, 0);
+            var n = rf.OpenedInode!.ReadToHost(null, rf, buffer, 0);
             Assert.Equal(payload.Length, n);
             Assert.Equal(payload, Encoding.UTF8.GetString(buffer, 0, n));
             rf.Close();
@@ -1142,7 +1142,7 @@ public class SilkFsAdapterTests
                 var file = new Dentry("big.bin", null, loc.Dentry, loc.Dentry!.SuperBlock);
                 loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
                 var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-                Assert.Equal(payload.Length, file.Inode!.Write(wf, payload, 0));
+                Assert.Equal(payload.Length, file.Inode!.WriteFromHost(null, wf, payload, 0));
                 wf.Close();
                 sm.Close();
             }
@@ -1174,7 +1174,7 @@ public class SilkFsAdapterTests
                 var rf = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDONLY, fileLoc.Mount!);
                 var offset = LinuxConstants.PageSize - 19;
                 var slice = new byte[113];
-                var n = fileLoc.Dentry!.Inode!.Read(rf, slice, offset);
+                var n = fileLoc.Dentry!.Inode!.ReadToHost(null, rf, slice, offset);
                 rf.Close();
 
                 Assert.Equal(slice.Length, n);
@@ -1221,10 +1221,10 @@ public class SilkFsAdapterTests
                 var file = new Dentry("resize.bin", null, loc.Dentry, loc.Dentry!.SuperBlock);
                 loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
                 var wf = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
-                Assert.Equal(10, file.Inode!.Write(wf, "abcdefghij"u8.ToArray(), 0));
+                Assert.Equal(10, file.Inode!.WriteFromHost(null, wf, "abcdefghij"u8.ToArray(), 0));
                 Assert.Equal(0, file.Inode.Truncate(4));
                 Assert.Equal(0, file.Inode.Truncate(12));
-                Assert.Equal(2, file.Inode.Write(wf, "XY"u8.ToArray(), 10));
+                Assert.Equal(2, file.Inode.WriteFromHost(null, wf, "XY"u8.ToArray(), 10));
                 wf.Close();
                 sm.Close();
             }
@@ -1257,7 +1257,7 @@ public class SilkFsAdapterTests
 
                 var rf = new LinuxFile(fileLoc.Dentry, FileFlags.O_RDONLY, fileLoc.Mount!);
                 var buf = new byte[16];
-                var n = fileLoc.Dentry.Inode.Read(rf, buf, 0);
+                var n = fileLoc.Dentry.Inode.ReadToHost(null, rf, buf, 0);
                 rf.Close();
 
                 Assert.Equal(12, n);

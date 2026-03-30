@@ -34,7 +34,7 @@ public class LayerSilkOverlayTests
             Assert.True(osRelease.IsValid);
             var rf = new LinuxFile(osRelease.Dentry!, FileFlags.O_RDONLY, osRelease.Mount!);
             var buf = new byte[64];
-            var n = osRelease.Dentry!.Inode!.Read(rf, buf, 0);
+            var n = osRelease.Dentry!.Inode!.ReadToHost(null, rf, buf, 0);
             rf.Close();
             Assert.Equal(payload.Length, n);
             Assert.Equal("ID=layer\n", Encoding.UTF8.GetString(buf, 0, n));
@@ -44,7 +44,7 @@ public class LayerSilkOverlayTests
             var fiber = new Dentry("fiber.txt", null, etc.Dentry, etc.Dentry!.SuperBlock);
             etc.Dentry.Inode!.Create(fiber, 0x1A4, 0, 0);
             var wf = new LinuxFile(fiber, FileFlags.O_WRONLY, etc.Mount!);
-            var wrote = fiber.Inode!.Write(wf, "hello"u8.ToArray(), 0);
+            var wrote = fiber.Inode!.WriteFromHost(null, wf, "hello"u8.ToArray(), 0);
             wf.Close();
             Assert.Equal(5, wrote);
 
@@ -290,7 +290,7 @@ public class LayerSilkOverlayTests
                 var fileLoc = sm.PathWalkWithFlags("/etc/config.txt", LookupFlags.FollowSymlink);
                 Assert.True(fileLoc.IsValid);
                 var wf = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDWR, fileLoc.Mount!);
-                Assert.Equal(2, fileLoc.Dentry!.Inode!.Write(wf, "ZZ"u8.ToArray(), 2));
+                Assert.Equal(2, fileLoc.Dentry!.Inode!.WriteFromHost(null, wf, "ZZ"u8.ToArray(), 2));
                 wf.Close();
 
                 sm.Close();
@@ -311,7 +311,7 @@ public class LayerSilkOverlayTests
                 Assert.True(fileLoc.IsValid);
                 var rf = new LinuxFile(fileLoc.Dentry!, FileFlags.O_RDONLY, fileLoc.Mount!);
                 var buf = new byte[16];
-                var n = fileLoc.Dentry!.Inode!.Read(rf, buf, 0);
+                var n = fileLoc.Dentry!.Inode!.ReadToHost(null, rf, buf, 0);
                 rf.Close();
                 Assert.Equal(6, n);
                 Assert.Equal("abZZef", Encoding.UTF8.GetString(buf, 0, n));

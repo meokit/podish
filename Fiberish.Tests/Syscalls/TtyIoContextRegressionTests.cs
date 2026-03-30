@@ -39,7 +39,7 @@ public class TtyIoContextRegressionTests
         Assert.False(env.Broadcaster.SignalSent);
 
         var buffer = new byte[8];
-        var read = env.PipeReadFile.OpenedInode!.Read(env.Task, env.PipeReadFile, buffer, 0);
+        var read = env.PipeReadFile.OpenedInode!.ReadToHost(env.Task, env.PipeReadFile, buffer, 0);
         Assert.Equal(3, read);
         Assert.Equal("abc", Encoding.ASCII.GetString(buffer, 0, read));
     }
@@ -70,7 +70,7 @@ public class TtyIoContextRegressionTests
         Assert.False(env.Broadcaster.SignalSent);
 
         var buffer = new byte[8];
-        var read = env.PipeReadFile.OpenedInode!.Read(env.Task, env.PipeReadFile, buffer, 0);
+        var read = env.PipeReadFile.OpenedInode!.ReadToHost(env.Task, env.PipeReadFile, buffer, 0);
         Assert.Equal(3, read);
         Assert.Equal("xyz", Encoding.ASCII.GetString(buffer, 0, read));
     }

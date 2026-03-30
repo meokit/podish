@@ -530,7 +530,8 @@ public class ProcFsTests
             var file = new Dentry("data.bin", null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(LinuxConstants.PageSize * 2, file.Inode!.Write(wf, new byte[LinuxConstants.PageSize * 2], 0));
+            Assert.Equal(LinuxConstants.PageSize * 2,
+                file.Inode!.WriteFromHost(null, wf, new byte[LinuxConstants.PageSize * 2], 0));
             wf.Close();
 
             var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
@@ -582,7 +583,8 @@ public class ProcFsTests
             var file = new Dentry("active.bin", null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
-            Assert.Equal(LinuxConstants.PageSize * 2, file.Inode!.Write(wf, new byte[LinuxConstants.PageSize * 2], 0));
+            Assert.Equal(LinuxConstants.PageSize * 2,
+                file.Inode!.WriteFromHost(null, wf, new byte[LinuxConstants.PageSize * 2], 0));
             wf.Close();
 
             var mappedFile = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
@@ -639,7 +641,7 @@ public class ProcFsTests
 
             var file = new LinuxFile(fileDentry, FileFlags.O_RDWR, shmLoc.Mount!);
             var payload = Encoding.UTF8.GetBytes("keep-tmpfs");
-            Assert.Equal(payload.Length, fileDentry.Inode!.Write(file, payload, 0));
+            Assert.Equal(payload.Length, fileDentry.Inode!.WriteFromHost(null, file, payload, 0));
             file.Close();
 
             Assert.Equal(2, WriteAll(task, dropLoc, "2\n"));
@@ -873,7 +875,7 @@ public class ProcFsTests
             long offset = 0;
             while (true)
             {
-                var n = dentry.Inode!.Read(file, buffer, offset);
+                var n = dentry.Inode!.ReadToHost(null, file, buffer, offset);
                 Assert.True(n >= 0);
                 if (n == 0) break;
 
@@ -899,7 +901,7 @@ public class ProcFsTests
             long offset = 0;
             while (true)
             {
-                var n = dentry.Inode!.Read(file, buffer, offset);
+                var n = dentry.Inode!.ReadToHost(null, file, buffer, offset);
                 Assert.True(n >= 0);
                 if (n == 0) break;
 
@@ -933,7 +935,7 @@ public class ProcFsTests
         try
         {
             BindTaskContext(file, task);
-            return loc.Dentry!.Inode!.Write(file, Encoding.UTF8.GetBytes(text), offset);
+            return loc.Dentry!.Inode!.WriteFromHost(null, file, Encoding.UTF8.GetBytes(text), offset);
         }
         finally
         {
