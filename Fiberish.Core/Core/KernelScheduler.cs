@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
+using System.Threading.Tasks;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
 using Fiberish.Memory;
@@ -43,6 +44,7 @@ public class KernelScheduler
     private int _ownerThreadId;
 
     private int _wakePending;
+    private bool _isInsideRunLoop = true;
 
     public KernelScheduler()
     {
@@ -66,7 +68,7 @@ public class KernelScheduler
         get
         {
             var owner = OwnerThreadId;
-            return owner == 0 || owner == Environment.CurrentManagedThreadId;
+            return (owner == 0 || owner == Environment.CurrentManagedThreadId) && _isInsideRunLoop;
         }
     }
 
@@ -608,6 +610,8 @@ public class KernelScheduler
         {
             while (Running)
             {
+                _isInsideRunLoop = true;
+
                 // Advance timer to current physical time (in ms)
                 var nowMs = startTick + _sw.ElapsedMilliseconds;
                 _timerSystem.Advance(nowMs);
@@ -663,6 +667,10 @@ public class KernelScheduler
                     // otherwise we busy loop until _sw.ElapsedMilliseconds increases.
                     if (waitTime == 0) waitTime = 1;
 
+                    if (OperatingSystem.IsBrowser())
+                        throw new PlatformNotSupportedException("Synchronous Run is not supported on Browser Wasm. Use RunAsync instead.");
+
+                    _isInsideRunLoop = false;
                     WaitForEvent((int)waitTime);
                     continue;
                 }
@@ -716,6 +724,131 @@ public class KernelScheduler
         }
     }
 
+    public async Task RunAsync(long maxTicks = -1)
+    {
+        BindOwnerThreadIfNeeded();
+        var previousSyncContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(_synchronizationContext);
+        Logger.LogInformation("KernelScheduler async loop started.");
+        var exitReason = "running=false";
+
+        var startTick = _timerSystem.CurrentTick;
+
+        try
+        {
+            while (Running)
+            {
+                _isInsideRunLoop = true;
+
+                // Advance timer to current physical time (in ms)
+                var nowMs = startTick + _sw.ElapsedMilliseconds;
+                _timerSystem.Advance(nowMs);
+
+                if (maxTicks > 0 && CurrentTick >= maxTicks)
+                {
+                    Logger.LogWarning("KernelScheduler reached max ticks limit. Stopping.");
+                    exitReason = "max-ticks";
+                    break;
+                }
+
+                // 0. Process Continuations (High Priority)
+                var hadRunnableTasks = _runQueue.Count > 0;
+                var drainedEvents = DrainEventsWithBudget(hadRunnableTasks ? RunQueueDrainEventBudget : int.MaxValue);
+
+                // 1. Process Timers & Wait
+                if (_runQueue.Count == 0 && !drainedEvents)
+                {
+                    // Check scheduler state - this will detect actual bugs
+                    ValidateSchedulerState();
+
+                    var (anyAlive, anyWaiting) = GetTaskLiveness();
+                    if (!anyAlive)
+                    {
+                        Logger.LogInformation("No active tasks. Exiting loop.");
+                        Running = false;
+                        exitReason = "no-active-tasks";
+                        break;
+                    }
+
+                    // Calculate wait time
+                    long waitTime = -1;
+                    if (_timerSystem.HasTimers)
+                    {
+                        var nextTick = _timerSystem.GetNextExpiration();
+                        if (nextTick.HasValue)
+                        {
+                            waitTime = nextTick.Value - _timerSystem.CurrentTick;
+                            if (waitTime < 0) waitTime = 0;
+                        }
+                    }
+                    else
+                    {
+                        // If anyWaiting is true, we must wait indefinitely for external wakeups.
+                        if (anyWaiting) waitTime = -1;
+                        else
+                            waitTime = 0;
+                    }
+
+                    if (waitTime == 0) waitTime = 1;
+
+                    _isInsideRunLoop = false;
+                    SynchronizationContext.SetSynchronizationContext(previousSyncContext);
+                    await WaitForEventAsync((int)waitTime);
+                    SynchronizationContext.SetSynchronizationContext(_synchronizationContext);
+                    continue;
+                }
+
+                // 2. Run Task
+                if (TryDequeue(out var task) && task != null)
+                {
+                    if (task.Status != FiberTaskStatus.Ready)
+                        continue;
+
+                    task.Status = FiberTaskStatus.Running;
+
+                    var previous = SynchronizationContext.Current;
+                    var previousTask = CurrentTask;
+                    CurrentTask = task;
+                    SynchronizationContext.SetSynchronizationContext(GetSynchronizationContextFor(task));
+                    try
+                    {
+                        task.RunSlice();
+                    }
+                    finally
+                    {
+                        SynchronizationContext.SetSynchronizationContext(previous);
+                        CurrentTask = previousTask;
+                    }
+                }
+                else if (TryFindReadyTask(out var readyTaskAfterDequeueMiss))
+                {
+                    EnqueueTask(readyTaskAfterDequeueMiss!);
+                }
+                
+                // Cooperative yield every so often to keep JS event loop responsive
+                if (_sw.ElapsedMilliseconds % 50 == 0 && _runQueue.Count > 0)
+                {
+                    _isInsideRunLoop = false;
+                    SynchronizationContext.SetSynchronizationContext(previousSyncContext);
+                    await Task.Yield();
+                    SynchronizationContext.SetSynchronizationContext(_synchronizationContext);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            exitReason = $"exception:{ex.GetType().Name}";
+            Logger.LogError(ex, "KernelScheduler async loop crashed.");
+            throw;
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousSyncContext);
+            Logger.LogInformation("KernelScheduler async loop stopped. reason={Reason} running={Running} tick={Tick}", exitReason,
+                Running, CurrentTick);
+        }
+    }
+
     private void DrainContinuations()
     {
         DrainEvents();
@@ -762,6 +895,27 @@ public class KernelScheduler
     private void WaitForEvent(int timeoutMs)
     {
         _wakeEvent.Wait(timeoutMs);
+        _wakeEvent.Reset();
+    }
+
+    private async ValueTask WaitForEventAsync(int timeoutMs)
+    {
+        if (timeoutMs < 0)
+        {
+            await _events.Reader.WaitToReadAsync().ConfigureAwait(false);
+        }
+        else
+        {
+            using var cts = new CancellationTokenSource(timeoutMs);
+            try
+            {
+                await _events.Reader.WaitToReadAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Timeout elapsed
+            }
+        }
         _wakeEvent.Reset();
     }
 

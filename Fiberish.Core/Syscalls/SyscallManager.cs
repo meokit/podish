@@ -139,6 +139,7 @@ public partial class SyscallManager
     // PTY Manager for /dev/ptmx and /dev/pts/N
     public PtyManager PtyManager { get; } = null!;
 
+
     // Ambient engine for the currently executing synchronous syscall only.
     // Do not capture or depend on this across await/callback boundaries.
     public Engine CurrentSyscallEngine { get; set; } = null!;
@@ -954,7 +955,10 @@ public partial class SyscallManager
         var stdoutInode = new ConsoleInode(devSb, false, tty);
         var stdoutDentry = new Dentry("stdout", stdoutInode, devSb.Root, devSb);
         FDs[1] = new LinuxFile(stdoutDentry, FileFlags.O_WRONLY, AnonMount);
-        FDs[2] = new LinuxFile(stdoutDentry, FileFlags.O_WRONLY, AnonMount);
+
+        var stderrInode = new ConsoleInode(devSb, false, tty);
+        var stderrDentry = new Dentry("stderr", stderrInode, devSb.Root, devSb);
+        FDs[2] = new LinuxFile(stderrDentry, FileFlags.O_WRONLY, AnonMount);
 
         // Resolve the mounted /dev dentry (goes through OverlayFS -> mount -> devtmpfs root)
         var devRoot = devSb.Root;

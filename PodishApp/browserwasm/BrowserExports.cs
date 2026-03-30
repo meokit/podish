@@ -60,6 +60,8 @@ public static partial class BrowserExports
             LogLevel = "debug"
         });
 
+        context.SetLogObserver((level, msg) => Console.WriteLine(msg));
+
         try
         {
             await using var stream = new MemoryStream(rootfsTarBytes, writable: false);

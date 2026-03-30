@@ -1,9 +1,3 @@
-import { dotnet } from './_framework/dotnet.js';
-
-const runtime = await dotnet.create();
-const exports = await runtime.getAssemblyExports('PodishApp.BrowserWasm');
-const browserExports = exports.PodishApp.BrowserWasm.BrowserExports;
-
 const React = globalThis.React;
 const ReactDOM = globalThis.ReactDOM;
 const { useEffect, useMemo, useRef, useState } = React;
@@ -11,6 +5,66 @@ const { Terminal } = globalThis;
 const { FitAddon } = globalThis.FitAddon;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+
+function createPodishWorkerClient() {
+  const worker = new Worker(new URL('./podish-worker.mjs', import.meta.url), { type: 'module' });
+  let nextRequestId = 1;
+  const pending = new Map();
+
+  const ready = new Promise((resolve, reject) => {
+    const onMessage = event => {
+      const message = event.data;
+      if (message?.type === 'ready') {
+        worker.removeEventListener('message', onMessage);
+        resolve();
+      } else if (message?.type === 'ready-error') {
+        worker.removeEventListener('message', onMessage);
+        reject(new Error(message.error ?? 'Worker failed to initialize.'));
+      }
+    };
+    worker.addEventListener('message', onMessage);
+    worker.addEventListener('error', event => reject(event.error ?? new Error(event.message)));
+  });
+
+  worker.addEventListener('message', event => {
+    const message = event.data;
+    if (message?.type !== 'response')
+      return;
+
+    const entry = pending.get(message.id);
+    if (!entry)
+      return;
+
+    pending.delete(message.id);
+    if (message.ok) {
+      entry.resolve(message.result);
+    } else {
+      entry.reject(new Error(message.error ?? 'Worker invocation failed.'));
+    }
+  });
+
+  function invoke(method, args = [], transfer = []) {
+    return ready.then(() => new Promise((resolve, reject) => {
+      const id = nextRequestId++;
+      pending.set(id, { resolve, reject });
+      worker.postMessage({ type: 'invoke', id, method, args }, transfer);
+    }));
+  }
+
+  return {
+    ready,
+    invoke,
+    terminate() {
+      worker.terminate();
+    }
+  };
+}
+
+const podishWorker = createPodishWorkerClient();
+
+async function callWorker(method, args = [], transfer = []) {
+  return podishWorker.invoke(method, args, transfer);
+}
 
 function App() {
   const terminalRef = useRef(null);
@@ -21,11 +75,11 @@ function App() {
   const [busy, setBusy] = useState(false);
 
   const api = useMemo(() => ({
-    printRuntimeInfo() {
-      xtermRef.current?.writeln(browserExports.GetRuntimeInfo());
+    async printRuntimeInfo() {
+      xtermRef.current?.writeln(await callWorker('GetRuntimeInfo'));
     },
-    probeNative() {
-      xtermRef.current?.writeln(browserExports.ProbeNative());
+    async probeNative() {
+      xtermRef.current?.writeln(await callWorker('ProbeNative'));
     },
     clear() {
       xtermRef.current?.clear();
@@ -40,7 +94,7 @@ function App() {
       try {
         const bytes = new Uint8Array(await rootfsFile.arrayBuffer());
         xtermRef.current?.writeln(`Uploading ${rootfsFile.name} (${bytes.byteLength} bytes) ...`);
-        const result = JSON.parse(await browserExports.StartRootfsTarShell(bytes));
+        const result = JSON.parse(await callWorker('StartRootfsTarShell', [bytes], [bytes.buffer]));
         if (!result.ok) {
           xtermRef.current?.writeln(`Start failed: ${result.error}`);
           return;
@@ -56,7 +110,7 @@ function App() {
     async stopSession() {
       setBusy(true);
       try {
-        const result = JSON.parse(await browserExports.StopSession());
+        const result = JSON.parse(await callWorker('StopSession'));
         if (result.message) {
           xtermRef.current?.writeln(result.message);
         } else {
@@ -78,15 +132,20 @@ function App() {
 
   function startOutputPump() {
     stopOutputPump();
-    pumpRef.current = globalThis.setInterval(() => {
-      const chunk = browserExports.ReadSessionOutput(8192);
-      if (chunk?.length) {
-        xtermRef.current?.write(decoder.decode(chunk, { stream: true }));
-      }
+    pumpRef.current = globalThis.setInterval(async () => {
+      try {
+        const chunk = await callWorker('ReadSessionOutput', [8192]);
+        if (chunk?.length) {
+          xtermRef.current?.write(decoder.decode(chunk, { stream: true }));
+        }
 
-      const status = JSON.parse(browserExports.GetSessionStatus());
-      if (status.hasSession && !status.running) {
-        xtermRef.current?.writeln(`\r\n[process exited: ${status.exitCode}]`);
+        const status = JSON.parse(await callWorker('GetSessionStatus'));
+        if (status.hasSession && !status.running) {
+          xtermRef.current?.writeln(`\r\n[process exited: ${status.exitCode}]`);
+          stopOutputPump();
+        }
+      } catch (error) {
+        xtermRef.current?.writeln(`\r\n[worker error] ${error}`);
         stopOutputPump();
       }
     }, 50);
@@ -107,28 +166,45 @@ function App() {
     fitAddon.fit();
     terminal.writeln('Podish browser-wasm shell');
     terminal.writeln('React.js + xterm.js frontend ready');
-    terminal.writeln(browserExports.GetRuntimeInfo());
-    terminal.writeln('Choose a rootfs .tar, then start /bin/sh from tmpfs.');
+    terminal.writeln('Starting .NET runtime inside a Web Worker...');
     terminal.writeln('');
     terminal.write('$ ');
     xtermRef.current = terminal;
     fitRef.current = fitAddon;
 
+    podishWorker.ready
+      .then(async () => {
+        terminal.writeln(await callWorker('GetRuntimeInfo'));
+        terminal.writeln('Choose a rootfs .tar, then start /bin/sh from tmpfs.');
+      })
+      .catch(error => {
+        terminal.writeln(`[worker bootstrap failed] ${error}`);
+      });
+
     const onResize = () => fitAddon.fit();
     globalThis.addEventListener('resize', onResize);
-    const onData = data => browserExports.WriteSessionInput(encoder.encode(data));
-    terminal.onData(onData);
+    const onData = data => {
+      const bytes = encoder.encode(data);
+      void callWorker('WriteSessionInput', [bytes], [bytes.buffer]).catch(error => {
+        terminal.writeln(`\r\n[input error] ${error}`);
+      });
+    };
+    const dataDisposable = terminal.onData(onData);
 
     const resizeToGuest = () => {
       const { rows, cols } = terminal;
-      browserExports.ResizeSessionTerminal(rows, cols);
+      void callWorker('ResizeSessionTerminal', [rows, cols]).catch(() => { });
     };
     resizeToGuest();
-    terminal.onResize(({ rows, cols }) => browserExports.ResizeSessionTerminal(rows, cols));
+    const resizeDisposable = terminal.onResize(({ rows, cols }) => {
+      void callWorker('ResizeSessionTerminal', [rows, cols]).catch(() => { });
+    });
 
     return () => {
       stopOutputPump();
       globalThis.removeEventListener('resize', onResize);
+      dataDisposable.dispose();
+      resizeDisposable.dispose();
       terminal.dispose();
       xtermRef.current = null;
       fitRef.current = null;
@@ -147,10 +223,10 @@ function App() {
         accept: '.tar,application/x-tar',
         onChange: event => setRootfsFile(event.target.files?.[0] ?? null)
       }),
-      React.createElement('button', { onClick: api.startRootfsShell, disabled: busy || !rootfsFile }, 'Start /bin/sh'),
-      React.createElement('button', { className: 'secondary', onClick: api.stopSession, disabled: busy }, 'Stop'),
-      React.createElement('button', { onClick: api.printRuntimeInfo }, 'Print Podish.Core'),
-      React.createElement('button', { onClick: api.probeNative }, 'Probe libfibercpu'),
+      React.createElement('button', { onClick: () => void api.startRootfsShell(), disabled: busy || !rootfsFile }, 'Start /bin/sh'),
+      React.createElement('button', { className: 'secondary', onClick: () => void api.stopSession(), disabled: busy }, 'Stop'),
+      React.createElement('button', { onClick: () => void api.printRuntimeInfo() }, 'Print Podish.Core'),
+      React.createElement('button', { onClick: () => void api.probeNative() }, 'Probe libfibercpu'),
       React.createElement('button', { className: 'secondary', onClick: api.clear }, 'Clear')
     ),
     React.createElement(

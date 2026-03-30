@@ -7,8 +7,6 @@ namespace Fiberish.VFS;
 
 public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 {
-    private static readonly Stream _stdout = Console.OpenStandardOutput();
-    private static readonly Stream _stdin = Console.OpenStandardInput();
     private readonly TtyDiscipline? _discipline;
     private readonly bool _isInput;
 
@@ -93,7 +91,7 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
         if (_discipline != null) return _discipline.Read(task, buffer, linuxFile.Flags);
 
-        return _stdin.Read(buffer);
+        return 0;
     }
 
     public override async ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
@@ -115,8 +113,6 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
         if (_discipline != null) return _discipline.Write(task, buffer);
 
-        _stdout.Write(buffer);
-        _stdout.Flush();
         return buffer.Length;
     }
 

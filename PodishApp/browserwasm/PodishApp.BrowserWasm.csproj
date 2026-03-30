@@ -11,6 +11,10 @@
     <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
     <RunAOTCompilation>true</RunAOTCompilation>
     <WasmBuildNative>true</WasmBuildNative>
+    <WasmEnableThreads>false</WasmEnableThreads>
+    <EmccInitialHeapSize>536870912</EmccInitialHeapSize>
+    <WasmNumAbortedWorkersToWarmup>0</WasmNumAbortedWorkersToWarmup>
+    <WasmMaxThreads>4</WasmMaxThreads>
     <WasmRunWasmOpt>false</WasmRunWasmOpt>
     <WasmNativeStrip>false</WasmNativeStrip>
     <EmccLinkOptimizationFlag>-O0</EmccLinkOptimizationFlag>
@@ -21,6 +25,10 @@
     <WasmMainJSPath>$(MSBuildProjectDirectory)/wwwroot/main.mjs</WasmMainJSPath>
     <WasmMainHTMLPath>$(MSBuildProjectDirectory)/wwwroot/index.html</WasmMainHTMLPath>
   </PropertyGroup>
+
+  <ItemGroup>
+    <WasmExtraConfig Include="stackSize" Value="8388608" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="../../Podish.Core/Podish.Core.csproj">

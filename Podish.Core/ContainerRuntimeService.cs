@@ -100,18 +100,19 @@ public sealed class ContainerRuntimeService
 
         using var logSink = CreateContainerLogSink(request.LogDriver, request.ContainerDir, _loggerFactory);
         var publishedPorts = request.PublishedPorts ?? Array.Empty<PublishedPortSpec>();
-        if (request.UseTty)
-        {
-            driver = request.TerminalBridge != null
-                ? new BridgeTtyDriver(request.TerminalBridge, logSink, scheduler)
-                : new ConsoleTtyDriver(logSink);
-            var broadcaster = new SchedulerSignalBroadcaster(scheduler);
-            ttyDiag = new TtyDiscipline(driver, broadcaster, _loggerFactory.CreateLogger<TtyDiscipline>(), scheduler);
-            if (driver is ConsoleTtyDriver consoleDriver)
-                consoleDriver.BindTty(ttyDiag);
-            if (request.TerminalBridge != null)
-                request.TerminalBridge.BindTty(ttyDiag);
-        }
+
+        // Always create a driver + discipline so all I/O routes through ITtyDriver.
+        // In TTY mode this provides line discipline, echo, signals, etc.
+        // In non-TTY mode it acts as a passthrough to the driver's Write().
+        driver = request.TerminalBridge != null
+            ? new BridgeTtyDriver(request.TerminalBridge, logSink, scheduler)
+            : new ConsoleTtyDriver(logSink);
+        var broadcaster = new SchedulerSignalBroadcaster(scheduler);
+        ttyDiag = new TtyDiscipline(driver, broadcaster, _loggerFactory.CreateLogger<TtyDiscipline>(), scheduler);
+        if (driver is ConsoleTtyDriver consoleDriver)
+            consoleDriver.BindTty(ttyDiag);
+        if (request.TerminalBridge != null)
+            request.TerminalBridge.BindTty(ttyDiag);
 
         if (isInteractive)
         {
@@ -458,7 +459,14 @@ public sealed class ContainerRuntimeService
                 request.ContainerId, request.Exe, string.Join(" ", request.ExeArgs), request.UseTty,
                 request.Volumes.Length,
                 request.LogDriver, publishedPorts.Count);
-            scheduler.Run();
+            if (OperatingSystem.IsBrowser())
+            {
+                await scheduler.RunAsync();
+            }
+            else
+            {
+                scheduler.Run();
+            }
             _logger.LogDebug(
                 "Scheduler run returned containerId={ContainerId} mainExited={MainExited}",
                 request.ContainerId, mainTask.Exited);
@@ -513,7 +521,8 @@ public sealed class ContainerRuntimeService
             _logger.LogDebug("Container teardown starting containerId={ContainerId}", request.ContainerId);
             try
             {
-                Task.Delay(50).Wait();
+                if (OperatingSystem.IsBrowser()) await Task.Delay(50);
+                else Task.Delay(50).Wait();
             }
             catch
             {
@@ -533,7 +542,8 @@ public sealed class ContainerRuntimeService
                     {
                         _logger.LogTrace("Container teardown waiting for input loop containerId={ContainerId}",
                             request.ContainerId);
-                        Task.WhenAny(inputTask, Task.Delay(100)).Wait();
+                        if (OperatingSystem.IsBrowser()) await Task.WhenAny(inputTask, Task.Delay(100));
+                        else Task.WhenAny(inputTask, Task.Delay(100)).Wait();
                     }
                     catch
                     {
@@ -1177,13 +1187,10 @@ public sealed class ContainerRuntimeService
         private const int OutputQueueCapacityBytes = 64 * 1024;
         private readonly PodishTerminalBridge _bridge;
         private readonly IContainerLogSink _containerLogSink;
-        private readonly CancellationTokenSource _cts = new();
-        private readonly AutoResetEvent _hasData = new(false);
         private readonly Lock _lock = new();
-        private readonly Task _pumpTask;
-        private readonly Queue<(TtyEndpointKind Kind, byte[] Data)> _queue = new();
         private readonly AsyncWaitQueue _writeReady;
         private int _queuedBytes;
+        private bool _disposed;
 
         public BridgeTtyDriver(PodishTerminalBridge bridge, IContainerLogSink containerLogSink,
             KernelScheduler scheduler)
@@ -1191,23 +1198,14 @@ public sealed class ContainerRuntimeService
             _bridge = bridge;
             _containerLogSink = containerLogSink;
             _writeReady = new AsyncWaitQueue(scheduler);
-            _pumpTask = Task.Run(PumpLoop);
         }
 
         public void Dispose()
         {
-            _cts.Cancel();
-            _hasData.Set();
-            try
+            lock (_lock)
             {
-                _pumpTask.Wait(200);
+                _disposed = true;
             }
-            catch
-            {
-            }
-
-            _cts.Dispose();
-            _hasData.Dispose();
         }
 
         public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
@@ -1215,10 +1213,12 @@ public sealed class ContainerRuntimeService
             if (buffer.Length == 0)
                 return 0;
 
-            int written;
-            var payload = Array.Empty<byte>();
+            byte[] payload;
             lock (_lock)
             {
+                if (_disposed)
+                    return -(int)Errno.EIO;
+
                 var space = OutputQueueCapacityBytes - _queuedBytes;
                 if (space <= 0)
                 {
@@ -1226,18 +1226,24 @@ public sealed class ContainerRuntimeService
                     return -(int)Errno.EAGAIN;
                 }
 
-                written = Math.Min(space, buffer.Length);
+                var written = Math.Min(space, buffer.Length);
                 payload = buffer[..written].ToArray();
-                _queue.Enqueue((kind, payload));
                 _queuedBytes += written;
-                if (_queuedBytes >= OutputQueueCapacityBytes)
-                    _writeReady.Reset();
             }
 
-            _ = kind;
+            // On Wasm (single-threaded), emit synchronously on scheduler thread.
+            // On native, same: the pump is the caller, so no background thread needed.
             _containerLogSink.Write(kind, payload);
-            _hasData.Set();
-            return written;
+            _bridge.EmitOutput(kind, payload);
+
+            lock (_lock)
+            {
+                _queuedBytes -= payload.Length;
+                if (_queuedBytes < OutputQueueCapacityBytes)
+                    _writeReady.Signal();
+            }
+
+            return payload.Length;
         }
 
         public void Flush()
@@ -1261,34 +1267,6 @@ public sealed class ContainerRuntimeService
                 return false;
             _writeReady.Register(callback, scheduler);
             return true;
-        }
-
-        private void PumpLoop()
-        {
-            while (!_cts.IsCancellationRequested)
-            {
-                _hasData.WaitOne(50);
-                while (true)
-                {
-                    (TtyEndpointKind Kind, byte[] Data) item;
-                    var becameWritable = false;
-                    lock (_lock)
-                    {
-                        if (_queue.Count == 0)
-                            break;
-
-                        var wasFull = _queuedBytes >= OutputQueueCapacityBytes;
-                        item = _queue.Dequeue();
-                        _queuedBytes -= item.Data.Length;
-                        becameWritable = wasFull && _queuedBytes < OutputQueueCapacityBytes;
-                    }
-
-                    if (becameWritable)
-                        _writeReady.Signal();
-
-                    _bridge.EmitOutput(item.Kind, item.Data);
-                }
-            }
         }
     }
 
