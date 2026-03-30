@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.X86.Native;
@@ -410,6 +412,339 @@ public partial class SyscallManager
             Uid = uid,
             Value = (ulong)value
         };
+    }
+
+    /// <summary>
+    /// rt_sigtimedwait - wait for a signal with timeout (32-bit timespec)
+    /// syscall 177
+    /// </summary>
+    private async ValueTask<int> SysRtSigTimedWait(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var setPtr = a1;
+        var infoPtr = a2;
+        var timeoutPtr = a3;
+        var sigsetsize = a4;
+
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (sigsetsize != 8) return -(int)Errno.EINVAL;
+
+        // Read the signal set using ArrayPool
+        var setBuf = ArrayPool<byte>.Shared.Rent(8);
+        try
+        {
+            if (!engine.CopyFromUser(setPtr, setBuf.AsSpan(0, 8))) return -(int)Errno.EFAULT;
+            var waitSet = BinaryPrimitives.ReadUInt64LittleEndian(setBuf.AsSpan(0, 8));
+
+            // Read timeout (32-bit timespec)
+            long? timeoutMs = null;
+            if (timeoutPtr != 0)
+            {
+                var tsBuf = ArrayPool<byte>.Shared.Rent(8);
+                try
+                {
+                    if (!engine.CopyFromUser(timeoutPtr, tsBuf.AsSpan(0, 8))) return -(int)Errno.EFAULT;
+                    var sec = BinaryPrimitives.ReadInt32LittleEndian(tsBuf.AsSpan(0, 4));
+                    var nsec = BinaryPrimitives.ReadInt32LittleEndian(tsBuf.AsSpan(4, 4));
+                    if (sec < 0 || nsec < 0 || nsec >= 1_000_000_000) return -(int)Errno.EINVAL;
+                    timeoutMs = sec * 1000L + nsec / 1_000_000L;
+                    if (timeoutMs < 0) timeoutMs = 0;
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(tsBuf);
+                }
+            }
+
+            return await DoRtSigTimedWait(engine, task, waitSet, timeoutMs, infoPtr);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(setBuf);
+        }
+    }
+
+    /// <summary>
+    /// rt_sigtimedwait_time64 - wait for a signal with timeout (64-bit timespec)
+    /// syscall 421
+    /// </summary>
+    private async ValueTask<int> SysRtSigTimedWaitTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var setPtr = a1;
+        var infoPtr = a2;
+        var timeoutPtr = a3;
+        var sigsetsize = a4;
+
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (sigsetsize != 8) return -(int)Errno.EINVAL;
+
+        // Read the signal set using ArrayPool
+        var setBuf = ArrayPool<byte>.Shared.Rent(8);
+        try
+        {
+            if (!engine.CopyFromUser(setPtr, setBuf.AsSpan(0, 8))) return -(int)Errno.EFAULT;
+            var waitSet = BinaryPrimitives.ReadUInt64LittleEndian(setBuf.AsSpan(0, 8));
+
+            // Read timeout (64-bit timespec)
+            long? timeoutMs = null;
+            if (timeoutPtr != 0)
+            {
+                var tsBuf = ArrayPool<byte>.Shared.Rent(16);
+                try
+                {
+                    if (!engine.CopyFromUser(timeoutPtr, tsBuf.AsSpan(0, 16))) return -(int)Errno.EFAULT;
+                    var sec = BinaryPrimitives.ReadInt64LittleEndian(tsBuf.AsSpan(0, 8));
+                    var nsec = BinaryPrimitives.ReadInt64LittleEndian(tsBuf.AsSpan(8, 8));
+                    if (sec < 0 || nsec < 0 || nsec >= 1_000_000_000) return -(int)Errno.EINVAL;
+                    timeoutMs = sec * 1000L + nsec / 1_000_000L;
+                    if (timeoutMs < 0) timeoutMs = 0;
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(tsBuf);
+                }
+            }
+
+            return await DoRtSigTimedWait(engine, task, waitSet, timeoutMs, infoPtr);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(setBuf);
+        }
+    }
+
+    /// <summary>
+    /// Shared implementation for rt_sigtimedwait syscalls.
+    /// </summary>
+    private async ValueTask<int> DoRtSigTimedWait(Engine engine, FiberTask task, ulong waitSet, long? timeoutMs, uint infoPtr)
+    {
+        // Remove SIGKILL and SIGSTOP from the wait set (they cannot be caught)
+        waitSet &= ~(1UL << 8);  // SIGKILL (9)
+        waitSet &= ~(1UL << 18); // SIGSTOP (19)
+
+        if (waitSet == 0) return -(int)Errno.EINVAL;
+
+        // Check for already pending signals matching the wait set
+        if (TryConsumePendingSignal(task, waitSet, out var consumedInfo))
+        {
+            if (infoPtr != 0 && !WriteSigInfo(engine, infoPtr, consumedInfo)) return -(int)Errno.EFAULT;
+            return consumedInfo.Signo;
+        }
+
+        // If timeout is 0, return immediately (no blocking)
+        if (timeoutMs == 0) return -(int)Errno.EAGAIN;
+
+        // Block and wait for signal or timeout (-1 means infinite wait)
+        var result = await new SigTimedWaitAwaitable(task, waitSet, timeoutMs ?? -1);
+
+        if (result.SignalNumber > 0)
+        {
+            if (infoPtr != 0 && !WriteSigInfo(engine, infoPtr, result.Info)) return -(int)Errno.EFAULT;
+            return result.SignalNumber;
+        }
+
+        return result.TimedOut ? -(int)Errno.EAGAIN : -(int)Errno.EINTR;
+    }
+
+    /// <summary>
+    /// Try to consume a pending signal from the wait set.
+    /// </summary>
+    private static bool TryConsumePendingSignal(FiberTask task, ulong waitSet, out SigInfo info)
+    {
+        var pending = task.GetVisiblePendingSignals();
+        var available = pending & waitSet;
+
+        if (available == 0)
+        {
+            info = default;
+            return false;
+        }
+
+        // Find the first matching signal
+        for (var sig = 1; sig <= 64; sig++)
+        {
+            var mask = 1UL << (sig - 1);
+            if ((available & mask) == 0) continue;
+
+            // Try to dequeue from thread or process pending queue
+            var target = task.ResolvePendingTargetUnsafe(sig);
+            if (target == PendingSignalTarget.Thread)
+            {
+                var dequeued = task.DequeueSignalUnsafe(sig);
+                if (dequeued.HasValue)
+                {
+                    info = dequeued.Value;
+                    return true;
+                }
+            }
+            else if (target == PendingSignalTarget.Process)
+            {
+                var dequeued = task.Process.DequeueProcessSignalUnsafe(sig);
+                if (dequeued.HasValue)
+                {
+                    info = dequeued.Value;
+                    return true;
+                }
+            }
+        }
+
+        info = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Awaitable for rt_sigtimedwait operation.
+    /// </summary>
+    private readonly struct SigTimedWaitAwaitable
+    {
+        private readonly FiberTask _task;
+        private readonly ulong _waitSet;
+        private readonly long _timeoutMs;
+
+        public SigTimedWaitAwaitable(FiberTask task, ulong waitSet, long timeoutMs)
+        {
+            _task = task;
+            _waitSet = waitSet;
+            _timeoutMs = timeoutMs;
+        }
+
+        public SigTimedWaitAwaiter GetAwaiter() => new(_task, _waitSet, _timeoutMs);
+    }
+
+    private struct SigTimedWaitAwaiter : INotifyCompletion
+    {
+        private readonly FiberTask _task;
+        private readonly ulong _waitSet;
+        private readonly long _timeoutMs;
+        private readonly FiberTask.WaitToken _token;
+
+        public SigTimedWaitAwaiter(FiberTask task, ulong waitSet, long timeoutMs)
+        {
+            _task = task;
+            _waitSet = waitSet;
+            _timeoutMs = timeoutMs;
+            _token = task.BeginWaitToken();
+        }
+
+        public bool IsCompleted => false;
+
+        public void OnCompleted(Action continuation)
+        {
+            if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
+                return;
+
+            var state = new SigTimedWaitOperation(_task, _waitSet, _token, continuation, operation);
+
+            if (_timeoutMs >= 0)
+                state.RegisterTimeout(_task.CommonKernel, _timeoutMs);
+
+            state.RegisterSignalWait();
+            _task.ArmInterruptingSignalSafetyNet(_token, state.OnSignal);
+        }
+
+        public SigTimedWaitResult GetResult()
+        {
+            var reason = _task.CompleteWaitToken(_token);
+
+            // Check if a matching signal is now pending
+            if (TryConsumePendingSignal(_task, _waitSet, out var info))
+                return new SigTimedWaitResult { SignalNumber = info.Signo, Info = info };
+
+            return new SigTimedWaitResult
+            {
+                TimedOut = reason == WakeReason.Timer,
+                Interrupted = reason == WakeReason.Signal
+            };
+        }
+    }
+
+    private sealed class SigTimedWaitOperation
+    {
+        private readonly FiberTask _task;
+        private readonly ulong _waitSet;
+        private readonly TaskAsyncOperationHandle _operation;
+        private Fiberish.Core.Timer? _timer;
+
+        public SigTimedWaitOperation(FiberTask task, ulong waitSet, FiberTask.WaitToken token,
+            Action continuation, TaskAsyncOperationHandle operation)
+        {
+            _task = task;
+            _waitSet = waitSet;
+            _operation = operation;
+            _operation.TryInitialize(continuation);
+        }
+
+        public void RegisterTimeout(KernelScheduler scheduler, long timeoutMs)
+        {
+            _timer = scheduler.ScheduleTimer(timeoutMs, OnTimeout);
+            _operation.TryAddRegistration(TaskAsyncRegistration.From(_timer));
+        }
+
+        public void RegisterSignalWait()
+        {
+            _operation.TryAddRegistration(TaskAsyncRegistration.From(new SigTimedWaitSignalRegistration(_task, _waitSet, OnSignal)));
+        }
+
+        private void OnTimeout()
+        {
+            _operation.TryComplete(WakeReason.Timer);
+        }
+
+        public void OnSignal()
+        {
+            var pending = _task.GetVisiblePendingSignals();
+            if ((pending & _waitSet) != 0 || _task.HasInterruptingPendingSignal())
+                _operation.TryComplete(WakeReason.Signal);
+        }
+    }
+
+    private sealed class SigTimedWaitSignalRegistration : IDisposable
+    {
+        private readonly Action _callback;
+        private readonly FiberTask _task;
+        private readonly ulong _waitSet;
+        private int _disposed;
+
+        public SigTimedWaitSignalRegistration(FiberTask task, ulong waitSet, Action callback)
+        {
+            _task = task;
+            _waitSet = waitSet;
+            _callback = callback;
+            _task.SignalPosted += OnSignalPosted;
+
+            if ((_task.GetVisiblePendingSignals() & _waitSet) != 0)
+            {
+                Dispose();
+                _callback();
+            }
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+
+            _task.SignalPosted -= OnSignalPosted;
+        }
+
+        private void OnSignalPosted(int sig)
+        {
+            if (sig <= 0 || sig > 64)
+                return;
+
+            if ((_waitSet & (1UL << (sig - 1))) == 0)
+                return;
+
+            Dispose();
+            _callback();
+        }
+    }
+
+    private struct SigTimedWaitResult
+    {
+        public int SignalNumber;
+        public SigInfo Info;
+        public bool TimedOut;
+        public bool Interrupted;
     }
 #pragma warning restore CS1998
 }

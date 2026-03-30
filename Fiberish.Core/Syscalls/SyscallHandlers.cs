@@ -178,6 +178,8 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.rt_sigreturn, SysRtSigReturn);
         Register(X86SyscallNumbers.rt_sigpending, SysRtSigPending);
         Register(X86SyscallNumbers.rt_sigsuspend, SysRtSigSuspend);
+        Register(X86SyscallNumbers.rt_sigtimedwait, SysRtSigTimedWait);
+        Register(X86SyscallNumbers.rt_sigtimedwait_time64, SysRtSigTimedWaitTime64);
 
         Register(X86SyscallNumbers.gettid, SysGettid);
         Register(X86SyscallNumbers.sched_getaffinity, SysSchedGetAffinity);
@@ -225,15 +227,16 @@ public partial class SyscallManager
         Register(X86SyscallNumbers.timer_delete, SysTimerDelete);
 
         // 64-bit time syscalls (i386)
-        Register(403, SysClockGetTime64);
-        Register(404, SysClockSetTime64);
-        Register(405, SysClockAdjTime64);
-        Register(406, SysClockGetResTime64);
-        Register(407, SysClockNanosleepTime64);
-        Register(408, SysTimerGetTime64);
-        Register(409, SysTimerSetTime64);
-        Register(410, SysTimerFdGetTime64);
-        Register(411, SysTimerFdSetTime64);
+        Register(X86SyscallNumbers.clock_gettime64, SysClockGetTime64);
+        Register(X86SyscallNumbers.clock_settime64, SysClockSetTime64);
+        Register(X86SyscallNumbers.clock_adjtime64, SysClockAdjTime64);
+        Register(X86SyscallNumbers.clock_getres_time64, SysClockGetResTime64);
+        Register(X86SyscallNumbers.clock_nanosleep_time64, SysClockNanosleepTime64);
+        Register(X86SyscallNumbers.timer_gettime64, SysTimerGetTime64);
+        Register(X86SyscallNumbers.timer_settime64, SysTimerSetTime64);
+        Register(X86SyscallNumbers.timerfd_gettime64, SysTimerFdGetTime64);
+        Register(X86SyscallNumbers.timerfd_settime64, SysTimerFdSetTime64);
+        Register(X86SyscallNumbers.utimensat_time64, SysUtimensAtTime64);
 
         // FDs / Virtual
         Register(X86SyscallNumbers.timerfd_create, SysTimerFdCreate); // timerfd_create

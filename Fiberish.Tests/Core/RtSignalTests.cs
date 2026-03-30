@@ -153,6 +153,86 @@ public class RtSignalTests
         Assert.Equal(2, rtCount); // RT signals both queued
     }
 
+    // ─── rt_sigtimedwait tests ────────────────────────────────────────────────
+
+    [Fact]
+    public void RtSigTimedWait_PendingSignal_ReturnsImmediately()
+    {
+        using var env = new TestEnv();
+
+        // Post a signal
+        env.Task.PostSignal((int)Signal.SIGUSR1);
+
+        // The signal should be pending
+        var pending = env.Task.GetVisiblePendingSignals();
+        var sigusr1Bit = 1UL << ((int)Signal.SIGUSR1 - 1);
+        Assert.NotEqual(0UL, pending & sigusr1Bit);
+    }
+
+    [Fact]
+    public void RtSigTimedWait_MatchingSignalInSet_ReturnsSignalNumber()
+    {
+        using var env = new TestEnv();
+
+        // Post a signal
+        env.Task.PostSignal((int)Signal.SIGUSR1);
+
+        // Dequeue should work
+        var dequeued = env.Task.DequeueSignalUnsafe((int)Signal.SIGUSR1);
+        Assert.True(dequeued.HasValue);
+        Assert.Equal((int)Signal.SIGUSR1, dequeued.Value.Signo);
+    }
+
+    [Fact]
+    public void RtSigTimedWait_MultipleSignals_ReturnsLowest()
+    {
+        using var env = new TestEnv();
+
+        // Post multiple RT signals (they get queued)
+        env.Task.PostSignalInfo(new SigInfo { Signo = SIGRTMIN + 1, Code = 0 });
+        env.Task.PostSignalInfo(new SigInfo { Signo = SIGRTMIN + 2, Code = 0 });
+
+        // First dequeue should get the lower signal number (FIFO order for RT signals)
+        var dequeued1 = env.Task.DequeueSignalUnsafe(SIGRTMIN + 1);
+        Assert.True(dequeued1.HasValue);
+        Assert.Equal(SIGRTMIN + 1, dequeued1.Value.Signo);
+
+        var dequeued2 = env.Task.DequeueSignalUnsafe(SIGRTMIN + 2);
+        Assert.True(dequeued2.HasValue);
+        Assert.Equal(SIGRTMIN + 2, dequeued2.Value.Signo);
+    }
+
+    [Fact]
+    public void RtSigTimedWait_NoSignal_DequeueReturnsNull()
+    {
+        using var env = new TestEnv();
+
+        // No signal posted, dequeue should return null
+        var dequeued = env.Task.DequeueSignalUnsafe((int)Signal.SIGUSR1);
+        Assert.False(dequeued.HasValue);
+    }
+
+    [Fact]
+    public void RtSigTimedWait_SignalMask_DoesNotAffectDequeue()
+    {
+        using var env = new TestEnv();
+
+        // Block SIGUSR1
+        env.Task.SignalMask = 1UL << ((int)Signal.SIGUSR1 - 1);
+
+        // Post signal
+        env.Task.PostSignal((int)Signal.SIGUSR1);
+
+        // Signal should still be pending (masked signals stay pending)
+        var pending = env.Task.GetVisiblePendingSignals();
+        var sigusr1Bit = 1UL << ((int)Signal.SIGUSR1 - 1);
+        Assert.NotEqual(0UL, pending & sigusr1Bit);
+
+        // Dequeue should still work (sigtimedwait explicitly dequeues)
+        var dequeued = env.Task.DequeueSignalUnsafe((int)Signal.SIGUSR1);
+        Assert.True(dequeued.HasValue);
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()
