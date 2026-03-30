@@ -80,16 +80,17 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
             Ino, recvLen, flags, (int)file.Flags, NativeSocket.Connected);
 
         while (true)
-            try
+        {
+            var n = NativeSocket.Receive(buffer, 0, recvLen, hostFlags, out var error);
+            if (error == SocketError.Success)
             {
-                var n = NativeSocket.Receive(buffer, 0, recvLen, hostFlags);
                 if (n > 0)
                     ClearReadyBits(PollEvents.POLLIN);
                 Logger.LogTrace("Host socket recv done ino={Ino} bytes={Bytes}", Ino, n);
                 return n;
             }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                             ex.SocketErrorCode == SocketError.IOPending)
+
+            if (error is SocketError.WouldBlock or SocketError.IOPending)
             {
                 ClearReadyBits(PollEvents.POLLIN);
                 if (IsNonBlocking(file, flags))
@@ -101,19 +102,11 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
                 var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
                 if (!ready)
                     return _receiveTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
+                continue;
             }
-            catch (SocketException ex)
-            {
-                return MapSocketError(ex.SocketErrorCode);
-            }
-            catch (ObjectDisposedException)
-            {
-                return -(int)Errno.ENOTCONN;
-            }
-            catch (InvalidOperationException)
-            {
-                return -(int)Errno.EINVAL;
-            }
+
+            return MapSocketError(error);
+        }
     }
 
     public async ValueTask<RecvMessageResult> RecvFromAsync(LinuxFile file, FiberTask task, byte[] buffer, int flags,
@@ -166,58 +159,38 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
     public async ValueTask<int> SendAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags)
     {
         var hostFlags = TranslateSendFlags(flags);
-        byte[]? rented = null;
-        ArraySegment<byte> segment;
-        if (!MemoryMarshal.TryGetArray(buffer, out segment))
-        {
-            rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
-            buffer.Span.CopyTo(rented);
-            segment = new ArraySegment<byte>(rented, 0, buffer.Length);
-        }
-
         Logger.LogTrace(
             "Host socket send enter ino={Ino} len={Len} flags=0x{Flags:X} fileFlags=0x{FileFlags:X} connected={Connected}",
-            Ino, segment.Count, flags, (int)file.Flags, NativeSocket.Connected);
+            Ino, buffer.Length, flags, (int)file.Flags, NativeSocket.Connected);
 
-        try
+        while (true)
         {
-            while (true)
-                try
-                {
-                    var n = NativeSocket.Send(segment.Array!, segment.Offset, segment.Count, hostFlags);
-                    if (n > 0)
-                        ClearReadyBits(PollEvents.POLLOUT);
-                    Logger.LogTrace("Host socket send done ino={Ino} bytes={Bytes}", Ino, n);
-                    return n;
-                }
-                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                                 ex.SocketErrorCode == SocketError.IOPending)
-                {
+            var n = NativeSocket.Send(buffer.Span, hostFlags, out var error);
+            if (error == SocketError.Success)
+            {
+                if (n > 0)
                     ClearReadyBits(PollEvents.POLLOUT);
-                    if (IsNonBlocking(file, flags))
-                    {
-                        Logger.LogDebug("Host socket send would block (ino={Ino}, flags={Flags:X})", Ino,
-                            (int)file.Flags);
-                        return -(int)Errno.EAGAIN;
-                    }
+                Logger.LogTrace("Host socket send done ino={Ino} bytes={Bytes}", Ino, n);
+                return n;
+            }
 
-                    var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
-                    if (!ready)
-                        return _sendTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
-                }
-                catch (SocketException ex)
+            if (error is SocketError.WouldBlock or SocketError.IOPending)
+            {
+                ClearReadyBits(PollEvents.POLLOUT);
+                if (IsNonBlocking(file, flags))
                 {
-                    return MapSocketError(ex.SocketErrorCode);
+                    Logger.LogDebug("Host socket send would block (ino={Ino}, flags={Flags:X})", Ino,
+                        (int)file.Flags);
+                    return -(int)Errno.EAGAIN;
                 }
-                catch (ObjectDisposedException)
-                {
-                    return -(int)Errno.ENOTCONN;
-                }
-        }
-        finally
-        {
-            if (rented != null)
-                ArrayPool<byte>.Shared.Return(rented);
+
+                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
+                if (!ready)
+                    return _sendTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
+                continue;
+            }
+
+            return MapSocketError(error);
         }
     }
 
@@ -302,37 +275,38 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
                 NativeSocket.Connect(endpoint);
                 return 0;
             }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                             ex.SocketErrorCode == SocketError.IOPending ||
-                                             ex.SocketErrorCode == SocketError.InProgress ||
-                                             ex.SocketErrorCode == SocketError.AlreadyInProgress)
-            {
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-                {
-                    Logger.LogDebug("Host socket connect in progress (ino={Ino}, flags={Flags:X}, endpoint={Endpoint})",
-                        Ino,
-                        (int)file.Flags, endpoint);
-                    return -(int)Errno.EINPROGRESS;
-                }
-
-                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
-                if (!ready)
-                    return _sendTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
-
-                var so = NativeSocket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
-                if (so is not int soInt)
-                    return -(int)Errno.EIO;
-                var err = (SocketError)soInt;
-                if (err == SocketError.Success || err == SocketError.IsConnected)
-                    return 0;
-                if (err is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
-                    or SocketError.AlreadyInProgress)
-                    continue;
-                return MapSocketError(err);
-            }
             catch (SocketException ex)
             {
-                return MapSocketError(ex.SocketErrorCode);
+                var error = ex.SocketErrorCode;
+                if (error is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
+                    or SocketError.AlreadyInProgress)
+                {
+                    if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                    {
+                        Logger.LogDebug(
+                            "Host socket connect in progress (ino={Ino}, flags={Flags:X}, endpoint={Endpoint})",
+                            Ino,
+                            (int)file.Flags, endpoint);
+                        return -(int)Errno.EINPROGRESS;
+                    }
+
+                    var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
+                    if (!ready)
+                        return _sendTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
+
+                    var so = NativeSocket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
+                    if (so is not int soInt)
+                        return -(int)Errno.EIO;
+                    var err = (SocketError)soInt;
+                    if (err == SocketError.Success || err == SocketError.IsConnected)
+                        return 0;
+                    if (err is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
+                        or SocketError.AlreadyInProgress)
+                        continue;
+                    return MapSocketError(err);
+                }
+
+                return MapSocketError(error);
             }
             catch (ObjectDisposedException)
             {
@@ -359,20 +333,23 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
                 var newIno = new HostSocketInode(0, SuperBlock, accepted);
                 return new AcceptedSocketResult(0, newIno, accepted.RemoteEndPoint);
             }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                             ex.SocketErrorCode == SocketError.IOPending)
-            {
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-                    return new AcceptedSocketResult(-(int)Errno.EAGAIN, null);
-
-                var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
-                if (!ready)
-                    return new AcceptedSocketResult(_receiveTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS,
-                        null);
-            }
             catch (SocketException ex)
             {
-                return new AcceptedSocketResult(MapSocketError(ex.SocketErrorCode), null);
+                var error = ex.SocketErrorCode;
+                if (error is SocketError.WouldBlock or SocketError.IOPending)
+                {
+                    if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                        return new AcceptedSocketResult(-(int)Errno.EAGAIN, null);
+
+                    var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
+                    if (!ready)
+                        return new AcceptedSocketResult(
+                            _receiveTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS,
+                            null);
+                    continue;
+                }
+
+                return new AcceptedSocketResult(MapSocketError(error), null);
             }
             catch (ObjectDisposedException)
             {
@@ -733,62 +710,34 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
         }
     }
 
-    public override int Read(LinuxFile file, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(LinuxFile file, Span<byte> buffer, long offset)
     {
-        var rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
-        try
+        var bytes = NativeSocket.Receive(buffer, SocketFlags.None, out var error);
+        if (error == SocketError.Success)
         {
-            var bytes = NativeSocket.Receive(rented, 0, buffer.Length, SocketFlags.None);
-            TraceIo("read", rented.AsSpan(0, bytes), bytes);
-            rented.AsSpan(0, bytes).CopyTo(buffer);
+            TraceIo("read", buffer[..bytes], bytes);
             return bytes;
         }
-        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                         ex.SocketErrorCode == SocketError.IOPending)
-        {
+
+        if (error is SocketError.WouldBlock or SocketError.IOPending)
             return -(int)Errno.EAGAIN;
-        }
-        catch (SocketException ex)
-        {
-            return MapSocketError(ex.SocketErrorCode);
-        }
-        catch (ObjectDisposedException)
-        {
-            return -(int)Errno.ENOTCONN;
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+
+        return MapSocketError(error);
     }
 
-    public override int Write(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
     {
-        var rented = ArrayPool<byte>.Shared.Rent(buffer.Length);
-        try
+        var bytes = NativeSocket.Send(buffer, SocketFlags.None, out var error);
+        if (error == SocketError.Success)
         {
-            buffer.CopyTo(rented);
-            var bytes = NativeSocket.Send(rented, 0, buffer.Length, SocketFlags.None);
-            TraceIo("write", rented.AsSpan(0, Math.Min(bytes, buffer.Length)), bytes);
+            TraceIo("write", buffer[..Math.Min(bytes, buffer.Length)], bytes);
             return bytes;
         }
-        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
-                                         ex.SocketErrorCode == SocketError.IOPending)
-        {
+
+        if (error is SocketError.WouldBlock or SocketError.IOPending)
             return -(int)Errno.EAGAIN;
-        }
-        catch (SocketException ex)
-        {
-            return MapSocketError(ex.SocketErrorCode);
-        }
-        catch (ObjectDisposedException)
-        {
-            return -(int)Errno.ENOTCONN;
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+
+        return MapSocketError(error);
     }
 
     public int MapSocketError(SocketError err)
