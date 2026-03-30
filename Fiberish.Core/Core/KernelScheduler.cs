@@ -790,7 +790,12 @@ public class KernelScheduler
                             waitTime = 0;
                     }
 
-                    if (waitTime == 0) waitTime = 1;
+                    if (waitTime == 0)
+                        // In some environments, a 0-wait is expensive/spinning. 
+                        // But in Wasm, waitTime=0 usually means we should yield as much as possible.
+                        // If it came from line 782 (timer already expired), we should spin once or yield.
+                        // If it came from line 790 (no timers, nothing waiting), we probably should wait indefinitely for external wakeups.
+                        waitTime = anyWaiting ? -1 : 1;
 
                     _isInsideRunLoop = false;
                     SynchronizationContext.SetSynchronizationContext(previousSyncContext);
@@ -828,7 +833,7 @@ public class KernelScheduler
 
                 // Cooperative yield every so often to keep JS event loop responsive
                 var currentMs = _sw.ElapsedMilliseconds;
-                if (currentMs - lastYieldMs >= 50 && _runQueue.Count > 0)
+                if (currentMs - lastYieldMs >= 10 && _runQueue.Count > 0)
                 {
                     lastYieldMs = currentMs;
                     _isInsideRunLoop = false;

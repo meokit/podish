@@ -19,7 +19,6 @@ public partial class SyscallManager
     public const uint MountFlagMask = LinuxConstants.MS_RDONLY | LinuxConstants.MS_NOSUID |
                                       LinuxConstants.MS_NODEV | LinuxConstants.MS_NOEXEC;
 
-    private const int MaxSyscalls = 512;
     private static readonly ILogger Logger = Logging.CreateLogger<SyscallManager>();
     private readonly List<Mount> _containerOwnedMounts = [];
     private readonly FileSystemType _devptsFsType;
@@ -33,8 +32,6 @@ public partial class SyscallManager
 
     private readonly SharedFsState _sharedFsState;
     private readonly SharedUnixSocketNamespace _sharedUnixSocketNamespace;
-    private readonly SyscallHandler?[] _syscallHandlers = new SyscallHandler?[MaxSyscalls];
-
     private int _closed;
     private SharedLoopbackNetNamespace? _privateNetNamespace;
 
@@ -56,7 +53,6 @@ public partial class SyscallManager
         SysVSem = new SysVSemManager();
 
         RegisterEngine(engine);
-        RegisterHandlers();
 
         // Register default filesystems
         FileSystemRegistry.TryRegister(new FileSystemType { Name = "hostfs", Factory = devMgr => new Hostfs(devMgr) });
@@ -126,8 +122,6 @@ public partial class SyscallManager
         // Share mount namespace
         _mountNamespace = mountNamespace;
         _devptsFsType = CreateDevPtsFileSystemType(new SignalBroadcasterImpl());
-
-        RegisterHandlers();
 
         _privateNetNamespace = privateNetNamespace;
     }
@@ -1053,10 +1047,6 @@ public partial class SyscallManager
         return newSys;
     }
 
-    private void Register(uint nr, SyscallHandler handler)
-    {
-        if (nr < MaxSyscalls) _syscallHandlers[nr] = handler;
-    }
 
     internal static int MapSyscallExceptionToErrno(Exception ex)
     {
@@ -1109,24 +1099,24 @@ public partial class SyscallManager
             if (Strace)
                 SyscallTracer.TraceEntry(Logger, this, fiberTask?.TID ?? 0, eax, ebx, ecx, edx, esi, edi, ebp);
 
-            ValueTask<int> retTask = new(-(int)Errno.ENOSYS);
+            ValueTask<int> retTask;
+            bool handled;
+            try
+            {
+                retTask = DispatchSyscall(eax, engine, ebx, ecx, edx, esi, edi, ebp, out handled);
+            }
+            catch (Exception ex)
+            {
+                var ret = MapSyscallExceptionToErrno(ex);
+                Logger.LogError(ex, "Syscall handler threw before returning task. nr={Nr} tid={Tid} ret={Ret}",
+                    eax, fiberTask?.TID ?? 0, ret);
+                engine.RegWrite(Reg.EAX, unchecked((uint)ret));
+                if (Strace)
+                    SyscallTracer.TraceExit(Logger, this, fiberTask?.TID ?? 0, eax, ret, ebx, ecx, edx);
+                return true;
+            }
 
-            if (eax < MaxSyscalls && _syscallHandlers[eax] != null)
-                try
-                {
-                    retTask = _syscallHandlers[eax]!(engine, ebx, ecx, edx, esi, edi, ebp);
-                }
-                catch (Exception ex)
-                {
-                    var ret = MapSyscallExceptionToErrno(ex);
-                    Logger.LogError(ex, "Syscall handler threw before returning task. nr={Nr} tid={Tid} ret={Ret}",
-                        eax, fiberTask?.TID ?? 0, ret);
-                    engine.RegWrite(Reg.EAX, unchecked((uint)ret));
-                    if (Strace)
-                        SyscallTracer.TraceExit(Logger, this, fiberTask?.TID ?? 0, eax, ret, ebx, ecx, edx);
-                    return true;
-                }
-            else if (!Strace) Logger.LogWarning("Unimplemented Syscall: {Eax}", eax);
+            if (!handled && !Strace) Logger.LogWarning("Unimplemented Syscall: {Eax}", eax);
 
             // --- Handling Async Syscalls ---
             int completedRet;

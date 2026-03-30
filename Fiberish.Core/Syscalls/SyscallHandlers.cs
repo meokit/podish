@@ -1,312 +1,825 @@
+using Fiberish.Core;
 using Fiberish.Native;
 
 namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
-    private void RegisterHandlers()
+    private ValueTask<int> DispatchSyscall(uint eax, Engine engine, uint ebx, uint ecx, uint edx, uint esi, uint edi,
+        uint ebp, out bool handled)
     {
-        Register(X86SyscallNumbers.exit, SysExit);
-        Register(X86SyscallNumbers.fork, SysFork);
-        Register(X86SyscallNumbers.fcntl64, SysFcntl64);
-        Register(X86SyscallNumbers.waitpid, SysWaitPid);
-        Register(X86SyscallNumbers.read, SysRead);
-        Register(X86SyscallNumbers.preadv2, SysPReadV2);
-        Register(X86SyscallNumbers.pwritev2, SysPWriteV2);
-        Register(X86SyscallNumbers.statx, SysStatx);
-        Register(X86SyscallNumbers.openat2, SysOpenAt2);
-        Register(X86SyscallNumbers.write, SysWrite);
-        Register(X86SyscallNumbers.open, SysOpen);
-        Register(X86SyscallNumbers.close, SysClose);
-        Register(X86SyscallNumbers.unlink, SysUnlink);
-        Register(X86SyscallNumbers.mknod, SysMknod);
-        Register(X86SyscallNumbers.chmod, SysChmod);
-        Register(X86SyscallNumbers.chown, SysChown);
-        Register(X86SyscallNumbers.lchown, SysLchown);
-        Register(X86SyscallNumbers.lseek, SysLseek);
-        Register(X86SyscallNumbers._llseek, SysLlseek);
-        Register(X86SyscallNumbers.getpid, SysGetPid);
-        Register(X86SyscallNumbers.mount, SysMount);
-        Register(X86SyscallNumbers.umount, SysUmount);
-        Register(X86SyscallNumbers.umount2, SysUmount2);
-        Register(X86SyscallNumbers.setuid, SysSetUid);
-        Register(X86SyscallNumbers.getuid, SysGetUid);
-        Register(X86SyscallNumbers.access, SysAccess);
-        Register(X86SyscallNumbers.brk, SysBrk);
-        Register(X86SyscallNumbers.setgid, SysSetGid);
-        Register(X86SyscallNumbers.getgid, SysGetGid);
-        Register(X86SyscallNumbers.signal, SysSignal);
-        Register(X86SyscallNumbers.geteuid, SysGetEUid);
-        Register(X86SyscallNumbers.getegid, SysGetEGid);
-        Register(X86SyscallNumbers.ioctl, SysIoctl);
-        Register(X86SyscallNumbers.chroot, SysChroot);
-        Register(X86SyscallNumbers.getppid, SysGetPPid);
-        Register(X86SyscallNumbers.setreuid, SysSetReUid);
-        Register(X86SyscallNumbers.setregid, SysSetReGid);
-        Register(X86SyscallNumbers.munmap, SysMunmap);
-        Register(X86SyscallNumbers.truncate, SysTruncate);
-        Register(X86SyscallNumbers.ftruncate, SysFtruncate);
-        Register(X86SyscallNumbers.truncate64, SysTruncate64);
-        Register(X86SyscallNumbers.ftruncate64, SysFtruncate64);
-        Register(X86SyscallNumbers.fchmod, SysFchmod);
-        Register(X86SyscallNumbers.fchown, SysFchown);
-        Register(X86SyscallNumbers.sigreturn, SysSigReturn);
-        Register(X86SyscallNumbers.clone, SysClone);
-        Register(X86SyscallNumbers.uname, SysUname);
-        Register(X86SyscallNumbers.sysinfo, SysSysinfo);
-        Register(X86SyscallNumbers.mprotect, SysMprotect);
-        Register(X86SyscallNumbers.setfsuid, SysSetFsUid);
-        Register(X86SyscallNumbers.setfsgid, SysSetFsGid);
-        Register(X86SyscallNumbers.writev, SysWriteV);
-        Register(X86SyscallNumbers.setresuid, SysSetResUid);
-        Register(X86SyscallNumbers.getresuid, SysGetResUid16);
-        Register(X86SyscallNumbers.setresgid, SysSetResGid);
-        Register(X86SyscallNumbers.getresgid, SysGetResGid16);
-        Register(X86SyscallNumbers.capget, SysCapget);
-        Register(X86SyscallNumbers.capset, SysCapset);
-        Register(X86SyscallNumbers.rt_sigaction, SysRtSigAction);
-        Register(X86SyscallNumbers.rt_sigprocmask, SysRtSigProcMask);
-        Register(X86SyscallNumbers.chown32, SysChown);
-        Register(X86SyscallNumbers.getcwd, SysGetCwd);
-        Register(X86SyscallNumbers.mmap2, SysMmap2);
-        Register(X86SyscallNumbers.statfs, SysStatfs);
-        Register(X86SyscallNumbers.fstatfs, SysFstatfs);
-        Register(X86SyscallNumbers.stat64, SysStat64);
-        Register(X86SyscallNumbers.lstat64, SysLstat64);
-        Register(X86SyscallNumbers.fstat64, SysFstat64);
-        Register(X86SyscallNumbers.lchown32, SysLchown);
-        Register(X86SyscallNumbers.getgroups, SysGetGroups);
-        Register(X86SyscallNumbers.setgroups, SysSetGroups);
-        Register(X86SyscallNumbers.fchown32, SysFchown);
-        Register(X86SyscallNumbers.getdents64, SysGetdents64);
-        Register(X86SyscallNumbers.wait4, SysWait4);
-        Register(X86SyscallNumbers.vfork, SysVfork);
-        Register(X86SyscallNumbers.futex, SysFutex);
-        Register(X86SyscallNumbers.sigpending, SysSigPending);
-        Register(X86SyscallNumbers.set_thread_area, SysSetThreadArea);
-        Register(X86SyscallNumbers.set_robust_list, SysSetRobustList);
-        Register(X86SyscallNumbers.get_robust_list, SysGetRobustList);
-        Register(X86SyscallNumbers.exit_group, SysExitGroup);
-        Register(X86SyscallNumbers.set_tid_address, SysSetTidAddress);
-        Register(X86SyscallNumbers.waitid, SysWaitId);
-        Register(X86SyscallNumbers.fchownat, SysFchownAt);
-        Register(X86SyscallNumbers.fchmodat, SysFchmodAt);
-        Register(X86SyscallNumbers.faccessat, SysFaccessAt);
-        Register(X86SyscallNumbers.statfs64, SysStatfs64);
-        Register(X86SyscallNumbers.fstatfs64, SysFstatfs64);
-        Register(X86SyscallNumbers.getrandom, SysGetRandom);
-
-        Register(X86SyscallNumbers.creat, SysCreat);
-        Register(X86SyscallNumbers.link, SysLink);
-        Register(X86SyscallNumbers.linkat, SysLinkat);
-        Register(X86SyscallNumbers.chdir, SysChdir);
-        Register(X86SyscallNumbers.fchdir, SysFchdir);
-        Register(X86SyscallNumbers.time, SysTime);
-        Register(X86SyscallNumbers.times, SysTimes);
-        Register(X86SyscallNumbers.nice, SysNice);
-        Register(X86SyscallNumbers.getpriority, SysGetPriority);
-        Register(X86SyscallNumbers.setpriority, SysSetPriority);
-        Register(X86SyscallNumbers.personality, SysPersonality);
-        Register(X86SyscallNumbers.prctl, SysPrctl);
-        Register(X86SyscallNumbers.getcpu, SysGetCpu);
-        Register(X86SyscallNumbers.prlimit64, SysPrlimit64);
-        Register(X86SyscallNumbers.get_thread_area, SysGetThreadArea);
-
-        Register(X86SyscallNumbers.openat, SysOpenAt);
-        Register(X86SyscallNumbers.dup, SysDup);
-        Register(X86SyscallNumbers.dup2, SysDup2);
-        Register(X86SyscallNumbers.dup3, SysDup3);
-
-        Register(X86SyscallNumbers.pread, SysPRead);
-        Register(X86SyscallNumbers.pwrite, SysPWrite);
-        Register(X86SyscallNumbers.readv, SysReadV);
-        Register(X86SyscallNumbers.preadv, SysPReadV);
-        Register(X86SyscallNumbers.pwritev, SysPWriteV);
-
-        Register(X86SyscallNumbers.mkdir, SysMkdir);
-        Register(X86SyscallNumbers.rmdir, SysRmdir);
-        Register(X86SyscallNumbers.mkdirat, SysMkdirAt);
-        Register(X86SyscallNumbers.mknodat, SysMknodat);
-        Register(X86SyscallNumbers.unlinkat, SysUnlinkAt);
-        Register(X86SyscallNumbers.utimes, SysUtimes);
-        Register(X86SyscallNumbers.symlink, SysSymlink);
-        Register(X86SyscallNumbers.symlinkat, SysSymlinkAt);
-        Register(X86SyscallNumbers.readlink, SysReadlink);
-        Register(X86SyscallNumbers.readlinkat, SysReadlinkAt);
-        Register(X86SyscallNumbers.getdents, SysGetdents);
-        Register(X86SyscallNumbers.setxattr, SysSetXAttr);
-        Register(X86SyscallNumbers.lsetxattr, SysLSetXAttr);
-        Register(X86SyscallNumbers.fsetxattr, SysFSetXAttr);
-        Register(X86SyscallNumbers.getxattr, SysGetXAttr);
-        Register(X86SyscallNumbers.lgetxattr, SysLGetXAttr);
-        Register(X86SyscallNumbers.fgetxattr, SysFGetXAttr);
-        Register(X86SyscallNumbers.listxattr, SysListXAttr);
-        Register(X86SyscallNumbers.llistxattr, SysLListXAttr);
-        Register(X86SyscallNumbers.flistxattr, SysFListXAttr);
-        Register(X86SyscallNumbers.removexattr, SysRemoveXAttr);
-        Register(X86SyscallNumbers.lremovexattr, SysLRemoveXAttr);
-        Register(X86SyscallNumbers.fremovexattr, SysFRemoveXAttr);
-
-        Register(X86SyscallNumbers.fstatat64, SysNewFstatAt);
-        Register(X86SyscallNumbers.utimensat, SysUtimensAt);
-
-        Register(X86SyscallNumbers.rename, SysRename);
-        Register(X86SyscallNumbers.renameat, SysRenameAt);
-        Register(X86SyscallNumbers.renameat2, SysRenameAt2);
-
-        Register(X86SyscallNumbers.getuid32, SysGetUid32);
-        Register(X86SyscallNumbers.getgid32, SysGetGid32);
-        Register(X86SyscallNumbers.geteuid32, SysGetEUid32);
-        Register(X86SyscallNumbers.getegid32, SysGetEGid32);
-        Register(X86SyscallNumbers.setuid32, SysSetUid32);
-        Register(X86SyscallNumbers.setgid32, SysSetGid32);
-        Register(X86SyscallNumbers.setreuid32, SysSetReUid32);
-        Register(X86SyscallNumbers.setregid32, SysSetReGid32);
-        Register(X86SyscallNumbers.getgroups32, SysGetGroups32);
-        Register(X86SyscallNumbers.setgroups32, SysSetGroups32);
-        Register(X86SyscallNumbers.setresuid32, SysSetResUid32);
-        Register(X86SyscallNumbers.getresuid32, SysGetResUid32);
-        Register(X86SyscallNumbers.setresgid32, SysSetResGid32);
-        Register(X86SyscallNumbers.getresgid32, SysGetResGid32);
-        Register(X86SyscallNumbers.setfsuid32, SysSetFsUid32);
-        Register(X86SyscallNumbers.setfsgid32, SysSetFsGid32);
-        Register(X86SyscallNumbers.clock_gettime, SysClockGetTime);
-        Register(X86SyscallNumbers.clock_gettime64, SysClockGetTime64);
-        Register(X86SyscallNumbers.gettimeofday, SysGetTimeOfDay);
-        Register(X86SyscallNumbers.nanosleep, SysNanosleep);
-
-        Register(X86SyscallNumbers.rt_sigreturn, SysRtSigReturn);
-        Register(X86SyscallNumbers.rt_sigpending, SysRtSigPending);
-        Register(X86SyscallNumbers.rt_sigsuspend, SysRtSigSuspend);
-        Register(X86SyscallNumbers.rt_sigtimedwait, SysRtSigTimedWait);
-        Register(X86SyscallNumbers.rt_sigtimedwait_time64, SysRtSigTimedWaitTime64);
-
-        Register(X86SyscallNumbers.gettid, SysGettid);
-        Register(X86SyscallNumbers.sched_getaffinity, SysSchedGetAffinity);
-        Register(X86SyscallNumbers.getpgid, SysGetPgid);
-        Register(X86SyscallNumbers.setpgid, SysSetPgid);
-        Register(X86SyscallNumbers.setsid, SysSetSid);
-        Register(X86SyscallNumbers.getsid, SysGetSid);
-        Register(X86SyscallNumbers.getpgrp, SysGetPgrp);
-        Register(X86SyscallNumbers.umask, SysUmask);
-        Register(X86SyscallNumbers.sethostname, SysSethostname);
-        Register(X86SyscallNumbers.setdomainname, SysSetdomainname);
-        Register(X86SyscallNumbers.sched_yield, SysSchedYield);
-        Register(X86SyscallNumbers.pause, SysPause);
-
-        // Network Syscalls
-        Register(X86SyscallNumbers.socketcall, SysSocketCall);
-        Register(X86SyscallNumbers.socket, SysSocket);
-        Register(X86SyscallNumbers.bind, SysBind);
-        Register(X86SyscallNumbers.connect, SysConnect);
-        Register(X86SyscallNumbers.listen, SysListen);
-        Register(X86SyscallNumbers.accept4, SysAccept4);
-        Register(X86SyscallNumbers.getsockname, SysGetSockName);
-        Register(X86SyscallNumbers.getpeername, SysGetPeerName);
-        Register(X86SyscallNumbers.sendto, SysSendTo);
-        Register(X86SyscallNumbers.recvfrom, SysRecvFrom);
-        Register(X86SyscallNumbers.shutdown, SysShutdown);
-        Register(X86SyscallNumbers.socketpair, SysSocketPair);
-        Register(X86SyscallNumbers.sendmsg, SysSendMsg);
-        Register(X86SyscallNumbers.recvmsg, SysRecvMsg);
-        Register(X86SyscallNumbers.setsockopt, SysSetSockOpt);
-        Register(X86SyscallNumbers.getsockopt, SysGetSockOpt);
-        Register(X86SyscallNumbers.sendmmsg, SysSendMMsg);
-        Register(X86SyscallNumbers.recvmmsg, SysRecvMMsg);
-
-        // Alarm
-        Register(X86SyscallNumbers.alarm, SysAlarm); // alarm
-        Register(X86SyscallNumbers.setitimer, SysSetitimer);
-        Register(X86SyscallNumbers.getitimer, SysGetitimer);
-
-        // POSIX Timers 32-bit (Using 64-bit implementations because timespec padding allows identical parsing if careful, or we just direct them to the 64-bit handlers that adapt for missing padding if applicable. For now, we point to the implementations in Time64).
-        Register(X86SyscallNumbers.timer_create, SysTimerCreate);
-        Register(X86SyscallNumbers.timer_settime, SysTimerSetTime32);
-        Register(X86SyscallNumbers.timer_gettime, SysTimerGetTime32);
-        Register(X86SyscallNumbers.timer_getoverrun, SysTimerGetOverrun);
-        Register(X86SyscallNumbers.timer_delete, SysTimerDelete);
-
-        // 64-bit time syscalls (i386)
-        Register(X86SyscallNumbers.clock_gettime64, SysClockGetTime64);
-        Register(X86SyscallNumbers.clock_settime64, SysClockSetTime64);
-        Register(X86SyscallNumbers.clock_adjtime64, SysClockAdjTime64);
-        Register(X86SyscallNumbers.clock_getres_time64, SysClockGetResTime64);
-        Register(X86SyscallNumbers.clock_nanosleep_time64, SysClockNanosleepTime64);
-        Register(X86SyscallNumbers.timer_gettime64, SysTimerGetTime64);
-        Register(X86SyscallNumbers.timer_settime64, SysTimerSetTime64);
-        Register(X86SyscallNumbers.timerfd_gettime64, SysTimerFdGetTime64);
-        Register(X86SyscallNumbers.timerfd_settime64, SysTimerFdSetTime64);
-        Register(X86SyscallNumbers.utimensat_time64, SysUtimensAtTime64);
-
-        // FDs / Virtual
-        Register(X86SyscallNumbers.timerfd_create, SysTimerFdCreate); // timerfd_create
-        Register(X86SyscallNumbers.timerfd_settime, SysTimerFdSetTime); // timerfd_settime
-        Register(X86SyscallNumbers.timerfd_gettime, SysTimerFdGetTime); // timerfd_gettime
-
-        Register(X86SyscallNumbers.eventfd, SysEventFd); // eventfd
-        Register(X86SyscallNumbers.eventfd2, SysEventFd2); // eventfd2
-
-        Register(X86SyscallNumbers.signalfd, SysSignalFd); // signalfd
-        Register(X86SyscallNumbers.signalfd4, SysSignalFd4); // signalfd4
-
-        Register(X86SyscallNumbers.fsync, SysFsync);
-        Register(X86SyscallNumbers.fdatasync, SysFdatasync);
-        Register(X86SyscallNumbers.sync, SysSync);
-        Register(X86SyscallNumbers.madvise, SysMadvise);
-        Register(X86SyscallNumbers.msync, SysMsync);
-        Register(X86SyscallNumbers.mremap, SysMremap);
-        Register(X86SyscallNumbers.membarrier, SysMembarrier);
-
-        Register(X86SyscallNumbers.kill, SysKill);
-        Register(X86SyscallNumbers.tkill, SysTkill);
-        Register(X86SyscallNumbers.tgkill, SysTgkill);
-        Register(X86SyscallNumbers.rt_sigqueueinfo, SysRtSigQueueInfo);
-        Register(X86SyscallNumbers.rt_tgsigqueueinfo, SysRtTgSigQueueInfo);
-        Register(X86SyscallNumbers.execve, SysExecve);
-
-        Register(X86SyscallNumbers.select, SysSelect);
-        Register(X86SyscallNumbers._newselect, SysNewSelect);
-        Register(X86SyscallNumbers.pselect6, SysPselect6);
-        Register(X86SyscallNumbers.pselect6_time64, SysPselect6Time64);
-        Register(X86SyscallNumbers.flock, SysFlock);
-        Register(X86SyscallNumbers.msync, SysMsync);
-        Register(X86SyscallNumbers.poll, SysPoll);
-        Register(X86SyscallNumbers.ppoll, SysPpoll);
-        Register(X86SyscallNumbers.ppoll_time64, SysPpollTime64);
-        Register(X86SyscallNumbers.pipe, SysPipe);
-        Register(X86SyscallNumbers.pipe2, SysPipe2);
-        Register(X86SyscallNumbers.sendfile, SysSendfile);
-        Register(X86SyscallNumbers.sendfile64, SysSendfile64);
-        Register(X86SyscallNumbers.splice, SysSplice);
-        Register(X86SyscallNumbers.tee, SysTee);
-        Register(X86SyscallNumbers.readahead, SysReadahead);
-        Register(X86SyscallNumbers.fadvise64, SysFadvise64);
-        Register(X86SyscallNumbers.fallocate, SysFallocate);
-        Register(X86SyscallNumbers.memfd_create, SysMemfdCreate);
-        Register(X86SyscallNumbers.epoll_create, SysEpollCreate);
-        Register(X86SyscallNumbers.epoll_create1, SysEpollCreate1);
-        Register(X86SyscallNumbers.epoll_ctl, SysEpollCtl);
-        Register(X86SyscallNumbers.epoll_wait, SysEpollWait);
-        Register(X86SyscallNumbers.epoll_pwait, SysEpollPwait);
-        Register(X86SyscallNumbers.epoll_pwait2, SysEpollPwait2);
-        Register(X86SyscallNumbers.faccessat2, SysFaccessAt2);
-        Register(X86SyscallNumbers.fchmodat2, SysFchmodAt2);
-
-        // System V IPC
-        Register(X86SyscallNumbers.ipc, SysIpc);
-        Register(X86SyscallNumbers.semget, SysSemGet);
-        Register(X86SyscallNumbers.semctl, SysSemCtl);
-        Register(X86SyscallNumbers.semop, SysSemOp);
-
-        // New Mount API
-        Register(X86SyscallNumbers.open_tree, SysOpenTree);
-        Register(X86SyscallNumbers.move_mount, SysMoveMount);
-        Register(X86SyscallNumbers.fsopen, SysFsopen);
-        Register(X86SyscallNumbers.fsconfig, SysFsconfig);
-        Register(X86SyscallNumbers.fsmount, SysFsmount);
-        Register(X86SyscallNumbers.mount_setattr, SysMountSetattr);
-
-        // Magic Syscall for debugging
-        Register(888, SysMagicDebug);
+        switch (eax)
+        {
+            case X86SyscallNumbers.exit:
+                handled = true;
+                return SysExit(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fork:
+                handled = true;
+                return SysFork(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fcntl64:
+                handled = true;
+                return SysFcntl64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.waitpid:
+                handled = true;
+                return SysWaitPid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.read:
+                handled = true;
+                return SysRead(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.preadv2:
+                handled = true;
+                return SysPReadV2(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.pwritev2:
+                handled = true;
+                return SysPWriteV2(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.statx:
+                handled = true;
+                return SysStatx(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.openat2:
+                handled = true;
+                return SysOpenAt2(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.write:
+                handled = true;
+                return SysWrite(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.open:
+                handled = true;
+                return SysOpen(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.close:
+                handled = true;
+                return SysClose(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.unlink:
+                handled = true;
+                return SysUnlink(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.mknod:
+                handled = true;
+                return SysMknod(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.chmod:
+                handled = true;
+                return SysChmod(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.chown:
+                handled = true;
+                return SysChown(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.lchown:
+                handled = true;
+                return SysLchown(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.lseek:
+                handled = true;
+                return SysLseek(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers._llseek:
+                handled = true;
+                return SysLlseek(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getpid:
+                handled = true;
+                return SysGetPid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.mount:
+                handled = true;
+                return SysMount(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.umount:
+                handled = true;
+                return SysUmount(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.umount2:
+                handled = true;
+                return SysUmount2(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setuid:
+                handled = true;
+                return SysSetUid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getuid:
+                handled = true;
+                return SysGetUid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.access:
+                handled = true;
+                return SysAccess(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.brk:
+                handled = true;
+                return SysBrk(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setgid:
+                handled = true;
+                return SysSetGid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getgid:
+                handled = true;
+                return SysGetGid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.signal:
+                handled = true;
+                return SysSignal(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.geteuid:
+                handled = true;
+                return SysGetEUid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getegid:
+                handled = true;
+                return SysGetEGid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.ioctl:
+                handled = true;
+                return SysIoctl(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.chroot:
+                handled = true;
+                return SysChroot(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getppid:
+                handled = true;
+                return SysGetPPid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setreuid:
+                handled = true;
+                return SysSetReUid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setregid:
+                handled = true;
+                return SysSetReGid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.munmap:
+                handled = true;
+                return SysMunmap(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.truncate:
+                handled = true;
+                return SysTruncate(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.ftruncate:
+                handled = true;
+                return SysFtruncate(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.truncate64:
+                handled = true;
+                return SysTruncate64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.ftruncate64:
+                handled = true;
+                return SysFtruncate64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fchmod:
+                handled = true;
+                return SysFchmod(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fchown:
+                handled = true;
+                return SysFchown(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sigreturn:
+                handled = true;
+                return SysSigReturn(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.clone:
+                handled = true;
+                return SysClone(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.uname:
+                handled = true;
+                return SysUname(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sysinfo:
+                handled = true;
+                return SysSysinfo(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.mprotect:
+                handled = true;
+                return SysMprotect(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setfsuid:
+                handled = true;
+                return SysSetFsUid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setfsgid:
+                handled = true;
+                return SysSetFsGid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.writev:
+                handled = true;
+                return SysWriteV(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setresuid:
+                handled = true;
+                return SysSetResUid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getresuid:
+                handled = true;
+                return SysGetResUid16(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setresgid:
+                handled = true;
+                return SysSetResGid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getresgid:
+                handled = true;
+                return SysGetResGid16(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.capget:
+                handled = true;
+                return SysCapget(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.capset:
+                handled = true;
+                return SysCapset(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.rt_sigaction:
+                handled = true;
+                return SysRtSigAction(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.rt_sigprocmask:
+                handled = true;
+                return SysRtSigProcMask(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.chown32:
+                handled = true;
+                return SysChown(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getcwd:
+                handled = true;
+                return SysGetCwd(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.mmap2:
+                handled = true;
+                return SysMmap2(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.statfs:
+                handled = true;
+                return SysStatfs(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fstatfs:
+                handled = true;
+                return SysFstatfs(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.stat64:
+                handled = true;
+                return SysStat64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.lstat64:
+                handled = true;
+                return SysLstat64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fstat64:
+                handled = true;
+                return SysFstat64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.lchown32:
+                handled = true;
+                return SysLchown(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getgroups:
+                handled = true;
+                return SysGetGroups(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setgroups:
+                handled = true;
+                return SysSetGroups(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fchown32:
+                handled = true;
+                return SysFchown(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getdents64:
+                handled = true;
+                return SysGetdents64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.wait4:
+                handled = true;
+                return SysWait4(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.vfork:
+                handled = true;
+                return SysVfork(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.futex:
+                handled = true;
+                return SysFutex(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sigpending:
+                handled = true;
+                return SysSigPending(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.set_thread_area:
+                handled = true;
+                return SysSetThreadArea(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.set_robust_list:
+                handled = true;
+                return SysSetRobustList(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.get_robust_list:
+                handled = true;
+                return SysGetRobustList(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.exit_group:
+                handled = true;
+                return SysExitGroup(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.set_tid_address:
+                handled = true;
+                return SysSetTidAddress(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.waitid:
+                handled = true;
+                return SysWaitId(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fchownat:
+                handled = true;
+                return SysFchownAt(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fchmodat:
+                handled = true;
+                return SysFchmodAt(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.faccessat:
+                handled = true;
+                return SysFaccessAt(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.statfs64:
+                handled = true;
+                return SysStatfs64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fstatfs64:
+                handled = true;
+                return SysFstatfs64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getrandom:
+                handled = true;
+                return SysGetRandom(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.creat:
+                handled = true;
+                return SysCreat(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.link:
+                handled = true;
+                return SysLink(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.linkat:
+                handled = true;
+                return SysLinkat(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.chdir:
+                handled = true;
+                return SysChdir(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fchdir:
+                handled = true;
+                return SysFchdir(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.time:
+                handled = true;
+                return SysTime(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.times:
+                handled = true;
+                return SysTimes(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.nice:
+                handled = true;
+                return SysNice(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getpriority:
+                handled = true;
+                return SysGetPriority(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setpriority:
+                handled = true;
+                return SysSetPriority(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.personality:
+                handled = true;
+                return SysPersonality(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.prctl:
+                handled = true;
+                return SysPrctl(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getcpu:
+                handled = true;
+                return SysGetCpu(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.prlimit64:
+                handled = true;
+                return SysPrlimit64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.get_thread_area:
+                handled = true;
+                return SysGetThreadArea(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.openat:
+                handled = true;
+                return SysOpenAt(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.dup:
+                handled = true;
+                return SysDup(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.dup2:
+                handled = true;
+                return SysDup2(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.dup3:
+                handled = true;
+                return SysDup3(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.pread:
+                handled = true;
+                return SysPRead(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.pwrite:
+                handled = true;
+                return SysPWrite(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.readv:
+                handled = true;
+                return SysReadV(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.preadv:
+                handled = true;
+                return SysPReadV(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.pwritev:
+                handled = true;
+                return SysPWriteV(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.mkdir:
+                handled = true;
+                return SysMkdir(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.rmdir:
+                handled = true;
+                return SysRmdir(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.mkdirat:
+                handled = true;
+                return SysMkdirAt(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.mknodat:
+                handled = true;
+                return SysMknodat(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.unlinkat:
+                handled = true;
+                return SysUnlinkAt(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.utimes:
+                handled = true;
+                return SysUtimes(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.symlink:
+                handled = true;
+                return SysSymlink(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.symlinkat:
+                handled = true;
+                return SysSymlinkAt(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.readlink:
+                handled = true;
+                return SysReadlink(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.readlinkat:
+                handled = true;
+                return SysReadlinkAt(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getdents:
+                handled = true;
+                return SysGetdents(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setxattr:
+                handled = true;
+                return SysSetXAttr(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.lsetxattr:
+                handled = true;
+                return SysLSetXAttr(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fsetxattr:
+                handled = true;
+                return SysFSetXAttr(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getxattr:
+                handled = true;
+                return SysGetXAttr(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.lgetxattr:
+                handled = true;
+                return SysLGetXAttr(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fgetxattr:
+                handled = true;
+                return SysFGetXAttr(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.listxattr:
+                handled = true;
+                return SysListXAttr(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.llistxattr:
+                handled = true;
+                return SysLListXAttr(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.flistxattr:
+                handled = true;
+                return SysFListXAttr(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.removexattr:
+                handled = true;
+                return SysRemoveXAttr(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.lremovexattr:
+                handled = true;
+                return SysLRemoveXAttr(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fremovexattr:
+                handled = true;
+                return SysFRemoveXAttr(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fstatat64:
+                handled = true;
+                return SysNewFstatAt(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.utimensat:
+                handled = true;
+                return SysUtimensAt(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.rename:
+                handled = true;
+                return SysRename(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.renameat:
+                handled = true;
+                return SysRenameAt(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.renameat2:
+                handled = true;
+                return SysRenameAt2(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getuid32:
+                handled = true;
+                return SysGetUid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getgid32:
+                handled = true;
+                return SysGetGid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.geteuid32:
+                handled = true;
+                return SysGetEUid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getegid32:
+                handled = true;
+                return SysGetEGid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setuid32:
+                handled = true;
+                return SysSetUid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setgid32:
+                handled = true;
+                return SysSetGid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setreuid32:
+                handled = true;
+                return SysSetReUid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setregid32:
+                handled = true;
+                return SysSetReGid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getgroups32:
+                handled = true;
+                return SysGetGroups32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setgroups32:
+                handled = true;
+                return SysSetGroups32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setresuid32:
+                handled = true;
+                return SysSetResUid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getresuid32:
+                handled = true;
+                return SysGetResUid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setresgid32:
+                handled = true;
+                return SysSetResGid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getresgid32:
+                handled = true;
+                return SysGetResGid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setfsuid32:
+                handled = true;
+                return SysSetFsUid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setfsgid32:
+                handled = true;
+                return SysSetFsGid32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.clock_gettime:
+                handled = true;
+                return SysClockGetTime(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.gettimeofday:
+                handled = true;
+                return SysGetTimeOfDay(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.nanosleep:
+                handled = true;
+                return SysNanosleep(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.rt_sigreturn:
+                handled = true;
+                return SysRtSigReturn(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.rt_sigpending:
+                handled = true;
+                return SysRtSigPending(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.rt_sigsuspend:
+                handled = true;
+                return SysRtSigSuspend(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.rt_sigtimedwait:
+                handled = true;
+                return SysRtSigTimedWait(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.rt_sigtimedwait_time64:
+                handled = true;
+                return SysRtSigTimedWaitTime64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.gettid:
+                handled = true;
+                return SysGettid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sched_getaffinity:
+                handled = true;
+                return SysSchedGetAffinity(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getpgid:
+                handled = true;
+                return SysGetPgid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setpgid:
+                handled = true;
+                return SysSetPgid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setsid:
+                handled = true;
+                return SysSetSid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getsid:
+                handled = true;
+                return SysGetSid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getpgrp:
+                handled = true;
+                return SysGetPgrp(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.umask:
+                handled = true;
+                return SysUmask(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sethostname:
+                handled = true;
+                return SysSethostname(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setdomainname:
+                handled = true;
+                return SysSetdomainname(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sched_yield:
+                handled = true;
+                return SysSchedYield(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.pause:
+                handled = true;
+                return SysPause(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.socketcall:
+                handled = true;
+                return SysSocketCall(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.socket:
+                handled = true;
+                return SysSocket(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.bind:
+                handled = true;
+                return SysBind(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.connect:
+                handled = true;
+                return SysConnect(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.listen:
+                handled = true;
+                return SysListen(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.accept4:
+                handled = true;
+                return SysAccept4(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getsockname:
+                handled = true;
+                return SysGetSockName(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getpeername:
+                handled = true;
+                return SysGetPeerName(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sendto:
+                handled = true;
+                return SysSendTo(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.recvfrom:
+                handled = true;
+                return SysRecvFrom(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.shutdown:
+                handled = true;
+                return SysShutdown(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.socketpair:
+                handled = true;
+                return SysSocketPair(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sendmsg:
+                handled = true;
+                return SysSendMsg(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.recvmsg:
+                handled = true;
+                return SysRecvMsg(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setsockopt:
+                handled = true;
+                return SysSetSockOpt(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getsockopt:
+                handled = true;
+                return SysGetSockOpt(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sendmmsg:
+                handled = true;
+                return SysSendMMsg(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.recvmmsg:
+                handled = true;
+                return SysRecvMMsg(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.alarm:
+                handled = true;
+                return SysAlarm(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setitimer:
+                handled = true;
+                return SysSetitimer(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getitimer:
+                handled = true;
+                return SysGetitimer(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.timer_create:
+                handled = true;
+                return SysTimerCreate(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.timer_settime:
+                handled = true;
+                return SysTimerSetTime32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.timer_gettime:
+                handled = true;
+                return SysTimerGetTime32(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.timer_getoverrun:
+                handled = true;
+                return SysTimerGetOverrun(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.timer_delete:
+                handled = true;
+                return SysTimerDelete(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.clock_gettime64:
+                handled = true;
+                return SysClockGetTime64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.clock_settime64:
+                handled = true;
+                return SysClockSetTime64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.clock_adjtime64:
+                handled = true;
+                return SysClockAdjTime64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.clock_getres_time64:
+                handled = true;
+                return SysClockGetResTime64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.clock_nanosleep_time64:
+                handled = true;
+                return SysClockNanosleepTime64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.timer_settime64:
+                handled = true;
+                return SysTimerSetTime64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.timerfd_gettime64:
+                handled = true;
+                return SysTimerFdGetTime64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.timerfd_settime64:
+                handled = true;
+                return SysTimerFdSetTime64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.utimensat_time64:
+                handled = true;
+                return SysUtimensAtTime64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.timerfd_create:
+                handled = true;
+                return SysTimerFdCreate(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.timerfd_settime:
+                handled = true;
+                return SysTimerFdSetTime(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.timerfd_gettime:
+                handled = true;
+                return SysTimerFdGetTime(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.eventfd:
+                handled = true;
+                return SysEventFd(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.eventfd2:
+                handled = true;
+                return SysEventFd2(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.signalfd:
+                handled = true;
+                return SysSignalFd(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.signalfd4:
+                handled = true;
+                return SysSignalFd4(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fsync:
+                handled = true;
+                return SysFsync(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fdatasync:
+                handled = true;
+                return SysFdatasync(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sync:
+                handled = true;
+                return SysSync(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.madvise:
+                handled = true;
+                return SysMadvise(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.msync:
+                handled = true;
+                return SysMsync(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.mremap:
+                handled = true;
+                return SysMremap(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.membarrier:
+                handled = true;
+                return SysMembarrier(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.kill:
+                handled = true;
+                return SysKill(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.tkill:
+                handled = true;
+                return SysTkill(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.tgkill:
+                handled = true;
+                return SysTgkill(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.rt_sigqueueinfo:
+                handled = true;
+                return SysRtSigQueueInfo(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.rt_tgsigqueueinfo:
+                handled = true;
+                return SysRtTgSigQueueInfo(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.execve:
+                handled = true;
+                return SysExecve(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.select:
+                handled = true;
+                return SysSelect(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers._newselect:
+                handled = true;
+                return SysNewSelect(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.pselect6:
+                handled = true;
+                return SysPselect6(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.pselect6_time64:
+                handled = true;
+                return SysPselect6Time64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.flock:
+                handled = true;
+                return SysFlock(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.poll:
+                handled = true;
+                return SysPoll(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.ppoll:
+                handled = true;
+                return SysPpoll(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.ppoll_time64:
+                handled = true;
+                return SysPpollTime64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.pipe:
+                handled = true;
+                return SysPipe(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.pipe2:
+                handled = true;
+                return SysPipe2(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sendfile:
+                handled = true;
+                return SysSendfile(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sendfile64:
+                handled = true;
+                return SysSendfile64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.splice:
+                handled = true;
+                return SysSplice(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.tee:
+                handled = true;
+                return SysTee(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.readahead:
+                handled = true;
+                return SysReadahead(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fadvise64:
+                handled = true;
+                return SysFadvise64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fallocate:
+                handled = true;
+                return SysFallocate(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.memfd_create:
+                handled = true;
+                return SysMemfdCreate(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.epoll_create:
+                handled = true;
+                return SysEpollCreate(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.epoll_create1:
+                handled = true;
+                return SysEpollCreate1(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.epoll_ctl:
+                handled = true;
+                return SysEpollCtl(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.epoll_wait:
+                handled = true;
+                return SysEpollWait(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.epoll_pwait:
+                handled = true;
+                return SysEpollPwait(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.epoll_pwait2:
+                handled = true;
+                return SysEpollPwait2(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.faccessat2:
+                handled = true;
+                return SysFaccessAt2(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fchmodat2:
+                handled = true;
+                return SysFchmodAt2(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.ipc:
+                handled = true;
+                return SysIpc(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.semget:
+                handled = true;
+                return SysSemGet(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.semctl:
+                handled = true;
+                return SysSemCtl(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.semop:
+                handled = true;
+                return SysSemOp(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.open_tree:
+                handled = true;
+                return SysOpenTree(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.move_mount:
+                handled = true;
+                return SysMoveMount(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fsopen:
+                handled = true;
+                return SysFsopen(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fsconfig:
+                handled = true;
+                return SysFsconfig(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fsmount:
+                handled = true;
+                return SysFsmount(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.mount_setattr:
+                handled = true;
+                return SysMountSetattr(engine, ebx, ecx, edx, esi, edi, ebp);
+            case 888:
+                handled = true;
+                return SysMagicDebug(engine, ebx, ecx, edx, esi, edi, ebp);
+            default:
+                handled = false;
+                return new ValueTask<int>(0);
+        }
     }
 }
