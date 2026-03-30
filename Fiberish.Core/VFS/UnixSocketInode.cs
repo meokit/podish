@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
@@ -805,6 +806,16 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         return null;
     }
 
+    public override async ValueTask WaitForRead(LinuxFile file, FiberTask task)
+    {
+        await _readWaitQueue.WaitInterruptiblyAsync(task);
+    }
+
+    public override async ValueTask WaitForWrite(LinuxFile file, FiberTask task)
+    {
+        await _writeWaitQueue.WaitInterruptiblyAsync(task);
+    }
+
     public void EnqueueMessage(UnixMessage msg)
     {
         using (EnterStateScope())
@@ -1023,7 +1034,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         base.OnEvictCache();
     }
 
-    public override int Read(LinuxFile file, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(LinuxFile file, Span<byte> buffer, long offset)
     {
         using (EnterStateScope())
         {
@@ -1082,7 +1093,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         return -(int)Errno.EAGAIN;
     }
 
-    public override int Write(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile file, ReadOnlySpan<byte> buffer, long offset)
     {
         UnixSocketInode? peer;
         using (EnterStateScope())
@@ -1107,6 +1118,162 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         var msg = new UnixMessage { Data = clonedData, SourceSunPathRaw = GetLocalSunPathRaw() };
         peer.EnqueueMessage(msg);
         return buffer.Length;
+    }
+
+    public override async ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task,
+        IReadOnlyList<Iovec> iovs, long offset, int flags)
+    {
+        if (task == null) return -(int)Errno.EPERM;
+
+        var totalCap = 0L;
+        foreach (var iov in iovs) totalCap += iov.Len;
+        if (totalCap == 0) return 0;
+
+        var recvFlags = 0;
+        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0)
+            recvFlags |= LinuxConstants.MSG_DONTWAIT;
+
+        var chunkBuf = ArrayPool<byte>.Shared.Rent((int)Math.Min(totalCap, 65536));
+        try
+        {
+            var totalRead = 0;
+            var iovIndex = 0;
+            var iovOffset = 0u;
+
+            while (totalRead < totalCap)
+            {
+                var gatherLen = (int)Math.Min(totalCap - totalRead, 65536);
+
+                // For stream sockets, after first successful read we don't want to block
+                var currentFlags = recvFlags;
+                if (totalRead > 0 && UnixSocketType == SocketType.Stream)
+                    currentFlags |= LinuxConstants.MSG_DONTWAIT;
+
+                var n = await RecvAsync(file, task, chunkBuf, currentFlags, gatherLen);
+
+                if (n < 0)
+                {
+                    if (n == -(int)Errno.EAGAIN && totalRead > 0)
+                        break;
+                    return totalRead > 0 ? totalRead : n;
+                }
+
+                if (n == 0) break; // EOF
+
+                var chunkProcessed = 0;
+                while (chunkProcessed < n && iovIndex < iovs.Count)
+                {
+                    var iov = iovs[iovIndex];
+                    var rem = iov.Len - iovOffset;
+                    if (rem == 0)
+                    {
+                        iovIndex++;
+                        iovOffset = 0;
+                        continue;
+                    }
+
+                    var toCopy = (int)Math.Min(n - chunkProcessed, rem);
+                    if (!engine.CopyToUser(iov.BaseAddr + iovOffset, chunkBuf.AsSpan(chunkProcessed, toCopy)))
+                        return totalRead > 0 ? totalRead : -(int)Errno.EFAULT;
+
+                    chunkProcessed += toCopy;
+                    totalRead += toCopy;
+                    iovOffset += (uint)toCopy;
+                    if (iovOffset >= iov.Len)
+                    {
+                        iovIndex++;
+                        iovOffset = 0;
+                    }
+                }
+
+                if (UnixSocketType != SocketType.Stream)
+                    break; // Datagrams only read one message!
+            }
+
+            return totalRead;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(chunkBuf);
+        }
+    }
+
+    public override async ValueTask<int> WriteV(Engine engine, LinuxFile file, FiberTask? task,
+        IReadOnlyList<Iovec> iovs, long offset, int flags)
+    {
+        if (task == null) return -(int)Errno.EPERM;
+
+        var totalLen = 0L;
+        foreach (var iov in iovs) totalLen += iov.Len;
+        if (totalLen == 0) return 0;
+        if (totalLen > 65536 && UnixSocketType == SocketType.Dgram)
+            return -(int)Errno.EMSGSIZE;
+
+        var toRent = UnixSocketType == SocketType.Dgram ? (int)totalLen : (int)Math.Min(totalLen, 65536);
+        var chunkBuf = ArrayPool<byte>.Shared.Rent(toRent);
+        try
+        {
+            var totalWritten = 0;
+            var iovIndex = 0;
+            var iovOffset = 0u;
+
+            while (totalWritten < totalLen)
+            {
+                var gatherLen = 0;
+
+                // Gather up to 64K
+                while (iovIndex < iovs.Count && gatherLen < 65536)
+                {
+                    var iov = iovs[iovIndex];
+                    var rem = iov.Len - iovOffset;
+                    if (rem == 0)
+                    {
+                        iovIndex++;
+                        iovOffset = 0;
+                        continue;
+                    }
+
+                    var copyLen = (int)Math.Min(rem, 65536 - gatherLen);
+                    if (!engine.CopyFromUser(iov.BaseAddr + iovOffset, chunkBuf.AsSpan(gatherLen, copyLen)))
+                        return totalWritten > 0 ? totalWritten : -(int)Errno.EFAULT;
+
+                    gatherLen += copyLen;
+                    iovOffset += (uint)copyLen;
+                    if (iovOffset >= iov.Len)
+                    {
+                        iovIndex++;
+                        iovOffset = 0;
+                    }
+                }
+
+                if (gatherLen == 0) break;
+
+                var payload = chunkBuf.AsMemory(0, gatherLen);
+                var sendFlags = 0;
+                if ((flags & 0x00000008) != 0 /* RWF_NOWAIT */)
+                    sendFlags |= LinuxConstants.MSG_DONTWAIT;
+
+                var n = await SendAsync(file, task, payload, sendFlags);
+
+                if (n == -(int)Errno.EPIPE)
+                {
+                    task.PostSignal((int)Signal.SIGPIPE);
+                    return n;
+                }
+
+                if (n < 0)
+                    return totalWritten > 0 ? totalWritten : n;
+
+                totalWritten += n;
+                if (n < gatherLen) break; // Partial write
+            }
+
+            return totalWritten;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(chunkBuf);
+        }
     }
 
     private static void ReleaseQueuedFds(List<LinuxFile>? fds)

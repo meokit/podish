@@ -662,7 +662,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             parentSilk.InvalidateEntriesCache();
     }
 
-    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         return ReadWithPageCache(linuxFile, buffer, offset, BackendRead);
     }
@@ -691,7 +691,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         }
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         var rc = WriteWithPageCache(linuxFile, buffer, offset, BackendWrite);
         if (rc > 0)

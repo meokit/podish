@@ -471,9 +471,9 @@ public class OverlayInode : Inode
                         while (true)
                         {
                             // Use null to trigger host-internal read without dependency on user's open mode
-                            var n = lowerInode.Read(null!, buf, pos);
+                            var n = lowerInode.ReadToHost(null, null!, buf, pos);
                             if (n <= 0) break;
-                            upperDentry.Inode!.Write(null!, buf.AsSpan(0, n), pos);
+                            upperDentry.Inode!.WriteFromHost(null, null!, buf.AsSpan(0, n), pos);
                             pos += n;
                         }
                     }
@@ -906,12 +906,12 @@ public class OverlayInode : Inode
         return UpperInode!.RemoveXAttr(name);
     }
 
-    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         return ReadWithPageCache(linuxFile, buffer, offset, BackendRead);
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         return WriteWithPageCache(linuxFile, buffer, offset, BackendWrite);
     }
@@ -1055,7 +1055,7 @@ public class OverlayInode : Inode
     private int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
     {
         var source = ResolveSourceForFile(linuxFile);
-        if (source != null) return source.Read(linuxFile!, buffer, offset);
+        if (source != null) return source.ReadToHost(null, linuxFile!, buffer, offset);
         return 0;
     }
 
@@ -1070,7 +1070,7 @@ public class OverlayInode : Inode
 
         var source = ResolveSourceForFile(linuxFile);
         if (source == null) return -(int)Errno.EROFS;
-        return source.Write(linuxFile, buffer, offset);
+        return source.WriteFromHost(null, linuxFile, buffer, offset);
     }
 }
 

@@ -36,7 +36,7 @@ public class VfsStream : Stream
     {
         if (_file.OpenedInode == null) return 0;
 
-        var n = _file.OpenedInode.Read(_file, buffer.AsSpan(offset, count), _position);
+        var n = _file.OpenedInode!.ReadToHost(null, _file, buffer.AsSpan(offset, count), _position);
         if (n > 0) _position += n;
         return n;
     }
@@ -68,7 +68,7 @@ public class VfsStream : Stream
     {
         if (_file.OpenedInode == null) return;
 
-        var n = _file.OpenedInode.Write(_file, buffer.AsSpan(offset, count), _position);
+        var n = _file.OpenedInode!.WriteFromHost(null, _file, buffer.AsSpan(offset, count), _position);
         if (n > 0) _position += n;
     }
 

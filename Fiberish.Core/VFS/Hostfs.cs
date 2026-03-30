@@ -1849,7 +1849,7 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         return RandomAccess.Read(tempHandle, buffer, offset);
     }
 
-    public override int Read(LinuxFile? linuxFile, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(LinuxFile? linuxFile, Span<byte> buffer, long offset)
     {
         return ReadWithPageCache(linuxFile, buffer, offset, BackendRead);
     }
@@ -1901,7 +1901,7 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         return buffer.Length;
     }
 
-    public override int Write(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         return WriteWithPageCache(linuxFile, buffer, offset, BackendWrite);
     }

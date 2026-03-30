@@ -292,7 +292,7 @@ public class Process
             if (dentry.Inode != null)
             {
                 var file = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
-                headerLen = dentry.Inode.Read(file, headerBuf.AsSpan(), 0);
+                headerLen = dentry.Inode.ReadToHost(null, file, headerBuf.AsSpan(), 0);
                 if (headerLen < 0) headerLen = 0;
             }
 

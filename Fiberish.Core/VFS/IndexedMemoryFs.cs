@@ -478,7 +478,7 @@ public abstract class IndexedMemoryInode : Inode
         }
     }
 
-    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         return BackendRead(linuxFile, buffer, offset);
     }
@@ -581,7 +581,7 @@ public abstract class IndexedMemoryInode : Inode
         }
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         return BackendWrite(linuxFile, buffer, offset);
     }

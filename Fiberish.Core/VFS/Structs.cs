@@ -928,25 +928,207 @@ public abstract class Inode : IAddressSpaceOperations
         throw new NotSupportedException();
     }
 
-    public virtual int Read(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
+    public int ReadToHost(FiberTask? task, LinuxFile file, Span<byte> buffer, long offset = -1)
     {
-        return Read(linuxFile, buffer, offset);
+        return ReadSpan(task, file, buffer, offset);
     }
 
-    public virtual int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    public int WriteFromHost(FiberTask? task, LinuxFile file, ReadOnlySpan<byte> buffer, long offset = -1)
+    {
+        return WriteSpan(task, file, buffer, offset);
+    }
+
+    protected internal virtual int ReadSpan(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
+    {
+        return ReadSpan(linuxFile, buffer, offset);
+    }
+
+    protected internal virtual int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         return 0;
     }
 
-    public virtual int Write(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal virtual int WriteSpan(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer,
+        long offset)
     {
-        return Write(linuxFile, buffer, offset);
+        return WriteSpan(linuxFile, buffer, offset);
     }
 
-    public virtual int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal virtual int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
         return 0;
+    }
+
+    public virtual async ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task, IReadOnlyList<Iovec> iovs,
+        long offset, int flags)
+    {
+        var updatePosition = offset == -1;
+        var currentOffset = updatePosition ? file.Position : offset;
+        var totalRead = 0;
+
+        for (var i = 0; i < iovs.Count; i++)
+        {
+            var iov = iovs[i];
+            if (iov.Len == 0) continue;
+
+            var iovProcessed = 0u;
+            while (iovProcessed < iov.Len)
+            {
+                var currAddr = iov.BaseAddr + iovProcessed;
+                var ptr = engine.GetPhysicalAddressSafe(currAddr, true); // true = We are writing TO guest memory
+                if (ptr == IntPtr.Zero)
+                    if (engine.PageFaultResolver != null && engine.PageFaultResolver(currAddr, true))
+                        ptr = engine.GetPhysicalAddressSafe(currAddr, true);
+
+                if (ptr == IntPtr.Zero) return totalRead > 0 ? totalRead : -(int)Errno.EFAULT;
+
+                var pageOffset = currAddr & 0xFFF;
+                var chunkLen = Math.Min(iov.Len - iovProcessed, 4096 - pageOffset);
+
+                while (true)
+                {
+                    int n;
+                    unsafe
+                    {
+                        var span = new Span<byte>((void*)ptr, (int)chunkLen);
+                        n = ReadSpan(task, file, span, currentOffset);
+                    }
+
+                    if (n == -(int)Errno.EAGAIN)
+                    {
+                        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0 /* RWF_NOWAIT */)
+                        {
+                            if (updatePosition) file.Position = currentOffset;
+                            return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
+                        }
+
+                        if (task == null)
+                        {
+                            if (updatePosition) file.Position = currentOffset;
+                            return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
+                        }
+
+                        await WaitForRead(file, task);
+                        continue;
+                    }
+
+                    if (n > 0)
+                    {
+                        totalRead += n;
+                        currentOffset += n;
+                        iovProcessed += (uint)n;
+                        if (n < chunkLen)
+                        {
+                            if (updatePosition) file.Position = currentOffset;
+                            return totalRead;
+                        }
+
+                        break; // Processed this chunk
+                    }
+
+                    // EOF or real error (n <= 0)
+                    if (updatePosition) file.Position = currentOffset;
+                    return totalRead > 0 ? totalRead : n;
+                }
+            }
+        }
+
+        if (updatePosition) file.Position = currentOffset;
+        return totalRead;
+    }
+
+    public virtual async ValueTask<int> WriteV(Engine engine, LinuxFile file, FiberTask? task,
+        IReadOnlyList<Iovec> iovs, long offset, int flags)
+    {
+        var updatePosition = offset == -1;
+        var append = (file.Flags & FileFlags.O_APPEND) != 0;
+        var currentOffset = updatePosition
+            ? append ? (long)Size : file.Position
+            : offset;
+        var sizeBeforeWrite = (long)Size;
+        var totalWritten = 0;
+
+        int FinalizeWriteResult(int rc)
+        {
+            if (rc > 0)
+            {
+                var sizeAfterWrite = (long)Size;
+                if (sizeAfterWrite > sizeBeforeWrite && MappingManager != null)
+                {
+                    // Truncate notification might be needed but typically memory context handles this elsewhere, or we do it if needed
+                    // Actually, let's let caller handle it, or we can just ignore it here since VFS handles size.
+                    // Wait, Fiberish.Core.Syscalls used to do: ProcessAddressSpaceSync.NotifyInodeTruncated
+                    // We don't have access to ProcessAddressSpaceSync here.
+                }
+            }
+
+            if (updatePosition) file.Position = currentOffset;
+            return rc;
+        }
+
+        for (var i = 0; i < iovs.Count; i++)
+        {
+            var iov = iovs[i];
+            if (iov.Len == 0) continue;
+
+            var iovProcessed = 0u;
+            while (iovProcessed < iov.Len)
+            {
+                var currAddr = iov.BaseAddr + iovProcessed;
+                var ptr = engine.GetPhysicalAddressSafe(currAddr, false); // false = We are reading FROM guest memory
+                if (ptr == IntPtr.Zero)
+                    if (engine.PageFaultResolver != null && engine.PageFaultResolver(currAddr, false))
+                        ptr = engine.GetPhysicalAddressSafe(currAddr, false);
+
+                if (ptr == IntPtr.Zero)
+                    return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EFAULT);
+
+                var pageOffset = currAddr & 0xFFF;
+                var chunkLen = Math.Min(iov.Len - iovProcessed, 4096 - pageOffset);
+
+                while (true)
+                {
+                    int n;
+                    unsafe
+                    {
+                        var span = new ReadOnlySpan<byte>((void*)ptr, (int)chunkLen);
+                        n = WriteSpan(task, file, span, currentOffset);
+                    }
+
+                    if (n == -(int)Errno.EPIPE)
+                    {
+                        task?.PostSignal((int)Signal.SIGPIPE);
+                        return FinalizeWriteResult(n);
+                    }
+
+                    if (n == -(int)Errno.EAGAIN)
+                    {
+                        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0 /* RWF_NOWAIT */)
+                            return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN);
+
+                        if (task == null)
+                            return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN);
+
+                        await WaitForWrite(file, task);
+                        continue;
+                    }
+
+                    if (n > 0)
+                    {
+                        totalWritten += n;
+                        currentOffset += n;
+                        iovProcessed += (uint)n;
+                        if (n < chunkLen) return FinalizeWriteResult(totalWritten);
+                        break; // Processed this chunk
+                    }
+
+                    return FinalizeWriteResult(totalWritten > 0 ? totalWritten : n);
+                }
+            }
+        }
+
+        return FinalizeWriteResult(totalWritten);
     }
 
     /// <summary>

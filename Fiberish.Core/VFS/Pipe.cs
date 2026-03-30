@@ -190,7 +190,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         }
     }
 
-    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         using (EnterStateScope())
         {
@@ -252,7 +252,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         }
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         using (EnterStateScope())
         {

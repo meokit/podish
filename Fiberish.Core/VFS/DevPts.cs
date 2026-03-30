@@ -73,7 +73,7 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         return null;
     }
 
-    public override int Read(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         return PtyPair.Slave.Read(task, buffer, linuxFile.Flags);
     }
@@ -85,7 +85,8 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         PtyPair.Slave.DataAvailable.Reset();
     }
 
-    public override int Write(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer,
+        long offset)
     {
         return PtyPair.Slave.Write(task, buffer);
     }
@@ -232,7 +233,7 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         return _ptyManager.AllocatePty();
     }
 
-    public override int Read(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         // Get the PTY pair from the file's private data
         if (linuxFile.PrivateData is not PtyPair pair)
@@ -250,7 +251,8 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         pair.Master.DataAvailable.Reset();
     }
 
-    public override int Write(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer,
+        long offset)
     {
         if (linuxFile.PrivateData is not PtyPair pair)
             return -(int)Errno.EBADF;

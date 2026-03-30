@@ -346,7 +346,7 @@ public class LayerInode : Inode
         return 2 + childDirCount;
     }
 
-    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         if (offset < 0) return -(int)Errno.EINVAL;
         if (_entry.Type != InodeType.File) return 0;
@@ -359,7 +359,7 @@ public class LayerInode : Inode
         return _entry.SymlinkTarget;
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         return -(int)Errno.EROFS;
     }

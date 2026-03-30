@@ -85,7 +85,7 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         throw new InvalidOperationException("Cannot link in /dev");
     }
 
-    public override int Read(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         if (!_isInput) return 0;
 
@@ -107,7 +107,8 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         _discipline.DataAvailable.Reset();
     }
 
-    public override int Write(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer,
+        long offset)
     {
         if (_isInput) return 0;
 
@@ -333,7 +334,7 @@ public sealed class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSourc
         return null;
     }
 
-    public override int Read(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         if (ResolveDiscipline(task, linuxFile) is not { } tty)
             return -(int)Errno.ENXIO;
@@ -350,7 +351,8 @@ public sealed class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSourc
         tty.DataAvailable.Reset();
     }
 
-    public override int Write(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer,
+        long offset)
     {
         if (ResolveDiscipline(task, linuxFile) is not { } tty)
             return -(int)Errno.ENXIO;
@@ -446,7 +448,7 @@ public class RandomInode : Inode
         throw new InvalidOperationException("Cannot link in /dev/random");
     }
 
-    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         RandomNumberGenerator.Fill(buffer);
         return buffer.Length;
@@ -457,7 +459,7 @@ public class RandomInode : Inode
         return base.Poll(linuxFile, events);
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         // Writing to /dev/urandom updates the entropy pool. 
         // We can just ignore it or count it as success.
@@ -500,13 +502,13 @@ public class NullInode : Inode
         throw new InvalidOperationException("Cannot link in /dev/null");
     }
 
-    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         // /dev/null always returns EOF.
         return 0;
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         // /dev/null discards all bytes and reports success.
         return buffer.Length;

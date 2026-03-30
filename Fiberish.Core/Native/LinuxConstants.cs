@@ -123,6 +123,12 @@ public enum SigProcMaskAction
     SIG_SETMASK = 2
 }
 
+public struct Iovec
+{
+    public uint BaseAddr;
+    public uint Len;
+}
+
 public static class LinuxConstants
 {
     public const int PageSize = 4096;

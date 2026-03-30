@@ -113,11 +113,6 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
-    public override Dentry? Lookup(string name)
-    {
-        return null;
-    }
-
     public Dentry? Lookup(FiberTask task, string name)
     {
         if (Dentries.Count == 0) return null;
@@ -160,11 +155,6 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
         return created;
     }
 
-    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
-    {
-        return false;
-    }
-
     public bool RevalidateCachedChild(FiberTask task, Dentry parent, string name, Dentry cached)
     {
         // /proc/self must always reflect current task.
@@ -175,25 +165,6 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
             return task.CommonKernel.GetProcess(pid) != null;
 
         return true;
-    }
-
-    public override List<DirectoryEntry> GetEntries()
-    {
-        return
-        [
-            new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory },
-            new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory },
-            new DirectoryEntry { Name = "mounts", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "mountinfo", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "cpuinfo", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "meminfo", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "version", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "stat", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "uptime", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "loadavg", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "sys", Ino = 0, Type = InodeType.Directory },
-            new DirectoryEntry { Name = "self", Ino = 0, Type = InodeType.Symlink }
-        ];
     }
 
     public List<DirectoryEntry> GetEntries(FiberTask task)
@@ -220,6 +191,35 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
             entries.Add(new DirectoryEntry { Name = process.TGID.ToString(), Ino = 0, Type = InodeType.Directory });
 
         return entries;
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        return null;
+    }
+
+    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    {
+        return false;
+    }
+
+    public override List<DirectoryEntry> GetEntries()
+    {
+        return
+        [
+            new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = "mounts", Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = "mountinfo", Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = "cpuinfo", Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = "meminfo", Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = "version", Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = "stat", Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = "uptime", Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = "loadavg", Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = "sys", Ino = 0, Type = InodeType.Directory },
+            new DirectoryEntry { Name = "self", Ino = 0, Type = InodeType.Symlink }
+        ];
     }
 
     private Dentry CreatePidDirectory(Dentry parent, int pid)
@@ -262,11 +262,6 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         Mode = 0x16D; // 0555
         SetInitialLinkCount(2, "ProcPidDirectoryInode.ctor");
         MTime = ATime = CTime = DateTime.UtcNow;
-    }
-
-    public override Dentry? Lookup(string name)
-    {
-        return null;
     }
 
     public Dentry? Lookup(FiberTask task, string name)
@@ -318,11 +313,6 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         return created;
     }
 
-    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
-    {
-        return false;
-    }
-
     public bool RevalidateCachedChild(FiberTask task, Dentry parent, string name, Dentry cached)
     {
         // Whole /proc/<pid> subtree becomes invalid once process is gone.
@@ -332,15 +322,6 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         if (name is "fd" or "fdinfo") return false;
 
         return true;
-    }
-
-    public override List<DirectoryEntry> GetEntries()
-    {
-        return
-        [
-            new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory },
-            new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory }
-        ];
     }
 
     public List<DirectoryEntry> GetEntries(FiberTask task)
@@ -364,6 +345,25 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         entries.Add(new DirectoryEntry { Name = "cwd", Ino = 0, Type = InodeType.Symlink });
         entries.Add(new DirectoryEntry { Name = "root", Ino = 0, Type = InodeType.Symlink });
         return entries;
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        return null;
+    }
+
+    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    {
+        return false;
+    }
+
+    public override List<DirectoryEntry> GetEntries()
+    {
+        return
+        [
+            new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory }
+        ];
     }
 
     private Dentry CreateFile(Dentry parent, string name, int mode, Func<ProcOpenContext, string> contentFactory)
@@ -410,11 +410,6 @@ file sealed class ProcPidSymlinkInode : Inode, IContextualSymlinkInode
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
-    public override string Readlink()
-    {
-        return string.Empty;
-    }
-
     public string Readlink(FiberTask task)
     {
         var process = task.CommonKernel.GetProcess(_pid);
@@ -424,6 +419,11 @@ file sealed class ProcPidSymlinkInode : Inode, IContextualSymlinkInode
         if (string.IsNullOrEmpty(target))
             return string.Empty;
         return target;
+    }
+
+    public override string Readlink()
+    {
+        return string.Empty;
     }
 }
 
@@ -442,11 +442,6 @@ file sealed class ProcPidFdDirectoryInode : Inode, IContextualDirectoryInode
         Mode = 0x16D; // 0555
         SetInitialLinkCount(2, "ProcPidFdDirectoryInode.ctor");
         MTime = ATime = CTime = DateTime.UtcNow;
-    }
-
-    public override Dentry? Lookup(string name)
-    {
-        return null;
     }
 
     public Dentry? Lookup(FiberTask task, string name)
@@ -468,26 +463,12 @@ file sealed class ProcPidFdDirectoryInode : Inode, IContextualDirectoryInode
         return dentry;
     }
 
-    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
-    {
-        return false;
-    }
-
     public bool RevalidateCachedChild(FiberTask task, Dentry parent, string name, Dentry cached)
     {
         var process = task.CommonKernel.GetProcess(_pid);
         if (process == null) return false;
         if (!int.TryParse(name, out var fd)) return false;
         return process.Syscalls.FDs.ContainsKey(fd);
-    }
-
-    public override List<DirectoryEntry> GetEntries()
-    {
-        return
-        [
-            new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory },
-            new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory }
-        ];
     }
 
     public List<DirectoryEntry> GetEntries(FiberTask task)
@@ -504,6 +485,25 @@ file sealed class ProcPidFdDirectoryInode : Inode, IContextualDirectoryInode
         foreach (var fd in process.Syscalls.FDs.Keys.OrderBy(k => k))
             entries.Add(new DirectoryEntry { Name = fd.ToString(), Ino = 0, Type = InodeType.Symlink });
         return entries;
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        return null;
+    }
+
+    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    {
+        return false;
+    }
+
+    public override List<DirectoryEntry> GetEntries()
+    {
+        return
+        [
+            new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory }
+        ];
     }
 }
 
@@ -524,11 +524,6 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode, IContextualDirectoryInode
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
-    public override Dentry? Lookup(string name)
-    {
-        return null;
-    }
-
     public Dentry? Lookup(FiberTask task, string name)
     {
         if (Dentries.Count == 0) return null;
@@ -547,26 +542,12 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode, IContextualDirectoryInode
         return dentry;
     }
 
-    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
-    {
-        return false;
-    }
-
     public bool RevalidateCachedChild(FiberTask task, Dentry parent, string name, Dentry cached)
     {
         var process = task.CommonKernel.GetProcess(_pid);
         if (process == null) return false;
         if (!int.TryParse(name, out var fd)) return false;
         return process.Syscalls.FDs.ContainsKey(fd);
-    }
-
-    public override List<DirectoryEntry> GetEntries()
-    {
-        return
-        [
-            new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory },
-            new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory }
-        ];
     }
 
     public List<DirectoryEntry> GetEntries(FiberTask task)
@@ -584,9 +565,29 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode, IContextualDirectoryInode
             entries.Add(new DirectoryEntry { Name = fd.ToString(), Ino = 0, Type = InodeType.File });
         return entries;
     }
+
+    public override Dentry? Lookup(string name)
+    {
+        return null;
+    }
+
+    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    {
+        return false;
+    }
+
+    public override List<DirectoryEntry> GetEntries()
+    {
+        return
+        [
+            new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory }
+        ];
+    }
 }
 
-file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode, IContextualMagicSymlinkInode, IContextualSymlinkInode
+file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode, IContextualMagicSymlinkInode,
+    IContextualSymlinkInode
 {
     private readonly int _fd;
     private readonly int _pid;
@@ -603,12 +604,6 @@ file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode, IContextual
         Mode = 0x1FF; // 0777
         SetInitialLinkCount(1, "ProcPidFdSymlinkInode.ctor");
         MTime = ATime = CTime = DateTime.UtcNow;
-    }
-
-    public bool TryResolveLink(out LinuxFile file)
-    {
-        file = null!;
-        return false;
     }
 
     public bool TryResolveLink(FiberTask task, out LinuxFile file)
@@ -630,11 +625,6 @@ file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode, IContextual
         return true;
     }
 
-    public override string Readlink()
-    {
-        return string.Empty;
-    }
-
     public string Readlink(FiberTask task)
     {
         var process = task.CommonKernel.GetProcess(_pid);
@@ -646,6 +636,17 @@ file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode, IContextual
 
         var loc = new PathLocation(file.Dentry, file.Mount);
         return process.Syscalls.GetAbsolutePath(loc);
+    }
+
+    public bool TryResolveLink(out LinuxFile file)
+    {
+        file = null!;
+        return false;
+    }
+
+    public override string Readlink()
+    {
+        return string.Empty;
     }
 }
 
@@ -668,16 +669,16 @@ file sealed class ProcPidFdInfoFileInode : Inode, ITaskContextBoundInode
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
-    public override void Open(LinuxFile linuxFile)
-    {
-    }
-
     public void BindTaskContext(LinuxFile linuxFile, FiberTask task)
     {
         EnsureBoundContent(linuxFile, task);
     }
 
-    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    public override void Open(LinuxFile linuxFile)
+    {
+    }
+
+    protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         var data = linuxFile.PrivateData as byte[] ?? [];
         if (offset < 0) return -(int)Errno.EINVAL;
@@ -861,17 +862,17 @@ file sealed class ProcSelfSymlinkInode : Inode, IContextualSymlinkInode
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
-    public override string Readlink()
-    {
-        return string.Empty;
-    }
-
     public string Readlink(FiberTask task)
     {
         return task.Process.TGID.ToString();
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    public override string Readlink()
+    {
+        return string.Empty;
+    }
+
+    protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         return -(int)Errno.EPERM;
     }
@@ -895,17 +896,17 @@ file sealed class ProcDynamicFileInode : Inode, ITaskContextBoundInode
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
-    public override void Open(LinuxFile linuxFile)
-    {
-        ATime = DateTime.UtcNow;
-    }
-
     public void BindTaskContext(LinuxFile linuxFile, FiberTask task)
     {
         BindContext(linuxFile, ProcContext.FromTask(task));
     }
 
-    public override int Read(LinuxFile linuxFile, Span<byte> buffer, long offset)
+    public override void Open(LinuxFile linuxFile)
+    {
+        ATime = DateTime.UtcNow;
+    }
+
+    protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
         var openData = linuxFile.PrivateData as ProcOpenData;
         if (openData == null) return 0;
@@ -918,7 +919,7 @@ file sealed class ProcDynamicFileInode : Inode, ITaskContextBoundInode
         return count;
     }
 
-    public override int Write(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (_writeHandler == null) return -(int)Errno.EPERM;
 
