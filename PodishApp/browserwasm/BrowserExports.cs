@@ -53,8 +53,7 @@ public static partial class BrowserExports
         return $"Podish.Core loaded: {typeof(PodishContext).Assembly.GetName().Name}";
     }
 
-    [JSExport]
-    public static string ProbeNative()
+    internal static string ProbeNative()
     {
         var state = X86Native.Create();
         try
@@ -92,7 +91,7 @@ public static partial class BrowserExports
         var context = new PodishContext(new PodishContextOptions
         {
             WorkDir = workDir,
-            LogLevel = "warning"
+            LogLevel = "warn"
         });
 
         context.SetLogObserver(EmitManagedLog);
@@ -158,7 +157,6 @@ public static partial class BrowserExports
         }
     }
 
-    [JSExport]
     internal static int DispatchPendingInputEvents(int maxPackets = 64)
     {
         var session = GetSession();
@@ -187,8 +185,7 @@ public static partial class BrowserExports
         await session.RunUntilExitAsync();
     }
 
-    [JSExport]
-    public static async Task<string> StopSession()
+    internal static async Task<string> StopSession()
     {
         BrowserSessionState? session;
         lock (Sync)
