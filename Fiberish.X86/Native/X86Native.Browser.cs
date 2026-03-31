@@ -1,5 +1,4 @@
 #if FIBERISH_BROWSER_WASM
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Fiberish.X86.Native;
@@ -44,11 +43,6 @@ public unsafe partial class X86Native
         None = 0,
         Dirty = 1 << 0,
         External = 1 << 1
-    }
-
-    [ModuleInitializer]
-    internal static void Initialize()
-    {
     }
 
     [LibraryImport(LibName, EntryPoint = "X86_Create")]

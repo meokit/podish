@@ -50,16 +50,31 @@ public sealed class PodishRunResult
 
 public sealed class PodishContainerSession
 {
+    private readonly Lock _lock = new();
     private readonly ContainerProcessController _processController;
-    private readonly Task<int> _runTask;
+    private Task<int>? _runTask;
+    private readonly Func<Task<int>>? _startRun;
     private readonly PodishTerminalBridge? _terminalBridge;
 
     internal PodishContainerSession(string containerId, string imageRef, Task<int> runTask,
         PodishTerminalBridge? terminalBridge, ContainerProcessController processController)
+        : this(containerId, imageRef, terminalBridge, processController)
+    {
+        _runTask = runTask;
+    }
+
+    internal PodishContainerSession(string containerId, string imageRef, Func<Task<int>> startRun,
+        PodishTerminalBridge? terminalBridge, ContainerProcessController processController)
+        : this(containerId, imageRef, terminalBridge, processController)
+    {
+        _startRun = startRun;
+    }
+
+    private PodishContainerSession(string containerId, string imageRef, PodishTerminalBridge? terminalBridge,
+        ContainerProcessController processController)
     {
         ContainerId = containerId;
         ImageRef = imageRef;
-        _runTask = runTask;
         _terminalBridge = terminalBridge;
         _processController = processController;
     }
@@ -67,7 +82,7 @@ public sealed class PodishContainerSession
     public string ContainerId { get; }
     public string ImageRef { get; }
     public bool HasTerminal => _terminalBridge != null;
-    public bool IsCompleted => _runTask.IsCompleted;
+    public bool IsCompleted => _runTask?.IsCompleted ?? false;
     public int? InitPid => _processController.InitPid;
 
     public void SetOutputHandler(Action<TtyEndpointKind, ReadOnlySpan<byte>>? handler)
@@ -99,7 +114,17 @@ public sealed class PodishContainerSession
 
     public Task<int> WaitAsync()
     {
-        return _runTask;
+        lock (_lock)
+        {
+            if (_runTask != null)
+                return _runTask;
+
+            if (_startRun == null)
+                throw new InvalidOperationException("Session run task is not available.");
+
+            _runTask = _startRun();
+            return _runTask;
+        }
     }
 
     public bool SignalInitProcess(int signal)
@@ -214,15 +239,25 @@ public sealed class PodishTerminalBridge
             c = _pendingCols;
         }
 
-        if (r.HasValue && c.HasValue) tty.Device.EnqueueResize(r.Value, c.Value);
+        if (r.HasValue && c.HasValue) tty.InitializeWindowSize(r.Value, c.Value);
+
     }
 
     public void SetOutputHandler(Action<TtyEndpointKind, ReadOnlySpan<byte>>? handler)
     {
+        byte[]? bufferedOutput = null;
         lock (_lock)
         {
             _outputHandler = handler;
+            if (handler != null && _outputBuffer.Count > 0)
+            {
+                bufferedOutput = _outputBuffer.ToArray();
+                _outputBuffer.Clear();
+            }
         }
+
+        if (bufferedOutput != null)
+            handler!(TtyEndpointKind.Stdout, bufferedOutput);
     }
 
     public int WriteInput(ReadOnlySpan<byte> data)
@@ -414,9 +449,22 @@ public sealed class PodishContext : IDisposable
         using var _ = Logging.BeginScope(LoggerFactory);
         ArgumentNullException.ThrowIfNull(rootfsTarStream);
 
-        await using var copy = new MemoryStream();
-        await rootfsTarStream.CopyToAsync(copy);
-        var tarBytes = copy.ToArray();
+        byte[] tarBytes;
+        if (rootfsTarStream is MemoryStream ms && ms.TryGetBuffer(out var segment))
+        {
+            tarBytes = segment.Array!;
+            if (segment.Offset != 0 || segment.Count != tarBytes.Length)
+            {
+                tarBytes = new byte[segment.Count];
+                Buffer.BlockCopy(segment.Array!, segment.Offset, tarBytes, 0, segment.Count);
+            }
+        }
+        else
+        {
+            await using var copy = new MemoryStream();
+            await rootfsTarStream.CopyToAsync(copy);
+            tarBytes = copy.ToArray();
+        }
 
         var rootfsSpec = new PodishRunSpec
         {
@@ -452,6 +500,7 @@ public sealed class PodishContext : IDisposable
                 rootfsName),
             rootfsName);
     }
+
 
     private async Task<PodishContainerSession> StartInternalAsync(PodishRunSpec spec, bool attachTerminalBridge,
         string? containerIdOverride = null,
@@ -509,8 +558,7 @@ public sealed class PodishContext : IDisposable
         if (bridge != null && spec.TerminalRows.HasValue && spec.TerminalCols.HasValue)
             bridge.Resize(spec.TerminalRows.Value, spec.TerminalCols.Value);
         var processController = new ContainerProcessController();
-        var runtimeThread = new ContainerRuntimeThread(_logger, LoggerFactory);
-        var runTask = runtimeThread.Start(new ContainerRunRequest
+        var request = new ContainerRunRequest
         {
             RootfsPath = rootfsPath,
             RootFileSystemFactory = rootFileSystemFactory,
@@ -542,14 +590,38 @@ public sealed class PodishContext : IDisposable
             WaylandDesktopHeight = spec.WaylandDesktopHeight,
             TerminalRows = spec.TerminalRows,
             TerminalCols = spec.TerminalCols
-        });
-        runTask = runTask.ContinueWith(static (task, state) =>
-        {
-            ((ContainerRuntimeThread)state!).Dispose();
-            return task.GetAwaiter().GetResult();
-        }, runtimeThread, TaskScheduler.Default);
+        };
+        if (OperatingSystem.IsBrowser())
+            return new PodishContainerSession(containerId, imageRef, () => RunInCurrentThreadAsync(request), bridge,
+                processController);
 
+        var runTask = RunInDedicatedRuntimeThreadAsync(request);
         return new PodishContainerSession(containerId, imageRef, runTask, bridge, processController);
+    }
+
+    private Task<int> RunInCurrentThreadAsync(ContainerRunRequest request)
+    {
+        var service = new ContainerRuntimeService(_logger, LoggerFactory);
+        return service.RunAsync(request);
+    }
+
+    private Task<int> RunInDedicatedRuntimeThreadAsync(ContainerRunRequest request)
+    {
+        var runtimeThread = new ContainerRuntimeThread(_logger, LoggerFactory);
+        return RunInDedicatedRuntimeThreadAsync(runtimeThread, request);
+    }
+
+    private static async Task<int> RunInDedicatedRuntimeThreadAsync(ContainerRuntimeThread runtimeThread,
+        ContainerRunRequest request)
+    {
+        try
+        {
+            return await runtimeThread.Start(request).ConfigureAwait(false);
+        }
+        finally
+        {
+            runtimeThread.Dispose();
+        }
     }
 
     public static bool TryParsePodmanLogLevel(string raw, out LogLevel level)

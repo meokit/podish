@@ -159,7 +159,8 @@ public sealed class ContainerRuntimeService
                 try
                 {
                     if (!Console.IsOutputRedirected)
-                        tty.Device.EnqueueResize(Console.WindowHeight, Console.WindowWidth);
+                        tty.InitializeWindowSize((ushort)Console.WindowHeight, (ushort)Console.WindowWidth);
+
 
                     sigwinch = PosixSignalRegistration.Create(PosixSignal.SIGWINCH, context =>
                     {
@@ -461,10 +462,7 @@ public sealed class ContainerRuntimeService
                 request.ContainerId, request.Exe, string.Join(" ", request.ExeArgs), request.UseTty,
                 request.Volumes.Length,
                 request.LogDriver, publishedPorts.Count);
-            if (OperatingSystem.IsBrowser())
-                await scheduler.RunAsync();
-            else
-                scheduler.Run();
+            scheduler.Run();
             _logger.LogDebug(
                 "Scheduler run returned containerId={ContainerId} mainExited={MainExited}",
                 request.ContainerId, mainTask.Exited);

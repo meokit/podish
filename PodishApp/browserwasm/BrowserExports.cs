@@ -1,7 +1,11 @@
+using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.JavaScript;
 using System.Runtime.Versioning;
 using System.Text;
+using System.Runtime.CompilerServices;
+using Fiberish.Core;
 using Fiberish.X86.Native;
+using Microsoft.Extensions.Logging;
 using Podish.Core;
 
 namespace PodishApp.BrowserWasm;
@@ -9,8 +13,39 @@ namespace PodishApp.BrowserWasm;
 [SupportedOSPlatform("browser")]
 public static partial class BrowserExports
 {
+    private const int IrqOutputReady = 1 << 1;
+    private const int StackLogPayloadThreshold = 512;
+    private const int PooledLogPayloadSize = 4096;
+    private const byte ControlStopSession = 1;
+    private const byte ControlSessionExited = 2;
+
+    [JSImport("signalInterrupt", "podish-worker.mjs")]
+    internal static partial void SignalInterrupt(int bits);
+
+    [JSImport("requestTimer", "podish-worker.mjs")]
+    internal static partial void RequestTimer(int delayMs);
+
+    [JSImport("cancelTimer", "podish-worker.mjs")]
+    internal static partial void CancelTimer();
+
     private static readonly Lock Sync = new();
     private static BrowserSessionState? _session;
+
+    static BrowserExports()
+    {
+        BrowserSchedulerHostBridge.Configure(
+            BrowserSabInterop.IrqInputReady,
+            BrowserSabInterop.IrqOutputDrained,
+            BrowserSabInterop.IrqTimer,
+            BrowserSabInterop.IrqSchedulerWake,
+            RequestTimer,
+            CancelTimer,
+            SignalInterrupt,
+            BrowserSabInterop.WaitForInterrupt,
+            BrowserSabInterop.PollInterrupt,
+            DispatchPendingInputEvents,
+            DispatchPendingOutputEvents);
+    }
 
     [JSExport]
     public static string GetRuntimeInfo()
@@ -57,10 +92,10 @@ public static partial class BrowserExports
         var context = new PodishContext(new PodishContextOptions
         {
             WorkDir = workDir,
-            LogLevel = "debug"
+            LogLevel = "warning"
         });
 
-        context.SetLogObserver((level, msg) => Console.WriteLine(msg));
+        context.SetLogObserver(EmitManagedLog);
 
         try
         {
@@ -76,18 +111,44 @@ public static partial class BrowserExports
                 Tty = true,
                 TerminalRows = (ushort)rows,
                 TerminalCols = (ushort)cols,
-                Strace = true,
-                Init = false,
+                Strace = false,
                 NetworkMode = Fiberish.Core.Net.NetworkMode.Host
             }, rootfsName: "uploaded-rootfs.tar", containerIdOverride: "browserwasm");
 
             var state = new BrowserSessionState(context, session);
+            state.Dispatcher.Register(BrowserSabQueueKind.Input, BrowserSabInterop.EventInputBytes, payload =>
+            {
+                if (payload.IsEmpty)
+                    return;
+
+                session.WriteInput(payload);
+            });
+            state.Dispatcher.Register(BrowserSabQueueKind.Input, BrowserSabInterop.EventResize, payload =>
+            {
+                if (!BrowserEventDispatcher.TryParseResize(payload, out var resizeRows, out var resizeCols))
+                    return;
+
+                session.Resize(resizeRows, resizeCols);
+            });
+            state.Dispatcher.Register(BrowserSabQueueKind.Input, BrowserSabInterop.EventControl, payload =>
+            {
+                if (payload.IsEmpty)
+                    return;
+
+                if (payload[0] == ControlStopSession)
+                    session.ForceStop();
+            });
+            session.SetOutputHandler((_, data) =>
+            {
+                if (!data.IsEmpty)
+                    state.EnqueueOutput(data);
+            });
+
             lock (Sync)
             {
                 _session = state;
             }
 
-            _ = state.TrackExitAsync();
             return Json(ok: true, containerId: session.ContainerId, imageRef: session.ImageRef);
         }
         catch (Exception ex)
@@ -98,59 +159,32 @@ public static partial class BrowserExports
     }
 
     [JSExport]
-    public static byte[] ReadSessionOutput(int maxBytes = 4096)
-    {
-        var session = GetSession();
-        if (session == null || maxBytes <= 0)
-            return [];
-
-        var pool = System.Buffers.ArrayPool<byte>.Shared;
-        var buffer = pool.Rent(maxBytes);
-        try
-        {
-            var read = session.Session.ReadOutput(buffer.AsSpan(0, maxBytes), 0);
-            if (read <= 0)
-                return [];
-
-            var result = new byte[read];
-            buffer.AsSpan(0, read).CopyTo(result);
-            return result;
-        }
-        finally
-        {
-            pool.Return(buffer);
-        }
-    }
-
-    [JSExport]
-    public static int WriteSessionInput(byte[] data)
-    {
-        var session = GetSession();
-        return session == null || data.Length == 0 ? 0 : session.Session.WriteInput(data);
-    }
-
-    [JSExport]
-    public static bool ResizeSessionTerminal(int rows, int cols)
-    {
-        var session = GetSession();
-        if (session == null || rows <= 0 || cols <= 0)
-            return false;
-
-        return session.Session.Resize((ushort)rows, (ushort)cols);
-    }
-
-    [JSExport]
-    public static string GetSessionStatus()
+    internal static int DispatchPendingInputEvents(int maxPackets = 64)
     {
         var session = GetSession();
         if (session == null)
-            return Json(hasSession: false, running: false);
+            return 0;
 
-        return Json(
-            hasSession: true,
-            running: !session.ExitCode.HasValue,
-            exitCode: session.ExitCode,
-            containerId: session.Session.ContainerId);
+        return session.Dispatcher.DispatchQueue(BrowserSabQueueKind.Input, maxPackets);
+    }
+
+    internal static int DispatchPendingOutputEvents(int maxPackets = 64)
+    {
+        var session = GetSession();
+        if (session == null)
+            return 0;
+
+        return session.FlushPendingOutput(maxPackets);
+    }
+
+    [JSExport]
+    public static async Task RunCurrentSession()
+    {
+        var session = GetSession();
+        if (session == null)
+            return;
+
+        await session.RunUntilExitAsync();
     }
 
     [JSExport]
@@ -191,8 +225,12 @@ public static partial class BrowserExports
         finally
         {
             session.Context.Dispose();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
         }
     }
+
 
     private static string Json(
         bool? ok = null,
@@ -259,6 +297,88 @@ public static partial class BrowserExports
         }
     }
 
+    private static void EmitManagedLog(LogLevel level, string message)
+    {
+        if (string.IsNullOrEmpty(message))
+            return;
+
+        byte levelByte = level switch
+        {
+            LogLevel.Trace => (byte)0,
+            LogLevel.Debug => (byte)1,
+            LogLevel.Information => (byte)2,
+            LogLevel.Warning => (byte)3,
+            LogLevel.Error => (byte)4,
+            LogLevel.Critical => (byte)5,
+            _ => (byte)2
+        };
+        var messageSpan = message.AsSpan();
+        var totalPayloadLength = 1 + Encoding.UTF8.GetByteCount(messageSpan);
+        var poolSize = PooledLogPayloadSize;
+        byte[]? rented = null;
+        nint unmanaged = 0;
+
+        try
+        {
+            unsafe
+            {
+                Span<byte> buffer = totalPayloadLength <= StackLogPayloadThreshold
+                    ? stackalloc byte[StackLogPayloadThreshold]
+                    : totalPayloadLength <= poolSize
+                        ? (rented = System.Buffers.ArrayPool<byte>.Shared.Rent(poolSize)).AsSpan(0, poolSize)
+                        : new Span<byte>((void*)(unmanaged = Marshal.AllocHGlobal(BrowserSabInterop.LogChunkSize)),
+                            BrowserSabInterop.LogChunkSize);
+
+                if (totalPayloadLength <= buffer.Length)
+                {
+                    buffer[0] = levelByte;
+                    var written = Encoding.UTF8.GetBytes(messageSpan, buffer[1..]);
+                    BrowserSabInterop.WriteLogPacketFromMemory(
+                        BrowserSabInterop.EventLogMessage,
+                        (nint)Unsafe.AsPointer(ref buffer[0]),
+                        1 + written,
+                        BrowserSabInterop.LogFlagBegin | BrowserSabInterop.LogFlagEnd);
+                    return;
+                }
+
+                buffer[0] = levelByte;
+                BrowserSabInterop.WriteLogPacketFromMemory(
+                    BrowserSabInterop.EventLogMessage,
+                    (nint)Unsafe.AsPointer(ref buffer[0]),
+                    1,
+                    BrowserSabInterop.LogFlagBegin);
+
+                var encoder = Encoding.UTF8.GetEncoder();
+                var remaining = messageSpan;
+                while (!remaining.IsEmpty)
+                {
+                    encoder.Convert(
+                        remaining,
+                        buffer,
+                        flush: false,
+                        out var charsUsed,
+                        out var bytesUsed,
+                        out _);
+
+                    remaining = remaining[charsUsed..];
+                    var isFinal = remaining.IsEmpty;
+                    BrowserSabInterop.WriteLogPacketFromMemory(
+                        BrowserSabInterop.EventLogMessage,
+                        (nint)Unsafe.AsPointer(ref buffer[0]),
+                        bytesUsed,
+                        isFinal ? BrowserSabInterop.LogFlagEnd : 0);
+                }
+            }
+        }
+        finally
+        {
+            if (rented != null)
+                System.Buffers.ArrayPool<byte>.Shared.Return(rented);
+            if (unmanaged != 0)
+                Marshal.FreeHGlobal(unmanaged);
+        }
+    }
+
     private static string EscapeJson(string value)
     {
         var sb = new StringBuilder(value.Length + 8);
@@ -301,20 +421,90 @@ public static partial class BrowserExports
 
     private sealed class BrowserSessionState(PodishContext context, PodishContainerSession session)
     {
+        private readonly Lock _outputLock = new();
+        private readonly Queue<byte[]> _pendingOutputPackets = [];
+
         public PodishContext Context { get; } = context;
         public PodishContainerSession Session { get; } = session;
+        public BrowserEventDispatcher Dispatcher { get; } = new();
         public int? ExitCode { get; private set; }
+        public bool RunStarted { get; private set; }
 
-        public async Task TrackExitAsync()
+        public void EnqueueOutput(ReadOnlySpan<byte> payload)
         {
+            if (Dispatcher.Emit(BrowserSabQueueKind.Output, BrowserSabInterop.EventOutputBytes, payload) > 0)
+            {
+                SignalInterrupt(IrqOutputReady);
+                return;
+            }
+
+            lock (_outputLock)
+            {
+                _pendingOutputPackets.Enqueue(payload.ToArray());
+            }
+        }
+
+        public int FlushPendingOutput(int maxPackets)
+        {
+            if (maxPackets <= 0)
+                return 0;
+
+            var flushed = 0;
+            while (flushed < maxPackets)
+            {
+                byte[]? payload;
+                lock (_outputLock)
+                {
+                    if (_pendingOutputPackets.Count == 0)
+                        break;
+                    payload = _pendingOutputPackets.Peek();
+                }
+
+                if (Dispatcher.Emit(BrowserSabQueueKind.Output, BrowserSabInterop.EventOutputBytes, payload) <= 0)
+                    break;
+
+                lock (_outputLock)
+                {
+                    if (_pendingOutputPackets.Count > 0 && ReferenceEquals(_pendingOutputPackets.Peek(), payload))
+                        _pendingOutputPackets.Dequeue();
+                }
+
+                flushed++;
+            }
+
+            if (flushed > 0)
+                SignalInterrupt(IrqOutputReady);
+
+            return flushed;
+        }
+
+        public async Task RunUntilExitAsync()
+        {
+            if (RunStarted)
+            {
+                ExitCode = await Session.WaitAsync();
+                return;
+            }
+
+            RunStarted = true;
             try
             {
                 ExitCode = await Session.WaitAsync();
+                EmitExitPacket(ExitCode ?? -1);
             }
             catch
             {
                 ExitCode = -1;
+                EmitExitPacket(-1);
             }
+        }
+
+        private void EmitExitPacket(int exitCode)
+        {
+            Span<byte> payload = stackalloc byte[5];
+            payload[0] = ControlSessionExited;
+            BitConverter.TryWriteBytes(payload[1..], exitCode);
+            EnqueueOutput(payload);
         }
     }
 }
