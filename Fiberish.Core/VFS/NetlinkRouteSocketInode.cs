@@ -41,7 +41,7 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
                             "Netlink readiness wait requires an explicit scheduler.");
         using (EnterStateScope())
         {
-            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, _responses.Count > 0, _readWaitQueue,
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, () => _responses.Count > 0, _readWaitQueue,
                 _readWaitQueue.Reset);
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch);
         }
@@ -60,7 +60,7 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
             return null;
         using (EnterStateScope())
         {
-            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, _responses.Count > 0, _readWaitQueue,
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, () => _responses.Count > 0, _readWaitQueue,
                 _readWaitQueue.Reset);
             return QueueReadinessRegistration.RegisterHandle(callback, task, events, readWatch);
         }
@@ -145,7 +145,7 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
 
         using (EnterStateScope())
         {
-            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, _responses.Count > 0, _readWaitQueue,
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, () => _responses.Count > 0, _readWaitQueue,
                 _readWaitQueue.Reset);
             revents |= QueueReadinessRegistration.ComputeRevents(events, readWatch);
         }

@@ -666,10 +666,6 @@ public class KernelScheduler
                     // otherwise we busy loop until _sw.ElapsedMilliseconds increases.
                     if (waitTime == 0) waitTime = 1;
 
-                    if (OperatingSystem.IsBrowser())
-                        throw new PlatformNotSupportedException(
-                            "Synchronous Run is not supported on Browser Wasm. Use RunAsync instead.");
-
                     _isInsideRunLoop = false;
                     WaitForEvent((int)waitTime);
                     continue;
@@ -903,6 +899,13 @@ public class KernelScheduler
 
     private void WaitForEvent(int timeoutMs)
     {
+        if (OperatingSystem.IsBrowser() && BrowserSchedulerHostBridge.IsConfigured)
+        {
+            BrowserSchedulerHostBridge.WaitForEvent(timeoutMs);
+            _wakeEvent.Reset();
+            return;
+        }
+
         _wakeEvent.Wait(timeoutMs);
         _wakeEvent.Reset();
     }
@@ -992,7 +995,14 @@ public class KernelScheduler
         // Always signal event
         _wakeEvent.Set();
 
-        if (Interlocked.Exchange(ref _wakePending, 1) != 0) return;
+        if (OperatingSystem.IsBrowser() && BrowserSchedulerHostBridge.IsConfigured)
+            BrowserSchedulerHostBridge.SignalSchedulerWake();
+
+        if (Interlocked.Exchange(ref _wakePending, 1) != 0)
+        {
+            return;
+        }
+
         _events.Writer.TryWrite(SchedulerWorkItem.WakeScheduler());
     }
 
@@ -1181,7 +1191,10 @@ public class KernelScheduler
 
     private static FiberTask? SelectSignalWakeTarget(Process process, int signal)
     {
+        FiberTask? signalWaitLeader = null;
+        FiberTask? signalWaitEligible = null;
         FiberTask? leader = null;
+        FiberTask? eligibleLeader = null;
         FiberTask? eligible = null;
         FiberTask? fallback = null;
 
@@ -1192,14 +1205,24 @@ public class KernelScheduler
             if (fallback == null) fallback = task;
             if (task.TID == process.TGID) leader = task;
 
+            if (task.PrefersSignalWake(signal))
+            {
+                if (task.TID == process.TGID)
+                    signalWaitLeader = task;
+                else if (signalWaitEligible == null)
+                    signalWaitEligible = task;
+            }
+
             if (!task.IsSignalIgnoredOrBlocked(signal))
             {
-                if (task.TID == process.TGID) return task;
-                if (eligible == null) eligible = task;
+                if (task.TID == process.TGID)
+                    eligibleLeader ??= task;
+                else
+                    eligible ??= task;
             }
         }
 
-        return eligible ?? leader ?? fallback;
+        return signalWaitLeader ?? signalWaitEligible ?? eligibleLeader ?? eligible ?? leader ?? fallback;
     }
 
     public int SignalAllProcesses(int signal, int? excludePid = null, bool skipInit = true)

@@ -912,6 +912,39 @@ public class TtyDisciplineTests
     }
 
     [Fact]
+    public void HasDataAvailable_is_true_when_device_buffer_has_pending_raw_input()
+    {
+        var isInsideRunLoopField = typeof(KernelScheduler).GetField("_isInsideRunLoop",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isInsideRunLoopField);
+
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
+        _tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        _tty.SetAttr(0, termios);
+
+        isInsideRunLoopField!.SetValue(_taskContext.Scheduler, false);
+        try
+        {
+            _tty.Input(Encoding.ASCII.GetBytes("x"));
+
+            Assert.True(_tty.Device.HasBufferedInput);
+            Assert.True(_tty.HasDataAvailable);
+
+            var buffer = new byte[8];
+            var read = _tty.Read(_task, buffer, FileFlags.O_NONBLOCK);
+            Assert.Equal(1, read);
+            Assert.Equal("x", Encoding.ASCII.GetString(buffer, 0, read));
+        }
+        finally
+        {
+            isInsideRunLoopField.SetValue(_taskContext.Scheduler, true);
+        }
+    }
+
+    [Fact]
     public void No_lost_wakeup_when_data_arrives_during_read()
     {
         // This test simulates the race condition scenario:
@@ -1182,6 +1215,38 @@ public class TtyDisciplineTests
         _tty.Input(Encoding.ASCII.GetBytes("x\n"));
         _taskContext.DrainEvents();
 
+        Assert.True(fired > 0);
+    }
+
+    [Fact]
+    public void QueueReadinessRegistration_preserves_fresh_tty_signal_that_arrives_after_watch_creation()
+    {
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
+        _tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        _tty.SetAttr(0, termios);
+
+        var watch = new QueueReadinessWatch(LinuxConstants.POLLIN, () => _tty.HasDataAvailable, _tty.DataAvailable,
+            _tty.DataAvailable.Reset);
+
+        Assert.False(_tty.HasDataAvailable);
+        Assert.False(_tty.DataAvailable.IsSignaled);
+
+        _tty.Input(Encoding.ASCII.GetBytes("x"));
+        _taskContext.DrainEvents();
+
+        Assert.True(_tty.HasDataAvailable);
+        Assert.True(_tty.DataAvailable.IsSignaled);
+
+        var fired = 0;
+        using var reg = QueueReadinessRegistration.RegisterHandle(() => fired++, _task, LinuxConstants.POLLIN, watch);
+
+        _taskContext.DrainEvents();
+
+        Assert.NotNull(reg);
+        Assert.True(_tty.DataAvailable.IsSignaled);
         Assert.True(fired > 0);
     }
 

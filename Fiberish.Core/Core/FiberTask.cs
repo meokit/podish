@@ -69,6 +69,9 @@ public class FiberTask
     private int _pageFaultDepth;
     private Exception? _pendingAsyncSyscallError;
     private int _pendingAsyncSyscallResult;
+    private long _signalWaitId;
+    private ulong _signalWaitMask;
+    private SignalWaitKind _signalWaitKind;
 
     private bool _pendingFaultFromInterrupt;
     private KernelSyncContext? _synchronizationContext;
@@ -177,6 +180,13 @@ public class FiberTask
     public Func<ValueTask<int>>? PendingSyscall { get; set; }
     public Timer? BlockingTimer { get; set; }
     public event Action<int>? SignalPosted;
+
+    internal enum SignalWaitKind
+    {
+        None,
+        WaitSet,
+        Interrupting
+    }
 
     private TaskStateScope EnterTaskStateScope([CallerMemberName] string? caller = null)
     {
@@ -388,6 +398,12 @@ public class FiberTask
         lock (_waitStateGate)
         {
             if (!token.Matches(this, _activeWaitId)) return WakeReason.None;
+            if (_signalWaitId == _activeWaitId)
+            {
+                _signalWaitId = 0;
+                _signalWaitMask = 0;
+                _signalWaitKind = SignalWaitKind.None;
+            }
             var reason = _activeWaitReason;
             _activeWaitContinuation = null;
             _activeWaitReason = WakeReason.None;
@@ -404,6 +420,38 @@ public class FiberTask
     public WakeReason CompleteWait(WaitToken token)
     {
         return CompleteWaitToken(token);
+    }
+
+    internal void RegisterSignalWait(WaitToken token, ulong waitSet, SignalWaitKind kind)
+    {
+        lock (_waitStateGate)
+        {
+            if (!token.Matches(this, _activeWaitId))
+                return;
+
+            _signalWaitId = _activeWaitId;
+            _signalWaitMask = waitSet;
+            _signalWaitKind = kind;
+        }
+    }
+
+    internal bool PrefersSignalWake(int signal)
+    {
+        if (signal < 1 || signal > 64)
+            return false;
+
+        lock (_waitStateGate)
+        {
+            if (_signalWaitId == 0 || _signalWaitId != _activeWaitId)
+                return false;
+
+            return _signalWaitKind switch
+            {
+                SignalWaitKind.WaitSet => (_signalWaitMask & (1UL << (signal - 1))) != 0,
+                SignalWaitKind.Interrupting => !IsSignalIgnoredOrBlocked(signal),
+                _ => false
+            };
+        }
     }
 
 

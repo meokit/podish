@@ -122,7 +122,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
                             "Unix socket readiness wait requires an explicit scheduler.");
         using (EnterStateScope())
         {
-            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady(), _readWaitQueue,
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady, _readWaitQueue,
                 _readWaitQueue.Reset);
             var writeWatch = BuildWriteWatch(events);
             return QueueReadinessRegistration.Register(callback, scheduler, events, readWatch, writeWatch);
@@ -137,7 +137,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
                             "Unix socket readiness wait requires an explicit scheduler.");
         using (EnterStateScope())
         {
-            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady(), _readWaitQueue,
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady, _readWaitQueue,
                 _readWaitQueue.Reset);
             var writeWatch = BuildWriteWatch(events);
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch, writeWatch);
@@ -459,7 +459,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
     {
         using (EnterStateScope())
         {
-            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady(), _readWaitQueue,
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady, _readWaitQueue,
                 _readWaitQueue.Reset);
             var writeWatch = BuildWriteWatch(events);
             return QueueReadinessRegistration.Register(callback, task, events, readWatch, writeWatch);
@@ -470,7 +470,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
     {
         using (EnterStateScope())
         {
-            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady(), _readWaitQueue,
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady, _readWaitQueue,
                 _readWaitQueue.Reset);
             var writeWatch = BuildWriteWatch(events);
             return QueueReadinessRegistration.RegisterHandle(callback, task, events, readWatch, writeWatch);
@@ -764,7 +764,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         short revents = 0;
         using (EnterStateScope())
         {
-            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady(), _readWaitQueue,
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady, _readWaitQueue,
                 _readWaitQueue.Reset);
             var writeWatch = BuildWriteWatch(events);
             revents |= QueueReadinessRegistration.ComputeRevents(events, readWatch, writeWatch);
@@ -792,7 +792,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         if ((events & PollEvents.POLLOUT) == 0 || _listening || _shutDownWrite || _peer == null || _peer._shutDownRead)
             return default;
 
-        return new QueueReadinessWatch(PollEvents.POLLOUT, _peer._queuedBytes < MaxSendBuffer, _writeWaitQueue,
+        return new QueueReadinessWatch(PollEvents.POLLOUT, () => _peer._queuedBytes < MaxSendBuffer, _writeWaitQueue,
             _writeWaitQueue.Reset);
     }
 

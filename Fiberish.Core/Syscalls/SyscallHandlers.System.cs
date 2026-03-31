@@ -320,6 +320,7 @@ public partial class SyscallManager
                 return;
 
             var state = new PauseOperation(_task, continuation, operation);
+            _task.RegisterSignalWait(_token, 0, FiberTask.SignalWaitKind.Interrupting);
             _task.ArmInterruptingSignalSafetyNet(_token, state.OnSignal);
         }
 

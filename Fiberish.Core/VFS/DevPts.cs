@@ -44,7 +44,7 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
         {
-            var readWatch = new QueueReadinessWatch(POLLIN, PtyPair.Slave.HasDataAvailable,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.HasDataAvailable,
                 PtyPair.Slave.DataAvailable, PtyPair.Slave.DataAvailable.Reset);
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch);
         }
@@ -57,7 +57,7 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
             return QueueReadinessRegistration.Register(callback, task, events,
-                new QueueReadinessWatch(POLLIN, PtyPair.Slave.HasDataAvailable, PtyPair.Slave.DataAvailable,
+                new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.HasDataAvailable, PtyPair.Slave.DataAvailable,
                     PtyPair.Slave.DataAvailable.Reset));
 
         return false;
@@ -68,7 +68,7 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
             return QueueReadinessRegistration.RegisterHandle(callback, task, events,
-                new QueueReadinessWatch(POLLIN, PtyPair.Slave.HasDataAvailable, PtyPair.Slave.DataAvailable,
+                new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.HasDataAvailable, PtyPair.Slave.DataAvailable,
                     PtyPair.Slave.DataAvailable.Reset));
         return null;
     }
@@ -121,7 +121,7 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
             if (dispatcher?.Scheduler is not { } scheduler)
                 throw new InvalidOperationException("PTY slave wait requires an explicit scheduler.");
 
-            var readWatch = new QueueReadinessWatch(POLLIN, PtyPair.Slave.HasDataAvailable,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.HasDataAvailable,
                 PtyPair.Slave.DataAvailable, PtyPair.Slave.DataAvailable.Reset);
             return QueueReadinessRegistration.Register(callback, scheduler, events, readWatch);
         }
@@ -188,7 +188,7 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         if ((events & POLLIN) != 0)
         {
             var readWatch =
-                new QueueReadinessWatch(POLLIN, pair.Master.HasDataAvailable, pair.Master.DataAvailable,
+                new QueueReadinessWatch(POLLIN, () => pair.Master.HasDataAvailable, pair.Master.DataAvailable,
                     pair.Master.DataAvailable.Reset);
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch);
         }
@@ -204,7 +204,7 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
             return QueueReadinessRegistration.Register(callback, task, events,
-                new QueueReadinessWatch(POLLIN, pair.Master.HasDataAvailable, pair.Master.DataAvailable,
+                new QueueReadinessWatch(POLLIN, () => pair.Master.HasDataAvailable, pair.Master.DataAvailable,
                     pair.Master.DataAvailable.Reset));
 
         return false;
@@ -218,7 +218,7 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
             return QueueReadinessRegistration.RegisterHandle(callback, task, events,
-                new QueueReadinessWatch(POLLIN, pair.Master.HasDataAvailable, pair.Master.DataAvailable,
+                new QueueReadinessWatch(POLLIN, () => pair.Master.HasDataAvailable, pair.Master.DataAvailable,
                     pair.Master.DataAvailable.Reset));
 
         return null;
@@ -297,7 +297,7 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
                 throw new InvalidOperationException("PTY master wait requires an explicit scheduler.");
 
             var readWatch =
-                new QueueReadinessWatch(POLLIN, pair.Master.HasDataAvailable, pair.Master.DataAvailable,
+                new QueueReadinessWatch(POLLIN, () => pair.Master.HasDataAvailable, pair.Master.DataAvailable,
                     pair.Master.DataAvailable.Reset);
             return QueueReadinessRegistration.Register(callback, scheduler, events, readWatch);
         }

@@ -46,10 +46,10 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
         using (EnterStateScope())
         {
-            var readWatch = new QueueReadinessWatch(POLLIN, _count > 0 || _writersClosed, _readHandle,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
                 : default;
 
             if ((events & POLLIN) != 0)
@@ -71,10 +71,10 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLOUT = 0x0004;
         using (EnterStateScope())
         {
-            var readWatch = new QueueReadinessWatch(POLLIN, _count > 0 || _writersClosed, _readHandle,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
                 : default;
 
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch, writeWatch);
@@ -89,10 +89,10 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
         using (EnterStateScope())
         {
-            var readWatch = new QueueReadinessWatch(POLLIN, _count > 0 || _writersClosed, _readHandle,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
                 : default;
 
             if ((events & POLLIN) != 0)
@@ -111,10 +111,10 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLOUT = 0x0004;
         using (EnterStateScope())
         {
-            var readWatch = new QueueReadinessWatch(POLLIN, _count > 0 || _writersClosed, _readHandle,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
                 : default;
 
             return QueueReadinessRegistration.RegisterHandle(callback, task, events, readWatch, writeWatch);
@@ -326,10 +326,10 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
             var canRead = mode == (int)FileFlags.O_RDONLY || mode == (int)FileFlags.O_RDWR;
             var canWrite = mode == (int)FileFlags.O_WRONLY || mode == (int)FileFlags.O_RDWR;
             var readWatch = canRead
-                ? new QueueReadinessWatch(POLLIN, _count > 0 || _writersClosed, _readHandle, _readHandle.Reset)
+                ? new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle, _readHandle.Reset)
                 : default;
             var writeWatch = canWrite && !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
                 : default;
 
             revents |= QueueReadinessRegistration.ComputeRevents(events, readWatch, writeWatch);

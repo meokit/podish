@@ -45,6 +45,12 @@ public class TtyDevice
     public bool HasInterrupt => _interruptFlag || _resizePending;
 
     /// <summary>
+    ///     True when the hardware input buffer contains unread bytes.
+    ///     Unlike <see cref="HasInterrupt"/>, this excludes resize-only notifications.
+    /// </summary>
+    public bool HasBufferedInput => _interruptFlag;
+
+    /// <summary>
     ///     Get the approximate number of items in the buffer.
     /// </summary>
     public int Count

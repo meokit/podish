@@ -1,6 +1,7 @@
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
+using System.Reflection;
 using Xunit;
 
 namespace Fiberish.Tests.Core;
@@ -233,6 +234,70 @@ public class RtSignalTests
         Assert.True(dequeued.HasValue);
     }
 
+    [Fact]
+    public void ProcessSignal_Prefers_TaskWaitingInSigTimedWaitSet()
+    {
+        using var env = new TestEnv();
+        using var waiterEngine = new Engine();
+        var waiter = new FiberTask(101, env.Process, waiterEngine, env.Scheduler)
+        {
+            Status = FiberTaskStatus.Waiting
+        };
+
+        var signal = (int)Signal.SIGUSR1;
+        var signalBit = 1UL << (signal - 1);
+        waiter.SignalMask = signalBit;
+
+        var token = waiter.BeginWaitToken();
+        RegisterSignalWait(waiter, token, signalBit, "WaitSet");
+
+        var waiterSignalPosted = 0;
+        var leaderSignalPosted = 0;
+        waiter.SignalPosted += _ => waiterSignalPosted++;
+        env.Task.SignalPosted += _ => leaderSignalPosted++;
+
+        Assert.True(env.Scheduler.SignalProcess(env.Process.TGID, signal));
+
+        Assert.Equal(1, waiterSignalPosted);
+        Assert.Equal(0, leaderSignalPosted);
+    }
+
+    [Fact]
+    public void ProcessSignal_Prefers_TaskWaitingInSigSuspend()
+    {
+        using var env = new TestEnv();
+        using var waiterEngine = new Engine();
+        var waiter = new FiberTask(101, env.Process, waiterEngine, env.Scheduler)
+        {
+            Status = FiberTaskStatus.Waiting
+        };
+
+        var signal = (int)Signal.SIGUSR1;
+        var token = waiter.BeginWaitToken();
+        RegisterSignalWait(waiter, token, 0, "Interrupting");
+
+        var waiterSignalPosted = 0;
+        var leaderSignalPosted = 0;
+        waiter.SignalPosted += _ => waiterSignalPosted++;
+        env.Task.SignalPosted += _ => leaderSignalPosted++;
+
+        Assert.True(env.Scheduler.SignalProcess(env.Process.TGID, signal));
+
+        Assert.Equal(1, waiterSignalPosted);
+        Assert.Equal(0, leaderSignalPosted);
+        Assert.Equal(signal, waiter.InterruptingSignal);
+    }
+
+    private static void RegisterSignalWait(FiberTask task, FiberTask.WaitToken token, ulong waitSet, string kindName)
+    {
+        var kindType = typeof(FiberTask).GetNestedType("SignalWaitKind", BindingFlags.NonPublic);
+        Assert.NotNull(kindType);
+        var method = typeof(FiberTask).GetMethod("RegisterSignalWait", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        var kind = Enum.Parse(kindType!, kindName);
+        method!.Invoke(task, [token, waitSet, kind]);
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()
@@ -241,6 +306,7 @@ public class RtSignalTests
 
             Engine = new Engine();
             Process = new Process(100, new VMAManager(), null!);
+            Scheduler.RegisterProcess(Process);
             Task = new FiberTask(100, Process, Engine, Scheduler);
         }
 

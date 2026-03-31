@@ -637,6 +637,7 @@ public partial class SyscallManager
             if (_timeoutMs >= 0)
                 state.RegisterTimeout(_task.CommonKernel, _timeoutMs);
 
+            _task.RegisterSignalWait(_token, _waitSet, FiberTask.SignalWaitKind.WaitSet);
             state.RegisterSignalWait();
             _task.ArmInterruptingSignalSafetyNet(_token, state.OnSignal);
         }

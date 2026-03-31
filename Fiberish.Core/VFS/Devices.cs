@@ -7,6 +7,7 @@ namespace Fiberish.VFS;
 
 public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 {
+    private static long _nextPseudoConsoleIno = 0x100000;
     private readonly TtyDiscipline? _discipline;
     private readonly bool _isInput;
 
@@ -16,7 +17,7 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         Type = InodeType.CharDev;
         Mode = 0x1B6; // 666
         _isInput = isInput;
-        Ino = 1; // Dummy
+        Ino = (ulong)Interlocked.Increment(ref _nextPseudoConsoleIno);
         _discipline = discipline;
     }
 
@@ -47,7 +48,7 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
             const short POLLIN = 0x0001;
             if ((events & POLLIN) != 0)
                 return QueueReadinessRegistration.Register(callback, task, events,
-                    new QueueReadinessWatch(POLLIN, _discipline.HasDataAvailable, _discipline.DataAvailable,
+                    new QueueReadinessWatch(POLLIN, () => _discipline.HasDataAvailable, _discipline.DataAvailable,
                         _discipline.DataAvailable.Reset));
         }
         else
@@ -127,7 +128,7 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
             if (_discipline == null)
                 return (events & POLLIN) != 0 ? POLLIN : (short)0;
 
-            var readWatch = new QueueReadinessWatch(POLLIN, _discipline.HasDataAvailable, _discipline.DataAvailable,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => _discipline.HasDataAvailable, _discipline.DataAvailable,
                 _discipline.DataAvailable.Reset);
             return QueueReadinessRegistration.ComputeRevents(events, readWatch);
         }
@@ -157,7 +158,7 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
                     throw new InvalidOperationException("TTY read wait requires an explicit scheduler.");
 
                 var readWatch =
-                    new QueueReadinessWatch(POLLIN, _discipline.HasDataAvailable, _discipline.DataAvailable,
+                    new QueueReadinessWatch(POLLIN, () => _discipline.HasDataAvailable, _discipline.DataAvailable,
                         _discipline.DataAvailable.Reset);
                 return QueueReadinessRegistration.Register(callback, scheduler, events, readWatch);
             }
@@ -194,7 +195,7 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
             if ((events & POLLIN) != 0)
             {
                 var readWatch =
-                    new QueueReadinessWatch(POLLIN, _discipline.HasDataAvailable, _discipline.DataAvailable,
+                    new QueueReadinessWatch(POLLIN, () => _discipline.HasDataAvailable, _discipline.DataAvailable,
                         _discipline.DataAvailable.Reset);
                 if (task != null)
                     return QueueReadinessRegistration.RegisterHandle(callback, task, events, readWatch);
@@ -259,7 +260,7 @@ public sealed class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSourc
         {
             var scheduler = dispatcher.Scheduler
                             ?? throw new InvalidOperationException("TTY read wait requires an explicit scheduler.");
-            var readWatch = new QueueReadinessWatch(POLLIN, tty.HasDataAvailable, tty.DataAvailable,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => tty.HasDataAvailable, tty.DataAvailable,
                 tty.DataAvailable.Reset);
             return QueueReadinessRegistration.Register(callback, scheduler, events, readWatch);
         }
@@ -285,7 +286,7 @@ public sealed class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSourc
         {
             var scheduler = dispatcher.Scheduler
                             ?? throw new InvalidOperationException("TTY read wait requires an explicit scheduler.");
-            var readWatch = new QueueReadinessWatch(POLLIN, tty.HasDataAvailable, tty.DataAvailable,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => tty.HasDataAvailable, tty.DataAvailable,
                 tty.DataAvailable.Reset);
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch);
         }
@@ -307,7 +308,7 @@ public sealed class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSourc
         const short POLLOUT = 0x0004;
         if ((events & POLLIN) != 0)
         {
-            var readWatch = new QueueReadinessWatch(POLLIN, tty.HasDataAvailable, tty.DataAvailable,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => tty.HasDataAvailable, tty.DataAvailable,
                 tty.DataAvailable.Reset);
             return QueueReadinessRegistration.Register(callback, task, events, readWatch);
         }
@@ -326,7 +327,7 @@ public sealed class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSourc
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
         {
-            var readWatch = new QueueReadinessWatch(POLLIN, tty.HasDataAvailable, tty.DataAvailable,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => tty.HasDataAvailable, tty.DataAvailable,
                 tty.DataAvailable.Reset);
             return QueueReadinessRegistration.RegisterHandle(callback, task, events, readWatch);
         }
@@ -375,7 +376,7 @@ public sealed class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSourc
         if (tty == null)
             return POLLHUP | POLLERR;
 
-        var readWatch = new QueueReadinessWatch(POLLIN, tty.HasDataAvailable, tty.DataAvailable,
+        var readWatch = new QueueReadinessWatch(POLLIN, () => tty.HasDataAvailable, tty.DataAvailable,
             tty.DataAvailable.Reset);
         var revents = QueueReadinessRegistration.ComputeRevents(events, readWatch);
         if ((events & POLLOUT) != 0 && tty.CanWriteOutput)

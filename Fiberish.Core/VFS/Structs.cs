@@ -25,16 +25,30 @@ internal interface IDispatcherWaitSource
 
 internal readonly struct QueueReadinessWatch
 {
+    private readonly bool _isReadySnapshot;
+    private readonly Func<bool>? _isReadyProbe;
+
     public QueueReadinessWatch(short eventMask, bool isReady, AsyncWaitQueue? queue, Action? resetStaleSignal = null)
     {
         EventMask = eventMask;
-        IsReady = isReady;
+        _isReadySnapshot = isReady;
+        _isReadyProbe = null;
+        Queue = queue;
+        ResetStaleSignal = resetStaleSignal;
+    }
+
+    public QueueReadinessWatch(short eventMask, Func<bool> isReadyProbe, AsyncWaitQueue? queue,
+        Action? resetStaleSignal = null)
+    {
+        EventMask = eventMask;
+        _isReadySnapshot = false;
+        _isReadyProbe = isReadyProbe ?? throw new ArgumentNullException(nameof(isReadyProbe));
         Queue = queue;
         ResetStaleSignal = resetStaleSignal;
     }
 
     public short EventMask { get; }
-    public bool IsReady { get; }
+    public bool IsReady => _isReadyProbe?.Invoke() ?? _isReadySnapshot;
     public AsyncWaitQueue? Queue { get; }
     public Action? ResetStaleSignal { get; }
 
