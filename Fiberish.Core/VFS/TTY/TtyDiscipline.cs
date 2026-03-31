@@ -140,9 +140,13 @@ public class TtyDiscipline
 
     /// <summary>
     ///     Check if there is data available to read from the TTY.
-    ///     This includes both pending input from the device and data already in the input queue.
+    ///     This must not treat resize-only notifications as readable input. However,
+    ///     pending hardware input bytes should still count as readable because a
+    ///     subsequent read will first pull them through the line discipline.
+    ///     This matters for raw-mode poll/select users such as vim, which often wait
+    ///     for readability before issuing the read that drains the device buffer.
     /// </summary>
-    public bool HasDataAvailable => Device.HasInterrupt || _inq.Count > 0;
+    public bool HasDataAvailable => _inq.HasReadableData || Device.HasBufferedInput;
 
     public int BytesAvailable => _inq.Count;
 
@@ -206,7 +210,7 @@ public class TtyDiscipline
         var bgCheck = CheckBackgroundJob(task, true);
         if (bgCheck < 0) return bgCheck;
 
-        _logger.LogInformation(
+        _logger.LogTrace(
             "[TTY] Read: Called with buffer len={BufferLen}, flags={Flags}, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
             buffer.Length, flags, _inq.Count, _canonBuffer.Count);
 
@@ -287,13 +291,13 @@ public class TtyDiscipline
 
         var result = _inq.Read(buffer, flags);
 
-        _logger.LogInformation("[TTY] Read: _inq.Read returned {Result}, buffer contents=[{BufferContents}]",
+        _logger.LogTrace("[TTY] Read: _inq.Read returned {Result}, buffer contents=[{BufferContents}]",
             result, string.Join(", ", buffer.Slice(0, Math.Max(0, result)).ToArray().Select(b => $"0x{b:X2}")));
 
         // Race condition check
         if (Device.HasInterrupt && _inq.Count > 0)
         {
-            _logger.LogInformation("[TTY] Read: Race condition detected, re-signaling data available");
+            _logger.LogTrace("[TTY] Read: Race condition detected, re-signaling data available");
             _inq.DataAvailable.Signal();
         }
 
@@ -376,6 +380,13 @@ public class TtyDiscipline
         BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(2, 2), _cols); // cols
         return 0;
     }
+
+    public void InitializeWindowSize(ushort rows, ushort cols)
+    {
+        _rows = rows;
+        _cols = cols;
+    }
+
 
     public int SetWindowSize(byte[] winSizeBytes)
     {
@@ -540,7 +551,7 @@ public class TtyDiscipline
     /// </summary>
     public void ProcessPendingInput(FiberTask? task = null)
     {
-        _logger.LogInformation(
+        _logger.LogTrace(
             "[TTY] ProcessPendingInput: Device.HasInterrupt={HasInterrupt}, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
             Device.HasInterrupt, _inq.Count, _canonBuffer.Count);
 
@@ -548,7 +559,7 @@ public class TtyDiscipline
         var resize = Device.ConsumeResize();
         if (resize.HasValue)
         {
-            _logger.LogInformation("[TTY] ProcessPendingInput: Resize event detected {Rows}x{Cols}", resize.Value.Rows,
+            _logger.LogTrace("[TTY] ProcessPendingInput: Resize event detected {Rows}x{Cols}", resize.Value.Rows,
                 resize.Value.Cols);
             HandleResize((ushort)resize.Value.Rows, (ushort)resize.Value.Cols, task);
         }
@@ -557,16 +568,16 @@ public class TtyDiscipline
         var inputs = Device.ConsumeAll();
         if (inputs != null)
         {
-            _logger.LogInformation("[TTY] ProcessPendingInput: Processing {Chunks} input chunks from device",
+            _logger.LogTrace("[TTY] ProcessPendingInput: Processing {Chunks} input chunks from device",
                 inputs.Count);
             foreach (var inputData in inputs)
             {
-                _logger.LogInformation("[TTY] ProcessPendingInput: Processing {Count} bytes: [{Data}]",
+                _logger.LogTrace("[TTY] ProcessPendingInput: Processing {Count} bytes: [{Data}]",
                     inputData.Length, string.Join(", ", inputData.Select(b => $"0x{b:X2}")));
                 foreach (var b in inputData) InputByte(b, task);
             }
 
-            _logger.LogInformation(
+            _logger.LogTrace(
                 "[TTY] ProcessPendingInput: Done processing, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
                 _inq.Count, _canonBuffer.Count);
         }
@@ -582,6 +593,10 @@ public class TtyDiscipline
 
         if (Interlocked.Exchange(ref _inputDispatchPending, 1) != 0)
         {
+            // An ingress dispatch is already pending, but the scheduler may currently be
+            // outside the run loop (for example during an async wait or cooperative yield
+            // on browser Wasm). Re-signal it so freshly arrived input is not left sitting
+            // in the device buffer until some unrelated later event happens to wake it.
             _scheduler.WakeUp();
             return;
         }
@@ -602,7 +617,7 @@ public class TtyDiscipline
     {
         if (_rows != rows || _cols != cols)
         {
-            _logger.LogInformation(
+            _logger.LogTrace(
                 "[TTY] HandleResize: Window size changing from {OldRows}x{OldCols} to {Rows}x{Cols}, sending SIGWINCH",
                 _rows, _cols, rows, cols);
             _rows = rows;
@@ -613,14 +628,14 @@ public class TtyDiscipline
 
     private void InputByte(byte b, FiberTask? task)
     {
-        _logger.LogInformation(
+        _logger.LogTrace(
             "[TTY] InputByte: {Char} (0x{Hex}), _canonBuffer.Count={CanonCount}, _inq.Count={InqCount}",
             (char)b, b.ToString("X2"), _canonBuffer.Count, _inq.Count);
 
         // Handle LNEXT (literal next) - this character should be treated literally
         if (_lnextPending)
         {
-            _logger.LogInformation("[TTY] InputByte: LNEXT pending, treating 0x{Hex} literally", b.ToString("X2"));
+            _logger.LogTrace("[TTY] InputByte: LNEXT pending, treating 0x{Hex} literally", b.ToString("X2"));
             _lnextPending = false;
             ProcessRegularChar(b);
             return;
@@ -778,7 +793,7 @@ public class TtyDiscipline
 
     private void ProcessRegularChar(byte b)
     {
-        _logger.LogInformation(
+        _logger.LogTrace(
             "[TTY] ProcessRegularChar: 0x{Hex} ({Char}), ICANON={IsCanon}, _canonBuffer.Count={CanonCount}",
             b.ToString("X2"), (char)b, (_lflag & ICANON) != 0, _canonBuffer.Count);
 
@@ -787,7 +802,7 @@ public class TtyDiscipline
         {
             if (b == 10) // EOL (NL)
             {
-                _logger.LogInformation("[TTY] ProcessRegularChar: NL received, flushing canonical buffer");
+                _logger.LogTrace("[TTY] ProcessRegularChar: NL received, flushing canonical buffer");
                 _canonBuffer.Add(b);
                 // Echo NL - ECHO flag OR ECHONL flag
                 if ((_lflag & ECHO) != 0 || (_lflag & ECHONL) != 0) EchoByte(TtyEndpointKind.Stdout, b);
@@ -796,30 +811,30 @@ public class TtyDiscipline
             }
             else if (MatchCc(VEOF, b)) // EOF
             {
-                _logger.LogInformation("[TTY] ProcessRegularChar: EOF received, flushing canonical buffer");
+                _logger.LogTrace("[TTY] ProcessRegularChar: EOF received, flushing canonical buffer");
                 // EOF character (Ctrl-D)
                 FlushCanonical(true);
             }
             else if (MatchCc(VEOL, b) && _cc[VEOL] != POSIX_VDISABLE) // Alternate EOL
             {
-                _logger.LogInformation("[TTY] ProcessRegularChar: VEOL received, flushing canonical buffer");
+                _logger.LogTrace("[TTY] ProcessRegularChar: VEOL received, flushing canonical buffer");
                 _canonBuffer.Add(b);
                 FlushCanonical(false);
             }
             else if (MatchCc(VEOL2, b) && _cc[VEOL2] != POSIX_VDISABLE) // Alternate EOL2
             {
-                _logger.LogInformation("[TTY] ProcessRegularChar: VEOL2 received, flushing canonical buffer");
+                _logger.LogTrace("[TTY] ProcessRegularChar: VEOL2 received, flushing canonical buffer");
                 _canonBuffer.Add(b);
                 FlushCanonical(false);
             }
             else if (MatchCc(VERASE, b)) // Backspace
             {
-                _logger.LogInformation("[TTY] ProcessRegularChar: VERASE received");
+                _logger.LogTrace("[TTY] ProcessRegularChar: VERASE received");
                 CanonErase();
             }
             else if (MatchCc(VKILL, b)) // Kill Line
             {
-                _logger.LogInformation("[TTY] ProcessRegularChar: VKILL received");
+                _logger.LogTrace("[TTY] ProcessRegularChar: VKILL received");
                 CanonKill();
             }
             else
@@ -829,7 +844,7 @@ public class TtyDiscipline
                 if (_canonBuffer.Count < 4096)
                 {
                     _canonBuffer.Add(b);
-                    _logger.LogInformation("[TTY] ProcessRegularChar: Added 0x{Hex} to canon buffer, new count={Count}",
+                    _logger.LogTrace("[TTY] ProcessRegularChar: Added 0x{Hex} to canon buffer, new count={Count}",
                         b.ToString("X2"), _canonBuffer.Count);
                     // Echo
                     if ((_lflag & ECHO) != 0) EchoByte(TtyEndpointKind.Stdout, b);
@@ -845,7 +860,7 @@ public class TtyDiscipline
         else
         {
             // Raw mode
-            _logger.LogInformation("[TTY] ProcessRegularChar: Raw mode, writing 0x{Hex} directly to input queue",
+            _logger.LogTrace("[TTY] ProcessRegularChar: Raw mode, writing 0x{Hex} directly to input queue",
                 b.ToString("X2"));
             _inq.Write(b);
             if ((_lflag & ECHO) != 0) EchoByte(TtyEndpointKind.Stdout, b);
@@ -864,14 +879,14 @@ public class TtyDiscipline
 
     private void FlushCanonical(bool eof)
     {
-        _logger.LogInformation("[TTY] FlushCanonical: count={Count}, eof={Eof}, buffer contents=[{BufferContents}]",
+        _logger.LogTrace("[TTY] FlushCanonical: count={Count}, eof={Eof}, buffer contents=[{BufferContents}]",
             _canonBuffer.Count, eof, string.Join(", ", _canonBuffer.Select(b => $"0x{b:X2}")));
 
         // If empty and NOT eof, nothing to flush.
         // But if EOF, we must flush (even empty) to signal the reader (0 bytes read).
         if (_canonBuffer.Count == 0 && !eof)
         {
-            _logger.LogInformation("[TTY] FlushCanonical: Buffer empty and not EOF, returning without flushing");
+            _logger.LogTrace("[TTY] FlushCanonical: Buffer empty and not EOF, returning without flushing");
             return;
         }
 
@@ -880,13 +895,13 @@ public class TtyDiscipline
         // If we have NO data and EOF, we push empty write to signal 0-read.
 
         var dataToWrite = _canonBuffer.ToArray();
-        _logger.LogInformation("[TTY] FlushCanonical: Writing {Count} bytes to input queue: [{Data}]",
+        _logger.LogTrace("[TTY] FlushCanonical: Writing {Count} bytes to input queue: [{Data}]",
             dataToWrite.Length, string.Join(", ", dataToWrite.Select(b => $"0x{b:X2}")));
         _inq.Write(dataToWrite, true);
         _canonBuffer.Clear();
 
         if (eof)
-            _logger.LogInformation("[TTY] FlushCanonical: EOF was signaled, input queue marked as canonical ready");
+            _logger.LogTrace("[TTY] FlushCanonical: EOF was signaled, input queue marked as canonical ready");
         // If this was an EOF, we just flushed whatever was there.
         // If _canonBuffer was empty, _inq.Write with canonicalReady=true will ensure Read() returns.
     }
@@ -1123,24 +1138,24 @@ public class TtyDiscipline
 
     private void SendSignal(int sig, FiberTask? task)
     {
-        _logger.LogInformation(
+        _logger.LogTrace(
             "[TTY] SendSignal: sig={Sig}, ForegroundPgrp={Pgrp}, _inq.Count={InqCount}, _canonBuffer.Count={CanonCount}",
             sig, ForegroundPgrp, _inq.Count, _canonBuffer.Count);
 
         if (ForegroundPgrp > 0)
         {
-            _logger.LogInformation("[TTY] SendSignal: Signaling process group {Pgrp} with signal {Sig}", ForegroundPgrp,
+            _logger.LogTrace("[TTY] SendSignal: Signaling process group {Pgrp} with signal {Sig}", ForegroundPgrp,
                 sig);
             _broadcaster.SignalProcessGroup(task, ForegroundPgrp, sig);
         }
         else
         {
-            _logger.LogInformation("[TTY] SendSignal: Signaling foreground task with signal {Sig}", sig);
+            _logger.LogTrace("[TTY] SendSignal: Signaling foreground task with signal {Sig}", sig);
             _broadcaster.SignalForegroundTask(task, sig);
         }
 
         // Wake up read
-        _logger.LogInformation("[TTY] SendSignal: Signaling input queue to wake up readers");
+        _logger.LogTrace("[TTY] SendSignal: Signaling input queue to wake up readers");
         _inq.Signal();
     }
 }
@@ -1163,6 +1178,17 @@ internal sealed class TtyInputQueue
             lock (_lock)
             {
                 return _queue.Count;
+            }
+        }
+    }
+
+    public bool HasReadableData
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _queue.Count > 0 || _hasCanonicalLine;
             }
         }
     }
