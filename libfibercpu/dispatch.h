@@ -10,12 +10,6 @@
 
 namespace fiberish {
 
-#if defined(__EMSCRIPTEN__)
-inline constexpr bool kUseRunLoopTrampoline = true;
-#else
-inline constexpr bool kUseRunLoopTrampoline = false;
-#endif
-
 // External reference to handlers
 extern void* g_HandlerBase;
 extern HandlerFunc g_Handlers[1024];
@@ -74,12 +68,7 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
                                                                   uint32_t target_eip, uint64_t flags_cache) {
     (void)op;
     (void)utlb;
-    state->mem_op.emplace<0>();
-    if constexpr (kUseRunLoopTrampoline) {
-        CommitFlagsCache(state, flags_cache);
-        state->ctx.eip = target_eip;
-        return instr_limit;
-    }
+    state->clear_pending_mem_op();
     if (instr_limit <= 0) {
         CommitFlagsCache(state, flags_cache);
         state->ctx.eip = target_eip;

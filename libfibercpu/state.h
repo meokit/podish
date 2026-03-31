@@ -83,6 +83,12 @@ struct JccProfileCounters {
     uint64_t cache_miss = 0;
 };
 
+enum class PendingMemOp : uint8_t {
+    None = 0,
+    Read = 1,
+    Write = 2,
+};
+
 struct EmuState {
     Context ctx;
     mem::Mmu mmu;
@@ -165,21 +171,39 @@ struct EmuState {
     void sync_eip_to_op_start(const DecodedOp* op) { ctx.eip = op->next_eip - op->len; }
     void sync_eip_to_op_end(const DecodedOp* op) { ctx.eip = op->next_eip; }
 
-    std::variant<std::monostate, MemReadOperation, MemWriteOperation> mem_op;
+    union MemOpUnion {
+        MemReadOperation read;
+        MemWriteOperation write;
+
+        MemOpUnion() noexcept {}
+        ~MemOpUnion() noexcept {}
+    };
+
+    PendingMemOp mem_op_type = PendingMemOp::None;
+    MemOpUnion mem_op;
+
+    FORCE_INLINE void clear_pending_mem_op() { mem_op_type = PendingMemOp::None; }
 
     template <typename T>
     FORCE_INLINE mem::MemResult<T> request_read_and_check_pending(uint32_t addr, uint32_t eip) {
         // Use pending value
-        if (auto read_op = std::get_if<MemReadOperation>(&mem_op)) {
-            if (read_op->done && read_op->eip == eip) {
+        if (mem_op_type == PendingMemOp::Read) {
+            const auto& read_op = mem_op.read;
+            if (read_op.done && read_op.eip == eip) {
                 T pending{};
-                std::memcpy(&pending, read_op->data.data(), sizeof(T));
-                mem_op.emplace<0>();  // Clear result
+                std::memcpy(&pending, read_op.data.data(), sizeof(T));
+                clear_pending_mem_op();
                 return pending;
             }
         }
 
-        mem_op = MemReadOperation{.data = {}, .addr = addr, .size = sizeof(T), .eip = eip, .done = false};
+        mem_op_type = PendingMemOp::Read;
+        auto& op = mem_op.read;
+        op.data = {};
+        op.addr = addr;
+        op.size = sizeof(T);
+        op.eip = eip;
+        op.done = false;
 
         return std::unexpected(mem::FaultCode::PageFault);
     }
@@ -188,14 +212,16 @@ struct EmuState {
     FORCE_INLINE mem::MemResult<void> request_write_and_check_pending(uint32_t addr, const T& value, uint32_t eip) {
         static_assert(sizeof(T) <= 16);
 
-        if (auto write_op = std::get_if<MemWriteOperation>(&mem_op)) {
-            if (write_op->done && write_op->eip == eip) {
-                mem_op.emplace<0>();
+        if (mem_op_type == PendingMemOp::Write) {
+            const auto& write_op = mem_op.write;
+            if (write_op.done && write_op.eip == eip) {
+                clear_pending_mem_op();
                 return {};
             }
         }
 
-        auto& op = mem_op.emplace<MemWriteOperation>();
+        mem_op_type = PendingMemOp::Write;
+        auto& op = mem_op.write;
 
         op.addr = addr;
         op.size = sizeof(T);
@@ -211,7 +237,8 @@ struct EmuState {
         static_assert(sizeof(T) <= 16);
 
         // No check for pending, just request
-        auto& op = mem_op.emplace<MemWriteOperation>();
+        mem_op_type = PendingMemOp::Write;
+        auto& op = mem_op.write;
 
         op.addr = addr;
         op.size = sizeof(T);

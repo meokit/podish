@@ -288,10 +288,6 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
         return nullptr;
     }
 
-    if constexpr (kUseRunLoopTrampoline) {
-        return CacheDecodedBlock(state, eip, new_block);
-    }
-
     if (!BlockIsConcatCandidateTerminal(new_block)) {
         state->block_stats.block_concat_reject_not_concat_terminal++;
         return CacheDecodedBlock(state, eip, new_block);
@@ -766,7 +762,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 #endif
 
             if (block_ptr->entry) {
-                state->mem_op.emplace<0>();
+                state->clear_pending_mem_op();
                 state->intercept_exec_write_for_smc = true;
                 int64_t batch_limit = 100000;
                 if (max_insts != 0) {
@@ -1036,7 +1032,7 @@ int X86_Step(EmuState* state) {
 #endif
 
     if (h) {
-        state->mem_op.emplace<0>();
+        state->clear_pending_mem_op();
         MicroTLB utlb;
         uint64_t flags_cache = GetStateFlagsCache(state);
         h(state, head, 0, utlb, std::numeric_limits<uint32_t>::max(),

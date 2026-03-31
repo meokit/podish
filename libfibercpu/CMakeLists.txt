@@ -102,6 +102,24 @@ target_include_directories(fibercpu_core PRIVATE .)
 target_include_directories(fibercpu_core SYSTEM PRIVATE ${simde_SOURCE_DIR})
 target_link_libraries(fibercpu_core PRIVATE unordered_dense::unordered_dense)
 
+if(NOT MSVC AND NOT EMSCRIPTEN)
+    add_compile_options(
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-O3>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fomit-frame-pointer>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fno-stack-protector>"
+        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-march=native>"
+    )
+endif()
+
+if(EMSCRIPTEN)
+    target_compile_options(fibercpu_core PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:-mtail-call>
+        $<$<COMPILE_LANGUAGE:C>:-msimd128>
+        $<$<COMPILE_LANGUAGE:CXX>:-mtail-call>
+        $<$<COMPILE_LANGUAGE:CXX>:-msimd128>
+    )
+endif()
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(fibercpu_core PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-Wall>
@@ -251,7 +269,6 @@ if(NOT MSVC)
 endif()
 
 
-
 # Link libraries
 if(USE_SOFTFLOAT)
     if(FIBERCPU_BUILD_STATIC)
@@ -308,15 +325,6 @@ if(FIBERCPU_ENABLE_LTO)
     if(result)
         set_target_properties(fibercpu PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
     endif()
-endif()
-
-if(NOT MSVC AND NOT EMSCRIPTEN)
-    add_compile_options(
-        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-O3>"
-        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fomit-frame-pointer>"
-        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fno-stack-protector>"
-        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-march=native>"
-    )
 endif()
 
 # macOS codesign support

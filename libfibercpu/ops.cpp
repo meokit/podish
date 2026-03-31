@@ -5,81 +5,72 @@
 
 namespace fiberish {
 
+template <typename T>
+static inline bool ExecuteMemOp(EmuState* state, DecodedOp* op, mem::MicroTLB& utlb, uint32_t addr, T* value,
+                                bool is_write) {
+    if (!is_write) {
+        auto res = state->mmu.read<T>(addr, &utlb, op);
+        if (!res) {
+            return true;
+        } else {
+            *value = *res;
+        }
+    } else {
+        if (!state->mmu.write<T>(addr, *value, &utlb, op)) return true;
+    }
+
+    return false;
+}
+
+static inline bool PerformMemOp(EmuState* state, DecodedOp* op, mem::MicroTLB& utlb, uint32_t addr, uint32_t size,
+                                std::byte* value, bool is_write) {
+    struct TSize10 {
+        std::byte data[10];
+    };
+    struct TSize16 {
+        std::byte data[16];
+    };
+
+    switch (size) {
+        case 1:
+            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint8_t*>(value), is_write);
+        case 2:
+            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint16_t*>(value), is_write);
+        case 4:
+            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint32_t*>(value), is_write);
+        case 8:
+            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint64_t*>(value), is_write);
+        case 10:
+            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<TSize10*>(value),
+                                is_write);  // 80-bit extended precision
+        case 16:
+            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<TSize16*>(value), is_write);
+        default:
+            __builtin_unreachable();
+    }
+}
+
 template <bool restart>
 ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
-    bool fault = false;
-
-    auto execute_mem_op = [&]<typename T>(uint32_t addr, T* value, bool is_write) {
-        if (!is_write) {
-            auto res = state->mmu.read<T>(addr, &utlb, op);
-            if (!res) {
-                fault = true;
-            } else {
-                *value = *res;
-            }
+    if (state->mem_op_type == PendingMemOp::Read) {
+        auto& mem_op = state->mem_op.read;
+        const bool fault = PerformMemOp(state, op, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), false);
+        if (!fault) {
+            mem_op.done = true;
         } else {
-            if (!state->mmu.write<T>(addr, *value, &utlb, op)) fault = true;
+            state->clear_pending_mem_op();
+            return instr_limit;
         }
-    };
-
-    auto perform = [&](uint32_t addr, uint32_t size, std::byte* value, bool is_write) {
-        struct TSize10 {
-            std::byte data[10];
-        };
-        struct TSize16 {
-            std::byte data[16];
-        };
-
-        switch (size) {
-            case 1:
-                execute_mem_op(addr, reinterpret_cast<uint8_t*>(value), is_write);
-                break;
-            case 2:
-                execute_mem_op(addr, reinterpret_cast<uint16_t*>(value), is_write);
-                break;
-            case 4:
-                execute_mem_op(addr, reinterpret_cast<uint32_t*>(value), is_write);
-                break;
-            case 8:
-                execute_mem_op(addr, reinterpret_cast<uint64_t*>(value), is_write);
-                break;
-            case 10:
-                execute_mem_op(addr, reinterpret_cast<TSize10*>(value), is_write);
-                break;  // 80-bit extended precision
-            case 16:
-                execute_mem_op(addr, reinterpret_cast<TSize16*>(value), is_write);
-                break;
-            default:
-                __builtin_unreachable();
+    } else if (state->mem_op_type == PendingMemOp::Write) {
+        auto& mem_op = state->mem_op.write;
+        const bool fault = PerformMemOp(state, op, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), true);
+        if (!fault) {
+            mem_op.done = true;
+        } else {
+            state->clear_pending_mem_op();
+            return instr_limit;
         }
-    };
-
-    std::visit(
-        [&](auto&& arg) {
-            using T = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<T, std::monostate>) {
-                // No-op
-            } else if constexpr (std::is_same_v<T, MemReadOperation>) {
-                perform(arg.addr, arg.size, arg.data.data(), false);
-                if (!fault) {
-                    arg.done = true;
-                }
-            } else if constexpr (std::is_same_v<T, MemWriteOperation>) {
-                perform(arg.addr, arg.size, arg.data.data(), true);
-                if (!fault) {
-                    arg.done = true;
-                }
-            }
-        },
-        state->mem_op);
-
-    // Handle fault or restart
-    if (fault) {
-        // Break calling chain
-        // Note: eip will be synced on read or write
-        state->mem_op.emplace<0>();
-        return instr_limit;
     }
 
     if constexpr (restart) {
@@ -87,19 +78,19 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
         ATTR_MUSTTAIL return op->handler(state, op, instr_limit, utlb, branch, flags_cache);
     }
 
-    state->mem_op.emplace<0>();
+    state->clear_pending_mem_op();
     DecodedOp* next_op = NextOp(op);
     ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
 }
 
 ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
-    ATTR_MUSTTAIL return MemoryOpGeneric<true>(state, op, instr_limit, utlb, branch, flags_cache);
+    return MemoryOpGeneric<true>(state, op, instr_limit, utlb, branch, flags_cache);
 }
 
 ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                          mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
-    ATTR_MUSTTAIL return MemoryOpGeneric<false>(state, op, instr_limit, utlb, branch, flags_cache);
+    return MemoryOpGeneric<false>(state, op, instr_limit, utlb, branch, flags_cache);
 }
 
 static FORCE_INLINE int64_t ChainToKnownBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
@@ -129,12 +120,6 @@ static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT
     BasicBlock* next_block = it == state->block_cache.end() ? &state->dummy_invalid_block : it->second;
 
     if (!next_block->MatchesChainTarget(target_eip)) {
-        CommitFlagsCache(state, flags_cache);
-        state->ctx.eip = target_eip;
-        return instr_limit;
-    }
-
-    if constexpr (kUseRunLoopTrampoline) {
         CommitFlagsCache(state, flags_cache);
         state->ctx.eip = target_eip;
         return instr_limit;
