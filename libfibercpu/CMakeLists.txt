@@ -115,8 +115,10 @@ if(EMSCRIPTEN)
     target_compile_options(fibercpu_core PRIVATE
         $<$<COMPILE_LANGUAGE:C>:-mtail-call>
         $<$<COMPILE_LANGUAGE:C>:-msimd128>
+        $<$<COMPILE_LANGUAGE:C>:-Wno-pass-failed>
         $<$<COMPILE_LANGUAGE:CXX>:-mtail-call>
         $<$<COMPILE_LANGUAGE:CXX>:-msimd128>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-pass-failed>
     )
 endif()
 
@@ -238,7 +240,16 @@ set(FIBERCPU_LIBRARY_TYPE SHARED)
 if(FIBERCPU_BUILD_STATIC)
     set(FIBERCPU_LIBRARY_TYPE STATIC)
 endif()
-add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${SOURCES_JIT} $<TARGET_OBJECTS:fibercpu_core> ${FIBERCPU_STENCIL_OBJ})
+
+set(FIBERCPU_FINAL_SOURCES
+    ${SOURCES_JIT}
+    $<TARGET_OBJECTS:fibercpu_core>
+)
+if(FIBERCPU_ENABLE_JIT)
+    list(APPEND FIBERCPU_FINAL_SOURCES ${FIBERCPU_STENCIL_OBJ})
+endif()
+
+add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${FIBERCPU_FINAL_SOURCES})
 set_target_properties(fibercpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(FIBERCPU_ENABLE_JIT)
     add_dependencies(fibercpu fibercpu_jit_stencils)
