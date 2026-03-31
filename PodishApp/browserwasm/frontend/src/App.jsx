@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { callWorker, podishWorker, encoder, decoder } from './worker-client'
+import { callWorker, podishWorker, encoder, decoder, writeSessionInput, writeSessionResize, startSessionRunLoop, stopSessionViaSab } from './worker-client'
+
+const CONTROL_SESSION_EXITED = 2
 
 // ── Gzip decompression ──────────────────────────────────────────────────────
 
@@ -76,10 +78,17 @@ export default function App() {
   const terminalRef = useRef(null)
   const xtermRef = useRef(null)
   const fitRef = useRef(null)
-  const pumpRef = useRef(null)
   const [status, setStatus] = useState('idle')
   const [workerReady, setWorkerReady] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState(null)
+  const [sessionMessage, setSessionMessage] = useState('No active container')
+
+  const settleTerminalLayout = useCallback(async () => {
+    fitRef.current?.fit()
+    await new Promise(resolve => globalThis.requestAnimationFrame(() => resolve()))
+    fitRef.current?.fit()
+    return xtermRef.current || { rows: 24, cols: 80 }
+  }, [])
 
   // ── Terminal init ──
 
@@ -143,27 +152,49 @@ export default function App() {
         setStatus('error')
       })
 
+    if (globalThis.document?.fonts?.ready) {
+      void globalThis.document.fonts.ready.then(() => {
+        fitAddon.fit()
+      })
+    }
+
     const onResize = () => fitAddon.fit()
     globalThis.addEventListener('resize', onResize)
 
     const onData = data => {
       const bytes = encoder.encode(data)
-      void callWorker('WriteSessionInput', [bytes], [bytes.buffer]).catch(() => {})
+      void writeSessionInput(bytes).catch(() => {})
     }
     const dataDisposable = terminal.onData(onData)
 
+    podishWorker.onOutput((kind, chunk) => {
+      if (chunk?.length)
+        xtermRef.current?.write(decoder.decode(chunk, { stream: true }))
+    })
+    podishWorker.onControl(payload => {
+      if (!payload?.length)
+        return
+      if (payload[0] !== CONTROL_SESSION_EXITED || payload.length < 5)
+        return
+      const exitCode = new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getInt32(1, true)
+      xtermRef.current?.writeln(`\r\n\x1b[38;5;244m[process exited: ${exitCode}]\x1b[0m`)
+      stopStatusMonitor()
+      setStatus('stopped')
+      setSessionMessage(`Process exited with code ${exitCode}`)
+    })
+
     const resizeToGuest = () => {
       const { rows, cols } = terminal
-      void callWorker('ResizeSessionTerminal', [rows, cols]).catch(() => {})
+      void writeSessionResize(rows, cols).catch(() => {})
     }
     resizeToGuest()
     const resizeDisposable = terminal.onResize(() => {
       const { rows, cols } = terminal
-      void callWorker('ResizeSessionTerminal', [rows, cols]).catch(() => {})
+      void writeSessionResize(rows, cols).catch(() => {})
     })
 
     return () => {
-      stopOutputPump()
+      stopStatusMonitor()
       globalThis.removeEventListener('resize', onResize)
       dataDisposable.dispose()
       resizeDisposable.dispose()
@@ -173,35 +204,9 @@ export default function App() {
     }
   }, [])
 
-  // ── Output pump ──
+  // ── Session monitoring ──
 
-  function stopOutputPump() {
-    if (pumpRef.current !== null) {
-      globalThis.clearInterval(pumpRef.current)
-      pumpRef.current = null
-    }
-  }
-
-  function startOutputPump() {
-    stopOutputPump()
-    pumpRef.current = globalThis.setInterval(async () => {
-      try {
-        const chunk = await callWorker('ReadSessionOutput', [8192])
-        if (chunk?.length)
-          xtermRef.current?.write(decoder.decode(chunk, { stream: true }))
-
-        const st = JSON.parse(await callWorker('GetSessionStatus'))
-        if (st.hasSession && !st.running) {
-          xtermRef.current?.writeln(`\r\n\x1b[38;5;244m[process exited: ${st.exitCode}]\x1b[0m`)
-          stopOutputPump()
-          setStatus('stopped')
-        }
-      } catch (error) {
-        xtermRef.current?.writeln(`\r\n\x1b[31m[worker error]\x1b[0m ${error}`)
-        stopOutputPump()
-        setStatus('error')
-      }
-    }, 50)
+  function stopStatusMonitor() {
   }
 
   // ── Actions ──
@@ -210,23 +215,25 @@ export default function App() {
     setStatus('booting')
     xtermRef.current?.writeln(`\x1b[38;5;244mBooting ${label} (${(tarBytes.byteLength / 1024 / 1024).toFixed(1)} MB)...\x1b[0m`)
     try {
-      const { rows, cols } = xtermRef.current || { rows: 24, cols: 80 }
+      const { rows, cols } = await settleTerminalLayout()
       const bytes = new Uint8Array(tarBytes)
       const result = JSON.parse(await callWorker('StartRootfsTarShell', [bytes, rows, cols], [bytes.buffer]))
       if (!result.ok) {
         xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m Boot failed: ${result.error}`)
         setStatus('error')
+        setSessionMessage('Boot failed')
         return
       }
-      xtermRef.current?.writeln(`\x1b[32m✓\x1b[0m Container started: ${result.containerId}`)
-      xtermRef.current?.write('\r\n')
       setStatus('running')
-      startOutputPump()
+      setSessionMessage(`Container started: ${result.containerId}`)
+      void writeSessionResize(rows, cols).catch(() => {})
+      startSessionRunLoop()
     } catch (error) {
       xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m ${error}`)
       setStatus('error')
+      setSessionMessage('Boot failed')
     }
-  }, [])
+  }, [settleTerminalLayout])
 
   const bootDefault = useCallback(async () => {
     setStatus('downloading')
@@ -259,6 +266,7 @@ export default function App() {
       xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m Download failed: ${error}`)
       setStatus('error')
       setDownloadProgress(null)
+      setSessionMessage('Download failed')
     }
   }, [bootWithBytes])
 
@@ -281,21 +289,19 @@ export default function App() {
       } catch (error) {
         xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m Import failed: ${error}`)
         setStatus('error')
+        setSessionMessage('Import failed')
       }
     }
     input.click()
   }, [bootWithBytes])
 
   const stopSession = useCallback(async () => {
-    try {
-      const result = JSON.parse(await callWorker('StopSession'))
-      if (result.message)
-        xtermRef.current?.writeln(`\x1b[38;5;244m${result.message}\x1b[0m`)
-    } catch (error) {
+    await stopSessionViaSab().catch(error => {
       xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m ${error}`)
-    }
-    stopOutputPump()
-    setStatus('idle')
+    })
+    stopStatusMonitor()
+    setStatus('stopped')
+    setSessionMessage('Stopping container...')
   }, [])
 
   const isBusy = status === 'downloading' || status === 'booting'
@@ -365,6 +371,7 @@ export default function App() {
             <ActionButton onClick={() => xtermRef.current?.clear()} variant="secondary" className="w-full">
               🗑 Clear Terminal
             </ActionButton>
+            <p className="text-xs text-slate-500 break-all">{sessionMessage}</p>
           </div>
 
           {/* Spacer */}

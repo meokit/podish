@@ -22,7 +22,6 @@
     <WasmBitcodeCompileOptimizationFlag>-O0</WasmBitcodeCompileOptimizationFlag>
     <FiberishForceBrowserWasm>true</FiberishForceBrowserWasm>
     <InvariantGlobalization>true</InvariantGlobalization>
-
   </PropertyGroup>
 
   <ItemGroup>
@@ -76,6 +75,12 @@
 
     <Copy SourceFiles="@(BrowserSpecificManaged)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="false" />
     <Copy SourceFiles="@(BrowserSpecificSymbols)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="false" />
+  </Target>
+
+  <Target Name="FrontendBuild" BeforeTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <Message Importance="high" Text="Building frontend with Vite..." />
+    <Exec WorkingDirectory="frontend" Command="npm install" />
+    <Exec WorkingDirectory="frontend" Command="npm run build" />
   </Target>
 
 </Project>

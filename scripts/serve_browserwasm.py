@@ -24,9 +24,16 @@ class CoopCoepHandler(http.server.SimpleHTTPRequestHandler):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Serve browser-wasm publish output with COOP/COEP headers.")
+    # Default search paths for standard .NET Wasm publish layouts
+    default_dir = "PodishApp/browserwasm/bin/Release/net10.0/browser-wasm/publish/wwwroot"
+    if not Path(default_dir).exists():
+        fallback = "PodishApp/browserwasm/bin/Release/net10.0/publish/wwwroot"
+        if Path(fallback).exists():
+            default_dir = fallback
+
     parser.add_argument(
         "--dir",
-        default="PodishApp/browserwasm/bin/Release/net10.0/publish/wwwroot",
+        default=default_dir,
         help="Directory to serve.",
     )
     parser.add_argument("--host", default="127.0.0.1", help="Bind host.")
