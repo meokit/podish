@@ -483,7 +483,7 @@ FORCE_INLINE LogicFlow OpHlt(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpInt(LogicFuncParams) {
     // CD ib: INT n
     uint8_t vector = (uint8_t)imm;
-    utlb->invalidate();
+    mem::InvalidateMicroTLB(utlb);
 
     CommitFlagsCache(state, flags_cache);
     // Set EIP to next instruction (return address)
@@ -500,7 +500,7 @@ FORCE_INLINE LogicFlow OpInt(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpInt3(LogicFuncParams) {
     // CC: INT 3
-    utlb->invalidate();
+    mem::InvalidateMicroTLB(utlb);
     CommitFlagsCache(state, flags_cache);
     RaiseInterrupt(state, 3, op);
     if (state->eip_dirty || state->status != EmuStatus::Running) {
@@ -512,7 +512,7 @@ FORCE_INLINE LogicFlow OpInt3(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpInto(LogicFuncParams) {
     // CE: INTO
     if (TestFlagBits(flags_cache, OF_MASK)) {
-        utlb->invalidate();
+        mem::InvalidateMicroTLB(utlb);
         CommitFlagsCache(state, flags_cache);
         RaiseInterrupt(state, 4, op);
     }
@@ -570,7 +570,7 @@ FORCE_INLINE LogicFlow OpBound(LogicFuncParams) {
         int16_t upper = *high_res;
 
         if (val < lower || val > upper) {
-            utlb->invalidate();
+            mem::InvalidateMicroTLB(utlb);
             state->status = EmuStatus::Fault;
             state->fault_vector = 5;  // #BR
             return LogicFlow::ExitOnCurrentEIP;
@@ -588,7 +588,7 @@ FORCE_INLINE LogicFlow OpBound(LogicFuncParams) {
         int32_t upper = *high_res;
 
         if (val < lower || val > upper) {
-            utlb->invalidate();
+            mem::InvalidateMicroTLB(utlb);
             state->status = EmuStatus::Fault;
             state->fault_vector = 5;  // #BR
             return LogicFlow::ExitOnCurrentEIP;

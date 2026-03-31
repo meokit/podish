@@ -156,10 +156,16 @@ struct DecodedControlFlowData {
     uint32_t imm = 0;
     uint32_t target_eip = 0;
     BasicBlock* cached_target = nullptr;
+#if INTPTR_MAX == INT32_MAX
+    uint32_t cached_target_padding;
+#endif
 };
 
 struct alignas(16) DecodedOp {
     HandlerFunc handler;
+#if INTPTR_MAX == INT32_MAX
+    uint32_t handler_padding;
+#endif
     uint32_t next_eip;
     uint8_t len;
     uint8_t modrm;
@@ -170,6 +176,9 @@ struct alignas(16) DecodedOp {
         struct {
             uint64_t reserved;
             BasicBlock* next_block;
+#if INTPTR_MAX == INT32_MAX
+            uint32_t next_block_padding;
+#endif
         } link;
         DecodedControlFlowData control;
     } ext;
@@ -188,15 +197,9 @@ static_assert(sizeof(DecodedInstTmp) == 32, "DecodedInstTmp must be exactly 32 b
 static_assert(offsetof(DecodedOp, handler) == 0, "DecodedOp: handler must start at offset 0");
 static_assert(offsetof(DecodedOp, ext) == 16, "DecodedOp: ext must start at offset 16");
 
-#if INTPTR_MAX == INT32_MAX
-static_assert(sizeof(DecodedControlFlowData) == 12, "DecodedControlFlowData must be exactly 12 bytes on 32-bit");
-static_assert(offsetof(DecodedOp, next_eip) == 4, "DecodedOp: next_eip must start at offset 4 on 32-bit");
-static_assert(offsetof(DecodedOp, meta) == 11, "DecodedOp: meta must start at offset 11 on 32-bit");
-#else
 static_assert(sizeof(DecodedControlFlowData) == 16, "DecodedControlFlowData must be exactly 16 bytes");
 static_assert(offsetof(DecodedOp, next_eip) == 8, "DecodedOp: next_eip must start at offset 8");
 static_assert(offsetof(DecodedOp, meta) == 15, "DecodedOp: meta must start at offset 15");
-#endif
 
 template <typename OpT>
 FORCE_INLINE bool HasExt(const OpT* op) {

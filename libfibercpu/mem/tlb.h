@@ -7,6 +7,9 @@
 
 namespace fiberish::mem {
 
+#if defined(__wasm32__)
+struct alignas(1) MicroTLB {};
+#else
 struct alignas(16) MicroTLB {
     uint32_t tag_r = std::numeric_limits<uint32_t>::max();  // Mismatch by default (odd value for even aligned vars)
     uint32_t tag_w = std::numeric_limits<uint32_t>::max();
@@ -18,6 +21,15 @@ struct alignas(16) MicroTLB {
         addend = 0;
     }
 };
+#endif
+
+inline void InvalidateMicroTLB(MicroTLB* utlb) {
+#if !defined(__wasm32__)
+    utlb->invalidate();
+#else
+    (void)utlb;
+#endif
+}
 
 struct alignas(16) TlbEntry {
     uint32_t tag = std::numeric_limits<uint32_t>::max();  // Mismatch by default (odd value for even aligned vars)
