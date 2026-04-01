@@ -88,6 +88,19 @@
         <Exec WorkingDirectory="frontend" Command="npm run build"/>
     </Target>
 
+    <Target Name="CleanPublishWwwrootBeforePublish"
+            BeforeTargets="ComputeFilesToPublish"
+            Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+        <PropertyGroup>
+            <_PublishWwwrootDir>$([MSBuild]::NormalizePath('$(PublishDir)', 'wwwroot'))</_PublishWwwrootDir>
+            <_ProjectWwwrootDir>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', 'wwwroot'))</_ProjectWwwrootDir>
+        </PropertyGroup>
+        <Message Importance="high" Text="Cleaning publish wwwroot at $(_PublishWwwrootDir) before publish..."
+                 Condition="'$(_PublishWwwrootDir)' != '' and '$(_PublishWwwrootDir)' != '$(_ProjectWwwrootDir)' and Exists('$(_PublishWwwrootDir)')"/>
+        <RemoveDir Directories="$(_PublishWwwrootDir)"
+                   Condition="'$(_PublishWwwrootDir)' != '' and '$(_PublishWwwrootDir)' != '$(_ProjectWwwrootDir)' and Exists('$(_PublishWwwrootDir)')"/>
+    </Target>
+
     <Target Name="ManualBrowserWasmOptBeforeBundle"
             AfterTargets="_BrowserWasmLinkDotNet"
             BeforeTargets="_CompleteWasmBuildNative"
