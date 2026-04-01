@@ -8,6 +8,7 @@ export const IRQ_OUTPUT_DRAINED = 1 << 2
 export const IRQ_TIMER = 1 << 3
 export const IRQ_TIMER_CONTROL = 1 << 4
 export const IRQ_LOG_READY = 1 << 5
+export const IRQ_HTTP_RPC = 1 << 6
 
 export function createInterruptControllerStorage() {
     const buffer = new SharedArrayBuffer(IRQ_I32_COUNT * 4)

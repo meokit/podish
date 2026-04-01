@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# build-rootfs.sh — Build an Alpine i386 rootfs with common tools using podman.
-# Output: rootfs.tar.gz in the wwwroot directory (ready for static deployment).
+# build-rootfs.sh — Build an Alpine i386 browser rootfs and export OCI store assets.
+# Output: image.json, indexes/, blobs/ in frontend/public (ready for static deployment).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-OUTPUT="${SCRIPT_DIR}/frontend/public/rootfs.tar.gz"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+OUTPUT_DIR="${SCRIPT_DIR}/frontend/public"
+IMAGE_REF="localhost/podish-browser-rootfs:latest"
+SAFE_IMAGE_NAME="localhost_podish-browser-rootfs_latest"
 CONTAINER_NAME="podish-rootfs-builder-$$"
+TEMP_TAR="$(mktemp -t podish-browser-rootfs.XXXXXX.tar)"
 
 PACKAGES=(
   python3
@@ -21,6 +25,13 @@ PACKAGES=(
   less
   ncurses
 )
+
+cleanup() {
+  podman rm -f "$CONTAINER_NAME" > /dev/null 2>&1 || true
+  rm -f "$TEMP_TAR"
+}
+
+trap cleanup EXIT
 
 echo "==> Creating Alpine i386 container with packages..."
 podman create \
@@ -41,11 +52,27 @@ podman create \
 echo "==> Starting container to install packages..."
 podman start -a "$CONTAINER_NAME"
 
-echo "==> Exporting rootfs..."
-podman export "$CONTAINER_NAME" | gzip -9 > "$OUTPUT"
+echo "==> Exporting temporary rootfs tar..."
+podman export "$CONTAINER_NAME" > "$TEMP_TAR"
 
-echo "==> Cleaning up container..."
-podman rm -f "$CONTAINER_NAME" > /dev/null 2>&1 || true
+echo "==> Importing rootfs into local Podish OCI store..."
+pushd "$REPO_ROOT" > /dev/null
+dotnet run --project "$REPO_ROOT/Podish.Cli/Podish.Cli.csproj" -- import "$TEMP_TAR" "$IMAGE_REF"
+popd > /dev/null
 
-SIZE=$(du -h "$OUTPUT" | cut -f1)
-echo "==> Done! Rootfs saved to: $OUTPUT ($SIZE)"
+STORE_DIR="$REPO_ROOT/.fiberpod/oci/images/$SAFE_IMAGE_NAME"
+if [[ ! -f "$STORE_DIR/image.json" ]]; then
+  echo "image.json not found in $STORE_DIR" >&2
+  exit 1
+fi
+
+echo "==> Copying OCI browser assets..."
+rm -f "$OUTPUT_DIR/rootfs.tar.gz"
+rm -f "$OUTPUT_DIR/image.json"
+rm -rf "$OUTPUT_DIR/indexes" "$OUTPUT_DIR/blobs"
+cp "$STORE_DIR/image.json" "$OUTPUT_DIR/image.json"
+cp -R "$STORE_DIR/indexes" "$OUTPUT_DIR/indexes"
+cp -R "$STORE_DIR/blobs" "$OUTPUT_DIR/blobs"
+
+IMAGE_SIZE=$(du -sh "$OUTPUT_DIR/blobs" | cut -f1)
+echo "==> Done! OCI assets saved to: $OUTPUT_DIR (blob payload $IMAGE_SIZE)"

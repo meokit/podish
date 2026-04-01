@@ -16,7 +16,8 @@ internal sealed class BrowserEventDispatcher
         _handlers[(queue, eventType)] = handler;
     }
 
-    public int DispatchQueue(BrowserSabQueueKind queue, int maxPackets = 64, int maxPacketBytes = 64 * 1024)
+    public int DispatchQueue(BrowserSabQueueKind queue, int maxPackets = 64,
+        int maxPacketBytes = BrowserSabInterop.QueuePacketBufferSize)
     {
         if (maxPackets <= 0)
             return 0;

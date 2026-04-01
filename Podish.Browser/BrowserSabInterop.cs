@@ -8,6 +8,8 @@ namespace Podish.Browser;
 internal static partial class BrowserSabInterop
 {
     internal const int LogChunkSize = 4096;
+    internal const int QueuePacketBufferSize = 64 * 1024;
+    internal const int HttpRpcResponseCapacity = 128 * 1024;
     internal const int LogFlagBegin = 1 << 0;
     internal const int LogFlagEnd = 1 << 1;
     internal const int IrqInputReady = 1 << 0;
@@ -15,12 +17,34 @@ internal static partial class BrowserSabInterop
     internal const int IrqOutputDrained = 1 << 2;
     internal const int IrqTimer = 1 << 3;
     internal const int IrqSchedulerWake = 1 << 4;
+    internal const int IrqHttpRpc = 1 << 6;
 
     internal const int EventInputBytes = 1;
     internal const int EventOutputBytes = 2;
     internal const int EventResize = 3;
     internal const int EventControl = 4;
     internal const int EventLogMessage = 5;
+    internal const int EventHttpRequest = 6;
+
+    internal const int HttpRpcResultOk = 0;
+    internal const int HttpRpcResultTimeout = -1;
+    internal const int HttpRpcResultNetworkError = -2;
+    internal const int HttpRpcResultTooLarge = -3;
+    internal const int HttpRpcResultPending = -4;
+    internal const int HttpRpcResultNoFreeSlot = -5;
+    internal const int HttpRpcResultInvalidRequest = -6;
+    internal const int HttpRpcResultCancelled = -7;
+    internal const int HttpRpcResultUrlTooLong = -8;
+
+    internal const int HttpRpcFlagStarted = 1 << 0;
+    internal const int HttpRpcFlagChunkReady = 1 << 1;
+    internal const int HttpRpcFlagEof = 1 << 2;
+    internal const int HttpRpcFlagError = 1 << 3;
+    internal const int HttpRpcFlagCancelled = 1 << 4;
+
+    internal const int HttpRpcRangeModeNone = 0;
+    internal const int HttpRpcRangeModeOpenEnded = 1;
+    internal const int HttpRpcRangeModeBounded = 2;
 
     [JSImport("pollInterrupt", "podish-worker.mjs")]
     internal static partial int PollInterrupt(int mask = -1);
@@ -29,13 +53,13 @@ internal static partial class BrowserSabInterop
     internal static partial int WaitForInterrupt(int mask = -1, int timeoutMs = -1);
 
     [JSImport("pollInputPacketInto", "podish-worker.mjs")]
-    internal static unsafe partial int PollInputPacketInto(nint buffer, int maxBytes = 65536);
+    internal static unsafe partial int PollInputPacketInto(nint buffer, int maxBytes = QueuePacketBufferSize);
 
     [JSImport("pollOutputPacketInto", "podish-worker.mjs")]
-    internal static unsafe partial int PollOutputPacketInto(nint buffer, int maxBytes = 65536);
+    internal static unsafe partial int PollOutputPacketInto(nint buffer, int maxBytes = QueuePacketBufferSize);
 
     [JSImport("pollLogPacketInto", "podish-worker.mjs")]
-    internal static unsafe partial int PollLogPacketInto(nint buffer, int maxBytes = 65536);
+    internal static unsafe partial int PollLogPacketInto(nint buffer, int maxBytes = QueuePacketBufferSize);
 
     [JSImport("writeInputPacketFromMemory", "podish-worker.mjs")]
     internal static unsafe partial int WriteInputPacketFromMemory(int eventType, nint buffer, int length);
@@ -45,6 +69,28 @@ internal static partial class BrowserSabInterop
 
     [JSImport("writeLogPacketFromMemory", "podish-worker.mjs")]
     internal static unsafe partial int WriteLogPacketFromMemory(int eventType, nint buffer, int length, int flags);
+
+    [JSImport("httpRpcBeginStreamGet", "podish-worker.mjs")]
+    internal static unsafe partial int HttpRpcBeginStreamGet(
+        nint urlUtf8,
+        int urlUtf8Length,
+        int rangeMode,
+        int rangeStartLow,
+        int rangeStartHigh,
+        int rangeLength,
+        int timeoutMs = -1);
+
+    [JSImport("httpRpcGetRequestFlags", "podish-worker.mjs")]
+    internal static partial int HttpRpcGetRequestFlags(int requestId);
+
+    [JSImport("httpRpcTryReadStreamChunkIntoMemory", "podish-worker.mjs")]
+    internal static unsafe partial int HttpRpcTryReadStreamChunkIntoMemory(
+        int requestId,
+        nint destination,
+        int destinationLength);
+
+    [JSImport("httpRpcCloseRequest", "podish-worker.mjs")]
+    internal static partial int HttpRpcCloseRequest(int requestId);
 
     internal static bool TryParsePacket(ReadOnlySpan<byte> rawPacket, out int eventType, out ReadOnlySpan<byte> payload)
     {

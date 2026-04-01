@@ -16,6 +16,7 @@ public static class BrowserSchedulerHostBridge
     private static int _irqOutputDrained;
     private static int _irqTimer;
     private static int _irqSchedulerWake;
+    private static int _irqHttpRpc;
 
     public static bool IsConfigured
     {
@@ -39,6 +40,7 @@ public static class BrowserSchedulerHostBridge
         int irqOutputDrained,
         int irqTimer,
         int irqSchedulerWake,
+        int irqHttpRpc,
         Action<int> armTimer,
         Action cancelTimer,
         Action<int> signalInterrupt,
@@ -53,6 +55,7 @@ public static class BrowserSchedulerHostBridge
             _irqOutputDrained = irqOutputDrained;
             _irqTimer = irqTimer;
             _irqSchedulerWake = irqSchedulerWake;
+            _irqHttpRpc = irqHttpRpc;
             _armTimer = armTimer;
             _cancelTimer = cancelTimer;
             _signalInterrupt = signalInterrupt;
@@ -89,6 +92,7 @@ public static class BrowserSchedulerHostBridge
         int irqOutputDrained;
         int irqTimer;
         int irqSchedulerWake;
+        int irqHttpRpc;
 
         lock (Sync)
         {
@@ -102,6 +106,7 @@ public static class BrowserSchedulerHostBridge
             irqOutputDrained = _irqOutputDrained;
             irqTimer = _irqTimer;
             irqSchedulerWake = _irqSchedulerWake;
+            irqHttpRpc = _irqHttpRpc;
         }
 
         if (armTimer == null
@@ -112,7 +117,7 @@ public static class BrowserSchedulerHostBridge
             || flushOutput == null)
             throw new InvalidOperationException("Browser scheduler host bridge is not configured.");
 
-        var mask = irqInputReady | irqOutputDrained | irqTimer | irqSchedulerWake;
+        var mask = irqInputReady | irqOutputDrained | irqTimer | irqSchedulerWake | irqHttpRpc;
 
         if (ProcessInterrupts(pollInterrupt(mask), irqInputReady, irqOutputDrained, dispatchInput, flushOutput))
             return;

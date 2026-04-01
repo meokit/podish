@@ -9,6 +9,7 @@ import {
 import {
     attachInterruptController,
     createInterruptControllerStorage,
+    IRQ_HTTP_RPC,
     IRQ_INPUT_READY,
     IRQ_LOG_READY,
     IRQ_OUTPUT_DRAINED,
@@ -16,6 +17,18 @@ import {
     IRQ_TIMER,
     IRQ_TIMER_CONTROL,
 } from '../public/interrupt-controller.mjs'
+import {
+    attachHttpRpcController,
+    createHttpRpcStorage,
+    HTTP_RPC_CHUNK_CAPACITY,
+    HTTP_RPC_OPCODE_STREAM_GET,
+    HTTP_RPC_RANGE_MODE_BOUNDED,
+    HTTP_RPC_RANGE_MODE_NONE,
+    HTTP_RPC_RANGE_MODE_OPEN_ENDED,
+    HTTP_RPC_RESULT_INVALID_REQUEST,
+    HTTP_RPC_RESULT_NETWORK_ERROR,
+    HTTP_RPC_RESULT_TIMEOUT,
+} from '../public/http-rpc-shared.mjs'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -57,6 +70,7 @@ function createPodishWorkerClient() {
         log: attachQueue(createQueueStorage(LOG_QUEUE_CAPACITY), LOG_QUEUE_CAPACITY),
         timer: attachTimerControl(createTimerControlStorage()),
         irq: attachInterruptController(createInterruptControllerStorage()),
+        httpRpc: attachHttpRpcController(createHttpRpcStorage()),
     }
     let onOutputCallback = null
     let onControlCallback = null
@@ -64,6 +78,10 @@ function createPodishWorkerClient() {
     let activeTimerId = null
     let pendingLogChunks = []
     let pendingLogBytes = 0
+    const activeHttpStreams = new Map()
+    const openingHttpRequests = new Set()
+    let httpRpcKickInFlight = false
+    let httpRpcKickQueued = false
 
     const ready = new Promise((resolve, reject) => {
         const onMessage = event => {
@@ -87,10 +105,241 @@ function createPodishWorkerClient() {
         logBuffer: sabState.log.buffer,
         timerControlBuffer: sabState.timer.buffer,
         irqBuffer: sabState.irq.buffer,
+        httpRpcBuffer: sabState.httpRpc.buffer,
         inputCapacity: INPUT_QUEUE_CAPACITY,
         outputCapacity: OUTPUT_QUEUE_CAPACITY,
         logCapacity: LOG_QUEUE_CAPACITY,
     })
+
+    async function readStreamChunk(streamState, requestedLength) {
+        const chunkLength = Math.max(1, Math.min(requestedLength || 1, HTTP_RPC_CHUNK_CAPACITY))
+
+        if (streamState.remainingBytes === 0)
+            return null
+
+        while (true) {
+            if (streamState.pendingChunk) {
+                if (streamState.skipBytesRemaining > 0n) {
+                    const pendingRemaining = streamState.pendingChunk.length - streamState.pendingOffset
+                    const bytesToSkip = Number(streamState.skipBytesRemaining > BigInt(pendingRemaining)
+                        ? BigInt(pendingRemaining)
+                        : streamState.skipBytesRemaining)
+                    streamState.pendingOffset += bytesToSkip
+                    streamState.skipBytesRemaining -= BigInt(bytesToSkip)
+                    if (streamState.pendingOffset >= streamState.pendingChunk.length) {
+                        streamState.pendingChunk = null
+                        streamState.pendingOffset = 0
+                        continue
+                    }
+                }
+
+            const remaining = streamState.pendingChunk.length - streamState.pendingOffset
+            const toCopy = Math.min(
+                chunkLength,
+                remaining,
+                streamState.remainingBytes >= 0 ? streamState.remainingBytes : remaining,
+            )
+            const payload = streamState.pendingChunk.subarray(
+                streamState.pendingOffset,
+                streamState.pendingOffset + toCopy,
+            ).slice()
+            streamState.pendingOffset += toCopy
+            if (streamState.remainingBytes >= 0)
+                streamState.remainingBytes -= toCopy
+            if (streamState.pendingOffset >= streamState.pendingChunk.length) {
+                streamState.pendingChunk = null
+                streamState.pendingOffset = 0
+            }
+            return payload
+            }
+
+            let timeoutId = null
+            try {
+                const readPromise = streamState.reader.read()
+                const result = streamState.timeoutMs >= 0
+                    ? await Promise.race([
+                        readPromise,
+                        new Promise((_, reject) => {
+                            timeoutId = globalThis.setTimeout(() => reject(new Error('timeout')), streamState.timeoutMs)
+                        }),
+                    ])
+                    : await readPromise
+
+                if (result.done)
+                    return null
+
+                let value = result.value instanceof Uint8Array ? result.value : new Uint8Array(result.value)
+                if (streamState.skipBytesRemaining > 0n) {
+                    const bytesToSkip = Number(streamState.skipBytesRemaining > BigInt(value.length)
+                        ? BigInt(value.length)
+                        : streamState.skipBytesRemaining)
+                    streamState.skipBytesRemaining -= BigInt(bytesToSkip)
+                    if (bytesToSkip >= value.length) {
+                        continue
+                    }
+                    value = value.subarray(bytesToSkip)
+                }
+
+                const allowedLength = streamState.remainingBytes >= 0
+                    ? Math.min(value.length, streamState.remainingBytes)
+                    : value.length
+                const limitedValue = allowedLength === value.length ? value : value.subarray(0, allowedLength)
+                if (limitedValue.length <= chunkLength) {
+                    if (streamState.remainingBytes >= 0)
+                        streamState.remainingBytes -= limitedValue.length
+                    return limitedValue
+                }
+
+                streamState.pendingChunk = limitedValue
+                streamState.pendingOffset = chunkLength
+                if (streamState.remainingBytes >= 0)
+                    streamState.remainingBytes -= chunkLength
+                return limitedValue.subarray(0, chunkLength).slice()
+            } finally {
+                if (timeoutId !== null)
+                    globalThis.clearTimeout(timeoutId)
+            }
+        }
+    }
+
+    async function disposeHttpStream(requestId) {
+        const streamState = activeHttpStreams.get(requestId)
+        if (!streamState)
+            return
+        activeHttpStreams.delete(requestId)
+        try {
+            await streamState.reader.cancel()
+        } catch {
+        }
+    }
+
+    async function processHttpRpcKick() {
+        if (httpRpcKickInFlight) {
+            httpRpcKickQueued = true
+            return
+        }
+
+        httpRpcKickInFlight = true
+        try {
+            do {
+                httpRpcKickQueued = false
+
+                for (const requestId of Array.from(activeHttpStreams.keys())) {
+                    if (sabState.httpRpc.findSlotByRequestId(requestId) >= 0)
+                        continue
+                    await disposeHttpStream(requestId)
+                }
+
+                for (let slotId = 0; slotId < sabState.httpRpc.slotCount; slotId += 1) {
+                    const beginRequest = sabState.httpRpc.readBeginRequest(slotId)
+                    if (beginRequest && beginRequest.opcode === HTTP_RPC_OPCODE_STREAM_GET
+                        && !activeHttpStreams.has(beginRequest.requestId)
+                        && !openingHttpRequests.has(beginRequest.requestId)) {
+                        openingHttpRequests.add(beginRequest.requestId)
+                        try {
+                            const url = decoder.decode(beginRequest.urlBytes)
+                            const controller = new AbortController()
+                            const rangeStart = (BigInt(beginRequest.rangeStartHigh) << 32n) | BigInt(beginRequest.rangeStartLow)
+                            let headers = undefined
+                            if (beginRequest.rangeMode === HTTP_RPC_RANGE_MODE_OPEN_ENDED) {
+                                headers = {Range: `bytes=${rangeStart.toString()}-`}
+                            } else if (beginRequest.rangeMode === HTTP_RPC_RANGE_MODE_BOUNDED) {
+                                const rangeEnd = rangeStart + BigInt(Math.max(0, beginRequest.rangeLength) - 1)
+                                headers = {Range: `bytes=${rangeStart.toString()}-${rangeEnd.toString()}`}
+                            }
+                            let timeoutId = null
+                            let response
+                            try {
+                                if (beginRequest.timeoutMs >= 0) {
+                                    timeoutId = globalThis.setTimeout(() => controller.abort(), beginRequest.timeoutMs)
+                                }
+                                response = await fetch(url, {headers, signal: controller.signal})
+                            } finally {
+                                if (timeoutId !== null)
+                                    globalThis.clearTimeout(timeoutId)
+                            }
+
+                            if (!response.ok || !response.body) {
+                                sabState.httpRpc.completeFailure(slotId, beginRequest.requestId, -(response?.status || HTTP_RPC_RESULT_NETWORK_ERROR))
+                                sabState.irq.signal(IRQ_HTTP_RPC)
+                                continue
+                            }
+
+                            const skipBytesRemaining = beginRequest.rangeMode !== HTTP_RPC_RANGE_MODE_NONE && response.status === 200 && rangeStart > 0n
+                                ? rangeStart
+                                : 0n
+
+                            if (sabState.httpRpc.findSlotByRequestId(beginRequest.requestId) < 0) {
+                                try {
+                                    await response.body.cancel()
+                                } catch {
+                                }
+                                continue
+                            }
+
+                            activeHttpStreams.set(beginRequest.requestId, {
+                                requestId: beginRequest.requestId,
+                                reader: response.body.getReader(),
+                                pendingChunk: null,
+                                pendingOffset: 0,
+                                skipBytesRemaining,
+                                remainingBytes: beginRequest.rangeMode === HTTP_RPC_RANGE_MODE_BOUNDED ? beginRequest.rangeLength : -1,
+                                timeoutMs: beginRequest.timeoutMs,
+                            })
+                            if (skipBytesRemaining > 0n)
+                                console.warn(`[http-rpc/worker] range-fallback requestId=${beginRequest.requestId} url=${url} status=${response.status} skipBytes=${skipBytesRemaining} rangeMode=${beginRequest.rangeMode} rangeLength=${beginRequest.rangeLength}`)
+                            sabState.httpRpc.markStarted(slotId, beginRequest.requestId, response.status | 0)
+                            sabState.irq.signal(IRQ_HTTP_RPC)
+                        } catch (error) {
+                            const resultCode = error?.name === 'AbortError' || error?.message === 'timeout'
+                                ? HTTP_RPC_RESULT_TIMEOUT
+                                : HTTP_RPC_RESULT_NETWORK_ERROR
+                            sabState.httpRpc.completeFailure(slotId, beginRequest.requestId, resultCode)
+                            sabState.irq.signal(IRQ_HTTP_RPC)
+                        } finally {
+                            openingHttpRequests.delete(beginRequest.requestId)
+                        }
+                        continue
+                    }
+
+                    const readRequest = sabState.httpRpc.readPendingChunkRequest(slotId)
+                    if (!readRequest)
+                        continue
+
+                    const streamState = activeHttpStreams.get(readRequest.requestId)
+                    if (!streamState) {
+                        if (openingHttpRequests.has(readRequest.requestId))
+                            continue
+                        sabState.httpRpc.completeFailure(slotId, readRequest.requestId, HTTP_RPC_RESULT_INVALID_REQUEST)
+                        sabState.irq.signal(IRQ_HTTP_RPC)
+                        continue
+                    }
+
+                    try {
+                        const payload = await readStreamChunk(streamState, readRequest.requestedLength)
+                        if (payload === null) {
+                            await disposeHttpStream(readRequest.requestId)
+                            sabState.httpRpc.markEof(slotId, readRequest.requestId)
+                            sabState.irq.signal(IRQ_HTTP_RPC)
+                            continue
+                        }
+
+                        sabState.httpRpc.writeChunk(slotId, readRequest.requestId, payload)
+                        sabState.irq.signal(IRQ_HTTP_RPC)
+                    } catch (error) {
+                        await disposeHttpStream(readRequest.requestId)
+                        const resultCode = error?.name === 'AbortError' || error?.message === 'timeout'
+                            ? HTTP_RPC_RESULT_TIMEOUT
+                            : HTTP_RPC_RESULT_NETWORK_ERROR
+                        sabState.httpRpc.completeFailure(slotId, readRequest.requestId, resultCode)
+                        sabState.irq.signal(IRQ_HTTP_RPC)
+                    }
+                }
+            } while (httpRpcKickQueued)
+        } finally {
+            httpRpcKickInFlight = false
+        }
+    }
 
     function emitBrowserLog(payload) {
         if (!payload?.length)
@@ -255,6 +504,10 @@ function createPodishWorkerClient() {
 
     worker.addEventListener('message', event => {
         const message = event.data
+        if (message?.type === 'http-rpc-kick') {
+            void processHttpRpcKick()
+            return
+        }
         if (message?.type !== 'response') return
         const entry = pending.get(message.id)
         if (!entry) return

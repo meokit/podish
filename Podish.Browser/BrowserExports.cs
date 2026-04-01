@@ -30,6 +30,7 @@ public static partial class BrowserExports
             BrowserSabInterop.IrqOutputDrained,
             BrowserSabInterop.IrqTimer,
             BrowserSabInterop.IrqSchedulerWake,
+            BrowserSabInterop.IrqHttpRpc,
             RequestTimer,
             CancelTimer,
             SignalInterrupt,
@@ -52,6 +53,11 @@ public static partial class BrowserExports
     public static string GetRuntimeInfo()
     {
         return $"Podish.Core loaded: {typeof(PodishContext).Assembly.GetName().Name}";
+    }
+
+    internal static void EmitDiagnosticLog(LogLevel level, string message)
+    {
+        EmitManagedLog(level, message);
     }
 
     [JSExport]
@@ -98,6 +104,96 @@ public static partial class BrowserExports
                 Strace = false,
                 NetworkMode = NetworkMode.Host
             }, "uploaded-rootfs.tar", "browserwasm");
+
+            var state = new BrowserSessionState(context, session);
+            state.Dispatcher.Register(BrowserSabQueueKind.Input, BrowserSabInterop.EventInputBytes, payload =>
+            {
+                if (payload.IsEmpty)
+                    return;
+
+                session.WriteInput(payload);
+            });
+            state.Dispatcher.Register(BrowserSabQueueKind.Input, BrowserSabInterop.EventResize, payload =>
+            {
+                if (!BrowserEventDispatcher.TryParseResize(payload, out var resizeRows, out var resizeCols))
+                    return;
+
+                session.Resize(resizeRows, resizeCols);
+            });
+            state.Dispatcher.Register(BrowserSabQueueKind.Input, BrowserSabInterop.EventControl, payload =>
+            {
+                if (payload.IsEmpty)
+                    return;
+
+                if (payload[0] == ControlStopSession)
+                    session.ForceStop();
+            });
+            session.SetOutputHandler((_, data) =>
+            {
+                if (!data.IsEmpty)
+                    state.EnqueueOutput(data);
+            });
+
+            lock (Sync)
+            {
+                _session = state;
+            }
+
+            return Json(true, containerId: session.ContainerId, imageRef: session.ImageRef);
+        }
+        catch (Exception ex)
+        {
+            context.Dispose();
+            return Json(false, error: ex.ToString());
+        }
+    }
+
+    [JSExport]
+    public static async Task<string> StartStoredImageShell(string imageJsonUrl, int rows = 24, int cols = 80)
+    {
+        if (string.IsNullOrWhiteSpace(imageJsonUrl))
+            return Json(false, error: "imageJsonUrl is required");
+
+        BrowserSessionState? previous;
+        lock (Sync)
+        {
+            previous = _session;
+            _session = null;
+        }
+
+        if (previous != null)
+            await DisposeSessionAsync(previous);
+
+        var workDir = Path.Combine(Environment.CurrentDirectory, ".browserwasm");
+        Directory.CreateDirectory(workDir);
+
+        var context = new PodishContext(new PodishContextOptions
+        {
+            WorkDir = workDir,
+            LogLevel = "warn"
+        });
+
+        context.SetLogObserver(EmitManagedLog);
+
+        try
+        {
+            var session = await context.StartWithRootFileSystemAsync(new PodishRunSpec
+                {
+                    Name = "browser-layer-shell",
+                    Hostname = "browser-layer-shell",
+                    Rootfs = imageJsonUrl,
+                    Exe = "/bin/sh",
+                    ExeArgs = [],
+                    Interactive = true,
+                    Tty = true,
+                    TerminalRows = (ushort)rows,
+                    TerminalCols = (ushort)cols,
+                    Strace = false,
+                    NetworkMode = NetworkMode.Host
+                },
+                BrowserLayerRootfs.CreateRootFileSystemFactory(imageJsonUrl),
+                "browserwasm",
+                imageJsonUrl);
 
             var state = new BrowserSessionState(context, session);
             state.Dispatcher.Register(BrowserSabQueueKind.Input, BrowserSabInterop.EventInputBytes, payload =>

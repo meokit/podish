@@ -428,6 +428,16 @@ public sealed class PodishContext : IDisposable
         return await StartInternalAsync(spec, true, containerIdOverride);
     }
 
+    internal async Task<PodishContainerSession> StartWithRootFileSystemAsync(PodishRunSpec spec,
+        Func<DeviceNumberManager, SuperBlock> rootFileSystemFactory,
+        string? containerIdOverride = null,
+        string? rootFileSystemSource = null)
+    {
+        using var _ = Logging.BeginScope(LoggerFactory);
+        ArgumentNullException.ThrowIfNull(rootFileSystemFactory);
+        return await StartInternalAsync(spec, true, containerIdOverride, rootFileSystemFactory, rootFileSystemSource);
+    }
+
     public async Task<PodishRunResult> RunRootfsTarAsync(Stream rootfsTarStream, PodishRunSpec spec,
         string rootfsName = "in-memory-rootfs", string? containerIdOverride = null)
     {

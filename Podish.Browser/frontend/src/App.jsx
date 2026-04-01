@@ -251,9 +251,33 @@ export default function App() {
     const bootDefault = useCallback(async () => {
         setStatus('downloading')
         setDownloadProgress(null)
-        xtermRef.current?.writeln('\x1b[38;5;244mDownloading default rootfs...\x1b[0m')
+        xtermRef.current?.writeln('\x1b[38;5;244mChecking default browser rootfs...\x1b[0m')
         try {
-            const resp = await fetch('./rootfs.tar.gz')
+            const imageJsonUrl = new URL('./image.json', globalThis.location.href).toString()
+            const imageResp = await fetch(imageJsonUrl)
+            if (imageResp.ok) {
+                const {rows, cols} = await settleTerminalLayout()
+                xtermRef.current?.writeln('\x1b[32m✓\x1b[0m Found OCI layer metadata, booting streamed rootfs...')
+                const result = JSON.parse(await callWorker('StartStoredImageShell', [imageJsonUrl, rows, cols]))
+                if (!result.ok) {
+                    xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m Boot failed: ${result.error}`)
+                    setStatus('error')
+                    setSessionMessage('Boot failed')
+                    return
+                }
+                setStatus('running')
+                setSessionMessage(`Container started: ${result.containerId}`)
+                void writeSessionResize(rows, cols).catch(() => {
+                })
+                startSessionRunLoop()
+                return
+            }
+
+            xtermRef.current?.writeln('\x1b[31m✗\x1b[0m OCI metadata not found; rootfs.tar.gz fallback is disabled by design.\x1b[0m')
+            setStatus('error')
+            setSessionMessage('OCI image.json required')
+            return
+
             if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
 
             const contentLength = parseInt(resp.headers.get('content-length') || '0', 10)

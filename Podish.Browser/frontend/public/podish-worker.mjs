@@ -2,10 +2,15 @@ import {attachQueue,} from './sab-ring.mjs';
 import {
     attachInterruptController,
     IRQ_INPUT_READY,
+    IRQ_HTTP_RPC,
     IRQ_LOG_READY,
     IRQ_OUTPUT_READY,
     IRQ_TIMER_CONTROL,
 } from './interrupt-controller.mjs';
+import {
+    attachHttpRpcController,
+    HTTP_RPC_RESULT_PENDING,
+} from './http-rpc-shared.mjs';
 import {dotnet} from './_framework/dotnet.js';
 
 let browserExportsPromise = null;
@@ -13,6 +18,10 @@ let runtimeInstance = null;
 let sidecarQueues = null;
 let interruptController = null;
 let timerControl = null;
+let httpRpc = null;
+
+const BROWSER_ASSEMBLY_NAME = 'Podish.Browser';
+const SAB_PACKET_BUFFER_SIZE = 64 * 1024;
 
 function attachTimerControl(buffer) {
     const i32 = new Int32Array(buffer, 0, 3);
@@ -92,19 +101,19 @@ export function waitForInterruptSync(mask = 0xFFFFFFFF, timeoutMs = -1) {
     return interruptController.take(mask >>> 0);
 }
 
-export function pollInputPacketInto(ptr, maxBytes = 65536) {
+export function pollInputPacketInto(ptr, maxBytes = SAB_PACKET_BUFFER_SIZE) {
     if (!runtimeInstance || !sidecarQueues)
         return 0;
     return writePacketIntoMemory(sidecarQueues.input.tryReadPacket(), ptr, maxBytes | 0);
 }
 
-export function pollOutputPacketInto(ptr, maxBytes = 65536) {
+export function pollOutputPacketInto(ptr, maxBytes = SAB_PACKET_BUFFER_SIZE) {
     if (!runtimeInstance || !sidecarQueues)
         return 0;
     return writePacketIntoMemory(sidecarQueues.output.tryReadPacket(), ptr, maxBytes | 0);
 }
 
-export function pollLogPacketInto(ptr, maxBytes = 65536) {
+export function pollLogPacketInto(ptr, maxBytes = SAB_PACKET_BUFFER_SIZE) {
     if (!runtimeInstance || !sidecarQueues)
         return 0;
     return writePacketIntoMemory(sidecarQueues.log.tryReadPacket(), ptr, maxBytes | 0);
@@ -146,6 +155,54 @@ export function writeLogPacketFromMemory(eventType, ptr, len, flags = 0) {
     return written;
 }
 
+export function httpRpcBeginStreamGet(urlPtr, urlUtf8Length, rangeMode = 0, rangeStartLow = 0, rangeStartHigh = 0, rangeLength = -1, timeoutMs = -1) {
+    if (!runtimeInstance || !httpRpc)
+        return 0;
+
+    const urlBytes = urlUtf8Length > 0
+        ? runtimeInstance.Module.HEAPU8.slice(urlPtr >>> 0, (urlPtr >>> 0) + (urlUtf8Length >>> 0))
+        : new Uint8Array(0);
+    const requestId = httpRpc.tryBeginStreamRequest(
+        urlBytes,
+        rangeMode | 0,
+        rangeStartLow | 0,
+        rangeStartHigh | 0,
+        rangeLength | 0,
+        timeoutMs | 0,
+    );
+    if (requestId > 0)
+        self.postMessage({type: 'http-rpc-kick'});
+    return requestId;
+}
+
+export function httpRpcGetRequestFlags(requestId) {
+    if (!runtimeInstance || !httpRpc)
+        return 0;
+    return httpRpc.getRequestFlags(requestId | 0);
+}
+
+export function httpRpcTryReadStreamChunkIntoMemory(requestId, destination, destinationLength) {
+    if (!runtimeInstance || !httpRpc)
+        return HTTP_RPC_RESULT_PENDING;
+
+    const destinationView = destinationLength > 0
+        ? runtimeInstance.Module.HEAPU8.subarray(destination >>> 0, (destination >>> 0) + (destinationLength >>> 0))
+        : null;
+    const result = httpRpc.tryReadStreamChunkInto(requestId | 0, destinationView, 0, destinationLength | 0);
+    if (result === HTTP_RPC_RESULT_PENDING)
+        self.postMessage({type: 'http-rpc-kick'});
+    return result;
+}
+
+export function httpRpcCloseRequest(requestId) {
+    if (!runtimeInstance || !httpRpc)
+        return 0;
+    const closed = httpRpc.closeRequest(requestId | 0) ? 1 : 0;
+    if (closed)
+        self.postMessage({type: 'http-rpc-kick'});
+    return closed;
+}
+
 async function getBrowserExports() {
     if (browserExportsPromise)
         return browserExportsPromise;
@@ -167,13 +224,17 @@ async function getBrowserExports() {
             writeInputPacketFromMemory,
             writeOutputPacketFromMemory,
             writeLogPacketFromMemory,
+            httpRpcBeginStreamGet,
+            httpRpcGetRequestFlags,
+            httpRpcTryReadStreamChunkIntoMemory,
+            httpRpcCloseRequest,
         });
 
         // Start the .NET Main (which now stays alive via Task.Delay(-1))
         void runtime.runMain();
 
-        const exports = await runtime.getAssemblyExports('PodishApp.BrowserWasm');
-        return exports.PodishApp.BrowserWasm.BrowserExports;
+        const exports = await runtime.getAssemblyExports(BROWSER_ASSEMBLY_NAME);
+        return exports.Podish.Browser.BrowserExports;
     })();
 
     return browserExportsPromise;
@@ -205,6 +266,7 @@ self.onmessage = async event => {
         }
         timerControl = attachTimerControl(message.timerControlBuffer)
         interruptController = attachInterruptController(message.irqBuffer)
+        httpRpc = attachHttpRpcController(message.httpRpcBuffer)
         return
     }
 
