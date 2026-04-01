@@ -18,6 +18,18 @@ function logStartup(message, ...args) {
     console.info(`[podish/browser] ${message}`, ...args)
 }
 
+function getImageUrlBase() {
+    const configuredBase = globalThis.ImageUrlBase
+    const base = typeof configuredBase === 'string' && configuredBase.trim().length > 0
+        ? configuredBase.trim()
+        : '/rootfs/'
+    return base.endsWith('/') ? base : `${base}/`
+}
+
+function getDefaultImageJsonUrl() {
+    return new URL('image.json', new URL(getImageUrlBase(), globalThis.location.href)).toString()
+}
+
 async function decompressGzip(compressedBytes) {
     const ds = new DecompressionStream('gzip')
     const blob = new Blob([compressedBytes])
@@ -198,7 +210,7 @@ export default function App() {
         setStatus('downloading')
         logStartup('preparing default browser rootfs')
         try {
-            const imageJsonUrl = new URL('./image.json', globalThis.location.href).toString()
+            const imageJsonUrl = getDefaultImageJsonUrl()
             const imageResp = await fetch(imageJsonUrl)
             if (!imageResp.ok)
                 throw new Error(`HTTP ${imageResp.status}: ${imageResp.statusText}`)
