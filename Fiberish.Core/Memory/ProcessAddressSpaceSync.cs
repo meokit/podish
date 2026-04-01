@@ -360,6 +360,17 @@ internal static class ProcessAddressSpaceSync
         }
     }
 
+    internal static void MigrateOverlayMappings(OverlayInode inode, Inode newBackingInode)
+    {
+        var targets = inode.SnapshotMappedAddressSpaces();
+        foreach (var target in targets)
+        {
+            using var snapshot = RentEngineSnapshot();
+            FillAddressSpaceEngineSnapshot(target, snapshot.Engines, snapshot.SeenStates);
+            target.MigrateOverlayMappings(inode, newBackingInode, snapshot.Engines.Count == 0 ? [] : snapshot.Engines);
+        }
+    }
+
     internal static void SyncAllMappedSharedFiles(VMAManager vmaManager, Engine engine, Process? process = null)
     {
         using var scope = EnterAddressSpaceScope(engine, process);

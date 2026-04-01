@@ -99,16 +99,18 @@ public class LayerSilkOverlayTests
 
             var osRelease = sm.PathWalkWithFlags("/etc/os-release", LookupFlags.FollowSymlink);
             Assert.True(osRelease.IsValid);
+            var overlayInode = Assert.IsType<OverlayInode>(osRelease.Dentry!.Inode);
+            Assert.NotNull(overlayInode.LowerInode);
+            overlayInode.LowerInode!.Mapping = new AddressSpace(AddressSpaceKind.File);
 
             var file = new LinuxFile(osRelease.Dentry!, FileFlags.O_RDONLY, osRelease.Mount!);
-            osRelease.Dentry!.Inode!.Mapping = new AddressSpace(AddressSpaceKind.File);
 
             var pageBuffer = new byte[LinuxConstants.PageSize];
             var rc = osRelease.Dentry.Inode.ReadPage(file, new PageIoRequest(0, 0, LinuxConstants.PageSize), pageBuffer);
 
             Assert.Equal(0, rc);
-            Assert.NotNull(osRelease.Dentry.Inode.Mapping);
-            Assert.Equal(32, osRelease.Dentry.Inode.Mapping.PageCount);
+            Assert.NotNull(overlayInode.LowerInode!.Mapping);
+            Assert.Equal(32, overlayInode.LowerInode.Mapping.PageCount);
             Assert.Equal(payload.AsSpan(0, LinuxConstants.PageSize).ToArray(), pageBuffer);
 
             file.Close();

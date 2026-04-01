@@ -146,6 +146,32 @@ public class VMAManager
         return vma.File?.OpenedInode;
     }
 
+    private static Inode? ResolveCurrentFileBacking(LinuxFile? file)
+    {
+        if (file?.OpenedInode is OverlayInode overlayInode)
+            return overlayInode.ResolveMmapSource(file) ?? file.OpenedInode;
+
+        return file?.OpenedInode;
+    }
+
+    private bool SyncFileBackedVmaMapping(VmArea vma)
+    {
+        var backingInode = ResolveCurrentFileBacking(vma.File);
+        if (backingInode == null)
+            return false;
+
+        var resolvedMapping = Backings.GetOrCreateMapping(backingInode);
+        if (ReferenceEquals(vma.VmMapping, resolvedMapping))
+        {
+            resolvedMapping.Release();
+            return false;
+        }
+
+        vma.VmMapping?.Release();
+        vma.VmMapping = resolvedMapping;
+        return true;
+    }
+
     private static AnonVma? ShareVmAnonVmaForSplit(VmArea vma)
     {
         var privateObject = vma.VmAnonVma;
@@ -597,14 +623,14 @@ public class VMAManager
         else if (isShared)
         {
             // MAP_SHARED file: share the inode's global page cache
-            sharedObj = Backings.GetOrCreateMapping(file.OpenedInode!);
+            sharedObj = Backings.GetOrCreateMapping(ResolveCurrentFileBacking(file)!);
             vmPgoff = (ulong)(offset / LinuxConstants.PageSize);
             fileMapping = new VmaFileMapping(file);
         }
         else
         {
             // MAP_PRIVATE file: clean reads come from inode mapping, private COW pages are created lazily.
-            sharedObj = Backings.GetOrCreateMapping(file.OpenedInode!);
+            sharedObj = Backings.GetOrCreateMapping(ResolveCurrentFileBacking(file)!);
             vmPgoff = (ulong)(offset / LinuxConstants.PageSize);
             fileMapping = new VmaFileMapping(file);
         }
@@ -1473,6 +1499,9 @@ public class VMAManager
             return FaultResult.Segv;
         }
 
+        if (vma.IsFileBacked)
+            SyncFileBackedVmaMapping(vma);
+
         var pageStart = addr & LinuxConstants.PageMask;
         var pageIndex = GetVmaPageIndex(vma, pageStart);
 
@@ -1486,6 +1515,44 @@ public class VMAManager
     public bool HandleFault(uint addr, bool isWrite, Engine engine)
     {
         return HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+    }
+
+    internal void MigrateOverlayMappings(OverlayInode overlayInode, Inode newBackingInode, IReadOnlyList<Engine> engines)
+    {
+        var invalidatedRanges = new List<NativeRange>();
+
+        foreach (var vma in _vmas)
+        {
+            if (!ReferenceEquals(vma.File?.OpenedInode, overlayInode))
+                continue;
+
+            var replacementMapping = Backings.GetOrCreateMapping(newBackingInode);
+            if (ReferenceEquals(vma.VmMapping, replacementMapping))
+            {
+                replacementMapping.Release();
+                continue;
+            }
+
+            vma.VmMapping?.Release();
+            vma.VmMapping = replacementMapping;
+            invalidatedRanges.Add(new NativeRange(vma.Start, vma.Length));
+        }
+
+        if (invalidatedRanges.Count == 0)
+            return;
+
+        MergeRangesInPlace(invalidatedRanges);
+        var sequence = BumpMapSequence();
+        foreach (var range in invalidatedRanges)
+            RecordCodeCacheResetRange(sequence, range.Start, range.Length);
+
+        if (engines.Count == 0)
+            return;
+
+        var primary = engines[0];
+        foreach (var range in invalidatedRanges)
+            TearDownNativeMappings(primary, range.Start, range.Length, false, true, true);
+        primary.AddressSpaceMapSequenceSeen = sequence;
     }
 
     private static bool TryResolveMappedFilePage(VmArea vma, uint pageIndex, long absoluteFileOffset, bool writable,

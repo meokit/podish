@@ -1,4 +1,5 @@
 using Fiberish.Diagnostics;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Microsoft.Extensions.Logging;
 
@@ -375,14 +376,21 @@ public class OverlayInode : Inode
 
     private Inode? ResolveSourceForFile(LinuxFile? linuxFile)
     {
+        if (UpperInode != null)
+            return UpperInode;
         if (linuxFile != null && _openBackingByFile.TryGetValue(linuxFile, out var bound))
             return bound;
-        return UpperInode ?? LowerInode ?? GetAnyOpenBackingInode();
+        return LowerInode ?? GetAnyOpenBackingInode();
     }
 
     private Inode? ResolvePagingSource(LinuxFile? linuxFile)
     {
         return ResolveSourceForFile(linuxFile);
+    }
+
+    internal Inode? ResolveMmapSource(LinuxFile? linuxFile)
+    {
+        return ResolvePagingSource(linuxFile);
     }
 
     private void BindFileBacking(LinuxFile linuxFile, Inode backing, string reason)
@@ -418,6 +426,15 @@ public class OverlayInode : Inode
         UnbindFileBacking(linuxFile, $"{reason}.old");
         linuxFile.PrivateData = null;
         BindFileBacking(linuxFile, backing, $"{reason}.new");
+    }
+
+    private void RebindAllFileBackings(Inode backing, string reason)
+    {
+        if (_openBackingByFile.Count == 0)
+            return;
+
+        foreach (var linuxFile in _openBackingByFile.Keys.ToArray())
+            RebindFileBacking(linuxFile, backing, reason);
     }
 
     public int CopyUp(LinuxFile? linuxFile)
@@ -495,6 +512,12 @@ public class OverlayInode : Inode
         }
 
         UpperDentry = upperDentry;
+
+        if (UpperInode != null)
+        {
+            RebindAllFileBackings(UpperInode, "OverlayInode.CopyUp.rebind-all");
+            ProcessAddressSpaceSync.MigrateOverlayMappings(this, UpperInode);
+        }
 
         // 4. Redirect handle if provided
         if (linuxFile != null && UpperInode != null) RebindFileBacking(linuxFile, UpperInode, "OverlayInode.CopyUp");
@@ -929,21 +952,7 @@ public class OverlayInode : Inode
         if (request.Length == 0) return 0;
         var source = ResolvePagingSource(linuxFile);
         if (source != null)
-        {
-            if (Mapping == null || ReferenceEquals(source.Mapping, Mapping))
-                return source.ReadPage(linuxFile, request, pageBuffer);
-
-            var originalMapping = source.Mapping;
-            source.Mapping = Mapping;
-            try
-            {
-                return source.ReadPage(linuxFile, request, pageBuffer);
-            }
-            finally
-            {
-                source.Mapping = originalMapping;
-            }
-        }
+            return source.ReadPage(linuxFile, request, pageBuffer);
 
         var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         return rc < 0 ? rc : 0;
@@ -952,20 +961,7 @@ public class OverlayInode : Inode
     public override int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
     {
         var source = ResolvePagingSource(linuxFile);
-        if (source == null) return 0;
-        if (Mapping == null || ReferenceEquals(source.Mapping, Mapping))
-            return source.Readahead(linuxFile, request);
-
-        var originalMapping = source.Mapping;
-        source.Mapping = Mapping;
-        try
-        {
-            return source.Readahead(linuxFile, request);
-        }
-        finally
-        {
-            source.Mapping = originalMapping;
-        }
+        return source?.Readahead(linuxFile, request) ?? 0;
     }
 
     public override int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
