@@ -112,7 +112,7 @@
                 <Error Condition="'$(ManualWasmOptPath)' == '' or !Exists('$(ManualWasmOptPath)')"
                              Text="Could not resolve wasm-opt. EmscriptenSdkToolsPath=$(EmscriptenSdkToolsPath), ManualWasmOptPath=$(ManualWasmOptPath)" />
                 <Exec WorkingDirectory="$(MSBuildProjectDirectory)"
-                            Command="node frontend/scripts/optimize-wasm.js --input-wasm &quot;$(_WasmIntermediateOutputPath)dotnet.native.wasm&quot; --wasm-opt &quot;$(ManualWasmOptPath)&quot; --safety-level $(ManualWasmSafetyLevel) --no-recompress"/>
+                            Command="node frontend/scripts/optimize-wasm.js --input-wasm &quot;$(_WasmIntermediateOutputPath)dotnet.native.wasm&quot; --wasm-opt &quot;$(ManualWasmOptPath)&quot; --safety-level $(ManualWasmSafetyLevel)"/>
     </Target>
 
 </Project>

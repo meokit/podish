@@ -5,6 +5,4 @@ node_modules/
 frontend/dist/
 frontend/node_modules/
 rootfs.tar.gz
-frontend/public/image.json
-frontend/public/indexes/
-frontend/public/blobs/
+frontend/public/rootfs/

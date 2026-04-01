@@ -36,4 +36,4 @@ node scripts/optimize-wasm.js --no-recompress
 - The browser build expects an Emscripten toolchain file. Override `EmscriptenToolchainFile=/path/to/Emscripten.cmake`
   if Homebrew is not used.
 - The current frontend uses CDN-hosted React and xterm assets for a zero-bundler scaffold.
-- `build-rootfs.sh` now emits `image.json`, `indexes/`, and `blobs/` into `frontend/public/` for streamed browser boot.
+- `build-rootfs.sh` now emits `image.json`, `indexes/`, and `blobs/` into `frontend/public/rootfs/` for streamed browser boot.

@@ -18,14 +18,42 @@ class CoopCoepHandler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
     def guess_type(self, path: str) -> str:
+        if path.endswith(".br") or path.endswith(".gz"):
+            # Use the remaining filename to determine MIME type.
+            return self.guess_type(path[:-3])
+
         if path.endswith(".wasm"):
             return "application/wasm"
+
         return super().guess_type(path)
 
     def send_head(self):
         path = self.translate_path(self.path)
+
         if os.path.isdir(path):
             return super().send_head()
+
+        # Content negotiation for precompressed assets
+        encoding = None
+        if path.endswith(".br"):
+            encoding = "br"
+        elif path.endswith(".gz"):
+            encoding = "gzip"
+
+        if not os.path.exists(path):
+            # Prefer br over gzip when browser asks for them.
+            accept_encoding = (self.headers.get("Accept-Encoding") or "").lower()
+            if ".br" not in path and ".gz" not in path:
+                if "br" in accept_encoding:
+                    candidate = path + ".br"
+                    if os.path.isfile(candidate):
+                        path = candidate
+                        encoding = "br"
+                if encoding is None and "gzip" in accept_encoding:
+                    candidate = path + ".gz"
+                    if os.path.isfile(candidate):
+                        path = candidate
+                        encoding = "gzip"
 
         if not os.path.exists(path):
             return self.send_error(404, "File not found")
@@ -37,7 +65,18 @@ class CoopCoepHandler(http.server.SimpleHTTPRequestHandler):
         range_header = self.headers.get("Range")
 
         if range_header is None:
-            return super().send_head()
+            # Send full content.
+            self.send_response(200)
+            ctype = self.guess_type(path)
+            self.send_header("Content-Type", ctype)
+            if encoding:
+                self.send_header("Content-Encoding", encoding)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(file_size))
+            self.send_header("Last-Modified", self.date_time_string(os.path.getmtime(path)))
+            self.end_headers()
+
+            return open(path, "rb")
 
         import re
         m = re.match(r"bytes=(\d+)-(\d*)", range_header)
@@ -65,6 +104,8 @@ class CoopCoepHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(206)
         ctype = self.guess_type(path)
         self.send_header("Content-Type", ctype)
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
         self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(end - start + 1))

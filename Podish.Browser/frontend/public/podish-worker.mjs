@@ -23,6 +23,14 @@ let httpRpc = null;
 const BROWSER_ASSEMBLY_NAME = 'Podish.Browser';
 const SAB_PACKET_BUFFER_SIZE = 64 * 1024;
 
+function resolveBootResource(type, name, defaultUri) {
+    if (typeof defaultUri !== 'string' || defaultUri.length === 0)
+        return null;
+    if (type !== 'dotnetwasm' && !(typeof name === 'string' && name.endsWith('.wasm')))
+        return null;
+    return `${defaultUri}.br`;
+}
+
 function attachTimerControl(buffer) {
     const i32 = new Int32Array(buffer, 0, 3);
     return {
@@ -208,7 +216,9 @@ async function getBrowserExports() {
         return browserExportsPromise;
 
     browserExportsPromise = (async () => {
-        const runtime = await dotnet.create();
+        const runtime = await dotnet
+            .withResourceLoader(resolveBootResource)
+            .create();
         runtimeInstance = runtime;
 
         runtime.setModuleImports('podish-worker.mjs', {

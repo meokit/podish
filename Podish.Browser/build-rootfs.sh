@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # build-rootfs.sh — Build an Alpine i386 browser rootfs and export OCI store assets.
-# Output: image.json, indexes/, blobs/ in frontend/public (ready for static deployment).
+# Output: image.json, indexes/, blobs/ in frontend/public/rootfs (ready for static deployment).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-OUTPUT_DIR="${SCRIPT_DIR}/frontend/public"
+PUBLIC_DIR="${SCRIPT_DIR}/frontend/public"
+OUTPUT_DIR="${PUBLIC_DIR}/rootfs"
 IMAGE_REF="localhost/podish-browser-rootfs:latest"
 SAFE_IMAGE_NAME="localhost_podish-browser-rootfs_latest"
 CONTAINER_NAME="podish-rootfs-builder-$$"
@@ -67,9 +68,13 @@ if [[ ! -f "$STORE_DIR/image.json" ]]; then
 fi
 
 echo "==> Copying OCI browser assets..."
+mkdir -p "$OUTPUT_DIR"
 rm -f "$OUTPUT_DIR/rootfs.tar.gz"
 rm -f "$OUTPUT_DIR/image.json"
 rm -rf "$OUTPUT_DIR/indexes" "$OUTPUT_DIR/blobs"
+rm -f "$PUBLIC_DIR/rootfs.tar.gz"
+rm -f "$PUBLIC_DIR/image.json"
+rm -rf "$PUBLIC_DIR/indexes" "$PUBLIC_DIR/blobs"
 cp "$STORE_DIR/image.json" "$OUTPUT_DIR/image.json"
 cp -R "$STORE_DIR/indexes" "$OUTPUT_DIR/indexes"
 cp -R "$STORE_DIR/blobs" "$OUTPUT_DIR/blobs"
