@@ -1,9 +1,8 @@
 using System.Buffers.Binary;
-using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.JavaScript;
 using System.Runtime.Versioning;
 
-namespace PodishApp.BrowserWasm;
+namespace Podish.Browser;
 
 [SupportedOSPlatform("browser")]
 internal static partial class BrowserSabInterop
@@ -29,9 +28,6 @@ internal static partial class BrowserSabInterop
     [JSImport("waitForInterruptSync", "podish-worker.mjs")]
     internal static partial int WaitForInterrupt(int mask = -1, int timeoutMs = -1);
 
-    [JSImport("signalInterrupt", "podish-worker.mjs")]
-    internal static partial void SignalInterrupt(int bits);
-
     [JSImport("pollInputPacketInto", "podish-worker.mjs")]
     internal static unsafe partial int PollInputPacketInto(nint buffer, int maxBytes = 65536);
 
@@ -49,27 +45,6 @@ internal static partial class BrowserSabInterop
 
     [JSImport("writeLogPacketFromMemory", "podish-worker.mjs")]
     internal static unsafe partial int WriteLogPacketFromMemory(int eventType, nint buffer, int length, int flags);
-
-    internal static bool TryParsePacket(byte[] rawPacket, out int eventType, out byte[] payload)
-    {
-        eventType = 0;
-        payload = [];
-
-        if (rawPacket.Length < 8)
-            return false;
-
-        var totalLength = BinaryPrimitives.ReadUInt32LittleEndian(rawPacket.AsSpan(0, 4));
-        if (totalLength < 8 || totalLength > rawPacket.Length)
-            return false;
-
-        eventType = (int)BinaryPrimitives.ReadUInt32LittleEndian(rawPacket.AsSpan(4, 4));
-        var payloadLength = (int)totalLength - 8;
-        if (payloadLength == 0)
-            return true;
-
-        payload = rawPacket.AsSpan(8, payloadLength).ToArray();
-        return true;
-    }
 
     internal static bool TryParsePacket(ReadOnlySpan<byte> rawPacket, out int eventType, out ReadOnlySpan<byte> payload)
     {
@@ -105,7 +80,8 @@ internal static partial class BrowserSabInterop
         }
     }
 
-    internal static unsafe int WritePacketFromMemory(BrowserSabQueueKind queue, int eventType, ReadOnlySpan<byte> payload)
+    internal static unsafe int WritePacketFromMemory(BrowserSabQueueKind queue, int eventType,
+        ReadOnlySpan<byte> payload)
     {
         if (payload.IsEmpty)
             return queue switch
@@ -122,7 +98,8 @@ internal static partial class BrowserSabInterop
             {
                 BrowserSabQueueKind.Input => WriteInputPacketFromMemory(eventType, (nint)ptr, payload.Length),
                 BrowserSabQueueKind.Output => WriteOutputPacketFromMemory(eventType, (nint)ptr, payload.Length),
-                BrowserSabQueueKind.Log => WriteLogPacketFromMemory(eventType, (nint)ptr, payload.Length, LogFlagBegin | LogFlagEnd),
+                BrowserSabQueueKind.Log => WriteLogPacketFromMemory(eventType, (nint)ptr, payload.Length,
+                    LogFlagBegin | LogFlagEnd),
                 _ => 0
             };
         }

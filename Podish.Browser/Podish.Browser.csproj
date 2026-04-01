@@ -1,0 +1,86 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <OutputType>Exe</OutputType>
+        <RootNamespace>Podish.Browser</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
+        <RunAOTCompilation>true</RunAOTCompilation>
+        <WasmBuildNative>true</WasmBuildNative>
+        <WasmEnableThreads>false</WasmEnableThreads>
+        <EmccInitialHeapSize>536870912</EmccInitialHeapSize>
+        <WasmNumAbortedWorkersToWarmup>0</WasmNumAbortedWorkersToWarmup>
+        <WasmMaxThreads>4</WasmMaxThreads>
+        <WasmRunWasmOpt>false</WasmRunWasmOpt>
+        <WasmNativeStrip>false</WasmNativeStrip>
+        <EmccLinkOptimizationFlag>-O0</EmccLinkOptimizationFlag>
+        <WasmLinkOptimizationFlag>-O0</WasmLinkOptimizationFlag>
+        <WasmBitcodeCompileOptimizationFlag>-O0</WasmBitcodeCompileOptimizationFlag>
+        <FiberishForceBrowserWasm>true</FiberishForceBrowserWasm>
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <PackageId>Podish.Browser</PackageId>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <WasmExtraConfig Include="stackSize" Value="8388608"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../Podish.Core/Podish.Core.csproj">
+            <AdditionalProperties>FiberishForceBrowserWasm=true;WasmBuildNative=true;RuntimeIdentifier=browser-wasm</AdditionalProperties>
+        </ProjectReference>
+        <ProjectReference Include="../Fiberish.Core/Fiberish.Core.csproj">
+            <AdditionalProperties>FiberishForceBrowserWasm=true;WasmBuildNative=true;RuntimeIdentifier=browser-wasm</AdditionalProperties>
+        </ProjectReference>
+        <ProjectReference Include="../Fiberish.X86/Fiberish.X86.csproj">
+            <AdditionalProperties>FiberishForceBrowserWasm=true;WasmBuildNative=true;RuntimeIdentifier=browser-wasm</AdditionalProperties>
+        </ProjectReference>
+    </ItemGroup>
+
+    <ItemGroup>
+        <TrimmerRootAssembly Include="Podish.Core" RootMode="all"/>
+        <TrimmerRootAssembly Include="Fiberish.Core" RootMode="all"/>
+        <TrimmerRootAssembly Include="Fiberish.X86" RootMode="all"/>
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+        <Reference Include="Podish.Core">
+            <HintPath>$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Podish.Core.dll</HintPath>
+            <Private>true</Private>
+        </Reference>
+        <Reference Include="Fiberish.Core">
+            <HintPath>$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.Core.dll</HintPath>
+            <Private>true</Private>
+        </Reference>
+        <Reference Include="Fiberish.X86">
+            <HintPath>$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.X86.dll</HintPath>
+            <Private>true</Private>
+        </Reference>
+        <NativeFileReference Include="$(MSBuildProjectDirectory)/../Fiberish.X86/build_native/browser-wasm/libfibercpu.a"/>
+    </ItemGroup>
+
+    <Target Name="CopyBrowserSpecificProjectOutputs" AfterTargets="Build"
+            Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+        <ItemGroup>
+            <BrowserSpecificManaged Include="$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Podish.Core.dll"/>
+            <BrowserSpecificManaged Include="$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.Core.dll"/>
+            <BrowserSpecificManaged Include="$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.X86.dll"/>
+            <BrowserSpecificSymbols Include="$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Podish.Core.pdb" Condition="Exists('$(MSBuildProjectDirectory)/../../Podish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Podish.Core.pdb')"/>
+            <BrowserSpecificSymbols Include="$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.Core.pdb" Condition="Exists('$(MSBuildProjectDirectory)/../../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.Core.pdb')"/>
+            <BrowserSpecificSymbols Include="$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.X86.pdb" Condition="Exists('$(MSBuildProjectDirectory)/../../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.X86.pdb')"/>
+        </ItemGroup>
+
+        <Copy SourceFiles="@(BrowserSpecificManaged)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="false"/>
+        <Copy SourceFiles="@(BrowserSpecificSymbols)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="false"/>
+    </Target>
+
+    <Target Name="FrontendBuild" BeforeTargets="Build" Condition="'$(Configuration)' == 'Release'">
+        <Message Importance="high" Text="Building frontend with Vite..."/>
+        <Exec WorkingDirectory="frontend" Command="npm install"/>
+        <Exec WorkingDirectory="frontend" Command="npm run build"/>
+    </Target>
+
+</Project>

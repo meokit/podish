@@ -1,14 +1,15 @@
+using System.Buffers;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.JavaScript;
 using System.Runtime.Versioning;
 using System.Text;
-using System.Runtime.CompilerServices;
 using Fiberish.Core;
-using Fiberish.X86.Native;
+using Fiberish.Core.Net;
 using Microsoft.Extensions.Logging;
 using Podish.Core;
 
-namespace PodishApp.BrowserWasm;
+namespace Podish.Browser;
 
 [SupportedOSPlatform("browser")]
 public static partial class BrowserExports
@@ -18,15 +19,6 @@ public static partial class BrowserExports
     private const int PooledLogPayloadSize = 4096;
     private const byte ControlStopSession = 1;
     private const byte ControlSessionExited = 2;
-
-    [JSImport("signalInterrupt", "podish-worker.mjs")]
-    internal static partial void SignalInterrupt(int bits);
-
-    [JSImport("requestTimer", "podish-worker.mjs")]
-    internal static partial void RequestTimer(int delayMs);
-
-    [JSImport("cancelTimer", "podish-worker.mjs")]
-    internal static partial void CancelTimer();
 
     private static readonly Lock Sync = new();
     private static BrowserSessionState? _session;
@@ -47,33 +39,26 @@ public static partial class BrowserExports
             DispatchPendingOutputEvents);
     }
 
+    [JSImport("signalInterrupt", "podish-worker.mjs")]
+    internal static partial void SignalInterrupt(int bits);
+
+    [JSImport("requestTimer", "podish-worker.mjs")]
+    internal static partial void RequestTimer(int delayMs);
+
+    [JSImport("cancelTimer", "podish-worker.mjs")]
+    internal static partial void CancelTimer();
+
     [JSExport]
     public static string GetRuntimeInfo()
     {
         return $"Podish.Core loaded: {typeof(PodishContext).Assembly.GetName().Name}";
     }
 
-    internal static string ProbeNative()
-    {
-        var state = X86Native.Create();
-        try
-        {
-            return state == IntPtr.Zero
-                ? "X86_Create returned null"
-                : $"libfibercpu linked successfully, state=0x{state.ToInt64():x}";
-        }
-        finally
-        {
-            if (state != IntPtr.Zero)
-                X86Native.Destroy(state);
-        }
-    }
-
     [JSExport]
     public static async Task<string> StartRootfsTarShell(byte[] rootfsTarBytes, int rows = 24, int cols = 80)
     {
         if (rootfsTarBytes.Length == 0)
-            return Json(ok: false, error: "rootfs tar is empty");
+            return Json(false, error: "rootfs tar is empty");
 
         BrowserSessionState? previous;
         lock (Sync)
@@ -98,7 +83,7 @@ public static partial class BrowserExports
 
         try
         {
-            await using var stream = new MemoryStream(rootfsTarBytes, writable: false);
+            await using var stream = new MemoryStream(rootfsTarBytes, false);
             var session = await context.StartRootfsTarAsync(stream, new PodishRunSpec
             {
                 Name = "browser-shell",
@@ -111,8 +96,8 @@ public static partial class BrowserExports
                 TerminalRows = (ushort)rows,
                 TerminalCols = (ushort)cols,
                 Strace = false,
-                NetworkMode = Fiberish.Core.Net.NetworkMode.Host
-            }, rootfsName: "uploaded-rootfs.tar", containerIdOverride: "browserwasm");
+                NetworkMode = NetworkMode.Host
+            }, "uploaded-rootfs.tar", "browserwasm");
 
             var state = new BrowserSessionState(context, session);
             state.Dispatcher.Register(BrowserSabQueueKind.Input, BrowserSabInterop.EventInputBytes, payload =>
@@ -148,12 +133,12 @@ public static partial class BrowserExports
                 _session = state;
             }
 
-            return Json(ok: true, containerId: session.ContainerId, imageRef: session.ImageRef);
+            return Json(true, containerId: session.ContainerId, imageRef: session.ImageRef);
         }
         catch (Exception ex)
         {
             context.Dispose();
-            return Json(ok: false, error: ex.ToString());
+            return Json(false, error: ex.ToString());
         }
     }
 
@@ -195,10 +180,10 @@ public static partial class BrowserExports
         }
 
         if (session == null)
-            return Json(ok: true, message: "no active session");
+            return Json(true, message: "no active session");
 
         await DisposeSessionAsync(session);
-        return Json(ok: true);
+        return Json(true);
     }
 
     private static BrowserSessionState? GetSession()
@@ -299,7 +284,7 @@ public static partial class BrowserExports
         if (string.IsNullOrEmpty(message))
             return;
 
-        byte levelByte = level switch
+        var levelByte = level switch
         {
             LogLevel.Trace => (byte)0,
             LogLevel.Debug => (byte)1,
@@ -319,10 +304,10 @@ public static partial class BrowserExports
         {
             unsafe
             {
-                Span<byte> buffer = totalPayloadLength <= StackLogPayloadThreshold
+                var buffer = totalPayloadLength <= StackLogPayloadThreshold
                     ? stackalloc byte[StackLogPayloadThreshold]
                     : totalPayloadLength <= poolSize
-                        ? (rented = System.Buffers.ArrayPool<byte>.Shared.Rent(poolSize)).AsSpan(0, poolSize)
+                        ? (rented = ArrayPool<byte>.Shared.Rent(poolSize)).AsSpan(0, poolSize)
                         : new Span<byte>((void*)(unmanaged = Marshal.AllocHGlobal(BrowserSabInterop.LogChunkSize)),
                             BrowserSabInterop.LogChunkSize);
 
@@ -352,7 +337,7 @@ public static partial class BrowserExports
                     encoder.Convert(
                         remaining,
                         buffer,
-                        flush: false,
+                        false,
                         out var charsUsed,
                         out var bytesUsed,
                         out _);
@@ -370,7 +355,7 @@ public static partial class BrowserExports
         finally
         {
             if (rented != null)
-                System.Buffers.ArrayPool<byte>.Shared.Return(rented);
+                ArrayPool<byte>.Shared.Return(rented);
             if (unmanaged != 0)
                 Marshal.FreeHGlobal(unmanaged);
         }
@@ -380,7 +365,6 @@ public static partial class BrowserExports
     {
         var sb = new StringBuilder(value.Length + 8);
         foreach (var ch in value)
-        {
             switch (ch)
             {
                 case '\\':
@@ -411,7 +395,6 @@ public static partial class BrowserExports
                         sb.Append(ch);
                     break;
             }
-        }
 
         return sb.ToString();
     }

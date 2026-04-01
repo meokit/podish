@@ -1,28 +1,19 @@
-using System.Collections.Concurrent;
-using System.Buffers.Binary;
 using System.Buffers;
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Runtime.Versioning;
 
-namespace PodishApp.BrowserWasm;
+namespace Podish.Browser;
 
 [SupportedOSPlatform("browser")]
 internal sealed class BrowserEventDispatcher
 {
-    private readonly ConcurrentDictionary<(BrowserSabQueueKind Queue, int EventType), BrowserEventHandler> _handlers = new();
+    private readonly ConcurrentDictionary<(BrowserSabQueueKind Queue, int EventType), BrowserEventHandler> _handlers =
+        new();
 
     public void Register(BrowserSabQueueKind queue, int eventType, BrowserEventHandler handler)
     {
         _handlers[(queue, eventType)] = handler;
-    }
-
-    public bool TryRegister(BrowserSabQueueKind queue, int eventType, BrowserEventHandler handler)
-    {
-        return _handlers.TryAdd((queue, eventType), handler);
-    }
-
-    public bool Unregister(BrowserSabQueueKind queue, int eventType)
-    {
-        return _handlers.TryRemove((queue, eventType), out _);
     }
 
     public int DispatchQueue(BrowserSabQueueKind queue, int maxPackets = 64, int maxPacketBytes = 64 * 1024)
@@ -40,7 +31,8 @@ internal sealed class BrowserEventDispatcher
                 if (packetLength <= 0)
                     break;
 
-                if (!BrowserSabInterop.TryParsePacket(packetBuffer.AsSpan(0, packetLength), out var eventType, out var payload))
+                if (!BrowserSabInterop.TryParsePacket(packetBuffer.AsSpan(0, packetLength), out var eventType,
+                        out var payload))
                     break;
 
                 if (_handlers.TryGetValue((queue, eventType), out var handler))
