@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from 'react'
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {Terminal} from '@xterm/xterm'
 import {FitAddon} from '@xterm/addon-fit'
 import {
@@ -7,14 +7,11 @@ import {
     encoder,
     podishWorker,
     startSessionRunLoop,
-    stopSessionViaSab,
     writeSessionInput,
     writeSessionResize
 } from './worker-client'
 
 const CONTROL_SESSION_EXITED = 2
-
-// ── Gzip decompression ──────────────────────────────────────────────────────
 
 async function decompressGzip(compressedBytes) {
     const ds = new DecompressionStream('gzip')
@@ -38,8 +35,6 @@ async function decompressGzip(compressedBytes) {
     return result
 }
 
-// ── StatusBadge ─────────────────────────────────────────────────────────────
-
 const statusConfig = {
     idle: {text: 'Idle', color: 'bg-slate-600', dot: 'bg-slate-400'},
     downloading: {text: 'Downloading', color: 'bg-amber-900/60', dot: 'bg-amber-400 animate-pulse'},
@@ -53,44 +48,109 @@ function StatusBadge({status}) {
     const cfg = statusConfig[status] || statusConfig.idle
     return (
         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${cfg.color}`}>
-      <span className={`w-2 h-2 rounded-full ${cfg.dot}`}/>
+            <span className={`w-2 h-2 rounded-full ${cfg.dot}`}/>
             {cfg.text}
-    </span>
+        </span>
     )
 }
 
-// ── ActionButton ────────────────────────────────────────────────────────────
+function ImportRootfsModal({open, busy, selectedFileName, onPickFile, onCancel, onConfirm}) {
+    if (!open)
+        return null
 
-const variants = {
-    primary: 'bg-brand-600 hover:bg-brand-500 text-white shadow-lg shadow-brand-600/20 hover:shadow-brand-500/30',
-    secondary: 'bg-slate-700/80 hover:bg-slate-600/80 text-slate-200 border border-slate-600/50',
-    danger: 'bg-red-600/80 hover:bg-red-500/80 text-white',
-}
-
-function ActionButton({onClick, disabled, variant = 'primary', className = '', children}) {
     return (
-        <button
-            onClick={onClick}
-            disabled={disabled}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200
-        disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer
-        ${variants[variant] || variants.primary} ${className}`}
-        >
-            {children}
-        </button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/72 backdrop-blur-sm p-4">
+            <div className="glass-panel w-full max-w-lg rounded-2xl border border-slate-700/70 p-6 shadow-2xl shadow-slate-950/50">
+                <div className="flex items-start justify-between gap-4">
+                    <div className="space-y-2">
+                        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-brand-200/80">
+                            Import Rootfs
+                        </p>
+                        <h2 className="text-xl font-semibold text-slate-100">
+                            Choose a custom Linux rootfs
+                        </h2>
+                        <p className="text-sm leading-6 text-slate-400">
+                            Select a <span className="font-mono text-slate-300">.tar</span>, <span
+                            className="font-mono text-slate-300">.tar.gz</span>, or <span
+                            className="font-mono text-slate-300">.tgz</span> archive. Once confirmed, this tab will boot directly from that rootfs.
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onCancel}
+                        disabled={busy}
+                        className="rounded-full border border-slate-700/80 px-3 py-1 text-xs font-medium text-slate-400 transition hover:border-slate-500 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                        Cancel
+                    </button>
+                </div>
+
+                <label
+                    className={`mt-6 flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border border-dashed px-5 py-10 text-center transition ${
+                        busy
+                            ? 'cursor-not-allowed border-slate-800 bg-slate-900/40 opacity-60'
+                            : 'border-slate-600/70 bg-slate-900/50 hover:border-brand-300/60 hover:bg-slate-900/70'
+                    }`}
+                >
+                    <input
+                        type="file"
+                        accept=".tar,.tar.gz,.tgz,application/x-tar,application/gzip"
+                        className="hidden"
+                        disabled={busy}
+                        onChange={event => onPickFile(event.target.files?.[0] ?? null)}
+                    />
+                    <span className="text-sm font-medium text-slate-100">
+                        {selectedFileName || 'Click to choose a rootfs archive'}
+                    </span>
+                    <span className="text-xs text-slate-500">
+                        Supports plain tar archives and gzip-compressed tarballs.
+                    </span>
+                </label>
+
+                <div className="mt-6 flex items-center justify-between gap-4">
+                    <p className="text-xs text-slate-500">
+                        No file selected means this tab will fall back to the default rootfs.
+                    </p>
+                    <div className="flex items-center gap-3">
+                        <button
+                            type="button"
+                            onClick={onCancel}
+                            disabled={busy}
+                            className="rounded-xl border border-slate-700/80 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-500 hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            Use Default Instead
+                        </button>
+                        <button
+                            type="button"
+                            onClick={onConfirm}
+                            disabled={busy || !selectedFileName}
+                            className="rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-brand-900/30 transition hover:bg-brand-400 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            {busy ? 'Starting...' : 'Start from Rootfs'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
     )
 }
-
-// ── App ─────────────────────────────────────────────────────────────────────
 
 export default function App() {
     const terminalRef = useRef(null)
     const xtermRef = useRef(null)
     const fitRef = useRef(null)
+    const bootFlowStartedRef = useRef(false)
+
     const [status, setStatus] = useState('idle')
     const [workerReady, setWorkerReady] = useState(false)
-    const [downloadProgress, setDownloadProgress] = useState(null)
     const [sessionMessage, setSessionMessage] = useState('No active container')
+    const [importModalOpen, setImportModalOpen] = useState(false)
+    const [selectedImportFile, setSelectedImportFile] = useState(null)
+    const [importFallbackPending, setImportFallbackPending] = useState(false)
+
+    const searchParams = useMemo(() => new URLSearchParams(globalThis.location?.search || ''), [])
+    const importMode = searchParams.get('import') === '1'
+    const isBusy = status === 'downloading' || status === 'booting'
 
     const settleTerminalLayout = useCallback(async () => {
         fitRef.current?.fit()
@@ -99,7 +159,99 @@ export default function App() {
         return xtermRef.current || {rows: 24, cols: 80}
     }, [])
 
-    // ── Terminal init ──
+    const bootWithBytes = useCallback(async (tarBytes, label) => {
+        setStatus('booting')
+        xtermRef.current?.writeln(`\x1b[38;5;244mBooting ${label} (${(tarBytes.byteLength / 1024 / 1024).toFixed(1)} MB)...\x1b[0m`)
+        try {
+            const {rows, cols} = await settleTerminalLayout()
+            const bytes = new Uint8Array(tarBytes)
+            const result = JSON.parse(await callWorker('StartRootfsTarShell', [bytes, rows, cols], [bytes.buffer]))
+            if (!result.ok) {
+                xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m Boot failed: ${result.error}`)
+                setStatus('error')
+                setSessionMessage('Boot failed')
+                return
+            }
+            setStatus('running')
+            setSessionMessage(`Container started: ${result.containerId}`)
+            void writeSessionResize(rows, cols).catch(() => {
+            })
+            startSessionRunLoop()
+        } catch (error) {
+            xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m ${error}`)
+            setStatus('error')
+            setSessionMessage('Boot failed')
+        }
+    }, [settleTerminalLayout])
+
+    const bootDefault = useCallback(async () => {
+        setStatus('downloading')
+        xtermRef.current?.writeln('\x1b[38;5;244mPreparing default browser rootfs...\x1b[0m')
+        try {
+            const imageJsonUrl = new URL('./image.json', globalThis.location.href).toString()
+            const imageResp = await fetch(imageJsonUrl)
+            if (!imageResp.ok)
+                throw new Error(`HTTP ${imageResp.status}: ${imageResp.statusText}`)
+
+            const {rows, cols} = await settleTerminalLayout()
+            xtermRef.current?.writeln('\x1b[32m✓\x1b[0m Found OCI layer metadata, booting streamed rootfs...')
+            const result = JSON.parse(await callWorker('StartStoredImageShell', [imageJsonUrl, rows, cols]))
+            if (!result.ok) {
+                xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m Boot failed: ${result.error}`)
+                setStatus('error')
+                setSessionMessage('Boot failed')
+                return
+            }
+
+            setStatus('running')
+            setSessionMessage(`Container started: ${result.containerId}`)
+            void writeSessionResize(rows, cols).catch(() => {
+            })
+            startSessionRunLoop()
+        } catch (error) {
+            xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m Download failed: ${error}`)
+            setStatus('error')
+            setSessionMessage('Download failed')
+        }
+    }, [settleTerminalLayout])
+
+    const openImportTab = useCallback(() => {
+        const importUrl = new URL(globalThis.location.href)
+        importUrl.searchParams.set('import', '1')
+        globalThis.open(importUrl.toString(), '_blank', 'noopener,noreferrer')
+    }, [])
+
+    const handleImportFallback = useCallback(() => {
+        if (importFallbackPending)
+            return
+
+        setImportFallbackPending(true)
+        setImportModalOpen(false)
+        setSelectedImportFile(null)
+        xtermRef.current?.writeln('\x1b[38;5;244mImport cancelled, starting default rootfs instead...\x1b[0m')
+        void bootDefault()
+    }, [bootDefault, importFallbackPending])
+
+    const confirmImportRootfs = useCallback(async () => {
+        if (!selectedImportFile)
+            return
+
+        setImportModalOpen(false)
+        setStatus('booting')
+        xtermRef.current?.writeln(`\x1b[38;5;244mReading ${selectedImportFile.name}...\x1b[0m`)
+        try {
+            let tarBytes = new Uint8Array(await selectedImportFile.arrayBuffer())
+            if (selectedImportFile.name.endsWith('.gz') || selectedImportFile.name.endsWith('.tgz')) {
+                xtermRef.current?.writeln('\x1b[38;5;244mDecompressing gzip...\x1b[0m')
+                tarBytes = await decompressGzip(tarBytes)
+            }
+            await bootWithBytes(tarBytes, selectedImportFile.name)
+        } catch (error) {
+            xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m Import failed: ${error}`)
+            setStatus('error')
+            setSessionMessage('Import failed')
+        }
+    }, [bootWithBytes, selectedImportFile])
 
     useEffect(() => {
         const terminal = new Terminal({
@@ -149,12 +301,15 @@ export default function App() {
 
         podishWorker.ready
             .then(async () => {
-                setWorkerReady(true)
                 terminal.writeln('\x1b[32m✓\x1b[0m .NET runtime ready')
                 const info = await callWorker('GetRuntimeInfo')
                 terminal.writeln(`\x1b[32m✓\x1b[0m ${info}`)
                 terminal.writeln('')
-                terminal.writeln('\x1b[38;5;244mPress "Boot Default" to start, or import your own rootfs.\x1b[0m')
+                if (importMode)
+                    terminal.writeln('\x1b[38;5;244mPlease choose a custom rootfs to continue.\x1b[0m')
+                else
+                    terminal.writeln('\x1b[38;5;244mPreparing the default rootfs automatically...\x1b[0m')
+                setWorkerReady(true)
             })
             .catch(error => {
                 terminal.writeln(`\x1b[31m✗\x1b[0m Worker bootstrap failed: ${error}`)
@@ -188,17 +343,10 @@ export default function App() {
                 return
             const exitCode = new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getInt32(1, true)
             xtermRef.current?.writeln(`\r\n\x1b[38;5;244m[process exited: ${exitCode}]\x1b[0m`)
-            stopStatusMonitor()
             setStatus('stopped')
             setSessionMessage(`Process exited with code ${exitCode}`)
         })
 
-        const resizeToGuest = () => {
-            const {rows, cols} = terminal
-            void writeSessionResize(rows, cols).catch(() => {
-            })
-        }
-        resizeToGuest()
         const resizeDisposable = terminal.onResize(() => {
             const {rows, cols} = terminal
             void writeSessionResize(rows, cols).catch(() => {
@@ -206,7 +354,6 @@ export default function App() {
         })
 
         return () => {
-            stopStatusMonitor()
             globalThis.removeEventListener('resize', onResize)
             dataDisposable.dispose()
             resizeDisposable.dispose()
@@ -214,235 +361,68 @@ export default function App() {
             xtermRef.current = null
             fitRef.current = null
         }
-    }, [])
+    }, [importMode])
 
-    // ── Session monitoring ──
-
-    function stopStatusMonitor() {
-    }
-
-    // ── Actions ──
-
-    const bootWithBytes = useCallback(async (tarBytes, label) => {
-        setStatus('booting')
-        xtermRef.current?.writeln(`\x1b[38;5;244mBooting ${label} (${(tarBytes.byteLength / 1024 / 1024).toFixed(1)} MB)...\x1b[0m`)
-        try {
-            const {rows, cols} = await settleTerminalLayout()
-            const bytes = new Uint8Array(tarBytes)
-            const result = JSON.parse(await callWorker('StartRootfsTarShell', [bytes, rows, cols], [bytes.buffer]))
-            if (!result.ok) {
-                xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m Boot failed: ${result.error}`)
-                setStatus('error')
-                setSessionMessage('Boot failed')
-                return
-            }
-            setStatus('running')
-            setSessionMessage(`Container started: ${result.containerId}`)
-            void writeSessionResize(rows, cols).catch(() => {
-            })
-            startSessionRunLoop()
-        } catch (error) {
-            xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m ${error}`)
-            setStatus('error')
-            setSessionMessage('Boot failed')
-        }
-    }, [settleTerminalLayout])
-
-    const bootDefault = useCallback(async () => {
-        setStatus('downloading')
-        setDownloadProgress(null)
-        xtermRef.current?.writeln('\x1b[38;5;244mChecking default browser rootfs...\x1b[0m')
-        try {
-            const imageJsonUrl = new URL('./image.json', globalThis.location.href).toString()
-            const imageResp = await fetch(imageJsonUrl)
-            if (imageResp.ok) {
-                const {rows, cols} = await settleTerminalLayout()
-                xtermRef.current?.writeln('\x1b[32m✓\x1b[0m Found OCI layer metadata, booting streamed rootfs...')
-                const result = JSON.parse(await callWorker('StartStoredImageShell', [imageJsonUrl, rows, cols]))
-                if (!result.ok) {
-                    xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m Boot failed: ${result.error}`)
-                    setStatus('error')
-                    setSessionMessage('Boot failed')
-                    return
-                }
-                setStatus('running')
-                setSessionMessage(`Container started: ${result.containerId}`)
-                void writeSessionResize(rows, cols).catch(() => {
-                })
-                startSessionRunLoop()
-                return
-            }
-
-            xtermRef.current?.writeln('\x1b[31m✗\x1b[0m OCI metadata not found; rootfs.tar.gz fallback is disabled by design.\x1b[0m')
-            setStatus('error')
-            setSessionMessage('OCI image.json required')
+    useEffect(() => {
+        if (!workerReady || bootFlowStartedRef.current)
             return
 
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
-
-            const contentLength = parseInt(resp.headers.get('content-length') || '0', 10)
-            const reader = resp.body.getReader()
-            const chunks = []
-            let loaded = 0
-            while (true) {
-                const {done, value} = await reader.read()
-                if (done) break
-                chunks.push(value)
-                loaded += value.byteLength
-                if (contentLength > 0) setDownloadProgress({loaded, total: contentLength})
-            }
-            const compressed = new Uint8Array(loaded)
-            let offset = 0
-            for (const c of chunks) {
-                compressed.set(c, offset);
-                offset += c.byteLength
-            }
-
-            xtermRef.current?.writeln(`\x1b[32m✓\x1b[0m Downloaded ${(loaded / 1024 / 1024).toFixed(1)} MB, decompressing...`)
-            setDownloadProgress(null)
-            const tarBytes = await decompressGzip(compressed)
-            await bootWithBytes(tarBytes, 'default rootfs')
-        } catch (error) {
-            xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m Download failed: ${error}`)
-            setStatus('error')
-            setDownloadProgress(null)
-            setSessionMessage('Download failed')
+        bootFlowStartedRef.current = true
+        if (importMode) {
+            setImportModalOpen(true)
+            return
         }
-    }, [bootWithBytes])
 
-    const importRootfs = useCallback(async () => {
-        const input = document.createElement('input')
-        input.type = 'file'
-        input.accept = '.tar,.tar.gz,.tgz,application/x-tar,application/gzip'
-        input.onchange = async () => {
-            const file = input.files?.[0]
-            if (!file) return
-            setStatus('booting')
-            xtermRef.current?.writeln(`\x1b[38;5;244mReading ${file.name}...\x1b[0m`)
-            try {
-                let tarBytes = new Uint8Array(await file.arrayBuffer())
-                if (file.name.endsWith('.gz') || file.name.endsWith('.tgz')) {
-                    xtermRef.current?.writeln('\x1b[38;5;244mDecompressing gzip...\x1b[0m')
-                    tarBytes = await decompressGzip(tarBytes)
-                }
-                await bootWithBytes(tarBytes, file.name)
-            } catch (error) {
-                xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m Import failed: ${error}`)
-                setStatus('error')
-                setSessionMessage('Import failed')
-            }
-        }
-        input.click()
-    }, [bootWithBytes])
-
-    const stopSession = useCallback(async () => {
-        await stopSessionViaSab().catch(error => {
-            xtermRef.current?.writeln(`\x1b[31m✗\x1b[0m ${error}`)
-        })
-        stopStatusMonitor()
-        setStatus('stopped')
-        setSessionMessage('Stopping container...')
-    }, [])
-
-    const isBusy = status === 'downloading' || status === 'booting'
-
-    // ── Render ──
+        void bootDefault()
+    }, [bootDefault, importMode, workerReady])
 
     return (
-        <div className="flex flex-col h-screen">
-            {/* Header */}
-            <header className="glass flex items-center justify-between px-6 py-3 z-10">
-                <div className="flex items-center gap-3">
-                    <h1 className="text-lg font-bold tracking-tight bg-gradient-to-r from-brand-400 to-brand-300 bg-clip-text text-transparent">
+        <div className="flex h-screen flex-col overflow-hidden">
+            <ImportRootfsModal
+                open={importModalOpen}
+                busy={isBusy}
+                selectedFileName={selectedImportFile?.name || ''}
+                onPickFile={setSelectedImportFile}
+                onCancel={handleImportFallback}
+                onConfirm={confirmImportRootfs}
+            />
+
+            <header className="glass z-10 flex items-center justify-between px-6 py-3">
+                <div className="flex min-w-0 items-center gap-3">
+                    <h1 className="bg-gradient-to-r from-brand-400 to-brand-300 bg-clip-text text-lg font-bold tracking-tight text-transparent">
                         Podish
                     </h1>
-                    <span className="text-xs text-slate-500 font-mono">
-            x86 Linux in WebAssembly
-          </span>
+                    <span className="truncate text-xs font-mono text-slate-500">
+                        x86 Linux in WebAssembly
+                    </span>
+                    <span className="hidden text-xs text-slate-600 sm:inline">•</span>
+                    <span className="hidden truncate text-xs font-mono text-slate-500 sm:inline">
+                        {sessionMessage}
+                    </span>
                 </div>
-                <StatusBadge status={status}/>
+                <div className="flex items-center gap-3">
+                    {importMode && !importFallbackPending && status === 'idle' && (
+                        <span className="hidden text-[11px] uppercase tracking-[0.2em] text-brand-200/70 sm:inline">
+                            Import Mode
+                        </span>
+                    )}
+                    <StatusBadge status={status}/>
+                    <button
+                        type="button"
+                        onClick={openImportTab}
+                        className="text-sm font-medium text-slate-300/70 underline decoration-slate-500/40 underline-offset-4 transition hover:text-slate-100 hover:decoration-slate-200/70"
+                    >
+                        Import your rootfs
+                    </button>
+                </div>
             </header>
 
-            {/* Body */}
-            <div className="flex flex-1 min-h-0">
-                {/* Sidebar */}
-                <aside className="glass-panel w-64 shrink-0 flex flex-col p-4 gap-4 border-r border-slate-700/50">
-                    {/* Boot */}
-                    <div className="space-y-2">
-                        <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Boot</h2>
-                        <ActionButton onClick={bootDefault} disabled={isBusy || !workerReady} className="w-full">
-                            {status === 'downloading' ? '⟳ Downloading...'
-                                : status === 'booting' ? '⟳ Booting...'
-                                    : '⚡ Boot Default Rootfs'}
-                        </ActionButton>
-                        {downloadProgress && (
-                            <div className="space-y-1">
-                                <div className="w-full bg-slate-700 rounded-full h-1.5 overflow-hidden">
-                                    <div
-                                        className="bg-brand-500 h-1.5 rounded-full transition-all duration-300"
-                                        style={{width: `${Math.round((downloadProgress.loaded / downloadProgress.total) * 100)}%`}}
-                                    />
-                                </div>
-                                <p className="text-xs text-slate-500 text-right">
-                                    {(downloadProgress.loaded / 1024 / 1024).toFixed(1)} / {(downloadProgress.total / 1024 / 1024).toFixed(1)} MB
-                                </p>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="border-t border-slate-700/50"/>
-
-                    {/* Custom rootfs */}
-                    <div className="space-y-2">
-                        <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Custom Rootfs</h2>
-                        <ActionButton onClick={importRootfs} disabled={isBusy || !workerReady} variant="secondary"
-                                      className="w-full">
-                            📁 Import .tar / .tar.gz
-                        </ActionButton>
-                    </div>
-
-                    <div className="border-t border-slate-700/50"/>
-
-                    {/* Session */}
-                    <div className="space-y-2">
-                        <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Session</h2>
-                        <ActionButton onClick={stopSession} disabled={status !== 'running'} variant="danger"
-                                      className="w-full">
-                            ■ Stop
-                        </ActionButton>
-                        <ActionButton onClick={() => xtermRef.current?.clear()} variant="secondary" className="w-full">
-                            🗑 Clear Terminal
-                        </ActionButton>
-                        <p className="text-xs text-slate-500 break-all">{sessionMessage}</p>
-                    </div>
-
-                    {/* Spacer */}
-                    <div className="flex-1"/>
-
-                    {/* Info */}
-                    <div className="text-xs text-slate-600 space-y-1">
-                        <p>Default rootfs: Alpine Linux i386</p>
-                        <p>python3 · luajit · gcc · vim</p>
-                        <p>Powered by .NET + Wasm</p>
-                    </div>
-                </aside>
-
-                {/* Terminal */}
-                <main className="flex-1 flex flex-col p-4 min-w-0">
-                    <div className="flex items-center gap-2 mb-2">
-                        <div className="flex gap-1.5">
-                            <span className="w-3 h-3 rounded-full bg-red-500/80"/>
-                            <span className="w-3 h-3 rounded-full bg-yellow-500/80"/>
-                            <span className="w-3 h-3 rounded-full bg-green-500/80"/>
-                        </div>
-                        <span className="text-xs text-slate-500 font-mono ml-2">terminal</span>
-                    </div>
-                    <div
-                        ref={terminalRef}
-                        className="terminal-container flex-1 rounded-xl border border-slate-700/50 overflow-hidden bg-[#020617] animate-glow"
-                    />
-                </main>
-            </div>
+            <main className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
+                <div
+                    ref={terminalRef}
+                    className="terminal-container animate-glow flex-1 overflow-hidden rounded-xl border border-slate-700/50 bg-[#020617]"
+                />
+            </main>
         </div>
     )
 }
