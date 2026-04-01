@@ -188,6 +188,46 @@ public class LayerFsTests
     }
 
     [Fact]
+    public void ReadPage_WithMinimumReadAhead_PopulatesPageCacheWindow()
+    {
+        var payload = new byte[LinuxConstants.PageSize * 32];
+        for (var i = 0; i < payload.Length; i++) payload[i] = (byte)(i % 256);
+
+        var index = new LayerIndex();
+        index.AddEntry(new LayerIndexEntry("/etc", InodeType.Directory, 0x1ED));
+        index.AddEntry(new LayerIndexEntry("/etc/os-release", InodeType.File, 0x1A4, Size: (ulong)payload.Length,
+            InlineData: payload));
+
+        var fs = new LayerFileSystem();
+        var sb = fs.ReadSuper(
+            new FileSystemType { Name = "layerfs" },
+            0,
+            "layer",
+            new LayerMountOptions
+            {
+                Index = index,
+                ContentProvider = new InMemoryLayerContentProvider(),
+                MinimumReadAheadBytes = 128 * 1024
+            });
+
+        var d = sb.Root.Inode!.Lookup("etc");
+        Assert.NotNull(d);
+        var osRelease = d!.Inode!.Lookup("os-release");
+        Assert.NotNull(osRelease);
+
+        var file = new LinuxFile(osRelease!, FileFlags.O_RDONLY, null!);
+        osRelease!.Inode!.Mapping = new AddressSpace(AddressSpaceKind.File);
+
+        var pageBuffer = new byte[LinuxConstants.PageSize];
+        var rc = osRelease.Inode.ReadPage(file, new PageIoRequest(0, 0, LinuxConstants.PageSize), pageBuffer);
+
+        Assert.Equal(0, rc);
+        Assert.NotNull(osRelease.Inode.Mapping);
+        Assert.Equal(32, osRelease.Inode.Mapping.PageCount);
+        Assert.Equal(payload.AsSpan(0, LinuxConstants.PageSize).ToArray(), pageBuffer);
+    }
+
+    [Fact]
     public void ShrinkAfterLookup_ReLookupMustUseFreshInodeObject()
     {
         var rootNode = LayerNode.Directory("/")

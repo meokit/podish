@@ -1,3 +1,5 @@
+using Fiberish.Native;
+
 namespace Fiberish.VFS;
 
 /// <summary>
@@ -37,6 +39,8 @@ public class VfsStream : Stream
         if (_file.OpenedInode == null) return 0;
 
         var n = _file.OpenedInode!.ReadToHost(null, _file, buffer.AsSpan(offset, count), _position);
+        if (n < 0)
+            throw new IOException(BuildIoFailureMessage("read", n, count));
         if (n > 0) _position += n;
         return n;
     }
@@ -69,7 +73,18 @@ public class VfsStream : Stream
         if (_file.OpenedInode == null) return;
 
         var n = _file.OpenedInode!.WriteFromHost(null, _file, buffer.AsSpan(offset, count), _position);
+        if (n < 0)
+            throw new IOException(BuildIoFailureMessage("write", n, count));
         if (n > 0) _position += n;
+    }
+
+    private string BuildIoFailureMessage(string operation, int result, int requestedCount)
+    {
+        var errnoValue = -result;
+        var errnoName = Enum.IsDefined(typeof(Errno), errnoValue)
+            ? ((Errno)errnoValue).ToString()
+            : errnoValue.ToString();
+        return $"VFS {operation} failed: errno={errnoName} result={result} position={_position} requestedCount={requestedCount}";
     }
 
     protected override void Dispose(bool disposing)

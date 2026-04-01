@@ -1,6 +1,7 @@
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
+using Fiberish.Native;
 using Fiberish.SilkFS;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
@@ -62,6 +63,55 @@ public class LayerSilkOverlayTests
             Assert.NotNull(lowerEtc);
             Assert.Null(lowerEtc!.Inode!.Lookup("fiber.txt"));
 
+            sm.Close();
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Overlay_LayerfsLower_ReadPage_TriggersLowerReadAhead()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"layerfs-pagecache-readahead-{Guid.NewGuid():N}");
+        try
+        {
+            var payload = new byte[LinuxConstants.PageSize * 32];
+            for (var i = 0; i < payload.Length; i++) payload[i] = (byte)(i % 256);
+            var index = new LayerIndex();
+            index.AddEntry(new LayerIndexEntry("/etc", InodeType.Directory, 0x1ED));
+            index.AddEntry(new LayerIndexEntry("/etc/os-release", InodeType.File, 0x1A4, Size: (ulong)payload.Length,
+                InlineData: payload));
+
+            using var engine = new Engine();
+            var sm = new SyscallManager(engine, new VMAManager(), 0);
+
+            var layerType = FileSystemRegistry.Get("layerfs")!;
+            var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(layerType, 0, "test-lower",
+                new LayerMountOptions
+                {
+                    Index = index,
+                    ContentProvider = new InMemoryLayerContentProvider(),
+                    MinimumReadAheadBytes = 128 * 1024
+                });
+            sm.MountRootOverlayWithLower(lowerSb, "silkfs", silkRoot);
+
+            var osRelease = sm.PathWalkWithFlags("/etc/os-release", LookupFlags.FollowSymlink);
+            Assert.True(osRelease.IsValid);
+
+            var file = new LinuxFile(osRelease.Dentry!, FileFlags.O_RDONLY, osRelease.Mount!);
+            osRelease.Dentry!.Inode!.Mapping = new AddressSpace(AddressSpaceKind.File);
+
+            var pageBuffer = new byte[LinuxConstants.PageSize];
+            var rc = osRelease.Dentry.Inode.ReadPage(file, new PageIoRequest(0, 0, LinuxConstants.PageSize), pageBuffer);
+
+            Assert.Equal(0, rc);
+            Assert.NotNull(osRelease.Dentry.Inode.Mapping);
+            Assert.Equal(32, osRelease.Dentry.Inode.Mapping.PageCount);
+            Assert.Equal(payload.AsSpan(0, LinuxConstants.PageSize).ToArray(), pageBuffer);
+
+            file.Close();
             sm.Close();
         }
         finally

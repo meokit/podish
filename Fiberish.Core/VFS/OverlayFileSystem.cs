@@ -380,6 +380,19 @@ public class OverlayInode : Inode
         return UpperInode ?? LowerInode ?? GetAnyOpenBackingInode();
     }
 
+    private Inode? ResolvePagingSource(LinuxFile? linuxFile)
+    {
+        var source = ResolveSourceForFile(linuxFile);
+        if (source == null)
+            return null;
+
+        // Let the backing filesystem populate the same address space the overlay caller observes.
+        if (Mapping != null && source.Mapping == null)
+            source.Mapping = Mapping;
+
+        return source;
+    }
+
     private void BindFileBacking(LinuxFile linuxFile, Inode backing, string reason)
     {
         if (_openBackingByFile.TryGetValue(linuxFile, out var existing))
@@ -922,13 +935,17 @@ public class OverlayInode : Inode
             return -(int)Errno.EINVAL;
         pageBuffer.Clear();
         if (request.Length == 0) return 0;
+        var source = ResolvePagingSource(linuxFile);
+        if (source != null)
+            return source.ReadPage(linuxFile, request, pageBuffer);
+
         var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         return rc < 0 ? rc : 0;
     }
 
     public override int Readahead(LinuxFile? linuxFile, ReadaheadRequest request)
     {
-        var source = ResolveSourceForFile(linuxFile);
+        var source = ResolvePagingSource(linuxFile);
         if (source == null) return 0;
         return source.Readahead(linuxFile, request);
     }

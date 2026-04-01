@@ -356,6 +356,25 @@ public sealed class ImageArchiveService
         File.Move(tmp, outputArchive, true);
     }
 
+    public void ExportStoredImage(string imageReferenceOrPath, string outputDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+            throw new InvalidOperationException("output directory is required");
+
+        var (storeDir, _) = ResolveStoreDirForImage(imageReferenceOrPath);
+        var imagePath = Path.Combine(storeDir, "image.json");
+        if (!File.Exists(imagePath))
+            throw new FileNotFoundException($"image metadata not found: {imagePath}");
+
+        if (Directory.Exists(outputDirectory))
+            Directory.Delete(outputDirectory, true);
+        Directory.CreateDirectory(outputDirectory);
+
+        File.Copy(imagePath, Path.Combine(outputDirectory, "image.json"), true);
+        CopyDirectory(Path.Combine(storeDir, "indexes"), Path.Combine(outputDirectory, "indexes"));
+        CopyDirectory(Path.Combine(storeDir, "blobs"), Path.Combine(outputDirectory, "blobs"));
+    }
+
     public void ExportToStream(string containerId, Stream output)
     {
         if (string.IsNullOrWhiteSpace(containerId))
@@ -453,7 +472,7 @@ public sealed class ImageArchiveService
             digestToBlobPath[layer.Digest] = blobPath;
         }
 
-        var merged = MergeLayerIndexes(layerIndexes);
+        var merged = OciLayerIndexMerger.Merge(layerIndexes);
         var layerType = FileSystemRegistry.Get("layerfs");
         if (layerType == null)
             throw new InvalidOperationException("layerfs is not registered");
@@ -768,6 +787,30 @@ public sealed class ImageArchiveService
         }
     }
 
+    private static void CopyDirectory(string sourceDir, string destinationDir)
+    {
+        if (!Directory.Exists(sourceDir))
+            throw new DirectoryNotFoundException($"directory not found: {sourceDir}");
+
+        Directory.CreateDirectory(destinationDir);
+
+        foreach (var directory in Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(sourceDir, directory);
+            Directory.CreateDirectory(Path.Combine(destinationDir, relativePath));
+        }
+
+        foreach (var file in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(sourceDir, file);
+            var targetPath = Path.Combine(destinationDir, relativePath);
+            var targetDirectory = Path.GetDirectoryName(targetPath);
+            if (!string.IsNullOrEmpty(targetDirectory))
+                Directory.CreateDirectory(targetDirectory);
+            File.Copy(file, targetPath, true);
+        }
+    }
+
     private static (string Registry, string Repository, string Tag) ParseImageReference(string imageReference)
     {
         var firstSlashIndex = imageReference.IndexOf('/');
@@ -786,91 +829,6 @@ public sealed class ImageArchiveService
         }
 
         return (registry, rest, tag);
-    }
-
-    private static LayerIndex MergeLayerIndexes(IReadOnlyList<IReadOnlyList<LayerIndexEntry>> layers)
-    {
-        var merged = new Dictionary<string, LayerIndexEntry>(StringComparer.Ordinal)
-        {
-            ["/"] = new("/", InodeType.Directory, 0x1ED)
-        };
-
-        foreach (var layer in layers)
-        foreach (var entry in layer)
-        {
-            var path = NormalizeAbsolutePath(entry.Path);
-            if (path == "/") continue;
-
-            var parent = ParentPath(path);
-            var name = BaseName(path);
-            if (name == ".wh..wh..opq")
-            {
-                RemoveAllChildren(merged, parent);
-                continue;
-            }
-
-            if (name.StartsWith(".wh.", StringComparison.Ordinal) && name.Length > 4)
-            {
-                var hiddenName = name[4..];
-                var hiddenPath = parent == "/" ? "/" + hiddenName : parent + "/" + hiddenName;
-                RemovePathWithDescendants(merged, hiddenPath);
-                continue;
-            }
-
-            merged[path] = entry with { Path = path };
-        }
-
-        var index = new LayerIndex();
-        foreach (var entry in merged.Values
-                     .Where(e => e.Path != "/")
-                     .OrderBy(e => e.Path.Count(c => c == '/'))
-                     .ThenBy(e => e.Path, StringComparer.Ordinal))
-            index.AddEntry(entry);
-        return index;
-    }
-
-    private static void RemoveAllChildren(Dictionary<string, LayerIndexEntry> merged, string parentPath)
-    {
-        var prefix = parentPath == "/" ? "/" : parentPath + "/";
-        var keys = merged.Keys.Where(k => k != "/" && k.StartsWith(prefix, StringComparison.Ordinal)).ToArray();
-        foreach (var k in keys)
-            merged.Remove(k);
-    }
-
-    private static void RemovePathWithDescendants(Dictionary<string, LayerIndexEntry> merged, string path)
-    {
-        var normalized = NormalizeAbsolutePath(path);
-        merged.Remove(normalized);
-        var prefix = normalized == "/" ? "/" : normalized + "/";
-        var keys = merged.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToArray();
-        foreach (var k in keys)
-            merged.Remove(k);
-    }
-
-    private static string NormalizeAbsolutePath(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path)) return "/";
-        var p = path.Replace('\\', '/');
-        if (!p.StartsWith('/')) p = "/" + p;
-        while (p.Contains("//", StringComparison.Ordinal)) p = p.Replace("//", "/", StringComparison.Ordinal);
-        if (p.Length > 1 && p.EndsWith('/')) p = p.TrimEnd('/');
-        return p;
-    }
-
-    private static string ParentPath(string path)
-    {
-        var normalized = NormalizeAbsolutePath(path);
-        if (normalized == "/") return "/";
-        var lastSlash = normalized.LastIndexOf('/');
-        return lastSlash <= 0 ? "/" : normalized[..lastSlash];
-    }
-
-    private static string BaseName(string path)
-    {
-        var normalized = NormalizeAbsolutePath(path);
-        if (normalized == "/") return "/";
-        var lastSlash = normalized.LastIndexOf('/');
-        return lastSlash < 0 ? normalized : normalized[(lastSlash + 1)..];
     }
 
     private static void EnsureFileSystemsRegistered()

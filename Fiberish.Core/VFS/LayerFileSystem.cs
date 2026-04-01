@@ -25,7 +25,7 @@ public class LayerFileSystem : FileSystem
         }
 
         var contentProvider = options.ContentProvider ?? new InMemoryLayerContentProvider();
-        var sb = new LayerSuperBlock(fsType, index, contentProvider, DevManager);
+        var sb = new LayerSuperBlock(fsType, index, contentProvider, DevManager, options.MinimumReadAheadBytes);
         sb.Root = new Dentry("/", sb.GetOrCreateInode("/"), null, sb);
         sb.Root.Parent = sb.Root;
         return sb;
@@ -37,6 +37,7 @@ public class LayerMountOptions
     public LayerNode? Root { get; init; }
     public LayerIndex? Index { get; init; }
     public ILayerContentProvider? ContentProvider { get; init; }
+    public int MinimumReadAheadBytes { get; init; }
 }
 
 public interface ILayerContentProvider
@@ -198,17 +199,19 @@ public class LayerSuperBlock : SuperBlock
     private readonly Dictionary<string, LayerInode> _inodeByPath = new(StringComparer.Ordinal);
 
     public LayerSuperBlock(FileSystemType fsType, LayerIndex index, ILayerContentProvider contentProvider,
-        DeviceNumberManager? devManager = null) : base(devManager)
+        DeviceNumberManager? devManager = null, int minimumReadAheadBytes = 0) : base(devManager)
     {
         Type = fsType;
         Index = index;
         ContentProvider = contentProvider;
+        MinimumReadAheadBytes = Math.Max(0, minimumReadAheadBytes);
         foreach (var path in Index.Entries.Keys.OrderBy(static p => p, StringComparer.Ordinal))
             _inoByPath[path] = (ulong)(_inoByPath.Count + 1);
     }
 
     public LayerIndex Index { get; }
     public ILayerContentProvider ContentProvider { get; }
+    public int MinimumReadAheadBytes { get; }
 
     public LayerInode GetOrCreateInode(string path)
     {
@@ -371,6 +374,24 @@ public class LayerInode : Inode
         pageBuffer.Clear();
         if (request.Length == 0) return 0;
         if (_entry.Type != InodeType.File) return 0;
+
+        if (Mapping != null)
+        {
+            PopulatePageCacheWindow(request.PageIndex, GetMinimumReadAheadPageCount());
+
+            var pagePtr = Mapping.PeekPage((uint)request.PageIndex);
+            if (pagePtr != IntPtr.Zero)
+            {
+                unsafe
+                {
+                    var src = new ReadOnlySpan<byte>((void*)pagePtr, LinuxConstants.PageSize);
+                    src[..request.Length].CopyTo(pageBuffer);
+                }
+
+                return 0;
+            }
+        }
+
         var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         return rc < 0 ? rc : 0;
     }
@@ -379,11 +400,34 @@ public class LayerInode : Inode
     {
         if (_entry.Type != InodeType.File || request.PageCount <= 0 || Mapping == null) return 0;
 
+        PopulatePageCacheWindow(request.StartPageIndex, Math.Max(request.PageCount, GetMinimumReadAheadPageCount()));
+
+        return 0;
+    }
+
+    private int GetMinimumReadAheadPageCount()
+    {
+        var minimumBytes = ((LayerSuperBlock)SuperBlock).MinimumReadAheadBytes;
+        if (minimumBytes <= 0)
+            return 1;
+
+        return Math.Max(1, (minimumBytes + LinuxConstants.PageSize - 1) / LinuxConstants.PageSize);
+    }
+
+    private void PopulatePageCacheWindow(long startPageIndex, int pageCount)
+    {
+        if (pageCount <= 0 || Mapping == null)
+            return;
+
+        var maxPageCount = (int)(((long)Size + LinuxConstants.PageSize - 1) / LinuxConstants.PageSize);
+        if (maxPageCount <= 0 || startPageIndex >= maxPageCount)
+            return;
+
         var sb = (LayerSuperBlock)SuperBlock;
         var page = new byte[LinuxConstants.PageSize];
-        for (var i = 0; i < request.PageCount; i++)
+        var endPageIndex = Math.Min(startPageIndex + pageCount, maxPageCount);
+        for (var pageIndex = startPageIndex; pageIndex < endPageIndex; pageIndex++)
         {
-            var pageIndex = request.StartPageIndex + i;
             if (Mapping.PeekPage((uint)pageIndex) != IntPtr.Zero) continue;
 
             var ptr = Mapping.GetOrCreatePage((uint)pageIndex, p =>
@@ -401,10 +445,9 @@ public class LayerInode : Inode
                 return true;
             }, out _, true, AllocationClass.Readahead);
 
-            if (ptr == IntPtr.Zero) return 0;
+            if (ptr == IntPtr.Zero)
+                return;
         }
-
-        return 0;
     }
 
     protected override int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer,

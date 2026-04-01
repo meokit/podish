@@ -748,7 +748,7 @@ public sealed class ContainerRuntimeService
                 _logger.LogWarning(ex, "Failed to persist repaired OCI image metadata at {ImagePath}", imagePath);
             }
 
-        var merged = MergeLayerIndexes(layerIndexes);
+        var merged = OciLayerIndexMerger.Merge(layerIndexes);
         var layerType = FileSystemRegistry.Get("layerfs");
         if (layerType == null)
         {
@@ -762,90 +762,6 @@ public sealed class ContainerRuntimeService
         return true;
     }
 
-    private static LayerIndex MergeLayerIndexes(IReadOnlyList<IReadOnlyList<LayerIndexEntry>> layers)
-    {
-        var merged = new Dictionary<string, LayerIndexEntry>(StringComparer.Ordinal)
-        {
-            ["/"] = new("/", InodeType.Directory, 0x1ED)
-        };
-
-        foreach (var layer in layers)
-        foreach (var entry in layer)
-        {
-            var path = NormalizeAbsolutePath(entry.Path);
-            if (path == "/") continue;
-
-            var parent = ParentPath(path);
-            var name = BaseName(path);
-            if (name == ".wh..wh..opq")
-            {
-                RemoveAllChildren(merged, parent);
-                continue;
-            }
-
-            if (name.StartsWith(".wh.", StringComparison.Ordinal) && name.Length > 4)
-            {
-                var hiddenName = name[4..];
-                var hiddenPath = parent == "/" ? "/" + hiddenName : parent + "/" + hiddenName;
-                RemovePathWithDescendants(merged, hiddenPath);
-                continue;
-            }
-
-            merged[path] = entry with { Path = path };
-        }
-
-        var index = new LayerIndex();
-        foreach (var entry in merged.Values
-                     .Where(e => e.Path != "/")
-                     .OrderBy(e => e.Path.Count(c => c == '/'))
-                     .ThenBy(e => e.Path, StringComparer.Ordinal))
-            index.AddEntry(entry);
-        return index;
-    }
-
-    private static void RemoveAllChildren(Dictionary<string, LayerIndexEntry> merged, string parentPath)
-    {
-        var prefix = parentPath == "/" ? "/" : parentPath + "/";
-        var keys = merged.Keys.Where(k => k != "/" && k.StartsWith(prefix, StringComparison.Ordinal)).ToArray();
-        foreach (var k in keys)
-            merged.Remove(k);
-    }
-
-    private static void RemovePathWithDescendants(Dictionary<string, LayerIndexEntry> merged, string path)
-    {
-        var normalized = NormalizeAbsolutePath(path);
-        merged.Remove(normalized);
-        var prefix = normalized == "/" ? "/" : normalized + "/";
-        var keys = merged.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToArray();
-        foreach (var k in keys)
-            merged.Remove(k);
-    }
-
-    private static string NormalizeAbsolutePath(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path)) return "/";
-        var p = path.Replace('\\', '/');
-        if (!p.StartsWith('/')) p = "/" + p;
-        while (p.Contains("//", StringComparison.Ordinal)) p = p.Replace("//", "/", StringComparison.Ordinal);
-        if (p.Length > 1 && p.EndsWith('/')) p = p.TrimEnd('/');
-        return p;
-    }
-
-    private static string ParentPath(string path)
-    {
-        var normalized = NormalizeAbsolutePath(path);
-        if (normalized == "/") return "/";
-        var lastSlash = normalized.LastIndexOf('/');
-        return lastSlash <= 0 ? "/" : normalized[..lastSlash];
-    }
-
-    private static string BaseName(string path)
-    {
-        var normalized = NormalizeAbsolutePath(path);
-        if (normalized == "/") return "/";
-        var lastSlash = normalized.LastIndexOf('/');
-        return lastSlash < 0 ? normalized : normalized[(lastSlash + 1)..];
-    }
 
     private string BuildResolvConfContent(string[] dnsServers)
     {
