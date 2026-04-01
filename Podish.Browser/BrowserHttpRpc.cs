@@ -33,9 +33,6 @@ internal static class BrowserHttpRpc
             return BrowserSabInterop.HttpRpcResultInvalidRequest;
         }
 
-        BrowserExports.EmitDiagnosticLog(LogLevel.Information,
-            $"[http-rpc/cs] begin url={url} rangeStart={rangeStart} rangeLength={rangeLength} timeoutMs={timeoutMs}");
-
         var urlByteCount = Encoding.UTF8.GetByteCount(url);
         byte[]? rented = null;
 
@@ -70,9 +67,6 @@ internal static class BrowserHttpRpc
         if (requestId <= 0)
             throw new InvalidOperationException($"Failed to start HTTP request for '{url}': {requestId}");
 
-        BrowserExports.EmitDiagnosticLog(LogLevel.Information,
-            $"[http-rpc/cs] read-all requestId={requestId} url={url} chunkCapacity={StreamChunkSize}");
-
         var writer = new ArrayBufferWriter<byte>();
         var scratch = ArrayPool<byte>.Shared.Rent(StreamChunkSize);
         try
@@ -80,8 +74,6 @@ internal static class BrowserHttpRpc
             while (true)
             {
                 var bytesRead = WaitAndReadStreamChunk(requestId, scratch.AsSpan(0, StreamChunkSize), timeoutMs);
-                BrowserExports.EmitDiagnosticLog(LogLevel.Information,
-                    $"[http-rpc/cs] read-all-chunk requestId={requestId} bytesRead={bytesRead}");
                 if (bytesRead == 0)
                     return writer.WrittenSpan.ToArray();
                 if (bytesRead < 0)
@@ -110,16 +102,11 @@ internal static class BrowserHttpRpc
         if (requestId <= 0)
             return false;
 
-        BrowserExports.EmitDiagnosticLog(LogLevel.Information,
-            $"[http-rpc/cs] read-range requestId={requestId} url={url} rangeStart={rangeStart} destinationLength={destination.Length}");
-
         try
         {
             while (bytesRead < destination.Length)
             {
                 var chunkRead = WaitAndReadStreamChunk(requestId, destination[bytesRead..], timeoutMs);
-                BrowserExports.EmitDiagnosticLog(LogLevel.Information,
-                    $"[http-rpc/cs] read-range-chunk requestId={requestId} chunkRead={chunkRead} accumulated={bytesRead}");
                 if (chunkRead == 0)
                     return true;
                 if (chunkRead < 0)
