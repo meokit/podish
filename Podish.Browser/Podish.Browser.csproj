@@ -25,8 +25,8 @@
         <TrimMode>full</TrimMode>
         <WasmStripILAfterAOT>true</WasmStripILAfterAOT>
         <WasmNativeStrip>true</WasmNativeStrip>
-        <RunManualWasmOptOnPublish>true</RunManualWasmOptOnPublish>
-        <ManualWasmOptProfile>Oz</ManualWasmOptProfile>
+        <RunManualWasmOptBeforeBundle>true</RunManualWasmOptBeforeBundle>
+        <ManualWasmSafetyLevel>safe3</ManualWasmSafetyLevel>
     </PropertyGroup>
 
     <ItemGroup>
@@ -88,16 +88,18 @@
         <Exec WorkingDirectory="frontend" Command="npm run build"/>
     </Target>
 
-    <Target Name="ManualOptimizePublishedWasm" AfterTargets="Publish"
-            Condition="'$(RuntimeIdentifier)' == 'browser-wasm' and '$(RunManualWasmOptOnPublish)' == 'true'">
+    <Target Name="ManualBrowserWasmOptBeforeBundle"
+            AfterTargets="_BrowserWasmLinkDotNet"
+            BeforeTargets="_CompleteWasmBuildNative"
+            Condition="'$(RuntimeIdentifier)' == 'browser-wasm' and '$(RunManualWasmOptBeforeBundle)' == 'true'">
         <PropertyGroup>
             <ManualWasmOptPath Condition="'$(ManualWasmOptPath)' == '' and '$(EmscriptenSdkToolsPath)' != ''">$([MSBuild]::NormalizePath('$(EmscriptenSdkToolsPath)', 'bin', 'wasm-opt$(_ExeExt)'))</ManualWasmOptPath>
         </PropertyGroup>
-        <Message Importance="high" Text="Optimizing published browser wasm with manual wasm-opt post-processing..."/>
+        <Message Importance="high" Text="Running wasm-opt $(ManualWasmSafetyLevel) on browser wasm before bundle hashing..."/>
                 <Error Condition="'$(ManualWasmOptPath)' == '' or !Exists('$(ManualWasmOptPath)')"
-                             Text="Could not resolve wasm-opt from the active Emscripten toolset. EmscriptenSdkToolsPath=$(EmscriptenSdkToolsPath), ManualWasmOptPath=$(ManualWasmOptPath)" />
+                             Text="Could not resolve wasm-opt. EmscriptenSdkToolsPath=$(EmscriptenSdkToolsPath), ManualWasmOptPath=$(ManualWasmOptPath)" />
                 <Exec WorkingDirectory="$(MSBuildProjectDirectory)"
-                            Command="node frontend/scripts/optimize-wasm.js --publish-dir &quot;$(PublishDir)wwwroot&quot; --profile $(ManualWasmOptProfile) --wasm-opt &quot;$(ManualWasmOptPath)&quot;"/>
+                            Command="node frontend/scripts/optimize-wasm.js --input-wasm &quot;$(_WasmIntermediateOutputPath)dotnet.native.wasm&quot; --wasm-opt &quot;$(ManualWasmOptPath)&quot; --safety-level $(ManualWasmSafetyLevel) --no-recompress"/>
     </Target>
 
 </Project>
