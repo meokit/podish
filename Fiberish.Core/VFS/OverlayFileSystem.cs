@@ -382,15 +382,7 @@ public class OverlayInode : Inode
 
     private Inode? ResolvePagingSource(LinuxFile? linuxFile)
     {
-        var source = ResolveSourceForFile(linuxFile);
-        if (source == null)
-            return null;
-
-        // Let the backing filesystem populate the same address space the overlay caller observes.
-        if (Mapping != null && source.Mapping == null)
-            source.Mapping = Mapping;
-
-        return source;
+        return ResolveSourceForFile(linuxFile);
     }
 
     private void BindFileBacking(LinuxFile linuxFile, Inode backing, string reason)
@@ -937,7 +929,21 @@ public class OverlayInode : Inode
         if (request.Length == 0) return 0;
         var source = ResolvePagingSource(linuxFile);
         if (source != null)
-            return source.ReadPage(linuxFile, request, pageBuffer);
+        {
+            if (Mapping == null || ReferenceEquals(source.Mapping, Mapping))
+                return source.ReadPage(linuxFile, request, pageBuffer);
+
+            var originalMapping = source.Mapping;
+            source.Mapping = Mapping;
+            try
+            {
+                return source.ReadPage(linuxFile, request, pageBuffer);
+            }
+            finally
+            {
+                source.Mapping = originalMapping;
+            }
+        }
 
         var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         return rc < 0 ? rc : 0;
@@ -947,7 +953,19 @@ public class OverlayInode : Inode
     {
         var source = ResolvePagingSource(linuxFile);
         if (source == null) return 0;
-        return source.Readahead(linuxFile, request);
+        if (Mapping == null || ReferenceEquals(source.Mapping, Mapping))
+            return source.Readahead(linuxFile, request);
+
+        var originalMapping = source.Mapping;
+        source.Mapping = Mapping;
+        try
+        {
+            return source.Readahead(linuxFile, request);
+        }
+        finally
+        {
+            source.Mapping = originalMapping;
+        }
     }
 
     public override int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
