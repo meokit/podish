@@ -338,14 +338,31 @@ public partial class SyscallManager
         Logger.LogInformation($"[Open] Path='{path}' Flags={flags} Mode={mode}");
         const uint O_TMPFILE_MASK = 0x400000;
         var createdHere = false;
+        var accessMode = flags & 3u;
+        var wantDirectory = ((FileFlags)flags & FileFlags.O_DIRECTORY) != 0;
+        var wantCreate = ((FileFlags)flags & FileFlags.O_CREAT) != 0;
+        var wantExcl = ((FileFlags)flags & FileFlags.O_EXCL) != 0;
+        var wantTrunc = ((FileFlags)flags & FileFlags.O_TRUNC) != 0;
         var noFollow = ((FileFlags)flags & FileFlags.O_NOFOLLOW) != 0;
         var task = sm.CurrentTask;
 
-        // Use PathWalkWithMount to track mount information
-        var loc = sm.PathWalk(path, startLoc.IsValid ? startLoc : null, !noFollow);
+        var lookupFlags = noFollow ? LookupFlags.None : LookupFlags.FollowSymlink;
+        var lookupData = sm.PathWalker.PathWalkWithData(path, startLoc.IsValid ? startLoc : null, lookupFlags);
+        if (lookupData.HasError && lookupData.ErrorCode != -(int)Errno.ENOENT)
+            return lookupData.ErrorCode;
 
-        var dentry = loc.Dentry;
-        var mount = loc.Mount;
+        Dentry? dentry;
+        Mount? mount;
+        if (lookupData.HasError)
+        {
+            dentry = null;
+            mount = null;
+        }
+        else
+        {
+            dentry = lookupData.Path.Dentry;
+            mount = lookupData.Path.Mount;
+        }
 
         if ((flags & O_TMPFILE_MASK) != 0)
         {
@@ -381,10 +398,44 @@ public partial class SyscallManager
             }
         }
 
+        if (wantDirectory && wantCreate)
+            return -(int)Errno.EINVAL;
+
         if (dentry == null)
         {
-            if ((flags & (uint)FileFlags.O_CREAT) != 0)
+            if (wantCreate)
             {
+                var noFollowData = sm.PathWalker.PathWalkWithData(path, startLoc.IsValid ? startLoc : null, LookupFlags.None);
+                if (noFollowData.HasError && noFollowData.ErrorCode != -(int)Errno.ENOENT)
+                    return noFollowData.ErrorCode;
+
+                if (noFollowData.Path.Dentry?.Inode?.Type == InodeType.Symlink)
+                {
+                    if (wantExcl)
+                        return -(int)Errno.EEXIST;
+
+                    var target = noFollowData.Path.Dentry.Inode.Readlink();
+                    if (!string.IsNullOrEmpty(target))
+                    {
+                        string createPath;
+                        if (target[0] == '/')
+                        {
+                            createPath = target;
+                        }
+                        else
+                        {
+                            var symlinkLastSlash = path.LastIndexOf('/');
+                            var symlinkParentPath = symlinkLastSlash == -1 ? "" : symlinkLastSlash == 0 ? "/" : path[..symlinkLastSlash];
+                            createPath = string.IsNullOrEmpty(symlinkParentPath) || symlinkParentPath == "."
+                                ? target
+                                : $"{symlinkParentPath.TrimEnd('/')}/{target}";
+                        }
+
+                        if (!string.Equals(createPath, path, StringComparison.Ordinal))
+                            return ImplOpen(sm, createPath, flags, mode, startLoc);
+                    }
+                }
+
                 var lastSlash = path.LastIndexOf('/');
                 var parentPath = lastSlash == -1 ? "" : lastSlash == 0 ? "/" : path[..lastSlash];
                 var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
@@ -439,13 +490,18 @@ public partial class SyscallManager
             if (noFollow && dentry.Inode?.Type == InodeType.Symlink)
                 return -(int)Errno.ELOOP;
 
+            if (wantDirectory && dentry.Inode?.Type != InodeType.Directory)
+                return -(int)Errno.ENOTDIR;
+
             // File exists - check for O_EXCL
-            if ((flags & (uint)FileFlags.O_CREAT) != 0 && (flags & (uint)FileFlags.O_EXCL) != 0)
+            if (wantCreate && wantExcl)
                 return -(int)Errno.EEXIST;
 
+            if (dentry.Inode?.Type == InodeType.Directory && (accessMode != 0 || wantTrunc || wantCreate))
+                return -(int)Errno.EISDIR;
+
             // Check mount read-only for write operations on existing file
-            var accessMode = (int)flags & 3; // O_ACCMODE
-            if (accessMode != 0 || (flags & (uint)FileFlags.O_TRUNC) != 0) // O_WRONLY or O_RDWR or O_TRUNC
+            if (accessMode != 0 || wantTrunc) // O_WRONLY or O_RDWR or O_TRUNC
                 if (mount != null && mount.IsReadOnly)
                     return -(int)Errno.EROFS;
         }

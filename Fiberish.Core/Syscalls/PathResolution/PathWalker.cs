@@ -106,17 +106,7 @@ public class PathWalker
     /// </summary>
     public (PathLocation parent, string name, int error) PathWalkForCreate(string path, PathLocation? startAt)
     {
-        var nd = PathWalkWithData(path, startAt,
-            LookupFlags.FollowSymlink | LookupFlags.Create | LookupFlags.Parent);
-
-        if (nd.HasError)
-            return (PathLocation.None, "", nd.ErrorCode);
-
-        if (nd.LastType == LastType.Normal && nd.LastName != null)
-            return (nd.Path, nd.LastName, 0);
-
-        // Path ended at root or current directory
-        return (nd.Path, "", -(int)Errno.EEXIST);
+        return PrepareCreate(path, startAt);
     }
 
     /// <summary>
@@ -336,14 +326,10 @@ public class PathWalker
 
             if (shouldFollow || mustFollow)
             {
-                if (!FollowSymlink(nd, next, mount, currentTask))
+                if (!FollowSymlink(nd, next, mount, currentTask, mustFollow))
                     return false;
                 return true;
             }
-
-            // Don't follow - check if we need to fail if it's a symlink
-            if ((nd.Flags & LookupFlags.NoFollow) != 0 && isLast)
-                return nd.SetError(-(int)Errno.ELOOP);
 
             // Save as last component for create/etc if it's the last part
             if (isLast)
@@ -402,7 +388,8 @@ public class PathWalker
     /// <summary>
     ///     Follow a symbolic link. Equivalent to Linux follow_symlink().
     /// </summary>
-    public bool FollowSymlink(NameData nd, Dentry symlink, Mount? currentMount, FiberTask? task = null)
+    public bool FollowSymlink(NameData nd, Dentry symlink, Mount? currentMount, FiberTask? task = null,
+        bool forceFollowFinal = false)
     {
         // Check recursion limit
         if (nd.Depth >= NameData.MaxSymlinkDepth)
@@ -451,12 +438,16 @@ public class PathWalker
         nd.PathString = target;
         nd.PathPosition = target[0] == '/' ? 1 : 0;
         nd.Path = startLocation;
+        var savedFlags = nd.Flags;
+        if (forceFollowFinal)
+            nd.Flags = (nd.Flags | LookupFlags.FollowSymlink) & ~LookupFlags.NoFollow;
 
         var result = LinkPathWalk(nd);
 
         // Restore path string state (but keep resolved location)
         nd.PathString = savedPath;
         nd.PathPosition = savedPos;
+        nd.Flags = savedFlags;
         nd.Depth--;
 
         nd.SymlinkStack.Pop();
@@ -476,25 +467,37 @@ public class PathWalker
     /// </summary>
     public (PathLocation parent, string name, int error) PrepareCreate(string path, PathLocation? startAt = null)
     {
+        if (string.IsNullOrEmpty(path))
+            return (PathLocation.None, "", -(int)Errno.ENOENT);
+
+        var normalizedPath = path;
+        while (normalizedPath.Length > 1 && normalizedPath.EndsWith("/", StringComparison.Ordinal))
+            normalizedPath = normalizedPath[..^1];
+
         // Extract parent path and name
-        var lastSlash = path.LastIndexOf('/');
-        var parentPath = lastSlash <= 0 ? "" : path[..lastSlash];
-        var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
+        var lastSlash = normalizedPath.LastIndexOf('/');
+        var parentPath = lastSlash <= 0 ? "" : normalizedPath[..lastSlash];
+        var name = lastSlash == -1 ? normalizedPath : normalizedPath[(lastSlash + 1)..];
 
         if (string.IsNullOrEmpty(name))
             return (PathLocation.None, "", -(int)Errno.ENOENT);
 
         // Resolve parent directory
-        var parentLoc = PathWalk(
+        var parentLookup = PathWalkWithData(
             string.IsNullOrEmpty(parentPath) ? "." : parentPath,
-            startAt ?? _sm.CurrentWorkingDirectory,
+            startAt,
             LookupFlags.FollowSymlink | LookupFlags.Directory);
 
+        if (parentLookup.HasError)
+            return (PathLocation.None, name, parentLookup.ErrorCode);
+
+        var parentLoc = parentLookup.Path;
+
         if (!parentLoc.IsValid)
-            return (PathLocation.None, "", -(int)Errno.ENOENT);
+            return (PathLocation.None, name, -(int)Errno.ENOENT);
 
         if (parentLoc.Dentry?.Inode?.Type != InodeType.Directory)
-            return (PathLocation.None, "", -(int)Errno.ENOTDIR);
+            return (PathLocation.None, name, -(int)Errno.ENOTDIR);
 
         return (parentLoc, name, 0);
     }

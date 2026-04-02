@@ -2,6 +2,7 @@ using Fiberish.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Microsoft.Extensions.Logging;
+using System.Runtime.CompilerServices;
 
 // needed for SyscallManager Access if required, but maybe not directly here yet
 
@@ -68,6 +69,7 @@ public class OverlaySuperBlock : SuperBlock
 {
     private readonly Dictionary<InodeKey, OverlayFileLockState> _flocks = new();
     private readonly object _flockSync = new();
+    private readonly Dictionary<OverlayNodeStateKey, OverlayNodeState> _nodeStates = new();
     private readonly HashSet<InodeKey> _opaqueDirs = new();
     private readonly Dictionary<InodeKey, HashSet<string>> _whiteouts = new();
 
@@ -87,6 +89,26 @@ public class OverlaySuperBlock : SuperBlock
     public SuperBlock LowerSB { get; }
     public SuperBlock UpperSB { get; }
     public IOverlayWhiteoutCodec WhiteoutCodec { get; }
+
+    public OverlayNodeState GetOrCreateNodeState(IReadOnlyList<Dentry>? lowers, Dentry? upper)
+    {
+        if ((lowers == null || lowers.Count == 0) && upper == null)
+            throw new InvalidOperationException("Overlay node state requires at least one backing dentry");
+
+        var key = OverlayNodeStateKey.Create(lowers, upper);
+        lock (Lock)
+        {
+            if (!_nodeStates.TryGetValue(key, out var state))
+            {
+                state = new OverlayNodeState(lowers, upper);
+                _nodeStates[key] = state;
+                return state;
+            }
+
+            state.UpdateBackings(lowers, upper);
+            return state;
+        }
+    }
 
     public void AddWhiteout(InodeKey dirKey, string name)
     {
@@ -238,20 +260,134 @@ public class OverlaySuperBlock : SuperBlock
     }
 }
 
+public readonly record struct OverlayNodeStateKey(int Identity)
+{
+    public static OverlayNodeStateKey Create(IReadOnlyList<Dentry>? lowers, Dentry? upper)
+    {
+        var identity = lowers is { Count: > 0 }
+            ? RuntimeHelpers.GetHashCode(lowers[0])
+            : RuntimeHelpers.GetHashCode(upper!);
+        return new OverlayNodeStateKey(identity);
+    }
+}
+
+public sealed class OverlayNodeState
+{
+    private readonly HashSet<OverlayInode> _aliases = [];
+    private readonly Dictionary<string, OverlayNodeState> _children = new(StringComparer.Ordinal);
+    private List<Dentry> _lowerDentries;
+
+    public OverlayNodeState(IReadOnlyList<Dentry>? lowers, Dentry? upper)
+    {
+        _lowerDentries = lowers?.Where(d => d != null).ToList() ?? [];
+        UpperDentry = upper;
+    }
+
+    public object SyncRoot { get; } = new();
+    public IReadOnlyList<Dentry> LowerDentries => _lowerDentries;
+    public Dentry? UpperDentry { get; private set; }
+
+    public void UpdateBackings(IReadOnlyList<Dentry>? lowers, Dentry? upper)
+    {
+        lock (SyncRoot)
+        {
+            if (_lowerDentries.Count == 0 && lowers is { Count: > 0 })
+                _lowerDentries = lowers.Where(d => d != null).ToList();
+            if (UpperDentry == null && upper != null)
+                UpperDentry = upper;
+        }
+    }
+
+    public void SetUpperDentry(Dentry upper)
+    {
+        lock (SyncRoot)
+        {
+            UpperDentry = upper;
+        }
+    }
+
+    public void RegisterAlias(OverlayInode inode)
+    {
+        lock (SyncRoot)
+        {
+            _aliases.Add(inode);
+        }
+    }
+
+    public void UnregisterAlias(OverlayInode inode)
+    {
+        lock (SyncRoot)
+        {
+            _aliases.Remove(inode);
+        }
+    }
+
+    public OverlayInode[] SnapshotAliases()
+    {
+        lock (SyncRoot)
+        {
+            return [.. _aliases];
+        }
+    }
+
+    public OverlayNodeState GetOrCreateChildState(string name, IReadOnlyList<Dentry>? lowers, Dentry? upper)
+    {
+        lock (SyncRoot)
+        {
+            if (!_children.TryGetValue(name, out var state))
+            {
+                state = new OverlayNodeState(lowers, upper);
+                _children[name] = state;
+                return state;
+            }
+
+            state.UpdateBackings(lowers, upper);
+            return state;
+        }
+    }
+
+    public bool TryRemoveChildState(string name, OverlayNodeState expected)
+    {
+        lock (SyncRoot)
+        {
+            return _children.TryGetValue(name, out var state) &&
+                   ReferenceEquals(state, expected) &&
+                   _children.Remove(name);
+        }
+    }
+
+    public void AttachChildState(string name, OverlayNodeState state, IReadOnlyList<Dentry>? lowers, Dentry? upper)
+    {
+        lock (SyncRoot)
+        {
+            state.UpdateBackings(lowers, upper);
+            _children[name] = state;
+        }
+    }
+}
+
 public class OverlayInode : Inode
 {
+    private readonly OverlayNodeState _state;
     private readonly Dictionary<LinuxFile, Inode> _openBackingByFile = [];
 
     public OverlayInode(SuperBlock sb, Dentry? lower, Dentry? upper)
-        : this(sb, lower != null ? [lower] : null, upper)
+        : this(sb, lower != null ? [lower] : null, upper, null)
     {
     }
 
     public OverlayInode(SuperBlock sb, IReadOnlyList<Dentry>? lowers, Dentry? upper)
+        : this(sb, lowers, upper, null)
+    {
+    }
+
+    private OverlayInode(SuperBlock sb, IReadOnlyList<Dentry>? lowers, Dentry? upper, OverlayNodeState? state)
     {
         SuperBlock = sb;
-        LowerDentries = lowers?.Where(d => d != null).ToList() ?? [];
-        UpperDentry = upper;
+        _state = state ?? ((lowers == null || lowers.Count == 0) && upper == null
+            ? new OverlayNodeState(null, null)
+            : ((OverlaySuperBlock)sb).GetOrCreateNodeState(lowers, upper));
+        _state.RegisterAlias(this);
         InitializeOverlayLinkCount("OverlayInode.ctor");
     }
 
@@ -354,10 +490,10 @@ public class OverlayInode : Inode
     ///     Lower dentries ordered from top-most lower layer to bottom-most lower layer.
     ///     Lookup resolves in this order.
     /// </summary>
-    public IReadOnlyList<Dentry> LowerDentries { get; }
+    public IReadOnlyList<Dentry> LowerDentries => _state.LowerDentries;
 
     public Dentry? LowerDentry => LowerDentries.Count > 0 ? LowerDentries[0] : null;
-    public Dentry? UpperDentry { get; private set; }
+    public Dentry? UpperDentry => _state.UpperDentry;
 
     public Inode? LowerInode => LowerDentry?.Inode;
     public Inode? UpperInode => UpperDentry?.Inode;
@@ -439,90 +575,115 @@ public class OverlayInode : Inode
 
     public int CopyUp(LinuxFile? linuxFile)
     {
-        if (UpperInode != null) return 0;
-        if (LowerDentry == null) throw new InvalidOperationException("No lower dentry to copy up");
-
-        // 1. Ensure parent directories exist in upper FS
-        var upperParent = EnsureParentUpper(LowerDentry);
-
-        var osb = (OverlaySuperBlock)SuperBlock;
-        var upperDentry = new Dentry(LowerDentry.Name, null, upperParent, osb.UpperSB);
-
-        if (Type == InodeType.Directory)
+        lock (_state.SyncRoot)
         {
-            // Check if directory already exists in upper before creating a duplicate.
-            // This can happen when multiple OverlayInode instances for the same directory
-            // each try to CopyUp independently.
-            var existing = upperParent.Inode!.Lookup(LowerDentry.Name);
-            if (existing != null)
+            if (UpperInode != null) return 0;
+            if (LowerDentry == null) throw new InvalidOperationException("No lower dentry to copy up");
+
+            var upperParent = EnsureParentUpper(LowerDentry);
+            var osb = (OverlaySuperBlock)SuperBlock;
+            var upperDentry = new Dentry(LowerDentry.Name, null, upperParent, osb.UpperSB);
+
+            if (Type == InodeType.Directory)
             {
-                UpperDentry = existing;
+                var existing = upperParent.Inode!.Lookup(LowerDentry.Name);
+                if (existing != null)
+                {
+                    _state.SetUpperDentry(existing);
+                    PromoteStateBackings(existing.Inode, linuxFile);
+                    return 0;
+                }
+
+                upperParent.Inode!.Mkdir(upperDentry, Mode, Uid, Gid);
+                _state.SetUpperDentry(upperDentry);
+                PromoteStateBackings(UpperInode, linuxFile);
                 return 0;
             }
 
-            upperParent.Inode!.Mkdir(upperDentry, Mode, Uid, Gid);
-            UpperDentry = upperDentry;
-            return 0;
-        }
-
-        var lowerInode = LowerInode;
-        try
-        {
-            switch (Type)
+            var lowerInode = LowerInode;
+            try
             {
-                case InodeType.Symlink:
-                    if (lowerInode == null)
-                        throw new InvalidOperationException("No lower inode available for symlink copy-up");
-                    upperParent.Inode!.Symlink(upperDentry, lowerInode.Readlink(), Uid, Gid);
-                    break;
+                switch (Type)
+                {
+                    case InodeType.Symlink:
+                        if (lowerInode == null)
+                            throw new InvalidOperationException("No lower inode available for symlink copy-up");
+                        upperParent.Inode!.Symlink(upperDentry, lowerInode.Readlink(), Uid, Gid);
+                        break;
 
-                case InodeType.CharDev:
-                case InodeType.BlockDev:
-                case InodeType.Fifo:
-                case InodeType.Socket:
-                    upperParent.Inode!.Mknod(upperDentry, Mode, Uid, Gid, Type, Rdev);
-                    break;
+                    case InodeType.CharDev:
+                    case InodeType.BlockDev:
+                    case InodeType.Fifo:
+                    case InodeType.Socket:
+                        upperParent.Inode!.Mknod(upperDentry, Mode, Uid, Gid, Type, Rdev);
+                        break;
 
-                default:
-                    upperParent.Inode!.Create(upperDentry, Mode, Uid, Gid);
-
-                    if (lowerInode != null)
+                    default:
                     {
-                        var buf = new byte[4096];
-                        long pos = 0;
-                        while (true)
+                        var existing = upperParent.Inode!.Lookup(LowerDentry.Name);
+                        if (existing != null)
                         {
-                            // Use null to trigger host-internal read without dependency on user's open mode
-                            var n = lowerInode.ReadToHost(null, null!, buf, pos);
-                            if (n <= 0) break;
-                            upperDentry.Inode!.WriteFromHost(null, null!, buf.AsSpan(0, n), pos);
-                            pos += n;
+                            _state.SetUpperDentry(existing);
+                            PromoteStateBackings(existing.Inode, linuxFile);
+                            return 0;
                         }
+
+                        upperParent.Inode!.Create(upperDentry, Mode, Uid, Gid);
+
+                        if (lowerInode != null)
+                        {
+                            var buf = new byte[4096];
+                            long pos = 0;
+                            while (true)
+                            {
+                                var n = lowerInode.ReadToHost(null, null!, buf, pos);
+                                if (n < 0)
+                                    throw new IOException($"copy-up read failed rc={n}");
+                                if (n == 0) break;
+                                var writeRc = upperDentry.Inode!.WriteFromHost(null, null!, buf.AsSpan(0, n), pos);
+                                if (writeRc != n)
+                                    throw new IOException($"copy-up write failed rc={writeRc} expected={n}");
+                                pos += n;
+                            }
+                        }
+
+                        break;
                     }
-
-                    break;
+                }
             }
-        }
-        catch (Exception ex)
-        {
-            Logging.CreateLogger<OverlayInode>()
-                .LogWarning("CopyUp failed for {Name}: {Error}", LowerDentry.Name, ex.Message);
-            // Cleanup failed upper dentry if needed? For now just return error.
-            return -(int)Errno.EACCES;
-        }
+            catch (Exception ex)
+            {
+                try
+                {
+                    upperParent.Inode!.Unlink(LowerDentry.Name);
+                }
+                catch
+                {
+                }
 
-        UpperDentry = upperDentry;
+                Logging.CreateLogger<OverlayInode>()
+                    .LogWarning("CopyUp failed for {Name}: {Error}", LowerDentry.Name, ex.Message);
+                return -(int)Errno.EACCES;
+            }
 
-        if (UpperInode != null)
-        {
-            RebindAllFileBackings(UpperInode, "OverlayInode.CopyUp.rebind-all");
-            ProcessAddressSpaceSync.MigrateOverlayMappings(this, UpperInode);
+            _state.SetUpperDentry(upperDentry);
+            PromoteStateBackings(UpperInode, linuxFile);
         }
-
-        // 4. Redirect handle if provided
-        if (linuxFile != null && UpperInode != null) RebindFileBacking(linuxFile, UpperInode, "OverlayInode.CopyUp");
 
         return 0;
+    }
+
+    private void PromoteStateBackings(Inode? newBacking, LinuxFile? triggeringFile = null)
+    {
+        if (newBacking == null) return;
+        foreach (var alias in _state.SnapshotAliases())
+        {
+            alias.RebindAllFileBackings(newBacking, "OverlayInode.CopyUp.rebind-all");
+            ProcessAddressSpaceSync.MigrateOverlayMappings(alias, newBacking);
+        }
+
+        if (triggeringFile != null)
+            RebindFileBacking(triggeringFile, newBacking, "OverlayInode.CopyUp");
     }
 
     private Dentry EnsureParentUpper(Dentry lowerDentry)
@@ -580,7 +741,8 @@ public class OverlayInode : Inode
         if (upperDentry == null && lowerDentry == null) return null;
 
         // Create Overlay Inode
-        var inode = new OverlayInode(SuperBlock, lowerDentry != null ? [lowerDentry] : null, upperDentry);
+        var state = _state.GetOrCreateChildState(name, lowerDentry != null ? [lowerDentry] : null, upperDentry);
+        var inode = new OverlayInode(SuperBlock, lowerDentry != null ? [lowerDentry] : null, upperDentry, state);
 
         var parentDentry = Dentries.Count > 0 ? Dentries[0] : null;
         return new Dentry(name, inode, parentDentry, SuperBlock);
@@ -603,7 +765,8 @@ public class OverlayInode : Inode
         UpperInode!.Create(upperDentry, mode, uid, gid);
 
         // Now update the overlay dentry's inode
-        var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry); // Created only in upper
+        var childState = _state.GetOrCreateChildState(dentry.Name, null, upperDentry);
+        var newOverlayInode = new OverlayInode(SuperBlock, null, upperDentry, childState); // Created only in upper
         dentry.Instantiate(newOverlayInode);
 
         return dentry;
@@ -611,6 +774,9 @@ public class OverlayInode : Inode
 
     public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
+        if (Lookup(dentry.Name) != null)
+            throw new InvalidOperationException("Exists");
+
         if (UpperDentry == null)
             CopyUpDirectory();
         var osb = (OverlaySuperBlock)SuperBlock;
@@ -623,7 +789,8 @@ public class OverlayInode : Inode
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
         UpperInode!.Mkdir(upperDentry, mode, uid, gid);
 
-        var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
+        var childState = _state.GetOrCreateChildState(dentry.Name, null, upperDentry);
+        var newOverlayInode = new OverlayInode(SuperBlock, null, upperDentry, childState);
         dentry.Instantiate(newOverlayInode);
         NamespaceOps.OnDirectoryCreated(this, newOverlayInode, "OverlayInode.Mkdir");
 
@@ -641,7 +808,7 @@ public class OverlayInode : Inode
         if (LowerDentry == null)
             throw new InvalidOperationException("Cannot copy-up: no lower dentry");
 
-        UpperDentry = EnsureUpperDir(LowerDentry);
+        _state.SetUpperDentry(EnsureUpperDir(LowerDentry));
     }
 
     private Dentry EnsureUpperDir(Dentry lowerDentry)
@@ -718,15 +885,45 @@ public class OverlayInode : Inode
         var inUpper = UpperInode?.Lookup(name) != null;
         var inLower = LookupInAnyLower(name) != null;
         var osb = (OverlaySuperBlock)SuperBlock;
-        if (inUpper) UpperInode!.Rmdir(name);
+        if (inUpper)
+        {
+            if (UpperInode!.Lookup(name) is { Inode: { } upperDirInode } upperDir)
+            {
+                RemoveUpperOverlayInternalEntries(upperDir);
+                if (upperDirInode.GetEntries().Any(e => e.Name is not "." and not ".."))
+                    throw new InvalidOperationException("Directory not empty");
+            }
+
+            UpperInode.Rmdir(name);
+        }
         if (inLower)
         {
             if (UpperDentry == null) CopyUpDirectory();
+            if (UpperInode?.Lookup(name) is { } upperDir &&
+                upperDir.Inode?.GetEntries().Any(e => e.Name is not "." and not "..") == true)
+                throw new InvalidOperationException("Directory not empty");
             osb.AddWhiteout(new InodeKey(Dev, Ino), name);
             osb.WhiteoutCodec.TryCreateEncodedWhiteout(this, name);
         }
 
         NamespaceOps.OnDirectoryRemoved(this, overlayEntry.Inode!, "OverlayInode.Rmdir");
+    }
+
+    private void RemoveUpperOverlayInternalEntries(Dentry upperDir)
+    {
+        var upperDirInode = upperDir.Inode;
+        if (upperDirInode == null) return;
+
+        var osb = (OverlaySuperBlock)SuperBlock;
+        foreach (var entry in upperDirInode.GetEntries().Where(e => e.Name is not "." and not "..").ToList())
+        {
+            var child = upperDirInode.Lookup(entry.Name);
+            if (!osb.WhiteoutCodec.IsEncodedOpaqueEntry(entry) &&
+                !osb.WhiteoutCodec.TryDecodeEncodedWhiteout(entry, child?.Inode, out _))
+                continue;
+
+            upperDirInode.Unlink(entry.Name);
+        }
     }
 
     public override void Rename(string oldName, Inode newParent, string newName)
@@ -742,7 +939,23 @@ public class OverlayInode : Inode
         if (targetEntry != null && ReferenceEquals(targetEntry.Inode, sourceEntry.Inode))
             return;
 
+        if (targetEntry != null && targetEntry.Inode?.Type == InodeType.Directory &&
+            sourceOverlay.Type != InodeType.Directory)
+            throw new InvalidOperationException("Is a directory");
+
+        if (targetEntry != null && targetEntry.Inode?.Type != InodeType.Directory &&
+            sourceOverlay.Type == InodeType.Directory)
+            throw new InvalidOperationException("Not a directory");
+
+        if (targetEntry?.Inode?.Type == InodeType.Directory &&
+            sourceOverlay.Type == InodeType.Directory &&
+            targetEntry.Inode.GetEntries().Any(e => e.Name is not "." and not ".."))
+            throw new InvalidOperationException("Directory not empty");
+
+        var targetLowerEntry = targetParent.LookupInAnyLower(newName);
+        var targetHasLowerDirectoryBacking = targetLowerEntry?.Inode?.Type == InodeType.Directory;
         var sourceLowerOnly = sourceOverlay.UpperInode == null && sourceOverlay.LowerInode != null;
+        var sourceHasLowerBacking = sourceOverlay.LowerInode != null;
 
         // Rename mutates directory entries, so parents must exist in upper.
         if (UpperDentry == null)
@@ -767,12 +980,27 @@ public class OverlayInode : Inode
 
         UpperInode.Rename(oldName, targetParent.UpperInode, newName);
 
-        // Lower-only source still exists in lower layer after copy-up rename; hide old lower name.
-        if (sourceLowerOnly)
+        // Any source that still has lower backing leaves the old lower name behind after upper rename.
+        if (sourceHasLowerBacking)
         {
             osb.AddWhiteout(new InodeKey(Dev, Ino), oldName);
             osb.WhiteoutCodec.TryCreateEncodedWhiteout(this, oldName);
         }
+
+        if (sourceOverlay.Type == InodeType.Directory && targetHasLowerDirectoryBacking && !sourceHasLowerBacking)
+            osb.MarkOpaque(new InodeKey(sourceOverlay.Dev, sourceOverlay.Ino));
+
+        if (!ReferenceEquals(_state, targetParent._state) || !string.Equals(oldName, newName, StringComparison.Ordinal))
+        {
+            _state.TryRemoveChildState(oldName, sourceOverlay._state);
+            targetParent._state.AttachChildState(newName, sourceOverlay._state, sourceOverlay.LowerDentries,
+                sourceOverlay.UpperDentry);
+        }
+
+        if (Dentries.Count > 0)
+            Dentries[0].TryUncacheChild(oldName, "OverlayInode.Rename.old-parent", out _);
+        if (targetParent.Dentries.Count > 0)
+            targetParent.Dentries[0].TryUncacheChild(newName, "OverlayInode.Rename.new-parent.drop-stale", out _);
 
         if (targetEntry?.Inode != null)
             NamespaceOps.OnRenameOverwrite(sourceEntry.Inode, targetEntry.Inode,
@@ -785,6 +1013,8 @@ public class OverlayInode : Inode
     {
         if (oldInode is not OverlayInode oldOverlay)
             throw new InvalidOperationException("Source is not an overlay inode");
+        if (Lookup(dentry.Name) != null)
+            throw new InvalidOperationException("Exists");
 
         // Link mutates directory entries, so parent must exist in upper
         if (UpperDentry == null)
@@ -841,7 +1071,8 @@ public class OverlayInode : Inode
             osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name);
         }
 
-        var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
+        var childState = _state.GetOrCreateChildState(dentry.Name, null, upperDentry);
+        var newOverlayInode = new OverlayInode(SuperBlock, null, upperDentry, childState);
         dentry.Instantiate(newOverlayInode);
         return dentry;
     }
@@ -865,7 +1096,8 @@ public class OverlayInode : Inode
             osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name);
         }
 
-        var newOverlayInode = new OverlayInode(SuperBlock, (Dentry?)null, upperDentry);
+        var childState = _state.GetOrCreateChildState(dentry.Name, null, upperDentry);
+        var newOverlayInode = new OverlayInode(SuperBlock, null, upperDentry, childState);
         dentry.Instantiate(newOverlayInode);
         return dentry;
     }
@@ -1007,6 +1239,18 @@ public class OverlayInode : Inode
     {
         _ = Flock(linuxFile, LinuxConstants.LOCK_UN);
         UnbindFileBacking(linuxFile, "OverlayInode.Release");
+    }
+
+    protected override void OnEvictCache()
+    {
+        _state.UnregisterAlias(this);
+        base.OnEvictCache();
+    }
+
+    protected override void OnFinalizeDelete()
+    {
+        _state.UnregisterAlias(this);
+        base.OnFinalizeDelete();
     }
 
     public override int Truncate(long size)

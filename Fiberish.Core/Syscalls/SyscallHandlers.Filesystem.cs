@@ -272,7 +272,9 @@ public partial class SyscallManager
         if (err != 0) return err;
 
         // Check if directory exists and is empty
-        var targetLoc = PathWalkWithFlags(path, LookupFlags.None);
+        var targetLookup = PathWalker.PathWalkWithData(path, null, LookupFlags.None);
+        if (targetLookup.HasError) return targetLookup.ErrorCode;
+        var targetLoc = targetLookup.Path;
         if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (targetLoc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
         if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
@@ -622,14 +624,23 @@ public partial class SyscallManager
         var (parentLoc, name, err) = PathWalkForCreate(path, startLoc.IsValid ? startLoc : null);
         if (err != 0) return err;
 
-        var targetLoc = PathWalkWithFlags(path, startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
+        var targetLookup = PathWalker.PathWalkWithData(path, startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
             LookupFlags.None);
+        if (targetLookup.HasError) return targetLookup.ErrorCode;
+        var targetLoc = targetLookup.Path;
         if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         if ((flags & AT_REMOVEDIR) != 0) // AT_REMOVEDIR
         {
             if (targetLoc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
             if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
+
+            var task = engine.Owner as FiberTask;
+            var entries = task != null && targetLoc.Dentry.Inode is IContextualDirectoryInode contextualDirectory
+                ? contextualDirectory.GetEntries(task)
+                : targetLoc.Dentry.Inode.GetEntries();
+            if (entries.Count > 2) return -(int)Errno.ENOTEMPTY;
+
             try
             {
                 parentLoc.Dentry!.Inode!.Rmdir(name);
@@ -1429,7 +1440,9 @@ public partial class SyscallManager
         var (parentLoc, name, err) = PathWalkForCreate(path);
         if (err != 0) return err;
 
-        var targetLoc = PathWalkWithFlags(path, LookupFlags.None);
+        var targetLookup = PathWalker.PathWalkWithData(path, null, LookupFlags.None);
+        if (targetLookup.HasError) return targetLookup.ErrorCode;
+        var targetLoc = targetLookup.Path;
         if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (targetLoc.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
 
@@ -1863,7 +1876,9 @@ public partial class SyscallManager
         var bufAddr = a2;
         var bufSize = (int)a3;
 
-        var loc = PathWalkWithFlags(path, LookupFlags.None);
+        var lookup = PathWalker.PathWalkWithData(path, null, LookupFlags.None);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (loc.Dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
 
@@ -1893,7 +1908,9 @@ public partial class SyscallManager
             startAt = new PathLocation(fdir.Dentry, fdir.Mount);
         }
 
-        var loc = PathWalkWithFlags(path, startAt ?? CurrentWorkingDirectory, LookupFlags.None);
+        var lookup = PathWalker.PathWalkWithData(path, startAt ?? CurrentWorkingDirectory, LookupFlags.None);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (loc.Dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
 

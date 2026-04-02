@@ -782,6 +782,195 @@ public class OverlayTests
         }
     }
 
+    [Fact]
+    public void OverlayCopyUp_StateIsSharedAcrossMultipleLookups()
+    {
+        var lowerFs = new LayerFileSystem();
+        var lowerRoot = LayerNode.Directory("/")
+            .AddChild(LayerNode.File("shared.txt", Encoding.UTF8.GetBytes("lower")));
+        var lowerSb = lowerFs.ReadSuper(
+            new FileSystemType { Name = "layerfs" },
+            0,
+            "layer-lower",
+            new LayerMountOptions { Root = lowerRoot });
+
+        var upperType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var upperSb = upperType.CreateAnonymousFileSystem().ReadSuper(upperType, 0, "ovl-upper", null);
+
+        var overlayFs = new OverlayFileSystem();
+        var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+            new FileSystemType { Name = "overlay" },
+            0,
+            "overlay",
+            new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+        var first = overlaySb.Root.Inode!.Lookup("shared.txt")!;
+        var second = overlaySb.Root.Inode!.Lookup("shared.txt")!;
+        var firstInode = Assert.IsType<OverlayInode>(first.Inode);
+        var secondInode = Assert.IsType<OverlayInode>(second.Inode);
+        Assert.NotSame(firstInode, secondInode);
+        Assert.Null(firstInode.UpperDentry);
+        Assert.Null(secondInode.UpperDentry);
+
+        var writer = new LinuxFile(first, FileFlags.O_WRONLY, null!);
+        try
+        {
+            var rc = firstInode.WriteFromHost(null, writer, "!"u8.ToArray(), 5);
+            Assert.Equal(1, rc);
+        }
+        finally
+        {
+            writer.Close();
+        }
+
+        Assert.NotNull(firstInode.UpperDentry);
+        Assert.NotNull(secondInode.UpperDentry);
+
+        var reader = new LinuxFile(second, FileFlags.O_RDONLY, null!);
+        try
+        {
+            var buf = new byte[6];
+            var rc = secondInode.ReadToHost(null, reader, buf, 0);
+            Assert.Equal(6, rc);
+            Assert.Equal("lower!", Encoding.UTF8.GetString(buf));
+        }
+        finally
+        {
+            reader.Close();
+        }
+    }
+
+    [Fact]
+    public void OverlayTruncate_LowerOnlyFile_ShrinksPrefixLikeUnionmountSuite()
+    {
+        const string initial = ":xxx:yyy:zzz";
+        var lowerFs = new LayerFileSystem();
+        var lowerRoot = LayerNode.Directory("/")
+            .AddChild(LayerNode.File("trunc.txt", Encoding.UTF8.GetBytes(initial)));
+        var lowerSb = lowerFs.ReadSuper(
+            new FileSystemType { Name = "layerfs" },
+            0,
+            "layer-lower",
+            new LayerMountOptions { Root = lowerRoot });
+
+        var upperType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var upperSb = upperType.CreateAnonymousFileSystem().ReadSuper(upperType, 0, "ovl-upper", null);
+
+        var overlayFs = new OverlayFileSystem();
+        var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+            new FileSystemType { Name = "overlay" },
+            0,
+            "overlay",
+            new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+        for (var length = 0; length <= initial.Length; length++)
+        {
+            var dentry = overlaySb.Root.Inode!.Lookup("trunc.txt")!;
+            var inode = Assert.IsType<OverlayInode>(dentry.Inode);
+            Assert.Equal(0, inode.Truncate(length));
+            Assert.Equal((ulong)length, inode.Size);
+
+            var file = new LinuxFile(dentry, FileFlags.O_RDONLY, null!);
+            try
+            {
+                var buf = new byte[initial.Length];
+                var read = inode.ReadToHost(null, file, buf, 0);
+                Assert.Equal(length, read);
+                Assert.Equal(initial[..length], Encoding.UTF8.GetString(buf, 0, read));
+            }
+            finally
+            {
+                file.Close();
+            }
+
+            var writer = new LinuxFile(dentry, FileFlags.O_WRONLY, null!);
+            try
+            {
+                Assert.Equal(initial.Length, inode.WriteFromHost(null, writer, Encoding.UTF8.GetBytes(initial), 0));
+            }
+            finally
+            {
+                writer.Close();
+            }
+        }
+    }
+
+    [Fact]
+    public void OverlayUnlink_LowerSymlink_RemovesOnlyLinkLikeUnionmountSuite()
+    {
+        var lowerFs = new LayerFileSystem();
+        var lowerRoot = LayerNode.Directory("/")
+            .AddChild(LayerNode.File("target.txt", Encoding.UTF8.GetBytes(":xxx:yyy:zzz")))
+            .AddChild(LayerNode.Symlink("link.txt", "target.txt"));
+        var lowerSb = lowerFs.ReadSuper(
+            new FileSystemType { Name = "layerfs" },
+            0,
+            "layer-lower",
+            new LayerMountOptions { Root = lowerRoot });
+
+        var upperType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var upperSb = upperType.CreateAnonymousFileSystem().ReadSuper(upperType, 0, "ovl-upper", null);
+
+        var overlayFs = new OverlayFileSystem();
+        var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+            new FileSystemType { Name = "overlay" },
+            0,
+            "overlay",
+            new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+        Assert.Equal("target.txt", root.Lookup("link.txt")!.Inode!.Readlink());
+
+        root.Unlink("link.txt");
+        Assert.Null(root.Lookup("link.txt"));
+
+        var target = root.Lookup("target.txt");
+        Assert.NotNull(target);
+        var file = new LinuxFile(target!, FileFlags.O_RDONLY, null!);
+        try
+        {
+            var buf = new byte[12];
+            var read = target!.Inode!.ReadToHost(null, file, buf, 0);
+            Assert.Equal(12, read);
+            Assert.Equal(":xxx:yyy:zzz", Encoding.UTF8.GetString(buf, 0, read));
+        }
+        finally
+        {
+            file.Close();
+        }
+
+        Assert.Throws<FileNotFoundException>(() => root.Unlink("link.txt"));
+    }
+
+    [Fact]
+    public void OverlayUnlink_LowerFile_RepeatedUnlinkLikeUnionmountSuite()
+    {
+        var lowerFs = new LayerFileSystem();
+        var lowerRoot = LayerNode.Directory("/")
+            .AddChild(LayerNode.File("gone.txt", Encoding.UTF8.GetBytes("x")));
+        var lowerSb = lowerFs.ReadSuper(
+            new FileSystemType { Name = "layerfs" },
+            0,
+            "layer-lower",
+            new LayerMountOptions { Root = lowerRoot });
+
+        var upperType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var upperSb = upperType.CreateAnonymousFileSystem().ReadSuper(upperType, 0, "ovl-upper", null);
+
+        var overlayFs = new OverlayFileSystem();
+        var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+            new FileSystemType { Name = "overlay" },
+            0,
+            "overlay",
+            new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+        Assert.NotNull(root.Lookup("gone.txt"));
+        root.Unlink("gone.txt");
+        Assert.Null(root.Lookup("gone.txt"));
+        Assert.Throws<FileNotFoundException>(() => root.Unlink("gone.txt"));
+    }
+
     private static string ReadAll(PathLocation loc)
     {
         Assert.True(loc.IsValid);
