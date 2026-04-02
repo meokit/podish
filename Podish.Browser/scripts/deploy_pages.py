@@ -4,14 +4,17 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import shutil
 import subprocess
-from datetime import date
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 
 DEFAULT_PUBLISH_DIR = Path("Podish.Browser/bin/Release/net10.0/publish/wwwroot")
 DEFAULT_CLOUDFLARE_DIR = Path("Podish.Browser/cloudflare-pages")
+DEFAULT_ROOTFS_DIR = Path("Podish.Browser/frontend/public/rootfs")
 STATIC_IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
 IMAGE_CACHE = "public, max-age=60, s-maxage=300"
 
@@ -24,6 +27,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--r2-bucket", required=True, help="R2 bucket name for rootfs assets.")
     parser.add_argument("--publish-dir", default=str(DEFAULT_PUBLISH_DIR), help="Path to the publish wwwroot directory.")
     parser.add_argument(
+        "--rootfs-dir",
+        default=str(DEFAULT_ROOTFS_DIR),
+        help="Path to the build-rootfs output directory to upload to R2.",
+    )
+    parser.add_argument(
         "--cloudflare-dir",
         default=str(DEFAULT_CLOUDFLARE_DIR),
         help="Directory that contains the Pages Function source.",
@@ -31,10 +39,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--r2-prefix", default="rootfs", help="Object prefix inside the R2 bucket.")
     parser.add_argument("--branch", help="Optional Pages branch name for preview deployments.")
     parser.add_argument("--commit-hash", help="Optional commit hash to pass through to wrangler.")
-    parser.add_argument("--compatibility-date", default=date.today().isoformat(), help="Wrangler compatibility date.")
+    parser.add_argument(
+        "--compatibility-date",
+        default=datetime.now(timezone.utc).date().isoformat(),
+        help="Wrangler compatibility date. Defaults to the current UTC date.",
+    )
     parser.add_argument("--wrangler-bin", default="wrangler", help="Wrangler executable to invoke.")
     parser.add_argument("--skip-upload", action="store_true", help="Skip uploading rootfs objects to R2.")
     parser.add_argument("--skip-deploy", action="store_true", help="Skip running wrangler pages deploy.")
+    parser.add_argument(
+        "--force-rootfs-upload",
+        action="store_true",
+        help="Upload all rootfs objects even if they already exist remotely.",
+    )
     parser.add_argument("--keep-staging", action="store_true", help="Keep the generated .dist directory after deploy.")
     return parser.parse_args()
 
@@ -43,43 +60,48 @@ def main() -> None:
     args = parse_args()
 
     publish_dir = Path(args.publish_dir).resolve()
+    rootfs_dir = Path(args.rootfs_dir).resolve()
     cloudflare_dir = Path(args.cloudflare_dir).resolve()
-    staging_dir = cloudflare_dir / ".dist"
-    rootfs_dir = publish_dir / "rootfs"
     r2_prefix = args.r2_prefix.strip("/")
 
-    if not publish_dir.is_dir():
-        raise SystemExit(f"Publish directory not found: {publish_dir}")
-    if not cloudflare_dir.is_dir():
-        raise SystemExit(f"Cloudflare directory not found: {cloudflare_dir}")
-    if not rootfs_dir.is_dir():
-        raise SystemExit(f"rootfs directory not found: {rootfs_dir}")
     if not r2_prefix:
         raise SystemExit("--r2-prefix must not be empty")
 
-    print(f"Staging static Pages assets from {publish_dir}")
-    stage_static_assets(publish_dir, staging_dir)
-
-    print(f"Writing wrangler config in {cloudflare_dir}")
-    write_wrangler_config(
-        cloudflare_dir=cloudflare_dir,
-        project_name=args.project_name,
-        bucket_name=args.r2_bucket,
-        compatibility_date=args.compatibility_date,
-        rootfs_prefix=r2_prefix,
-    )
+    if args.skip_upload and args.skip_deploy:
+        raise SystemExit("Nothing to do: both --skip-upload and --skip-deploy were provided")
 
     if not args.skip_upload:
+        if not rootfs_dir.is_dir():
+            raise SystemExit(f"rootfs directory not found: {rootfs_dir}")
         print(f"Uploading rootfs objects from {rootfs_dir} to R2 bucket {args.r2_bucket}")
         upload_rootfs(
             wrangler_bin=args.wrangler_bin,
             bucket_name=args.r2_bucket,
             rootfs_dir=rootfs_dir,
             r2_prefix=r2_prefix,
-            cwd=cloudflare_dir,
+            cwd=rootfs_dir,
+            skip_existing=not args.force_rootfs_upload,
         )
 
     if not args.skip_deploy:
+        if not publish_dir.is_dir():
+            raise SystemExit(f"Publish directory not found: {publish_dir}")
+        if not cloudflare_dir.is_dir():
+            raise SystemExit(f"Cloudflare directory not found: {cloudflare_dir}")
+        staging_dir = cloudflare_dir / ".dist"
+
+        print(f"Staging static Pages assets from {publish_dir}")
+        stage_static_assets(publish_dir, staging_dir)
+
+        print(f"Writing wrangler config in {cloudflare_dir}")
+        write_wrangler_config(
+            cloudflare_dir=cloudflare_dir,
+            project_name=args.project_name,
+            bucket_name=args.r2_bucket,
+            compatibility_date=args.compatibility_date,
+            rootfs_prefix=r2_prefix,
+        )
+
         print(f"Deploying Pages project {args.project_name}")
         deploy_pages(
             wrangler_bin=args.wrangler_bin,
@@ -90,7 +112,7 @@ def main() -> None:
             commit_hash=args.commit_hash,
         )
 
-    if not args.keep_staging:
+    if not args.skip_deploy and not args.keep_staging:
         shutil.rmtree(staging_dir, ignore_errors=True)
         print(f"Removed staging directory {staging_dir}")
 
@@ -199,6 +221,7 @@ def upload_rootfs(
     rootfs_dir: Path,
     r2_prefix: str,
     cwd: Path,
+    skip_existing: bool,
 ) -> None:
     files = sorted(
         path
@@ -213,6 +236,16 @@ def upload_rootfs(
         object_key = "/".join(part for part in (r2_prefix, relative_path) if part)
         content_type = guess_content_type(path)
         cache_control = IMAGE_CACHE if relative_path == "image.json" else STATIC_IMMUTABLE_CACHE
+        should_skip_existing = skip_existing and relative_path != "image.json"
+
+        if should_skip_existing and remote_object_exists(
+            wrangler_bin=wrangler_bin,
+            bucket_name=bucket_name,
+            object_key=object_key,
+            cwd=cwd,
+        ):
+            print(f"= Skipping existing rootfs object: {bucket_name}/{object_key}")
+            continue
 
         command = [
             wrangler_bin,
@@ -264,6 +297,35 @@ def guess_content_type(path: Path) -> str:
         return "application/json; charset=utf-8"
     guessed_type, _ = mimetypes.guess_type(path.name)
     return guessed_type or "application/octet-stream"
+
+
+def remote_object_exists(*, wrangler_bin: str, bucket_name: str, object_key: str, cwd: Path) -> bool:
+    with tempfile.NamedTemporaryFile(prefix="deploy-pages-r2-check-", delete=False) as temporary_file:
+        temp_path = Path(temporary_file.name)
+    try:
+        result = subprocess.run(
+            [
+                wrangler_bin,
+                "r2",
+                "object",
+                "get",
+                f"{bucket_name}/{object_key}",
+                "--file",
+                str(temp_path),
+                "--remote",
+            ],
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        return result.returncode == 0
+    finally:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
 
 
 def run(command: list[str], *, cwd: Path) -> None:

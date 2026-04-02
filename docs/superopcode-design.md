@@ -359,7 +359,7 @@ The old gaps around n-gram analysis and cross-sample aggregation are no longer t
 The conclusion is:
 
 - `runner.py` is now sufficient as the main sampling entry point
-- `scripts/analyze_blocks.py` and `benchmark/podish_perf/analyze_superopcode_candidates.py` already provide the first usable post-processing path
+- `scripts/analyze_blocks.py` and `Podish.PerfTools analyze-superopcode-candidates` already provide the first usable post-processing path
 - The next step is to improve candidate quality and workload breadth, not to rebuild the data pipeline from scratch
 
 ## 9.2 Implementation Plan Based on Existing Runner
@@ -396,7 +396,7 @@ Recommended new capabilities:
 
 ### Step 3: Keep Improving the Aggregation Script
 
-`benchmark/podish_perf/analyze_superopcode_candidates.py` already exists. The next step is to score hot-anchor neighborhoods rather than raw N-grams.
+`Podish.PerfTools analyze-superopcode-candidates` already exists. The next step is to score hot-anchor neighborhoods rather than raw N-grams.
 
 Current inputs:
 
@@ -501,7 +501,8 @@ python3 benchmark/podish_perf/runner.py \
 Or aggregate separately on existing results directories:
 
 ```bash
-python3 benchmark/podish_perf/analyze_superopcode_candidates.py \
+dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- \
+  analyze-superopcode-candidates \
   benchmark/podish_perf/results/<timestamp>/guest-stats \
   --n-gram 2 \
   --top 100 \

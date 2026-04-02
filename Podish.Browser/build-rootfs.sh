@@ -17,14 +17,17 @@ PACKAGES=(
   luajit
   fastfetch
   gcc
+  make
   vim
   musl-dev
   bash
   coreutils
   procps-ng
   curl
+  git
   less
   ncurses
+  bsd-games
 )
 
 cleanup() {
@@ -42,6 +45,8 @@ podman create \
   sh -c "
     apk update &&
     apk add --no-cache ${PACKAGES[*]} &&
+    git clone --depth 1 https://github.com/eembc/coremark /coremark &&
+    rm -rf /coremark/.git &&
     # Create a basic profile
     echo 'export PS1=\"\\[\\e[1;32m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ \"' > /etc/profile.d/prompt.sh &&
     echo 'alias ll=\"ls -lah --color=auto\"' >> /etc/profile.d/prompt.sh &&
