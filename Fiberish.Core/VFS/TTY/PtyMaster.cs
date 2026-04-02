@@ -141,6 +141,16 @@ public class PtySlave
         }
     }
 
+    public bool IsReadReady
+    {
+        get
+        {
+            if (Discipline != null)
+                return Discipline.IsReadReady;
+            return _pair.Master.InputBuffer.HasData;
+        }
+    }
+
     /// <summary>
     ///     Gets the wait queue for data availability.
     /// </summary>

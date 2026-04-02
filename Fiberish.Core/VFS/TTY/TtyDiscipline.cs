@@ -87,6 +87,8 @@ public class TtyDiscipline
     private readonly TtyInputQueue _inq;
     private readonly Lock _lock = new();
     private readonly ILogger _logger;
+    private readonly Dictionary<int, int> _pendingBlockingReadCounts = [];
+    private readonly Dictionary<int, bool> _pendingReadTimeouts = [];
     private readonly KernelScheduler _scheduler;
     private uint _cflag = 0xbf; // CS8 | CREAD | ...
     private ushort _cols = 80;
@@ -139,14 +141,41 @@ public class TtyDiscipline
     public bool HasPendingInput => Device.HasInterrupt;
 
     /// <summary>
-    ///     Check if there is data available to read from the TTY.
-    ///     This must not treat resize-only notifications as readable input. However,
-    ///     pending hardware input bytes should still count as readable because a
-    ///     subsequent read will first pull them through the line discipline.
-    ///     This matters for raw-mode poll/select users such as vim, which often wait
-    ///     for readability before issuing the read that drains the device buffer.
+    ///     Check if there are pending input bytes either in the discipline queue or
+    ///     still buffered in the device ingress queue.
     /// </summary>
     public bool HasDataAvailable => _inq.HasReadableData || Device.HasBufferedInput;
+
+    /// <summary>
+    ///     Check if Linux tty poll/select should currently report the fd readable.
+    ///     For noncanonical mode this follows n_tty_poll semantics:
+    ///     - MIN > 0 && TIME == 0 => need MIN bytes
+    ///     - otherwise => need at least 1 byte
+    ///     Canonical mode only becomes readable once the discipline queue has a
+    ///     complete line or EOF state ready to consume.
+    /// </summary>
+    public bool IsReadReady
+    {
+        get
+        {
+            bool canonicalMode;
+            byte vmin;
+            byte vtime;
+            lock (_lock)
+            {
+                canonicalMode = (_lflag & ICANON) != 0;
+                vmin = _cc[VMIN];
+                vtime = _cc[VTIME];
+            }
+
+            if (canonicalMode)
+                return _inq.HasReadableData;
+
+            var available = _inq.Count + Device.Count;
+            var required = vtime == 0 && vmin > 0 ? vmin : 1;
+            return available >= required;
+        }
+    }
 
     public int BytesAvailable => _inq.Count;
 
@@ -221,9 +250,10 @@ public class TtyDiscipline
         {
             var vmin = _cc[VMIN];
             var vtime = _cc[VTIME];
+            var timedOut = ConsumePendingReadTimeout(task);
 
             // Determine if we need to enforce MIN/TIME rules. If non-blocking, we just read what we can.
-            if ((flags & FileFlags.O_NONBLOCK) == 0 && (vmin > 0 || vtime > 0))
+            if ((flags & FileFlags.O_NONBLOCK) == 0)
             {
                 // To properly implement VMIN/VTIME across the async/blocking syscall boundary,
                 // we'd ideally yield back to the scheduler. However, returning -EAGAIN causes
@@ -236,15 +266,26 @@ public class TtyDiscipline
 
                 var count = _inq.Count;
 
+                if (vmin == 0 && vtime == 0)
+                {
+                    ClearPendingBlockingRead(task);
+                    if (count == 0)
+                        return 0;
+
+                    return _inq.Read(buffer, flags);
+                }
+
                 if (vmin > 0 && vtime == 0)
                 {
                     // Block until VMIN bytes
                     if (count >= vmin || count >= buffer.Length)
                     {
+                        ClearPendingBlockingRead(task);
                         var readCount = _inq.Read(buffer, flags);
                         return readCount;
                     }
 
+                    TrackPendingBlockingRead(task, buffer.Length);
                     _inq.DataAvailable.Reset();
                     return -(int)Errno.EAGAIN; // Will wait on IOAwaiter
                 }
@@ -259,30 +300,38 @@ public class TtyDiscipline
                 // For now, if we have enough bytes (VMIN), or if VMIN==0 and we just check what's there:
                 if (vmin > 0 && vtime > 0)
                 {
-                    if (count >= vmin || count >= buffer.Length) return _inq.Read(buffer, flags);
-
-                    // Wait for at least one byte
-                    if (count == 0)
+                    if (count >= vmin || count >= buffer.Length)
                     {
-                        _inq.DataAvailable.Reset();
-                        return -(int)Errno.EAGAIN;
+                        ClearPendingBlockingRead(task);
+                        return _inq.Read(buffer, flags);
                     }
 
-                    // We have SOME bytes (count > 0) but less than VMIN.
-                    // The inter-byte timer should be ticking. If we don't have timer support yet in this layer,
-                    // we'll return what we have (violating VMIN slightly but preventing deadlocks), OR 
-                    // we wait for more (violating VTIME). 
-                    // Let's just return what we have for now if we can't do accurate inter-byte timing easily.
-                    return _inq.Read(buffer, flags);
+                    if (timedOut && count > 0)
+                    {
+                        ClearPendingBlockingRead(task);
+                        return _inq.Read(buffer, flags);
+                    }
+
+                    TrackPendingBlockingRead(task, buffer.Length);
+                    _inq.DataAvailable.Reset();
+                    return -(int)Errno.EAGAIN;
                 }
 
                 if (vmin == 0 && vtime > 0)
                 {
-                    if (count > 0) return _inq.Read(buffer, flags);
+                    if (count > 0)
+                    {
+                        ClearPendingBlockingRead(task);
+                        return _inq.Read(buffer, flags);
+                    }
 
-                    // Pure timeout read. We need a way to return 0 after VTIME.
-                    // Right now we can't easily wait with timeout.
-                    // fallback to blocking for first byte like vmin=1, vtime=0.
+                    if (timedOut)
+                    {
+                        ClearPendingBlockingRead(task);
+                        return 0;
+                    }
+
+                    TrackPendingBlockingRead(task, buffer.Length);
                     _inq.DataAvailable.Reset();
                     return -(int)Errno.EAGAIN;
                 }
@@ -290,6 +339,8 @@ public class TtyDiscipline
         }
 
         var result = _inq.Read(buffer, flags);
+        if (result != -(int)Errno.EAGAIN)
+            ClearPendingBlockingRead(task);
 
         _logger.LogTrace("[TTY] Read: _inq.Read returned {Result}, buffer contents=[{BufferContents}]",
             result, string.Join(", ", buffer.Slice(0, Math.Max(0, result)).ToArray().Select(b => $"0x{b:X2}")));
@@ -302,6 +353,41 @@ public class TtyDiscipline
         }
 
         return result;
+    }
+
+    public async ValueTask<AwaitResult> WaitForReadAsync(FiberTask task)
+    {
+        while (true)
+        {
+            if (IsBlockingReadReady(task))
+                return AwaitResult.Completed;
+
+            if (task.HasInterruptingPendingSignal())
+                return AwaitResult.Interrupted;
+
+            var timeoutMs = GetReadTimeoutMs();
+            if (timeoutMs < 0)
+            {
+                var result = await _inq.DataAvailable.WaitAsync(task);
+                _inq.DataAvailable.Reset();
+                if (result != AwaitResult.Completed)
+                    return result;
+                continue;
+            }
+
+            var waitOutcome = await WaitForDataOrTimeoutAsync(task, timeoutMs);
+            if (waitOutcome == TtyReadWaitOutcome.Interrupted)
+                return AwaitResult.Interrupted;
+
+            if (IsBlockingReadReady(task))
+                return AwaitResult.Completed;
+
+            if (waitOutcome == TtyReadWaitOutcome.TimedOut)
+            {
+                MarkPendingReadTimeout(task);
+                return AwaitResult.Completed;
+            }
+        }
     }
 
     public int Write(FiberTask? task, ReadOnlySpan<byte> buffer)
@@ -1158,6 +1244,127 @@ public class TtyDiscipline
         _logger.LogTrace("[TTY] SendSignal: Signaling input queue to wake up readers");
         _inq.Signal();
     }
+
+    private bool ConsumePendingReadTimeout(FiberTask? task)
+    {
+        if (task == null)
+            return false;
+
+        return _pendingReadTimeouts.Remove(task.TID);
+    }
+
+    private void MarkPendingReadTimeout(FiberTask task)
+    {
+        _pendingReadTimeouts[task.TID] = true;
+    }
+
+    private void TrackPendingBlockingRead(FiberTask? task, int requestedCount)
+    {
+        if (task == null)
+            return;
+
+        _pendingBlockingReadCounts[task.TID] = requestedCount;
+    }
+
+    private void ClearPendingBlockingRead(FiberTask? task)
+    {
+        if (task == null)
+            return;
+
+        _pendingBlockingReadCounts.Remove(task.TID);
+    }
+
+    private bool IsBlockingReadReady(FiberTask task)
+    {
+        var requestedCount = _pendingBlockingReadCounts.TryGetValue(task.TID, out var pendingCount)
+            ? pendingCount
+            : int.MaxValue;
+        var timedOut = _pendingReadTimeouts.ContainsKey(task.TID);
+
+        bool canonicalMode;
+        byte vmin;
+        byte vtime;
+        lock (_lock)
+        {
+            canonicalMode = (_lflag & ICANON) != 0;
+            vmin = _cc[VMIN];
+            vtime = _cc[VTIME];
+        }
+
+        if (canonicalMode)
+            return _inq.HasReadableData;
+
+        var available = _inq.Count + Device.Count;
+        if (vmin == 0 && vtime == 0)
+            return true;
+
+        if (vmin > 0 && vtime == 0)
+            return available >= Math.Min((int)vmin, requestedCount);
+
+        if (vmin == 0 && vtime > 0)
+            return available > 0 || timedOut;
+
+        return available >= Math.Min((int)vmin, requestedCount) || (timedOut && available > 0);
+    }
+
+    private int GetReadTimeoutMs()
+    {
+        bool canonicalMode;
+        byte vmin;
+        byte vtime;
+        lock (_lock)
+        {
+            canonicalMode = (_lflag & ICANON) != 0;
+            vmin = _cc[VMIN];
+            vtime = _cc[VTIME];
+        }
+
+        if (canonicalMode || vtime == 0)
+            return -1;
+
+        if (vmin == 0)
+            return vtime * 100;
+
+        var available = _inq.Count + Device.Count;
+        return available > 0 ? vtime * 100 : -1;
+    }
+
+    private async ValueTask<TtyReadWaitOutcome> WaitForDataOrTimeoutAsync(FiberTask task, int timeoutMs)
+    {
+        var waitQueue = task.CommonKernel.RentAsyncWaitQueue();
+        IDisposable? registration = null;
+        Timer? timer = null;
+        var timedOut = false;
+
+        try
+        {
+            registration = _inq.DataAvailable.RegisterCancelable(waitQueue.Signal, task);
+            timer = task.CommonKernel.ScheduleTimer(timeoutMs, () =>
+            {
+                timedOut = true;
+                waitQueue.Signal();
+            });
+
+            var result = await waitQueue.WaitInterruptiblyAsync(task);
+            if (result != AwaitResult.Completed)
+                return TtyReadWaitOutcome.Interrupted;
+
+            return timedOut ? TtyReadWaitOutcome.TimedOut : TtyReadWaitOutcome.Data;
+        }
+        finally
+        {
+            registration?.Dispose();
+            timer?.Cancel();
+            task.CommonKernel.ReturnAsyncWaitQueue(waitQueue);
+        }
+    }
+}
+
+internal enum TtyReadWaitOutcome
+{
+    Data,
+    TimedOut,
+    Interrupted
 }
 
 internal sealed class TtyInputQueue

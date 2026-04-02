@@ -5,10 +5,12 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using Fiberish.Core;
 using Fiberish.Core.Net;
+using Fiberish.Core.VFS.TTY;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Fiberish.Tests.Syscalls;
@@ -118,6 +120,64 @@ public class WaitSyscallTests
 
         var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(8, rc);
+    }
+
+    [Fact]
+    public async Task SysRead_TtyRaw_MinZero_TimePositive_TimesOutToZero()
+    {
+        using var env = new TestEnv();
+        const uint bufPtr = 0x3A000;
+        env.MapUserPage(bufPtr);
+
+        var (fd, _) = CreateTty(env, vmin: 0, vtime: 1);
+
+        var pending = env.StartOnScheduler(() => env.Invoke("SysRead", (uint)fd, bufPtr, 8, 0, 0, 0));
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, rc);
+    }
+
+    [Fact]
+    public async Task SysRead_TtyRaw_MinPositive_TimePositive_TimeoutAfterFirstByte_ReturnsBufferedByte()
+    {
+        using var env = new TestEnv();
+        const uint bufPtr = 0x3B000;
+        env.MapUserPage(bufPtr);
+
+        var (fd, tty) = CreateTty(env, vmin: 2, vtime: 1);
+
+        var pending = env.StartOnScheduler(() => env.Invoke("SysRead", (uint)fd, bufPtr, 8, 0, 0, 0));
+        Assert.False(pending.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.InvokeOnSchedulerAsync(() => tty.Input([(byte)'a']));
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(1, rc);
+        Assert.Equal("a", System.Text.Encoding.ASCII.GetString(env.Read(bufPtr, 1)));
+    }
+
+    [Fact]
+    public async Task SysRead_TtyRaw_MinPositive_TimePositive_CompletesWhenMinimumArrivesBeforeTimeout()
+    {
+        using var env = new TestEnv();
+        const uint bufPtr = 0x3C000;
+        env.MapUserPage(bufPtr);
+
+        var (fd, tty) = CreateTty(env, vmin: 2, vtime: 1);
+
+        var pending = env.StartOnScheduler(() => env.Invoke("SysRead", (uint)fd, bufPtr, 8, 0, 0, 0));
+        Assert.False(pending.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.InvokeOnSchedulerAsync(() => tty.Input([(byte)'a']));
+        await env.InvokeOnSchedulerAsync(() => tty.Input([(byte)'b']));
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(2, rc);
+        Assert.Equal("ab", System.Text.Encoding.ASCII.GetString(env.Read(bufPtr, 2)));
     }
 
     [Fact]
@@ -1081,5 +1141,71 @@ public class WaitSyscallTests
         var rfd = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
         var wfd = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
         return (rfd, wfd);
+    }
+
+    private static (int fd, TtyDiscipline tty) CreateTty(TestEnv env, byte vmin, byte vtime)
+    {
+        env.Process.PGID = 100;
+        env.Process.SID = 100;
+
+        var tty = new TtyDiscipline(new TestTtyDriver(), new TestSignalBroadcaster(), NullLogger.Instance, env.Scheduler)
+        {
+            ForegroundPgrp = 100,
+            SessionId = 100
+        };
+        env.Process.ControllingTty = tty;
+
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
+        tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        termios[17 + 6] = vmin;
+        termios[17 + 5] = vtime;
+        tty.SetAttr(0, termios);
+
+        var inode = new ConsoleInode(env.SyscallManager.MemfdSuperBlock, true, tty);
+        var file = new LinuxFile(new Dentry("tty-stdin", inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDONLY, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+        return (fd, tty);
+    }
+
+    private sealed class TestSignalBroadcaster : ISignalBroadcaster
+    {
+        public void SignalProcessGroup(FiberTask? task, int pgid, int signal)
+        {
+            _ = task;
+            _ = pgid;
+            _ = signal;
+        }
+
+        public void SignalForegroundTask(FiberTask? task, int signal)
+        {
+            _ = task;
+            _ = signal;
+        }
+    }
+
+    private sealed class TestTtyDriver : ITtyDriver
+    {
+        public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
+        {
+            _ = kind;
+            return buffer.Length;
+        }
+
+        public bool CanWrite => true;
+
+        public bool RegisterWriteWait(Action callback, KernelScheduler scheduler)
+        {
+            _ = callback;
+            _ = scheduler;
+            return false;
+        }
+
+        public void Flush()
+        {
+        }
     }
 }

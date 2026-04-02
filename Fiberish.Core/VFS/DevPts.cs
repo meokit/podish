@@ -44,7 +44,7 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
         {
-            var readWatch = new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.HasDataAvailable,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.IsReadReady,
                 PtyPair.Slave.DataAvailable, PtyPair.Slave.DataAvailable.Reset);
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch);
         }
@@ -57,7 +57,7 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
             return QueueReadinessRegistration.Register(callback, task, events,
-                new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.HasDataAvailable, PtyPair.Slave.DataAvailable,
+                new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.IsReadReady, PtyPair.Slave.DataAvailable,
                     PtyPair.Slave.DataAvailable.Reset));
 
         return false;
@@ -68,7 +68,7 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLIN = 0x0001;
         if ((events & POLLIN) != 0)
             return QueueReadinessRegistration.RegisterHandle(callback, task, events,
-                new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.HasDataAvailable, PtyPair.Slave.DataAvailable,
+                new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.IsReadReady, PtyPair.Slave.DataAvailable,
                     PtyPair.Slave.DataAvailable.Reset));
         return null;
     }
@@ -80,10 +80,18 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
     public override async ValueTask<AwaitResult> WaitForRead(LinuxFile linuxFile, FiberTask task)
     {
-        var result = await PtyPair.Slave.DataAvailable.WaitAsync(task);
-        // Reset after waking up
-        PtyPair.Slave.DataAvailable.Reset();
-        return result;
+        if (PtyPair.Slave.Discipline != null)
+            return await PtyPair.Slave.Discipline.WaitForReadAsync(task);
+
+        while (!PtyPair.Slave.IsReadReady)
+        {
+            var result = await PtyPair.Slave.DataAvailable.WaitAsync(task);
+            PtyPair.Slave.DataAvailable.Reset();
+            if (result != AwaitResult.Completed)
+                return result;
+        }
+
+        return AwaitResult.Completed;
     }
 
     protected internal override int WriteSpan(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer,
@@ -99,7 +107,7 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
         short revents = 0;
 
-        if ((events & POLLIN) != 0 && PtyPair.Slave.HasDataAvailable)
+        if ((events & POLLIN) != 0 && PtyPair.Slave.IsReadReady)
             revents |= POLLIN;
 
         // PTY slave is always writable (simplified)
@@ -122,7 +130,7 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
             if (dispatcher?.Scheduler is not { } scheduler)
                 throw new InvalidOperationException("PTY slave wait requires an explicit scheduler.");
 
-            var readWatch = new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.HasDataAvailable,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.IsReadReady,
                 PtyPair.Slave.DataAvailable, PtyPair.Slave.DataAvailable.Reset);
             return QueueReadinessRegistration.Register(callback, scheduler, events, readWatch);
         }

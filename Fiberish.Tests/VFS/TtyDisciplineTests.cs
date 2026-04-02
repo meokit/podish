@@ -269,7 +269,7 @@ public class TtyDisciplineTests
     }
 
     [Fact]
-    public void RawMode_VMIN_VTIME_returns_available_bytes()
+    public void RawMode_VMIN_VTIME_keeps_waiting_until_timeout_or_minimum()
     {
         var buffer = new byte[100];
 
@@ -287,13 +287,12 @@ public class TtyDisciplineTests
         var read = _tty.Read(_task, buffer, 0);
         Assert.Equal(-(int)Errno.EAGAIN, read);
 
-        // Input 2 bytes (less than VMIN). Since we don't have timer support yet in TtyDiscipline,
-        // it returns what's available immediately after the first byte arrives.
+        // Input 2 bytes (less than VMIN). Linux keeps waiting until either VMIN is
+        // satisfied or the inter-byte timeout fires.
         _tty.Input(new[] { (byte)'a', (byte)'b' });
 
         read = _tty.Read(_task, buffer, 0);
-        Assert.Equal(2, read);
-        Assert.Equal("ab", Encoding.ASCII.GetString(buffer, 0, read));
+        Assert.Equal(-(int)Errno.EAGAIN, read);
     }
 
     [Fact]
@@ -321,6 +320,148 @@ public class TtyDisciplineTests
         read = _tty.Read(_task, buffer, 0);
         Assert.Equal(1, read);
         Assert.Equal("x", Encoding.ASCII.GetString(buffer, 0, read));
+    }
+
+    [Fact]
+    public void RawMode_MIN0_TIME0_blocking_read_returns_zero_when_no_data()
+    {
+        var buffer = new byte[100];
+
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
+        _tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        termios[17 + 6] = 0; // VMIN = 0
+        termios[17 + 5] = 0; // VTIME = 0
+        _tty.SetAttr(0, termios);
+
+        var read = _tty.Read(_task, buffer, 0);
+        Assert.Equal(0, read);
+    }
+
+    [Fact]
+    public void RawMode_Poll_requires_vmin_bytes_when_time_is_zero()
+    {
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
+        _tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        termios[17 + 6] = 2; // VMIN = 2
+        termios[17 + 5] = 0; // VTIME = 0
+        _tty.SetAttr(0, termios);
+
+        var sb = new TestSuperBlock();
+        var inode = new ConsoleInode(sb, true, _tty);
+        var file = new LinuxFile(new Dentry("stdin", inode, null, sb), FileFlags.O_RDONLY, null!);
+
+        try
+        {
+            _tty.Input([(byte)'a']);
+            Assert.Equal(0, inode.Poll(file, LinuxConstants.POLLIN));
+
+            _tty.Input([(byte)'b']);
+            Assert.Equal(LinuxConstants.POLLIN, inode.Poll(file, LinuxConstants.POLLIN));
+        }
+        finally
+        {
+            file.Close();
+        }
+    }
+
+    [Fact]
+    public void RawMode_Poll_with_min0_time0_requires_a_byte()
+    {
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
+        _tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        termios[17 + 6] = 0; // VMIN = 0
+        termios[17 + 5] = 0; // VTIME = 0
+        _tty.SetAttr(0, termios);
+
+        var sb = new TestSuperBlock();
+        var inode = new ConsoleInode(sb, true, _tty);
+        var file = new LinuxFile(new Dentry("stdin", inode, null, sb), FileFlags.O_RDONLY, null!);
+
+        try
+        {
+            Assert.Equal(0, inode.Poll(file, LinuxConstants.POLLIN));
+
+            _tty.Input([(byte)'a']);
+            Assert.Equal(LinuxConstants.POLLIN, inode.Poll(file, LinuxConstants.POLLIN));
+        }
+        finally
+        {
+            file.Close();
+        }
+    }
+
+    [Fact]
+    public void RawMode_Poll_with_vtime_uses_single_byte_threshold()
+    {
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
+        _tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        termios[17 + 6] = 3; // VMIN = 3
+        termios[17 + 5] = 1; // VTIME = 1
+        _tty.SetAttr(0, termios);
+
+        var sb = new TestSuperBlock();
+        var inode = new ConsoleInode(sb, true, _tty);
+        var file = new LinuxFile(new Dentry("stdin", inode, null, sb), FileFlags.O_RDONLY, null!);
+
+        try
+        {
+            _tty.Input([(byte)'a']);
+            Assert.Equal(LinuxConstants.POLLIN, inode.Poll(file, LinuxConstants.POLLIN));
+        }
+        finally
+        {
+            file.Close();
+        }
+    }
+
+    [Fact]
+    public void RawMode_RegisterWait_does_not_fire_before_vmin_threshold()
+    {
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
+        _tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        termios[17 + 6] = 2; // VMIN = 2
+        termios[17 + 5] = 0; // VTIME = 0
+        _tty.SetAttr(0, termios);
+
+        var sb = new TestSuperBlock();
+        var inode = new ConsoleInode(sb, true, _tty);
+        var file = new LinuxFile(new Dentry("stdin", inode, null, sb), FileFlags.O_RDONLY, null!);
+
+        try
+        {
+            _tty.Input([(byte)'a']);
+
+            var fired = 0;
+            using var reg = inode.RegisterWaitHandle(file, _task, () => fired++, LinuxConstants.POLLIN);
+            _taskContext.DrainEvents();
+
+            Assert.NotNull(reg);
+            Assert.Equal(0, fired);
+
+            _tty.Input([(byte)'b']);
+            _taskContext.DrainEvents();
+
+            Assert.True(fired > 0);
+        }
+        finally
+        {
+            file.Close();
+        }
     }
 
     #endregion
