@@ -82,6 +82,13 @@ function createPodishWorkerClient() {
     const openingHttpRequests = new Set()
     let httpRpcKickInFlight = false
     let httpRpcKickQueued = false
+    let networkActivityCount = 0
+    let onNetworkActivityChange = null
+
+    function updateNetworkActivity(delta) {
+        networkActivityCount = Math.max(0, networkActivityCount + delta)
+        onNetworkActivityChange?.(networkActivityCount > 0)
+    }
 
     const ready = new Promise((resolve, reject) => {
         const onMessage = event => {
@@ -236,6 +243,7 @@ function createPodishWorkerClient() {
                         && !activeHttpStreams.has(beginRequest.requestId)
                         && !openingHttpRequests.has(beginRequest.requestId)) {
                         openingHttpRequests.add(beginRequest.requestId)
+                        updateNetworkActivity(1)
                         try {
                             const url = decoder.decode(beginRequest.urlBytes)
                             const controller = new AbortController()
@@ -297,6 +305,7 @@ function createPodishWorkerClient() {
                             sabState.httpRpc.completeFailure(slotId, beginRequest.requestId, resultCode)
                             sabState.irq.signal(IRQ_HTTP_RPC)
                         } finally {
+                            updateNetworkActivity(-1)
                             openingHttpRequests.delete(beginRequest.requestId)
                         }
                         continue
@@ -541,6 +550,10 @@ function createPodishWorkerClient() {
         onControl(cb) {
             onControlCallback = cb
             ensureRuntimePump()
+        },
+        onNetworkActivityChange(cb) {
+            onNetworkActivityChange = cb
+            cb?.(networkActivityCount > 0)
         }
     }
 }
@@ -557,6 +570,10 @@ export function writeSessionInput(bytes) {
 
 export function writeSessionResize(rows, cols) {
     return podishWorker.writeResize(rows, cols)
+}
+
+export function onWorkerNetworkActivityChange(cb) {
+    podishWorker.onNetworkActivityChange(cb)
 }
 
 export function startSessionRunLoop() {

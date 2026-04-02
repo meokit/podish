@@ -1,10 +1,12 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {Terminal} from '@xterm/xterm'
 import {FitAddon} from '@xterm/addon-fit'
+import {WebglAddon} from '@xterm/addon-webgl'
 import {
     callWorker,
     decoder,
     encoder,
+    onWorkerNetworkActivityChange,
     podishWorker,
     startSessionRunLoop,
     writeSessionInput,
@@ -61,12 +63,17 @@ const statusConfig = {
     error: {text: 'Error', color: 'status-error', dot: 'status-dot-error'},
 }
 
-function StatusBadge({status}) {
+function StatusBadge({status, networkActive = false}) {
     const cfg = statusConfig[status] || statusConfig.idle
+    const diskLampActive = networkActive && status !== 'idle' && status !== 'error' && status !== 'stopped'
     return (
-        <span className={`status-badge inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${cfg.color}`}>
-            <span className={`w-2 h-2 rounded-full ${cfg.dot}`}/>
-            {cfg.text}
+        <span
+            className={`status-badge inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs font-medium ${cfg.color} ${
+                diskLampActive ? 'status-badge-network' : ''
+            }`}
+        >
+            <span className={`h-2 w-2 rounded-full ${cfg.dot} ${diskLampActive ? 'status-dot-network' : ''}`}/>
+            <span className="hidden min-[420px]:inline">{cfg.text}</span>
         </span>
     )
 }
@@ -157,6 +164,7 @@ export default function App() {
     const xtermRef = useRef(null)
     const fitRef = useRef(null)
     const bootFlowStartedRef = useRef(false)
+    const networkFetchCountRef = useRef(0)
 
     const [status, setStatus] = useState('idle')
     const [workerReady, setWorkerReady] = useState(false)
@@ -164,6 +172,7 @@ export default function App() {
     const [importModalOpen, setImportModalOpen] = useState(false)
     const [selectedImportFile, setSelectedImportFile] = useState(null)
     const [importFallbackPending, setImportFallbackPending] = useState(false)
+    const [networkActive, setNetworkActive] = useState(false)
 
     const searchParams = useMemo(() => new URLSearchParams(globalThis.location?.search || ''), [])
     const importMode = searchParams.get('import') === '1'
@@ -171,6 +180,18 @@ export default function App() {
 
     const focusTerminal = useCallback(() => {
         xtermRef.current?.focus()
+    }, [])
+
+    const trackNetworkRequest = useCallback(async callback => {
+        networkFetchCountRef.current += 1
+        setNetworkActive(true)
+        try {
+            return await callback()
+        } finally {
+            networkFetchCountRef.current = Math.max(0, networkFetchCountRef.current - 1)
+            if (networkFetchCountRef.current === 0)
+                setNetworkActive(false)
+        }
     }, [])
 
     const settleTerminalLayout = useCallback(async () => {
@@ -211,7 +232,7 @@ export default function App() {
         logStartup('preparing default browser rootfs')
         try {
             const imageJsonUrl = getDefaultImageJsonUrl()
-            const imageResp = await fetch(imageJsonUrl)
+            const imageResp = await trackNetworkRequest(() => fetch(imageJsonUrl))
             if (!imageResp.ok)
                 throw new Error(`HTTP ${imageResp.status}: ${imageResp.statusText}`)
 
@@ -234,7 +255,7 @@ export default function App() {
             setStatus('error')
             setSessionMessage('Download failed')
         }
-    }, [settleTerminalLayout])
+    }, [settleTerminalLayout, trackNetworkRequest])
 
     const openImportTab = useCallback(() => {
         const importUrl = new URL(globalThis.location.href)
@@ -277,6 +298,7 @@ export default function App() {
     }, [bootWithBytes, focusTerminal, selectedImportFile])
 
     useEffect(() => {
+        let webglAddon = null
         const terminal = new Terminal({
             cursorBlink: true,
             convertEol: true,
@@ -287,6 +309,21 @@ export default function App() {
         const fitAddon = new FitAddon()
         terminal.loadAddon(fitAddon)
         terminal.open(terminalRef.current)
+
+        try {
+            webglAddon = new WebglAddon()
+            terminal.loadAddon(webglAddon)
+            webglAddon.onContextLoss(() => {
+                try {
+                    webglAddon?.dispose()
+                } catch {
+                }
+                webglAddon = null
+                fitAddon.fit()
+            })
+        } catch {
+        }
+
         fitAddon.fit()
         terminal.focus()
 
@@ -349,6 +386,7 @@ export default function App() {
             setStatus('stopped')
             setSessionMessage(`Process exited with code ${exitCode}`)
         })
+        onWorkerNetworkActivityChange(setNetworkActive)
 
         const resizeDisposable = terminal.onResize(() => {
             const {rows, cols} = terminal
@@ -361,6 +399,11 @@ export default function App() {
             terminalRef.current?.removeEventListener('pointerdown', onPointerDown)
             dataDisposable.dispose()
             resizeDisposable.dispose()
+            onWorkerNetworkActivityChange(null)
+            try {
+                webglAddon?.dispose()
+            } catch {
+            }
             terminal.dispose()
             xtermRef.current = null
             fitRef.current = null
@@ -381,7 +424,7 @@ export default function App() {
     }, [bootDefault, importMode, workerReady])
 
     return (
-        <div className="flex h-screen flex-col overflow-hidden">
+        <div className="app-shell flex h-dvh min-h-0 flex-col overflow-hidden">
             <ImportRootfsModal
                 open={importModalOpen}
                 busy={isBusy}
@@ -391,16 +434,16 @@ export default function App() {
                 onConfirm={confirmImportRootfs}
             />
 
-            <header className="glass z-10 flex items-center justify-between px-6 py-3">
+            <header className="glass z-10 flex items-center justify-between px-4 py-3 sm:px-6">
                 <div className="flex min-w-0 items-center gap-3">
-                    <h1 className="app-wordmark bg-clip-text text-lg font-bold tracking-tight text-transparent">
+                    <h1 className="app-wordmark hidden bg-clip-text text-lg font-bold tracking-tight text-transparent sm:block">
                         Podish
                     </h1>
-                    <span className="text-theme-muted truncate text-xs font-mono">
+                    <span className="text-theme-muted hidden truncate text-xs font-mono md:inline">
                         x86 Linux in WebAssembly
                     </span>
-                    <span className="text-theme-subtle hidden text-xs sm:inline">•</span>
-                    <span className="text-theme-muted hidden truncate text-xs font-mono sm:inline">
+                    <span className="text-theme-subtle hidden text-xs md:inline">•</span>
+                    <span className="text-theme-muted hidden truncate text-xs font-mono lg:inline">
                         {sessionMessage}
                     </span>
                 </div>
@@ -410,22 +453,22 @@ export default function App() {
                             Import Mode
                         </span>
                     )}
-                    <StatusBadge status={status}/>
+                    <StatusBadge status={status} networkActive={networkActive}/>
                     <button
                         type="button"
                         onClick={openImportTab}
-                        className="import-link text-sm font-medium underline underline-offset-4 transition"
+                        className="import-link hidden text-sm font-medium underline underline-offset-4 transition sm:inline-block"
                     >
                         Import rootfs
                     </button>
                 </div>
             </header>
 
-            <main className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
+            <main className="flex min-h-0 flex-1 flex-col px-0 pb-0 pt-0 sm:px-4 sm:pb-4 sm:pt-3">
                 <div
                     ref={terminalRef}
                     onClick={focusTerminal}
-                    className="terminal-shell terminal-container animate-glow flex-1 overflow-hidden rounded-xl"
+                    className="terminal-shell terminal-container animate-glow flex-1 overflow-hidden rounded-none sm:rounded-xl"
                 />
             </main>
         </div>
