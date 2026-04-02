@@ -2266,6 +2266,16 @@ public class FiberTask
         if (syscallNr == X86SyscallNumbers.clock_nanosleep)
             return true;
 
+        // Linux signal(7) and FUTEX_WAIT(2const): FUTEX_WAIT-style sleeps are not restarted.
+        if (syscallNr == X86SyscallNumbers.futex)
+        {
+            var futexOp = (int)syscallArg2 & 0x7F;
+            if (futexOp == LinuxConstants.FUTEX_WAIT ||
+                futexOp == LinuxConstants.FUTEX_WAIT_BITSET ||
+                futexOp == LinuxConstants.FUTEX_WAIT_REQUEUE_PI)
+                return true;
+        }
+
         // epoll_wait (x86 32-bit: 256), epoll_pwait (319), epoll_pwait2 (441)
         if (syscallNr == X86SyscallNumbers.epoll_wait ||
             syscallNr == X86SyscallNumbers.epoll_pwait ||
@@ -2289,6 +2299,10 @@ public class FiberTask
         // select (82), _newselect (142)
         if (syscallNr == X86SyscallNumbers.select ||
             syscallNr == X86SyscallNumbers._newselect)
+            return true;
+
+        // semop(2) and semtimedop(2) waits are never automatically restarted.
+        if (syscallNr == X86SyscallNumbers.semop || syscallNr == X86SyscallNumbers.semtimedop_time64)
             return true;
 
         if (HasSocketTimeoutForCurrentSyscall(task, syscallNr, syscallArg1))

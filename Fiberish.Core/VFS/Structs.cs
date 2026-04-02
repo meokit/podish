@@ -59,9 +59,13 @@ internal readonly struct QueueReadinessWatch
 
     public void ResetIfStale()
     {
+        // Linux poll(2): readiness means the requested I/O would not block.
+        // If the queue is still signaled after readiness became false, clear the stale edge
+        // before registering so we don't spuriously wake callbacks on non-ready fds.
         if (!IsReady && Queue != null && Queue.IsSignaled)
             ResetStaleSignal?.Invoke();
     }
+
 }
 
 internal static class QueueReadinessRegistration
@@ -116,7 +120,14 @@ internal static class QueueReadinessRegistration
         if (!watch.ShouldObserve(requestedEvents))
             return false;
 
+        if (watch.IsReady)
+        {
+            task.CommonKernel.ScheduleContinuation(callback, task);
+            return true;
+        }
+
         watch.ResetIfStale();
+
         watch.Queue!.Register(callback, task);
         return true;
     }
@@ -127,7 +138,14 @@ internal static class QueueReadinessRegistration
         if (!watch.ShouldObserve(requestedEvents))
             return false;
 
+        if (watch.IsReady)
+        {
+            scheduler.Schedule(callback);
+            return true;
+        }
+
         watch.ResetIfStale();
+
         watch.Queue!.Register(callback, scheduler);
         return true;
     }
@@ -150,6 +168,14 @@ internal static class QueueReadinessRegistration
     {
         if (!watch.ShouldObserve(requestedEvents))
             return;
+
+        if (watch.IsReady)
+        {
+            ScheduleReadyCallback(callback, task, scheduler);
+            registrations ??= [];
+            registrations.Add(NoopWaitRegistration.Instance);
+            return;
+        }
 
         watch.ResetIfStale();
 
@@ -177,6 +203,27 @@ internal static class QueueReadinessRegistration
         {
             foreach (var registration in _registrations)
                 registration.Dispose();
+        }
+    }
+
+    private static void ScheduleReadyCallback(Action callback, FiberTask? task, KernelScheduler? scheduler)
+    {
+        if (task != null)
+        {
+            task.CommonKernel.ScheduleContinuation(callback, task);
+            return;
+        }
+
+        (scheduler ?? throw new InvalidOperationException("Scheduler is required for wait registration."))
+            .Schedule(callback);
+    }
+
+    private sealed class NoopWaitRegistration : IDisposable
+    {
+        public static readonly NoopWaitRegistration Instance = new();
+
+        public void Dispose()
+        {
         }
     }
 }
@@ -1023,7 +1070,11 @@ public abstract class Inode : IAddressSpaceOperations
                             return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
                         }
 
-                        await WaitForRead(file, task);
+                        if (await WaitForRead(file, task) == AwaitResult.Interrupted)
+                        {
+                            if (updatePosition) file.Position = currentOffset;
+                            return totalRead > 0 ? totalRead : -(int)Errno.ERESTARTSYS;
+                        }
                         continue;
                     }
 
@@ -1124,7 +1175,12 @@ public abstract class Inode : IAddressSpaceOperations
                         if (task == null)
                             return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN);
 
-                        await WaitForWrite(file, task);
+                        // Linux pipe(7): blocking writes up to PIPE_BUF stay atomic, so a pipe
+                        // writer may need to wait for the whole chunk to fit even though poll(2)
+                        // would already report POLLOUT once any space is available.
+                        var minWritableBytes = chunkLen <= PipeInode.PipeBuf ? (int)chunkLen : 1;
+                        if (await WaitForWrite(file, task, minWritableBytes) == AwaitResult.Interrupted)
+                            return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.ERESTARTSYS);
                         continue;
                     }
 
@@ -1400,16 +1456,18 @@ public abstract class Inode : IAddressSpaceOperations
     }
 
     // Async blocking support
-    public virtual ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
+    public virtual ValueTask<AwaitResult> WaitForRead(LinuxFile linuxFile, FiberTask task)
     {
         _ = task;
-        return ValueTask.CompletedTask;
+        return ValueTask.FromResult(AwaitResult.Completed);
     }
 
-    public virtual ValueTask WaitForWrite(LinuxFile linuxFile, FiberTask task)
+    public virtual ValueTask<AwaitResult> WaitForWrite(LinuxFile linuxFile, FiberTask task,
+        int minWritableBytes = 1)
     {
+        _ = minWritableBytes;
         _ = task;
-        return ValueTask.CompletedTask;
+        return ValueTask.FromResult(AwaitResult.Completed);
     }
 
     /// <summary>

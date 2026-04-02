@@ -53,7 +53,7 @@ public partial class SyscallManager
             if (op == LinuxConstants.SEMOP)
                 ret = await SysVSem.SemOp((int)first, ptr, second, engine);
             else if (op == LinuxConstants.SEMTIMEDOP)
-                ret = await SysVSem.SemOp((int)first, ptr, second, engine); // Ignore timeout for now
+                ret = await DoSemTimedOp(engine, (int)first, ptr, second, fifth, false);
         }
 
         return ret;
@@ -161,6 +161,12 @@ public partial class SyscallManager
         return await SysVSem.SemOp((int)semid, sops, nsops, engine);
     }
 
+    private async ValueTask<int> SysSemTimedOpTime64(Engine engine, uint semid, uint sops, uint nsops, uint timeout,
+        uint _5, uint _6)
+    {
+        return await DoSemTimedOp(engine, (int)semid, sops, nsops, timeout, true);
+    }
+
     private ValueTask<int> SysSemCtl(Engine engine, uint semid, uint semnum, uint cmd, uint arg, uint _5, uint _6)
     {
         var t = engine.Owner as FiberTask;
@@ -172,6 +178,24 @@ public partial class SyscallManager
             actualCmd = (int)(cmd & ~LinuxConstants.IPC_64);
 
         return ValueTask.FromResult(SysVSem.SemCtl((int)semid, (int)semnum, actualCmd, arg, engine, uid, gid));
+    }
+
+    private async ValueTask<int> DoSemTimedOp(Engine engine, int semid, uint sops, uint nsops, uint timeoutPtr,
+        bool time64)
+    {
+        long? timeoutMs = null;
+        if (timeoutPtr != 0)
+        {
+            var ok = time64
+                ? TryReadTimespec64TimeoutMs(engine, timeoutPtr, out var parsedTimeout, out var err)
+                : TryReadTimespec32TimeoutMs(engine, timeoutPtr, out parsedTimeout, out err);
+            if (!ok)
+                return err;
+
+            timeoutMs = parsedTimeout;
+        }
+
+        return await SysVSem.SemOp(semid, sops, nsops, engine, timeoutMs);
     }
 #pragma warning restore CS1998
 }

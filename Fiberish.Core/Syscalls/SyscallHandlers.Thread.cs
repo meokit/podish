@@ -40,18 +40,56 @@ public partial class SyscallManager
                 return -(int)Errno.EINVAL;
             }
 
+            // Linux FUTEX_WAIT(2const): compare-and-block must not lose a wake that races with
+            // queue insertion, so we re-check the futex word after registering the waiter.
+            if (!engine.CopyFromUser(uaddr, tidBuf))
+            {
+                registration.Cancel();
+                return -(int)Errno.EFAULT;
+            }
+
+            currentVal = BinaryPrimitives.ReadUInt32LittleEndian(tidBuf);
+            if (currentVal != val)
+            {
+                registration.Cancel();
+                return -(int)Errno.EAGAIN;
+            }
+
+            int? timeoutMs = null;
+            if (a4 != 0)
+            {
+                if (!TryReadTimespec32TimeoutMs(engine, a4, out var parsedTimeout, out var timeoutErr))
+                {
+                    registration.Cancel();
+                    return timeoutErr;
+                }
+
+                timeoutMs = parsedTimeout;
+                if (timeoutMs == 0)
+                {
+                    registration.Cancel();
+                    return -(int)Errno.ETIMEDOUT;
+                }
+            }
+
             Logger.LogInformation(
                 "[SysFutex WAIT] TID={TID} uaddr=0x{Uaddr:x} val={Val} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset} WakeReason={WR} PendingSig=0x{PS:x}",
                 task.TID, uaddr, val, isPrivate, waitKey.Kind, waitKey.PageValue, waitKey.OffsetWithinPage,
                 task.WakeReason, task.PendingSignals);
-            var result = await new FutexAwaitable(waiter, task, registration);
+            var result = await new FutexAwaitable(waiter, task, registration, timeoutMs);
             Logger.LogInformation(
                 "[SysFutex WAIT] TID={TID} awaiter result={Result} WakeReason={WR} PendingSig=0x{PS:x}",
                 task.TID, result, task.WakeReason, task.PendingSignals);
-            if (result == AwaitResult.Interrupted)
+            if (result == FutexWaitOutcome.Interrupted)
             {
                 Futex.CancelWait(waitKey, waiter);
                 return -(int)Errno.ERESTARTSYS;
+            }
+
+            if (result == FutexWaitOutcome.TimedOut)
+            {
+                Futex.CancelWait(waitKey, waiter);
+                return -(int)Errno.ETIMEDOUT;
             }
 
             return 0;
@@ -112,11 +150,17 @@ public partial class SyscallManager
                 Logger.LogTrace(
                     "[SysFutex LOCK_PI] TID={TID} waiting uaddr=0x{Uaddr:x} owner={Owner} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset}",
                     task.TID, uaddr, owner, isPrivate, lockKey.Kind, lockKey.PageValue, lockKey.OffsetWithinPage);
-                var result = await new FutexAwaitable(waiter, task, registration);
-                if (result == AwaitResult.Interrupted)
+                var result = await new FutexAwaitable(waiter, task, registration, null);
+                if (result == FutexWaitOutcome.Interrupted)
                 {
                     Futex.CancelWait(lockKey, waiter);
                     return -(int)Errno.ERESTARTSYS;
+                }
+
+                if (result == FutexWaitOutcome.TimedOut)
+                {
+                    Futex.CancelWait(lockKey, waiter);
+                    return -(int)Errno.ETIMEDOUT;
                 }
             }
         }
@@ -157,17 +201,19 @@ public partial class SyscallManager
         private readonly Waiter _waiter;
         private readonly ITaskAsyncRegistration _registration;
         private readonly FiberTask _task;
+        private readonly int? _timeoutMs;
 
-        public FutexAwaitable(Waiter waiter, FiberTask task, ITaskAsyncRegistration registration)
+        public FutexAwaitable(Waiter waiter, FiberTask task, ITaskAsyncRegistration registration, int? timeoutMs)
         {
             _waiter = waiter;
             _task = task;
             _registration = registration;
+            _timeoutMs = timeoutMs;
         }
 
         public FutexAwaiter GetAwaiter()
         {
-            return new FutexAwaiter(_waiter, _task, _registration);
+            return new FutexAwaiter(_waiter, _task, _registration, _timeoutMs);
         }
     }
 
@@ -264,13 +310,15 @@ public partial class SyscallManager
         private readonly Waiter _waiter;
         private readonly ITaskAsyncRegistration _registration;
         private readonly FiberTask _task;
+        private readonly int? _timeoutMs;
         private readonly FiberTask.WaitToken _token;
 
-        public FutexAwaiter(Waiter waiter, FiberTask task, ITaskAsyncRegistration registration)
+        public FutexAwaiter(Waiter waiter, FiberTask task, ITaskAsyncRegistration registration, int? timeoutMs)
         {
             _waiter = waiter;
             _task = task;
             _registration = registration;
+            _timeoutMs = timeoutMs;
             _token = task.BeginWaitToken();
         }
 
@@ -287,24 +335,26 @@ public partial class SyscallManager
             if (!operation.TryAddRegistration(_registration))
                 return;
 
-            var handler = new FutexCompletionHandler(_task, _token, continuation, operation);
+            var handler = new FutexCompletionHandler(_task, _token, continuation, operation, _timeoutMs);
             var waiterAwaiter = _waiter.Tcs.Task.GetAwaiter();
             waiterAwaiter.OnCompleted(handler.OnWaitCompleted);
             _task.ArmInterruptingSignalSafetyNet(_token, handler.OnSignal);
         }
 
-        public AwaitResult GetResult()
+        public FutexWaitOutcome GetResult()
         {
             var reason = _task.CompleteWaitToken(_token);
+            if (reason == WakeReason.Timer) return FutexWaitOutcome.TimedOut;
+
             if (reason != WakeReason.Event && reason != WakeReason.None)
             {
                 _waiter.Tcs.TrySetResult(false);
-                return AwaitResult.Interrupted;
+                return FutexWaitOutcome.Interrupted;
             }
 
-            if (_waiter.Tcs.Task.IsCompleted && !_waiter.Tcs.Task.Result) return AwaitResult.Interrupted;
+            if (_waiter.Tcs.Task.IsCompleted && !_waiter.Tcs.Task.Result) return FutexWaitOutcome.Interrupted;
 
-            return AwaitResult.Completed;
+            return FutexWaitOutcome.Completed;
         }
 
         private sealed class FutexCompletionHandler
@@ -312,14 +362,20 @@ public partial class SyscallManager
             private readonly TaskAsyncOperationHandle _operation;
             private readonly FiberTask _task;
             private readonly FiberTask.WaitToken _token;
+            private Fiberish.Core.Timer? _timer;
 
             public FutexCompletionHandler(FiberTask task, FiberTask.WaitToken token, Action continuation,
-                TaskAsyncOperationHandle operation)
+                TaskAsyncOperationHandle operation, int? timeoutMs)
             {
                 _task = task;
                 _token = token;
                 _operation = operation;
                 _operation.TryInitialize(continuation);
+                if (timeoutMs.HasValue)
+                {
+                    _timer = _task.CommonKernel.ScheduleTimer(timeoutMs.Value, OnTimeout);
+                    _operation.TryAddRegistration(TaskAsyncRegistration.From(_timer));
+                }
             }
 
             public void OnWaitCompleted()
@@ -334,7 +390,19 @@ public partial class SyscallManager
             {
                 _operation.TryComplete(WakeReason.Signal);
             }
+
+            private void OnTimeout()
+            {
+                _operation.TryComplete(WakeReason.Timer);
+            }
         }
+    }
+
+    private enum FutexWaitOutcome
+    {
+        Completed,
+        Interrupted,
+        TimedOut
     }
 
     private async ValueTask<int> SysSetThreadArea(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,

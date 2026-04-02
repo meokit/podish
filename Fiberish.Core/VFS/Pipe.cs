@@ -11,6 +11,7 @@ namespace Fiberish.VFS;
 public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 {
     private const int BufferSize = 65536; // 64KB pipe buffer
+    public const int PipeBuf = 4096;
     private readonly byte[] _buffer;
 
     // Notification handles
@@ -264,9 +265,10 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
             var space = BufferSize - _count;
             if (space > 0)
             {
-                // Atomic write guarantee: writes <= PIPE_BUF must not be interleaved/partial
-                const int PIPE_BUF = 4096;
-                if (buffer.Length <= PIPE_BUF && space < buffer.Length)
+                // Linux pipe(7): blocking writes of n <= PIPE_BUF bytes must remain atomic,
+                // so we only report progress here when the pipe can accept the whole chunk.
+                // Non-blocking writes of n <= PIPE_BUF bytes return EAGAIN instead of partial progress.
+                if (buffer.Length <= PipeBuf && space < buffer.Length)
                     return -(int)Errno.EAGAIN;
 
                 var toWrite = Math.Min(buffer.Length, space);
@@ -298,16 +300,46 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         }
     }
 
-    public override async ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
+    public override async ValueTask<AwaitResult> WaitForRead(LinuxFile linuxFile, FiberTask task)
     {
-        // Must await the handle
-        // TODO: Handle cancellation/interruption?
-        await _readHandle.WaitAsync(task);
+        using (EnterStateScope())
+        {
+            if (_count > 0 || _writersClosed)
+                return AwaitResult.Completed;
+
+            if (_readHandle.IsSignaled)
+                _readHandle.Reset();
+        }
+
+        var result = await _readHandle.WaitInterruptiblyAsync(task);
+        return result;
     }
 
-    public override async ValueTask WaitForWrite(LinuxFile linuxFile, FiberTask task)
+    public override async ValueTask<AwaitResult> WaitForWrite(LinuxFile linuxFile, FiberTask task,
+        int minWritableBytes = 1)
     {
-        await _writeHandle.WaitAsync(task);
+        minWritableBytes = Math.Clamp(minWritableBytes, 1, BufferSize);
+
+        while (true)
+        {
+            using (EnterStateScope())
+            {
+                var space = BufferSize - _count;
+                if (_readersClosed || space >= minWritableBytes)
+                    return AwaitResult.Completed;
+
+                // poll(2) documents POLLOUT as "writing is now possible", not "the full
+                // pending write fits right now". For pipe(7) atomic writes <= PIPE_BUF we
+                // may therefore need to ignore intermediate write-space wakeups until enough
+                // capacity accumulates for the requested chunk.
+                if (_writeHandle.IsSignaled)
+                    _writeHandle.Reset();
+            }
+
+            var result = await _writeHandle.WaitInterruptiblyAsync(task);
+            if (result == AwaitResult.Interrupted)
+                return AwaitResult.Interrupted;
+        }
     }
 
     public override short Poll(LinuxFile linuxFile, short events)

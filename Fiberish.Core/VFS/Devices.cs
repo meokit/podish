@@ -95,17 +95,18 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         return 0;
     }
 
-    public override async ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
+    public override async ValueTask<AwaitResult> WaitForRead(LinuxFile linuxFile, FiberTask task)
     {
-        if (!_isInput || _discipline == null) return;
+        if (!_isInput || _discipline == null) return AwaitResult.Completed;
 
         // Await the event. If already signaled, completes immediately.
-        await _discipline.DataAvailable.WaitAsync(task);
+        var result = await _discipline.DataAvailable.WaitAsync(task);
 
         // Reset after waking up. This ensures:
         // 1. If event was already signaled, we wake immediately and retry Read()
         // 2. If queue is still empty after retry, next WaitForRead() will block
         _discipline.DataAvailable.Reset();
+        return result;
     }
 
     protected internal override int WriteSpan(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer,
@@ -343,13 +344,14 @@ public sealed class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSourc
         return tty.Read(task, buffer, linuxFile.Flags);
     }
 
-    public override async ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
+    public override async ValueTask<AwaitResult> WaitForRead(LinuxFile linuxFile, FiberTask task)
     {
         if (ResolveDiscipline(task, linuxFile) is not { } tty)
-            return;
+            return AwaitResult.Completed;
 
-        await tty.DataAvailable.WaitAsync(task);
+        var result = await tty.DataAvailable.WaitAsync(task);
         tty.DataAvailable.Reset();
+        return result;
     }
 
     protected internal override int WriteSpan(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer,

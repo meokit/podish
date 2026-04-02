@@ -796,6 +796,9 @@ public partial class SyscallManager
             case X86SyscallNumbers.semop:
                 handled = true;
                 return SysSemOp(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.semtimedop_time64:
+                handled = true;
+                return SysSemTimedOpTime64(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.open_tree:
                 handled = true;
                 return SysOpenTree(engine, ebx, ecx, edx, esi, edi, ebp);

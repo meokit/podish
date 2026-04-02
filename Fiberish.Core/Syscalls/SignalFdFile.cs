@@ -127,9 +127,9 @@ public class SignalFdInode : TmpfsInode, ITaskWaitSource
         return null;
     }
 
-    public override async ValueTask WaitForRead(LinuxFile file, FiberTask task)
+    public override async ValueTask<AwaitResult> WaitForRead(LinuxFile file, FiberTask task)
     {
-        await WaitAsync(task);
+        return await WaitAsync(task);
     }
 
     private ulong GetMask()
@@ -234,23 +234,23 @@ public readonly struct SignalFdAwaitable
     }
 }
 
-public struct SignalFdAwaiter : INotifyCompletion
+public readonly struct SignalFdAwaiter : INotifyCompletion
 {
     private readonly SignalFdInode _inode;
     private readonly FiberTask _task;
-    private FiberTask.WaitToken? _token;
+    private readonly FiberTask.WaitToken _token;
 
     public SignalFdAwaiter(SignalFdInode inode, FiberTask task)
     {
         _inode = inode;
         _task = task;
+        _token = task.BeginWaitToken();
     }
 
     public bool IsCompleted => (_inode.Poll(_task, LinuxConstants.POLLIN) & LinuxConstants.POLLIN) != 0;
 
     public void OnCompleted(Action continuation)
     {
-        _token = _task.BeginWaitToken();
         if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
             return;
 
@@ -260,8 +260,6 @@ public struct SignalFdAwaiter : INotifyCompletion
 
     public AwaitResult GetResult()
     {
-        if (_token == null) return AwaitResult.Completed;
-
         _task.CompleteWaitToken(_token);
         return AwaitResult.Completed;
     }

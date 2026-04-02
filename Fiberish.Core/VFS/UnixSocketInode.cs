@@ -806,14 +806,16 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         return null;
     }
 
-    public override async ValueTask WaitForRead(LinuxFile file, FiberTask task)
+    public override async ValueTask<AwaitResult> WaitForRead(LinuxFile file, FiberTask task)
     {
-        await _readWaitQueue.WaitInterruptiblyAsync(task);
+        return await _readWaitQueue.WaitInterruptiblyAsync(task);
     }
 
-    public override async ValueTask WaitForWrite(LinuxFile file, FiberTask task)
+    public override async ValueTask<AwaitResult> WaitForWrite(LinuxFile file, FiberTask task,
+        int minWritableBytes = 1)
     {
-        await _writeWaitQueue.WaitInterruptiblyAsync(task);
+        _ = minWritableBytes;
+        return await _writeWaitQueue.WaitInterruptiblyAsync(task);
     }
 
     public void EnqueueMessage(UnixMessage msg)

@@ -660,6 +660,22 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
         base.OnEvictCache();
     }
 
+    public override async ValueTask<AwaitResult> WaitForRead(LinuxFile file, FiberTask task)
+    {
+        return await WaitForSocketEventAsync(file, task, PollEvents.POLLIN)
+            ? AwaitResult.Completed
+            : AwaitResult.Interrupted;
+    }
+
+    public override async ValueTask<AwaitResult> WaitForWrite(LinuxFile file, FiberTask task,
+        int minWritableBytes = 1)
+    {
+        _ = minWritableBytes;
+        return await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT)
+            ? AwaitResult.Completed
+            : AwaitResult.Interrupted;
+    }
+
     private ValueTask<bool> WaitForSocketEventAsync(LinuxFile file, FiberTask task, short events)
     {
         return _readiness.WaitForSocketEventAsync(file, task, events);
@@ -738,6 +754,168 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
             return -(int)Errno.EAGAIN;
 
         return MapSocketError(error);
+    }
+
+    public override async ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task, IReadOnlyList<Iovec> iovs,
+        long offset, int flags)
+    {
+        if (offset != -1)
+            return -(int)Errno.ESPIPE;
+        if (task == null)
+            return -(int)Errno.EPERM;
+
+        var totalCapacity = 0L;
+        foreach (var iov in iovs)
+            totalCapacity += iov.Len;
+        if (totalCapacity == 0)
+            return 0;
+
+        var buffer = ArrayPool<byte>.Shared.Rent((int)Math.Min(totalCapacity, 64 * 1024));
+        try
+        {
+            var totalRead = 0;
+            var iovIndex = 0;
+            var iovOffset = 0u;
+            var singleMessageOnly = LinuxSocketType != SocketType.Stream;
+
+            while (totalRead < totalCapacity)
+            {
+                var chunkLen = (int)Math.Min(buffer.Length, totalCapacity - totalRead);
+                // Linux recv(2): stream sockets may return any available prefix, but datagram/
+                // seqpacket receives return at most one message per call.
+                var recvFlags = totalRead > 0 && !singleMessageOnly ? flags | LinuxConstants.MSG_DONTWAIT : flags;
+                var bytesRead = await RecvAsync(file, task, buffer, recvFlags, chunkLen);
+                if (bytesRead < 0)
+                {
+                    if (bytesRead == -(int)Errno.EAGAIN && totalRead > 0)
+                        break;
+                    return totalRead > 0 ? totalRead : bytesRead;
+                }
+
+                if (bytesRead == 0)
+                    break;
+
+                var chunkOffset = 0;
+                while (chunkOffset < bytesRead && iovIndex < iovs.Count)
+                {
+                    var iov = iovs[iovIndex];
+                    var remaining = iov.Len - iovOffset;
+                    if (remaining == 0)
+                    {
+                        iovIndex++;
+                        iovOffset = 0;
+                        continue;
+                    }
+
+                    var toCopy = (int)Math.Min(remaining, bytesRead - chunkOffset);
+                    if (!engine.CopyToUser(iov.BaseAddr + iovOffset, buffer.AsSpan(chunkOffset, toCopy)))
+                        return totalRead > 0 ? totalRead : -(int)Errno.EFAULT;
+
+                    chunkOffset += toCopy;
+                    totalRead += toCopy;
+                    iovOffset += (uint)toCopy;
+                    if (iovOffset >= iov.Len)
+                    {
+                        iovIndex++;
+                        iovOffset = 0;
+                    }
+                }
+
+                if (singleMessageOnly)
+                    break;
+            }
+
+            return totalRead;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    public override async ValueTask<int> WriteV(Engine engine, LinuxFile file, FiberTask? task,
+        IReadOnlyList<Iovec> iovs, long offset, int flags)
+    {
+        if (offset != -1)
+            return -(int)Errno.ESPIPE;
+        if (task == null)
+            return -(int)Errno.EPERM;
+
+        var totalLength = 0L;
+        foreach (var iov in iovs)
+            totalLength += iov.Len;
+        if (totalLength == 0)
+            return 0;
+        if (LinuxSocketType != SocketType.Stream && totalLength > 65536)
+            return -(int)Errno.EMSGSIZE;
+
+        var rentLength = LinuxSocketType == SocketType.Stream ? (int)Math.Min(totalLength, 64 * 1024) : (int)totalLength;
+        var buffer = ArrayPool<byte>.Shared.Rent(rentLength);
+        try
+        {
+            var totalWritten = 0;
+            var iovIndex = 0;
+            var iovOffset = 0u;
+            var singleMessageOnly = LinuxSocketType != SocketType.Stream;
+
+            while (totalWritten < totalLength)
+            {
+                var gathered = 0;
+                while (iovIndex < iovs.Count && gathered < buffer.Length)
+                {
+                    var iov = iovs[iovIndex];
+                    var remaining = iov.Len - iovOffset;
+                    if (remaining == 0)
+                    {
+                        iovIndex++;
+                        iovOffset = 0;
+                        continue;
+                    }
+
+                    var toCopy = (int)Math.Min(remaining, buffer.Length - gathered);
+                    if (!engine.CopyFromUser(iov.BaseAddr + iovOffset, buffer.AsSpan(gathered, toCopy)))
+                        return totalWritten > 0 ? totalWritten : -(int)Errno.EFAULT;
+
+                    gathered += toCopy;
+                    iovOffset += (uint)toCopy;
+                    if (iovOffset >= iov.Len)
+                    {
+                        iovIndex++;
+                        iovOffset = 0;
+                    }
+                }
+
+                if (gathered == 0)
+                    break;
+
+                // Linux send(2): datagram-style sockets send one atomic message per call and
+                // oversize messages fail with EMSGSIZE rather than being split across sends.
+                var sendFlags = totalWritten > 0 && !singleMessageOnly ? flags | LinuxConstants.MSG_DONTWAIT : flags;
+                var bytesWritten = await SendAsync(file, task, buffer.AsMemory(0, gathered), sendFlags);
+                if (bytesWritten == -(int)Errno.EPIPE)
+                {
+                    task.PostSignal((int)Signal.SIGPIPE);
+                    return totalWritten > 0 ? totalWritten : bytesWritten;
+                }
+
+                if (bytesWritten < 0)
+                {
+                    if (bytesWritten == -(int)Errno.EAGAIN && totalWritten > 0)
+                        break;
+                    return totalWritten > 0 ? totalWritten : bytesWritten;
+                }
+
+                totalWritten += bytesWritten;
+                if (singleMessageOnly || bytesWritten < gathered)
+                    break;
+            }
+
+            return totalWritten;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     public int MapSocketError(SocketError err)

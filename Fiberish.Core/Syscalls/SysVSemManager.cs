@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Native;
@@ -45,25 +46,29 @@ public sealed class SemWaitState
 public readonly struct SemWaitAwaitable
 {
     private readonly SemWaitState _state;
+    private readonly long? _timeoutMs;
 
-    public SemWaitAwaitable(SemWaitState state)
+    public SemWaitAwaitable(SemWaitState state, long? timeoutMs = null)
     {
         _state = state;
+        _timeoutMs = timeoutMs;
     }
 
     public SemWaitAwaiter GetAwaiter()
     {
-        return new SemWaitAwaiter(_state);
+        return new SemWaitAwaiter(_state, _timeoutMs);
     }
 }
 
 public readonly struct SemWaitAwaiter : INotifyCompletion
 {
     private readonly SemWaitState _state;
+    private readonly long? _timeoutMs;
 
-    public SemWaitAwaiter(SemWaitState state)
+    public SemWaitAwaiter(SemWaitState state, long? timeoutMs)
     {
         _state = state;
+        _timeoutMs = timeoutMs;
     }
 
     public bool IsCompleted => false;
@@ -75,34 +80,54 @@ public readonly struct SemWaitAwaiter : INotifyCompletion
             return;
 
         state.Operation = operation;
-        var asyncState = new SemWaitOperation(state, continuation, operation);
+        var asyncState = new SemWaitOperation(state, continuation, operation, _timeoutMs);
         state.Task.ArmInterruptingSignalSafetyNet(state.Token, asyncState.OnSignal);
     }
 
-    public AwaitResult GetResult()
+    public SemWaitOutcome GetResult()
     {
         var reason = _state.Task.CompleteWaitToken(_state.Token);
-        if (reason != WakeReason.None && reason != WakeReason.Event) return AwaitResult.Interrupted;
-        return AwaitResult.Completed;
+        if (reason == WakeReason.Timer) return SemWaitOutcome.TimedOut;
+        if (reason != WakeReason.None && reason != WakeReason.Event) return SemWaitOutcome.Interrupted;
+        return SemWaitOutcome.Completed;
     }
 
     private sealed class SemWaitOperation
     {
         private readonly TaskAsyncOperationHandle _operation;
         private readonly SemWaitState _state;
+        private Fiberish.Core.Timer? _timer;
 
-        public SemWaitOperation(SemWaitState state, Action continuation, TaskAsyncOperationHandle operation)
+        public SemWaitOperation(SemWaitState state, Action continuation, TaskAsyncOperationHandle operation,
+            long? timeoutMs)
         {
             _state = state;
             _operation = operation;
             _operation.TryInitialize(continuation);
+            if (timeoutMs.HasValue)
+            {
+                _timer = state.Task.CommonKernel.ScheduleTimer(timeoutMs.Value, OnTimeout);
+                _operation.TryAddRegistration(TaskAsyncRegistration.From(_timer));
+            }
         }
 
         public void OnSignal()
         {
             _operation.TryComplete(WakeReason.Signal);
         }
+
+        private void OnTimeout()
+        {
+            _operation.TryComplete(WakeReason.Timer);
+        }
     }
+}
+
+public enum SemWaitOutcome
+{
+    Completed,
+    Interrupted,
+    TimedOut
 }
 
 public class SysVSemManager
@@ -153,7 +178,7 @@ public class SysVSemManager
         return semid;
     }
 
-    public async ValueTask<int> SemOp(int semid, uint sopsPtr, uint nsops, Engine engine)
+    public async ValueTask<int> SemOp(int semid, uint sopsPtr, uint nsops, Engine engine, long? timeoutMs = null)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -165,6 +190,8 @@ public class SysVSemManager
 
         if (!_setsBySemid.TryGetValue(semid, out var set))
             return -(int)Errno.EINVAL;
+
+        var deadlineMs = timeoutMs.HasValue ? Stopwatch.GetTimestamp() + timeoutMs.Value * Stopwatch.Frequency / 1000 : 0;
 
         while (true)
         {
@@ -238,12 +265,31 @@ public class SysVSemManager
                 return 0; // Success
             }
 
-            // Track we are waiting
+            // Linux semtimedop(2): timed waits use a relative timeout and expire with EAGAIN.
+            // Plain semop(2) reaches here with timeoutMs == null and waits indefinitely.
             set.Waiters.Add(blockedWaiter!);
 
+            long? remainingMs = null;
+            if (timeoutMs.HasValue)
+            {
+                var remainingTicks = Math.Max(0L, deadlineMs - Stopwatch.GetTimestamp());
+                remainingMs = remainingTicks == 0 ? 0 : Math.Max(1L, remainingTicks * 1000 / Stopwatch.Frequency);
+                if (remainingMs == 0)
+                {
+                    set.Waiters.Remove(blockedWaiter!);
+                    return -(int)Errno.EAGAIN;
+                }
+            }
+
             // Await execution
-            var res = await new SemWaitAwaitable(blockedWaiter!);
-            if (res == AwaitResult.Interrupted)
+            var res = await new SemWaitAwaitable(blockedWaiter!, remainingMs);
+            if (res == SemWaitOutcome.TimedOut)
+            {
+                set.Waiters.Remove(blockedWaiter!);
+                return -(int)Errno.EAGAIN;
+            }
+
+            if (res == SemWaitOutcome.Interrupted)
             {
                 set.Waiters.Remove(blockedWaiter!);
                 return -(int)Errno.EINTR;

@@ -249,18 +249,19 @@ public readonly struct WaitQueueAwaitable
     }
 }
 
-public struct WaitQueueAwaiter : INotifyCompletion
+public readonly struct WaitQueueAwaiter : INotifyCompletion
 {
     private readonly AsyncWaitQueue _queue;
     private readonly FiberTask _currentTask;
     private readonly bool _interruptOnSignals;
-    private FiberTask.WaitToken? _token;
+    private readonly FiberTask.WaitToken _token;
 
     public WaitQueueAwaiter(AsyncWaitQueue queue, FiberTask currentTask, bool interruptOnSignals)
     {
         _queue = queue;
         _currentTask = currentTask;
         _interruptOnSignals = interruptOnSignals;
+        _token = currentTask.BeginWaitToken();
     }
 
     public bool IsCompleted => _queue.IsSignaled;
@@ -268,7 +269,6 @@ public struct WaitQueueAwaiter : INotifyCompletion
     public void OnCompleted(Action continuation)
     {
         var currentTask = _currentTask;
-        _token = currentTask.BeginWaitToken();
         if (!currentTask.TryEnterAsyncOperation(_token, out var operation) || operation == null)
             return;
 
@@ -283,8 +283,6 @@ public struct WaitQueueAwaiter : INotifyCompletion
     public AwaitResult GetResult()
     {
         var task = _currentTask;
-        if (_token == null) return AwaitResult.Completed;
-
         var reason = task.CompleteWaitToken(_token);
         if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
         return AwaitResult.Completed;
@@ -342,16 +340,17 @@ public readonly struct SelectAwaitable
     }
 }
 
-public struct SelectAwaiter : INotifyCompletion
+public readonly struct SelectAwaiter : INotifyCompletion
 {
     private readonly AsyncWaitQueue[] _queues;
     private readonly FiberTask _currentTask;
-    private FiberTask.WaitToken? _token;
+    private readonly FiberTask.WaitToken _token;
 
     public SelectAwaiter(AsyncWaitQueue[] queues, FiberTask currentTask)
     {
         _queues = queues;
         _currentTask = currentTask;
+        _token = currentTask.BeginWaitToken();
     }
 
     public bool IsCompleted
@@ -368,7 +367,6 @@ public struct SelectAwaiter : INotifyCompletion
     public void OnCompleted(Action continuation)
     {
         var currentTask = _currentTask;
-        _token = currentTask.BeginWaitToken();
         if (!currentTask.TryEnterAsyncOperation(_token, out var operation) || operation == null)
             return;
 
@@ -381,7 +379,6 @@ public struct SelectAwaiter : INotifyCompletion
     public AwaitResult GetResult()
     {
         var task = _currentTask;
-        if (_token == null) return AwaitResult.Completed;
         var reason = task.CompleteWaitToken(_token);
         if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
         return AwaitResult.Completed;
@@ -443,7 +440,7 @@ public readonly struct ChildStateAwaitable
         return new ChildStateAwaiter(_parent, _targetPid, _wantStopped, _wantContinued, _scheduler, _task);
     }
 
-    public struct ChildStateAwaiter : INotifyCompletion
+    public readonly struct ChildStateAwaiter : INotifyCompletion
     {
         private readonly Process _parent;
         private readonly int _targetPid;
@@ -451,7 +448,7 @@ public readonly struct ChildStateAwaitable
         private readonly bool _wantContinued;
         private readonly KernelScheduler _scheduler;
         private readonly FiberTask _task;
-        private FiberTask.WaitToken? _token;
+        private readonly FiberTask.WaitToken _token;
 
         public ChildStateAwaiter(Process parent, int targetPid, bool wantStopped, bool wantContinued,
             KernelScheduler scheduler, FiberTask task)
@@ -462,6 +459,7 @@ public readonly struct ChildStateAwaitable
             _wantContinued = wantContinued;
             _scheduler = scheduler;
             _task = task;
+            _token = task.BeginWaitToken();
         }
 
         public bool IsCompleted
@@ -486,7 +484,6 @@ public readonly struct ChildStateAwaitable
 
         public void OnCompleted(Action continuation)
         {
-            _token = _task.BeginWaitToken();
             if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
                 return;
 
@@ -524,7 +521,6 @@ public readonly struct ChildStateAwaitable
 
         public AwaitResult GetResult()
         {
-            if (_token == null) return AwaitResult.Completed;
             var reason = _task.CompleteWaitToken(_token);
             if (reason != WakeReason.Event && reason != WakeReason.None) return AwaitResult.Interrupted;
 

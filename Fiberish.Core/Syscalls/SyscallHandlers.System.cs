@@ -453,21 +453,33 @@ public partial class SyscallManager
         if (!engine.CopyFromUser(a1, reqBuf)) return -(int)Errno.EFAULT;
         var sec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(0, 4));
         var nsec = BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(4, 4));
+        if (sec < 0 || nsec < 0 || nsec >= 1_000_000_000) return -(int)Errno.EINVAL;
 
         if (engine.Owner is FiberTask ownerTask)
             Logger.LogInformation("[SysNanosleep] pid={Pid} tid={Tid} req={{sec={Sec}, nsec={Nsec}}}",
                 ownerTask.Process.TGID, ownerTask.TID, sec, nsec);
 
-        var totalMs = sec * 1000L + nsec / 1000000L;
-        if (totalMs <= 0 && (sec > 0 || nsec > 0)) totalMs = 1; // Minimum 1ms tick if requested
-        if (totalMs < 0) return 0;
-
         if (engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
+        if (!TryConvertTimespecToTimeoutMs(sec, nsec, out var totalMs, out var timeoutErr))
+            return timeoutErr;
 
+        var startNs = GetSleepClockNs(LinuxConstants.CLOCK_MONOTONIC);
+        var requestedNs = checked(sec * 1_000_000_000L + nsec);
+
+        // Linux nanosleep(2): invalid tv_nsec is EINVAL; interrupted relative sleeps return rem.
         var res = await new SleepAwaitable(totalMs, fiberTask);
 
         if (res == AwaitResult.Interrupted)
+        {
+            // Linux nanosleep(2): interrupted relative sleeps report the unslept interval in rem.
+            if (a2 != 0)
+            {
+                var elapsedNs = Math.Max(0L, GetSleepClockNs(LinuxConstants.CLOCK_MONOTONIC) - startNs);
+                var remainingNs = Math.Max(0L, requestedNs - elapsedNs);
+                if (!WriteTimespec32(engine, a2, remainingNs)) return -(int)Errno.EFAULT;
+            }
             return -(int)Errno.ERESTARTSYS;
+        }
 
         return 0;
     }
@@ -476,29 +488,80 @@ public partial class SyscallManager
         uint a5, uint a6)
     {
         var clockId = (int)a1;
-        var flags = (int)a2; // e.g. TIMER_ABSTIME
+        var flags = (int)a2;
         var reqPtr = a3;
         var remPtr = a4;
+
+        if ((flags & ~1) != 0) return -(int)Errno.EINVAL;
+        if (clockId != LinuxConstants.CLOCK_REALTIME && clockId != LinuxConstants.CLOCK_MONOTONIC &&
+            clockId != LinuxConstants.CLOCK_BOOTTIME)
+            return -(int)Errno.EINVAL;
 
         var reqBuf = new byte[16]; // timespec64
         if (!engine.CopyFromUser(reqPtr, reqBuf)) return -(int)Errno.EFAULT;
         var sec = BinaryPrimitives.ReadInt64LittleEndian(reqBuf.AsSpan(0, 8));
         var nsec = BinaryPrimitives.ReadInt64LittleEndian(reqBuf.AsSpan(8, 8));
-
-        var totalMs = sec * 1000L + nsec / 1000000L;
-
-        // Simplified: ignore TIMER_ABSTIME for now, just perform relative sleep
-        if (totalMs <= 0 && (sec > 0 || nsec > 0)) totalMs = 1;
-        if (totalMs < 0) return 0;
+        if (sec < 0 || nsec < 0 || nsec >= 1_000_000_000) return -(int)Errno.EINVAL;
 
         if (engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
 
+        var absolute = (flags & 1) != 0;
+        var nowNs = GetSleepClockNs(clockId);
+        var requestNs = checked(sec * 1_000_000_000L + nsec);
+        var durationNs = absolute ? Math.Max(0L, requestNs - nowNs) : requestNs;
+        if (absolute && durationNs == 0)
+            return 0;
+
+        var totalMs = durationNs == 0 ? 0 : (int)Math.Min(int.MaxValue, (durationNs + 999_999) / 1_000_000);
+        var startNs = nowNs;
+
+        // Linux clock_nanosleep(2): TIMER_ABSTIME sleeps use an absolute deadline and do not write rem.
         var res = await new SleepAwaitable(totalMs, fiberTask);
 
         if (res == AwaitResult.Interrupted)
+        {
+            // Linux clock_nanosleep(2): rem is only written for relative sleeps.
+            if (!absolute && remPtr != 0)
+            {
+                var elapsedNs = Math.Max(0L, GetSleepClockNs(clockId) - startNs);
+                var remainingNs = Math.Max(0L, durationNs - elapsedNs);
+                if (!WriteTimespec64(engine, remPtr, remainingNs)) return -(int)Errno.EFAULT;
+            }
             return -(int)Errno.ERESTARTSYS;
+        }
 
         return 0;
+    }
+
+    private static long GetSleepClockNs(int clockId)
+    {
+        if (clockId == LinuxConstants.CLOCK_REALTIME)
+        {
+            var ticks = DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks;
+            return ticks * 100;
+        }
+
+        var freq = Stopwatch.Frequency;
+        var ticksNow = Stopwatch.GetTimestamp();
+        var secs = ticksNow / freq;
+        var rem = ticksNow % freq;
+        return secs * 1_000_000_000L + rem * 1_000_000_000L / freq;
+    }
+
+    private static bool WriteTimespec32(Engine engine, uint ptr, long totalNs)
+    {
+        var buf = new byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)(totalNs / 1_000_000_000L));
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)(totalNs % 1_000_000_000L));
+        return engine.CopyToUser(ptr, buf);
+    }
+
+    private static bool WriteTimespec64(Engine engine, uint ptr, long totalNs)
+    {
+        var buf = new byte[16];
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), totalNs / 1_000_000_000L);
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8, 8), totalNs % 1_000_000_000L);
+        return engine.CopyToUser(ptr, buf);
     }
 
     private async ValueTask<int> SysNice(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

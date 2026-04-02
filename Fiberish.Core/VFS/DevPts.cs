@@ -78,11 +78,12 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         return PtyPair.Slave.Read(task, buffer, linuxFile.Flags);
     }
 
-    public override async ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
+    public override async ValueTask<AwaitResult> WaitForRead(LinuxFile linuxFile, FiberTask task)
     {
-        await PtyPair.Slave.DataAvailable.WaitAsync(task);
+        var result = await PtyPair.Slave.DataAvailable.WaitAsync(task);
         // Reset after waking up
         PtyPair.Slave.DataAvailable.Reset();
+        return result;
     }
 
     protected internal override int WriteSpan(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer,
@@ -242,13 +243,14 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         return pair.Master.Read(task, buffer, linuxFile.Flags);
     }
 
-    public override async ValueTask WaitForRead(LinuxFile linuxFile, FiberTask task)
+    public override async ValueTask<AwaitResult> WaitForRead(LinuxFile linuxFile, FiberTask task)
     {
         if (linuxFile.PrivateData is not PtyPair pair)
-            return;
+            return AwaitResult.Completed;
 
-        await pair.Master.DataAvailable.WaitAsync(task);
+        var result = await pair.Master.DataAvailable.WaitAsync(task);
         pair.Master.DataAvailable.Reset();
+        return result;
     }
 
     protected internal override int WriteSpan(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer,

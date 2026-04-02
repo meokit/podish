@@ -9,8 +9,10 @@ namespace Fiberish.Syscalls;
 
 public class EventFdInode : TmpfsInode
 {
+    private const ulong MaxCounter = ulong.MaxValue - 1;
     private readonly bool _isSemaphore;
-    private readonly List<Action> _waiters = [];
+    private readonly List<Action> _readWaiters = [];
+    private readonly List<Action> _writeWaiters = [];
     private ulong _counter;
 
     public EventFdInode(ulong ino, SuperBlock superBlock, ulong initval, FileFlags flags) : base(ino, superBlock)
@@ -31,10 +33,11 @@ public class EventFdInode : TmpfsInode
         using (EnterStateScope())
         {
             if (_counter == 0)
-            {
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
-                return 0; // Simulated block - caller should use RegisterWait / PollAwaiter
-            }
+                // Linux eventfd(2): reads on a zero counter block unless O_NONBLOCK is set.
+                // We surface EAGAIN here so the generic VFS read path can call WaitForRead().
+                return -(int)Errno.EAGAIN;
+
+            var wasFull = _counter == MaxCounter;
 
             ulong val;
             if (_isSemaphore)
@@ -50,8 +53,8 @@ public class EventFdInode : TmpfsInode
 
             BinaryPrimitives.WriteUInt64LittleEndian(buffer[..8], val);
 
-            // Notify waiters that it's writable
-            NotifyWaiters();
+            if (wasFull)
+                NotifyWriteWaiters();
 
             return 8;
         }
@@ -66,14 +69,15 @@ public class EventFdInode : TmpfsInode
 
         using (EnterStateScope())
         {
-            if (ulong.MaxValue - _counter < add)
-            {
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
-                return 0; // Simulated block
-            }
+            if (MaxCounter - _counter < add)
+                // Linux eventfd(2): writes that would overflow block unless O_NONBLOCK is set.
+                // Return EAGAIN so the generic VFS write path can wait for POLLOUT.
+                return -(int)Errno.EAGAIN;
 
+            var wasEmpty = _counter == 0;
             _counter += add;
-            NotifyWaiters();
+            if (wasEmpty)
+                NotifyReadWaiters();
             return 8;
         }
     }
@@ -85,7 +89,8 @@ public class EventFdInode : TmpfsInode
         {
             if ((events & LinuxConstants.POLLIN) != 0 && _counter > 0)
                 revents |= LinuxConstants.POLLIN;
-            if ((events & LinuxConstants.POLLOUT) != 0 && _counter < ulong.MaxValue - 1)
+            // Linux eventfd(2): POLLOUT is reported if writing a value of at least 1 would not block.
+            if ((events & LinuxConstants.POLLOUT) != 0 && _counter < MaxCounter)
                 revents |= LinuxConstants.POLLOUT;
         }
 
@@ -94,15 +99,8 @@ public class EventFdInode : TmpfsInode
 
     public override bool RegisterWait(LinuxFile file, Action callback, short events)
     {
-        if (IsReadyForEvents(events))
-            return false;
-
-        using (EnterStateScope())
-        {
-            _waiters.Add(callback);
-        }
-
-        return true;
+        var registration = RegisterWaitHandle(file, callback, events);
+        return registration != null;
     }
 
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
@@ -115,19 +113,62 @@ public class EventFdInode : TmpfsInode
 
         using (EnterStateScope())
         {
-            _waiters.Add(callback);
+            if ((events & LinuxConstants.POLLIN) != 0)
+                _readWaiters.Add(callback);
+            if ((events & LinuxConstants.POLLOUT) != 0)
+                _writeWaiters.Add(callback);
         }
 
-        return new CallbackRegistration(this, _waiters, callback);
+        return new CallbackRegistration(this, callback, events);
     }
 
-    private void NotifyWaiters()
+    public override async ValueTask<AwaitResult> WaitForRead(LinuxFile file, FiberTask task)
+    {
+        using (EnterStateScope())
+        {
+            if (_counter > 0)
+                return AwaitResult.Completed;
+        }
+
+        // Linux eventfd(2): blocking reads sleep until the counter becomes nonzero.
+        return await new CallbackWaitAwaitable(task,
+            callback => RegisterWaitHandle(file, callback, LinuxConstants.POLLIN));
+    }
+
+    public override async ValueTask<AwaitResult> WaitForWrite(LinuxFile file, FiberTask task,
+        int minWritableBytes = 1)
+    {
+        _ = minWritableBytes;
+        using (EnterStateScope())
+        {
+            if (_counter < MaxCounter)
+                return AwaitResult.Completed;
+        }
+
+        // Linux eventfd(2): POLLOUT means a write of at least 1 is possible without blocking.
+        return await new CallbackWaitAwaitable(task,
+            callback => RegisterWaitHandle(file, callback, LinuxConstants.POLLOUT));
+    }
+
+    private void NotifyReadWaiters()
     {
         Action[] toWake;
         using (EnterStateScope())
         {
-            toWake = [.._waiters];
-            _waiters.Clear(); // They will re-register if they poll again
+            toWake = [.._readWaiters];
+            _readWaiters.Clear();
+        }
+
+        foreach (var action in toWake) action();
+    }
+
+    private void NotifyWriteWaiters()
+    {
+        Action[] toWake;
+        using (EnterStateScope())
+        {
+            toWake = [.._writeWaiters];
+            _writeWaiters.Clear();
         }
 
         foreach (var action in toWake) action();
@@ -139,7 +180,7 @@ public class EventFdInode : TmpfsInode
         {
             if ((events & LinuxConstants.POLLIN) != 0 && _counter > 0)
                 return true;
-            if ((events & LinuxConstants.POLLOUT) != 0 && _counter < ulong.MaxValue - 1)
+            if ((events & LinuxConstants.POLLOUT) != 0 && _counter < MaxCounter)
                 return true;
             return false;
         }
@@ -156,22 +197,25 @@ public class EventFdInode : TmpfsInode
     {
         private readonly Action _callback;
         private readonly EventFdInode _owner;
-        private List<Action>? _waiters;
+        private readonly short _events;
+        private int _disposed;
 
-        public CallbackRegistration(EventFdInode owner, List<Action> waiters, Action callback)
+        public CallbackRegistration(EventFdInode owner, Action callback, short events)
         {
             _owner = owner;
-            _waiters = waiters;
             _callback = callback;
+            _events = events;
         }
 
         public void Dispose()
         {
-            var waiters = Interlocked.Exchange(ref _waiters, null);
-            if (waiters == null) return;
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             using (_owner.EnterStateScope())
             {
-                waiters.Remove(_callback);
+                if ((_events & LinuxConstants.POLLIN) != 0)
+                    _owner._readWaiters.Remove(_callback);
+                if ((_events & LinuxConstants.POLLOUT) != 0)
+                    _owner._writeWaiters.Remove(_callback);
             }
         }
     }
@@ -270,11 +314,9 @@ public class TimerFdInode : TmpfsInode
         lock (_lock)
         {
             if (_expirations == 0)
-            {
-                if ((file.Flags & FileFlags.O_NONBLOCK) != 0) return -(int)Errno.EAGAIN;
-                return
-                    0; // Normally we'd block here if VFS supported sync blocking directly, but for now we expect users to use poll/select before reading.
-            }
+                // Linux timerfd_create(2): blocking reads wait until one or more expirations occur.
+                // Return EAGAIN here so the generic VFS read path can invoke WaitForRead().
+                return -(int)Errno.EAGAIN;
 
             BinaryPrimitives.WriteUInt64LittleEndian(buffer[..8], _expirations);
             _expirations = 0;
@@ -301,15 +343,8 @@ public class TimerFdInode : TmpfsInode
 
     public override bool RegisterWait(LinuxFile file, Action callback, short events)
     {
-        lock (_lock)
-        {
-            if ((events & LinuxConstants.POLLIN) != 0 && _expirations > 0)
-                // Already signaled
-                return false;
-
-            _waiters.Add(callback);
-            return true;
-        }
+        var registration = RegisterWaitHandle(file, callback, events);
+        return registration != null;
     }
 
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
@@ -317,11 +352,27 @@ public class TimerFdInode : TmpfsInode
         lock (_lock)
         {
             if ((events & LinuxConstants.POLLIN) != 0 && _expirations > 0)
-                return null;
+            {
+                callback();
+                return NoopWaitRegistration.Instance;
+            }
             _waiters.Add(callback);
         }
 
         return new CallbackRegistration(this, _waiters, callback);
+    }
+
+    public override async ValueTask<AwaitResult> WaitForRead(LinuxFile file, FiberTask task)
+    {
+        lock (_lock)
+        {
+            if (_expirations > 0)
+                return AwaitResult.Completed;
+        }
+
+        // Linux timerfd_create(2): reads sleep until the timer has one or more expirations queued.
+        return await new CallbackWaitAwaitable(task,
+            callback => RegisterWaitHandle(file, callback, LinuxConstants.POLLIN));
     }
 
     private sealed class CallbackRegistration : IDisposable
@@ -345,6 +396,83 @@ public class TimerFdInode : TmpfsInode
             {
                 waiters.Remove(_callback);
             }
+        }
+    }
+}
+
+internal readonly struct CallbackWaitAwaitable
+{
+    private readonly Func<Action, IDisposable?> _register;
+    private readonly FiberTask _task;
+
+    public CallbackWaitAwaitable(FiberTask task, Func<Action, IDisposable?> register)
+    {
+        _task = task;
+        _register = register;
+    }
+
+    public CallbackWaitAwaiter GetAwaiter()
+    {
+        return new CallbackWaitAwaiter(_task, _register);
+    }
+}
+
+internal readonly struct CallbackWaitAwaiter : INotifyCompletion
+{
+    private readonly Func<Action, IDisposable?> _register;
+    private readonly FiberTask _task;
+    private readonly FiberTask.WaitToken _token;
+
+    public CallbackWaitAwaiter(FiberTask task, Func<Action, IDisposable?> register)
+    {
+        _task = task;
+        _register = register;
+        _token = task.BeginWaitToken();
+    }
+
+    public bool IsCompleted => false;
+
+    public void OnCompleted(Action continuation)
+    {
+        if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
+            return;
+
+        var state = new CallbackWaitOperation(continuation, operation);
+        state.TryRegister(_register(state.OnReady));
+        _task.ArmInterruptingSignalSafetyNet(_token, state.OnSignal);
+    }
+
+    public AwaitResult GetResult()
+    {
+        var reason = _task.CompleteWaitToken(_token);
+        return reason == WakeReason.None || reason == WakeReason.Event
+            ? AwaitResult.Completed
+            : AwaitResult.Interrupted;
+    }
+
+    private sealed class CallbackWaitOperation
+    {
+        private readonly TaskAsyncOperationHandle _operation;
+
+        public CallbackWaitOperation(Action continuation, TaskAsyncOperationHandle operation)
+        {
+            _operation = operation;
+            _operation.TryInitialize(continuation);
+        }
+
+        public void TryRegister(IDisposable? registration)
+        {
+            _operation.TryAddRegistration(TaskAsyncRegistration.From(registration));
+        }
+
+        public void OnReady()
+        {
+            _operation.TryComplete(WakeReason.Event);
+        }
+
+        public void OnSignal()
+        {
+            _operation.TryComplete(WakeReason.Signal);
         }
     }
 }
