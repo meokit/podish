@@ -15,6 +15,38 @@ namespace Fiberish.Tests.Syscalls;
 
 public class WaitSyscallTests
 {
+    private static ValueTask<int> InvokeSplice(TestEnv env, uint fdIn, uint offInPtr, uint fdOut, uint offOutPtr,
+        uint len, uint flags)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysSplice", BindingFlags.NonPublic | BindingFlags.Instance);
+        var previous = env.Engine.CurrentSyscallManager;
+        env.Engine.CurrentSyscallManager = env.SyscallManager;
+        try
+        {
+            return (ValueTask<int>)method!.Invoke(env.SyscallManager,
+                [env.Engine, fdIn, offInPtr, fdOut, offOutPtr, len, flags])!;
+        }
+        finally
+        {
+            env.Engine.CurrentSyscallManager = previous;
+        }
+    }
+
+    private static ValueTask<int> InvokeTee(TestEnv env, uint fdIn, uint fdOut, uint len, uint flags)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysTee", BindingFlags.NonPublic | BindingFlags.Instance);
+        var previous = env.Engine.CurrentSyscallManager;
+        env.Engine.CurrentSyscallManager = env.SyscallManager;
+        try
+        {
+            return (ValueTask<int>)method!.Invoke(env.SyscallManager, [env.Engine, fdIn, fdOut, len, flags, 0u, 0u])!;
+        }
+        finally
+        {
+            env.Engine.CurrentSyscallManager = previous;
+        }
+    }
+
     private static ValueTask<int> Invoke(TestEnv env, string methodName, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
@@ -31,6 +63,249 @@ public class WaitSyscallTests
 
         var rc = await Invoke(env, "SysPselect6", 0, 0, 0, 0, tsPtr, 0);
         Assert.Equal(0, rc);
+    }
+
+    [Fact]
+    public async Task EventFd_SysRead_BlocksUntilWriterArrives()
+    {
+        using var env = new TestEnv();
+        const uint bufPtr = 0x37000;
+        env.MapUserPage(bufPtr);
+
+        var eventFd = new EventFdInode(20, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        var pending = env.StartOnScheduler(() => env.Invoke("SysRead", (uint)fd, bufPtr, 8, 0, 0, 0));
+        Assert.False(pending.IsCompleted);
+
+        var payload = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(payload, 7);
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.InvokeOnSchedulerAsync(() => Assert.Equal(8, eventFd.WriteFromHost(null, file, payload, 0)));
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(8, rc);
+        Assert.Equal(7UL, BinaryPrimitives.ReadUInt64LittleEndian(env.Read(bufPtr, 8)));
+    }
+
+    [Fact]
+    public async Task EventFd_SysWrite_BlocksUntilReaderMakesRoom()
+    {
+        using var env = new TestEnv();
+        const uint writeBufPtr = 0x38000;
+        env.MapUserPage(writeBufPtr);
+
+        var eventFd = new EventFdInode(21, env.SyscallManager.MemfdSuperBlock, ulong.MaxValue - 1, FileFlags.O_RDWR);
+        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        var payload = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(payload, 1);
+        env.Write(writeBufPtr, payload);
+
+        var pending = env.StartOnScheduler(() => env.Invoke("SysWrite", (uint)fd, writeBufPtr, 8, 0, 0, 0));
+        Assert.False(pending.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.InvokeOnSchedulerAsync(() =>
+        {
+            var readBuf = new byte[8];
+            Assert.Equal(8, eventFd.ReadToHost(null, file, readBuf, 0));
+        });
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(8, rc);
+    }
+
+    [Fact]
+    public async Task TimerFd_SysRead_BlocksUntilExpiration()
+    {
+        using var env = new TestEnv();
+        const uint bufPtr = 0x39000;
+        env.MapUserPage(bufPtr);
+
+        var timerFd = new TimerFdInode(22, env.SyscallManager.MemfdSuperBlock);
+        var file = new LinuxFile(new Dentry("timerfd", timerFd, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        var pending = env.StartOnScheduler(() => env.Invoke("SysRead", (uint)fd, bufPtr, 8, 0, 0, 0));
+        Assert.False(pending.IsCompleted);
+
+        var method = typeof(TimerFdInode).GetMethod("TimerCallback", BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(method);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.InvokeOnSchedulerAsync(() => method!.Invoke(timerFd, null));
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(8, rc);
+        Assert.Equal(1UL, BinaryPrimitives.ReadUInt64LittleEndian(env.Read(bufPtr, 8)));
+    }
+
+    [Fact]
+    public async Task Nanosleep_Interrupted_WritesRemainingTime()
+    {
+        using var env = new TestEnv();
+        const uint reqPtr = 0x3A000;
+        const uint remPtr = 0x3B000;
+        env.MapUserPage(reqPtr);
+        env.MapUserPage(remPtr);
+
+        WriteTimespecSec(env, reqPtr, 1);
+        env.Write(remPtr, new byte[8]);
+
+        var pending = env.StartOnScheduler(() => env.Invoke("SysNanosleep", reqPtr, remPtr, 0, 0, 0, 0));
+        Assert.False(pending.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.PostSignalAsync((int)Signal.SIGUSR1);
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(-(int)Errno.ERESTARTSYS, rc);
+
+        var rem = env.Read(remPtr, 8);
+        var sec = BinaryPrimitives.ReadInt32LittleEndian(rem.AsSpan(0, 4));
+        var nsec = BinaryPrimitives.ReadInt32LittleEndian(rem.AsSpan(4, 4));
+        Assert.True(sec > 0 || nsec > 0);
+        Assert.True(sec < 1 || (sec == 1 && nsec == 0));
+    }
+
+    [Fact]
+    public async Task ClockNanosleepTime64_AbsolutePastDeadline_ReturnsImmediately()
+    {
+        using var env = new TestEnv();
+        const uint reqPtr = 0x3C000;
+        env.MapUserPage(reqPtr);
+
+        var nowRc = await env.Invoke("SysClockGetTime64", LinuxConstants.CLOCK_MONOTONIC, reqPtr, 0, 0, 0, 0);
+        Assert.Equal(0, nowRc);
+
+        var ts = env.Read(reqPtr, 16);
+        var sec = BinaryPrimitives.ReadInt64LittleEndian(ts.AsSpan(0, 8));
+        var nsec = BinaryPrimitives.ReadInt64LittleEndian(ts.AsSpan(8, 8));
+        if (nsec > 0)
+            nsec--;
+        else
+            sec--;
+
+        BinaryPrimitives.WriteInt64LittleEndian(ts.AsSpan(0, 8), sec);
+        BinaryPrimitives.WriteInt64LittleEndian(ts.AsSpan(8, 8), nsec < 0 ? 999_999_999 : nsec);
+        env.Write(reqPtr, ts);
+
+        var rc = await env.Invoke("SysClockNanosleepTime64", LinuxConstants.CLOCK_MONOTONIC, 1, reqPtr, 0, 0, 0);
+        Assert.Equal(0, rc);
+    }
+
+    [Fact]
+    public async Task FutexWait_Timeout_ReturnsEtimedout()
+    {
+        using var env = new TestEnv();
+        const uint futexPtr = 0x3D000;
+        const uint timeoutPtr = 0x3E000;
+        env.MapUserPage(futexPtr);
+        env.MapUserPage(timeoutPtr);
+        env.Write(futexPtr, BitConverter.GetBytes(1u));
+
+        var ts = new byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(0, 4), 0);
+        BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(4, 4), 50_000_000);
+        env.Write(timeoutPtr, ts);
+
+        var rc = await env.Invoke("SysFutex", futexPtr, (uint)LinuxConstants.FUTEX_WAIT, 1, timeoutPtr, 0, 0);
+        Assert.Equal(-(int)Errno.ETIMEDOUT, rc);
+    }
+
+    [Fact]
+    public async Task SemTimedOpTime64_Timeout_ReturnsEagain()
+    {
+        using var env = new TestEnv();
+        const uint sopsPtr = 0x3F000;
+        const uint timeoutPtr = 0x40000;
+        env.MapUserPage(sopsPtr);
+        env.MapUserPage(timeoutPtr);
+
+        var semid = await env.Invoke("SysSemGet", LinuxConstants.IPC_PRIVATE, 1, LinuxConstants.IPC_CREAT | 0x1FF, 0, 0, 0);
+        Assert.True(semid >= 0);
+
+        var sops = new byte[6];
+        BinaryPrimitives.WriteInt16LittleEndian(sops.AsSpan(0, 2), 0);
+        BinaryPrimitives.WriteInt16LittleEndian(sops.AsSpan(2, 2), -1);
+        BinaryPrimitives.WriteInt16LittleEndian(sops.AsSpan(4, 2), 0);
+        env.Write(sopsPtr, sops);
+
+        var timeout = new byte[16];
+        BinaryPrimitives.WriteInt64LittleEndian(timeout.AsSpan(0, 8), 0);
+        BinaryPrimitives.WriteInt64LittleEndian(timeout.AsSpan(8, 8), 50_000_000);
+        env.Write(timeoutPtr, timeout);
+
+        var rc = await env.Invoke("SysSemTimedOpTime64", (uint)semid, sopsPtr, 1, timeoutPtr, 0, 0);
+        Assert.Equal(-(int)Errno.EAGAIN, rc);
+    }
+
+    [Fact]
+    public void FutexWait_IsInNeverRestartList()
+    {
+        using var env = new TestEnv();
+        var method = typeof(FiberTask).GetMethod("IsSyscallNeverRestart",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var restartNever = (bool)method!.Invoke(null,
+            [env.Task, (uint)X86SyscallNumbers.futex, 0u, (uint)LinuxConstants.FUTEX_WAIT])!;
+
+        Assert.True(restartNever);
+    }
+
+    [Fact]
+    public async Task Splice_BlockingWaitInterrupted_ReturnsErestartsys()
+    {
+        using var env = new TestEnv();
+        const uint inPipeAddr = 0x41000;
+        const uint outPipeAddr = 0x42000;
+        env.MapUserPage(inPipeAddr);
+        env.MapUserPage(outPipeAddr);
+
+        Assert.Equal(0, await Invoke(env, "SysPipe", inPipeAddr, 0, 0, 0, 0, 0));
+        Assert.Equal(0, await Invoke(env, "SysPipe", outPipeAddr, 0, 0, 0, 0, 0));
+        var (rfd, _) = ReadPipeFds(env, inPipeAddr);
+        var (_, wfd) = ReadPipeFds(env, outPipeAddr);
+
+        var pending = env.StartOnScheduler(() => InvokeSplice(env, (uint)rfd, 0, (uint)wfd, 0, 1, 0));
+        Assert.False(pending.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.PostSignalAsync((int)Signal.SIGUSR1);
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(-(int)Errno.ERESTARTSYS, rc);
+    }
+
+    [Fact]
+    public async Task Tee_BlockingWaitInterrupted_ReturnsErestartsys()
+    {
+        using var env = new TestEnv();
+        const uint inPipeAddr = 0x43000;
+        const uint outPipeAddr = 0x44000;
+        env.MapUserPage(inPipeAddr);
+        env.MapUserPage(outPipeAddr);
+
+        Assert.Equal(0, await Invoke(env, "SysPipe", inPipeAddr, 0, 0, 0, 0, 0));
+        Assert.Equal(0, await Invoke(env, "SysPipe", outPipeAddr, 0, 0, 0, 0, 0));
+        var (rfd, _) = ReadPipeFds(env, inPipeAddr);
+        var (_, wfd) = ReadPipeFds(env, outPipeAddr);
+
+        var pending = env.StartOnScheduler(() => InvokeTee(env, (uint)rfd, (uint)wfd, 1, 0));
+        Assert.False(pending.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.PostSignalAsync((int)Signal.SIGUSR1);
+
+        var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(-(int)Errno.ERESTARTSYS, rc);
     }
 
     [Fact]
@@ -526,20 +801,6 @@ public class WaitSyscallTests
     }
 
     [Fact]
-    public void FutexWait_IsNotInNeverRestartList()
-    {
-        using var env = new TestEnv();
-        var method = typeof(FiberTask).GetMethod("IsSyscallNeverRestart",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
-
-        var restartNever = (bool)method!.Invoke(null,
-            [env.Task, (uint)X86SyscallNumbers.futex, 0u, (uint)LinuxConstants.FUTEX_WAIT])!;
-
-        Assert.False(restartNever);
-    }
-
-    [Fact]
     public async Task RecvTimeoutSocket_IsInNeverRestartList()
     {
         using var env = new TestEnv();
@@ -812,5 +1073,13 @@ public class WaitSyscallTests
         {
             OwnerThreadIdField.SetValue(Scheduler, 0);
         }
+    }
+
+    private static (int rfd, int wfd) ReadPipeFds(TestEnv env, uint fdsAddr)
+    {
+        var buf = env.Read(fdsAddr, 8);
+        var rfd = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
+        var wfd = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+        return (rfd, wfd);
     }
 }

@@ -233,11 +233,92 @@ public class PipeTests
 
         var fired = 0;
         using var reg = inode.RegisterWaitHandle(rFile, env.Task!, () => fired++, LinuxConstants.POLLIN);
-        env.DrainEvents();
-
         Assert.NotNull(reg);
+
+        for (var i = 0; i < 3; i++)
+        {
+            env.DrainEvents();
+            await Task.Delay(1);
+        }
+
         Assert.False(readHandle.IsSignaled);
         Assert.Equal(0, fired);
+    }
+
+    [Fact(Timeout = 1000)]
+    public async Task Pipe_RegisterWaitHandle_UnreadablePipe_DoesNotSpuriouslyFire()
+    {
+        using var env = new TestEnv();
+        const uint fdsAddr = 0x161000;
+        env.MapUserPage(fdsAddr);
+
+        Assert.Equal(0, await CallSysPipe(env, fdsAddr));
+        var (rfd, wfd) = env.ReadPipeFds(fdsAddr);
+
+        var rFile = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(rfd));
+        var wFile = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(wfd));
+        var inode = Assert.IsType<PipeInode>(rFile.Dentry.Inode);
+
+        var fired = 0;
+        using var reg = inode.RegisterWaitHandle(rFile, env.Task!, () => fired++, LinuxConstants.POLLIN);
+        Assert.NotNull(reg);
+
+        for (var i = 0; i < 3; i++)
+        {
+            env.DrainEvents();
+            await Task.Delay(1);
+        }
+
+        Assert.Equal(0, fired);
+
+        Assert.Equal(1, inode.WriteFromHost(env.Task, wFile, [0x2A]));
+
+        for (var i = 0; i < 5 && fired == 0; i++)
+        {
+            env.DrainEvents();
+            await Task.Delay(1);
+        }
+
+        Assert.Equal(1, fired);
+    }
+
+    [Fact(Timeout = 1000)]
+    public async Task Pipe_WaitForWrite_SmallAtomicWrite_WaitsForFullPipeBufSpace()
+    {
+        using var env = new TestEnv();
+        const uint fdsAddr = 0x162000;
+        env.MapUserPage(fdsAddr);
+
+        Assert.Equal(0, await CallSysPipe(env, fdsAddr));
+        var (rfd, wfd) = env.ReadPipeFds(fdsAddr);
+
+        var rFile = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(rfd));
+        var wFile = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(wfd));
+        var inode = Assert.IsType<PipeInode>(wFile.Dentry.Inode);
+
+        Assert.Equal(65535, inode.WriteFromHost(env.Task, wFile, new byte[65535]));
+
+        var pending = inode.WaitForWrite(wFile, env.Task!, PipeInode.PipeBuf).AsTask();
+        Assert.False(pending.IsCompleted);
+
+        Assert.Equal(1, inode.ReadToHost(env.Task, rFile, new byte[1]));
+        for (var i = 0; i < 3; i++)
+        {
+            env.DrainEvents();
+            await Task.Delay(1);
+        }
+
+        Assert.False(pending.IsCompleted);
+
+        Assert.Equal(PipeInode.PipeBuf - 1, inode.ReadToHost(env.Task, rFile, new byte[PipeInode.PipeBuf - 1]));
+        for (var i = 0; i < 5 && !pending.IsCompleted; i++)
+        {
+            env.DrainEvents();
+            await Task.Delay(1);
+        }
+
+        Assert.True(pending.IsCompleted);
+        Assert.Equal(AwaitResult.Completed, await pending);
     }
 
     [Fact(Timeout = 1000)]
@@ -304,6 +385,7 @@ public class PipeTests
             Assert.NotNull(Scheduler);
             _ = (bool)DrainEventsMethod.Invoke(Scheduler, null)!;
         }
+
 
         public void MapUserPage(uint addr)
         {

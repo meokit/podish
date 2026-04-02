@@ -109,6 +109,16 @@ public class SocketSyscallTests
         return env.Invoke("SysWrite", fd, bufPtr, len, 0u, 0u, 0u);
     }
 
+    private static ValueTask<int> CallSysReadV(TestEnv env, uint fd, uint iovPtr, uint iovCount)
+    {
+        return env.Invoke("SysReadV", fd, iovPtr, iovCount, 0u, 0u, 0u);
+    }
+
+    private static ValueTask<int> CallSysWriteV(TestEnv env, uint fd, uint iovPtr, uint iovCount)
+    {
+        return env.Invoke("SysWriteV", fd, iovPtr, iovCount, 0u, 0u, 0u);
+    }
+
     private static ValueTask<int> CallSysUnlink(TestEnv env, uint pathPtr)
     {
         return env.Invoke("SysUnlink", pathPtr, 0u, 0u, 0u, 0u, 0u);
@@ -678,6 +688,89 @@ public class SocketSyscallTests
         EndPoint remote = new IPEndPoint(IPAddress.Any, 0);
         var received = server.ReceiveFrom(receiveBuffer, 0, receiveBuffer.Length, SocketFlags.None, ref remote);
         Assert.Equal("dns-probe", Encoding.ASCII.GetString(receiveBuffer, 0, received));
+    }
+
+    [Fact]
+    public async Task Socket_HostUdp_ReadV_ConsumesSingleDatagramPerCall()
+    {
+        using var server = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        server.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        var serverPort = ((IPEndPoint)server.LocalEndPoint!).Port;
+
+        using var env = new TestEnv();
+        env.MapUserPage(0x3E000);
+        env.MapUserPage(0x3F000);
+        env.MapUserPage(0x40000);
+        env.MapUserPage(0x41000);
+        env.MapUserPage(0x42000);
+        env.MapUserPage(0x43000);
+        env.MapUserPage(0x44000);
+        env.MapUserPage(0x45000);
+        env.WriteInt32(0x40000, 16);
+
+        WriteSockaddrIn(env, 0x3E000, 0x7F000001u, (ushort)serverPort);
+        var fd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        Assert.True(fd >= 0);
+        Assert.Equal(0, await CallSysConnect(env, (uint)fd, 0x3E000, 16));
+        Assert.Equal(0, await CallSysGetSockName(env, (uint)fd, 0x3F000, 0x40000));
+
+        var (guestIp, guestPort) = ReadSockaddrIn(env, 0x3F000);
+        var guestEndpoint = new IPEndPoint(new IPAddress(BinaryPrimitives.ReverseEndianness(guestIp)), guestPort);
+        _ = server.SendTo(Encoding.ASCII.GetBytes("one"), guestEndpoint);
+        _ = server.SendTo(Encoding.ASCII.GetBytes("two"), guestEndpoint);
+
+        env.WriteBytes(0x42000, [0x58, 0x58]);
+        env.WriteBytes(0x43000, [0x59, 0x59]);
+        env.WriteBytes(0x45000, [0x5A, 0x5A]);
+        env.WriteBytes(0x45010, [0x57, 0x57]);
+        WriteIovec(env, 0x41000, 0x42000, 2);
+        WriteIovec(env, 0x41008, 0x43000, 2);
+        WriteIovec(env, 0x44000, 0x45000, 2);
+        WriteIovec(env, 0x44008, 0x45010, 2);
+
+        var first = await CallSysReadV(env, (uint)fd, 0x41000, 2);
+        Assert.Equal(3, first);
+        Assert.Equal([0x6F, 0x6E], env.ReadBytes(0x42000, 2));
+        Assert.Equal([0x65, 0x59], env.ReadBytes(0x43000, 2));
+
+        var second = await CallSysReadV(env, (uint)fd, 0x44000, 2);
+        Assert.Equal(3, second);
+        Assert.Equal([0x74, 0x77], env.ReadBytes(0x45000, 2));
+        Assert.Equal([0x6F, 0x57], env.ReadBytes(0x45010, 2));
+    }
+
+    [Fact]
+    public async Task Socket_HostUdp_WriteV_SendsSingleDatagram()
+    {
+        using var server = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        server.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        server.ReceiveTimeout = 2000;
+        var serverPort = ((IPEndPoint)server.LocalEndPoint!).Port;
+
+        using var env = new TestEnv();
+        env.MapUserPage(0x46000);
+        env.MapUserPage(0x47000);
+        env.MapUserPage(0x48000);
+        env.MapUserPage(0x49000);
+        env.WriteBytes(0x47000, Encoding.ASCII.GetBytes("alpha"));
+        env.WriteBytes(0x48000, Encoding.ASCII.GetBytes("beta"));
+
+        WriteSockaddrIn(env, 0x46000, 0x7F000001u, (ushort)serverPort);
+        WriteIovec(env, 0x49000, 0x47000, 5);
+        WriteIovec(env, 0x49008, 0x48000, 4);
+
+        var fd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        Assert.True(fd >= 0);
+        Assert.Equal(0, await CallSysConnect(env, (uint)fd, 0x46000, 16));
+
+        var written = await CallSysWriteV(env, (uint)fd, 0x49000, 2);
+        Assert.Equal(9, written);
+
+        var receiveBuffer = new byte[64];
+        EndPoint remote = new IPEndPoint(IPAddress.Any, 0);
+        var received = server.ReceiveFrom(receiveBuffer, 0, receiveBuffer.Length, SocketFlags.None, ref remote);
+        Assert.Equal(9, received);
+        Assert.Equal("alphabeta", Encoding.ASCII.GetString(receiveBuffer, 0, received));
     }
 
     [Fact]
