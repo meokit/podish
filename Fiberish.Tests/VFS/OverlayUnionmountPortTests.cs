@@ -6,6 +6,9 @@ namespace Fiberish.Tests.VFS;
 
 public class OverlayUnionmountPortTests
 {
+    private const int RenameMassRingSize = 7;
+    private static readonly int RenameMassIterCount = (int)(RenameMassRingSize * 4.5);
+
     [Fact]
     public void Unionmount_RenameMassSequentialFiles_MatchesUpstreamSemantics()
     {
@@ -36,6 +39,342 @@ public class OverlayUnionmountPortTests
 
         for (var i = 100; i < fileCount; i++)
             root.Unlink($"file{i + iterCount}");
+    }
+
+    [Fact]
+    public void Unionmount_RenameMassSequentialFilesWithDeletePhase_MatchesUpstreamSemantics()
+    {
+        const int fileCount = 104;
+        const int iterCount = 3;
+
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        for (var i = 100; i < fileCount; i++)
+            CreateFile(lowerSb.Root, lowerSb, $"file{i}", $"v{i}");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        for (var i = 100; i < fileCount; i++)
+            root.Rename($"file{i}", root, $"file{i}_0");
+
+        for (var j = 0; j < iterCount; j++)
+        for (var i = fileCount - 1; i >= 100; i--)
+            root.Rename($"file{i}_{j}", root, $"file{i}_{j + 1}");
+
+        for (var i = 100; i < fileCount; i++)
+            Assert.Equal($"v{i}", ReadAll(root.Lookup($"file{i}_{iterCount}")!));
+
+        for (var i = 100; i < fileCount; i++)
+            root.Unlink($"file{i}_{iterCount}");
+
+        for (var i = 100; i < fileCount; i++)
+            Assert.Null(root.Lookup($"file{i}_{iterCount}"));
+    }
+
+    [Fact]
+    public void Unionmount_RenameMassNewSequentialFilesCircularly_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        for (var i = 0; i < RenameMassRingSize; i++)
+            CreateFile(overlaySb.Root, overlaySb, $"newfile{100 + i}", $"abcd{i}");
+
+        var gap = RenameMassRingSize - 1;
+        for (var i = 0; i < RenameMassIterCount; i++)
+        {
+            var nextGap = (gap - 1 + RenameMassRingSize) % RenameMassRingSize;
+            root.Rename($"newfile{100 + nextGap}", root, $"newfile{100 + gap}");
+            gap = nextGap;
+        }
+
+        var finalGap = PositiveMod(-(RenameMassIterCount + 1), RenameMassRingSize);
+        for (var i = 0; i < RenameMassRingSize; i++)
+        {
+            var path = $"newfile{100 + i}";
+            if (i == finalGap)
+            {
+                Assert.Null(root.Lookup(path));
+            }
+            else
+            {
+                Assert.NotNull(root.Lookup(path));
+                root.Unlink(path);
+            }
+        }
+    }
+
+    [Fact]
+    public void Unionmount_RenameMassHardlinkedSequentialFilesCircularly_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        for (var i = 0; i <= RenameMassRingSize; i++)
+            CreateFile(lowerSb.Root, lowerSb, $"srcfile{100 + i}", $"v{i}");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        for (var i = 0; i <= RenameMassRingSize; i++)
+        {
+            var source = Assert.IsType<OverlayInode>(root.Lookup($"srcfile{100 + i}")!.Inode);
+            root.Link(new Dentry($"lnfile{100 + i}", null, overlaySb.Root, overlaySb), source);
+        }
+
+        var gap = RenameMassRingSize - 1;
+        for (var i = 0; i < RenameMassIterCount; i++)
+        {
+            var nextGap = (gap - 1 + RenameMassRingSize) % RenameMassRingSize;
+            root.Rename($"lnfile{100 + nextGap}", root, $"lnfile{100 + gap}");
+            gap = nextGap;
+        }
+
+        gap = RenameMassRingSize - 1;
+        for (var i = 0; i < RenameMassIterCount; i++)
+        {
+            var nextGap = (gap + 1) % RenameMassRingSize;
+            root.Rename($"srcfile{100 + nextGap}", root, $"srcfile{100 + gap}");
+            gap = nextGap;
+        }
+
+        var linkGap = PositiveMod(-(RenameMassIterCount + 1), RenameMassRingSize);
+        for (var i = 0; i <= RenameMassRingSize; i++)
+        {
+            var path = $"lnfile{100 + i}";
+            if (i == linkGap)
+                Assert.Null(root.Lookup(path));
+            else
+                root.Unlink(path);
+        }
+
+        var srcGap = PositiveMod(RenameMassIterCount - 1, RenameMassRingSize);
+        for (var i = 0; i <= RenameMassRingSize; i++)
+        {
+            var path = $"srcfile{100 + i}";
+            if (i == srcGap)
+                Assert.Null(root.Lookup(path));
+            else
+                root.Unlink(path);
+        }
+    }
+
+    [Fact]
+    public void Unionmount_RenameMassDirectoriesCircularly_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        for (var i = 0; i < RenameMassRingSize - 1; i++)
+            root.Mkdir(new Dentry($"dir{100 + i}", null, overlaySb.Root, overlaySb), 0x1ED, 0, 0);
+
+        var gap = RenameMassRingSize - 1;
+        for (var i = 0; i < RenameMassIterCount; i++)
+        {
+            var nextGap = (gap - 1 + RenameMassRingSize) % RenameMassRingSize;
+            root.Rename($"dir{100 + nextGap}", root, $"dir{100 + gap}");
+            gap = nextGap;
+        }
+
+        var finalGap = PositiveMod(-(RenameMassIterCount + 1), RenameMassRingSize);
+        for (var i = 0; i < RenameMassRingSize; i++)
+        {
+            var path = $"dir{100 + i}";
+            if (i == finalGap)
+            {
+                Assert.Null(root.Lookup(path));
+            }
+            else
+            {
+                Assert.Equal(InodeType.Directory, root.Lookup(path)!.Inode!.Type);
+                root.Rmdir(path);
+            }
+        }
+    }
+
+    [Fact]
+    public void Unionmount_RenameMassPopulatedDirectoriesCircularly_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        for (var i = 0; i < RenameMassRingSize - 1; i++)
+        {
+            var dirDentry = new Dentry($"pdir{100 + i}", null, overlaySb.Root, overlaySb);
+            var dir = Assert.IsType<OverlayInode>(root.Mkdir(dirDentry, 0x1ED, 0, 0).Inode);
+            CreateFile(dirDentry, overlaySb, "a", $"abcd{i}");
+        }
+
+        var gap = RenameMassRingSize - 1;
+        for (var i = 0; i < RenameMassIterCount; i++)
+        {
+            var nextGap = (gap - 1 + RenameMassRingSize) % RenameMassRingSize;
+            root.Rename($"pdir{100 + nextGap}", root, $"pdir{100 + gap}");
+            gap = nextGap;
+        }
+
+        var n = RenameMassIterCount % (RenameMassRingSize * (RenameMassRingSize - 1));
+        var cycle = n / RenameMassRingSize;
+        n = (RenameMassRingSize - 1) - cycle;
+
+        var finalGap = PositiveMod(-(RenameMassIterCount + 1), RenameMassRingSize);
+        for (var i = 0; i < RenameMassRingSize; i++)
+        {
+            var path = $"pdir{100 + i}";
+            if (i == finalGap)
+            {
+                Assert.Null(root.Lookup(path));
+            }
+            else
+            {
+                var dir = root.Lookup(path)!;
+                Assert.Equal($"abcd{n}", ReadAll(dir.Inode!.Lookup("a")!));
+                n = (n + 1) % (RenameMassRingSize - 1);
+            }
+        }
+
+        for (var i = 0; i < RenameMassRingSize; i++)
+        {
+            var path = $"pdir{100 + i}";
+            if (i == finalGap)
+            {
+                Assert.Null(root.Lookup(path));
+            }
+            else
+            {
+                var dir = Assert.IsType<OverlayInode>(root.Lookup(path)!.Inode);
+                dir.Unlink("a");
+                root.Rmdir(path);
+            }
+        }
+    }
+
+    [Fact]
+    public void Unionmount_RenameMassSymlinksCircularly_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        for (var i = 0; i < RenameMassRingSize - 1; i++)
+        {
+            CreateFile(lowerSb.Root, lowerSb, $"target{100 + i}", ":xxx:yyy:zzz");
+            CreateSymlink(lowerSb.Root, lowerSb, $"sym{100 + i}", $"target{100 + i}");
+        }
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        var gap = RenameMassRingSize - 1;
+        for (var i = 0; i < RenameMassIterCount; i++)
+        {
+            var nextGap = (gap - 1 + RenameMassRingSize) % RenameMassRingSize;
+            root.Rename($"sym{100 + nextGap}", root, $"sym{100 + gap}");
+            gap = nextGap;
+        }
+
+        var n = RenameMassIterCount % (RenameMassRingSize * (RenameMassRingSize - 1));
+        var cycle = n / RenameMassRingSize;
+        n = (RenameMassRingSize - 1) - cycle;
+        var finalGap = PositiveMod(-(RenameMassIterCount + 1), RenameMassRingSize);
+
+        for (var i = 0; i < RenameMassRingSize; i++)
+        {
+            var path = $"sym{100 + i}";
+            if (i == finalGap)
+            {
+                Assert.Null(root.Lookup(path));
+            }
+            else
+            {
+                var entry = root.Lookup(path)!;
+                var target = $"target{100 + n}";
+                Assert.Equal(target, entry.Inode!.Readlink());
+                Assert.Equal(":xxx:yyy:zzz", ReadAll(root.Lookup(target)!));
+                n = (n + 1) % (RenameMassRingSize - 1);
+            }
+        }
+
+        for (var i = 0; i <= RenameMassRingSize; i++)
+        {
+            var path = $"sym{100 + i}";
+            if (i == finalGap)
+                Assert.Null(root.Lookup(path));
+            else if (root.Lookup(path) != null)
+                root.Unlink(path);
+        }
+    }
+
+    [Fact]
+    public void Unionmount_RenameMassDirectorySymlinksCircularly_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        for (var i = 0; i < RenameMassRingSize - 1; i++)
+        {
+            CreateDirectory(lowerSb.Root, lowerSb, $"dirtarget{100 + i}");
+            CreateSymlink(lowerSb.Root, lowerSb, $"dirsym{100 + i}", $"dirtarget{100 + i}");
+        }
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        var gap = RenameMassRingSize - 1;
+        for (var i = 0; i < RenameMassIterCount; i++)
+        {
+            var nextGap = (gap - 1 + RenameMassRingSize) % RenameMassRingSize;
+            root.Rename($"dirsym{100 + nextGap}", root, $"dirsym{100 + gap}");
+            gap = nextGap;
+        }
+
+        var n = RenameMassIterCount % (RenameMassRingSize * (RenameMassRingSize - 1));
+        var cycle = n / RenameMassRingSize;
+        n = (RenameMassRingSize - 1) - cycle;
+        var finalGap = PositiveMod(-(RenameMassIterCount + 1), RenameMassRingSize);
+
+        for (var i = 0; i < RenameMassRingSize; i++)
+        {
+            var path = $"dirsym{100 + i}";
+            if (i == finalGap)
+            {
+                Assert.Null(root.Lookup(path));
+            }
+            else
+            {
+                var entry = root.Lookup(path)!;
+                var target = $"dirtarget{100 + n}";
+                Assert.Equal(target, entry.Inode!.Readlink());
+                Assert.Equal(InodeType.Directory, root.Lookup(target)!.Inode!.Type);
+                n = (n + 1) % (RenameMassRingSize - 1);
+            }
+        }
+
+        for (var i = 0; i <= RenameMassRingSize; i++)
+        {
+            var path = $"dirsym{100 + i}";
+            if (i == finalGap)
+                Assert.Null(root.Lookup(path));
+            else if (root.Lookup(path) != null)
+                root.Unlink(path);
+        }
     }
 
     [Fact]
@@ -229,6 +568,323 @@ public class OverlayUnionmountPortTests
         Assert.NotNull(root.Lookup("src"));
         Assert.NotNull(srcOverlay.Lookup("pop"));
         Assert.NotNull(popOverlay.Lookup("b"));
+    }
+
+    [Fact]
+    public void Unionmount_RenameEmptyDir_RemoveOldNameAfterRoundTrip_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        CreateDirectory(lowerSb.Root, lowerSb, "empty");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        root.Rename("empty", root, "empty2");
+        Assert.Null(root.Lookup("empty"));
+
+        root.Rename("empty2", root, "empty");
+        Assert.ThrowsAny<Exception>(() => root.Rmdir("empty2"));
+
+        var empty = root.Lookup("empty");
+        Assert.NotNull(empty);
+        root.Rmdir("empty");
+
+        Assert.Null(root.Lookup("empty"));
+        Assert.Null(root.Lookup("empty2"));
+    }
+
+    [Fact]
+    public void Unionmount_RenameEmptyDir_UnlinkOldNameFailsAndDoesNotResurrectOldPath()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        CreateDirectory(lowerSb.Root, lowerSb, "empty");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        root.Rename("empty", root, "empty2");
+        Assert.ThrowsAny<Exception>(() => root.Unlink("empty"));
+
+        root.Rename("empty2", root, "empty");
+        Assert.ThrowsAny<Exception>(() => root.Unlink("empty"));
+
+        Assert.NotNull(root.Lookup("empty"));
+        Assert.Null(root.Lookup("empty2"));
+    }
+
+    [Fact]
+    public void Unionmount_RenameEmptyDir_Twice_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        CreateDirectory(lowerSb.Root, lowerSb, "empty");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        root.Rename("empty", root, "empty2");
+        Assert.ThrowsAny<Exception>(() => root.Rename("empty", root, "empty2"));
+
+        root.Rename("empty2", root, "empty3");
+        Assert.ThrowsAny<Exception>(() => root.Rename("empty2", root, "empty3"));
+
+        Assert.Null(root.Lookup("empty"));
+        Assert.Null(root.Lookup("empty2"));
+        Assert.NotNull(root.Lookup("empty3"));
+    }
+
+    [Fact]
+    public void Unionmount_RenameEmptyDir_OverSelf_IsNoOp()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        CreateDirectory(lowerSb.Root, lowerSb, "empty");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        root.Rename("empty", root, "empty");
+
+        var empty = root.Lookup("empty");
+        Assert.NotNull(empty);
+        Assert.Equal(InodeType.Directory, empty!.Inode!.Type);
+    }
+
+    [Fact]
+    public void Unionmount_RenameEmptyDir_OverParentDir_FailsAndPreservesDirectory()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        CreateDirectory(lowerSb.Root, lowerSb, "empty");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        Assert.ThrowsAny<Exception>(() => root.Rename("empty", root, "."));
+
+        var empty = root.Lookup("empty");
+        Assert.NotNull(empty);
+        Assert.Equal(InodeType.Directory, empty!.Inode!.Type);
+    }
+
+    [Fact]
+    public void Unionmount_RenamePopulatedDir_RemoveOldNameAfterRoundTrip_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        CreateDirectory(lowerSb.Root, lowerSb, "src");
+        var src = lowerSb.Root.Inode!.Lookup("src")!;
+        CreateFile(src, lowerSb, "a", "A");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        root.Rename("src", root, "dst");
+        Assert.ThrowsAny<Exception>(() => root.Rmdir("src"));
+
+        root.Rename("dst", root, "src");
+        Assert.ThrowsAny<Exception>(() => root.Rmdir("src"));
+
+        var restored = root.Lookup("src");
+        Assert.NotNull(restored);
+        Assert.Equal("A", ReadAll(restored!.Inode!.Lookup("a")!));
+        Assert.Null(root.Lookup("dst"));
+    }
+
+    [Fact]
+    public void Unionmount_RenamePopulatedDir_UnlinkOldNameFailsAndPreservesTree()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        CreateDirectory(lowerSb.Root, lowerSb, "src");
+        var src = lowerSb.Root.Inode!.Lookup("src")!;
+        CreateFile(src, lowerSb, "a", "A");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        root.Rename("src", root, "dst");
+        Assert.ThrowsAny<Exception>(() => root.Unlink("src"));
+
+        root.Rename("dst", root, "src");
+        Assert.ThrowsAny<Exception>(() => root.Unlink("src"));
+
+        var restored = root.Lookup("src");
+        Assert.NotNull(restored);
+        Assert.Equal("A", ReadAll(restored!.Inode!.Lookup("a")!));
+        Assert.Null(root.Lookup("dst"));
+    }
+
+    [Fact]
+    public void Unionmount_RenamePopulatedDir_Twice_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        CreateDirectory(lowerSb.Root, lowerSb, "src");
+        var src = lowerSb.Root.Inode!.Lookup("src")!;
+        CreateFile(src, lowerSb, "a", "A");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        root.Rename("src", root, "mid");
+        Assert.ThrowsAny<Exception>(() => root.Rename("src", root, "mid"));
+
+        root.Rename("mid", root, "dst");
+        Assert.ThrowsAny<Exception>(() => root.Rename("mid", root, "dst"));
+
+        Assert.Null(root.Lookup("src"));
+        Assert.Null(root.Lookup("mid"));
+        Assert.Equal("A", ReadAll(root.Lookup("dst")!.Inode!.Lookup("a")!));
+    }
+
+    [Fact]
+    public void Unionmount_RenamePopulatedDir_OverSelf_IsNoOp()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        CreateDirectory(lowerSb.Root, lowerSb, "src");
+        var src = lowerSb.Root.Inode!.Lookup("src")!;
+        CreateFile(src, lowerSb, "a", "A");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        root.Rename("src", root, "src");
+
+        var unchanged = root.Lookup("src");
+        Assert.NotNull(unchanged);
+        Assert.Equal("A", ReadAll(unchanged!.Inode!.Lookup("a")!));
+    }
+
+    [Fact]
+    public void Unionmount_MovePopulatedDir_ToSibling_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        CreateDirectory(lowerSb.Root, lowerSb, "src");
+        var src = lowerSb.Root.Inode!.Lookup("src")!;
+        CreateFile(src, lowerSb, "a", "A");
+        CreateDirectory(lowerSb.Root, lowerSb, "empty");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+        var empty = Assert.IsType<OverlayInode>(root.Lookup("empty")!.Inode);
+
+        root.Rename("src", empty, "x");
+        Assert.ThrowsAny<Exception>(() => root.Rename("src", empty, "x"));
+
+        Assert.Null(root.Lookup("src"));
+        var moved = empty.Lookup("x");
+        Assert.NotNull(moved);
+        Assert.Equal("A", ReadAll(moved!.Inode!.Lookup("a")!));
+    }
+
+    [Fact]
+    public void Unionmount_MovePopulatedSubdir_ToSiblingParent_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        CreateDirectory(lowerSb.Root, lowerSb, "src");
+        var src = lowerSb.Root.Inode!.Lookup("src")!;
+        CreateDirectory(src, lowerSb, "pop");
+        CreateFile(src.Inode!.Lookup("pop")!, lowerSb, "b", "B");
+        CreateDirectory(lowerSb.Root, lowerSb, "empty");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+        var srcOverlay = Assert.IsType<OverlayInode>(root.Lookup("src")!.Inode);
+        var empty = Assert.IsType<OverlayInode>(root.Lookup("empty")!.Inode);
+
+        srcOverlay.Rename("pop", empty, "pop");
+        Assert.ThrowsAny<Exception>(() => srcOverlay.Rename("pop", empty, "pop"));
+
+        Assert.Null(srcOverlay.Lookup("pop"));
+        var moved = empty.Lookup("pop");
+        Assert.NotNull(moved);
+        Assert.Equal("B", ReadAll(moved!.Inode!.Lookup("b")!));
+    }
+
+    [Fact]
+    public void Unionmount_MovePopulatedDir_IntoAnotherThenMoveSubdir_AcrossParents_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        CreateDirectory(lowerSb.Root, lowerSb, "src");
+        var src = lowerSb.Root.Inode!.Lookup("src")!;
+        CreateFile(src, lowerSb, "a", "A");
+        CreateDirectory(src, lowerSb, "pop");
+        CreateFile(src.Inode!.Lookup("pop")!, lowerSb, "b", "B");
+        CreateDirectory(lowerSb.Root, lowerSb, "empty");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+        var empty = Assert.IsType<OverlayInode>(root.Lookup("empty")!.Inode);
+
+        root.Rename("src", empty, "src");
+        var moved = Assert.IsType<OverlayInode>(empty.Lookup("src")!.Inode);
+        moved.Rename("pop", root, "pop");
+
+        Assert.Null(root.Lookup("src"));
+        Assert.NotNull(empty.Lookup("src"));
+        Assert.Null(moved.Lookup("pop"));
+        Assert.Equal("A", ReadAll(moved.Lookup("a")!));
+        Assert.Equal("B", ReadAll(root.Lookup("pop")!.Inode!.Lookup("b")!));
+    }
+
+    [Fact]
+    public void Unionmount_RenameNewPopulatedDirOverRemovedUnionedDir_SameFiles_MatchesUpstreamSemantics()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "um-upper", null);
+
+        CreateDirectory(lowerSb.Root, lowerSb, "pop");
+        var lowerPop = lowerSb.Root.Inode!.Lookup("pop")!;
+        CreateFile(lowerPop, lowerSb, "b", "B");
+
+        var overlaySb = CreateOverlay(lowerSb, upperSb);
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        var created = new Dentry("pop-new", null, overlaySb.Root, overlaySb);
+        var newDir = Assert.IsType<OverlayInode>(root.Mkdir(created, 0x1ED, 0, 0).Inode);
+        CreateFile(created, overlaySb, "b", "aaaa");
+
+        var pop = Assert.IsType<OverlayInode>(root.Lookup("pop")!.Inode);
+        pop.Unlink("b");
+        root.Rmdir("pop");
+
+        root.Rename("pop-new", root, "pop");
+
+        Assert.Null(root.Lookup("pop-new"));
+        var replaced = Assert.IsType<OverlayInode>(root.Lookup("pop")!.Inode);
+        Assert.Equal("aaaa", ReadAll(replaced.Lookup("b")!));
     }
 
     [Fact]
@@ -767,5 +1423,11 @@ public class OverlayUnionmountPortTests
         {
             file.Close();
         }
+    }
+
+    private static int PositiveMod(int value, int modulus)
+    {
+        var result = value % modulus;
+        return result < 0 ? result + modulus : result;
     }
 }
