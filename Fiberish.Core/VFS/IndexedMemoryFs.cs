@@ -128,15 +128,15 @@ public abstract class IndexedMemoryInode : Inode
         }
     }
 
-    public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
+    public override int Create(Dentry dentry, int mode, int uid, int gid)
     {
         lock (Lock)
         {
-            if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
+            if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
             var primaryDentry = Dentries[0];
             var key = new DCacheKey(Ino, dentry.Name);
-            if (IndexedSb.Dentries.ContainsKey(key)) throw new InvalidOperationException("Exists");
+            if (IndexedSb.Dentries.ContainsKey(key)) return -(int)Errno.EEXIST;
 
             var inode = (IndexedMemoryInode)IndexedSb.AllocInode();
             inode.Type = InodeType.File;
@@ -155,19 +155,19 @@ public abstract class IndexedMemoryInode : Inode
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Create");
             ChildNames.Add(dentry.Name);
 
-            return dentry;
+            return 0;
         }
     }
 
-    public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
+    public override int Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
         lock (Lock)
         {
-            if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
+            if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
             var primaryDentry = Dentries[0];
             var key = new DCacheKey(Ino, dentry.Name);
-            if (IndexedSb.Dentries.ContainsKey(key)) throw new InvalidOperationException("Exists");
+            if (IndexedSb.Dentries.ContainsKey(key)) return -(int)Errno.EEXIST;
 
             var inode = (IndexedMemoryInode)IndexedSb.AllocInode();
             inode.Type = InodeType.Directory;
@@ -186,22 +186,22 @@ public abstract class IndexedMemoryInode : Inode
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Mkdir");
             ChildNames.Add(dentry.Name);
 
-            return dentry;
+            return 0;
         }
     }
 
-    public override void Unlink(string name)
+    public override int Unlink(string name)
     {
         lock (Lock)
         {
-            if (Dentries.Count == 0) return;
+            if (Dentries.Count == 0) return 0;
             var primaryDentry = Dentries[0];
             var key = new DCacheKey(Ino, name);
             if (!IndexedSb.Dentries.TryGetValue(key, out var dentry))
-                throw new FileNotFoundException("Source does not exist", name);
+                return -(int)Errno.ENOENT;
 
             if (dentry.Inode?.Type == InodeType.Directory)
-                throw new InvalidOperationException("Is a directory");
+                return -(int)Errno.EISDIR;
 
             lock (IndexedSb.Lock)
             {
@@ -217,24 +217,25 @@ public abstract class IndexedMemoryInode : Inode
             }
 
             ChildNames.Remove(name);
+            return 0;
         }
     }
 
-    public override void Rmdir(string name)
+    public override int Rmdir(string name)
     {
         lock (Lock)
         {
-            if (Dentries.Count == 0) return;
+            if (Dentries.Count == 0) return 0;
             var primaryDentry = Dentries[0];
             var key = new DCacheKey(Ino, name);
             if (!IndexedSb.Dentries.TryGetValue(key, out var dentry))
-                throw new DirectoryNotFoundException(name);
+                return -(int)Errno.ENOENT;
 
             if (dentry.Inode?.Type != InodeType.Directory)
-                throw new InvalidOperationException("Not a directory");
+                return -(int)Errno.ENOTDIR;
 
             if (dentry.Children.Count > 0)
-                throw new InvalidOperationException("Directory not empty");
+                return -(int)Errno.ENOTEMPTY;
 
             lock (IndexedSb.Lock)
             {
@@ -250,10 +251,11 @@ public abstract class IndexedMemoryInode : Inode
             }
 
             ChildNames.Remove(name);
+            return 0;
         }
     }
 
-    public override void Rename(string oldName, Inode newParent, string newName)
+    public override int Rename(string oldName, Inode newParent, string newName)
     {
         var targetParent = (IndexedMemoryInode)newParent;
         Inode first = this;
@@ -269,19 +271,19 @@ public abstract class IndexedMemoryInode : Inode
             if (first != second)
                 lock (second.Lock)
                 {
-                    DoRename(oldName, targetParent, newName);
+                    return DoRename(oldName, targetParent, newName);
                 }
-            else
-                DoRename(oldName, targetParent, newName);
+
+            return DoRename(oldName, targetParent, newName);
         }
     }
 
-    private void DoRename(string oldName, IndexedMemoryInode targetParent, string newName)
+    private int DoRename(string oldName, IndexedMemoryInode targetParent, string newName)
     {
-        if (Dentries.Count == 0) throw new InvalidOperationException("Source parent detached");
+        if (Dentries.Count == 0) return -(int)Errno.ENOENT;
         var oldPrimary = Dentries[0];
 
-        if (targetParent.Dentries.Count == 0) throw new InvalidOperationException("Target parent detached");
+        if (targetParent.Dentries.Count == 0) return -(int)Errno.ENOENT;
         var newPrimary = targetParent.Dentries[0];
 
         var oldKey = new DCacheKey(Ino, oldName);
@@ -300,7 +302,7 @@ public abstract class IndexedMemoryInode : Inode
                     if (IndexedSb.Dentries.TryGetValue(oldKey, out var cacheMatch))
                         dentry = cacheMatch;
                     else
-                        throw new InvalidOperationException("Source does not exist");
+                        return -(int)Errno.ENOENT;
                 }
             }
 
@@ -310,7 +312,7 @@ public abstract class IndexedMemoryInode : Inode
                 while (curr != null)
                 {
                     if (curr == dentry)
-                        throw new InvalidOperationException("Cannot move directory into its own subdirectory");
+                        return -(int)Errno.EINVAL;
                     if (curr == curr.Parent) break;
                     curr = curr.Parent;
                 }
@@ -319,18 +321,22 @@ public abstract class IndexedMemoryInode : Inode
             if (IndexedSb.Dentries.TryGetValue(newKey, out var existingDentry))
             {
                 if (ReferenceEquals(existingDentry.Inode, dentry.Inode))
-                    return;
+                    return 0;
 
                 if (existingDentry.Inode!.Type == InodeType.Directory)
                 {
                     if (existingDentry.Children.Count > 0)
-                        throw new InvalidOperationException("Directory not empty");
-                    targetParent.Rmdir(newName);
+                        return -(int)Errno.ENOTEMPTY;
+                    var rmdirRc = targetParent.Rmdir(newName);
+                    if (rmdirRc < 0)
+                        return rmdirRc;
                 }
                 else
                 {
                     existingDentry.Inode.Mapping = null;
-                    targetParent.Unlink(newName);
+                    var unlinkRc = targetParent.Unlink(newName);
+                    if (unlinkRc < 0)
+                        return unlinkRc;
                 }
             }
 
@@ -351,18 +357,20 @@ public abstract class IndexedMemoryInode : Inode
 
             if (movedAcrossParents)
                 NamespaceOps.OnDirectoryMovedAcrossParents(this, targetParent, "IndexedMemoryInode.Rename");
+
+            return 0;
         }
     }
 
-    public override Dentry Link(Dentry dentry, Inode oldInode)
+    public override int Link(Dentry dentry, Inode oldInode)
     {
         lock (Lock)
         {
-            if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
+            if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
             var primaryDentry = Dentries[0];
             var key = new DCacheKey(Ino, dentry.Name);
-            if (IndexedSb.Dentries.ContainsKey(key)) throw new InvalidOperationException("Exists");
+            if (IndexedSb.Dentries.ContainsKey(key)) return -(int)Errno.EEXIST;
 
             dentry.Instantiate(oldInode);
             NamespaceOps.OnLinkAdded(oldInode, "IndexedMemoryInode.Link");
@@ -374,19 +382,19 @@ public abstract class IndexedMemoryInode : Inode
 
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Link");
             ChildNames.Add(dentry.Name);
-            return dentry;
+            return 0;
         }
     }
 
-    public override Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    public override int Symlink(Dentry dentry, string target, int uid, int gid)
     {
         lock (Lock)
         {
-            if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
+            if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
             var primaryDentry = Dentries[0];
             var key = new DCacheKey(Ino, dentry.Name);
-            if (IndexedSb.Dentries.ContainsKey(key)) throw new InvalidOperationException("Exists");
+            if (IndexedSb.Dentries.ContainsKey(key)) return -(int)Errno.EEXIST;
 
             var inode = (IndexedMemoryInode)IndexedSb.AllocInode();
             inode.Type = InodeType.Symlink;
@@ -407,22 +415,22 @@ public abstract class IndexedMemoryInode : Inode
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Symlink");
             ChildNames.Add(dentry.Name);
 
-            return dentry;
+            return 0;
         }
     }
 
-    public override Dentry Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
+    public override int Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
     {
         lock (Lock)
         {
-            if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
+            if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
             if (type != InodeType.CharDev && type != InodeType.BlockDev && type != InodeType.Fifo &&
                 type != InodeType.Socket)
-                throw new InvalidOperationException("Unsupported node type");
+                return -(int)Errno.EINVAL;
 
             var primaryDentry = Dentries[0];
             var key = new DCacheKey(Ino, dentry.Name);
-            if (IndexedSb.Dentries.ContainsKey(key)) throw new InvalidOperationException("Exists");
+            if (IndexedSb.Dentries.ContainsKey(key)) return -(int)Errno.EEXIST;
 
             var inode = (IndexedMemoryInode)IndexedSb.AllocInode();
             inode.Type = type;
@@ -441,16 +449,22 @@ public abstract class IndexedMemoryInode : Inode
 
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Mknod");
             ChildNames.Add(dentry.Name);
-            return dentry;
+            return 0;
         }
     }
 
-    public override string Readlink()
+    public override int Readlink(out string? target)
     {
         lock (Lock)
         {
-            if (Type != InodeType.Symlink || SymlinkData == null) throw new InvalidOperationException("Not a symlink");
-            return Encoding.UTF8.GetString(SymlinkData);
+            if (Type != InodeType.Symlink || SymlinkData == null)
+            {
+                target = null;
+                return -(int)Errno.EINVAL;
+            }
+
+            target = Encoding.UTF8.GetString(SymlinkData);
+            return 0;
         }
     }
 

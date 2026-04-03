@@ -65,7 +65,6 @@ internal readonly struct QueueReadinessWatch
         if (!IsReady && Queue != null && Queue.IsSignaled)
             ResetStaleSignal?.Invoke();
     }
-
 }
 
 internal static class QueueReadinessRegistration
@@ -190,6 +189,18 @@ internal static class QueueReadinessRegistration
         registrations.Add(registration);
     }
 
+    private static void ScheduleReadyCallback(Action callback, FiberTask? task, KernelScheduler? scheduler)
+    {
+        if (task != null)
+        {
+            task.CommonKernel.ScheduleContinuation(callback, task);
+            return;
+        }
+
+        (scheduler ?? throw new InvalidOperationException("Scheduler is required for wait registration."))
+            .Schedule(callback);
+    }
+
     private sealed class CompositeWaitRegistration : IDisposable
     {
         private readonly List<IDisposable> _registrations;
@@ -204,18 +215,6 @@ internal static class QueueReadinessRegistration
             foreach (var registration in _registrations)
                 registration.Dispose();
         }
-    }
-
-    private static void ScheduleReadyCallback(Action callback, FiberTask? task, KernelScheduler? scheduler)
-    {
-        if (task != null)
-        {
-            task.CommonKernel.ScheduleContinuation(callback, task);
-            return;
-        }
-
-        (scheduler ?? throw new InvalidOperationException("Scheduler is required for wait registration."))
-            .Schedule(callback);
     }
 
     private sealed class NoopWaitRegistration : IDisposable
@@ -939,9 +938,9 @@ public abstract class Inode : IAddressSpaceOperations
         return true;
     }
 
-    public virtual Dentry Create(Dentry dentry, int mode, int uid, int gid)
+    public virtual int Create(Dentry dentry, int mode, int uid, int gid)
     {
-        throw new NotSupportedException();
+        return -(int)Errno.EOPNOTSUPP;
     }
 
     public virtual int Truncate(long length)
@@ -949,44 +948,45 @@ public abstract class Inode : IAddressSpaceOperations
         return -(int)Errno.ENOSYS;
     }
 
-    public virtual Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
+    public virtual int Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
-        throw new NotSupportedException();
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public virtual void Unlink(string name)
+    public virtual int Unlink(string name)
     {
-        throw new NotSupportedException();
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public virtual void Rmdir(string name)
+    public virtual int Rmdir(string name)
     {
-        throw new NotSupportedException();
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public virtual Dentry Link(Dentry dentry, Inode oldInode)
+    public virtual int Link(Dentry dentry, Inode oldInode)
     {
-        throw new NotSupportedException();
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public virtual void Rename(string oldName, Inode newParent, string newName)
+    public virtual int Rename(string oldName, Inode newParent, string newName)
     {
-        throw new NotSupportedException();
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public virtual Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    public virtual int Symlink(Dentry dentry, string target, int uid, int gid)
     {
-        throw new NotSupportedException();
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public virtual Dentry Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
+    public virtual int Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
     {
-        throw new NotSupportedException();
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public virtual string Readlink()
+    public virtual int Readlink(out string? target)
     {
-        throw new NotSupportedException();
+        target = null;
+        return -(int)Errno.EINVAL;
     }
 
     public int ReadToHost(FiberTask? task, LinuxFile file, Span<byte> buffer, long offset = -1)
@@ -1075,6 +1075,7 @@ public abstract class Inode : IAddressSpaceOperations
                             if (updatePosition) file.Position = currentOffset;
                             return totalRead > 0 ? totalRead : -(int)Errno.ERESTARTSYS;
                         }
+
                         continue;
                     }
 

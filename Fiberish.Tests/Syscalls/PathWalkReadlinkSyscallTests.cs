@@ -128,7 +128,8 @@ public class PathWalkReadlinkSyscallTests
         var nd = env.SyscallManager.PathWalker.PathWalkWithData(path, null, LookupFlags.NoFollow);
         Assert.False(nd.HasError);
         Assert.NotNull(nd.Path.Dentry);
-        Assert.Equal(expectedName, nd.Path.Dentry!.Inode!.Readlink());
+        Assert.Equal(0, nd.Path.Dentry!.Inode!.Readlink(out var target));
+        Assert.Equal(expectedName, target);
     }
 
     [Theory]
@@ -146,6 +147,63 @@ public class PathWalkReadlinkSyscallTests
         var nd = env.SyscallManager.PathWalker.PathWalkWithData(path, null, LookupFlags.None);
         Assert.True(nd.HasError);
         Assert.Equal(errno, nd.ErrorCode);
+    }
+
+    private static (Dentry Root, Mount Mount) CreateOverlayRootWithReadlinkFixtures()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "readlink-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "readlink-upper", null);
+
+        var lowerRoot = lowerSb.Root;
+
+        var file = new Dentry("file", null, lowerRoot, lowerSb);
+        lowerRoot.Inode!.Create(file, 0x1A4, 0, 0);
+        var fileWriter = new LinuxFile(file, FileFlags.O_WRONLY, null!);
+        try
+        {
+            Assert.Equal(1, file.Inode!.WriteFromHost(null, fileWriter, "x"u8.ToArray(), 0));
+        }
+        finally
+        {
+            fileWriter.Close();
+        }
+
+        var dir = new Dentry("dir", null, lowerRoot, lowerSb);
+        lowerRoot.Inode.Mkdir(dir, 0x1ED, 0, 0);
+        var child = new Dentry("a", null, dir, lowerSb);
+        dir.Inode!.Create(child, 0x1A4, 0, 0);
+        var childWriter = new LinuxFile(child, FileFlags.O_WRONLY, null!);
+        try
+        {
+            Assert.Equal(1, child.Inode!.WriteFromHost(null, childWriter, "y"u8.ToArray(), 0));
+        }
+        finally
+        {
+            childWriter.Close();
+        }
+
+        lowerRoot.Inode.Symlink(new Dentry("link", null, lowerRoot, lowerSb), "file", 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry("indirect", null, lowerRoot, lowerSb), "link", 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry("broken", null, lowerRoot, lowerSb), "/missing-target", 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry("dir-link", null, lowerRoot, lowerSb), "dir", 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry("dir-chain", null, lowerRoot, lowerSb), "dir-link", 0, 0);
+
+        var overlayFs = new OverlayFileSystem();
+        var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+            new FileSystemType { Name = "overlay" },
+            0,
+            "readlink-overlay",
+            new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+        var mount = new Mount(overlaySb, overlaySb.Root)
+        {
+            Source = "overlay",
+            FsType = "overlay",
+            Options = "rw"
+        };
+
+        return (overlaySb.Root, mount);
     }
 
     private sealed class TestEnv : IDisposable
@@ -212,62 +270,5 @@ public class PathWalkReadlinkSyscallTests
             var task = (ValueTask<int>)method!.Invoke(SyscallManager, [Engine, a1, a2, a3, a4, a5, a6])!;
             return await task;
         }
-    }
-
-    private static (Dentry Root, Mount Mount) CreateOverlayRootWithReadlinkFixtures()
-    {
-        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "readlink-lower", null);
-        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "readlink-upper", null);
-
-        var lowerRoot = lowerSb.Root;
-
-        var file = new Dentry("file", null, lowerRoot, lowerSb);
-        lowerRoot.Inode!.Create(file, 0x1A4, 0, 0);
-        var fileWriter = new LinuxFile(file, FileFlags.O_WRONLY, null!);
-        try
-        {
-            Assert.Equal(1, file.Inode!.WriteFromHost(null, fileWriter, "x"u8.ToArray(), 0));
-        }
-        finally
-        {
-            fileWriter.Close();
-        }
-
-        var dir = new Dentry("dir", null, lowerRoot, lowerSb);
-        lowerRoot.Inode.Mkdir(dir, 0x1ED, 0, 0);
-        var child = new Dentry("a", null, dir, lowerSb);
-        dir.Inode!.Create(child, 0x1A4, 0, 0);
-        var childWriter = new LinuxFile(child, FileFlags.O_WRONLY, null!);
-        try
-        {
-            Assert.Equal(1, child.Inode!.WriteFromHost(null, childWriter, "y"u8.ToArray(), 0));
-        }
-        finally
-        {
-            childWriter.Close();
-        }
-
-        lowerRoot.Inode.Symlink(new Dentry("link", null, lowerRoot, lowerSb), "file", 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("indirect", null, lowerRoot, lowerSb), "link", 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("broken", null, lowerRoot, lowerSb), "/missing-target", 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("dir-link", null, lowerRoot, lowerSb), "dir", 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("dir-chain", null, lowerRoot, lowerSb), "dir-link", 0, 0);
-
-        var overlayFs = new OverlayFileSystem();
-        var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
-            new FileSystemType { Name = "overlay" },
-            0,
-            "readlink-overlay",
-            new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
-
-        var mount = new Mount(overlaySb, overlaySb.Root)
-        {
-            Source = "overlay",
-            FsType = "overlay",
-            Options = "rw"
-        };
-
-        return (overlaySb.Root, mount);
     }
 }

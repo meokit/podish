@@ -1048,9 +1048,13 @@ public class ProcFsTests
 
     private static string Readlink(FiberTask task, Dentry dentry)
     {
-        return dentry.Inode is IContextualSymlinkInode contextual
-            ? contextual.Readlink(task)
-            : dentry.Inode?.Readlink() ?? string.Empty;
+        if (dentry.Inode is IContextualSymlinkInode contextual)
+            return contextual.Readlink(task);
+
+        string? target = null;
+        var rc = dentry.Inode?.Readlink(out target) ?? -(int)Errno.ENOENT;
+        Assert.True(rc >= 0, $"Readlink failed with rc={rc}");
+        return target ?? string.Empty;
     }
 
     private static void BindTaskContext(LinuxFile file, FiberTask task)

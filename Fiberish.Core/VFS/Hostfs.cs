@@ -294,12 +294,12 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         return true;
     }
 
-    public void InstantiateDentry(Dentry dentry, string hostPath, bool isDir, int mode = 0)
+    public int InstantiateDentry(Dentry dentry, string hostPath, bool isDir, int mode = 0)
     {
         _ = isDir;
         var normalizedPath = NormalizeHostPath(hostPath);
-        if (!TryResolveVisibleNode(normalizedPath, out var nodeInfo, out var type, out _))
-            throw new FileNotFoundException("Path not visible under current hostfs policy", normalizedPath);
+        if (!TryResolveVisibleNode(normalizedPath, out var nodeInfo, out var type, out var error))
+            return error;
 
         var identity = nodeInfo.Identity;
         var effectiveNlink = type == InodeType.Directory ? null : nodeInfo.HostLinkCount;
@@ -326,6 +326,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         }
 
         dentry.Parent?.CacheChild(dentry, "HostSuperBlock.InstantiateDentry");
+        return 0;
     }
 
     protected override void Shutdown()
@@ -1408,6 +1409,39 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         }
     }
 
+    private static int NegErrnoFromPInvoke(int fallback = (int)Errno.EIO)
+    {
+        var errno = Marshal.GetLastPInvokeError();
+        return errno == 0 ? -fallback : -errno;
+    }
+
+    private static int MapHostException(Exception ex, Errno fallback = Errno.EIO)
+    {
+        return ex switch
+        {
+            UnauthorizedAccessException => -(int)Errno.EACCES,
+            FileNotFoundException => -(int)Errno.ENOENT,
+            DirectoryNotFoundException => -(int)Errno.ENOENT,
+            PathTooLongException => -(int)Errno.EINVAL,
+            NotSupportedException => -(int)Errno.EOPNOTSUPP,
+            ArgumentException => -(int)Errno.EINVAL,
+            IOException => -(int)fallback,
+            _ => -(int)fallback
+        };
+    }
+
+    private static bool IsDescendantPath(string ancestorPath, string candidatePath)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (string.Equals(ancestorPath, candidatePath, comparison))
+            return false;
+        var prefix = ancestorPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                     Path.DirectorySeparatorChar;
+        return candidatePath.StartsWith(prefix, comparison);
+    }
+
     internal void SetProjectedTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
     {
         _projectedATime = atime;
@@ -1510,12 +1544,12 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         return null;
     }
 
-    public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
+    public override int Create(Dentry dentry, int mode, int uid, int gid)
     {
-        if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
+        if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
         var subPath = Path.Combine(ResolveHostPath(), dentry.Name);
         var sb = (HostSuperBlock)SuperBlock;
-        if (sb.PathExistsOnHostRaw(subPath)) throw new InvalidOperationException("Exists");
+        if (sb.PathExistsOnHostRaw(subPath)) return -(int)Errno.EEXIST;
 
         try
         {
@@ -1525,20 +1559,33 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         }
         catch (Exception ex)
         {
-            throw new IOException($"HostInode.Create failed for '{subPath}'", ex);
+            return MapHostException(ex);
         }
 
         sb.MetadataStore.RemovePath(subPath);
-        sb.InstantiateDentry(dentry, subPath, false, mode);
-        return dentry;
+        var instantiateRc = sb.InstantiateDentry(dentry, subPath, false, mode);
+        if (instantiateRc < 0)
+        {
+            try
+            {
+                File.Delete(subPath);
+            }
+            catch
+            {
+            }
+
+            return instantiateRc;
+        }
+
+        return 0;
     }
 
-    public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
+    public override int Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
-        if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
+        if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
         var subPath = Path.Combine(ResolveHostPath(), dentry.Name);
         var sb = (HostSuperBlock)SuperBlock;
-        if (sb.PathExistsOnHostRaw(subPath)) throw new InvalidOperationException("Exists");
+        if (sb.PathExistsOnHostRaw(subPath)) return -(int)Errno.EEXIST;
 
         try
         {
@@ -1546,22 +1593,35 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         }
         catch (Exception ex)
         {
-            throw new IOException($"HostInode.Mkdir failed for '{subPath}'", ex);
+            return MapHostException(ex);
         }
 
         sb.MetadataStore.RemovePath(subPath);
-        sb.InstantiateDentry(dentry, subPath, true, mode);
+        var instantiateRc = sb.InstantiateDentry(dentry, subPath, true, mode);
+        if (instantiateRc < 0)
+        {
+            try
+            {
+                Directory.Delete(subPath, false);
+            }
+            catch
+            {
+            }
+
+            return instantiateRc;
+        }
+
         if (dentry.Inode != null)
             NamespaceOps.OnDirectoryCreated(this, dentry.Inode, "HostInode.Mkdir");
-        return dentry;
+        return 0;
     }
 
-    public override Dentry Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
+    public override int Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
     {
-        if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
+        if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
         var subPath = Path.Combine(ResolveHostPath(), dentry.Name);
         var sb = (HostSuperBlock)SuperBlock;
-        if (sb.PathExistsOnHostRaw(subPath)) throw new InvalidOperationException("Exists");
+        if (sb.PathExistsOnHostRaw(subPath)) return -(int)Errno.EEXIST;
 
         try
         {
@@ -1574,10 +1634,23 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         }
         catch (Exception ex)
         {
-            throw new IOException($"HostInode.Mknod failed for '{subPath}' type={type} rdev={rdev}", ex);
+            return MapHostException(ex);
         }
 
-        sb.InstantiateDentry(dentry, subPath, false, mode);
+        var instantiateRc = sb.InstantiateDentry(dentry, subPath, false, mode);
+        if (instantiateRc < 0)
+        {
+            try
+            {
+                File.Delete(subPath);
+            }
+            catch
+            {
+            }
+
+            return instantiateRc;
+        }
+
         if (dentry.Inode != null)
         {
             dentry.Inode.Type = type;
@@ -1587,40 +1660,61 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
             dentry.Inode.Gid = gid;
         }
 
-        return dentry;
+        return 0;
     }
 
-    public override void Unlink(string name)
+    public override int Unlink(string name)
     {
         var subPath = Path.Combine(ResolveHostPath(), name);
         var sb = (HostSuperBlock)SuperBlock;
         if (!sb.TryGetRawNodeType(subPath, out var targetType))
-            throw new FileNotFoundException("Entry not found", subPath);
+            return -(int)Errno.ENOENT;
         if (targetType == InodeType.Directory)
-            throw new InvalidOperationException("Is a directory");
+            return -(int)Errno.EISDIR;
 
         // unlink(2) deletes the directory entry itself and must not follow symlinks.
         var dentry = sb.GetDentry(subPath, name, null);
-        File.Delete(subPath);
+        try
+        {
+            File.Delete(subPath);
+        }
+        catch (Exception ex)
+        {
+            return MapHostException(ex);
+        }
+
         sb.MetadataStore.RemovePath(subPath);
         NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Unlink");
         dentry?.UnbindInode("HostInode.Unlink");
         if (Dentries.Count > 0)
             _ = Dentries[0].TryUncacheChild(name, "HostInode.Unlink", out _);
         sb.RemoveDentry(subPath);
+        return 0;
     }
 
-    public override void Rmdir(string name)
+    public override int Rmdir(string name)
     {
         var subPath = Path.Combine(ResolveHostPath(), name);
         var sb = (HostSuperBlock)SuperBlock;
         if (!sb.TryGetRawNodeType(subPath, out var targetType))
-            throw new DirectoryNotFoundException(subPath);
+            return -(int)Errno.ENOENT;
         if (targetType != InodeType.Directory)
-            throw new InvalidOperationException("Not a directory");
+            return -(int)Errno.ENOTDIR;
 
         var dentry = sb.GetDentry(subPath, name, null);
-        Directory.Delete(subPath, false);
+        try
+        {
+            Directory.Delete(subPath, false);
+        }
+        catch (IOException)
+        {
+            return -(int)Errno.ENOTEMPTY;
+        }
+        catch (Exception ex)
+        {
+            return MapHostException(ex);
+        }
+
         sb.MetadataStore.RemovePath(subPath);
         if (dentry?.Inode != null)
         {
@@ -1631,20 +1725,25 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         if (Dentries.Count > 0)
             _ = Dentries[0].TryUncacheChild(name, "HostInode.Rmdir", out _);
         sb.RemoveDentry(subPath);
+        return 0;
     }
 
-    public override void Rename(string oldName, Inode newParent, string newName)
+    public override int Rename(string oldName, Inode newParent, string newName)
     {
         if (Type != InodeType.Directory || newParent.Type != InodeType.Directory)
-            throw new InvalidOperationException("Not a directory");
+            return -(int)Errno.ENOTDIR;
 
-        var targetParent = (HostInode)newParent;
+        if (newParent is not HostInode targetParent)
+            return -(int)Errno.EXDEV;
         var oldFullPath = Path.Combine(ResolveHostPath(), oldName);
         var newFullPath = Path.Combine(targetParent.ResolveHostPath(), newName);
+        if (IsDescendantPath(oldFullPath, newFullPath))
+            return -(int)Errno.EINVAL;
 
         var sb = (HostSuperBlock)SuperBlock;
-        var dentry = sb.GetDentry(oldFullPath, oldName, null) ??
-                     throw new FileNotFoundException("Source not found", oldName);
+        var dentry = sb.GetDentry(oldFullPath, oldName, null);
+        if (dentry == null)
+            return -(int)Errno.ENOENT;
         var sourceIsDirectory = dentry.Inode!.Type == InodeType.Directory;
         var movedAcrossParents = sourceIsDirectory && !ReferenceEquals(this, targetParent);
 
@@ -1653,19 +1752,31 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         {
             var targetDentry = sb.GetDentry(newFullPath, newName, null);
             if (targetDentry != null && ReferenceEquals(targetDentry.Inode, dentry.Inode))
-                return;
+                return 0;
 
             var targetIsDirectory = targetType == InodeType.Directory;
 
             if (targetIsDirectory)
             {
                 if (!sourceIsDirectory)
-                    throw new InvalidOperationException("Is a directory");
+                    return -(int)Errno.EISDIR;
 
                 if (targetDentry != null && targetDentry.Children.Count > 0)
-                    throw new InvalidOperationException("Directory not empty");
+                    return -(int)Errno.ENOTEMPTY;
 
-                Directory.Delete(newFullPath, false);
+                try
+                {
+                    Directory.Delete(newFullPath, false);
+                }
+                catch (IOException)
+                {
+                    return -(int)Errno.ENOTEMPTY;
+                }
+                catch (Exception ex)
+                {
+                    return MapHostException(ex);
+                }
+
                 if (targetDentry?.Inode != null)
                     NamespaceOps.OnDirectoryRemoved(targetParent, targetDentry.Inode,
                         "HostInode.Rename.overwrite-target-dir");
@@ -1673,9 +1784,17 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
             else
             {
                 if (sourceIsDirectory)
-                    throw new InvalidOperationException("Not a directory");
+                    return -(int)Errno.ENOTDIR;
 
-                File.Delete(newFullPath);
+                try
+                {
+                    File.Delete(newFullPath);
+                }
+                catch (Exception ex)
+                {
+                    return MapHostException(ex);
+                }
+
                 NamespaceOps.OnRenameOverwrite(dentry.Inode, targetDentry?.Inode, "HostInode.Rename.overwrite-target");
             }
 
@@ -1686,10 +1805,17 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
             sb.RemoveDentry(newFullPath);
         }
 
-        if (sourceIsDirectory)
-            Directory.Move(oldFullPath, newFullPath);
-        else
-            File.Move(oldFullPath, newFullPath);
+        try
+        {
+            if (sourceIsDirectory)
+                Directory.Move(oldFullPath, newFullPath);
+            else
+                File.Move(oldFullPath, newFullPath);
+        }
+        catch (Exception ex)
+        {
+            return MapHostException(ex);
+        }
 
         sb.MetadataStore.RenamePath(oldFullPath, newFullPath);
 
@@ -1712,6 +1838,8 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
 
         if (movedAcrossParents)
             NamespaceOps.OnDirectoryMovedAcrossParents(this, targetParent, "HostInode.Rename");
+
+        return 0;
     }
 
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
@@ -1733,15 +1861,15 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         return -(int)Errno.EBADF;
     }
 
-    public override Dentry Link(Dentry dentry, Inode oldInode)
+    public override int Link(Dentry dentry, Inode oldInode)
     {
-        if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
-        if (oldInode is not HostInode hi) throw new InvalidOperationException("Not a host inode");
+        if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+        if (oldInode is not HostInode hi) return -(int)Errno.EXDEV;
 
         var newPath = Path.Combine(ResolveHostPath(), dentry.Name);
         var sourcePath = hi.ResolveHostPath();
         if (link(sourcePath, newPath) != 0)
-            throw new IOException($"link failed with error {Marshal.GetLastPInvokeError()}");
+            return NegErrnoFromPInvoke();
 
         var sb = (HostSuperBlock)SuperBlock;
         dentry.Instantiate(oldInode);
@@ -1751,27 +1879,57 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         if (Dentries.Count > 0)
             Dentries[0].CacheChild(dentry, "HostInode.Link");
 
-        return dentry;
+        return 0;
     }
 
-    public override Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    public override int Symlink(Dentry dentry, string target, int uid, int gid)
     {
-        if (Type != InodeType.Directory) throw new InvalidOperationException("Not a directory");
+        if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
         var newPath = Path.Combine(ResolveHostPath(), dentry.Name);
         var sb = (HostSuperBlock)SuperBlock;
         if (sb.PathExistsOnHostRaw(newPath))
-            throw new InvalidOperationException("Exists");
+            return -(int)Errno.EEXIST;
 
-        File.CreateSymbolicLink(newPath, target);
+        try
+        {
+            File.CreateSymbolicLink(newPath, target);
+        }
+        catch (Exception ex)
+        {
+            return MapHostException(ex);
+        }
+
         sb.MetadataStore.RemovePath(newPath);
-        sb.InstantiateDentry(dentry, newPath, false); // symlinks don't really use mode in Create
-        return dentry;
+        var instantiateRc = sb.InstantiateDentry(dentry, newPath, false); // symlinks don't really use mode in Create
+        if (instantiateRc < 0)
+        {
+            try
+            {
+                File.Delete(newPath);
+            }
+            catch
+            {
+            }
+
+            return instantiateRc;
+        }
+
+        return 0;
     }
 
-    public override string Readlink()
+    public override int Readlink(out string? target)
     {
-        var info = new FileInfo(ResolveHostPath());
-        return info.LinkTarget ?? throw new IOException("Not a link or target missing");
+        try
+        {
+            var info = new FileInfo(ResolveHostPath());
+            target = info.LinkTarget;
+            return string.IsNullOrEmpty(target) ? -(int)Errno.EINVAL : 0;
+        }
+        catch (Exception ex)
+        {
+            target = null;
+            return MapHostException(ex);
+        }
     }
 
     public override void Open(LinuxFile linuxFile)

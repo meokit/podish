@@ -196,7 +196,8 @@ public class CrossMountBehaviorTests
         Assert.True(fileLoc.IsValid);
         Assert.True(linkLoc.IsValid);
         Assert.Equal(InodeType.Symlink, fileLoc.Dentry!.Inode!.Type);
-        Assert.Equal("file.txt", fileLoc.Dentry.Inode.Readlink());
+        Assert.Equal(0, fileLoc.Dentry.Inode.Readlink(out var fileLinkTarget));
+        Assert.Equal("file.txt", fileLinkTarget);
         Assert.Equal(InodeType.File, linkLoc.Dentry!.Inode!.Type);
         Assert.Equal("F", env.ReadFile("/mnt/link.txt"));
     }
@@ -223,7 +224,8 @@ public class CrossMountBehaviorTests
         Assert.True(dirLoc.IsValid);
         Assert.True(linkLoc.IsValid);
         Assert.Equal(InodeType.Symlink, dirLoc.Dentry!.Inode!.Type);
-        Assert.Equal("dir", dirLoc.Dentry.Inode.Readlink());
+        Assert.Equal(0, dirLoc.Dentry.Inode.Readlink(out var dirLinkTarget));
+        Assert.Equal("dir", dirLinkTarget);
         Assert.Equal(InodeType.Directory, linkLoc.Dentry!.Inode!.Type);
         Assert.True(env.SyscallManager.PathWalkWithFlags("/mnt/link.txt/child.txt", LookupFlags.FollowSymlink).IsValid);
         Assert.Equal("D", env.ReadFile("/mnt/link.txt/child.txt"));
@@ -450,12 +452,13 @@ public class CrossMountBehaviorTests
             var (parentLoc, name, err) = SyscallManager.PathWalkForCreate(path);
             Assert.Equal(0, err);
             var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
-            var created = parentLoc.Dentry.Inode!.Create(dentry, 0x1A4, 0, 0);
+            var createRc = parentLoc.Dentry.Inode!.Create(dentry, 0x1A4, 0, 0);
+            Assert.Equal(0, createRc);
             if (!string.IsNullOrEmpty(contents))
             {
-                var file = new LinuxFile(created, FileFlags.O_RDWR, parentLoc.Mount!);
+                var file = new LinuxFile(dentry, FileFlags.O_RDWR, parentLoc.Mount!);
                 var bytes = Encoding.UTF8.GetBytes(contents);
-                Assert.True(created.Inode!.WriteFromHost(null, file, bytes, 0) >= 0);
+                Assert.True(dentry.Inode!.WriteFromHost(null, file, bytes, 0) >= 0);
             }
         }
 
@@ -467,7 +470,7 @@ public class CrossMountBehaviorTests
             var (parentLoc, name, err) = SyscallManager.PathWalkForCreate(path);
             Assert.Equal(0, err);
             var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
-            parentLoc.Dentry.Inode!.Mkdir(dentry, 0x1ED, 0, 0);
+            Assert.Equal(0, parentLoc.Dentry.Inode!.Mkdir(dentry, 0x1ED, 0, 0));
         }
 
         public void CreateSymlink(string path, string target)
@@ -478,7 +481,7 @@ public class CrossMountBehaviorTests
             var (parentLoc, name, err) = SyscallManager.PathWalkForCreate(path);
             Assert.Equal(0, err);
             var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
-            parentLoc.Dentry.Inode!.Symlink(dentry, target, 0, 0);
+            Assert.Equal(0, parentLoc.Dentry.Inode!.Symlink(dentry, target, 0, 0));
         }
 
         public string ReadFile(string path)

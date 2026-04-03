@@ -421,9 +421,10 @@ file sealed class ProcPidSymlinkInode : Inode, IContextualSymlinkInode
         return target;
     }
 
-    public override string Readlink()
+    public override int Readlink(out string? target)
     {
-        return string.Empty;
+        target = null;
+        return -(int)Errno.ENOENT;
     }
 }
 
@@ -644,9 +645,10 @@ file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode, IContextual
         return false;
     }
 
-    public override string Readlink()
+    public override int Readlink(out string? target)
     {
-        return string.Empty;
+        target = null;
+        return -(int)Errno.ENOENT;
     }
 }
 
@@ -867,9 +869,10 @@ file sealed class ProcSelfSymlinkInode : Inode, IContextualSymlinkInode
         return task.Process.TGID.ToString();
     }
 
-    public override string Readlink()
+    public override int Readlink(out string? target)
     {
-        return string.Empty;
+        target = null;
+        return -(int)Errno.ENOENT;
     }
 
     protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)

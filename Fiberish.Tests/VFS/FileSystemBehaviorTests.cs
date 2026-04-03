@@ -1,3 +1,4 @@
+using Fiberish.Native;
 using Fiberish.VFS;
 using Xunit;
 
@@ -156,7 +157,7 @@ public class FileSystemBehaviorTests
         var dir = new Dentry("dir", null, root, rig.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
 
-        Assert.ThrowsAny<Exception>(() => rootInode.Unlink("dir"));
+        Assert.Equal(-(int)Errno.EISDIR, rootInode.Unlink("dir"));
         Assert.NotNull(rootInode.Lookup("dir"));
         Assert.Contains(rootInode.GetEntries(), e => e.Name == "dir");
     }
@@ -175,7 +176,7 @@ public class FileSystemBehaviorTests
         var child = new Dentry("child.txt", null, dir, rig.SuperBlock);
         dirInode.Create(child, 0x1A4, 0, 0);
 
-        Assert.ThrowsAny<Exception>(() => rootInode.Rmdir("dir"));
+        Assert.Equal(-(int)Errno.ENOTEMPTY, rootInode.Rmdir("dir"));
         Assert.NotNull(rootInode.Lookup("dir"));
         Assert.NotNull(dirInode.Lookup("child.txt"));
     }
@@ -241,7 +242,8 @@ public class FileSystemBehaviorTests
         var looked = rootInode.Lookup("link.txt");
         Assert.NotNull(looked);
         Assert.Equal(InodeType.Symlink, looked!.Inode!.Type);
-        Assert.Equal("target.txt", looked.Inode.Readlink());
+        Assert.Equal(0, looked.Inode.Readlink(out var linkTarget));
+        Assert.Equal("target.txt", linkTarget);
         Assert.Contains(rootInode.GetEntries(), e => e.Name == "link.txt");
     }
 
@@ -267,7 +269,8 @@ public class FileSystemBehaviorTests
         Assert.NotNull(renamed);
         Assert.Equal(InodeType.Symlink, renamed!.Inode!.Type);
         Assert.Equal(linkIno, renamed.Inode.Ino);
-        Assert.Equal("target.txt", renamed.Inode.Readlink());
+        Assert.Equal(0, renamed.Inode.Readlink(out var renamedTarget));
+        Assert.Equal("target.txt", renamedTarget);
     }
 
     [Theory]
@@ -286,7 +289,7 @@ public class FileSystemBehaviorTests
         parentInode.Mkdir(child, 0x1ED, 0, 0);
         var parentIno = parent.Inode!.Ino;
 
-        Assert.ThrowsAny<Exception>(() => rootInode.Rename("parent", parentInode, "moved"));
+        Assert.Equal(-(int)Errno.EINVAL, rootInode.Rename("parent", parentInode, "moved"));
 
         var parentAfter = rootInode.Lookup("parent");
         Assert.NotNull(parentAfter);
@@ -344,7 +347,7 @@ public class FileSystemBehaviorTests
         var targetChild = new Dentry("target-child.txt", null, target, rig.SuperBlock);
         targetInode.Create(targetChild, 0x1A4, 0, 0);
 
-        Assert.ThrowsAny<Exception>(() => rootInode.Rename("source", rootInode, "target"));
+        Assert.Equal(-(int)Errno.ENOTEMPTY, rootInode.Rename("source", rootInode, "target"));
 
         var sourceAfter = rootInode.Lookup("source");
         var targetAfter = rootInode.Lookup("target");

@@ -375,27 +375,19 @@ public partial class SyscallManager
             var uid = t?.Process.EUID ?? 0;
             var gid = t?.Process.EGID ?? 0;
 
-            try
-            {
-                var tmpName = $".tmpfile.{Guid.NewGuid():N}";
-                var anonDentry = new Dentry(tmpName, null, dentry, dentry.SuperBlock);
-                var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
+            var tmpName = $".tmpfile.{Guid.NewGuid():N}";
+            var anonDentry = new Dentry(tmpName, null, dentry, dentry.SuperBlock);
+            var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
+            var createRc = dentry.Inode.Create(anonDentry, finalMode, uid, gid);
+            if (createRc < 0)
+                return createRc;
 
-                dentry.Inode.Create(anonDentry, finalMode, uid, gid);
-
-                var openFlags = flags & ~O_TMPFILE_MASK;
-                var f = new LinuxFile(anonDentry, (FileFlags)openFlags, mount ?? sm.RootMount!)
-                {
-                    IsTmpFile = true
-                };
-                return sm.AllocFD(f);
-            }
-            catch (Exception ex)
+            var openFlags = flags & ~O_TMPFILE_MASK;
+            var f = new LinuxFile(anonDentry, (FileFlags)openFlags, mount ?? sm.RootMount!)
             {
-                Logger.LogInformation(ex,
-                    "[Open] O_TMPFILE create failed path='{Path}' flags={Flags} mode={Mode}", path, flags, mode);
-                return MapFsExceptionToErrno(ex);
-            }
+                IsTmpFile = true
+            };
+            return sm.AllocFD(f);
         }
 
         if (wantDirectory && wantCreate)
@@ -405,7 +397,8 @@ public partial class SyscallManager
         {
             if (wantCreate)
             {
-                var noFollowData = sm.PathWalker.PathWalkWithData(path, startLoc.IsValid ? startLoc : null, LookupFlags.None);
+                var noFollowData =
+                    sm.PathWalker.PathWalkWithData(path, startLoc.IsValid ? startLoc : null, LookupFlags.None);
                 if (noFollowData.HasError && noFollowData.ErrorCode != -(int)Errno.ENOENT)
                     return noFollowData.ErrorCode;
 
@@ -414,8 +407,7 @@ public partial class SyscallManager
                     if (wantExcl)
                         return -(int)Errno.EEXIST;
 
-                    var target = noFollowData.Path.Dentry.Inode.Readlink();
-                    if (!string.IsNullOrEmpty(target))
+                    if (noFollowData.Path.Dentry.Inode.Readlink(out var target) == 0 && !string.IsNullOrEmpty(target))
                     {
                         string createPath;
                         if (target[0] == '/')
@@ -425,7 +417,8 @@ public partial class SyscallManager
                         else
                         {
                             var symlinkLastSlash = path.LastIndexOf('/');
-                            var symlinkParentPath = symlinkLastSlash == -1 ? "" : symlinkLastSlash == 0 ? "/" : path[..symlinkLastSlash];
+                            var symlinkParentPath = symlinkLastSlash == -1 ? "" :
+                                symlinkLastSlash == 0 ? "/" : path[..symlinkLastSlash];
                             createPath = string.IsNullOrEmpty(symlinkParentPath) || symlinkParentPath == "."
                                 ? target
                                 : $"{symlinkParentPath.TrimEnd('/')}/{target}";
@@ -453,32 +446,13 @@ public partial class SyscallManager
                 var uid = t?.Process.EUID ?? 0;
                 var gid = t?.Process.EGID ?? 0;
 
-                try
-                {
-                    dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
-                    var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
-                    parentDentry.Inode.Create(dentry, finalMode, uid, gid);
-                    createdHere = true;
-                    mount = parentMount;
-                }
-                catch (InvalidOperationException ex)
-                {
-                    // Hostfs uses InvalidOperationException("Exists") for collisions.
-                    if (ex.Message.Contains("Exists", StringComparison.OrdinalIgnoreCase))
-                        return -(int)Errno.EEXIST;
-
-                    Logger.LogInformation(ex,
-                        "[Open] create failed path='{Path}' parent='{ParentPath}' flags={Flags} mode={Mode}", path,
-                        parentPath, flags, mode);
-                    return MapFsExceptionToErrno(ex);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogInformation(ex,
-                        "[Open] create failed path='{Path}' parent='{ParentPath}' flags={Flags} mode={Mode}", path,
-                        parentPath, flags, mode);
-                    return MapFsExceptionToErrno(ex);
-                }
+                dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
+                var createMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
+                var createRc2 = parentDentry.Inode.Create(dentry, createMode, uid, gid);
+                if (createRc2 < 0)
+                    return createRc2;
+                createdHere = true;
+                mount = parentMount;
             }
             else
             {
@@ -528,17 +502,12 @@ public partial class SyscallManager
             if (!createdHere &&
                 (flags & (uint)FileFlags.O_TRUNC) != 0 &&
                 dentry?.Inode?.Type == InodeType.File)
-                try
-                {
-                    var truncateRc = dentry.Inode.Truncate(0);
-                    if (truncateRc < 0) return truncateRc;
-                    ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, sm.CurrentSyscallEngine, dentry.Inode, 0);
-                    flags &= ~(uint)FileFlags.O_TRUNC;
-                }
-                catch (Exception ex)
-                {
-                    return MapFsExceptionToErrno(ex, Errno.EACCES);
-                }
+            {
+                var truncateRc = dentry.Inode.Truncate(0);
+                if (truncateRc < 0) return truncateRc;
+                ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, sm.CurrentSyscallEngine, dentry.Inode, 0);
+                flags &= ~(uint)FileFlags.O_TRUNC;
+            }
 
             // If we already created the inode above, opening with O_CREAT|O_EXCL can
             // retrigger create semantics in backend Open() and fail spuriously.
@@ -555,7 +524,7 @@ public partial class SyscallManager
         {
             Logger.LogInformation(ex, "[Open] final open failed path='{Path}' flags={Flags} mode={Mode}", path, flags,
                 mode);
-            return MapFsExceptionToErrno(ex);
+            return MapSyscallExceptionToErrno(ex);
         }
     }
 

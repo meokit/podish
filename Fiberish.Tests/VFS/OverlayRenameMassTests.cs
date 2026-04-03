@@ -1,4 +1,4 @@
-using Fiberish.Native;
+using System.Text;
 using Fiberish.VFS;
 using Xunit;
 
@@ -259,7 +259,8 @@ public class OverlayRenameMassTests
         for (var i = 0; i < RenameMassRingSize - 1; i++)
         {
             var dirDentry = new Dentry($"pdir{100 + i}", null, overlaySb.Root, overlaySb);
-            var dir = Assert.IsType<OverlayInode>(root.Mkdir(dirDentry, 0x1ED, 0, 0).Inode);
+            Assert.Equal(0, root.Mkdir(dirDentry, 0x1ED, 0, 0));
+            var dir = Assert.IsType<OverlayInode>(dirDentry.Inode);
             CreateFile(dirDentry, overlaySb, "a", $"abcd{i}");
         }
 
@@ -273,7 +274,7 @@ public class OverlayRenameMassTests
 
         var n = RenameMassIterCount % (RenameMassRingSize * (RenameMassRingSize - 1));
         var cycle = n / RenameMassRingSize;
-        n = (RenameMassRingSize - 1) - cycle;
+        n = RenameMassRingSize - 1 - cycle;
 
         var finalGap = PositiveMod(-(RenameMassIterCount + 1), RenameMassRingSize);
         for (var i = 0; i < RenameMassRingSize; i++)
@@ -334,7 +335,7 @@ public class OverlayRenameMassTests
 
         var n = RenameMassIterCount % (RenameMassRingSize * (RenameMassRingSize - 1));
         var cycle = n / RenameMassRingSize;
-        n = (RenameMassRingSize - 1) - cycle;
+        n = RenameMassRingSize - 1 - cycle;
         var finalGap = PositiveMod(-(RenameMassIterCount + 1), RenameMassRingSize);
 
         for (var i = 0; i < RenameMassRingSize; i++)
@@ -348,7 +349,8 @@ public class OverlayRenameMassTests
             {
                 var entry = root.Lookup(path)!;
                 var target = $"target{100 + n}";
-                Assert.Equal(target, entry.Inode!.Readlink());
+                Assert.Equal(0, entry.Inode!.Readlink(out var linkTarget));
+                Assert.Equal(target, linkTarget);
                 Assert.Equal(":xxx:yyy:zzz", ReadAll(root.Lookup(target)!));
                 n = (n + 1) % (RenameMassRingSize - 1);
             }
@@ -391,7 +393,7 @@ public class OverlayRenameMassTests
 
         var n = RenameMassIterCount % (RenameMassRingSize * (RenameMassRingSize - 1));
         var cycle = n / RenameMassRingSize;
-        n = (RenameMassRingSize - 1) - cycle;
+        n = RenameMassRingSize - 1 - cycle;
         var finalGap = PositiveMod(-(RenameMassIterCount + 1), RenameMassRingSize);
 
         for (var i = 0; i < RenameMassRingSize; i++)
@@ -405,7 +407,8 @@ public class OverlayRenameMassTests
             {
                 var entry = root.Lookup(path)!;
                 var target = $"dirtarget{100 + n}";
-                Assert.Equal(target, entry.Inode!.Readlink());
+                Assert.Equal(0, entry.Inode!.Readlink(out var dirLinkTarget));
+                Assert.Equal(target, dirLinkTarget);
                 Assert.Equal(InodeType.Directory, root.Lookup(target)!.Inode!.Type);
                 n = (n + 1) % (RenameMassRingSize - 1);
             }
@@ -444,7 +447,7 @@ public class OverlayRenameMassTests
         var file = new LinuxFile(dentry, FileFlags.O_WRONLY, null!);
         try
         {
-            var payload = System.Text.Encoding.UTF8.GetBytes(content);
+            var payload = Encoding.UTF8.GetBytes(content);
             Assert.Equal(payload.Length, dentry.Inode!.WriteFromHost(null, file, payload, 0));
         }
         finally
@@ -466,7 +469,7 @@ public class OverlayRenameMassTests
         {
             var buf = new byte[64];
             var read = dentry.Inode!.ReadToHost(null, file, buf, 0);
-            return System.Text.Encoding.UTF8.GetString(buf, 0, read);
+            return Encoding.UTF8.GetString(buf, 0, read);
         }
         finally
         {

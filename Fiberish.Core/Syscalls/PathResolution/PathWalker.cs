@@ -396,9 +396,18 @@ public class PathWalker
             return nd.SetError(-(int)Errno.ELOOP);
 
         // Read symlink target
-        var target = task != null && symlink.Inode is IContextualSymlinkInode contextualSymlink
-            ? contextualSymlink.Readlink(task)
-            : symlink.Inode?.Readlink();
+        string? target = null;
+        if (task != null && symlink.Inode is IContextualSymlinkInode contextualSymlink)
+        {
+            target = contextualSymlink.Readlink(task);
+        }
+        else
+        {
+            var readlinkRc = symlink.Inode?.Readlink(out target) ?? -(int)Errno.ENOENT;
+            if (readlinkRc < 0)
+                return nd.SetError(readlinkRc);
+        }
+
         if (string.IsNullOrEmpty(target))
             return nd.SetError(-(int)Errno.ENOENT);
 

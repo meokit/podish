@@ -12,28 +12,6 @@ namespace Fiberish.Syscalls;
 public partial class SyscallManager
 {
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
-    private static int MapFsExceptionToErrno(Exception ex, Errno fallback = Errno.EIO)
-    {
-        return ex switch
-        {
-            FileNotFoundException => -(int)Errno.ENOENT,
-            DirectoryNotFoundException => -(int)Errno.ENOENT,
-            UnauthorizedAccessException => -(int)Errno.EACCES,
-            PathTooLongException => -(int)Errno.EINVAL,
-            InvalidOperationException ioe when ioe.Message.Contains("Exists", StringComparison.OrdinalIgnoreCase) =>
-                -(int)Errno.EEXIST,
-            InvalidOperationException ioe
-                when ioe.Message.Contains("Not a directory", StringComparison.OrdinalIgnoreCase) =>
-                -(int)Errno.ENOTDIR,
-            InvalidOperationException ioe
-                when ioe.Message.Contains("Is a directory", StringComparison.OrdinalIgnoreCase) =>
-                -(int)Errno.EISDIR,
-            IOException ioe when ioe.Message.Contains("Exists", StringComparison.OrdinalIgnoreCase) => -(int)Errno
-                .EEXIST,
-            _ => -(int)fallback
-        };
-    }
-
     private async ValueTask<int> SysLink(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var oldPath = ReadString(a1);
@@ -58,16 +36,8 @@ public partial class SyscallManager
 
         if (!ReferenceEquals(oldLoc.Mount, dirLoc.Mount)) return -(int)Errno.EXDEV;
 
-        try
-        {
-            var newDentry = new Dentry(name, null, dirLoc.Dentry, dirLoc.Dentry.SuperBlock);
-            dirLoc.Dentry.Inode.Link(newDentry, oldLoc.Dentry.Inode);
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            return MapFsExceptionToErrno(ex);
-        }
+        var newDentry = new Dentry(name, null, dirLoc.Dentry, dirLoc.Dentry.SuperBlock);
+        return dirLoc.Dentry.Inode.Link(newDentry, oldLoc.Dentry.Inode);
     }
 
     private async ValueTask<int> SysLinkat(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -96,7 +66,8 @@ public partial class SyscallManager
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_FOLLOW) != 0;
-        var oldLookup = PathWalker.PathWalkWithData(oldpath, oldStartLoc.IsValid ? oldStartLoc : CurrentWorkingDirectory,
+        var oldLookup = PathWalker.PathWalkWithData(oldpath,
+            oldStartLoc.IsValid ? oldStartLoc : CurrentWorkingDirectory,
             followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
         if (oldLookup.HasError) return oldLookup.ErrorCode;
         var oldLoc = oldLookup.Path;
@@ -117,16 +88,8 @@ public partial class SyscallManager
 
         if (!ReferenceEquals(oldLoc.Mount, dirLoc.Mount)) return -(int)Errno.EXDEV;
 
-        try
-        {
-            var newDentry = new Dentry(name, null, dirLoc.Dentry, dirLoc.Dentry.SuperBlock);
-            dirLoc.Dentry.Inode.Link(newDentry, oldLoc.Dentry.Inode);
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            return MapFsExceptionToErrno(ex);
-        }
+        var newDentry = new Dentry(name, null, dirLoc.Dentry, dirLoc.Dentry.SuperBlock);
+        return dirLoc.Dentry.Inode.Link(newDentry, oldLoc.Dentry.Inode);
     }
 
     private async ValueTask<int> SysChdir(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -163,17 +126,9 @@ public partial class SyscallManager
         var uid = t?.Process.EUID ?? 0;
         var gid = t?.Process.EGID ?? 0;
 
-        try
-        {
-            var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
-            var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
-            parentLoc.Dentry.Inode!.Mkdir(dentry, finalMode, uid, gid);
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            return MapFsExceptionToErrno(ex, Errno.EACCES);
-        }
+        var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
+        var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
+        return parentLoc.Dentry.Inode!.Mkdir(dentry, finalMode, uid, gid);
     }
 
     private async ValueTask<int> SysTruncate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -193,7 +148,7 @@ public partial class SyscallManager
     {
         var path = sm.ReadString(pathPtr);
 
-        var lookup = sm.PathWalker.PathWalkWithData(path, LookupFlags.FollowSymlink);
+        var lookup = sm.PathWalker.PathWalkWithData(path);
         if (lookup.HasError)
             return new ValueTask<int>(lookup.ErrorCode);
 
@@ -203,7 +158,8 @@ public partial class SyscallManager
 
         if (sm.CurrentTask?.Process != null)
         {
-            var accessRc = DacPolicy.CheckPathAccess(sm.CurrentTask.Process, loc.Dentry.Inode, AccessMode.MayWrite, true);
+            var accessRc =
+                DacPolicy.CheckPathAccess(sm.CurrentTask.Process, loc.Dentry.Inode, AccessMode.MayWrite, true);
             if (accessRc < 0)
                 return new ValueTask<int>(accessRc);
         }
@@ -256,17 +212,17 @@ public partial class SyscallManager
         const int FallocFlKeepSize = 0x01;
         const int supportedFlags = FallocFlKeepSize;
 
-        int fd = (int)a1;
-        int mode = unchecked((int)a2);
-        long offset = (long)(((ulong)a4 << 32) | a3);
-        long length = (long)(((ulong)a6 << 32) | a5);
+        var fd = (int)a1;
+        var mode = unchecked((int)a2);
+        var offset = (long)(((ulong)a4 << 32) | a3);
+        var length = (long)(((ulong)a6 << 32) | a5);
 
         if (mode < 0 || (mode & ~supportedFlags) != 0)
             return -(int)Errno.EOPNOTSUPP;
         if (offset < 0 || length <= 0)
             return -(int)Errno.EINVAL;
 
-        LinuxFile? file = GetFD(fd);
+        var file = GetFD(fd);
         if (file?.OpenedInode == null)
             return -(int)Errno.EBADF;
         if (file.OpenedInode.Type == InodeType.Directory)
@@ -288,7 +244,7 @@ public partial class SyscallManager
         if (endOffset <= (long)file.OpenedInode.Size)
             return 0;
 
-        int rc = file.OpenedInode.Truncate(endOffset);
+        var rc = file.OpenedInode.Truncate(endOffset);
         if (rc == 0)
             ProcessAddressSpaceSync.NotifyInodeTruncated(Mem, engine, file.OpenedInode, endOffset);
         return rc;
@@ -316,16 +272,11 @@ public partial class SyscallManager
             : targetLoc.Dentry.Inode.GetEntries();
         if (entries.Count > 2) return -(int)Errno.ENOTEMPTY; // Has more than . and ..
 
-        try
-        {
-            parentLoc.Dentry!.Inode!.Rmdir(name);
-            _ = parentLoc.Dentry.TryUncacheChild(name, "SysRmdir", out _);
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            return MapFsExceptionToErrno(ex, Errno.EACCES);
-        }
+        var rmdirRc = parentLoc.Dentry!.Inode!.Rmdir(name);
+        if (rmdirRc < 0)
+            return rmdirRc;
+        _ = parentLoc.Dentry.TryUncacheChild(name, "SysRmdir", out _);
+        return 0;
     }
 
     private async ValueTask<int> SysMkdirAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -349,17 +300,9 @@ public partial class SyscallManager
         var uid = t?.Process.EUID ?? 0;
         var gid = t?.Process.EGID ?? 0;
 
-        try
-        {
-            var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
-            var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
-            parentLoc.Dentry.Inode!.Mkdir(dentry, finalMode, uid, gid);
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            return MapFsExceptionToErrno(ex, Errno.EACCES);
-        }
+        var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
+        var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
+        return parentLoc.Dentry.Inode!.Mkdir(dentry, finalMode, uid, gid);
     }
 
     private async ValueTask<int> SysMknod(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -395,32 +338,20 @@ public partial class SyscallManager
         var finalMode = DacPolicy.ApplyUmask(mode & 0x0FFF, t?.Process.Umask ?? 0);
         var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
 
-        try
+        switch (fileType)
         {
-            switch (fileType)
-            {
-                case S_IFREG:
-                    parentLoc.Dentry.Inode!.Create(dentry, finalMode, uid, gid);
-                    return 0;
-                case S_IFIFO:
-                    parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.Fifo, 0);
-                    return 0;
-                case S_IFCHR:
-                    parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.CharDev, dev);
-                    return 0;
-                case S_IFBLK:
-                    parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.BlockDev, dev);
-                    return 0;
-                case S_IFSOCK:
-                    parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.Socket, 0);
-                    return 0;
-                default:
-                    return -(int)Errno.EINVAL;
-            }
-        }
-        catch (Exception ex)
-        {
-            return MapFsExceptionToErrno(ex, Errno.EACCES);
+            case S_IFREG:
+                return parentLoc.Dentry.Inode!.Create(dentry, finalMode, uid, gid);
+            case S_IFIFO:
+                return parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.Fifo, 0);
+            case S_IFCHR:
+                return parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.CharDev, dev);
+            case S_IFBLK:
+                return parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.BlockDev, dev);
+            case S_IFSOCK:
+                return parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.Socket, 0);
+            default:
+                return -(int)Errno.EINVAL;
         }
     }
 
@@ -671,30 +602,20 @@ public partial class SyscallManager
                 : targetLoc.Dentry.Inode.GetEntries();
             if (entries.Count > 2) return -(int)Errno.ENOTEMPTY;
 
-            try
-            {
-                parentLoc.Dentry!.Inode!.Rmdir(name);
-                _ = parentLoc.Dentry.TryUncacheChild(name, "SysUnlinkAt.Rmdir", out _);
-                return 0;
-            }
-            catch (Exception ex)
-            {
-                return MapFsExceptionToErrno(ex, Errno.EACCES);
-            }
+            var rmdirRc = parentLoc.Dentry!.Inode!.Rmdir(name);
+            if (rmdirRc < 0)
+                return rmdirRc;
+            _ = parentLoc.Dentry.TryUncacheChild(name, "SysUnlinkAt.Rmdir", out _);
+            return 0;
         }
 
         if (targetLoc.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
 
-        try
-        {
-            parentLoc.Dentry!.Inode!.Unlink(name);
-            _ = parentLoc.Dentry.TryUncacheChild(name, "SysUnlinkAt.Unlink", out _);
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            return MapFsExceptionToErrno(ex, Errno.ENOENT);
-        }
+        var unlinkRc = parentLoc.Dentry!.Inode!.Unlink(name);
+        if (unlinkRc < 0)
+            return unlinkRc;
+        _ = parentLoc.Dentry.TryUncacheChild(name, "SysUnlinkAt.Unlink", out _);
+        return 0;
     }
 
     private async ValueTask<int> SysGetdents(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -859,8 +780,8 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// utimensat_time64 - same as utimensat but with 64-bit timespec
-    /// syscall 412
+    ///     utimensat_time64 - same as utimensat but with 64-bit timespec
+    ///     syscall 412
     /// </summary>
     private async ValueTask<int> SysUtimensAtTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
@@ -925,7 +846,8 @@ public partial class SyscallManager
         return DoUtimensAtResolveTimes(engine, loc, atimeSec, (int)atimeNsec, mtimeSec, (int)mtimeNsec);
     }
 
-    private int DoUtimensAtResolveTimes(Engine engine, PathLocation loc, long atimeSec, int atimeNsec, long mtimeSec, int mtimeNsec)
+    private int DoUtimensAtResolveTimes(Engine engine, PathLocation loc, long atimeSec, int atimeNsec, long mtimeSec,
+        int mtimeNsec)
     {
         var inode = loc.Dentry!.Inode!;
         var requested = ResolveRequestedTimes(
@@ -1145,142 +1067,77 @@ public partial class SyscallManager
 
             var tempName = $".rename-exchange-{Guid.NewGuid():N}";
 
-            try
+            var rc = oldParentLoc.Dentry!.Inode!.Rename(oldName, oldParentLoc.Dentry.Inode, tempName);
+            if (rc < 0)
+                return rc;
+
+            rc = newParentLoc.Dentry!.Inode!.Rename(newName, oldParentLoc.Dentry.Inode!, oldName);
+            if (rc < 0)
             {
-                oldParentLoc.Dentry!.Inode!.Rename(oldName, oldParentLoc.Dentry.Inode, tempName);
-                try
-                {
-                    newParentLoc.Dentry!.Inode!.Rename(newName, oldParentLoc.Dentry.Inode!, oldName);
-                    try
-                    {
-                        oldParentLoc.Dentry.Inode!.Rename(tempName, newParentLoc.Dentry.Inode!, newName);
-                    }
-                    catch
-                    {
-                        try
-                        {
-                            oldParentLoc.Dentry.Inode!.Rename(oldName, newParentLoc.Dentry.Inode!, newName);
-                        }
-                        catch
-                        {
-                        }
-
-                        throw;
-                    }
-                }
-                catch
-                {
-                    try
-                    {
-                        oldParentLoc.Dentry.Inode!.Rename(tempName, oldParentLoc.Dentry.Inode, oldName);
-                    }
-                    catch
-                    {
-                    }
-
-                    throw;
-                }
-
-                foreach (var pDentry in oldParentLoc.Dentry.Inode!.Dentries.ToList())
-                {
-                    _ = pDentry.TryUncacheChild(oldName, "SysRename.exchange.cleanup-old", out _);
-                    _ = pDentry.TryUncacheChild(tempName, "SysRename.exchange.cleanup-temp", out _);
-                }
-
-                foreach (var pDentry in newParentLoc.Dentry!.Inode!.Dentries.ToList())
-                    _ = pDentry.TryUncacheChild(newName, "SysRename.exchange.cleanup-new", out _);
-
-                if (!ReferenceEquals(oldParentLoc.Dentry.Inode, newParentLoc.Dentry.Inode))
-                {
-                    foreach (var pDentry in oldParentLoc.Dentry.Inode.Dentries.ToList())
-                        _ = pDentry.TryUncacheChild(newName, "SysRename.exchange.cleanup-old-new", out _);
-                    foreach (var pDentry in newParentLoc.Dentry.Inode.Dentries.ToList())
-                        _ = pDentry.TryUncacheChild(oldName, "SysRename.exchange.cleanup-new-old", out _);
-                }
-
-                return 0;
+                _ = oldParentLoc.Dentry.Inode!.Rename(tempName, oldParentLoc.Dentry.Inode, oldName);
+                return rc;
             }
-            catch (FileNotFoundException)
+
+            rc = oldParentLoc.Dentry.Inode!.Rename(tempName, newParentLoc.Dentry.Inode!, newName);
+            if (rc < 0)
             {
-                return -(int)Errno.ENOENT;
+                _ = oldParentLoc.Dentry.Inode!.Rename(oldName, newParentLoc.Dentry.Inode!, newName);
+                _ = oldParentLoc.Dentry.Inode!.Rename(tempName, oldParentLoc.Dentry.Inode, oldName);
+                return rc;
             }
-            catch (DirectoryNotFoundException)
+
+            foreach (var pDentry in oldParentLoc.Dentry.Inode!.Dentries.ToList())
             {
-                return -(int)Errno.ENOENT;
+                _ = pDentry.TryUncacheChild(oldName, "SysRename.exchange.cleanup-old", out _);
+                _ = pDentry.TryUncacheChild(tempName, "SysRename.exchange.cleanup-temp", out _);
             }
-            catch (UnauthorizedAccessException ex)
+
+            foreach (var pDentry in newParentLoc.Dentry!.Inode!.Dentries.ToList())
+                _ = pDentry.TryUncacheChild(newName, "SysRename.exchange.cleanup-new", out _);
+
+            if (!ReferenceEquals(oldParentLoc.Dentry.Inode, newParentLoc.Dentry.Inode))
             {
-                Logger.LogInformation($"[RenameExchange] UnauthorizedAccessException: {ex.Message}");
-                return -(int)Errno.EACCES;
+                foreach (var pDentry in oldParentLoc.Dentry.Inode.Dentries.ToList())
+                    _ = pDentry.TryUncacheChild(newName, "SysRename.exchange.cleanup-old-new", out _);
+                foreach (var pDentry in newParentLoc.Dentry.Inode.Dentries.ToList())
+                    _ = pDentry.TryUncacheChild(oldName, "SysRename.exchange.cleanup-new-old", out _);
             }
-            catch (IOException ex)
-            {
-                Logger.LogInformation($"[RenameExchange] IOException: {ex.Message}");
-                return -(int)Errno.EIO;
-            }
-            catch (Exception ex)
-            {
-                Logger.LogInformation($"[RenameExchange] Exception: {ex.Message}");
-                return -(int)Errno.EACCES;
-            }
-        }
-
-        try
-        {
-            oldParentLoc.Dentry!.Inode!.Rename(oldName, newParentLoc.Dentry!.Inode!, newName);
-
-            // Update the VFS wrapper dentry cache across all views of the parent inodes.
-            // This is critical because multiple Dentries might exist for the same Inode
-            // (e.g., due to different path resolutions or OverlayFS wrapping).
-            var oldParentInode = oldParentLoc.Dentry?.Inode;
-            var newParentInode = newParentLoc.Dentry?.Inode;
-
-            if (oldParentInode != null)
-                foreach (var pDentry in oldParentInode.Dentries.ToList())
-                    _ = pDentry.TryUncacheChild(oldName, "SysRename.cleanup-old", out _);
-
-            if (newParentInode != null)
-                foreach (var pDentry in newParentInode.Dentries.ToList())
-                    // Clean up only the pre-existing target dentry that got replaced.
-                    // Do not tear down the freshly moved source dentry.
-                    if (replacedTargetInode != null &&
-                        pDentry.TryGetCachedChild(newName, out var victimDentry) &&
-                        ReferenceEquals(victimDentry.Inode, replacedTargetInode))
-                    {
-                        if (victimDentry.Inode != null) victimDentry.UnbindInode("SysRename.cleanup-replaced-target");
-
-                        _ = pDentry.TryUncacheChild(newName, "SysRename.cleanup-replaced-target", out _);
-                    }
-
-            // Note: We don't necessarily need to move the dentry object here; 
-            // the next Lookup will create a fresh Dentry pointing to the correct Inode.
-            // This ensures maximum correctness across all possible "views" of the FS.
 
             return 0;
         }
-        catch (FileNotFoundException)
-        {
-            return -(int)Errno.ENOENT;
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return -(int)Errno.ENOENT;
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            Logger.LogInformation($"[Rename] UnauthorizedAccessException: {ex.Message}");
-            return -(int)Errno.EACCES;
-        }
-        catch (IOException ex)
-        {
-            Logger.LogInformation($"[Rename] IOException: {ex.Message}");
-            return -(int)Errno.EIO;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogInformation($"[Rename] Exception: {ex.Message}");
-            return -(int)Errno.EACCES;
-        }
+
+        var renameRc = oldParentLoc.Dentry!.Inode!.Rename(oldName, newParentLoc.Dentry!.Inode!, newName);
+        if (renameRc < 0)
+            return renameRc;
+
+        // Update the VFS wrapper dentry cache across all views of the parent inodes.
+        // This is critical because multiple Dentries might exist for the same Inode
+        // (e.g., due to different path resolutions or OverlayFS wrapping).
+        var oldParentInode = oldParentLoc.Dentry?.Inode;
+        var newParentInode = newParentLoc.Dentry?.Inode;
+
+        if (oldParentInode != null)
+            foreach (var pDentry in oldParentInode.Dentries.ToList())
+                _ = pDentry.TryUncacheChild(oldName, "SysRename.cleanup-old", out _);
+
+        if (newParentInode != null)
+            foreach (var pDentry in newParentInode.Dentries.ToList())
+                // Clean up only the pre-existing target dentry that got replaced.
+                // Do not tear down the freshly moved source dentry.
+                if (replacedTargetInode != null &&
+                    pDentry.TryGetCachedChild(newName, out var victimDentry) &&
+                    ReferenceEquals(victimDentry.Inode, replacedTargetInode))
+                {
+                    if (victimDentry.Inode != null) victimDentry.UnbindInode("SysRename.cleanup-replaced-target");
+
+                    _ = pDentry.TryUncacheChild(newName, "SysRename.cleanup-replaced-target", out _);
+                }
+
+        // Note: We don't necessarily need to move the dentry object here; 
+        // the next Lookup will create a fresh Dentry pointing to the correct Inode.
+        // This ensures maximum correctness across all possible "views" of the FS.
+
+        return 0;
     }
 
     private async ValueTask<int> SysStat(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1496,16 +1353,11 @@ public partial class SyscallManager
         if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (targetLoc.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
 
-        try
-        {
-            parentLoc.Dentry!.Inode!.Unlink(name);
-            _ = parentLoc.Dentry.TryUncacheChild(name, "SysUnlink", out _);
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            return MapFsExceptionToErrno(ex, Errno.ENOENT);
-        }
+        var unlinkRc2 = parentLoc.Dentry!.Inode!.Unlink(name);
+        if (unlinkRc2 < 0)
+            return unlinkRc2;
+        _ = parentLoc.Dentry.TryUncacheChild(name, "SysUnlink", out _);
+        return 0;
     }
 
     private async ValueTask<int> SysAccess(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1907,17 +1759,8 @@ public partial class SyscallManager
         var uid = t?.Process.EUID ?? 0;
         var gid = t?.Process.EGID ?? 0;
 
-        try
-        {
-            var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
-            parentLoc.Dentry.Inode!.Symlink(dentry, target, uid, gid);
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogDebug(ex, "symlink(target={Target}, linkpath={LinkPath}) failed", target, linkpath);
-            return MapFsExceptionToErrno(ex, Errno.EACCES);
-        }
+        var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
+        return parentLoc.Dentry.Inode!.Symlink(dentry, target, uid, gid);
     }
 
     private async ValueTask<int> SysReadlink(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1933,9 +1776,21 @@ public partial class SyscallManager
         if (loc.Dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
 
         var task = engine.Owner as FiberTask;
-        var target = task != null && loc.Dentry.Inode is IContextualSymlinkInode contextualSymlink
-            ? contextualSymlink.Readlink(task)
-            : loc.Dentry.Inode.Readlink();
+        string? target;
+        if (task != null && loc.Dentry.Inode is IContextualSymlinkInode contextualSymlink)
+        {
+            target = contextualSymlink.Readlink(task);
+        }
+        else
+        {
+            var readlinkRc = loc.Dentry.Inode.Readlink(out target);
+            if (readlinkRc < 0)
+                return readlinkRc;
+        }
+
+        if (target == null)
+            return -(int)Errno.ENOENT;
+
         var bytes = Encoding.UTF8.GetBytes(target);
         var len = Math.Min(bytes.Length, bufSize);
         if (!engine.CopyToUser(bufAddr, bytes.AsSpan(0, len))) return -(int)Errno.EFAULT;
@@ -1965,9 +1820,21 @@ public partial class SyscallManager
         if (loc.Dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
 
         var task = engine.Owner as FiberTask;
-        var target = task != null && loc.Dentry.Inode is IContextualSymlinkInode contextualSymlink
-            ? contextualSymlink.Readlink(task)
-            : loc.Dentry.Inode.Readlink();
+        string? target;
+        if (task != null && loc.Dentry.Inode is IContextualSymlinkInode contextualSymlink)
+        {
+            target = contextualSymlink.Readlink(task);
+        }
+        else
+        {
+            var readlinkRc = loc.Dentry.Inode.Readlink(out target);
+            if (readlinkRc < 0)
+                return readlinkRc;
+        }
+
+        if (target == null)
+            return -(int)Errno.ENOENT;
+
         var bytes = Encoding.UTF8.GetBytes(target);
         var len = Math.Min(bytes.Length, bufSize);
         if (!engine.CopyToUser(bufAddr, bytes.AsSpan(0, len))) return -(int)Errno.EFAULT;
@@ -1995,18 +1862,8 @@ public partial class SyscallManager
         var uid = t?.Process.EUID ?? 0;
         var gid = t?.Process.EGID ?? 0;
 
-        try
-        {
-            var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
-            parentLoc.Dentry.Inode!.Symlink(dentry, target, uid, gid);
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogDebug(ex, "symlinkat(target={Target}, dirfd={Dirfd}, linkpath={LinkPath}) failed", target, dirfd,
-                linkpath);
-            return MapFsExceptionToErrno(ex, Errno.EACCES);
-        }
+        var dentry2 = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
+        return parentLoc.Dentry.Inode!.Symlink(dentry2, target, uid, gid);
     }
 
     private async ValueTask<int> SysMount(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

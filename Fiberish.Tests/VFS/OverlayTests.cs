@@ -30,7 +30,7 @@ public class OverlayTests
             if (hold == null)
             {
                 var holdDentry = new Dentry("hold", null, root, root.SuperBlock);
-                root.Inode.Mkdir(holdDentry, 0x1FF, 0, 0);
+                Assert.Equal(0, root.Inode.Mkdir(holdDentry, 0x1FF, 0, 0));
                 root.CacheChild(holdDentry, "OverlayTests.setup-hold");
                 hold = holdDentry;
             }
@@ -39,7 +39,7 @@ public class OverlayTests
             if (mnt == null)
             {
                 var mntDentry = new Dentry("mnt", null, hold, hold.SuperBlock);
-                hold.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                Assert.Equal(0, hold.Inode.Mkdir(mntDentry, 0x1FF, 0, 0));
                 hold.CacheChild(mntDentry, "OverlayTests.setup-mnt");
             }
 
@@ -308,14 +308,16 @@ public class OverlayTests
             Assert.Null(libInode.UpperDentry);
 
             var linkDentry = new Dentry("libbz2.so.1", null, libOv, overlaySb);
-            libInode.Symlink(linkDentry, "libbz2.so.1.0.8", 0, 0);
+            Assert.Equal(0, libInode.Symlink(linkDentry, "libbz2.so.1.0.8", 0, 0));
 
             var created = libOv.Inode!.Lookup("libbz2.so.1");
             Assert.NotNull(created);
             Assert.Equal(InodeType.Symlink, created!.Inode!.Type);
-            Assert.Equal("libbz2.so.1.0.8", created.Inode.Readlink());
+            Assert.Equal(0, created.Inode.Readlink(out var createdTarget));
+            Assert.Equal("libbz2.so.1.0.8", createdTarget);
             Assert.NotNull(libInode.UpperDentry);
-            Assert.Equal("libbz2.so.1.0.8", libInode.UpperInode!.Lookup("libbz2.so.1")!.Inode!.Readlink());
+            Assert.Equal(0, libInode.UpperInode!.Lookup("libbz2.so.1")!.Inode!.Readlink(out var upperTarget));
+            Assert.Equal("libbz2.so.1.0.8", upperTarget);
         }
         finally
         {
@@ -355,7 +357,7 @@ public class OverlayTests
             Assert.Null(tmpInode.UpperDentry);
 
             var node = new Dentry("devnode", null, tmpOv, overlaySb);
-            tmpInode.Mknod(node, 0x180, 0, 0, InodeType.CharDev, (1u << 8) | 3u);
+            Assert.Equal(0, tmpInode.Mknod(node, 0x180, 0, 0, InodeType.CharDev, (1u << 8) | 3u));
 
             var created = tmpOv.Inode!.Lookup("devnode");
             Assert.NotNull(created);
@@ -501,7 +503,7 @@ public class OverlayTests
             var rootInode = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
             Assert.NotNull(rootInode.Lookup("gone.txt"));
 
-            rootInode.Unlink("gone.txt");
+            Assert.Equal(0, rootInode.Unlink("gone.txt"));
 
             Assert.Null(rootInode.Lookup("gone.txt"));
             var names = rootInode.GetEntries().Select(e => e.Name).ToHashSet();
@@ -584,7 +586,7 @@ public class OverlayTests
                 new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
 
             var rootInode = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
-            rootInode.Unlink("gone.txt");
+            Assert.Equal(0, rootInode.Unlink("gone.txt"));
 
             Assert.Null(rootInode.Lookup("gone.txt"));
             Assert.NotNull(rootInode.UpperInode);
@@ -629,7 +631,7 @@ public class OverlayTests
             var before = rootInode.GetLinkCountForStat();
             Assert.NotNull(rootInode.Lookup("ghost"));
 
-            rootInode.Rmdir("ghost");
+            Assert.Equal(0, rootInode.Rmdir("ghost"));
 
             Assert.Null(rootInode.Lookup("ghost"));
             Assert.Equal(before - 1, rootInode.GetLinkCountForStat());
@@ -670,7 +672,7 @@ public class OverlayTests
                 new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
 
             var rootInode = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
-            rootInode.Rename("src.txt", rootInode, "dst.txt");
+            Assert.Equal(0, rootInode.Rename("src.txt", rootInode, "dst.txt"));
 
             Assert.Null(rootInode.Lookup("src.txt"));
             Assert.Contains("src.txt", overlaySb.GetWhiteouts(new InodeKey(rootInode.Dev, rootInode.Ino)));
@@ -728,7 +730,7 @@ public class OverlayTests
             var usrBefore = usrInode.GetLinkCountForStat();
 
             var link = new Dentry("libfoo.so.1", null, lib, overlaySb);
-            libInode.Symlink(link, "libfoo.so.1.0.0", 0, 0);
+            Assert.Equal(0, libInode.Symlink(link, "libfoo.so.1.0.0", 0, 0));
 
             Assert.Equal(rootBefore, rootInode.GetLinkCountForStat());
             Assert.Equal(usrBefore, usrInode.GetLinkCountForStat());
@@ -757,13 +759,13 @@ public class OverlayTests
 
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
         var fileDentry = new Dentry("open-unlink-truncate", null, overlaySb.Root, overlaySb);
-        root.Create(fileDentry, 0x1A4, 0, 0);
+        Assert.Equal(0, root.Create(fileDentry, 0x1A4, 0, 0));
         overlaySb.Root.CacheChild(fileDentry, "OverlayTests.open-unlink-truncate");
 
         var file = new LinuxFile(fileDentry, FileFlags.O_RDWR, null!);
         try
         {
-            root.Unlink(fileDentry.Name);
+            Assert.Equal(0, root.Unlink(fileDentry.Name));
 
             var truncateRc = file.OpenedInode!.Truncate(4096);
             Assert.Equal(0, truncateRc);
@@ -919,9 +921,10 @@ public class OverlayTests
             new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
 
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
-        Assert.Equal("target.txt", root.Lookup("link.txt")!.Inode!.Readlink());
+        Assert.Equal(0, root.Lookup("link.txt")!.Inode!.Readlink(out var linkTarget));
+        Assert.Equal("target.txt", linkTarget);
 
-        root.Unlink("link.txt");
+        Assert.Equal(0, root.Unlink("link.txt"));
         Assert.Null(root.Lookup("link.txt"));
 
         var target = root.Lookup("target.txt");
@@ -939,7 +942,7 @@ public class OverlayTests
             file.Close();
         }
 
-        Assert.Throws<FileNotFoundException>(() => root.Unlink("link.txt"));
+        Assert.Equal(-(int)Errno.ENOENT, root.Unlink("link.txt"));
     }
 
     [Fact]
@@ -966,9 +969,9 @@ public class OverlayTests
 
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
         Assert.NotNull(root.Lookup("gone.txt"));
-        root.Unlink("gone.txt");
+        Assert.Equal(0, root.Unlink("gone.txt"));
         Assert.Null(root.Lookup("gone.txt"));
-        Assert.Throws<FileNotFoundException>(() => root.Unlink("gone.txt"));
+        Assert.Equal(-(int)Errno.ENOENT, root.Unlink("gone.txt"));
     }
 
     private static string ReadAll(PathLocation loc)

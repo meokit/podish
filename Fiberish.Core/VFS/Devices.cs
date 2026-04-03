@@ -66,24 +66,24 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         return RegisterWaitHandleCore(callback, events, task, null);
     }
 
-    public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
+    public override int Create(Dentry dentry, int mode, int uid, int gid)
     {
-        throw new InvalidOperationException("Cannot create in /dev");
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
+    public override int Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
-        throw new InvalidOperationException("Cannot mkdir in /dev");
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public override Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    public override int Symlink(Dentry dentry, string target, int uid, int gid)
     {
-        throw new InvalidOperationException("Cannot symlink in /dev");
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public override Dentry Link(Dentry dentry, Inode oldInode)
+    public override int Link(Dentry dentry, Inode oldInode)
     {
-        throw new InvalidOperationException("Cannot link in /dev");
+        return -(int)Errno.EOPNOTSUPP;
     }
 
     protected internal override int ReadSpan(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
@@ -420,24 +420,24 @@ public class RandomInode : Inode
         Ino = 1; // Dummy
     }
 
-    public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
+    public override int Create(Dentry dentry, int mode, int uid, int gid)
     {
-        throw new InvalidOperationException("Cannot create in /dev/random");
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
+    public override int Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
-        throw new InvalidOperationException("Cannot mkdir in /dev/random");
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public override Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    public override int Symlink(Dentry dentry, string target, int uid, int gid)
     {
-        throw new InvalidOperationException("Cannot symlink in /dev/random");
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public override Dentry Link(Dentry dentry, Inode oldInode)
+    public override int Link(Dentry dentry, Inode oldInode)
     {
-        throw new InvalidOperationException("Cannot link in /dev/random");
+        return -(int)Errno.EOPNOTSUPP;
     }
 
     protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)
@@ -474,24 +474,24 @@ public class NullInode : Inode
         Ino = 1; // Dummy
     }
 
-    public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
+    public override int Create(Dentry dentry, int mode, int uid, int gid)
     {
-        throw new InvalidOperationException("Cannot create in /dev/null");
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
+    public override int Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
-        throw new InvalidOperationException("Cannot mkdir in /dev/null");
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public override Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    public override int Symlink(Dentry dentry, string target, int uid, int gid)
     {
-        throw new InvalidOperationException("Cannot symlink in /dev/null");
+        return -(int)Errno.EOPNOTSUPP;
     }
 
-    public override Dentry Link(Dentry dentry, Inode oldInode)
+    public override int Link(Dentry dentry, Inode oldInode)
     {
-        throw new InvalidOperationException("Cannot link in /dev/null");
+        return -(int)Errno.EOPNOTSUPP;
     }
 
     protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)

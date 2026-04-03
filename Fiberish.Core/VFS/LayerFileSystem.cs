@@ -356,10 +356,16 @@ public class LayerInode : Inode
         return ReadWithPageCache(linuxFile, buffer, offset, BackendRead);
     }
 
-    public override string Readlink()
+    public override int Readlink(out string? target)
     {
-        if (_entry.Type != InodeType.Symlink) throw new InvalidOperationException("Not a symlink");
-        return _entry.SymlinkTarget;
+        if (_entry.Type != InodeType.Symlink)
+        {
+            target = null;
+            return -(int)Errno.EINVAL;
+        }
+
+        target = _entry.SymlinkTarget;
+        return 0;
     }
 
     protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)

@@ -1,4 +1,5 @@
 using System.Text;
+using Fiberish.Native;
 using Fiberish.VFS;
 using Xunit;
 
@@ -120,7 +121,7 @@ public class OverlayUnionmountPortTests
         var created = new Dentry("empty-new", null, overlaySb.Root, overlaySb);
         root.Mkdir(created, 0x1ED, 0, 0);
 
-        Assert.ThrowsAny<Exception>(() => root.Rename("empty-new", root, "populated"));
+        Assert.True(root.Rename("empty-new", root, "populated") < 0);
         Assert.NotNull(root.Lookup("empty-new"));
         var stillPopulated = root.Lookup("populated");
         Assert.NotNull(stillPopulated);
@@ -168,7 +169,7 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
         var srcOverlay = Assert.IsType<OverlayInode>(root.Lookup("src")!.Inode);
-        Assert.ThrowsAny<Exception>(() => root.Rename("src", srcOverlay, "a"));
+        Assert.True(root.Rename("src", srcOverlay, "a") < 0);
         var srcAfter = root.Lookup("src");
         Assert.NotNull(srcAfter);
         Assert.NotNull(srcAfter!.Inode!.Lookup("a"));
@@ -193,7 +194,7 @@ public class OverlayUnionmountPortTests
         var srcOverlay = Assert.IsType<OverlayInode>(root.Lookup("src")!.Inode);
         var popOverlay = Assert.IsType<OverlayInode>(srcOverlay.Lookup("pop")!.Inode);
 
-        Assert.ThrowsAny<Exception>(() => root.Rename("src", popOverlay, "src"));
+        Assert.True(root.Rename("src", popOverlay, "src") < 0);
         Assert.NotNull(root.Lookup("src"));
         Assert.NotNull(srcOverlay.Lookup("pop"));
         Assert.NotNull(popOverlay.Lookup("b"));
@@ -215,7 +216,7 @@ public class OverlayUnionmountPortTests
         Assert.Null(root.Lookup("empty"));
 
         root.Rename("empty2", root, "empty");
-        Assert.ThrowsAny<Exception>(() => root.Rmdir("empty2"));
+        Assert.True(root.Rmdir("empty2") < 0);
 
         var empty = root.Lookup("empty");
         Assert.NotNull(empty);
@@ -238,10 +239,10 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
         root.Rename("empty", root, "empty2");
-        Assert.ThrowsAny<Exception>(() => root.Unlink("empty"));
+        Assert.True(root.Unlink("empty") < 0);
 
         root.Rename("empty2", root, "empty");
-        Assert.ThrowsAny<Exception>(() => root.Unlink("empty"));
+        Assert.True(root.Unlink("empty") < 0);
 
         Assert.NotNull(root.Lookup("empty"));
         Assert.Null(root.Lookup("empty2"));
@@ -260,10 +261,10 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
         root.Rename("empty", root, "empty2");
-        Assert.ThrowsAny<Exception>(() => root.Rename("empty", root, "empty2"));
+        Assert.True(root.Rename("empty", root, "empty2") < 0);
 
         root.Rename("empty2", root, "empty3");
-        Assert.ThrowsAny<Exception>(() => root.Rename("empty2", root, "empty3"));
+        Assert.True(root.Rename("empty2", root, "empty3") < 0);
 
         Assert.Null(root.Lookup("empty"));
         Assert.Null(root.Lookup("empty2"));
@@ -301,7 +302,7 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.ThrowsAny<Exception>(() => root.Rename("empty", root, "."));
+        Assert.True(root.Rename("empty", root, ".") < 0);
 
         var empty = root.Lookup("empty");
         Assert.NotNull(empty);
@@ -323,10 +324,10 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
         root.Rename("src", root, "dst");
-        Assert.ThrowsAny<Exception>(() => root.Rmdir("src"));
+        Assert.True(root.Rmdir("src") < 0);
 
         root.Rename("dst", root, "src");
-        Assert.ThrowsAny<Exception>(() => root.Rmdir("src"));
+        Assert.True(root.Rmdir("src") < 0);
 
         var restored = root.Lookup("src");
         Assert.NotNull(restored);
@@ -349,10 +350,10 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
         root.Rename("src", root, "dst");
-        Assert.ThrowsAny<Exception>(() => root.Unlink("src"));
+        Assert.True(root.Unlink("src") < 0);
 
         root.Rename("dst", root, "src");
-        Assert.ThrowsAny<Exception>(() => root.Unlink("src"));
+        Assert.True(root.Unlink("src") < 0);
 
         var restored = root.Lookup("src");
         Assert.NotNull(restored);
@@ -375,10 +376,10 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
         root.Rename("src", root, "mid");
-        Assert.ThrowsAny<Exception>(() => root.Rename("src", root, "mid"));
+        Assert.True(root.Rename("src", root, "mid") < 0);
 
         root.Rename("mid", root, "dst");
-        Assert.ThrowsAny<Exception>(() => root.Rename("mid", root, "dst"));
+        Assert.True(root.Rename("mid", root, "dst") < 0);
 
         Assert.Null(root.Lookup("src"));
         Assert.Null(root.Lookup("mid"));
@@ -423,7 +424,7 @@ public class OverlayUnionmountPortTests
         var empty = Assert.IsType<OverlayInode>(root.Lookup("empty")!.Inode);
 
         root.Rename("src", empty, "x");
-        Assert.ThrowsAny<Exception>(() => root.Rename("src", empty, "x"));
+        Assert.True(root.Rename("src", empty, "x") < 0);
 
         Assert.Null(root.Lookup("src"));
         var moved = empty.Lookup("x");
@@ -450,7 +451,7 @@ public class OverlayUnionmountPortTests
         var empty = Assert.IsType<OverlayInode>(root.Lookup("empty")!.Inode);
 
         srcOverlay.Rename("pop", empty, "pop");
-        Assert.ThrowsAny<Exception>(() => srcOverlay.Rename("pop", empty, "pop"));
+        Assert.True(srcOverlay.Rename("pop", empty, "pop") < 0);
 
         Assert.Null(srcOverlay.Lookup("pop"));
         var moved = empty.Lookup("pop");
@@ -502,7 +503,8 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
         var created = new Dentry("pop-new", null, overlaySb.Root, overlaySb);
-        var newDir = Assert.IsType<OverlayInode>(root.Mkdir(created, 0x1ED, 0, 0).Inode);
+        Assert.Equal(0, root.Mkdir(created, 0x1ED, 0, 0));
+        _ = Assert.IsType<OverlayInode>(created.Inode);
         CreateFile(created, overlaySb, "b", "aaaa");
 
         var pop = Assert.IsType<OverlayInode>(root.Lookup("pop")!.Inode);
@@ -532,7 +534,7 @@ public class OverlayUnionmountPortTests
         empty.Mkdir(sub, 0x1ED, 0, 0);
 
         Assert.NotNull(empty.Lookup("sub"));
-        Assert.ThrowsAny<Exception>(() => empty.Mkdir(new Dentry("sub", null, root.Lookup("empty"), overlaySb), 0x1ED, 0, 0));
+        Assert.True(empty.Mkdir(new Dentry("sub", null, root.Lookup("empty"), overlaySb), 0x1ED, 0, 0) < 0);
     }
 
     [Fact]
@@ -546,7 +548,7 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.ThrowsAny<Exception>(() => root.Mkdir(new Dentry("file", null, overlaySb.Root, overlaySb), 0x1ED, 0, 0));
+        Assert.True(root.Mkdir(new Dentry("file", null, overlaySb.Root, overlaySb), 0x1ED, 0, 0) < 0);
         Assert.Equal(":xxx:yyy:zzz", ReadAll(root.Lookup("file")!));
     }
 
@@ -563,7 +565,7 @@ public class OverlayUnionmountPortTests
 
         root.Rmdir("empty");
         Assert.Null(root.Lookup("empty"));
-        Assert.ThrowsAny<Exception>(() => root.Rmdir("empty"));
+        Assert.True(root.Rmdir("empty") < 0);
     }
 
     [Fact]
@@ -579,7 +581,7 @@ public class OverlayUnionmountPortTests
 
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
-        Assert.ThrowsAny<Exception>(() => root.Rmdir("populated"));
+        Assert.True(root.Rmdir("populated") < 0);
 
         var populatedOverlay = Assert.IsType<OverlayInode>(root.Lookup("populated")!.Inode);
         populatedOverlay.Unlink("a");
@@ -619,7 +621,7 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
         var source = Assert.IsType<OverlayInode>(root.Lookup("file")!.Inode);
-        Assert.ThrowsAny<Exception>(() => root.Link(new Dentry("target", null, overlaySb.Root, overlaySb), source));
+        Assert.True(root.Link(new Dentry("target", null, overlaySb.Root, overlaySb), source) < 0);
         Assert.Equal(":xxx:yyy:zzz", ReadAll(root.Lookup("file")!));
         Assert.Equal("", ReadAll(root.Lookup("target")!));
     }
@@ -698,8 +700,8 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.ThrowsAny<Exception>(() => root.Rename("file", root, "empty"));
-        Assert.ThrowsAny<Exception>(() => root.Rename("file", root, "populated"));
+        Assert.True(root.Rename("file", root, "empty") < 0);
+        Assert.True(root.Rename("file", root, "populated") < 0);
 
         Assert.Equal(":xxx:yyy:zzz", ReadAll(root.Lookup("file")!));
         Assert.NotNull(root.Lookup("empty"));
@@ -750,8 +752,10 @@ public class OverlayUnionmountPortTests
         Assert.NotNull(link2);
         Assert.Equal(InodeType.Symlink, link!.Inode!.Type);
         Assert.Equal(InodeType.Symlink, link2!.Inode!.Type);
-        Assert.Equal("target", link.Inode.Readlink());
-        Assert.Equal("target", link2.Inode.Readlink());
+        Assert.Equal(0, link.Inode.Readlink(out var linkTarget));
+        Assert.Equal("target", linkTarget);
+        Assert.Equal(0, link2.Inode.Readlink(out var link2Target));
+        Assert.Equal("target", link2Target);
     }
 
     [Fact]
@@ -793,8 +797,8 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.ThrowsAny<Exception>(() => root.Rename("empty", root, "file"));
-        Assert.ThrowsAny<Exception>(() => root.Rename("empty", Assert.IsType<OverlayInode>(root.Lookup("populated")!.Inode), "a"));
+        Assert.True(root.Rename("empty", root, "file") < 0);
+        Assert.True(root.Rename("empty", Assert.IsType<OverlayInode>(root.Lookup("populated")!.Inode), "a") < 0);
 
         Assert.NotNull(root.Lookup("empty"));
         Assert.Equal(":xxx:yyy:zzz", ReadAll(root.Lookup("file")!));
@@ -816,7 +820,8 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
         var created = new Dentry("newdir", null, overlaySb.Root, overlaySb);
-        var newDir = Assert.IsType<OverlayInode>(root.Mkdir(created, 0x1ED, 0, 0).Inode);
+        Assert.Equal(0, root.Mkdir(created, 0x1ED, 0, 0));
+        _ = Assert.IsType<OverlayInode>(created.Inode);
         CreateFile(created, overlaySb, "a", "A");
 
         var pop = Assert.IsType<OverlayInode>(root.Lookup("pop")!.Inode);
@@ -843,7 +848,7 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.ThrowsAny<Exception>(() => root.Lookup("file")!.Inode!.Readlink());
+        Assert.Equal(-(int)Errno.EINVAL, root.Lookup("file")!.Inode!.Readlink(out _));
     }
 
     [Fact]
@@ -858,7 +863,8 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.Equal("missing-target", root.Lookup("dangling")!.Inode!.Readlink());
+        Assert.Equal(0, root.Lookup("dangling")!.Inode!.Readlink(out var danglingTarget));
+        Assert.Equal("missing-target", danglingTarget);
     }
 
     [Fact]
@@ -874,7 +880,8 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.Equal("dir", root.Lookup("dir-link")!.Inode!.Readlink());
+        Assert.Equal(0, root.Lookup("dir-link")!.Inode!.Readlink(out var dirLinkTarget));
+        Assert.Equal("dir", dirLinkTarget);
     }
 
     [Fact]
@@ -890,7 +897,8 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.Equal("target", root.Lookup("link")!.Inode!.Readlink());
+        Assert.Equal(0, root.Lookup("link")!.Inode!.Readlink(out var directLinkTarget));
+        Assert.Equal("target", directLinkTarget);
     }
 
     [Fact]
@@ -907,7 +915,8 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.Equal("link", root.Lookup("chain")!.Inode!.Readlink());
+        Assert.Equal(0, root.Lookup("chain")!.Inode!.Readlink(out var chainTarget));
+        Assert.Equal("link", chainTarget);
     }
 
     [Fact]
@@ -924,7 +933,8 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.Equal("dir-link", root.Lookup("dir-chain")!.Inode!.Readlink());
+        Assert.Equal(0, root.Lookup("dir-chain")!.Inode!.Readlink(out var dirChainTarget));
+        Assert.Equal("dir-link", dirChainTarget);
     }
 
     [Fact]
@@ -977,7 +987,8 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
         var tree = Assert.IsType<OverlayInode>(root.Lookup("tree")!.Inode);
         var newSubDentry = new Dentry("newsub", null, root.Lookup("tree"), overlaySb);
-        var newSub = Assert.IsType<OverlayInode>(tree.Mkdir(newSubDentry, 0x1ED, 0, 0).Inode);
+        Assert.Equal(0, tree.Mkdir(newSubDentry, 0x1ED, 0, 0));
+        _ = Assert.IsType<OverlayInode>(newSubDentry.Inode);
         CreateFile(newSubDentry, overlaySb, "b", "B");
 
         RemoveTree(root, "tree");
@@ -1001,7 +1012,7 @@ public class OverlayUnionmountPortTests
         var newdir = root.Lookup("newdir")!;
 
         // Rename directory over file should fail
-        Assert.ThrowsAny<Exception>(() => root.Rename("newdir", root, "file"));
+        Assert.True(root.Rename("newdir", root, "file") < 0);
 
         Assert.NotNull(root.Lookup("newdir"));
         Assert.Equal("target", ReadAll(root.Lookup("file")!));
@@ -1023,7 +1034,7 @@ public class OverlayUnionmountPortTests
         CreateFile(newdirDentry, overlaySb, "a", "AAAA");
 
         // Rename directory over its own child should fail
-        Assert.ThrowsAny<Exception>(() => root.Rename("newdir", newdirInode, "a"));
+        Assert.True(root.Rename("newdir", newdirInode, "a") < 0);
 
         Assert.NotNull(root.Lookup("newdir"));
         Assert.Equal("AAAA", ReadAll(newdirInode.Lookup("a")!));

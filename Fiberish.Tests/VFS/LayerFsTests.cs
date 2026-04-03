@@ -67,7 +67,8 @@ public class LayerFsTests
 
         var d = sb.Root.Inode!.Lookup("sh");
         Assert.NotNull(d);
-        Assert.Equal("/bin/busybox", d!.Inode!.Readlink());
+        Assert.Equal(0, d!.Inode!.Readlink(out var target));
+        Assert.Equal("/bin/busybox", target);
     }
 
     [Fact]

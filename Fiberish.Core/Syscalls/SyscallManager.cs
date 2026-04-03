@@ -471,14 +471,11 @@ public partial class SyscallManager
         if (dentry == null)
         {
             dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
-            try
+            var mkdirRc = parentDentry.Inode.Mkdir(dentry, 0x1FF, 0, 0); // 777
+            if (mkdirRc < 0)
             {
-                parentDentry.Inode.Mkdir(dentry, 0x1FF, 0, 0); // 777
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning("Failed to create directory {Name}: {Error}", name, ex.Message);
-                throw;
+                Logger.LogWarning("Failed to create directory {Name}: rc={Rc}", name, mkdirRc);
+                throw new IOException($"Failed to create directory {name}: rc={mkdirRc}");
             }
         }
         else if (dentry.Inode?.Type != InodeType.Directory)
@@ -505,13 +502,10 @@ public partial class SyscallManager
         if (dentry == null)
         {
             dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
-            try
+            var createRc = parentDentry.Inode.Create(dentry, 0x1FF, 0, 0); // 777
+            if (createRc < 0)
             {
-                parentDentry.Inode.Create(dentry, 0x1FF, 0, 0); // 777
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning("Failed to create file mount point {Name}: {Error}", name, ex.Message);
+                Logger.LogWarning("Failed to create file mount point {Name}: rc={Rc}", name, createRc);
                 dentry.Instantiate(new PlaceholderInode(parentDentry.SuperBlock));
             }
         }
@@ -598,7 +592,9 @@ public partial class SyscallManager
             throw new IOException($"Failed to resolve fs context: rc={resolveRc}");
 
         var fileDentry = new Dentry(sourceName, null, sb.Root, sb);
-        sb.Root.Inode!.Create(fileDentry, 0x1A4, 0, 0); // 0644
+        var createRc = sb.Root.Inode!.Create(fileDentry, 0x1A4, 0, 0); // 0644
+        if (createRc < 0)
+            throw new IOException($"Failed to create detached tmpfs file inode: rc={createRc}");
         if (!content.IsEmpty)
         {
             var file = new LinuxFile(fileDentry, FileFlags.O_WRONLY, null!);

@@ -496,9 +496,11 @@ public sealed class ImageArchiveService
             }
             else if (inode.Type == InodeType.Symlink)
             {
+                if (inode.Readlink(out var linkTarget) < 0 || string.IsNullOrEmpty(linkTarget))
+                    return;
                 var link = new PaxTarEntry(TarEntryType.SymbolicLink, relPath)
                 {
-                    LinkName = inode.Readlink()
+                    LinkName = linkTarget
                 };
                 writer.WriteEntry(link);
                 return;

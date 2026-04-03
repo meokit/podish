@@ -317,12 +317,12 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         return RandomAccess.Read(tempHandle, buffer, offset);
     }
 
-    public override string Readlink()
+    public override int Readlink(out string? target)
     {
         lock (Lock)
         {
             EnsureSymlinkDataLoadedLocked();
-            return base.Readlink();
+            return base.Readlink(out target);
         }
     }
 
@@ -477,16 +477,19 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         UpsertInodeMetadata(tx, inode);
     }
 
-    public override Dentry Create(Dentry dentry, int mode, int uid, int gid)
+    public override int Create(Dentry dentry, int mode, int uid, int gid)
     {
-        var created = base.Create(dentry, mode, uid, gid);
+        var rc = base.Create(dentry, mode, uid, gid);
+        if (rc < 0)
+            return rc;
+
         _metadata.ExecuteTransaction(tx =>
         {
-            UpsertInodeMetadata(tx, created.Inode!);
-            tx.UpsertDentry((long)Ino, created.Name, (long)created.Inode!.Ino);
-            tx.ClearWhiteout((long)Ino, created.Name);
+            UpsertInodeMetadata(tx, dentry.Inode!);
+            tx.UpsertDentry((long)Ino, dentry.Name, (long)dentry.Inode!.Ino);
+            tx.ClearWhiteout((long)Ino, dentry.Name);
         });
-        if (created.Inode is SilkInode child)
+        if (dentry.Inode is SilkInode child)
         {
             if (child.Type == InodeType.Symlink)
                 child.PersistSymlinkData();
@@ -495,31 +498,37 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         }
 
         InvalidateEntriesCache();
-        return created;
+        return 0;
     }
 
-    public override Dentry Mkdir(Dentry dentry, int mode, int uid, int gid)
+    public override int Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
-        var created = base.Mkdir(dentry, mode, uid, gid);
+        var rc = base.Mkdir(dentry, mode, uid, gid);
+        if (rc < 0)
+            return rc;
+
         _metadata.ExecuteTransaction(tx =>
         {
             UpsertInodeMetadata(tx, this);
-            UpsertInodeMetadata(tx, created.Inode!);
-            tx.UpsertDentry((long)Ino, created.Name, (long)created.Inode!.Ino);
-            tx.ClearWhiteout((long)Ino, created.Name);
+            UpsertInodeMetadata(tx, dentry.Inode!);
+            tx.UpsertDentry((long)Ino, dentry.Name, (long)dentry.Inode!.Ino);
+            tx.ClearWhiteout((long)Ino, dentry.Name);
         });
         InvalidateEntriesCache();
-        return created;
+        return 0;
     }
 
-    public override Dentry Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
+    public override int Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
     {
-        var created = base.Mknod(dentry, mode, uid, gid, type, rdev);
+        var rc = base.Mknod(dentry, mode, uid, gid, type, rdev);
+        if (rc < 0)
+            return rc;
+
         _metadata.ExecuteTransaction(tx =>
         {
-            UpsertInodeMetadata(tx, created.Inode!);
-            tx.UpsertDentry((long)Ino, created.Name, (long)created.Inode!.Ino);
-            tx.ClearWhiteout((long)Ino, created.Name);
+            UpsertInodeMetadata(tx, dentry.Inode!);
+            tx.UpsertDentry((long)Ino, dentry.Name, (long)dentry.Inode!.Ino);
+            tx.ClearWhiteout((long)Ino, dentry.Name);
             if (type == InodeType.CharDev && rdev == 0)
             {
                 var parentIno = (long)Ino;
@@ -530,35 +539,41 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             }
         });
         InvalidateEntriesCache();
-        return created;
+        return 0;
     }
 
-    public override Dentry Symlink(Dentry dentry, string target, int uid, int gid)
+    public override int Symlink(Dentry dentry, string target, int uid, int gid)
     {
-        var created = base.Symlink(dentry, target, uid, gid);
+        var rc = base.Symlink(dentry, target, uid, gid);
+        if (rc < 0)
+            return rc;
+
         _metadata.ExecuteTransaction(tx =>
         {
-            UpsertInodeMetadata(tx, created.Inode!);
-            tx.UpsertDentry((long)Ino, created.Name, (long)created.Inode!.Ino);
-            tx.ClearWhiteout((long)Ino, created.Name);
+            UpsertInodeMetadata(tx, dentry.Inode!);
+            tx.UpsertDentry((long)Ino, dentry.Name, (long)dentry.Inode!.Ino);
+            tx.ClearWhiteout((long)Ino, dentry.Name);
         });
-        if (created.Inode is SilkInode child)
+        if (dentry.Inode is SilkInode child)
             child.PersistSymlinkData();
         InvalidateEntriesCache();
-        return created;
+        return 0;
     }
 
-    public override Dentry Link(Dentry dentry, Inode oldInode)
+    public override int Link(Dentry dentry, Inode oldInode)
     {
-        var created = base.Link(dentry, oldInode);
+        var rc = base.Link(dentry, oldInode);
+        if (rc < 0)
+            return rc;
+
         _metadata.ExecuteTransaction(tx =>
         {
             UpsertInodeMetadata(tx, oldInode);
-            tx.UpsertDentry((long)Ino, created.Name, (long)oldInode.Ino);
-            tx.ClearWhiteout((long)Ino, created.Name);
+            tx.UpsertDentry((long)Ino, dentry.Name, (long)oldInode.Ino);
+            tx.ClearWhiteout((long)Ino, dentry.Name);
         });
         InvalidateEntriesCache();
-        return created;
+        return 0;
     }
 
     public override void Open(LinuxFile linuxFile)
@@ -594,12 +609,14 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             RandomAccess.FlushToDisk(handle);
     }
 
-    public override void Unlink(string name)
+    public override int Unlink(string name)
     {
         var victim = Lookup(name)?.Inode;
-        base.Unlink(name);
+        var rc = base.Unlink(name);
+        if (rc < 0)
+            return rc;
         if (IsNamespaceMutationSuppressed)
-            return;
+            return 0;
 
         _metadata.ExecuteTransaction(tx =>
         {
@@ -609,14 +626,17 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         });
 
         InvalidateEntriesCache();
+        return 0;
     }
 
-    public override void Rmdir(string name)
+    public override int Rmdir(string name)
     {
         var victim = Lookup(name)?.Inode;
-        base.Rmdir(name);
+        var rc = base.Rmdir(name);
+        if (rc < 0)
+            return rc;
         if (IsNamespaceMutationSuppressed)
-            return;
+            return 0;
 
         _metadata.ExecuteTransaction(tx =>
         {
@@ -627,17 +647,20 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         });
 
         InvalidateEntriesCache();
+        return 0;
     }
 
-    public override void Rename(string oldName, Inode newParent, string newName)
+    public override int Rename(string oldName, Inode newParent, string newName)
     {
         if (Lookup(oldName)?.Inode == null)
-            throw new FileNotFoundException("Source does not exist", oldName);
+            return -(int)Errno.ENOENT;
 
         var overwrittenInode = newParent.Lookup(newName)?.Inode;
         using (SuppressNamespaceMetadataMutations())
         {
-            base.Rename(oldName, newParent, newName);
+            var rc = base.Rename(oldName, newParent, newName);
+            if (rc < 0)
+                return rc;
         }
 
         var movedInode = newParent.Lookup(newName)?.Inode;
@@ -660,6 +683,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         InvalidateEntriesCache();
         if (newParent is SilkInode parentSilk)
             parentSilk.InvalidateEntriesCache();
+        return 0;
     }
 
     protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)
