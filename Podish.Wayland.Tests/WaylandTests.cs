@@ -469,8 +469,11 @@ public sealed class WaylandRuntimeTests
 
             sent.Clear();
             await SendRequestAsync(client, 6, 6, static _ => { });
-            Assert.Empty(sent);
+            Assert.Equal(2, sent.Count);
+            Assert.Equal<uint>(8, DecodeHeader(sent[0]).ObjectId);
+            Assert.Equal<uint>(7, DecodeHeader(sent[1]).ObjectId);
 
+            sent.Clear();
             await server.HandlePresentationTickAsync(1234);
             Assert.Equal(2, sent.Count);
             Assert.Equal<uint>(11, DecodeHeader(sent[0]).ObjectId);
