@@ -500,6 +500,23 @@ public partial class SyscallManager
             if (dentry.Inode?.Type == InodeType.Directory && (accessMode != 0 || wantTrunc || wantCreate))
                 return -(int)Errno.EISDIR;
 
+            if (task?.Process != null && dentry.Inode != null)
+            {
+                var requested = AccessMode.None;
+                if (accessMode == 0)
+                    requested |= AccessMode.MayRead;
+                else if (accessMode == 1)
+                    requested |= AccessMode.MayWrite;
+                else if (accessMode == 2)
+                    requested |= AccessMode.MayRead | AccessMode.MayWrite;
+                if (wantTrunc)
+                    requested |= AccessMode.MayWrite;
+
+                var accessRc = DacPolicy.CheckPathAccess(task.Process, dentry.Inode, requested, true);
+                if (accessRc < 0)
+                    return accessRc;
+            }
+
             // Check mount read-only for write operations on existing file
             if (accessMode != 0 || wantTrunc) // O_WRONLY or O_RDWR or O_TRUNC
                 if (mount != null && mount.IsReadOnly)

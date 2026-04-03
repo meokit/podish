@@ -39,13 +39,22 @@ public partial class SyscallManager
         var oldPath = ReadString(a1);
         var newPath = ReadString(a2);
 
-        var oldLoc = PathWalkWithFlags(oldPath, LookupFlags.FollowSymlink);
+        var oldLookup = PathWalker.PathWalkWithData(oldPath, LookupFlags.None);
+        if (oldLookup.HasError) return oldLookup.ErrorCode;
+        var oldLoc = oldLookup.Path;
         if (!oldLoc.IsValid) return -(int)Errno.ENOENT;
-        if (oldLoc.Dentry!.Inode!.Type == InodeType.Directory) return -(int)Errno.EPERM;
 
         var (dirLoc, name, err) = PathWalkForCreate(newPath);
         if (err != 0) return err;
         if (!dirLoc.IsValid || dirLoc.Dentry!.Inode!.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+
+        if (oldLoc.Dentry!.Inode!.Type == InodeType.Directory)
+        {
+            var newLookup = PathWalker.PathWalkWithData(newPath, LookupFlags.None);
+            if (!newLookup.HasError && newLookup.Path.IsValid)
+                return -(int)Errno.EEXIST;
+            return -(int)Errno.EPERM;
+        }
 
         if (!ReferenceEquals(oldLoc.Mount, dirLoc.Mount)) return -(int)Errno.EXDEV;
 
@@ -87,15 +96,24 @@ public partial class SyscallManager
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_FOLLOW) != 0;
-        var oldLoc = PathWalkWithFlags(oldpath, oldStartLoc.IsValid ? oldStartLoc : CurrentWorkingDirectory,
+        var oldLookup = PathWalker.PathWalkWithData(oldpath, oldStartLoc.IsValid ? oldStartLoc : CurrentWorkingDirectory,
             followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+        if (oldLookup.HasError) return oldLookup.ErrorCode;
+        var oldLoc = oldLookup.Path;
         if (!oldLoc.IsValid) return -(int)Errno.ENOENT;
-
-        if (oldLoc.Dentry!.Inode!.Type == InodeType.Directory) return -(int)Errno.EPERM;
 
         var (dirLoc, name, err) = PathWalkForCreate(newpath, newStartLoc.IsValid ? newStartLoc : null);
         if (err != 0) return err;
         if (!dirLoc.IsValid || dirLoc.Dentry!.Inode!.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+
+        if (oldLoc.Dentry!.Inode!.Type == InodeType.Directory)
+        {
+            var newLookup = PathWalker.PathWalkWithData(newpath,
+                newStartLoc.IsValid ? newStartLoc : CurrentWorkingDirectory, LookupFlags.None);
+            if (!newLookup.HasError && newLookup.Path.IsValid)
+                return -(int)Errno.EEXIST;
+            return -(int)Errno.EPERM;
+        }
 
         if (!ReferenceEquals(oldLoc.Mount, dirLoc.Mount)) return -(int)Errno.EXDEV;
 
@@ -175,8 +193,20 @@ public partial class SyscallManager
     {
         var path = sm.ReadString(pathPtr);
 
-        var loc = sm.PathWalkWithFlags(path, LookupFlags.FollowSymlink);
-        if (!loc.IsValid || loc.Dentry!.Inode == null) return new ValueTask<int>(-(int)Errno.ENOENT);
+        var lookup = sm.PathWalker.PathWalkWithData(path, LookupFlags.FollowSymlink);
+        if (lookup.HasError)
+            return new ValueTask<int>(lookup.ErrorCode);
+
+        var loc = lookup.Path;
+        if (!loc.IsValid || loc.Dentry!.Inode == null)
+            return new ValueTask<int>(-(int)Errno.ENOENT);
+
+        if (sm.CurrentTask?.Process != null)
+        {
+            var accessRc = DacPolicy.CheckPathAccess(sm.CurrentTask.Process, loc.Dentry.Inode, AccessMode.MayWrite, true);
+            if (accessRc < 0)
+                return new ValueTask<int>(accessRc);
+        }
 
         // Check mount read-only
         if (loc.Mount!.IsReadOnly) return new ValueTask<int>(-(int)Errno.EROFS);
@@ -801,6 +831,16 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (loc.Mount != null && loc.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
+        var task = engine.Owner as FiberTask;
+        if (task?.Process != null)
+        {
+            var ownerRc = task.Process.FSUID == 0 || task.Process.FSUID == loc.Dentry.Inode.Uid
+                ? 0
+                : -(int)Errno.EACCES;
+            if (ownerRc < 0)
+                return ownerRc;
+        }
+
         if (timesAddr == 0)
         {
             var resolved = ResolveRequestedTimes(loc.Dentry.Inode.ATime, loc.Dentry.Inode.MTime, true);
@@ -856,6 +896,16 @@ public partial class SyscallManager
 
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (loc.Mount != null && loc.Mount.IsReadOnly) return -(int)Errno.EROFS;
+
+        var task = engine.Owner as FiberTask;
+        if (task?.Process != null)
+        {
+            var ownerRc = task.Process.FSUID == 0 || task.Process.FSUID == loc.Dentry.Inode.Uid
+                ? 0
+                : -(int)Errno.EACCES;
+            if (ownerRc < 0)
+                return ownerRc;
+        }
 
         if (timesAddr == 0)
         {
