@@ -972,7 +972,7 @@ public sealed class WaylandRuntimeTests
                 .Invoke(keymap, [])!;
 
             byte[] bytes = new byte[size];
-            int read = file.OpenedInode!.Read(file, bytes, 0);
+            int read = file.OpenedInode!.ReadToHost(null, file, bytes, 0);
             Assert.Equal((int)size, read);
 
             string text = Encoding.UTF8.GetString(bytes).TrimEnd('\0');
@@ -1607,7 +1607,7 @@ internal sealed class TestEnv : IDisposable
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, Runtime.Syscalls.AnonMount);
 
         var payload = Encoding.UTF8.GetBytes(content);
-        var rc = inode.Write(file, payload, 0);
+        var rc = inode.WriteFromHost(null, file, payload, 0);
         Assert.Equal(payload.Length, rc);
         return file;
     }

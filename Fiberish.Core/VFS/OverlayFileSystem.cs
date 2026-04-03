@@ -972,18 +972,28 @@ public class OverlayInode : Inode
         if (targetEntry != null && ReferenceEquals(targetEntry.Inode, sourceEntry.Inode))
             return;
 
-        if (targetEntry != null && targetEntry.Inode?.Type == InodeType.Directory &&
-            sourceOverlay.Type != InodeType.Directory)
-            throw new InvalidOperationException("Is a directory");
-
         if (targetEntry != null && targetEntry.Inode?.Type != InodeType.Directory &&
             sourceOverlay.Type == InodeType.Directory)
             throw new InvalidOperationException("Not a directory");
 
-        if (targetEntry?.Inode?.Type == InodeType.Directory &&
-            sourceOverlay.Type == InodeType.Directory &&
-            targetEntry.Inode.GetEntries().Any(e => e.Name is not "." and not ".."))
-            throw new InvalidOperationException("Directory not empty");
+        if (targetEntry?.Inode?.Type == InodeType.Directory)
+        {
+            if (sourceOverlay.Type != InodeType.Directory)
+                throw new InvalidOperationException("Is a directory");
+            if (targetEntry.Inode.GetEntries().Any(e => e.Name is not "." and not ".."))
+                throw new InvalidOperationException("Directory not empty");
+
+            // If target directory is logically empty but exists in upper (e.g. contains whiteouts),
+            // we must physically remove it from upper before rename can replace it.
+            if (targetParent.UpperInode != null && targetEntry.Inode is OverlayInode targetOverlay && targetOverlay.UpperInode != null)
+            {
+                // Clear all physical entries (whiteouts) in upper to allow rmdir
+                foreach (var e in targetOverlay.UpperInode.GetEntries().Where(e => e.Name is not "." and not "..").ToList())
+                    targetOverlay.UpperInode.Unlink(e.Name);
+
+                targetParent.UpperInode.Rmdir(newName);
+            }
+        }
 
         var targetLowerEntry = targetParent.LookupInAnyLower(newName);
         var targetHasLowerDirectoryBacking = targetLowerEntry?.Inode?.Type == InodeType.Directory;
