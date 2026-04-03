@@ -242,11 +242,27 @@ public class PathWalkLinkSyscallTests
         Assert.Equal(-(int)Errno.EPERM, await env.Call("SysLink", 0x1E000u, 0x1F000u));
     }
 
+    [Fact]
+    public async Task Linkat_WithAtSymlinkFollow_ToDirectorySymlink_ReturnsEperm()
+    {
+        var (root, mount) = CreateOverlayRootWithLinkFixtures();
+        using var env = new TestEnv((root, mount));
+        env.MapUserPage(0x203000u);
+        env.MapUserPage(0x204000u);
+        env.WriteCString(0x203000u, "/dir-link");
+        env.WriteCString(0x204000u, "/dir-link-copy");
+
+        // Link with AT_SYMLINK_FOLLOW on a symlink to directory should return EPERM
+        Assert.Equal(-(int)Errno.EPERM, await env.Call("SysLinkat", LinuxConstants.AT_FDCWD, 0x203000u, LinuxConstants.AT_FDCWD,
+            0x204000u, LinuxConstants.AT_SYMLINK_FOLLOW));
+    }
+
     [Theory]
     [InlineData("/dir", "/file")]
+    [InlineData("/file", "/dir")]
     [InlineData("/dir", "/dir")]
     [InlineData("/dir", "/dir/subdir")]
-    public async Task Link_DirectorySource_OverExistingTarget_ReturnsEexist(string oldPath, string newPath)
+    public async Task Link_SourceOverExistingTarget_ReturnsEexist(string oldPath, string newPath)
     {
         var (root, mount) = CreateOverlayRootWithLinkFixtures();
         using var env = new TestEnv((root, mount));

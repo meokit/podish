@@ -173,6 +173,67 @@ public class PathWalkRmdirSyscallTests
         Assert.Equal(0, error);
     }
 
+    [Theory]
+    [InlineData("/file/sub")]
+    [InlineData("/file/sub/")]
+    public async Task Rmdir_SubdirectoryOfFile_ReturnsEnotdir(string path)
+    {
+        var (root, mount) = CreateOverlayRootWithRmdirFixtures();
+        using var env = new TestEnv((root, mount));
+        env.MapUserPage(0x1E000u);
+        env.WriteCString(0x1E000u, path);
+
+        Assert.Equal(-(int)Errno.ENOTDIR, await env.Call("SysRmdir", 0x1E000u));
+    }
+
+    [Fact]
+    public async Task Rmdir_AfterMkdirOverUnlinkedFile_Succeeds()
+    {
+        var (root, mount) = CreateOverlayRootWithRmdirFixtures();
+        using var env = new TestEnv((root, mount));
+        env.MapUserPage(0x1F000u);
+        env.WriteCString(0x1F000u, "/nonempty/a");
+
+        // Unlink the file first
+        Assert.Equal(0, await env.Call("SysUnlink", 0x1F000u));
+        
+        // Mkdir over the unlinked file (whiteout)
+        Assert.Equal(0, await env.Call("SysMkdir", 0x1F000u, 0x1ED));
+        
+        // Rmdir the newly created directory
+        Assert.Equal(0, await env.Call("SysRmdir", 0x1F000u));
+        Assert.Equal(-(int)Errno.ENOENT, await env.Call("SysRmdir", 0x1F000u));
+    }
+
+    [Fact]
+    public async Task Rmdir_OpaqueDirectory_Succeeds()
+    {
+        var (root, mount) = CreateOverlayRootWithRmdirFixtures();
+        using var env = new TestEnv((root, mount));
+        env.MapUserPage(0x20000u);
+        env.MapUserPage(0x21000u);
+        env.WriteCString(0x20000u, "/empty");
+        env.WriteCString(0x21000u, "/empty/newfile");
+
+        // Rmdir the empty lower directory
+        Assert.Equal(0, await env.Call("SysRmdir", 0x20000u));
+        
+        // Recreate it (it's now opaque upper-only)
+        Assert.Equal(0, await env.Call("SysMkdir", 0x20000u, 0x1ED));
+        
+        // Populate it
+        var fd = await env.Call("SysOpen", 0x21000u, (uint)(FileFlags.O_WRONLY | FileFlags.O_CREAT));
+        Assert.True(fd >= 0);
+        await env.Call("SysClose", (uint)fd);
+        
+        // Try rmdir (should fail because not empty)
+        Assert.Equal(-(int)Errno.ENOTEMPTY, await env.Call("SysRmdir", 0x20000u));
+        
+        // Unlink child and rmdir
+        Assert.Equal(0, await env.Call("SysUnlink", 0x21000u));
+        Assert.Equal(0, await env.Call("SysRmdir", 0x20000u));
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv((Dentry Root, Mount Mount)? rootOverride = null)
