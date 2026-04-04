@@ -785,6 +785,72 @@ public class OverlayTests
     }
 
     [Fact]
+    public void OverlayUpperOnly_RecreateSameNameAfterUnlink_MustUseNewUpperBacking()
+    {
+        var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "ovl-lower", null);
+        var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "ovl-upper", null);
+
+        var overlayFs = new OverlayFileSystem();
+        var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+            new FileSystemType { Name = "overlay" },
+            0,
+            "overlay",
+            new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+        var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
+
+        var first = new Dentry("config.lock", null, overlaySb.Root, overlaySb);
+        Assert.Equal(0, root.Create(first, 0x1A4, 0, 0));
+        overlaySb.Root.CacheChild(first, "OverlayTests.recreate-same-name.first");
+        Assert.NotNull(first.Inode);
+
+        var firstFile = new LinuxFile(first, FileFlags.O_RDWR, null!);
+        try
+        {
+            Assert.Equal(1, first.Inode!.WriteFromHost(null, firstFile, "A"u8.ToArray(), 0));
+        }
+        finally
+        {
+            firstFile.Close();
+        }
+
+        Assert.Equal(0, root.Unlink("config.lock"));
+        Assert.Null(root.Lookup("config.lock"));
+
+        var second = new Dentry("config.lock", null, overlaySb.Root, overlaySb);
+        Assert.Equal(0, root.Create(second, 0x1A4, 0, 0));
+        overlaySb.Root.CacheChild(second, "OverlayTests.recreate-same-name.second");
+        Assert.NotNull(second.Inode);
+
+        var secondFile = new LinuxFile(second, FileFlags.O_RDWR, null!);
+        try
+        {
+            var writeRc = second.Inode!.WriteFromHost(null, secondFile, "B"u8.ToArray(), 0);
+            Assert.Equal(1, writeRc);
+        }
+        finally
+        {
+            secondFile.Close();
+        }
+
+        var reopened = root.Lookup("config.lock");
+        Assert.NotNull(reopened);
+        var reader = new LinuxFile(reopened!, FileFlags.O_RDONLY, null!);
+        try
+        {
+            var buf = new byte[1];
+            var readRc = reopened!.Inode!.ReadToHost(null, reader, buf, 0);
+            Assert.Equal(1, readRc);
+            Assert.Equal("B", Encoding.UTF8.GetString(buf, 0, 1));
+        }
+        finally
+        {
+            reader.Close();
+        }
+    }
+
+    [Fact]
     public void OverlayCopyUp_StateIsSharedAcrossMultipleLookups()
     {
         var lowerFs = new LayerFileSystem();

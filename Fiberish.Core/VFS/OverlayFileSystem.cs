@@ -291,6 +291,14 @@ public sealed class OverlayNodeState
     {
         lock (SyncRoot)
         {
+            var shouldReplaceUpper = upper != null &&
+                                     UpperDentry != null &&
+                                     !ReferenceEquals(UpperDentry, upper) &&
+                                     IsStaleUpperDentry(UpperDentry);
+
+            if (shouldReplaceUpper)
+                UpperDentry = upper;
+
             if (_lowerDentries.Count == 0 && lowers is { Count: > 0 })
                 _lowerDentries = lowers.Where(d => d != null).ToList();
             if (UpperDentry == null && upper != null)
@@ -301,9 +309,7 @@ public sealed class OverlayNodeState
     public void SetUpperDentry(Dentry upper)
     {
         lock (SyncRoot)
-        {
             UpperDentry = upper;
-        }
     }
 
     public void RegisterAlias(OverlayInode inode)
@@ -340,7 +346,6 @@ public sealed class OverlayNodeState
                 _children[name] = state;
                 return state;
             }
-
             state.UpdateBackings(lowers, upper);
             return state;
         }
@@ -363,6 +368,11 @@ public sealed class OverlayNodeState
             state.UpdateBackings(lowers, upper);
             _children[name] = state;
         }
+    }
+
+    private static bool IsStaleUpperDentry(Dentry upper)
+    {
+        return upper.Inode == null;
     }
 }
 
@@ -516,7 +526,9 @@ public class OverlayInode : Inode
             return UpperInode;
         if (linuxFile != null && _openBackingByFile.TryGetValue(linuxFile, out var bound))
             return bound;
-        return LowerInode ?? GetAnyOpenBackingInode();
+        if (LowerInode != null)
+            return LowerInode;
+        return GetAnyOpenBackingInode();
     }
 
     private Inode? ResolvePagingSource(LinuxFile? linuxFile)
