@@ -54,6 +54,7 @@
             <CMakeSuperOpcodes Condition="'$(EnableSuperOpcodes)' == 'false'">OFF</CMakeSuperOpcodes>
             <CMakeSuperOpcodes Condition="'$(CMakeSuperOpcodes)' == ''">ON</CMakeSuperOpcodes>
             <CMakeJit Condition="'$(EnableJit)' == 'false' Or '$(IsBrowserWasm)' == 'true'">OFF</CMakeJit>
+            <CMakeJit Condition="$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('ios'))">OFF</CMakeJit>
             <CMakeJit Condition="'$(CMakeJit)' == ''">ON</CMakeJit>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_HANDLER_PROFILE=$(CMakeHandlerProfile)</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_JCC_PROFILE=$(CMakeJccProfile)</CMakeArgs>
