@@ -1439,6 +1439,12 @@ import AppKit
 
 struct TerminalViewHost: NSViewRepresentable {
     let terminalView: TerminalView
+    let shouldFocus: Bool
+
+    init(terminalView: TerminalView, shouldFocus: Bool = false) {
+        self.terminalView = terminalView
+        self.shouldFocus = shouldFocus
+    }
 
     func makeNSView(context: Context) -> TerminalView {
         terminalView

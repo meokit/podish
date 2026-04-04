@@ -10,6 +10,7 @@ final class PodishUiStore: ObservableObject {
     @Published var containers: [PodishContainer] = []
     @Published var images: [PodishImage] = []
     @Published private(set) var pendingContainerActions: [String: PendingContainerAction] = [:]
+    @Published private(set) var recentContainerIDs: [String] = []
 
     @Published var events: [String] = [
         "container-start alpine-shell",
@@ -69,9 +70,14 @@ final class PodishUiStore: ObservableObject {
             containers = mapped
         }
 
+        let knownIds = Set(mapped.map(\.containerId))
+        let filteredRecentIDs = recentContainerIDs.filter { knownIds.contains($0) }
+        if filteredRecentIDs != recentContainerIDs {
+            recentContainerIDs = filteredRecentIDs
+        }
+
         // Resolve pending actions based on observed runtime state.
         var nextPending = pendingContainerActions
-        let knownIds = Set(containers.map(\.containerId))
         for container in containers {
             guard let action = nextPending[container.containerId] else { continue }
             switch action {
@@ -168,5 +174,10 @@ final class PodishUiStore: ObservableObject {
 
     func showNewContainer() {
         onShowNewContainer?()
+    }
+
+    func markRecentlyUsed(_ containerId: String) {
+        recentContainerIDs.removeAll { $0 == containerId }
+        recentContainerIDs.insert(containerId, at: 0)
     }
 }

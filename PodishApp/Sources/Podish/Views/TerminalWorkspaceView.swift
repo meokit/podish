@@ -29,13 +29,19 @@ struct TerminalWorkspaceView: View {
     @ViewBuilder
     private var content: some View {
         #if os(iOS)
-        VStack(spacing: 8) {
-            terminalSurface
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            PodishVirtualKeysBar(terminalView: session.currentTerminalView)
-        }
-        .padding(.bottom, 8)
+        terminalSurface
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(session.terminalBackgroundColor)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                PodishVirtualKeysBar(
+                    terminalView: session.currentTerminalView,
+                    chromeBackgroundColor: session.terminalBackgroundColor
+                )
+                .padding(.horizontal, 8)
+                .padding(.top, 6)
+                .padding(.bottom, 8)
+                .background(session.terminalBackgroundColor)
+            }
         #else
         terminalSurface
         #endif
@@ -77,6 +83,7 @@ struct TerminalWorkspaceView: View {
 #if os(iOS)
 private struct PodishVirtualKeysBar: View {
     let terminalView: TerminalView
+    let chromeBackgroundColor: SwiftUI.Color
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -128,7 +135,7 @@ private struct PodishVirtualKeysBar: View {
     }
 
     private var barBackgroundColor: SwiftUI.Color {
-        SwiftUI.Color(uiColor: colorScheme == .dark ? .secondarySystemBackground : .systemBackground)
+        chromeBackgroundColor
     }
 
     private var barBorderColor: SwiftUI.Color {
@@ -136,7 +143,7 @@ private struct PodishVirtualKeysBar: View {
     }
 
     private var barShadowColor: SwiftUI.Color {
-        SwiftUI.Color.black.opacity(colorScheme == .dark ? 0.18 : 0.08)
+        .clear
     }
 
     private func keyRow(_ keys: [PodishVirtualKey]) -> some View {

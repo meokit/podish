@@ -7,9 +7,9 @@ struct PodishRootView: View {
     @StateObject private var appearance = PodishTerminalAppearance()
     @StateObject private var session: PodishTerminalSession
     @State private var splitVisibility: NavigationSplitViewVisibility = .all
+    @State private var iosNavigationPath: [IOSRoute] = []
     @State private var detailsContainer: PodishContainer?
     @State private var showNewContainer = false
-    @State private var showSidebar = false
     @State private var sidebarSelection: PodishSidebarDestination = .home
     @State private var didBindSession = false
 
@@ -23,19 +23,24 @@ struct PodishRootView: View {
     var body: some View {
         platformContent
             .onChange(of: store.selectedContainerID) { newId in
+                #if os(macOS)
                 guard let newId else { return }
                 PodishLog.ui("RootView selectedContainerID changed -> \(newId)")
                 session.attachContainer(newId)
+                #endif
             }
             .onChange(of: session.activeContainerId) { activeId in
-                guard let activeId, store.selectedContainerID != activeId else { return }
+                guard let activeId else { return }
                 PodishLog.ui("RootView activeContainerId changed -> \(activeId)")
                 Task { @MainActor in
+                    store.markRecentlyUsed(activeId)
                     guard store.selectedContainerID != activeId else { return }
                     store.selectedContainerID = activeId
+                    #if os(macOS)
                     if sidebarSelection != .home {
                         sidebarSelection = .container(activeId)
                     }
+                    #endif
                 }
             }
     }
@@ -67,61 +72,41 @@ struct PodishRootView: View {
             NewContainerSheetView(store: store)
         }
         #else
-        NavigationStack {
-            detailContent
-                .navigationTitle("Podish")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            showSidebar = true
-                        } label: {
-                            Label("Containers", systemImage: "line.3.horizontal")
-                        }
-                    }
+        NavigationStack(path: $iosNavigationPath) {
+            IOSHomeView(
+                store: store,
+                onOpenContainer: { container in
+                    openIOSContainer(container)
+                },
+                onShowDetails: { container in
+                    detailsContainer = container
+                },
+                onShowNewContainer: {
+                    showNewContainer = true
                 }
+            )
+            .navigationDestination(for: IOSRoute.self) { route in
+                switch route {
+                case .terminal(let containerId):
+                    IOSTerminalScreen(
+                        session: session,
+                        containerId: containerId
+                    )
+                }
+            }
         }
         .onAppear {
             bindSessionIfNeeded()
             onSessionReady?(session)
             session.startIfNeeded()
             store.onShowNewContainer = {
-                if showSidebar {
-                    showSidebar = false
-                    Task { @MainActor in
-                        showNewContainer = true
-                    }
-                } else {
-                    showNewContainer = true
-                }
+                showNewContainer = true
             }
         }
-        .sheet(isPresented: $showSidebar) {
-            NavigationStack {
-                SidebarView(
-                    store: store,
-                    selection: $sidebarSelection,
-                    onShowDetails: { container in
-                        if showSidebar {
-                            showSidebar = false
-                            Task { @MainActor in
-                                detailsContainer = container
-                            }
-                        } else {
-                            detailsContainer = container
-                        }
-                    },
-                    onSelected: {
-                        showSidebar = false
-                    }
-                )
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") {
-                            showSidebar = false
-                        }
-                    }
-                }
+        .onChange(of: store.containers) { containers in
+            if let route = iosNavigationPath.last,
+               !containers.contains(where: { $0.id == route.containerId }) {
+                iosNavigationPath.removeAll()
             }
         }
         .sheet(item: $detailsContainer) { container in
@@ -144,6 +129,15 @@ struct PodishRootView: View {
             }
         }
         .navigationTitle("Podish")
+    }
+
+    private func openIOSContainer(_ container: PodishContainer) {
+        store.selectedContainerID = container.containerId
+        store.markRecentlyUsed(container.containerId)
+        let route = IOSRoute.terminal(container.containerId)
+        if iosNavigationPath.last != route {
+            iosNavigationPath.append(route)
+        }
     }
 
     private func bindSessionIfNeeded() {
@@ -202,6 +196,239 @@ struct PodishRootView: View {
         }
     }
 }
+
+private extension PodishRootView {
+    enum IOSRoute: Hashable {
+        case terminal(String)
+
+        var containerId: String {
+            switch self {
+            case .terminal(let containerId):
+                return containerId
+            }
+        }
+    }
+}
+
+#if os(iOS)
+private struct IOSHomeView: View {
+    @ObservedObject var store: PodishUiStore
+    let onOpenContainer: (PodishContainer) -> Void
+    let onShowDetails: (PodishContainer) -> Void
+    let onShowNewContainer: () -> Void
+    private let cardInsets = EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)
+
+    var body: some View {
+        List {
+            IOSDashboardSummaryBar(
+                totalCount: store.containers.count,
+                runningCount: store.runningContainers.count,
+                stoppedCount: store.containers.filter { $0.state != .running }.count
+            )
+            .listRowInsets(cardInsets)
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+
+            if orderedContainers.isEmpty {
+                IOSDashboardEmptyState(message: "No containers")
+                    .listRowInsets(cardInsets)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            } else {
+                ForEach(orderedContainers) { container in
+                    IOSContainerListRow(
+                        container: container,
+                        pendingAction: store.pendingAction(for: container.containerId),
+                        primaryActionSymbol: container.state == .running ? "stop.fill" : "play.fill",
+                        onOpen: { onOpenContainer(container) },
+                        onPrimaryAction: {
+                            if container.state == .running {
+                                store.stop(container)
+                            } else {
+                                store.start(container)
+                            }
+                        },
+                        onShowDetails: { onShowDetails(container) },
+                        onDelete: { store.remove(container) }
+                    )
+                    .listRowInsets(cardInsets)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                }
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Color(uiColor: .systemGroupedBackground))
+        .navigationTitle("Podish")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(action: onShowNewContainer) {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel("Create Container")
+            }
+        }
+    }
+
+    private var orderedContainers: [PodishContainer] {
+        let recentRanks = Dictionary(
+            uniqueKeysWithValues: store.recentContainerIDs.enumerated().map { ($0.element, $0.offset) }
+        )
+
+        return store.containers.sorted { lhs, rhs in
+            let lhsRunningRank = lhs.state == .running ? 0 : 1
+            let rhsRunningRank = rhs.state == .running ? 0 : 1
+            if lhsRunningRank != rhsRunningRank {
+                return lhsRunningRank < rhsRunningRank
+            }
+
+            let lhsRecentRank = recentRanks[lhs.containerId] ?? Int.max
+            let rhsRecentRank = recentRanks[rhs.containerId] ?? Int.max
+            if lhsRecentRank != rhsRecentRank {
+                return lhsRecentRank < rhsRecentRank
+            }
+
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+}
+
+private struct IOSDashboardSummaryBar: View {
+    let totalCount: Int
+    let runningCount: Int
+    let stoppedCount: Int
+
+    var body: some View {
+        HStack(spacing: 10) {
+            IOSDashboardMetricPill(value: "\(runningCount)", title: "Running")
+            IOSDashboardMetricPill(value: "\(stoppedCount)", title: "Stopped")
+            IOSDashboardMetricPill(value: "\(totalCount)", title: "Total")
+        }
+    }
+}
+
+private struct IOSDashboardMetricPill: View {
+    let value: String
+    let title: String
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.title2.weight(.bold))
+        }
+        .frame(maxWidth: .infinity, minHeight: 84)
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+        }
+    }
+}
+
+private struct IOSDashboardEmptyState: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemGroupedBackground))
+            }
+    }
+}
+
+private struct IOSContainerListRow: View {
+    let container: PodishContainer
+    let pendingAction: PodishUiStore.PendingContainerAction?
+    let primaryActionSymbol: String
+    let onOpen: () -> Void
+    let onPrimaryAction: () -> Void
+    let onShowDetails: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ContainerRowView(container: container)
+            Spacer(minLength: 4)
+            if pendingAction != nil {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 28, height: 28)
+            } else {
+                IOSRowCircleButton(systemImage: primaryActionSymbol, action: onPrimaryAction)
+            }
+            IOSRowCircleButton(systemImage: "info.circle", action: onShowDetails)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemGroupedBackground))
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onTapGesture(perform: onOpen)
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive, action: onDelete) {
+                Image(systemName: "trash")
+            }
+        }
+    }
+}
+
+private struct IOSRowCircleButton: View {
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: 28, height: 28)
+                .background(Color(uiColor: .tertiarySystemFill), in: Circle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct IOSTerminalScreen: View {
+    @ObservedObject var session: PodishTerminalSession
+    let containerId: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        TerminalWorkspaceView(session: session)
+            .background(session.terminalBackgroundColor)
+            .toolbar(.hidden, for: .navigationBar)
+            .overlay(alignment: .leading) {
+                Color.clear
+                    .frame(width: 28)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 12)
+                            .onEnded { value in
+                                guard value.startLocation.x < 28 else { return }
+                                guard value.translation.width > 80 else { return }
+                                guard abs(value.translation.height) < 60 else { return }
+                                dismiss()
+                            }
+                    )
+            }
+            .onAppear {
+                session.attachContainer(containerId)
+            }
+    }
+}
+#endif
 
 private struct HomeDashboardView: View {
     let onAddContainer: () -> Void
