@@ -43,6 +43,7 @@ Fiberish.Netstack/Cargo.lock
 tests/alpine-rootfs/
 tests/openssl/rootfs/
 tests/openssl/build_podman/
+tests/pjdfstest/upstream/
 *.xcuserstate
 xcuserdata/
 Fiberish.Tests/TestResults/

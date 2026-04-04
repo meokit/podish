@@ -70,7 +70,7 @@ public class OverlayImpermissibleSyscallTests
         BinaryPrimitives.WriteInt32LittleEndian(times.AsSpan(12, 4), 200);
         env.WriteBytes(0x14000u, times);
 
-        Assert.Equal(-(int)Errno.EACCES, await env.Call("SysUtimensAt", unchecked((uint)LinuxConstants.AT_FDCWD), 0x13000u, 0x14000u, 0));
+        Assert.Equal(-(int)Errno.EPERM, await env.Call("SysUtimensAt", unchecked((uint)LinuxConstants.AT_FDCWD), 0x13000u, 0x14000u, 0));
         Assert.Equal(originalAtime, inode.ATime);
         Assert.Equal(originalMtime, inode.MTime);
 
