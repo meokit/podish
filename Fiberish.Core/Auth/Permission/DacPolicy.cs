@@ -77,10 +77,11 @@ public static class DacPolicy
 
     public static int ApplySetIdClearOnChown(Inode inode, int oldUid, int oldGid, int newUid, int newGid)
     {
-        if (inode.Type != InodeType.File) return inode.Mode;
         if (oldUid == newUid && oldGid == newGid) return inode.Mode;
+        if (inode.Type == InodeType.Symlink) return inode.Mode;
 
-        // Linux-like: ownership change clears S_ISUID/S_ISGID on regular files.
+        // Linux clears S_ISUID/S_ISGID on ownership changes for non-symlink
+        // objects that can carry mode bits in pjdfstest coverage.
         return inode.Mode & ~0xC00;
     }
 

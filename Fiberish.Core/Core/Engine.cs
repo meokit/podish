@@ -478,7 +478,7 @@ public class Engine : IDisposable
                 var currAddr = vaddr + (uint)written;
                 var ptr = X86Native.ResolvePtr(State, currAddr, 1); // 1 = Write
                 if (ptr == null)
-                    if (PageFaultResolver != null && PageFaultResolver(currAddr, true))
+                    if (TryResolveUserAccessFault(currAddr, true))
                         ptr = X86Native.ResolvePtr(State, currAddr, 1);
 
                 if (ptr == null) return false;
@@ -507,7 +507,7 @@ public class Engine : IDisposable
                 var currAddr = vaddr + (uint)read;
                 var ptr = X86Native.ResolvePtr(State, currAddr, 0); // 0 = Read
                 if (ptr == null)
-                    if (PageFaultResolver != null && PageFaultResolver(currAddr, false))
+                    if (TryResolveUserAccessFault(currAddr, false))
                         ptr = X86Native.ResolvePtr(State, currAddr, 0);
 
                 if (ptr == null) return false;
@@ -521,6 +521,17 @@ public class Engine : IDisposable
         }
 
         return true;
+    }
+
+    private bool TryResolveUserAccessFault(uint addr, bool isWrite)
+    {
+        // While servicing a guest syscall, invalid user pointers should surface as
+        // -EFAULT to the guest rather than posting SIGSEGV via FiberTask's regular
+        // page-fault path. We still fault in valid-but-not-yet-mapped pages here.
+        if (CurrentSyscallManager?.Mem != null)
+            return CurrentSyscallManager.Mem.HandleFaultDetailed(addr, isWrite, this) == FaultResult.Handled;
+
+        return PageFaultResolver != null && PageFaultResolver(addr, isWrite);
     }
 
     /// <summary>
@@ -564,7 +575,7 @@ public class Engine : IDisposable
         {
             var ptr = X86Native.ResolvePtr(State, current, 0); // Read
             if (ptr == null)
-                if (PageFaultResolver != null && PageFaultResolver(current, false))
+                if (TryResolveUserAccessFault(current, false))
                     ptr = X86Native.ResolvePtr(State, current, 0);
 
             if (ptr == null) return null; // Fault

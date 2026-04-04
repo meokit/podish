@@ -12,6 +12,9 @@ namespace Fiberish.Tests.Syscalls;
 
 public class UtimensSyscallTests
 {
+    private const int UtimeNow = 0x3fffffff;
+    private const int UtimeOmit = 0x3ffffffe;
+
     [Fact]
     public async Task UtimensAt_TmpfsFile_AppliesRequestedAtimeAndMtime()
     {
@@ -67,6 +70,61 @@ public class UtimensSyscallTests
         Assert.Equal(1_700_000_400L, new DateTimeOffset(file.Inode.MTime).ToUnixTimeSeconds());
     }
 
+    [Fact]
+    public async Task UtimensAt_NonOwnerWithWriteAccess_CanUseUtimeNow()
+    {
+        using var env = new TestEnv();
+        const uint timesPtr = 0x14000;
+        env.MapUserPage(timesPtr);
+        env.SetCreds(uid: 1234, gid: 1234);
+
+        var root = env.SyscallManager.Root.Dentry!;
+        var file = new Dentry("now.txt", null, root, root.SuperBlock);
+        root.Inode!.Create(file, 0x1B6, 0, 0);
+
+        var times = new byte[16];
+        BinaryPrimitives.WriteInt32LittleEndian(times.AsSpan(0, 4), 0);
+        BinaryPrimitives.WriteInt32LittleEndian(times.AsSpan(4, 4), UtimeNow);
+        BinaryPrimitives.WriteInt32LittleEndian(times.AsSpan(8, 4), 0);
+        BinaryPrimitives.WriteInt32LittleEndian(times.AsSpan(12, 4), UtimeNow);
+        env.Write(timesPtr, times);
+
+        var rc = await env.Invoke("SysUtimensAt", unchecked((uint)-100), env.WriteString("/now.txt"), timesPtr, 0, 0, 0);
+
+        Assert.Equal(0, rc);
+    }
+
+    [Fact]
+    public async Task UtimensAt_NonOwnerWithWriteAccess_CannotSetExplicitTimes()
+    {
+        using var env = new TestEnv();
+        const uint timesPtr = 0x15000;
+        env.MapUserPage(timesPtr);
+        env.SetCreds(uid: 1234, gid: 1234);
+
+        var root = env.SyscallManager.Root.Dentry!;
+        var file = new Dentry("explicit.txt", null, root, root.SuperBlock);
+        root.Inode!.Create(file, 0x1B6, 0, 0);
+
+        var times = new byte[16];
+        BinaryPrimitives.WriteInt32LittleEndian(times.AsSpan(0, 4), 0);
+        BinaryPrimitives.WriteInt32LittleEndian(times.AsSpan(4, 4), UtimeOmit);
+        BinaryPrimitives.WriteInt32LittleEndian(times.AsSpan(8, 4), 1_700_000_500);
+        BinaryPrimitives.WriteInt32LittleEndian(times.AsSpan(12, 4), 0);
+        env.Write(timesPtr, times);
+
+        var rc = await env.Invoke(
+            "SysUtimensAt",
+            unchecked((uint)-100),
+            env.WriteString("/explicit.txt"),
+            timesPtr,
+            0,
+            0,
+            0);
+
+        Assert.Equal(-(int)Errno.EPERM, rc);
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()
@@ -98,6 +156,20 @@ public class UtimensSyscallTests
         public FiberTask Task { get; }
         public SyscallManager SyscallManager { get; }
         public Mount RootMount { get; }
+
+        public void SetCreds(int uid, int gid, params int[] groups)
+        {
+            Process.UID = uid;
+            Process.EUID = uid;
+            Process.SUID = uid;
+            Process.FSUID = uid;
+            Process.GID = gid;
+            Process.EGID = gid;
+            Process.SGID = gid;
+            Process.FSGID = gid;
+            Process.SupplementaryGroups.Clear();
+            Process.SupplementaryGroups.AddRange(groups);
+        }
 
         public void Dispose()
         {

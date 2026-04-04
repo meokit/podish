@@ -923,7 +923,7 @@ public partial class SyscallManager
         if (isSetToCurrentTime)
             return DacPolicy.CheckPathAccess(process, inode, AccessMode.MayWrite, true);
 
-        return -(int)Errno.EACCES;
+        return -(int)Errno.EPERM;
     }
 
     private async ValueTask<int> SysFchownAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

@@ -9,6 +9,7 @@
   <Project Path="Podish.Core/Podish.Core.csproj" />
   <Project Path="Podish.Core.Native/Podish.Core.Native.csproj" />
   <Project Path="Podish.Display/Podish.Display.csproj" />
+  <Project Path="Podish.PjdFs/Podish.PjdFs.csproj" />
   <Project Path="Podish.PerfTools/Podish.PerfTools.csproj" />
   <Project Path="Podish.Pulse/Podish.Pulse.csproj" />
   <Project Path="Podish.Pulse.Tests/Podish.Pulse.Tests.csproj" />
