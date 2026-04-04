@@ -11,5 +11,35 @@ final class PodishTerminalView: TerminalView {
         return NSRange(location: NSNotFound, length: 0)
     }
 }
-#endif
+#else
+import UIKit
 
+final class PodishTerminalView: TerminalView {
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if !isFirstResponder {
+            PodishLog.ui("TerminalView touchesBegan requesting first responder")
+            _ = becomeFirstResponder()
+        }
+        super.touchesBegan(touches, with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        PodishLog.ui("TerminalView becomeFirstResponder requested window=\(window != nil) firstResponder=\(isFirstResponder)")
+        let response = super.becomeFirstResponder()
+        PodishLog.ui("TerminalView becomeFirstResponder result=\(response) firstResponder=\(isFirstResponder)")
+        return response
+    }
+
+    override func resignFirstResponder() -> Bool {
+        PodishLog.ui("TerminalView resignFirstResponder requested")
+        let response = super.resignFirstResponder()
+        PodishLog.ui("TerminalView resignFirstResponder result=\(response)")
+        return response
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        PodishLog.ui("TerminalView didMoveToWindow windowAttached=\(window != nil)")
+    }
+}
+#endif

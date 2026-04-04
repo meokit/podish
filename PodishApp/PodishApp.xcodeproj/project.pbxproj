@@ -20,6 +20,7 @@
 		A0000000000000000000003B /* Sources/Podish/Views/PodishTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002B /* Sources/Podish/Views/PodishTerminalView.swift */; };
 		A0000000000000000000003D /* Sources/Podish/PodishLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002E /* Sources/Podish/PodishLog.swift */; };
 		A0000000000000000000003E /* PodishApp/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002F /* PodishApp/Assets.xcassets */; };
+		A00000000000000000000086 /* Sources/Podish/Models/PodishTerminalAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000087 /* Sources/Podish/Models/PodishTerminalAppearance.swift */; };
 		A0000000000000000000003C /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000082 /* SwiftTerm */; };
 		A00000000000000000000083 /* MessagePack in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000085 /* MessagePack */; };
 /* End PBXBuildFile section */
@@ -41,6 +42,7 @@
 		A0000000000000000000002D /* PodishApp/MacInfo.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PodishApp/MacInfo.plist; sourceTree = SOURCE_ROOT; };
 		A0000000000000000000002E /* Sources/Podish/PodishLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/PodishLog.swift; sourceTree = SOURCE_ROOT; };
 		A0000000000000000000002F /* PodishApp/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = PodishApp/Assets.xcassets; sourceTree = SOURCE_ROOT; };
+		A00000000000000000000087 /* Sources/Podish/Models/PodishTerminalAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Models/PodishTerminalAppearance.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -78,6 +80,7 @@
 				A00000000000000000000029 /* Sources/Podish/Views/ContainerDetailsSheetView.swift */,
 				A0000000000000000000002A /* Sources/Podish/Views/TerminalWorkspaceView.swift */,
 				A0000000000000000000002B /* Sources/Podish/Views/PodishTerminalView.swift */,
+				A00000000000000000000087 /* Sources/Podish/Models/PodishTerminalAppearance.swift */,
 				A0000000000000000000002C /* PodishApp/Info.plist */,
 				A0000000000000000000002D /* PodishApp/MacInfo.plist */,
 				A0000000000000000000002E /* Sources/Podish/PodishLog.swift */,
@@ -183,6 +186,7 @@
 				A0000000000000000000003A /* Sources/Podish/Views/TerminalWorkspaceView.swift in Sources */,
 				A0000000000000000000003B /* Sources/Podish/Views/PodishTerminalView.swift in Sources */,
 				A0000000000000000000003D /* Sources/Podish/PodishLog.swift in Sources */,
+				A00000000000000000000086 /* Sources/Podish/Models/PodishTerminalAppearance.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

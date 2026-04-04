@@ -4,7 +4,8 @@ struct PodishRootView: View {
     var onSessionReady: ((PodishTerminalSession) -> Void)?
 
     @StateObject private var store = PodishUiStore()
-    @StateObject private var session = PodishTerminalSession()
+    @StateObject private var appearance = PodishTerminalAppearance()
+    @StateObject private var session: PodishTerminalSession
     @State private var splitVisibility: NavigationSplitViewVisibility = .all
     @State private var detailsContainer: PodishContainer?
     @State private var showNewContainer = false
@@ -12,19 +13,29 @@ struct PodishRootView: View {
     @State private var sidebarSelection: PodishSidebarDestination = .home
     @State private var didBindSession = false
 
+    init(onSessionReady: ((PodishTerminalSession) -> Void)? = nil) {
+        self.onSessionReady = onSessionReady
+        let appearance = PodishTerminalAppearance()
+        _appearance = StateObject(wrappedValue: appearance)
+        _session = StateObject(wrappedValue: PodishTerminalSession(appearance: appearance))
+    }
+
     var body: some View {
         platformContent
             .onChange(of: store.selectedContainerID) { newId in
                 guard let newId else { return }
+                PodishLog.ui("RootView selectedContainerID changed -> \(newId)")
                 session.attachContainer(newId)
             }
             .onChange(of: session.activeContainerId) { activeId in
                 guard let activeId, store.selectedContainerID != activeId else { return }
-                if store.selectedContainerID != activeId {
+                PodishLog.ui("RootView activeContainerId changed -> \(activeId)")
+                Task { @MainActor in
+                    guard store.selectedContainerID != activeId else { return }
                     store.selectedContainerID = activeId
-                }
-                if sidebarSelection != .home {
-                    sidebarSelection = .container(activeId)
+                    if sidebarSelection != .home {
+                        sidebarSelection = .container(activeId)
+                    }
                 }
             }
     }
