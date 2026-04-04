@@ -1,7 +1,9 @@
 using System.Runtime.InteropServices;
+using System.Reflection;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
+using Fiberish.VFS;
 using Xunit;
 
 namespace Fiberish.Tests.Core;
@@ -157,5 +159,161 @@ public class EngineMmuTransferTests
         }
 
         Assert.Equal(1, Engine.GetAttachmentCount(sharedId));
+    }
+
+    [Fact]
+    public void AddressSpaceHandle_BindsSharedClone_AndRejectsForkedMmu()
+    {
+        using var parent = new Engine();
+        var mm = new VMAManager();
+        mm.BindOrAssertAddressSpaceHandle(parent);
+
+        using var shared = parent.Clone(true);
+        mm.BindOrAssertAddressSpaceHandle(shared);
+
+        using var forked = parent.Clone(false);
+        var ex = Assert.Throws<InvalidOperationException>(() => mm.BindOrAssertAddressSpaceHandle(forked));
+        Assert.Contains("does not match address-space MMU identity", ex.Message);
+    }
+
+    [Fact]
+    public void AddressSpaceHandle_DetachFromSharedEngine_CreatesNewIdentity()
+    {
+        using var parent = new Engine();
+        var sharedMm = new VMAManager();
+        sharedMm.BindOrAssertAddressSpaceHandle(parent);
+        var sharedIdentity = sharedMm.AddressSpaceIdentity;
+
+        using var child = parent.Clone(true);
+        Assert.Equal(sharedIdentity, child.CurrentMmuIdentity);
+
+        var detachedMm = new VMAManager();
+        detachedMm.BindAddressSpaceHandle(ProcessAddressSpaceHandle.DetachFromSharedEngine(child));
+
+        Assert.Equal(detachedMm.AddressSpaceIdentity, child.CurrentMmuIdentity);
+        Assert.NotEqual(sharedIdentity, detachedMm.AddressSpaceIdentity);
+        Assert.Equal(sharedIdentity, parent.CurrentMmuIdentity);
+    }
+
+    [Fact]
+    public void TryResolveMappedFilePage_DisposesHandle_WhenVmMappingMissing()
+    {
+        var method = typeof(VMAManager).GetMethod(
+            "TryResolveMappedFilePage",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        using var fixture = new MappedPageFixture();
+        var args = new object?[] { fixture.Vma, (uint)0, 0L, false, IntPtr.Zero };
+        var resolved = Assert.IsType<bool>(method!.Invoke(null, args));
+
+        Assert.False(resolved);
+        Assert.Equal(1, fixture.Inode.DisposeCount);
+    }
+
+    private sealed class MappedPageFixture : IDisposable
+    {
+        private readonly TestSuperBlock _sb;
+        private readonly Mount _mount;
+        private readonly Dentry _root;
+        private readonly Dentry _fileDentry;
+
+        public MappedPageFixture()
+        {
+            _sb = new TestSuperBlock();
+            var rootInode = new TestInode(_sb);
+            _root = new Dentry("/", rootInode, null, _sb);
+            _sb.Root = _root;
+
+            Inode = new TrackingMappedPageInode(_sb);
+            _fileDentry = new Dentry("mapped", Inode, _root, _sb);
+            _mount = new Mount(_sb, _root);
+            File = new LinuxFile(_fileDentry, FileFlags.O_RDONLY, _mount);
+            Vma = new VmArea
+            {
+                Start = 0x40000000,
+                End = 0x40001000,
+                Perms = Protection.Read,
+                Flags = MapFlags.Shared,
+                FileMapping = new VmaFileMapping(File),
+                Offset = 0,
+                VmPgoff = 0,
+                Name = "mapped-test",
+                VmMapping = null,
+                VmAnonVma = null
+            };
+        }
+
+        public TrackingMappedPageInode Inode { get; }
+        public LinuxFile File { get; }
+        public VmArea Vma { get; }
+
+        public void Dispose()
+        {
+            Vma.FileMapping?.Release();
+            _mount.Put();
+            Inode.DisposePage();
+        }
+    }
+
+    private sealed class TrackingMappedPageInode : TestInode
+    {
+        private readonly IntPtr _ptr = Marshal.AllocHGlobal(LinuxConstants.PageSize);
+
+        public TrackingMappedPageInode(SuperBlock sb) : base(sb)
+        {
+        }
+
+        public int DisposeCount { get; private set; }
+
+        public void DisposePage()
+        {
+            Marshal.FreeHGlobal(_ptr);
+        }
+
+        public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
+            bool writable, out IPageHandle? pageHandle)
+        {
+            pageHandle = new TrackingPageHandle(_ptr, () => DisposeCount++);
+            return true;
+        }
+    }
+
+    private sealed class TrackingPageHandle : IPageHandle
+    {
+        private readonly Action _onDispose;
+        private int _disposed;
+
+        public TrackingPageHandle(IntPtr pointer, Action onDispose)
+        {
+            Pointer = pointer;
+            _onDispose = onDispose;
+        }
+
+        public IntPtr Pointer { get; }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            _onDispose();
+        }
+    }
+
+    private sealed class TestSuperBlock : SuperBlock
+    {
+    }
+
+    private class TestInode : Inode
+    {
+        public TestInode(SuperBlock sb)
+        {
+            SuperBlock = sb;
+            Type = InodeType.File;
+            Mode = 0x1A4;
+            sb.EnsureInodeTracked(this);
+        }
+
+        public override bool SupportsMmap => true;
     }
 }

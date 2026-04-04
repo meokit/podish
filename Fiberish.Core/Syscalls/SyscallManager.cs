@@ -995,6 +995,7 @@ public partial class SyscallManager
     public void RegisterEngine(Engine engine)
     {
         engine.PageFaultResolver ??= (addr, isWrite) => Mem.HandleFault(addr, isWrite, engine);
+        Mem.BindOrAssertAddressSpaceHandle(engine);
         ProcessAddressSpaceSync.RegisterEngineAddressSpace(Mem, engine);
     }
 

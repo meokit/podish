@@ -26,6 +26,7 @@ public class VMAManager
 
     private readonly List<CodeCacheResetEntry> _pendingCodeCacheResets = [];
     private readonly List<VmArea> _vmas = [];
+    private ProcessAddressSpaceHandle? _addressSpaceHandle;
     private int _futexKeyRefCount = 1;
     private VmArea? _lastFaultVma;
     private long _mapSequence;
@@ -38,6 +39,8 @@ public class VMAManager
 
     public ExternalPageManager ExternalPages { get; } = new();
     public VmBackingManager Backings { get; }
+    internal ProcessAddressSpaceHandle? AddressSpaceHandle => _addressSpaceHandle;
+    internal nuint AddressSpaceIdentity => _addressSpaceHandle?.Identity ?? 0;
 
     public long CurrentMapSequence => Interlocked.Read(ref _mapSequence);
 
@@ -138,7 +141,42 @@ public class VMAManager
         }
 
         Clear(engine);
+        _addressSpaceHandle?.Dispose();
+        _addressSpaceHandle = null;
         return 0;
+    }
+
+    internal void BindAddressSpaceHandle(ProcessAddressSpaceHandle handle)
+    {
+        ArgumentNullException.ThrowIfNull(handle);
+        if (_addressSpaceHandle == null)
+        {
+            _addressSpaceHandle = handle;
+            return;
+        }
+
+        if (_addressSpaceHandle.Identity == handle.Identity)
+        {
+            handle.Dispose();
+            return;
+        }
+
+        _addressSpaceHandle.Dispose();
+        _addressSpaceHandle = handle;
+    }
+
+    internal void BindOrAssertAddressSpaceHandle(Engine engine)
+    {
+        ArgumentNullException.ThrowIfNull(engine);
+        if (_addressSpaceHandle == null)
+        {
+            _addressSpaceHandle = ProcessAddressSpaceHandle.CaptureAttachedEngine(engine);
+            return;
+        }
+
+        if (!_addressSpaceHandle.IsAttachedTo(engine))
+            throw new InvalidOperationException(
+                $"Engine MMU identity {engine.CurrentMmuIdentityInternal} does not match address-space MMU identity {_addressSpaceHandle.Identity}.");
     }
 
     private static Inode? ResolveMappedInode(VmArea vma)
@@ -510,7 +548,7 @@ public class VMAManager
 
         var primary = engines[0];
         foreach (var engine in engines)
-            if (engine.CurrentMmuIdentity != primary.CurrentMmuIdentity)
+            if (engine.CurrentMmuIdentityInternal != primary.CurrentMmuIdentityInternal)
                 throw new InvalidOperationException(
                     "OnFileTruncate requires all engines in the same address space to share one MMU core.");
 
@@ -1573,7 +1611,10 @@ public class VMAManager
         }
 
         if (!TryGetVmMapping(vma, out var mapping))
+        {
+            pageHandle.Dispose();
             return false;
+        }
         var existing = mapping.PeekPage(pageIndex);
         if (existing != IntPtr.Zero)
         {

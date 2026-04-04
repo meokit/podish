@@ -72,8 +72,10 @@ public class Engine : IDisposable
     public IntPtr State { get; private set; }
     internal GCHandle GcHandle => _gcHandle;
     internal long AddressSpaceMapSequenceSeen { get; set; }
-    public nuint CurrentMmuIdentity => _currentMmu.Identity;
-    public MmuHandle CurrentMmu => _currentMmu.AddRefHandle();
+    internal nuint CurrentMmuIdentityInternal => _currentMmu.Identity;
+    internal MmuHandle CurrentMmuInternal => _currentMmu.AddRefHandle();
+    internal nuint CurrentMmuIdentity => CurrentMmuIdentityInternal;
+    internal MmuHandle CurrentMmu => CurrentMmuInternal;
 
     // Callbacks
     public Func<Engine, uint, bool, bool>? FaultHandler { get; set; }
@@ -319,20 +321,20 @@ public class Engine : IDisposable
 
         if (skipMmu)
         {
-            using var detached = newEngine.DetachMmu();
+            using var detached = newEngine.DetachOwnedMmuHandle();
         }
 
         return newEngine;
     }
 
-    public void ShareMmuFrom(Engine source)
+    internal void ShareMmuFrom(Engine source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        using var handle = source.CurrentMmu;
-        ReplaceMmu(handle);
+        using var handle = source.CurrentMmuInternal;
+        AttachOwnedMmuHandle(handle);
     }
 
-    public void ReplaceMmu(MmuHandle mmu)
+    internal void AttachOwnedMmuHandle(MmuHandle mmu)
     {
         AssertSchedulerThread();
         ArgumentNullException.ThrowIfNull(mmu);
@@ -367,7 +369,18 @@ public class Engine : IDisposable
         }
     }
 
-    public MmuHandle DetachMmu()
+    internal MmuHandle CaptureCurrentMmuHandle()
+    {
+        AssertSchedulerThread();
+        return _currentMmu.AddRefHandle();
+    }
+
+    internal void ReplaceMmu(MmuHandle mmu)
+    {
+        AttachOwnedMmuHandle(mmu);
+    }
+
+    internal MmuHandle DetachOwnedMmuHandle()
     {
         AssertSchedulerThread();
         using var previous = _currentMmu.AddRefHandle();
@@ -398,6 +411,11 @@ public class Engine : IDisposable
         }
 
         return detached;
+    }
+
+    internal MmuHandle DetachMmu()
+    {
+        return DetachOwnedMmuHandle();
     }
 
     public void MemMap(uint addr, uint size, byte perms)

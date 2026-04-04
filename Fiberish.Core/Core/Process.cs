@@ -354,18 +354,15 @@ public class Process
         // via CLONE_VM. We must NOT clear the shared memory — instead, create a private
         // VMAManager for this process before proceeding.
         var freshMem = new VMAManager(Mem.Backings);
+        if (hadSharedAddressSpace)
+            freshMem.BindAddressSpaceHandle(ProcessAddressSpaceHandle.DetachFromSharedEngine(oldEngine));
+        else
+            freshMem.BindAddressSpaceHandle(ProcessAddressSpaceHandle.CaptureAttachedEngine(oldEngine));
         Mem = freshMem;
         Syscalls.Mem = freshMem;
         ProcessAddressSpaceSync.RebindEngineAddressSpace(oldMem, freshMem, oldEngine);
         MemoryReleased = false;
         oldMem.ReleaseSharedRef(oldEngine);
-
-        // CLONE_VM/vfork case: this engine can still share the native MMU core with parent.
-        // Detach first so exec's ResetMemory + new mappings don't clobber the parent's live mappings.
-        if (hadSharedAddressSpace)
-        {
-            using var detachedSharedCore = Syscalls.CurrentSyscallEngine.DetachMmu();
-        }
 
         // Clear old native MMU page tables + JIT cache.
         // ResetAllCodeCache only clears JIT; ResetMemory also resets the native page directory

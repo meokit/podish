@@ -95,6 +95,7 @@ public class FiberTask
         Process.Syscalls?.PtyManager.BindScheduler(kernel);
 
         CPU = cpu;
+        Process.Mem.AddressSpaceHandle?.AttachEngine(CPU);
         CPU.Owner = this;
         AsyncScope = new FiberTaskAsyncScope(this);
 
