@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="Fiberish.Core/Fiberish.Core.csproj" />
+  <Project Path="Fiberish.SilkFS/Fiberish.SilkFS.csproj" />
+  <Project Path="Fiberish.X86/Fiberish.X86.csproj" />
+  <Project Path="Podish.Browser/Podish.Browser.csproj" />
+  <Project Path="Podish.Core/Podish.Core.csproj" />
+</Solution>

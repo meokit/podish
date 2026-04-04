@@ -1,0 +1,14 @@
+.fiberpod/
+.cache/
+.tmp/
+.venv/
+.env
+.idea/
+.junie/
+.vscode/
+__pycache__/
+bin/
+build_native/
+obj/
+env/
+.DS_Store

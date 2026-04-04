@@ -11,7 +11,7 @@ Open `PodishApp/Package.swift` in Xcode.
 Restore managed dependencies first:
 
 ```bash
-dotnet restore Fiberish.sln
+dotnet restore Podish.slnx
 ```
 
 Build the Apple XCFramework used by the app:

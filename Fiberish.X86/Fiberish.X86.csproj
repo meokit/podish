@@ -27,8 +27,18 @@
     </PropertyGroup>
 
     <Target Name="BuildNativeLib" BeforeTargets="BeforeBuild" Condition="'$(DesignTimeBuild)' != 'true'">
-        <Message Text="Building libfibercpu with CMake..." Importance="High"/>
         <PropertyGroup>
+            <LibFibercpuSourceDir>$(MSBuildThisFileDirectory)../libfibercpu</LibFibercpuSourceDir>
+            <LibFibercpuSourceExists Condition="Exists('$(LibFibercpuSourceDir)/CMakeLists.txt')">true</LibFibercpuSourceExists>
+            <LibFibercpuSourceExists Condition="'$(LibFibercpuSourceExists)' == ''">false</LibFibercpuSourceExists>
+        </PropertyGroup>
+
+        <DownloadFile Condition="'$(LibFibercpuSourceExists)' != 'true' And '$(IsBrowserWasm)' == 'true' And !Exists('$(NativeBuildDir)/libfibercpu.a')"
+                      SourceUrl="https://github.com/GiantNeko/fibercpu/releases/latest/download/libfibercpu-wasm.a"
+                      DestinationFolder="$(NativeBuildDir)"
+                      DestinationFileName="libfibercpu.a" />
+
+        <PropertyGroup Condition="'$(LibFibercpuSourceExists)' == 'true'">
             <BuildFibercpuStatic Condition="'$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true' Or '$(IsBrowserWasm)' == 'true'">true</BuildFibercpuStatic>
             <BuildFibercpuStatic Condition="'$(BuildFibercpuStatic)' == ''">false</BuildFibercpuStatic>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true'">-DCMAKE_BUILD_TYPE=Release -DFIBERCPU_BUILD_STATIC=ON -DFIBERCPU_ENABLE_LTO=OFF</CMakeArgs>
@@ -52,10 +62,12 @@
             <CMakeGeneratorArgs Condition="'$(IsBrowserWasm)' == 'true'">-G Ninja</CMakeGeneratorArgs>
             <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_TOOLCHAIN_FILE=&quot;$(EmscriptenToolchainFile)&quot; -DCMAKE_CROSSCOMPILING_EMULATOR=&quot;$(BrowserWasmNodeExecutable)&quot;</CMakeArgs>
         </PropertyGroup>
-        <Error Condition="'$(IsBrowserWasm)' == 'true' And '$(EmscriptenToolchainFile)' == ''"
+
+        <Message Condition="'$(LibFibercpuSourceExists)' == 'true'" Text="Building libfibercpu with CMake..." Importance="High"/>
+        <Error Condition="'$(LibFibercpuSourceExists)' == 'true' And '$(IsBrowserWasm)' == 'true' And '$(EmscriptenToolchainFile)' == ''"
                Text="browser-wasm build requires Emscripten. Set EmscriptenToolchainFile to your Emscripten.cmake path." />
-        <Exec Command="cmake -S ../libfibercpu -B $(NativeBuildDir) $(CMakeGeneratorArgs) $(CMakeArgs)" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
-        <Exec Command="cmake --build $(NativeBuildDir) --config Release" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
+        <Exec Condition="'$(LibFibercpuSourceExists)' == 'true'" Command="cmake -S ../libfibercpu -B $(NativeBuildDir) $(CMakeGeneratorArgs) $(CMakeArgs)" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
+        <Exec Condition="'$(LibFibercpuSourceExists)' == 'true'" Command="cmake --build $(NativeBuildDir) --config Release" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
     </Target>
 
     <ItemGroup Condition="'$(IsBrowserWasm)' == 'true'">

@@ -1,0 +1,18 @@
+<Solution>
+  <Project Path="Fiberish.Core/Fiberish.Core.csproj" />
+  <Project Path="Fiberish.SilkFS/Fiberish.SilkFS.csproj" />
+  <Project Path="Fiberish.SilkFS.Tests/Fiberish.SilkFS.Tests.csproj" />
+  <Project Path="Fiberish.Tests/Fiberish.Tests.csproj" />
+  <Project Path="Fiberish.X86/Fiberish.X86.csproj" />
+  <Project Path="Podish.Browser/Podish.Browser.csproj" />
+  <Project Path="Podish.Cli/Podish.Cli.csproj" />
+  <Project Path="Podish.Core/Podish.Core.csproj" />
+  <Project Path="Podish.Core.Native/Podish.Core.Native.csproj" />
+  <Project Path="Podish.Display/Podish.Display.csproj" />
+  <Project Path="Podish.PerfTools/Podish.PerfTools.csproj" />
+  <Project Path="Podish.Pulse/Podish.Pulse.csproj" />
+  <Project Path="Podish.Pulse.Tests/Podish.Pulse.Tests.csproj" />
+  <Project Path="Podish.Wayland/Podish.Wayland.csproj" />
+  <Project Path="Podish.Wayland.Generator/Podish.Wayland.Generator.csproj" />
+  <Project Path="Podish.Wayland.Tests/Podish.Wayland.Tests.csproj" />
+</Solution>

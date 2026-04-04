@@ -59,7 +59,7 @@ On this repo snapshot, the workspace builds successfully with:
 Build the full solution:
 
 ```bash
-dotnet build Fiberish.sln -c Debug
+dotnet build Podish.slnx -c Debug
 ```
 
 This build already triggers the native sub-builds:

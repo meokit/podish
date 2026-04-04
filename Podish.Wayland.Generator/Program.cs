@@ -563,11 +563,11 @@ internal static class Program
         string current = Directory.GetCurrentDirectory();
         while (!string.IsNullOrEmpty(current))
         {
-            if (File.Exists(Path.Combine(current, "Fiberish.sln")))
+            if (File.Exists(Path.Combine(current, "Podish.slnx")))
                 return current;
             current = Path.GetDirectoryName(current) ?? string.Empty;
         }
 
-        throw new DirectoryNotFoundException("Could not locate repo root containing Fiberish.sln.");
+        throw new DirectoryNotFoundException("Could not locate repo root containing Podish.slnx.");
     }
 }
