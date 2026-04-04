@@ -100,10 +100,8 @@ final class PodishUiStore: ObservableObject {
         }
 
         if selectedContainerID != nextSelected {
-            DispatchQueue.main.async {
-                if self.selectedContainerID != nextSelected {
-                    self.selectedContainerID = nextSelected
-                }
+            if self.selectedContainerID != nextSelected {
+                self.selectedContainerID = nextSelected
             }
         }
     }

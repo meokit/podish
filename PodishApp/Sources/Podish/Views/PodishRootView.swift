@@ -20,13 +20,11 @@ struct PodishRootView: View {
             }
             .onChange(of: session.activeContainerId) { activeId in
                 guard let activeId, store.selectedContainerID != activeId else { return }
-                DispatchQueue.main.async {
-                    if store.selectedContainerID != activeId {
-                        store.selectedContainerID = activeId
-                    }
-                    if sidebarSelection != .home {
-                        sidebarSelection = .container(activeId)
-                    }
+                if store.selectedContainerID != activeId {
+                    store.selectedContainerID = activeId
+                }
+                if sidebarSelection != .home {
+                    sidebarSelection = .container(activeId)
                 }
             }
     }
@@ -48,9 +46,7 @@ struct PodishRootView: View {
             onSessionReady?(session)
             session.startIfNeeded()
             store.onShowNewContainer = {
-                DispatchQueue.main.async {
-                    showNewContainer = true
-                }
+                showNewContainer = true
             }
         }
         .sheet(item: $detailsContainer) { container in
@@ -79,15 +75,13 @@ struct PodishRootView: View {
             onSessionReady?(session)
             session.startIfNeeded()
             store.onShowNewContainer = {
-                DispatchQueue.main.async {
-                    if showSidebar {
-                        showSidebar = false
-                        DispatchQueue.main.async {
-                            showNewContainer = true
-                        }
-                    } else {
+                if showSidebar {
+                    showSidebar = false
+                    Task { @MainActor in
                         showNewContainer = true
                     }
+                } else {
+                    showNewContainer = true
                 }
             }
         }
@@ -99,7 +93,7 @@ struct PodishRootView: View {
                     onShowDetails: { container in
                         if showSidebar {
                             showSidebar = false
-                            DispatchQueue.main.async {
+                            Task { @MainActor in
                                 detailsContainer = container
                             }
                         } else {
@@ -146,17 +140,17 @@ struct PodishRootView: View {
         didBindSession = true
 
         session.onContainerList = { items in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 store.applyContainerList(items)
             }
         }
         session.onImageList = { items in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 store.applyImageList(items)
             }
         }
         session.onContainerStateChanged = { items in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 store.applyContainerList(items)
                 if let selectedId = store.selectedContainerID {
                     session.attachContainer(selectedId)

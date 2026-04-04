@@ -18,7 +18,7 @@ final class PodishApplicationDelegate: NSObject, NSApplicationDelegate {
 
         terminationInProgress = true
         onBeforeTerminate { [weak self] in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 NSApplication.shared.reply(toApplicationShouldTerminate: true)
                 self?.terminationInProgress = false
             }

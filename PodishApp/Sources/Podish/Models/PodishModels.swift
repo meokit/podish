@@ -33,7 +33,7 @@ struct PodishImage: Identifiable, Hashable {
     var createdAt: Date
 }
 
-struct NativeImageListItem: Decodable, Hashable {
+struct NativeImageListItem: Decodable, Hashable, Sendable {
     let imageReference: String
     let manifestDigest: String
     let layerCount: Int
@@ -42,7 +42,7 @@ struct NativeImageListItem: Decodable, Hashable {
     let repository: String?
 }
 
-struct NativeContainerListItem: Decodable, Hashable {
+struct NativeContainerListItem: Decodable, Hashable, Sendable {
     let handle: String
     let containerId: String
     let name: String
@@ -53,7 +53,7 @@ struct NativeContainerListItem: Decodable, Hashable {
     let exitCode: Int?
 }
 
-struct NativePublishedPortSpec: Decodable, Hashable {
+struct NativePublishedPortSpec: Decodable, Hashable, Sendable {
     let hostPort: Int
     let containerPort: Int
     let protocolValue: Int
@@ -67,7 +67,7 @@ struct NativePublishedPortSpec: Decodable, Hashable {
     }
 }
 
-struct NativeRunSpec: Decodable, Hashable {
+struct NativeRunSpec: Decodable, Hashable, Sendable {
     let name: String?
     let networkMode: Int
     let image: String?
@@ -85,7 +85,7 @@ struct NativeRunSpec: Decodable, Hashable {
     let memoryQuotaBytes: Int64?
 }
 
-struct NativeContainerInspect: Decodable, Hashable {
+struct NativeContainerInspect: Decodable, Hashable, Sendable {
     let handle: String
     let containerId: String
     let name: String
@@ -97,13 +97,13 @@ struct NativeContainerInspect: Decodable, Hashable {
     let spec: NativeRunSpec
 }
 
-struct NativeContainerLogEntry: Decodable, Hashable {
+struct NativeContainerLogEntry: Decodable, Hashable, Sendable {
     let time: String
     let stream: String
     let log: String
 }
 
-struct NativeLogsChunk: Decodable, Hashable {
+struct NativeLogsChunk: Decodable, Hashable, Sendable {
     let cursor: String
     let entries: [NativeContainerLogEntry]
 }
@@ -113,7 +113,7 @@ enum PodishSidebarDestination: Hashable {
     case container(String)
 }
 
-enum PodishNetworkMode: String, CaseIterable, Identifiable {
+enum PodishNetworkMode: String, CaseIterable, Identifiable, Sendable {
     case host
     case privateNet = "private"
 
@@ -144,7 +144,7 @@ enum PodishMemoryLimits {
     static let bytesPerMiB: Int64 = 1024 * 1024
 }
 
-struct PodishPortMapping: Hashable {
+struct PodishPortMapping: Hashable, Sendable {
     let hostPort: Int
     let containerPort: Int
 }

@@ -170,12 +170,10 @@ struct SidebarView: View {
         .background(Color.clear)
         .onChange(of: store.selectedContainerID) { newValue in
             guard case .container = selection else { return }
-            DispatchQueue.main.async {
-                if let newValue {
-                    selection = .container(newValue)
-                } else {
-                    selection = .home
-                }
+            if let newValue {
+                selection = .container(newValue)
+            } else {
+                selection = .home
             }
         }
     }
@@ -185,17 +183,15 @@ struct SidebarView: View {
             get: { selection },
             set: { newValue in
                 guard let newValue else { return }
-                DispatchQueue.main.async {
-                    selection = newValue
-                    switch newValue {
-                    case .home:
-                        onSelected?()
-                    case .container(let containerID):
-                        if store.selectedContainerID != containerID {
-                            store.selectedContainerID = containerID
-                        }
-                        onSelected?()
+                selection = newValue
+                switch newValue {
+                case .home:
+                    onSelected?()
+                case .container(let containerID):
+                    if store.selectedContainerID != containerID {
+                        store.selectedContainerID = containerID
                     }
+                    onSelected?()
                 }
             }
         )
