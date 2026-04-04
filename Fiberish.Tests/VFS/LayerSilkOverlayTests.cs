@@ -51,9 +51,10 @@ public class LayerSilkOverlayTests
 
             var upperRepo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             upperRepo.Initialize();
-            var etcIno = upperRepo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "etc");
+            using var session = upperRepo.OpenMetadataSession();
+            var etcIno = session.LookupDentry(SilkMetadataStore.RootInode, "etc");
             Assert.NotNull(etcIno);
-            var fiberIno = upperRepo.Metadata.LookupDentry(etcIno!.Value, "fiber.txt");
+            var fiberIno = session.LookupDentry(etcIno!.Value, "fiber.txt");
             Assert.NotNull(fiberIno);
             var livePath = upperRepo.GetLiveInodePath(fiberIno!.Value);
             Assert.True(File.Exists(livePath));

@@ -18,7 +18,8 @@ public class SilkRepositoryTests
             Assert.True(Directory.Exists(options.RootPath));
             Assert.True(Directory.Exists(options.LiveDataPath));
             Assert.True(File.Exists(options.MetadataPath));
-            Assert.True(repo.Metadata.InodeExists(SilkMetadataStore.RootInode));
+            using (var session = repo.OpenMetadataSession())
+                Assert.True(session.InodeExists(SilkMetadataStore.RootInode));
         }
         finally
         {
@@ -36,18 +37,19 @@ public class SilkRepositoryTests
             var repo = new SilkRepository(options);
             repo.Initialize();
 
-            var inode = repo.Metadata.CreateInode(SilkInodeKind.File, 0x1A4); // 0644
-            repo.Metadata.UpsertDentry(SilkMetadataStore.RootInode, "hello.txt", inode);
-            var lookup = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "hello.txt");
+            using var session = repo.OpenMetadataSession();
+            var inode = session.CreateInode(SilkInodeKind.File, 0x1A4); // 0644
+            session.UpsertDentry(SilkMetadataStore.RootInode, "hello.txt", inode);
+            var lookup = session.LookupDentry(SilkMetadataStore.RootInode, "hello.txt");
 
             Assert.Equal(inode, lookup);
 
-            repo.Metadata.SetXAttr(inode, "user.mime_type", "text/plain"u8.ToArray());
-            var v = repo.Metadata.GetXAttr(inode, "user.mime_type");
+            session.SetXAttr(inode, "user.mime_type", "text/plain"u8.ToArray());
+            var v = session.GetXAttr(inode, "user.mime_type");
             Assert.NotNull(v);
             Assert.Equal("text/plain", Encoding.UTF8.GetString(v!));
 
-            var list = repo.Metadata.ListXAttrs(inode);
+            var list = session.ListXAttrs(inode);
             Assert.True(list.ContainsKey("user.mime_type"));
         }
         finally
@@ -66,17 +68,18 @@ public class SilkRepositoryTests
             var repo = new SilkRepository(options);
             repo.Initialize();
 
-            Assert.False(repo.Metadata.HasWhiteout(SilkMetadataStore.RootInode, "ghost.txt"));
-            repo.Metadata.MarkWhiteout(SilkMetadataStore.RootInode, "ghost.txt");
-            Assert.True(repo.Metadata.HasWhiteout(SilkMetadataStore.RootInode, "ghost.txt"));
-            repo.Metadata.ClearWhiteout(SilkMetadataStore.RootInode, "ghost.txt");
-            Assert.False(repo.Metadata.HasWhiteout(SilkMetadataStore.RootInode, "ghost.txt"));
+            using var session = repo.OpenMetadataSession();
+            Assert.False(session.HasWhiteout(SilkMetadataStore.RootInode, "ghost.txt"));
+            session.MarkWhiteout(SilkMetadataStore.RootInode, "ghost.txt");
+            Assert.True(session.HasWhiteout(SilkMetadataStore.RootInode, "ghost.txt"));
+            session.ClearWhiteout(SilkMetadataStore.RootInode, "ghost.txt");
+            Assert.False(session.HasWhiteout(SilkMetadataStore.RootInode, "ghost.txt"));
 
-            Assert.False(repo.Metadata.IsOpaque(SilkMetadataStore.RootInode));
-            repo.Metadata.MarkOpaque(SilkMetadataStore.RootInode);
-            Assert.True(repo.Metadata.IsOpaque(SilkMetadataStore.RootInode));
-            repo.Metadata.ClearOpaque(SilkMetadataStore.RootInode);
-            Assert.False(repo.Metadata.IsOpaque(SilkMetadataStore.RootInode));
+            Assert.False(session.IsOpaque(SilkMetadataStore.RootInode));
+            session.MarkOpaque(SilkMetadataStore.RootInode);
+            Assert.True(session.IsOpaque(SilkMetadataStore.RootInode));
+            session.ClearOpaque(SilkMetadataStore.RootInode);
+            Assert.False(session.IsOpaque(SilkMetadataStore.RootInode));
         }
         finally
         {
@@ -94,7 +97,8 @@ public class SilkRepositoryTests
             var repo = new SilkRepository(options);
             repo.Initialize();
 
-            var inode = repo.Metadata.CreateInode(SilkInodeKind.File, 0x1A4);
+            using var session = repo.OpenMetadataSession();
+            var inode = session.CreateInode(SilkInodeKind.File, 0x1A4);
             var payload = "silk-content"u8.ToArray();
             repo.WriteLiveInodeData(inode, payload);
 
@@ -118,7 +122,8 @@ public class SilkRepositoryTests
             var repo = new SilkRepository(options);
             repo.Initialize();
 
-            var ino = repo.Metadata.CreateInode(SilkInodeKind.File, 0x1A4);
+            using var session = repo.OpenMetadataSession();
+            var ino = session.CreateInode(SilkInodeKind.File, 0x1A4);
             repo.WriteLiveInodeData(ino, "object-a"u8.ToArray());
             Assert.Equal("object-a", Encoding.UTF8.GetString(repo.ReadLiveInodeData(ino)!));
 
@@ -144,7 +149,8 @@ public class SilkRepositoryTests
             var repo = new SilkRepository(options);
             repo.Initialize();
 
-            var ino = repo.Metadata.CreateInode(SilkInodeKind.File, 0x1A4);
+            using var session = repo.OpenMetadataSession();
+            var ino = session.CreateInode(SilkInodeKind.File, 0x1A4);
             repo.WriteLiveInodeData(ino, "abcdef"u8.ToArray());
             repo.WriteLiveInodeData(ino, "xy"u8.ToArray());
 

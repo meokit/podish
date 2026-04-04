@@ -28,6 +28,11 @@ public struct PathLocation
     public bool IsNull => Dentry == null;
 }
 
+public readonly record struct UserStringReadResult(string Value, int ErrorCode)
+{
+    public bool Success => ErrorCode == 0;
+}
+
 public partial class SyscallManager
 {
     // Lazy-initialized PathWalker instance
@@ -60,6 +65,39 @@ public partial class SyscallManager
         }
 
         return sb.ToString();
+    }
+
+    public UserStringReadResult ReadUserString(uint addr, int maxLength = LinuxConstants.PathMax)
+    {
+        if (addr == 0) return new UserStringReadResult("", -(int)Errno.EFAULT);
+
+        var sb = new StringBuilder();
+        var current = addr;
+        var buf = new byte[1];
+        while (true)
+        {
+            // Syscall argument reads should fault in guest pages when the address is valid
+            // but currently unmapped into the host MMU, e.g. string literals in file-backed
+            // mappings. Using the no-fault helper here makes behavior depend on whether some
+            // earlier diagnostic read happened to prefault the page.
+            if (!CurrentSyscallEngine.CopyFromUser(current++, buf))
+                return new UserStringReadResult("", -(int)Errno.EFAULT);
+            if (buf[0] == 0)
+                return new UserStringReadResult(sb.ToString(), 0);
+
+            sb.Append((char)buf[0]);
+            if (sb.Length >= maxLength)
+                return new UserStringReadResult("", -(int)Errno.ENAMETOOLONG);
+        }
+    }
+
+    public int ReadPathArgument(uint addr, out string path, bool allowEmpty = false)
+    {
+        var result = ReadUserString(addr, LinuxConstants.PathMax);
+        path = result.Success ? result.Value : "";
+        if (!result.Success) return result.ErrorCode;
+        if (!allowEmpty && path.Length == 0) return -(int)Errno.ENOENT;
+        return 0;
     }
 
     /// <summary>

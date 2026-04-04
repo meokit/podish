@@ -179,6 +179,19 @@ public class VMAManager
                 $"Engine MMU identity {engine.CurrentMmuIdentityInternal} does not match address-space MMU identity {_addressSpaceHandle.Identity}.");
     }
 
+    internal bool TryAttachEngineToBoundAddressSpace(Engine engine)
+    {
+        ArgumentNullException.ThrowIfNull(engine);
+        if (_addressSpaceHandle == null)
+            return false;
+
+        if (_addressSpaceHandle.IsAttachedTo(engine))
+            return true;
+
+        _addressSpaceHandle.AttachEngine(engine);
+        return true;
+    }
+
     private static Inode? ResolveMappedInode(VmArea vma)
     {
         return vma.File?.OpenedInode;

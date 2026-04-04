@@ -2,6 +2,7 @@ using Fiberish.Core;
 using Fiberish.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.Native;
+using Fiberish.Auth.Permission;
 using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
@@ -278,6 +279,7 @@ public enum FileFlags
     O_RDONLY = 0,
     O_WRONLY = 1,
     O_RDWR = 2,
+    O_ACCMODE = 3,
     O_CREAT = 64,
     O_EXCL = 128,
     O_NOCTTY = 256,
@@ -707,6 +709,7 @@ public abstract class Inode : IAddressSpaceOperations
         var before = LinkCount;
         LinkCount = linkCount;
         HasExplicitLinkCount = true;
+        CTime = DateTime.Now;
         VfsDebugTrace.RecordLinkChange(this, "Inode.SetInitialLinkCount", before, LinkCount, reason);
         TryFinalizeDelete("SetInitialLinkCount", reason);
     }
@@ -737,7 +740,7 @@ public abstract class Inode : IAddressSpaceOperations
         TryFinalizeDelete("DecLink", reason);
     }
 
-    public uint GetLinkCountForStat()
+    public virtual uint GetLinkCountForStat()
     {
         if (HasExplicitLinkCount)
             return (uint)Math.Max(0, LinkCount);
@@ -1012,7 +1015,19 @@ public abstract class Inode : IAddressSpaceOperations
     protected internal virtual int WriteSpan(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer,
         long offset)
     {
-        return WriteSpan(linuxFile, buffer, offset);
+        var rc = WriteSpan(linuxFile, buffer, offset);
+        if (rc > 0)
+        {
+            CTime = DateTime.Now;
+            if (task?.Process != null)
+            {
+                var clearedMode = DacPolicy.ApplySetIdClearOnWrite(task.Process, this);
+                if (clearedMode != Mode)
+                    Mode = clearedMode;
+            }
+        }
+
+        return rc;
     }
 
     protected internal virtual int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
@@ -1316,6 +1331,7 @@ public abstract class Inode : IAddressSpaceOperations
         var end = offset + consumed;
         if (end > (long)Size) Size = (ulong)end;
         MTime = DateTime.Now;
+        CTime = MTime;
         return consumed;
     }
 

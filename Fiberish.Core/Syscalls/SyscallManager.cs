@@ -995,7 +995,15 @@ public partial class SyscallManager
     public void RegisterEngine(Engine engine)
     {
         engine.PageFaultResolver ??= (addr, isWrite) => Mem.HandleFault(addr, isWrite, engine);
-        Mem.BindOrAssertAddressSpaceHandle(engine);
+        try
+        {
+            Mem.BindOrAssertAddressSpaceHandle(engine);
+        }
+        catch (InvalidOperationException) when (engine.Owner == null && engine.CurrentMmuAttachmentCount == 1 &&
+                                               Mem.TryAttachEngineToBoundAddressSpace(engine))
+        {
+        }
+
         ProcessAddressSpaceSync.RegisterEngineAddressSpace(Mem, engine);
     }
 

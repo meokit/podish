@@ -64,14 +64,15 @@ public class SilkFsAdapterTests
 
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
-            var childIno = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "hello.txt");
+            using var session = repo.OpenMetadataSession();
+            var childIno = session.LookupDentry(SilkMetadataStore.RootInode, "hello.txt");
             Assert.NotNull(childIno);
-            var x = repo.Metadata.GetXAttr(childIno!.Value, "user.mime_type");
+            var x = session.GetXAttr(childIno!.Value, "user.mime_type");
             Assert.NotNull(x);
 
             var wh = new Dentry(".wh.ghost.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Mknod(wh, 0x180, 0, 0, InodeType.CharDev, 0);
-            Assert.True(repo.Metadata.HasWhiteout(SilkMetadataStore.RootInode, "ghost.txt"));
+            Assert.True(session.HasWhiteout(SilkMetadataStore.RootInode, "ghost.txt"));
         }
         finally
         {
@@ -175,7 +176,8 @@ public class SilkFsAdapterTests
 
                 var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
                 repo.Initialize();
-                Assert.True(repo.Metadata.HasWhiteout(SilkMetadataStore.RootInode, "gone.txt"));
+                using var session = repo.OpenMetadataSession();
+                Assert.True(session.HasWhiteout(SilkMetadataStore.RootInode, "gone.txt"));
                 sm.Close();
             }
         }
@@ -353,13 +355,14 @@ public class SilkFsAdapterTests
 
                 var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
                 repo.Initialize();
-                var fromIno = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "from");
-                var toIno = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "to");
+                using var session = repo.OpenMetadataSession();
+                var fromIno = session.LookupDentry(SilkMetadataStore.RootInode, "from");
+                var toIno = session.LookupDentry(SilkMetadataStore.RootInode, "to");
                 Assert.NotNull(fromIno);
                 Assert.NotNull(toIno);
 
-                var fromRec = repo.Metadata.GetInode(fromIno!.Value);
-                var toRec = repo.Metadata.GetInode(toIno!.Value);
+                var fromRec = session.GetInode(fromIno!.Value);
+                var toRec = session.GetInode(toIno!.Value);
                 Assert.NotNull(fromRec);
                 Assert.NotNull(toRec);
                 Assert.Equal(2, fromRec!.Value.Nlink);
@@ -411,7 +414,8 @@ public class SilkFsAdapterTests
 
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
-            var ino = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "obj.txt");
+            using var session = repo.OpenMetadataSession();
+            var ino = session.LookupDentry(SilkMetadataStore.RootInode, "obj.txt");
             Assert.NotNull(ino);
             var livePath = repo.GetLiveInodePath(ino!.Value);
             Assert.True(File.Exists(livePath));
@@ -471,13 +475,14 @@ public class SilkFsAdapterTests
 
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
-            var ino = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "gone.txt");
+            using var session = repo.OpenMetadataSession();
+            var ino = session.LookupDentry(SilkMetadataStore.RootInode, "gone.txt");
             Assert.NotNull(ino);
 
             loc.Dentry.Inode.Unlink("gone.txt");
 
-            Assert.Null(repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "gone.txt"));
-            Assert.Null(repo.Metadata.GetInode(ino!.Value));
+            Assert.Null(session.LookupDentry(SilkMetadataStore.RootInode, "gone.txt"));
+            Assert.Null(session.GetInode(ino!.Value));
             Assert.False(File.Exists(repo.GetLiveInodePath(ino.Value)));
             sm.Close();
         }
@@ -529,16 +534,17 @@ public class SilkFsAdapterTests
 
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
-            var bIno = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "b.txt");
+            using var session = repo.OpenMetadataSession();
+            var bIno = session.LookupDentry(SilkMetadataStore.RootInode, "b.txt");
             Assert.NotNull(bIno);
 
             loc.Dentry.Inode.Rename("a.txt", loc.Dentry.Inode, "b.txt");
 
-            Assert.Null(repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "a.txt"));
-            var newBIno = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "b.txt");
+            Assert.Null(session.LookupDentry(SilkMetadataStore.RootInode, "a.txt"));
+            var newBIno = session.LookupDentry(SilkMetadataStore.RootInode, "b.txt");
             Assert.NotNull(newBIno);
             Assert.NotEqual(bIno, newBIno);
-            Assert.Null(repo.Metadata.GetInode(bIno!.Value));
+            Assert.Null(session.GetInode(bIno!.Value));
             sm.Close();
         }
         finally
@@ -583,7 +589,8 @@ public class SilkFsAdapterTests
 
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
-            var ino = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "held.txt");
+            using var session = repo.OpenMetadataSession();
+            var ino = session.LookupDentry(SilkMetadataStore.RootInode, "held.txt");
             Assert.NotNull(ino);
             var livePath = repo.GetLiveInodePath(ino!.Value);
             Assert.True(File.Exists(livePath));
@@ -644,7 +651,8 @@ public class SilkFsAdapterTests
 
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
-            var ino = repo.Metadata.LookupDentry(SilkMetadataStore.RootInode, "mapheld.txt");
+            using var session = repo.OpenMetadataSession();
+            var ino = session.LookupDentry(SilkMetadataStore.RootInode, "mapheld.txt");
             Assert.NotNull(ino);
             var livePath = repo.GetLiveInodePath(ino!.Value);
             Assert.True(File.Exists(livePath));

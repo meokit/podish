@@ -46,6 +46,10 @@ public static class DacPolicy
     {
         if (process.EUID == 0) return 0;
 
+        // Linux allows an unprivileged no-op ownership change even when the caller
+        // does not own the file, because neither uid nor gid changes.
+        if (uid == -1 && gid == -1) return 0;
+
         // Unprivileged users may only retain ownership and optionally change group to one they are in.
         if (uid != -1 && uid != inode.Uid) return -(int)Errno.EPERM;
         if (process.FSUID != inode.Uid) return -(int)Errno.EPERM;
@@ -78,6 +82,27 @@ public static class DacPolicy
 
         // Linux-like: ownership change clears S_ISUID/S_ISGID on regular files.
         return inode.Mode & ~0xC00;
+    }
+
+    public static int ApplySetIdClearOnWrite(Process process, Inode inode)
+    {
+        if (inode.Type != InodeType.File) return inode.Mode;
+        if (process.FSUID == 0 || process.FSUID == inode.Uid) return inode.Mode;
+
+        // Linux clears S_ISUID/S_ISGID on regular-file writes by non-owner writers.
+        return inode.Mode & ~0xC00;
+    }
+
+    public static int CanRemoveOrRenameEntry(Process process, Inode parentDirectory, Inode victim)
+    {
+        const int S_ISVTX = 0x200;
+
+        if (process.FSUID == 0) return 0;
+        if ((parentDirectory.Mode & S_ISVTX) == 0) return 0;
+        if (process.FSUID == parentDirectory.Uid) return 0;
+        if (process.FSUID == victim.Uid) return 0;
+
+        return -(int)Errno.EPERM;
     }
 
     private static int ResolvePermissionClass(Process process, Inode inode, int uid, int gid, bool useEffectiveIds)

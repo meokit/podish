@@ -14,8 +14,10 @@ public partial class SyscallManager
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
     private async ValueTask<int> SysLink(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var oldPath = ReadString(a1);
-        var newPath = ReadString(a2);
+        var oldPathErr = ReadPathArgument(a1, out var oldPath);
+        if (oldPathErr != 0) return oldPathErr;
+        var newPathErr = ReadPathArgument(a2, out var newPath);
+        if (newPathErr != 0) return newPathErr;
 
         var oldLookup = PathWalker.PathWalkWithData(oldPath, LookupFlags.None);
         if (oldLookup.HasError) return oldLookup.ErrorCode;
@@ -43,9 +45,11 @@ public partial class SyscallManager
     private async ValueTask<int> SysLinkat(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var olddirfd = (int)a1;
-        var oldpath = ReadString(a2);
+        var oldPathErr = ReadPathArgument(a2, out var oldpath);
+        if (oldPathErr != 0) return oldPathErr;
         var newdirfd = (int)a3;
-        var newpath = ReadString(a4);
+        var newPathErr = ReadPathArgument(a4, out var newpath);
+        if (newPathErr != 0) return newPathErr;
         var flags = (int)a5;
         if ((flags & ~LinuxConstants.AT_SYMLINK_FOLLOW) != 0) return -(int)Errno.EINVAL;
 
@@ -94,8 +98,11 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysChdir(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var path = ReadString(a1);
-        var loc = PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        var pathErr = ReadPathArgument(a1, out var path);
+        if (pathErr != 0) return pathErr;
+        var lookup = PathWalker.PathWalkWithData(path, LookupFlags.FollowSymlink);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (loc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
@@ -116,7 +123,8 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysMkdir(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var path = ReadString(a1);
+        var pathErr = ReadPathArgument(a1, out var path);
+        if (pathErr != 0) return pathErr;
         var mode = a2;
 
         var (parentLoc, name, err) = PathWalkForCreate(path);
@@ -146,7 +154,9 @@ public partial class SyscallManager
 
     private static ValueTask<int> DoTruncate(SyscallManager sm, Engine engine, uint pathPtr, long length)
     {
-        var path = sm.ReadString(pathPtr);
+        var pathErr = sm.ReadPathArgument(pathPtr, out var path);
+        if (pathErr != 0)
+            return new ValueTask<int>(pathErr);
 
         var lookup = sm.PathWalker.PathWalkWithData(path);
         if (lookup.HasError)
@@ -184,6 +194,7 @@ public partial class SyscallManager
         var f = GetFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         if (f.OpenedInode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
+        if ((f.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EINVAL;
 
         var rc = f.OpenedInode.Truncate(length);
         if (rc == 0)
@@ -200,6 +211,7 @@ public partial class SyscallManager
         var f = GetFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         if (f.OpenedInode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
+        if ((f.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EINVAL;
 
         var rc = f.OpenedInode.Truncate(length);
         if (rc == 0)
@@ -252,7 +264,9 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysRmdir(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var path = ReadString(a1);
+        var pathErr = ReadPathArgument(a1, out var path);
+        if (pathErr != 0) return pathErr;
+        if (path == "." || path.EndsWith("/.", StringComparison.Ordinal)) return -(int)Errno.EINVAL;
 
         var (parentLoc, name, err) = PathWalkForCreate(path);
         if (err != 0) return err;
@@ -271,6 +285,12 @@ public partial class SyscallManager
             ? contextualDirectory.GetEntries(task)
             : targetLoc.Dentry.Inode.GetEntries();
         if (entries.Count > 2) return -(int)Errno.ENOTEMPTY; // Has more than . and ..
+        if (task?.Process != null)
+        {
+            var stickyRc =
+                DacPolicy.CanRemoveOrRenameEntry(task.Process, parentLoc.Dentry!.Inode!, targetLoc.Dentry.Inode);
+            if (stickyRc != 0) return stickyRc;
+        }
 
         var rmdirRc = parentLoc.Dentry!.Inode!.Rmdir(name);
         if (rmdirRc < 0)
@@ -282,7 +302,8 @@ public partial class SyscallManager
     private async ValueTask<int> SysMkdirAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
-        var path = ReadString(a2);
+        var pathErr = ReadPathArgument(a2, out var path);
+        if (pathErr != 0) return pathErr;
         var mode = a3;
 
         PathLocation startLoc = default;
@@ -313,7 +334,8 @@ public partial class SyscallManager
     private async ValueTask<int> SysMknodat(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
-        var path = ReadString(a2);
+        var pathErr = ReadPathArgument(a2, out var path);
+        if (pathErr != 0) return pathErr;
         var mode = (int)a3;
         var dev = a4;
 
@@ -569,7 +591,8 @@ public partial class SyscallManager
     private async ValueTask<int> SysUnlinkAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
-        var path = ReadString(a2);
+        var pathErr = ReadPathArgument(a2, out var path);
+        if (pathErr != 0) return pathErr;
         var flags = a3;
         const uint AT_REMOVEDIR = 0x200;
         if ((flags & ~AT_REMOVEDIR) != 0) return -(int)Errno.EINVAL;
@@ -593,6 +616,7 @@ public partial class SyscallManager
 
         if ((flags & AT_REMOVEDIR) != 0) // AT_REMOVEDIR
         {
+            if (path == "." || path.EndsWith("/.", StringComparison.Ordinal)) return -(int)Errno.EINVAL;
             if (targetLoc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
             if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
 
@@ -601,6 +625,12 @@ public partial class SyscallManager
                 ? contextualDirectory.GetEntries(task)
                 : targetLoc.Dentry.Inode.GetEntries();
             if (entries.Count > 2) return -(int)Errno.ENOTEMPTY;
+            if (task?.Process != null)
+            {
+                var stickyRc =
+                    DacPolicy.CanRemoveOrRenameEntry(task.Process, parentLoc.Dentry!.Inode!, targetLoc.Dentry.Inode);
+                if (stickyRc != 0) return stickyRc;
+            }
 
             var rmdirRc = parentLoc.Dentry!.Inode!.Rmdir(name);
             if (rmdirRc < 0)
@@ -610,6 +640,14 @@ public partial class SyscallManager
         }
 
         if (targetLoc.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
+        var taskForUnlinkAt = engine.Owner as FiberTask;
+        if (taskForUnlinkAt?.Process != null)
+        {
+            var stickyRc =
+                DacPolicy.CanRemoveOrRenameEntry(taskForUnlinkAt.Process, parentLoc.Dentry!.Inode!,
+                    targetLoc.Dentry.Inode);
+            if (stickyRc != 0) return stickyRc;
+        }
 
         var unlinkRc = parentLoc.Dentry!.Inode!.Unlink(name);
         if (unlinkRc < 0)
@@ -708,8 +746,12 @@ public partial class SyscallManager
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
-        var loc = PathWalkWithFlags(path, startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
+        var lookup = PathWalker.PathWalkWithData(
+            path,
+            startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
             followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
@@ -745,25 +787,21 @@ public partial class SyscallManager
             }
 
             var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
-            loc = PathWalkWithFlags(path, startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
+            var lookup = PathWalker.PathWalkWithData(
+                path,
+                startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
                 followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+            if (lookup.HasError) return lookup.ErrorCode;
+            loc = lookup.Path;
         }
 
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (loc.Mount != null && loc.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
-        var task = engine.Owner as FiberTask;
-        if (task?.Process != null)
-        {
-            var ownerRc = task.Process.FSUID == 0 || task.Process.FSUID == loc.Dentry.Inode.Uid
-                ? 0
-                : -(int)Errno.EACCES;
-            if (ownerRc < 0)
-                return ownerRc;
-        }
-
         if (timesAddr == 0)
         {
+            var permissionRc = CheckUtimensPermissions(engine, loc, useCurrentTimeShortcut: true);
+            if (permissionRc < 0) return permissionRc;
             var resolved = ResolveRequestedTimes(loc.Dentry.Inode.ATime, loc.Dentry.Inode.MTime, true);
             return loc.Dentry.Inode.UpdateTimes(resolved.Atime, resolved.Mtime, resolved.Ctime);
         }
@@ -811,25 +849,21 @@ public partial class SyscallManager
             }
 
             var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
-            loc = PathWalkWithFlags(path, startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
+            var lookup = PathWalker.PathWalkWithData(
+                path,
+                startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
                 followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+            if (lookup.HasError) return lookup.ErrorCode;
+            loc = lookup.Path;
         }
 
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (loc.Mount != null && loc.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
-        var task = engine.Owner as FiberTask;
-        if (task?.Process != null)
-        {
-            var ownerRc = task.Process.FSUID == 0 || task.Process.FSUID == loc.Dentry.Inode.Uid
-                ? 0
-                : -(int)Errno.EACCES;
-            if (ownerRc < 0)
-                return ownerRc;
-        }
-
         if (timesAddr == 0)
         {
+            var permissionRc = CheckUtimensPermissions(engine, loc, useCurrentTimeShortcut: true);
+            if (permissionRc < 0) return permissionRc;
             var resolved = ResolveRequestedTimes(loc.Dentry.Inode.ATime, loc.Dentry.Inode.MTime, true);
             return loc.Dentry.Inode.UpdateTimes(resolved.Atime, resolved.Mtime, resolved.Ctime);
         }
@@ -849,6 +883,15 @@ public partial class SyscallManager
     private int DoUtimensAtResolveTimes(Engine engine, PathLocation loc, long atimeSec, int atimeNsec, long mtimeSec,
         int mtimeNsec)
     {
+        var permissionRc = CheckUtimensPermissions(
+            engine,
+            loc,
+            useCurrentTimeShortcut: false,
+            atimeNsec,
+            mtimeNsec);
+        if (permissionRc < 0)
+            return permissionRc;
+
         var inode = loc.Dentry!.Inode!;
         var requested = ResolveRequestedTimes(
             inode.ATime,
@@ -860,6 +903,27 @@ public partial class SyscallManager
             mtimeNsec);
         if (requested.Error.HasValue) return requested.Error.Value;
         return inode.UpdateTimes(requested.Atime, requested.Mtime, requested.Ctime);
+    }
+
+    private int CheckUtimensPermissions(Engine engine, PathLocation loc, bool useCurrentTimeShortcut, int? atimeNsec = null,
+        int? mtimeNsec = null)
+    {
+        var task = engine.Owner as FiberTask;
+        var process = task?.Process;
+        if (process == null)
+            return 0;
+
+        var inode = loc.Dentry!.Inode!;
+        var isOwnerOrRoot = process.FSUID == 0 || process.FSUID == inode.Uid;
+        if (isOwnerOrRoot)
+            return 0;
+
+        var isSetToCurrentTime = useCurrentTimeShortcut ||
+                                 (atimeNsec == UtimeNow && mtimeNsec == UtimeNow);
+        if (isSetToCurrentTime)
+            return DacPolicy.CheckPathAccess(process, inode, AccessMode.MayWrite, true);
+
+        return -(int)Errno.EACCES;
     }
 
     private async ValueTask<int> SysFchownAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -877,8 +941,12 @@ public partial class SyscallManager
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
-        var loc = PathWalkWithFlags(path, startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
+        var lookup = PathWalker.PathWalkWithData(
+            path,
+            startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
             followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         var uid = (int)a3;
@@ -903,8 +971,12 @@ public partial class SyscallManager
             startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
         }
 
-        var loc = PathWalkWithFlags(path, startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
+        var lookup = PathWalker.PathWalkWithData(
+            path,
+            startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
             LookupFlags.FollowSymlink);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         var mode = a3;
@@ -932,8 +1004,12 @@ public partial class SyscallManager
         var knownFlags = AT_EACCESS | LinuxConstants.AT_SYMLINK_NOFOLLOW;
         if ((a4 & ~knownFlags) != 0) return -(int)Errno.EINVAL;
         var followLink = (a4 & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
-        var loc = PathWalkWithFlags(path, startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
+        var lookup = PathWalker.PathWalkWithData(
+            path,
+            startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
             followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         var mode = (int)a3;
@@ -968,16 +1044,20 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysRename(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var oldPath = ReadString(a1);
-        var newPath = ReadString(a2);
+        var oldPathErr = ReadPathArgument(a1, out var oldPath);
+        if (oldPathErr != 0) return oldPathErr;
+        var newPathErr = ReadPathArgument(a2, out var newPath);
+        if (newPathErr != 0) return newPathErr;
 
         return ImplRename(this, -100, oldPath, -100, newPath, 0);
     }
 
     private async ValueTask<int> SysRenameAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var oldPath = ReadString(a2);
-        var newPath = ReadString(a4);
+        var oldPathErr = ReadPathArgument(a2, out var oldPath);
+        if (oldPathErr != 0) return oldPathErr;
+        var newPathErr = ReadPathArgument(a4, out var newPath);
+        if (newPathErr != 0) return newPathErr;
         Logger.LogInformation(
             $"[RenameAt] olddirfd={(int)a1} oldpath='{oldPath}' newdirfd={(int)a3} newpath='{newPath}'");
         return ImplRename(this, (int)a1, oldPath, (int)a3, newPath, 0);
@@ -985,8 +1065,10 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysRenameAt2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var oldPath = ReadString(a2);
-        var newPath = ReadString(a4);
+        var oldPathErr = ReadPathArgument(a2, out var oldPath);
+        if (oldPathErr != 0) return oldPathErr;
+        var newPathErr = ReadPathArgument(a4, out var newPath);
+        if (newPathErr != 0) return newPathErr;
         Logger.LogInformation(
             $"[RenameAt2] olddirfd={(int)a1} oldpath='{oldPath}' newdirfd={(int)a3} newpath='{newPath}' flags={a5}");
         return ImplRename(this, (int)a1, oldPath, (int)a3, newPath, a5);
@@ -1055,6 +1137,34 @@ public partial class SyscallManager
             (ReferenceEquals(oldLoc.Dentry, targetLoc.Dentry) ||
              ReferenceEquals(oldLoc.Dentry!.Inode, targetLoc.Dentry!.Inode)))
             return 0;
+
+        var sourceInode = oldLoc.Dentry!.Inode!;
+        var sourceIsDirectory = sourceInode.Type == InodeType.Directory;
+        var movedAcrossParents = !ReferenceEquals(oldParentLoc.Dentry!.Inode, newParentLoc.Dentry!.Inode);
+        if (sourceIsDirectory && IsRenameTargetWithinSource(sourceInode, newParentLoc.Dentry))
+            return -(int)Errno.EINVAL;
+
+        if (sm.CurrentTask?.Process != null)
+        {
+            var stickyRc =
+                DacPolicy.CanRemoveOrRenameEntry(sm.CurrentTask.Process, oldParentLoc.Dentry!.Inode!,
+                    sourceInode);
+            if (stickyRc != 0) return stickyRc;
+            if (targetExists)
+            {
+                stickyRc = DacPolicy.CanRemoveOrRenameEntry(sm.CurrentTask.Process, newParentLoc.Dentry!.Inode!,
+                    targetLoc.Dentry!.Inode!);
+                if (stickyRc != 0) return stickyRc;
+            }
+
+            const int S_ISVTX = 0x200;
+            if (sourceIsDirectory &&
+                movedAcrossParents &&
+                (oldParentLoc.Dentry.Inode!.Mode & S_ISVTX) != 0 &&
+                sm.CurrentTask.Process.FSUID != 0 &&
+                sm.CurrentTask.Process.FSUID != sourceInode.Uid)
+                return -(int)Errno.EPERM;
+        }
 
         if ((flags & LinuxConstants.RENAME_NOREPLACE) != 0)
             if (targetExists)
@@ -1140,10 +1250,26 @@ public partial class SyscallManager
         return 0;
     }
 
+    private static bool IsRenameTargetWithinSource(Inode sourceInode, Dentry targetParent)
+    {
+        for (var current = targetParent; current != null; current = current.Parent)
+        {
+            if (ReferenceEquals(current.Inode, sourceInode))
+                return true;
+            if (ReferenceEquals(current.Parent, current))
+                break;
+        }
+
+        return false;
+    }
+
     private async ValueTask<int> SysStat(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var path = ReadString(a1);
-        var loc = PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        var pathErr = ReadPathArgument(a1, out var path);
+        if (pathErr != 0) return pathErr;
+        var lookup = PathWalker.PathWalkWithData(path, LookupFlags.FollowSymlink);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
@@ -1153,8 +1279,11 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysLstat(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var path = ReadString(a1);
-        var loc = PathWalkWithFlags(path, LookupFlags.None);
+        var pathErr = ReadPathArgument(a1, out var path);
+        if (pathErr != 0) return pathErr;
+        var lookup = PathWalker.PathWalkWithData(path, LookupFlags.None);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
@@ -1202,8 +1331,12 @@ public partial class SyscallManager
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
-        var loc = PathWalkWithFlags(path, startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
+        var lookup = PathWalker.PathWalkWithData(
+            path,
+            startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
             followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
@@ -1216,11 +1349,14 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysChmod(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var path = ReadString(a1);
+        var pathErr = ReadPathArgument(a1, out var path);
+        if (pathErr != 0) return pathErr;
         var mode = a2;
 
-        var loc = PathWalkWithFlags(path, LookupFlags.FollowSymlink);
-        if (!loc.IsValid || loc.Dentry!.Inode == null) return -2; // ENOENT
+        var lookup = PathWalker.PathWalkWithData(path, LookupFlags.FollowSymlink);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
         var t = engine.Owner as FiberTask;
@@ -1250,12 +1386,15 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysChown(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var path = ReadString(a1);
+        var pathErr = ReadPathArgument(a1, out var path);
+        if (pathErr != 0) return pathErr;
         var uid = (int)a2;
         var gid = (int)a3;
 
-        var loc = PathWalkWithFlags(path, LookupFlags.FollowSymlink);
-        if (!loc.IsValid || loc.Dentry!.Inode == null) return -2; // ENOENT
+        var lookup = PathWalker.PathWalkWithData(path, LookupFlags.FollowSymlink);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
+        if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
         var t = engine.Owner as FiberTask;
@@ -1286,11 +1425,14 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysLchown(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var path = ReadString(a1);
+        var pathErr = ReadPathArgument(a1, out var path);
+        if (pathErr != 0) return pathErr;
         var uid = (int)a2;
         var gid = (int)a3;
 
-        var loc = PathWalkWithFlags(path, LookupFlags.None);
+        var lookup = PathWalker.PathWalkWithData(path, LookupFlags.None);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
@@ -1342,7 +1484,8 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysUnlink(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var path = ReadString(a1);
+        var pathErr = ReadPathArgument(a1, out var path);
+        if (pathErr != 0) return pathErr;
 
         var (parentLoc, name, err) = PathWalkForCreate(path);
         if (err != 0) return err;
@@ -1352,6 +1495,13 @@ public partial class SyscallManager
         var targetLoc = targetLookup.Path;
         if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (targetLoc.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
+        var task = engine.Owner as FiberTask;
+        if (task?.Process != null)
+        {
+            var stickyRc =
+                DacPolicy.CanRemoveOrRenameEntry(task.Process, parentLoc.Dentry!.Inode!, targetLoc.Dentry.Inode);
+            if (stickyRc != 0) return stickyRc;
+        }
 
         var unlinkRc2 = parentLoc.Dentry!.Inode!.Unlink(name);
         if (unlinkRc2 < 0)
@@ -1362,10 +1512,13 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysAccess(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var path = ReadString(a1);
+        var pathErr = ReadPathArgument(a1, out var path);
+        if (pathErr != 0) return pathErr;
         var mode = (int)a2;
         if ((mode & ~7) != 0) return -(int)Errno.EINVAL;
-        var loc = PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        var lookup = PathWalker.PathWalkWithData(path, LookupFlags.FollowSymlink);
+        if (lookup.HasError) return lookup.ErrorCode;
+        var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (mode == 0) return 0; // F_OK
 
@@ -1749,8 +1902,10 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysSymlink(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var target = ReadString(a1);
-        var linkpath = ReadString(a2);
+        var targetErr = ReadPathArgument(a1, out var target);
+        if (targetErr != 0) return targetErr;
+        var linkPathErr = ReadPathArgument(a2, out var linkpath);
+        if (linkPathErr != 0) return linkPathErr;
 
         var (parentLoc, name, err) = PathWalkForCreate(linkpath);
         if (err != 0) return err;
@@ -1765,7 +1920,8 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysReadlink(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var path = ReadString(a1);
+        var pathErr = ReadPathArgument(a1, out var path);
+        if (pathErr != 0) return pathErr;
         var bufAddr = a2;
         var bufSize = (int)a3;
 
@@ -1801,7 +1957,8 @@ public partial class SyscallManager
         uint a6)
     {
         var dirfd = (int)a1;
-        var path = ReadString(a2);
+        var pathErr = ReadPathArgument(a2, out var path);
+        if (pathErr != 0) return pathErr;
         var bufAddr = a3;
         var bufSize = (int)a4;
 
@@ -1843,9 +2000,11 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysSymlinkAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var target = ReadString(a1);
+        var targetErr = ReadPathArgument(a1, out var target);
+        if (targetErr != 0) return targetErr;
         var dirfd = (int)a2;
-        var linkpath = ReadString(a3);
+        var linkPathErr = ReadPathArgument(a3, out var linkpath);
+        if (linkPathErr != 0) return linkPathErr;
 
         PathLocation? startAt = null;
         if (dirfd != -100 && !linkpath.StartsWith("/"))

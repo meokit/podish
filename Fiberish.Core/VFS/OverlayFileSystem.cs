@@ -496,6 +496,14 @@ public class OverlayInode : Inode
         }
     }
 
+    public override uint GetLinkCountForStat()
+    {
+        if (Type == InodeType.Directory)
+            return (uint)Math.Max(0, ComputeMergedDirectoryLinkCount());
+
+        return SourceInode?.GetLinkCountForStat() ?? base.GetLinkCountForStat();
+    }
+
     /// <summary>
     ///     Lower dentries ordered from top-most lower layer to bottom-most lower layer.
     ///     Lookup resolves in this order.
@@ -583,6 +591,11 @@ public class OverlayInode : Inode
 
         foreach (var linuxFile in _openBackingByFile.Keys.ToArray())
             RebindFileBacking(linuxFile, backing, reason);
+    }
+
+    private void RefreshOverlayLinkCountFromSource(string reason)
+    {
+        InitializeOverlayLinkCount(reason);
     }
 
     public int CopyUp(LinuxFile? linuxFile)
@@ -877,7 +890,8 @@ public class OverlayInode : Inode
         var childState = _state.GetOrCreateChildState(dentry.Name, null, upperDentry);
         var newOverlayInode = new OverlayInode(SuperBlock, null, upperDentry, childState);
         dentry.Instantiate(newOverlayInode);
-        NamespaceOps.OnDirectoryCreated(this, newOverlayInode, "OverlayInode.Mkdir");
+        newOverlayInode.RefreshOverlayLinkCountFromSource("OverlayInode.Mkdir.child-refresh");
+        RefreshOverlayLinkCountFromSource("OverlayInode.Mkdir.parent-refresh");
 
         return 0;
     }
@@ -992,7 +1006,8 @@ public class OverlayInode : Inode
             osb.WhiteoutCodec.TryCreateEncodedWhiteout(this, name);
         }
 
-        NamespaceOps.OnEntryRemoved(overlayEntry.Inode, "OverlayInode.Unlink");
+        if (overlayEntry.Inode is OverlayInode overlayChild)
+            overlayChild.RefreshOverlayLinkCountFromSource("OverlayInode.Unlink.child-refresh");
         return 0;
     }
 
@@ -1041,7 +1056,7 @@ public class OverlayInode : Inode
             osb.WhiteoutCodec.TryCreateEncodedWhiteout(this, name);
         }
 
-        NamespaceOps.OnDirectoryRemoved(this, overlayEntry.Inode!, "OverlayInode.Rmdir");
+        RefreshOverlayLinkCountFromSource("OverlayInode.Rmdir.parent-refresh");
         return 0;
     }
 
@@ -1180,11 +1195,18 @@ public class OverlayInode : Inode
         foreach (var alias in targetParent.Dentries)
             alias.TryUncacheChild(newName, "OverlayInode.Rename.new-parent.drop-stale", out _);
 
-        if (targetEntry?.Inode != null)
-            NamespaceOps.OnRenameOverwrite(sourceEntry.Inode, targetEntry.Inode,
-                "OverlayInode.Rename.overwrite-target");
-        if (sourceOverlay.Type == InodeType.Directory && !ReferenceEquals(this, targetParent))
-            NamespaceOps.OnDirectoryMovedAcrossParents(this, targetParent, "OverlayInode.Rename");
+        if (targetEntry?.Inode is OverlayInode overwrittenOverlay)
+            overwrittenOverlay.RefreshOverlayLinkCountFromSource("OverlayInode.Rename.overwrite-target");
+        if (sourceOverlay.Type == InodeType.Directory)
+        {
+            RefreshOverlayLinkCountFromSource("OverlayInode.Rename.old-parent-refresh");
+            if (!ReferenceEquals(this, targetParent))
+                targetParent.RefreshOverlayLinkCountFromSource("OverlayInode.Rename.new-parent-refresh");
+        }
+        else
+        {
+            sourceOverlay.RefreshOverlayLinkCountFromSource("OverlayInode.Rename.source-refresh");
+        }
 
         return 0;
     }
@@ -1235,7 +1257,7 @@ public class OverlayInode : Inode
         var newOverlayInode = oldOverlay;
         newOverlayInode.InitializeOverlayLinkCount("OverlayInode.Link.copyup-source");
         dentry.Instantiate(newOverlayInode);
-        NamespaceOps.OnLinkAdded(oldOverlay, "OverlayInode.Link");
+        newOverlayInode.RefreshOverlayLinkCountFromSource("OverlayInode.Link.refresh");
 
         return 0;
     }

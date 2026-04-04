@@ -393,12 +393,39 @@ public class MmapSupportTests
             env.Vma.HandleFaultDetailed(baseAddr + LinuxConstants.PageSize, false, env.Engine));
     }
 
+    [Fact]
+    public async Task Open_PathFromUnfaultedFileMapping_FaultsStringPage()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.MountStandardDev();
+        env.MapUserPage(0x18000);
+        env.MapUserPage(0x19000);
+        env.WriteCString(0x18000, "/path-by-mmap");
+        env.WriteCString(0x19000, "/dev/null");
+
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x18000, 0x8000 | 0x1A4));
+
+        var backingFd = await env.Call("SysOpen", 0x18000, (uint)FileFlags.O_RDWR);
+        Assert.True(backingFd >= 0);
+        Assert.Equal(10, await env.Call("SysWrite", (uint)backingFd, 0x19000, 10));
+
+        var mapped = await env.Call("SysMmap2", 0, LinuxConstants.PageSize, (uint)Protection.Read,
+            (uint)MapFlags.Private, (uint)backingFd);
+        Assert.True(mapped > 0);
+
+        var openedFd = await env.Call("SysOpen", (uint)mapped, (uint)FileFlags.O_RDWR);
+        Assert.True(openedFd >= 0);
+        Assert.Equal(0, await env.Call("SysClose", (uint)openedFd));
+        Assert.Equal(0, await env.Call("SysClose", (uint)backingFd));
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()
         {
             Engine = new Engine();
             Vma = new VMAManager();
+            Engine.PageFaultResolver = (addr, isWrite) => Vma.HandleFault(addr, isWrite, Engine);
             SyscallManager = new SyscallManager(Engine, Vma, 0);
 
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;

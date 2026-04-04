@@ -1,6 +1,7 @@
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
+using Fiberish.Auth.Permission;
 
 namespace Fiberish.Syscalls;
 
@@ -118,6 +119,10 @@ public class PathWalker
         if (string.IsNullOrEmpty(path))
             return nd.SetError(-(int)Errno.ENOENT);
 
+        var validationError = ValidatePath(path);
+        if (validationError != 0)
+            return nd.SetError(validationError);
+
         nd.PathString = path;
         nd.PathPosition = 0;
         nd.LastName = null;
@@ -213,6 +218,16 @@ public class PathWalker
         // Check if current is a directory
         if (current.Inode == null || current.Inode.Type != InodeType.Directory)
             return nd.SetError(-(int)Errno.ENOTDIR);
+
+        if (currentTask != null)
+        {
+            if (current.Inode is HostInode hostInode)
+                hostInode.RefreshProjectedMetadata(currentTask.Process.EUID, currentTask.Process.EGID);
+
+            var searchRc = DacPolicy.CheckPathAccess(currentTask.Process, current.Inode, AccessMode.MayExec, true);
+            if (searchRc != 0)
+                return nd.SetError(searchRc);
+        }
 
         // LOOKUP_PARENT: For the last component, just record the name and stop.
         // nd.Path stays as the parent directory. This mirrors Linux LOOKUP_PARENT.
@@ -479,6 +494,10 @@ public class PathWalker
         if (string.IsNullOrEmpty(path))
             return (PathLocation.None, "", -(int)Errno.ENOENT);
 
+        var validationError = ValidatePath(path);
+        if (validationError != 0)
+            return (PathLocation.None, "", validationError);
+
         var normalizedPath = path;
         while (normalizedPath.Length > 1 && normalizedPath.EndsWith("/", StringComparison.Ordinal))
             normalizedPath = normalizedPath[..^1];
@@ -490,6 +509,8 @@ public class PathWalker
 
         if (string.IsNullOrEmpty(name))
             return (PathLocation.None, "", -(int)Errno.ENOENT);
+        if (name.Length > LinuxConstants.NameMax)
+            return (PathLocation.None, "", -(int)Errno.ENAMETOOLONG);
 
         // Resolve parent directory
         var parentLookup = PathWalkWithData(
@@ -508,6 +529,45 @@ public class PathWalker
         if (parentLoc.Dentry?.Inode?.Type != InodeType.Directory)
             return (PathLocation.None, name, -(int)Errno.ENOTDIR);
 
+        var currentTask = _sm.CurrentTask;
+        if (currentTask != null)
+        {
+            if (parentLoc.Dentry.Inode is HostInode hostInode)
+                hostInode.RefreshProjectedMetadata(currentTask.Process.EUID, currentTask.Process.EGID);
+
+            var accessRc = DacPolicy.CheckPathAccess(
+                currentTask.Process,
+                parentLoc.Dentry.Inode,
+                AccessMode.MayWrite | AccessMode.MayExec,
+                true);
+            if (accessRc != 0)
+                return (PathLocation.None, name, accessRc);
+        }
+
         return (parentLoc, name, 0);
+    }
+
+    private static int ValidatePath(string path)
+    {
+        if (path.Length >= LinuxConstants.PathMax)
+            return -(int)Errno.ENAMETOOLONG;
+
+        var componentLength = 0;
+        for (var i = 0; i < path.Length; i++)
+        {
+            if (path[i] == '/')
+            {
+                if (componentLength > LinuxConstants.NameMax)
+                    return -(int)Errno.ENAMETOOLONG;
+                componentLength = 0;
+                continue;
+            }
+
+            componentLength++;
+            if (componentLength > LinuxConstants.NameMax)
+                return -(int)Errno.ENAMETOOLONG;
+        }
+
+        return 0;
     }
 }

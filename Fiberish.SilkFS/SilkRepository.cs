@@ -13,6 +13,11 @@ public sealed class SilkRepository
     public SilkFsOptions Options { get; }
     public SilkMetadataStore Metadata { get; }
 
+    public SilkMetadataSession OpenMetadataSession()
+    {
+        return Metadata.OpenSession();
+    }
+
     public void Initialize()
     {
         Directory.CreateDirectory(Options.RootPath);

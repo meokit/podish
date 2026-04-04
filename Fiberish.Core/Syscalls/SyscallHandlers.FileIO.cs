@@ -429,15 +429,14 @@ public partial class SyscallManager
                     }
                 }
 
-                var lastSlash = path.LastIndexOf('/');
-                var parentPath = lastSlash == -1 ? "" : lastSlash == 0 ? "/" : path[..lastSlash];
-                var name = lastSlash == -1 ? path : path[(lastSlash + 1)..];
+                var (parentLoc, name, createErr) = sm.PathWalkForCreate(path, startLoc.IsValid ? startLoc : null);
+                if (createErr != 0)
+                    return createErr;
 
-                var parentLoc = sm.PathWalk(parentPath == "" ? "." : parentPath, startLoc.IsValid ? startLoc : null);
                 var parentDentry = parentLoc.Dentry;
                 var parentMount = parentLoc.Mount;
-
-                if (parentDentry == null || parentDentry.Inode == null) return -(int)Errno.ENOENT;
+                if (parentDentry == null || parentDentry.Inode == null)
+                    return -(int)Errno.ENOENT;
 
                 // Check if parent mount is read-only (for create operation)
                 if (parentMount != null && parentMount.IsReadOnly) return -(int)Errno.EROFS;
@@ -473,6 +472,12 @@ public partial class SyscallManager
 
             if (dentry.Inode?.Type == InodeType.Directory && (accessMode != 0 || wantTrunc || wantCreate))
                 return -(int)Errno.EISDIR;
+            if (dentry.Inode?.Type == InodeType.Socket)
+                return -(int)Errno.ENXIO;
+            if (dentry.Inode?.Type == InodeType.Fifo &&
+                accessMode == (int)FileFlags.O_WRONLY &&
+                ((FileFlags)flags & FileFlags.O_NONBLOCK) != 0)
+                return -(int)Errno.ENXIO;
 
             if (task?.Process != null && dentry.Inode != null)
             {
@@ -530,8 +535,8 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysOpen(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var path = engine.ReadStringSafe(a1);
-        if (path == null) return -(int)Errno.EFAULT;
+        var pathErr = ReadPathArgument(a1, out var path);
+        if (pathErr != 0) return pathErr;
 
         return ImplOpen(this, path, a2, a3);
     }
@@ -539,8 +544,8 @@ public partial class SyscallManager
     private async ValueTask<int> SysOpenAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dfd = (int)a1;
-        var path = engine.ReadStringSafe(a2);
-        if (path == null) return -(int)Errno.EFAULT;
+        var pathErr = ReadPathArgument(a2, out var path);
+        if (pathErr != 0) return pathErr;
 
         var startLoc = PathLocation.None;
         if (dfd == -100) // AT_FDCWD
@@ -560,8 +565,8 @@ public partial class SyscallManager
     private async ValueTask<int> SysOpenAt2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
-        var path = engine.ReadStringSafe(a2);
-        if (path == null) return -(int)Errno.EFAULT;
+        var pathErr = ReadPathArgument(a2, out var path);
+        if (pathErr != 0) return pathErr;
 
         var howPtr = a3;
         var howSize = a4;

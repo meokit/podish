@@ -1200,6 +1200,12 @@ internal static partial class HostfsOwnershipMapper
 
     public static int SetGuestOwnership(HostInode inode, int uid, int gid)
     {
+        if (uid == -1 && gid == -1)
+        {
+            inode.CTime = DateTime.Now;
+            return 0;
+        }
+
         var opts = ((HostSuperBlock)inode.SuperBlock).Options;
         if ((opts.MountUid.HasValue || opts.MountGid.HasValue) && (uid != -1 || gid != -1))
             return -(int)Errno.EPERM;
@@ -2034,6 +2040,7 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
                 Size = (ulong)RandomAccess.GetLength(handle);
             }
 
+            CTime = DateTime.Now;
             return buffer.Length;
         }
 
@@ -2056,6 +2063,7 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
             Size = (ulong)RandomAccess.GetLength(tempHandle);
         }
 
+        CTime = DateTime.Now;
         return buffer.Length;
     }
 
@@ -2238,6 +2246,7 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
 
         Size = (ulong)size;
         MTime = DateTime.Now;
+        CTime = MTime;
         return 0;
     }
 

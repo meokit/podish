@@ -720,150 +720,6 @@ public class KernelScheduler
         }
     }
 
-    public async Task RunAsync(long maxTicks = -1)
-    {
-        BindOwnerThreadIfNeeded();
-        var previousSyncContext = SynchronizationContext.Current;
-        SynchronizationContext.SetSynchronizationContext(_synchronizationContext);
-        Logger.LogInformation("KernelScheduler async loop started.");
-        var exitReason = "running=false";
-
-        var startTick = _timerSystem.CurrentTick;
-        var lastYieldMs = _sw.ElapsedMilliseconds;
-
-        try
-        {
-            while (Running)
-            {
-                _isInsideRunLoop = true;
-
-                // Advance timer to current physical time (in ms)
-                var nowMs = startTick + _sw.ElapsedMilliseconds;
-                _timerSystem.Advance(nowMs);
-
-                if (maxTicks > 0 && CurrentTick >= maxTicks)
-                {
-                    Logger.LogWarning("KernelScheduler reached max ticks limit. Stopping.");
-                    exitReason = "max-ticks";
-                    break;
-                }
-
-                // 0. Process Continuations (High Priority)
-                var hadRunnableTasks = _runQueue.Count > 0;
-                var drainedEvents = DrainEventsWithBudget(hadRunnableTasks ? RunQueueDrainEventBudget : int.MaxValue);
-
-                // 1. Process Timers & Wait
-                if (_runQueue.Count == 0 && !drainedEvents)
-                {
-                    // Check scheduler state - this will detect actual bugs
-                    ValidateSchedulerState();
-
-                    var (anyAlive, anyWaiting) = GetTaskLiveness();
-                    if (!anyAlive)
-                    {
-                        Logger.LogInformation("No active tasks. Exiting loop.");
-                        Running = false;
-                        exitReason = "no-active-tasks";
-                        break;
-                    }
-
-                    // Calculate wait time
-                    long waitTime = -1;
-                    if (_timerSystem.HasTimers)
-                    {
-                        var nextTick = _timerSystem.GetNextExpiration();
-                        if (nextTick.HasValue)
-                        {
-                            waitTime = nextTick.Value - _timerSystem.CurrentTick;
-                            if (waitTime < 0) waitTime = 0;
-                        }
-                    }
-                    else
-                    {
-                        // If anyWaiting is true, we must wait indefinitely for external wakeups.
-                        if (anyWaiting) waitTime = -1;
-                        else
-                            waitTime = 0;
-                    }
-
-                    if (waitTime == 0)
-                        // In some environments, a 0-wait is expensive/spinning. 
-                        // But in Wasm, waitTime=0 usually means we should yield as much as possible.
-                        // If it came from line 782 (timer already expired), we should spin once or yield.
-                        // If it came from line 790 (no timers, nothing waiting), we probably should wait indefinitely for external wakeups.
-                        waitTime = anyWaiting ? -1 : 1;
-
-                    _isInsideRunLoop = false;
-                    SynchronizationContext.SetSynchronizationContext(previousSyncContext);
-                    await WaitForEventAsync((int)waitTime);
-                    SynchronizationContext.SetSynchronizationContext(_synchronizationContext);
-                    continue;
-                }
-
-                // 2. Run Task
-                if (TryDequeue(out var task) && task != null)
-                {
-                    if (task.Status != FiberTaskStatus.Ready)
-                        continue;
-
-                    task.Status = FiberTaskStatus.Running;
-
-                    var previous = SynchronizationContext.Current;
-                    var previousTask = CurrentTask;
-                    CurrentTask = task;
-                    SynchronizationContext.SetSynchronizationContext(GetSynchronizationContextFor(task));
-                    try
-                    {
-                        task.RunSlice();
-                    }
-                    finally
-                    {
-                        SynchronizationContext.SetSynchronizationContext(previous);
-                        CurrentTask = previousTask;
-                    }
-                }
-                else if (TryFindReadyTask(out var readyTaskAfterDequeueMiss))
-                {
-                    EnqueueTask(readyTaskAfterDequeueMiss!);
-                }
-
-                // Cooperative yield every so often to keep JS event loop responsive
-                var currentMs = _sw.ElapsedMilliseconds;
-                if (currentMs - lastYieldMs >= 10 && _runQueue.Count > 0)
-                {
-                    lastYieldMs = currentMs;
-                    _isInsideRunLoop = false;
-                    SynchronizationContext.SetSynchronizationContext(previousSyncContext);
-                    await Task.Yield();
-                    SynchronizationContext.SetSynchronizationContext(_synchronizationContext);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            exitReason = $"exception:{ex.GetType().Name}";
-            Logger.LogError(ex, "KernelScheduler async loop crashed.");
-            throw;
-        }
-        finally
-        {
-            SynchronizationContext.SetSynchronizationContext(previousSyncContext);
-            Logger.LogInformation("KernelScheduler async loop stopped. reason={Reason} running={Running} tick={Tick}",
-                exitReason,
-                Running, CurrentTick);
-        }
-    }
-
-    private void DrainContinuations()
-    {
-        DrainEvents();
-    }
-
-    private bool DrainEvents()
-    {
-        return DrainEventsWithBudget(int.MaxValue);
-    }
-
     private bool DrainEventsWithBudget(int maxItems)
     {
         var drained = false;
@@ -879,6 +735,11 @@ public class KernelScheduler
         return drained;
     }
 
+    private bool DrainEvents()
+    {
+        return DrainEventsWithBudget(int.MaxValue);
+    }
+
     private bool TryFindReadyTask(out FiberTask? readyTask)
     {
         foreach (var task in _tasks.Values)
@@ -892,11 +753,6 @@ public class KernelScheduler
         return false;
     }
 
-    private void WaitForEvent()
-    {
-        WaitForEvent(-1);
-    }
-
     private void WaitForEvent(int timeoutMs)
     {
         if (OperatingSystem.IsBrowser() && BrowserSchedulerHostBridge.IsConfigured)
@@ -907,28 +763,6 @@ public class KernelScheduler
         }
 
         _wakeEvent.Wait(timeoutMs);
-        _wakeEvent.Reset();
-    }
-
-    private async ValueTask WaitForEventAsync(int timeoutMs)
-    {
-        if (timeoutMs < 0)
-        {
-            await _events.Reader.WaitToReadAsync().ConfigureAwait(false);
-        }
-        else
-        {
-            using var cts = new CancellationTokenSource(timeoutMs);
-            try
-            {
-                await _events.Reader.WaitToReadAsync(cts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Timeout elapsed
-            }
-        }
-
         _wakeEvent.Reset();
     }
 
@@ -1263,19 +1097,6 @@ public class KernelScheduler
         return count;
     }
 
-    public void SignalTask(int tid, int signal)
-    {
-        if (IsSchedulerThread)
-        {
-            AssertSchedulerThread();
-            var task = GetTask(tid);
-            task?.PostSignal(signal);
-            return;
-        }
-
-        SignalTaskFromAnyThread(tid, signal);
-    }
-
     public void SignalTaskFromAnyThread(int tid, int signal)
     {
         RunIngress(() =>
@@ -1307,18 +1128,9 @@ public class KernelScheduler
 
     public readonly struct TimerAwaiter(long ticks, KernelScheduler scheduler) : INotifyCompletion
     {
-        private readonly long _ticks = ticks;
-        private readonly KernelScheduler _scheduler = scheduler;
-
-        public bool IsCompleted => _ticks <= 0;
-
         public void OnCompleted(Action continuation)
         {
-            _scheduler.ScheduleTimer(_ticks, continuation);
-        }
-
-        public void GetResult()
-        {
+            scheduler.ScheduleTimer(ticks, continuation);
         }
     }
 

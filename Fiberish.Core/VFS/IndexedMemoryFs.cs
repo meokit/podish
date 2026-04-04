@@ -73,6 +73,13 @@ public abstract class IndexedMemoryInode : Inode
 
     public override bool SupportsMmap => Type == InodeType.File;
 
+    private void TouchDirectoryMutationTimestamps()
+    {
+        var now = DateTime.Now;
+        MTime = now;
+        CTime = now;
+    }
+
     private void AttachNamespaceChild(Dentry parentDentry, Dentry childDentry, string reason)
     {
         var alreadyCached =
@@ -154,6 +161,7 @@ public abstract class IndexedMemoryInode : Inode
 
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Create");
             ChildNames.Add(dentry.Name);
+            TouchDirectoryMutationTimestamps();
 
             return 0;
         }
@@ -185,6 +193,7 @@ public abstract class IndexedMemoryInode : Inode
 
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Mkdir");
             ChildNames.Add(dentry.Name);
+            TouchDirectoryMutationTimestamps();
 
             return 0;
         }
@@ -217,6 +226,7 @@ public abstract class IndexedMemoryInode : Inode
             }
 
             ChildNames.Remove(name);
+            TouchDirectoryMutationTimestamps();
             return 0;
         }
     }
@@ -251,6 +261,7 @@ public abstract class IndexedMemoryInode : Inode
             }
 
             ChildNames.Remove(name);
+            TouchDirectoryMutationTimestamps();
             return 0;
         }
     }
@@ -354,6 +365,8 @@ public abstract class IndexedMemoryInode : Inode
 
             AttachNamespaceChild(newPrimary, dentry, "IndexedMemoryInode.Rename.new-parent");
             targetParent.ChildNames.Add(newName);
+            TouchDirectoryMutationTimestamps();
+            targetParent.TouchDirectoryMutationTimestamps();
 
             if (movedAcrossParents)
                 NamespaceOps.OnDirectoryMovedAcrossParents(this, targetParent, "IndexedMemoryInode.Rename");
@@ -382,6 +395,7 @@ public abstract class IndexedMemoryInode : Inode
 
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Link");
             ChildNames.Add(dentry.Name);
+            TouchDirectoryMutationTimestamps();
             return 0;
         }
     }
@@ -414,6 +428,7 @@ public abstract class IndexedMemoryInode : Inode
 
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Symlink");
             ChildNames.Add(dentry.Name);
+            TouchDirectoryMutationTimestamps();
 
             return 0;
         }
@@ -449,6 +464,7 @@ public abstract class IndexedMemoryInode : Inode
 
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Mknod");
             ChildNames.Add(dentry.Name);
+            TouchDirectoryMutationTimestamps();
             return 0;
         }
     }
@@ -591,6 +607,7 @@ public abstract class IndexedMemoryInode : Inode
             var end = offset + buffer.Length;
             if (end > (long)Size) Size = (ulong)end;
             MTime = DateTime.Now;
+            CTime = MTime;
             return buffer.Length;
         }
     }
@@ -673,6 +690,7 @@ public abstract class IndexedMemoryInode : Inode
                 Array.Resize(ref SymlinkData, (int)size);
                 Size = (ulong)size;
                 MTime = DateTime.Now;
+                CTime = MTime;
                 return 0;
             }
 
@@ -685,6 +703,7 @@ public abstract class IndexedMemoryInode : Inode
 
             Size = (ulong)size;
             MTime = DateTime.Now;
+            CTime = MTime;
         }
 
         return 0;

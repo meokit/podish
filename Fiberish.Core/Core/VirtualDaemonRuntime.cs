@@ -212,6 +212,7 @@ public sealed class VirtualDaemonRuntime
         {
             CurrentSyscallManager = Syscalls
         };
+        engine.ShareMmuFrom(Task.CPU);
         Syscalls.RegisterEngine(engine);
 
         var tid = Scheduler.AllocateTaskId();

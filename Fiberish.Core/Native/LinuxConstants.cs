@@ -28,6 +28,7 @@ public enum Errno
     ENFILE = 23, /* File table overflow */
     EMFILE = 24, /* Too many open files */
     ENOTTY = 25, /* Not a typewriter */
+    ENAMETOOLONG = 36, /* File name too long */
     ETXTBSY = 26, /* Text file busy */
     EFBIG = 27, /* File too large */
     ENOSPC = 28, /* No space left on device */
@@ -134,6 +135,9 @@ public static class LinuxConstants
     public const int PageSize = 4096;
     public const uint PageMask = 0xFFFFF000;
     public const uint PageOffsetMask = 0xFFF;
+    public const int PathMax = 4096;
+    public const int NameMax = 255;
+    public const int MaxSymlinkDepth = 40;
 
     // sigevent notify types
     public const int SIGEV_SIGNAL = 0;
