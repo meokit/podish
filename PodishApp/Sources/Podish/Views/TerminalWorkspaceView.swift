@@ -6,24 +6,11 @@ import UIKit
 
 struct TerminalWorkspaceView: View {
     @ObservedObject var session: PodishTerminalSession
+    var allowFocus: Bool = true
 
     var body: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            #if os(iOS)
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
-                logKeyboardEvent("keyboardWillShow", notification: note)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { note in
-                logKeyboardEvent("keyboardDidShow", notification: note)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { note in
-                logKeyboardEvent("keyboardWillHide", notification: note)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { note in
-                logKeyboardEvent("keyboardDidHide", notification: note)
-            }
-            #endif
     }
 
     @ViewBuilder
@@ -50,34 +37,72 @@ struct TerminalWorkspaceView: View {
     private var terminalSurface: some View {
         let terminalBackgroundColor: SwiftUI.Color = session.terminalBackgroundColor
 
-        return ZStack(alignment: .topLeading) {
+        return ZStack {
             TerminalViewHost(
                 terminalView: session.currentTerminalView,
-                shouldFocus: session.hasActiveTerminal
+                shouldFocus: allowFocus && session.hasActiveTerminal
             )
                 .id(session.activeTerminalIdentity)
                 .background(terminalBackgroundColor)
                 .clipped()
 
+            if session.activeContainerRequiresStart {
+                StartContainerOverlayButton(
+                    isStarting: session.activeContainerStartPending,
+                    action: session.startActiveContainer
+                )
+            }
+
             if let startupError = session.startupError {
-                Text(startupError)
-                    .font(.caption)
-                    .foregroundStyle(.white)
-                    .padding(8)
-                    .background(.red.opacity(0.75), in: RoundedRectangle(cornerRadius: 8))
-                    .padding(12)
+                VStack {
+                    HStack {
+                        Text(startupError)
+                            .font(.caption)
+                            .foregroundStyle(.white)
+                            .padding(8)
+                            .background(.red.opacity(0.75), in: RoundedRectangle(cornerRadius: 8))
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding(12)
             }
         }
     }
 
-    #if os(iOS)
-    private func logKeyboardEvent(_ name: String, notification: Notification) {
-        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? -1
-        let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect ?? .zero
-        let isFirstResponder = session.currentTerminalView.isFirstResponder
-        PodishLog.ui("Workspace \(name) firstResponder=\(isFirstResponder) duration=\(duration) frame=\(String(describing: NSCoder.string(for: frame)))")
+}
+
+private struct StartContainerOverlayButton: View {
+    let isStarting: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(.white.opacity(0.18))
+                    .overlay(
+                        Circle()
+                            .strokeBorder(.white.opacity(0.28), lineWidth: 1)
+                    )
+
+                if isStarting {
+                    ProgressView()
+                        .tint(.white)
+                        .controlSize(.regular)
+                } else {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 34, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.95))
+                        .offset(x: 3)
+                }
+            }
+            .frame(width: 88, height: 88)
+        }
+        .buttonStyle(.plain)
+        .disabled(isStarting)
+        .accessibilityLabel(isStarting ? "Starting container" : "Start container")
     }
-    #endif
 }
 
 #if os(iOS)

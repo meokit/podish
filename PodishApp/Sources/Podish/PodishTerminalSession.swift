@@ -103,6 +103,13 @@ enum PodishRuntimeError: LocalizedError {
             return "Native error \(code): \(message)"
         }
     }
+
+    var isContainerNotRunning: Bool {
+        switch self {
+        case .native(_, let message):
+            return message.localizedCaseInsensitiveContains("container is not running")
+        }
+    }
 }
 
 final class TerminalDelegateAdapter: NSObject, TerminalViewDelegate {
@@ -846,19 +853,14 @@ final class PodishRuntimeActor: @unchecked Sendable {
 final class PodishTerminalSession: ObservableObject {
     let appearance: PodishTerminalAppearance
     private let placeholderView: TerminalView
-    #if os(macOS)
-    private let displayView: TerminalView
-    #endif
     private let runtime: PodishRuntimeActor
     private var terminalViews: [String: TerminalView] = [:]
     private var terminalDelegates: [String: TerminalDelegateAdapter] = [:]
     private var terminalOutputTasks: [String: Task<Void, Never>] = [:]
-    #if os(macOS)
-    private var displayDelegate: TerminalDelegateAdapter?
-    #endif
 
     @Published var startupError: String?
     @Published private(set) var activeContainerId: String?
+    @Published private(set) var startingContainerIDs: Set<String> = []
 
     private var started = false
     private var shutdownTask: Task<Void, Never>?
@@ -869,51 +871,44 @@ final class PodishTerminalSession: ObservableObject {
     private var lastContainerSnapshot: [NativeContainerListItem] = []
 
     var currentTerminalView: TerminalView {
-        #if os(macOS)
-        displayView
-        #else
         if let id = activeContainerId, let view = terminalViews[id] {
             return view
         }
         return placeholderView
-        #endif
     }
 
     var activeTerminalIdentity: String {
-        #if os(macOS)
-        "__display__"
-        #else
         activeContainerId ?? "__placeholder__"
-        #endif
     }
 
     var hasActiveTerminal: Bool {
-        activeContainerId != nil
+        guard let activeContainerId else { return false }
+        return isContainerRunning(activeContainerId)
     }
 
     var terminalBackgroundColor: SwiftUI.Color {
         appearance.terminalBackgroundColor
     }
 
+    var activeContainerRequiresStart: Bool {
+        guard let activeContainerId else { return false }
+        return lastContainerSnapshot.contains(where: { $0.containerId == activeContainerId && !$0.running })
+    }
+
+    var activeContainerStartPending: Bool {
+        guard let activeContainerId else { return false }
+        return startingContainerIDs.contains(activeContainerId)
+    }
+
     init(appearance: PodishTerminalAppearance = PodishTerminalAppearance()) {
         self.appearance = appearance
-        #if os(macOS)
         placeholderView = PodishTerminalView(frame: .zero)
-        displayView = PodishTerminalView(frame: .zero)
-        #else
-        placeholderView = PodishTerminalView(frame: .zero)
-        #endif
         runtime = PodishRuntimeActor(workDir: PodishTerminalSession.makeWorkDir())
         #if os(iOS)
         placeholderView.inputAccessoryView = nil
         placeholderView.keyboardDismissMode = .interactive
         #endif
         self.appearance.apply(to: placeholderView)
-        #if os(macOS)
-        self.appearance.apply(to: displayView)
-        configureDisplayDelegate()
-        displayView.terminal = placeholderView.terminal
-        #endif
 
         runtimeEventTask = Task { [weak self] in
             guard let self else { return }
@@ -988,10 +983,6 @@ final class PodishTerminalSession: ObservableObject {
             self.cancelAllTerminalOutputTasks()
             self.terminalViews.removeAll()
             self.terminalDelegates.removeAll()
-            #if os(macOS)
-            self.displayView.terminal = self.placeholderView.terminal
-            self.requestDisplayRefresh()
-            #endif
             completion?()
         }
     }
@@ -1072,17 +1063,24 @@ final class PodishTerminalSession: ObservableObject {
     }
 
     func startContainer(_ containerId: String, completion: ((Bool) -> Void)? = nil) {
+        startingContainerIDs.insert(containerId)
         Task {
             do {
-                _ = try await runtime.startContainer(containerId: containerId)
-                self.startTerminalOutputTask(containerId: containerId)
+                let containers = try await runtime.startContainer(containerId: containerId)
                 await MainActor.run {
+                    self.lastContainerSnapshot = containers
+                    self.reconcileRunningSessions(containers)
+                    self.onContainerList?(containers)
+                    self.onContainerStateChanged?(containers)
                     self.ensureTerminalView(containerId: containerId)
+                    self.startTerminalOutputTask(containerId: containerId)
+                    self.startingContainerIDs.remove(containerId)
                     self.startupError = nil
                     completion?(true)
                 }
             } catch {
                 await MainActor.run {
+                    self.startingContainerIDs.remove(containerId)
                     self.startupError = error.localizedDescription
                     completion?(false)
                 }
@@ -1093,10 +1091,14 @@ final class PodishTerminalSession: ObservableObject {
     func stopContainer(_ containerId: String, completion: ((Bool) -> Void)? = nil) {
         Task {
             do {
-                _ = try await runtime.stopContainer(containerId: containerId)
+                let containers = try await runtime.stopContainer(containerId: containerId)
                 await MainActor.run {
                     // Separate the next session prompt from the previous line content.
                     self.terminalViews[containerId]?.feed(byteArray: ArraySlice([0x0D, 0x0A]))
+                    self.lastContainerSnapshot = containers
+                    self.reconcileRunningSessions(containers)
+                    self.onContainerList?(containers)
+                    self.onContainerStateChanged?(containers)
                     self.startupError = nil
                     completion?(true)
                 }
@@ -1116,10 +1118,6 @@ final class PodishTerminalSession: ObservableObject {
                 await MainActor.run {
                     if self.activeContainerId == containerId {
                         self.activeContainerId = nil
-                        #if os(macOS)
-                        self.displayView.terminal = self.placeholderView.terminal
-                        self.requestDisplayRefresh()
-                        #endif
                     }
                     self.terminalViews.removeValue(forKey: containerId)
                     self.terminalDelegates.removeValue(forKey: containerId)
@@ -1202,13 +1200,11 @@ final class PodishTerminalSession: ObservableObject {
     }
 
     func attachContainer(_ containerId: String) {
-        PodishLog.ui("attachContainer start id=\(containerId)")
         ensureTerminalView(containerId: containerId)
         activateContainer(containerId)
 
         guard isContainerRunning(containerId) else {
             // Keep showing the last buffered terminal content for non-running containers.
-            PodishLog.ui("attachContainer id=\(containerId) not running; skip output task")
             return
         }
 
@@ -1218,9 +1214,15 @@ final class PodishTerminalSession: ObservableObject {
                 if self.activeContainerId == containerId {
                     self.startupError = nil
                 }
-                PodishLog.ui("attachContainer completed id=\(containerId) active=\(self.activeContainerId == containerId)")
             }
         }
+    }
+
+    func startActiveContainer() {
+        guard let activeContainerId else { return }
+        guard activeContainerRequiresStart else { return }
+        guard !startingContainerIDs.contains(activeContainerId) else { return }
+        startContainer(activeContainerId)
     }
 
     private func isContainerRunning(_ containerId: String) -> Bool {
@@ -1263,8 +1265,6 @@ final class PodishTerminalSession: ObservableObject {
         terminalView.terminalDelegate = delegate
         terminalViews[containerId] = terminalView
         terminalDelegates[containerId] = delegate
-        PodishLog.ui("ensureTerminalView created id=\(containerId)")
-        startTerminalOutputTask(containerId: containerId)
     }
 
     private func reconcileRunningSessions(_ items: [NativeContainerListItem]) {
@@ -1282,10 +1282,6 @@ final class PodishTerminalSession: ObservableObject {
             cancelTerminalOutputTask(containerId: id)
             if activeContainerId == id {
                 activeContainerId = nil
-                #if os(macOS)
-                displayView.terminal = placeholderView.terminal
-                requestDisplayRefresh()
-                #endif
             }
             Task {
                 await runtime.closeTerminalSession(containerId: id)
@@ -1294,76 +1290,25 @@ final class PodishTerminalSession: ObservableObject {
 
         if let active = activeContainerId, !allIds.contains(active) {
             activeContainerId = nil
-            #if os(macOS)
-            displayView.terminal = placeholderView.terminal
-            requestDisplayRefresh()
-            #endif
         }
     }
-
-    #if os(macOS)
-    private func configureDisplayDelegate() {
-        let delegate = TerminalDelegateAdapter()
-        delegate.onInput = { [weak self] data in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                guard let active = self.activeContainerId else { return }
-                do {
-                    try await self.runtime.writeInput(containerId: active, data)
-                } catch {
-                    self.startupError = error.localizedDescription
-                }
-            }
-        }
-        delegate.onResize = { [weak self] cols, rows in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                guard let active = self.activeContainerId else { return }
-                await self.runtime.resize(containerId: active, cols: cols, rows: rows)
-            }
-        }
-        displayView.terminalDelegate = delegate
-        displayDelegate = delegate
-    }
-    #endif
 
     private func activateContainer(_ containerId: String) {
         let previousActiveId = activeContainerId
-        PodishLog.ui("activateContainer start id=\(containerId) previous=\(previousActiveId ?? "nil")")
         ensureTerminalView(containerId: containerId)
-        if let previousActiveId,
+        if let previousActiveId, previousActiveId != containerId,
            let previousView = terminalViews[previousActiveId] {
             clearTransientViewState(previousView)
         }
         activeContainerId = containerId
-        PodishLog.ui("activateContainer set active id=\(containerId)")
-        #if os(macOS)
-        if let term = terminalViews[containerId]?.terminal {
-            if let currentView = terminalViews[containerId] {
-                clearTransientViewState(currentView)
-            }
-            clearTransientViewState(displayView)
-            displayView.terminal = term
-            // Re-emit current terminal geometry and force a display pass so caret/scroller
-            // are recomputed immediately after switching buffers.
-            displayView.sizeChanged(source: term)
-            displayView.feed(byteArray: ArraySlice<UInt8>())
-            requestDisplayRefresh()
-        }
-        #endif
+        requestDisplayRefresh()
     }
-
-    #if os(macOS)
-    private func isContainerDisplayed(_ containerId: String) -> Bool {
-        guard activeContainerId == containerId else { return false }
-        return terminalViews[containerId]?.terminal === displayView.terminal
-    }
-    #endif
 
     private func requestDisplayRefresh() {
         #if os(macOS)
-        displayView.needsDisplay = true
-        #else
+        currentTerminalView.needsDisplay = true
+        #endif
+        #if os(iOS)
         currentTerminalView.setNeedsDisplay()
         #endif
     }
@@ -1387,6 +1332,12 @@ final class PodishTerminalSession: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
+                    guard !self.isContainerNotRunningError(error) else {
+                        if self.activeContainerId == containerId {
+                            self.startupError = nil
+                        }
+                        return
+                    }
                     if self.activeContainerId == containerId {
                         self.startupError = error.localizedDescription
                     }
@@ -1412,16 +1363,15 @@ final class PodishTerminalSession: ObservableObject {
 
     private func feedTerminalOutput(containerId: String, bytes: [UInt8]) {
         ensureTerminalView(containerId: containerId)
-        #if os(macOS)
-        if isContainerDisplayed(containerId),
-           displayView.terminal === terminalViews[containerId]?.terminal {
-            displayView.feed(byteArray: bytes[...])
-        } else {
-            terminalViews[containerId]?.feed(byteArray: bytes[...])
-        }
-        #else
         terminalViews[containerId]?.feed(byteArray: bytes[...])
-        #endif
+    }
+
+    private func isContainerNotRunningError(_ error: Error) -> Bool {
+        if let runtimeError = error as? PodishRuntimeError {
+            return runtimeError.isContainerNotRunning
+        }
+
+        return error.localizedDescription.localizedCaseInsensitiveContains("container is not running")
     }
 
     private static func makeWorkDir() -> String {
@@ -1435,8 +1385,6 @@ final class PodishTerminalSession: ObservableObject {
 }
 
 #if os(macOS)
-import AppKit
-
 struct TerminalViewHost: NSViewRepresentable {
     let terminalView: TerminalView
     let shouldFocus: Bool
@@ -1447,10 +1395,11 @@ struct TerminalViewHost: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> TerminalView {
-        terminalView
+        return terminalView
     }
 
     func updateNSView(_ nsView: TerminalView, context: Context) {
+        guard shouldFocus else { return }
         guard let window = nsView.window else { return }
         if !window.isKeyWindow {
             window.makeKeyAndOrderFront(nil)
@@ -1468,18 +1417,15 @@ struct TerminalViewHost: UIViewRepresentable {
     let shouldFocus: Bool
 
     func makeUIView(context: Context) -> TerminalView {
-        PodishLog.ui("TerminalViewHost makeUIView terminal=\(ObjectIdentifier(terminalView))")
         return terminalView
     }
 
     func updateUIView(_ uiView: TerminalView, context: Context) {
-        PodishLog.ui("TerminalViewHost updateUIView terminal=\(ObjectIdentifier(uiView)) shouldFocus=\(shouldFocus) window=\(uiView.window != nil) firstResponder=\(uiView.isFirstResponder)")
         guard shouldFocus else { return }
         guard uiView.window != nil else { return }
         guard !uiView.isFirstResponder else { return }
 
         Task { @MainActor in
-            PodishLog.ui("TerminalViewHost focus task terminal=\(ObjectIdentifier(uiView)) window=\(uiView.window != nil) firstResponder=\(uiView.isFirstResponder)")
             guard uiView.window != nil else { return }
             guard !uiView.isFirstResponder else { return }
             _ = uiView.becomeFirstResponder()

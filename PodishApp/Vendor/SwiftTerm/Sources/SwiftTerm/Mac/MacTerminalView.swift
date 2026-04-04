@@ -1450,8 +1450,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         
         let displayBuffer = terminal.displayBuffer
-        var startLocation = (selection.start.row * displayBuffer.rows) + selection.start.col
-        var endLocation = (selection.end.row * displayBuffer.rows) + selection.end.col
+        var startLocation = (selection.start.row * displayBuffer.cols) + selection.start.col
+        var endLocation = (selection.end.row * displayBuffer.cols) + selection.end.col
         if startLocation > endLocation {
             swap(&startLocation, &endLocation)
         }

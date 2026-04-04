@@ -25,13 +25,11 @@ struct PodishRootView: View {
             .onChange(of: store.selectedContainerID) { newId in
                 #if os(macOS)
                 guard let newId else { return }
-                PodishLog.ui("RootView selectedContainerID changed -> \(newId)")
                 session.attachContainer(newId)
                 #endif
             }
             .onChange(of: session.activeContainerId) { activeId in
                 guard let activeId else { return }
-                PodishLog.ui("RootView activeContainerId changed -> \(activeId)")
                 Task { @MainActor in
                     store.markRecentlyUsed(activeId)
                     guard store.selectedContainerID != activeId else { return }
@@ -120,6 +118,22 @@ struct PodishRootView: View {
 
     private var detailContent: some View {
         Group {
+            #if os(macOS)
+            ZStack {
+                TerminalWorkspaceView(
+                    session: session,
+                    allowFocus: sidebarSelection != .home
+                )
+                .opacity(sidebarSelection == .home ? 0 : 1)
+                .allowsHitTesting(sidebarSelection != .home)
+
+                if sidebarSelection == .home {
+                    HomeDashboardView {
+                        store.showNewContainer()
+                    }
+                }
+            }
+            #else
             if sidebarSelection == .home {
                 HomeDashboardView {
                     store.showNewContainer()
@@ -127,6 +141,7 @@ struct PodishRootView: View {
             } else {
                 TerminalWorkspaceView(session: session)
             }
+            #endif
         }
         .navigationTitle("Podish")
     }
