@@ -23,6 +23,7 @@ endif()
 
 # CPM Integration
 include(../cmake/CPM.cmake)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 CPMAddPackage(
     NAME simde
@@ -77,6 +78,7 @@ list(FILTER SOURCES EXCLUDE REGEX "3rdparty/softfloat/.*")
 if(NOT FIBERCPU_ENABLE_SUPEROPCODES)
     list(FILTER SOURCES EXCLUDE REGEX "generated/superopcodes\\.generated\\.cpp$")
 endif()
+list(FILTER SOURCES EXCLUDE REGEX "handler_reflection_exports\\.cpp$")
 list(FILTER SOURCES EXCLUDE REGEX "jit/.*")
 
 # Object library for core parts (contains the opcodes to scan)
@@ -134,6 +136,21 @@ if(USE_SOFTFLOAT)
     add_subdirectory(3rdparty/softfloat)
 endif()
 
+set(FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/handler_reflection.generated.cpp")
+
+add_custom_command(
+    OUTPUT ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
+            --output ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
+            $<TARGET_OBJECTS:fibercpu_core>
+    DEPENDS fibercpu_core ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
+    COMMENT "Generating handler reflection table from fibercpu_core objects"
+    COMMAND_EXPAND_LISTS
+    VERBATIM
+)
+
 # Final library includes objects from core
 set(FIBERCPU_LIBRARY_TYPE SHARED)
 if(FIBERCPU_BUILD_STATIC)
@@ -142,6 +159,8 @@ endif()
 
 set(FIBERCPU_FINAL_SOURCES
     $<TARGET_OBJECTS:fibercpu_core>
+    handler_reflection_exports.cpp
+    ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
 )
 
 add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${FIBERCPU_FINAL_SOURCES})

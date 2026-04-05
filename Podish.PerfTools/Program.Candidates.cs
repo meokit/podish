@@ -43,39 +43,81 @@ internal static partial class Program
 
         foreach (var analysisFile in analysisFiles)
         {
-            var data = JsonDocument.Parse(File.ReadAllText(analysisFile, Encoding.UTF8));
+            using var stream = File.OpenRead(analysisFile);
+            using var data = JsonDocument.Parse(stream);
             var sampleMeta = InferSampleMetadata(analysisFile);
-            if (ShouldSkipAnalysis(data.RootElement, out var skipReasons))
-            {
-                skippedSamples.Add(new Dictionary<string, object?>
-                {
-                    ["analysis_file"] = analysisFile,
-                    ["reasons"] = skipReasons
-                });
-                continue;
-            }
-
-            if (!data.RootElement.TryGetProperty("blocks", out var blocksNode) ||
-                blocksNode.ValueKind != JsonValueKind.Array)
-            {
-                skippedSamples.Add(new Dictionary<string, object?>
-                {
-                    ["analysis_file"] = analysisFile,
-                    ["reasons"] = new[] { "blocks list is empty" }
-                });
-                continue;
-            }
 
             var sampleAnchors = new Dictionary<string, SampleAnchorStats>(StringComparer.Ordinal);
             var samplePairs = new Dictionary<(string, string), SamplePairStats>();
-            AnalyzeSampleCandidates(blocksNode, sampleAnchors, samplePairs);
+            var usedCandidateSummary = false;
+
+            if (data.RootElement.TryGetProperty("candidate_summary", out var candidateSummaryNode) &&
+                candidateSummaryNode.ValueKind == JsonValueKind.Object)
+            {
+                var skipReasons = GetAnalysisValidationSkipReasons(data.RootElement);
+                if (skipReasons.Count > 0)
+                {
+                    skippedSamples.Add(new Dictionary<string, object?>
+                    {
+                        ["analysis_file"] = analysisFile,
+                        ["reasons"] = skipReasons
+                    });
+                    continue;
+                }
+
+                var candidateSummary = JsonSerializer.Deserialize(
+                    candidateSummaryNode,
+                    PerfToolsCompactJsonContext.Default.BlockCandidateSummary);
+                if (candidateSummary is null)
+                {
+                    skippedSamples.Add(new Dictionary<string, object?>
+                    {
+                        ["analysis_file"] = analysisFile,
+                        ["reasons"] = new[] { "candidate_summary is missing or invalid" }
+                    });
+                    continue;
+                }
+
+                LoadCandidateSummary(candidateSummary, sampleAnchors, samplePairs);
+                usedCandidateSummary = true;
+            }
+            else
+            {
+                if (ShouldSkipAnalysis(data.RootElement, out var skipReasons))
+                {
+                    skippedSamples.Add(new Dictionary<string, object?>
+                    {
+                        ["analysis_file"] = analysisFile,
+                        ["reasons"] = skipReasons
+                    });
+                    continue;
+                }
+
+                if (!data.RootElement.TryGetProperty("blocks", out var blocksNode) ||
+                    blocksNode.ValueKind != JsonValueKind.Array)
+                {
+                    skippedSamples.Add(new Dictionary<string, object?>
+                    {
+                        ["analysis_file"] = analysisFile,
+                        ["reasons"] = new[] { "blocks list is empty" }
+                    });
+                    continue;
+                }
+
+                AnalyzeSampleCandidates(blocksNode, sampleAnchors, samplePairs);
+            }
 
             if (samplePairs.Count == 0)
             {
                 skippedSamples.Add(new Dictionary<string, object?>
                 {
                     ["analysis_file"] = analysisFile,
-                    ["reasons"] = new[] { "no def-use-adjacent 2-op candidates found in blocks" }
+                    ["reasons"] = new[]
+                    {
+                        usedCandidateSummary
+                            ? "no candidate pairs found in candidate_summary"
+                            : "no def-use-adjacent 2-op candidates found in blocks"
+                    }
                 });
                 continue;
             }
@@ -178,5 +220,24 @@ internal static partial class Program
         }
 
         return 0;
+    }
+
+    private static List<string> GetAnalysisValidationSkipReasons(JsonElement root)
+    {
+        var reasons = new List<string>();
+        if (!root.TryGetProperty("validation", out var validation) || validation.ValueKind != JsonValueKind.Object)
+        {
+            reasons.Add("missing validation");
+            return reasons;
+        }
+
+        if (validation.TryGetProperty("warnings", out var warnings) && warnings.ValueKind == JsonValueKind.Array)
+            foreach (var warning in warnings.EnumerateArray().Select(x => x.GetString() ?? ""))
+                if (warning.Contains("parsed blocks are empty", StringComparison.Ordinal) ||
+                    warning.Contains("dump/export format likely drifted", StringComparison.Ordinal) ||
+                    warning.Contains("truncated", StringComparison.Ordinal))
+                    reasons.Add(warning);
+
+        return reasons;
     }
 }

@@ -13,6 +13,7 @@
         <PackageReference Include="LibObjectFile" Version="2.1.0"/>
         <Compile Include="Program.cs"/>
         <Compile Include="Program.Analysis.cs"/>
+        <Compile Include="Program.Analysis.Models.cs"/>
         <Compile Include="Program.Common.cs"/>
         <Compile Include="Program.SibStats.cs"/>
         <Compile Include="Program.Candidates.cs"/>

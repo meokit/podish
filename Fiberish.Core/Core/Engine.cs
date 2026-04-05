@@ -18,6 +18,9 @@ public enum EngineCloneMemoryMode
 
 public class Engine : IDisposable
 {
+    internal const uint BlockDumpMagic = 0x324b4c42; // "BLK2"
+    internal const int BlockDumpFormatVersion = 2;
+
     private static readonly ConcurrentDictionary<nuint, ConcurrentDictionary<nint, byte>> MmuAttachmentRegistry = new();
     private MmuHandle _currentMmu = null!;
     private bool _disposed;
@@ -798,10 +801,28 @@ public class Engine : IDisposable
 
         using var writer = new BinaryWriter(output, Encoding.UTF8, true);
         var imageBase = GetNativeImageBase().ToInt64();
-        writer.Write((ulong)imageBase);
-
         var blocks = GetBlockPointers();
+        var handlerTable = BuildBlockDumpHandlerTable();
+
+        writer.Write(BlockDumpMagic);
+        writer.Write(BlockDumpFormatVersion);
+        writer.Write((ulong)imageBase);
         writer.Write(blocks.Length);
+        writer.Write(handlerTable.Count);
+        foreach (var handler in handlerTable)
+        {
+            writer.Write(handler.HandlerId);
+            writer.Write(handler.OpId);
+            writer.Write(unchecked((ulong)handler.HandlerPtr.ToInt64()));
+            WriteLengthPrefixedUtf8(writer, handler.Symbol);
+        }
+
+        var handlerIdsByPtr = new Dictionary<nint, int>(handlerTable.Count);
+        foreach (var handler in handlerTable)
+        {
+            if (handler.HandlerPtr != IntPtr.Zero)
+                handlerIdsByPtr[(nint)handler.HandlerPtr] = handler.HandlerId;
+        }
 
         foreach (var blockPtr in blocks)
         {
@@ -829,18 +850,47 @@ public class Engine : IDisposable
                 writer.Write(ExtractDumpImm(op));
                 writer.Write(0u);
                 writer.Write(op.handler.ToInt64());
+                var handlerId = handlerIdsByPtr.TryGetValue((nint)op.handler, out var knownHandlerId)
+                    ? knownHandlerId
+                    : X86Native.GetHandlerId(op.handler);
+                writer.Write(handlerId);
             }
         }
     }
 
-    private static ulong PackDumpMem(X86Native.DecodedOp op)
+    internal static void WriteLengthPrefixedUtf8(BinaryWriter writer, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        writer.Write(bytes.Length);
+        writer.Write(bytes);
+    }
+
+    internal static List<BlockDumpHandlerEntry> BuildBlockDumpHandlerTable()
+    {
+        var handlerCount = X86Native.GetHandlerCount();
+        if (handlerCount <= 0)
+            return [];
+
+        var handlers = new List<BlockDumpHandlerEntry>(handlerCount);
+        for (var handlerId = 0; handlerId < handlerCount; handlerId++)
+        {
+            var handlerPtr = X86Native.GetHandlerById(handlerId);
+            var symbol = X86Native.GetHandlerSymbolById(handlerId) ?? string.Empty;
+            var opId = handlerPtr != IntPtr.Zero ? X86Native.GetOpIdForHandler(handlerPtr) : -1;
+            handlers.Add(new BlockDumpHandlerEntry(handlerId, handlerPtr, opId, symbol));
+        }
+
+        return handlers;
+    }
+
+    internal static ulong PackDumpMem(X86Native.DecodedOp op)
     {
         if (!HasMem(op.meta))
             return 0;
         return ((ulong)op.ea_desc << 32) | op.disp;
     }
 
-    private static uint ExtractDumpImm(X86Native.DecodedOp op)
+    internal static uint ExtractDumpImm(X86Native.DecodedOp op)
     {
         return HasImm(op.meta) ? op.imm : 0u;
     }
@@ -859,6 +909,8 @@ public class Engine : IDisposable
     {
         return X86Native.GetLibAddress();
     }
+
+    internal sealed record BlockDumpHandlerEntry(int HandlerId, IntPtr HandlerPtr, int OpId, string Symbol);
 
     protected virtual void Dispose(bool disposing)
     {

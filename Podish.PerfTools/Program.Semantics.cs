@@ -5,6 +5,36 @@ namespace Podish.PerfTools;
 
 internal static partial class Program
 {
+    private const ushort ResourceCf = 1 << 8;
+    private const ushort ResourcePf = 1 << 9;
+    private const ushort ResourceAf = 1 << 10;
+    private const ushort ResourceZf = 1 << 11;
+    private const ushort ResourceSf = 1 << 12;
+    private const ushort ResourceOf = 1 << 13;
+    private const ushort ResourceMem = 1 << 14;
+
+    private const uint NoteLoopDecrementsEcx = 1u << 0;
+    private const uint NoteJecxzReadsEcx = 1u << 1;
+    private const uint NoteConditionalControlFlowConsumesFlags = 1u << 2;
+    private const uint NoteUnconditionalJump = 1u << 3;
+    private const uint NoteCmovReadsDestination = 1u << 4;
+    private const uint NoteLeaReadsAddressRegs = 1u << 5;
+    private const uint NoteShiftCountComesFromCl = 1u << 6;
+    private const uint NoteCldClearsDirectionFlag = 1u << 7;
+
+    private const uint LegalitySecondControlFlow = 1u << 0;
+    private const uint LegalityMemorySideEffect = 1u << 1;
+    private const uint LegalityNonRaw = 1u << 2;
+
+    private static readonly string[] ComparePrefixes = ["cmp", "test", "bt", "btc", "btr", "bts", "comis", "ucomis"];
+    private static readonly string[] AdcSbbPrefixes = ["adc", "sbb"];
+    private static readonly string[] AluPrefixes = ["add", "sub", "and", "or", "xor", "inc", "dec", "neg", "shl", "shr", "sar", "sal", "rol", "ror", "shld", "shrd"];
+    private static readonly string[] GprWritePrefixes = ["mov", "lea", "movzx", "movsx", "pop"];
+    private static readonly string[] GprReadPrefixes = ["mov", "push", "xchg", "cmp", "test"];
+    private static readonly string[] StringComparePrefixes = ["cmps", "scas"];
+    private static readonly string[][] ResourceMaskNamesCache = new string[1 << 15][];
+    private static readonly string[][] NoteFlagsCache = new string[1 << 8][];
+
     private static string OpShortName(string name)
     {
         var shortName = name.Split("::").Last();
@@ -49,13 +79,13 @@ internal static partial class Program
             notes.Add("setcc consumes flags and defines a byte register");
         }
 
-        if (StartsWithAny(lower, "cmp", "test", "bt", "btc", "btr", "bts", "comis", "ucomis"))
+        if (StartsWithAny(lower, ComparePrefixes))
         {
             reads.Add("gpr");
             writes.Add("flags");
             notes.Add("compare/test family defines flags");
         }
-        else if (StartsWithAny(lower, "adc", "sbb"))
+        else if (StartsWithAny(lower, AdcSbbPrefixes))
         {
             reads.Add("gpr");
             reads.Add("flags");
@@ -63,8 +93,7 @@ internal static partial class Program
             writes.Add("flags");
             notes.Add("adc/sbb both consume and define flags");
         }
-        else if (StartsWithAny(lower, "add", "sub", "and", "or", "xor", "inc", "dec", "neg", "shl", "shr", "sar", "sal",
-                     "rol", "ror", "shld", "shrd"))
+        else if (StartsWithAny(lower, AluPrefixes))
         {
             reads.Add("gpr");
             writes.Add("gpr");
@@ -90,9 +119,9 @@ internal static partial class Program
             notes.Add("store consumes a register and writes memory");
         }
 
-        if (!isStore && StartsWithAny(lower, "mov", "lea", "movzx", "movsx", "pop"))
+        if (!isStore && StartsWithAny(lower, GprWritePrefixes))
             writes.Add("gpr");
-        if (!isLoad && StartsWithAny(lower, "mov", "push", "xchg", "cmp", "test"))
+        if (!isLoad && StartsWithAny(lower, GprReadPrefixes))
             reads.Add("gpr");
         if (lower.StartsWith("push", StringComparison.Ordinal))
         {
@@ -110,7 +139,7 @@ internal static partial class Program
             memorySideEffect = true;
         }
 
-        if (StartsWithAny(lower, "cmps", "scas"))
+        if (StartsWithAny(lower, StringComparePrefixes))
         {
             reads.Add("gpr");
             reads.Add("mem");
@@ -178,7 +207,37 @@ internal static partial class Program
         return new OpSemantics(reads, writes, notes, controlFlow, memorySideEffect);
     }
 
+    private static OpSemantics GetOpSemantics(BlockAnalysisOp op, string normalizedName)
+    {
+        var summary = op.semantic_summary;
+        if (summary.reads_mask != 0 || summary.writes_mask != 0 || summary.control_flow || summary.memory_side_effect ||
+            summary.note_flags != 0)
+            return ToOpSemantics(summary);
+
+        var defUse = op.def_use;
+        var reads = new HashSet<string>(defUse.reads, StringComparer.Ordinal);
+        var writes = new HashSet<string>(defUse.writes, StringComparer.Ordinal);
+        var fallback = InferSemantics(normalizedName);
+        var controlFlow = defUse.control_flow || fallback.ControlFlow;
+        var memorySideEffect = defUse.memory_side_effect || fallback.MemorySideEffect;
+        var notes = defUse.notes.ToList();
+        foreach (var note in fallback.Notes)
+            if (!notes.Contains(note, StringComparer.Ordinal))
+                notes.Add(note);
+
+        if (reads.Count == 0 && writes.Count == 0 && notes.Count == 0 && !memorySideEffect)
+            return fallback;
+
+        return new OpSemantics(reads, writes, notes, controlFlow, memorySideEffect);
+    }
+
     private static OpSemantics? AnalyzeDefUse(int? opId, int modrm, int meta, int prefixes, int eaDesc)
+    {
+        var summary = AnalyzeDefUseSummary(opId, modrm, meta, prefixes, eaDesc);
+        return summary is null ? null : ToOpSemantics(summary.Value);
+    }
+
+    private static OpSemanticSummary? AnalyzeDefUseSummary(int? opId, int modrm, int meta, int prefixes, int eaDesc)
     {
         _ = prefixes;
         if (opId is null || opId < 0)
@@ -197,22 +256,22 @@ internal static partial class Program
             {
                 state.ReadsGprMask |= RegMask(1);
                 state.WritesGprMask |= RegMask(1);
-                state.Note("loop family decrements ECX");
+                state.Note(NoteLoopDecrementsEcx);
             }
             else if (id == 0xE3)
             {
                 state.ReadsGprMask |= RegMask(1);
-                state.Note("jecxz reads ECX");
+                state.Note(NoteJecxzReadsEcx);
             }
 
-            state.Note("conditional control flow consumes flags");
-            return state.ToOpSemantics();
+            state.Note(NoteConditionalControlFlowConsumesFlags);
+            return state.ToSemanticSummary();
         }
 
         if (id is 0xE9 or 0xEB)
         {
-            state.Note("unconditional jump");
-            return state.ToOpSemantics();
+            state.Note(NoteUnconditionalJump);
+            return state.ToSemanticSummary();
         }
 
         if (id >= 0x140 && id <= 0x14F && hasModrm)
@@ -220,15 +279,15 @@ internal static partial class Program
             state.ReadsFlagsMask |= AllStatusFlagsMask;
             ApplyRegOperand(state, modrm, "readwrite");
             ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
-            state.Note("cmov reads destination because the old value is kept on false predicate");
-            return state.ToOpSemantics();
+            state.Note(NoteCmovReadsDestination);
+            return state.ToSemanticSummary();
         }
 
         if (id >= 0x190 && id <= 0x19F && hasModrm)
         {
             state.ReadsFlagsMask |= AllStatusFlagsMask;
             ApplyRmOperand(state, modrm, hasMem, eaDesc, "write");
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0x38 or 0x39 or 0x3A or 0x3B or 0x84 or 0x85 && hasModrm)
@@ -236,48 +295,48 @@ internal static partial class Program
             ApplyRegOperand(state, modrm, "read");
             ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
             state.WritesFlagsMask |= AllStatusFlagsMask;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0x89 or 0x200 or 0x201 && hasModrm)
         {
             ApplyRegOperand(state, modrm, "read");
             ApplyRmOperand(state, modrm, hasMem, eaDesc, "write");
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0x8B or 0x202 or 0x203 && hasModrm)
         {
             ApplyRegOperand(state, modrm, "write");
             ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id == 0x88 && hasModrm)
         {
             ApplyRegOperand(state, modrm, "read");
             ApplyRmOperand(state, modrm, hasMem, eaDesc, "write");
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id == 0x8A && hasModrm)
         {
             ApplyRegOperand(state, modrm, "write");
             ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0xC6 or 0xC7 && hasModrm)
         {
             ApplyRmOperand(state, modrm, hasMem, eaDesc, "write");
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id == 0x87 && hasModrm)
         {
             ApplyRegOperand(state, modrm, "readwrite");
             ApplyRmOperand(state, modrm, hasMem, eaDesc, "readwrite");
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id >= 0x91 && id <= 0x97)
@@ -285,22 +344,22 @@ internal static partial class Program
             var reg = id - 0x90;
             state.ReadsGprMask |= RegMask(0, reg);
             state.WritesGprMask |= RegMask(0, reg);
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id == 0x8D && hasModrm)
         {
             ApplyRegOperand(state, modrm, "write");
             state.ReadsAddrGprMask |= DecodeMemoryAddressRegs(eaDesc);
-            state.Note("lea reads effective-address registers without touching memory");
-            return state.ToOpSemantics();
+            state.Note(NoteLeaReadsAddressRegs);
+            return state.ToSemanticSummary();
         }
 
         if (id is 0x1B6 or 0x1B7 or 0x1BE or 0x1BF && hasModrm)
         {
             ApplyRegOperand(state, modrm, "write");
             ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0x00 or 0x01 or 0x08 or 0x09 or 0x10 or 0x11 or 0x18 or 0x19 or 0x20 or 0x21 or 0x28 or 0x29 or 0x30
@@ -311,7 +370,7 @@ internal static partial class Program
             state.WritesFlagsMask |= AllStatusFlagsMask;
             if (id is 0x10 or 0x11 or 0x18 or 0x19)
                 state.ReadsFlagsMask |= CfBit;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0x02 or 0x03 or 0x0A or 0x0B or 0x12 or 0x13 or 0x1A or 0x1B or 0x22 or 0x23 or 0x2A or 0x2B or 0x32
@@ -322,7 +381,7 @@ internal static partial class Program
             state.WritesFlagsMask |= AllStatusFlagsMask;
             if (id is 0x12 or 0x13 or 0x1A or 0x1B)
                 state.ReadsFlagsMask |= CfBit;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0x80 or 0x81 or 0x83 && hasModrm)
@@ -340,7 +399,7 @@ internal static partial class Program
             }
 
             state.WritesFlagsMask |= AllStatusFlagsMask;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0xC0 or 0xC1 or 0xD0 or 0xD1 or 0xD2 or 0xD3 && hasModrm)
@@ -349,11 +408,11 @@ internal static partial class Program
             if (id is 0xD2 or 0xD3)
             {
                 state.ReadsGprMask |= RegMask(1);
-                state.Note("shift count comes from CL");
+                state.Note(NoteShiftCountComesFromCl);
             }
 
             state.WritesFlagsMask |= AllStatusFlagsMask;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0xF6 or 0xF7 && hasModrm)
@@ -387,7 +446,7 @@ internal static partial class Program
                 state.WritesGprMask |= RegMask(0, 2);
             }
 
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0x1A3 or 0x1AB or 0x1B3 or 0x1BB && hasModrm)
@@ -396,7 +455,7 @@ internal static partial class Program
             var rmRole = id is 0x1AB or 0x1B3 or 0x1BB ? "readwrite" : "read";
             ApplyRmOperand(state, modrm, hasMem, eaDesc, rmRole);
             state.WritesFlagsMask |= CfBit;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id == 0x1AF && hasModrm)
@@ -404,7 +463,7 @@ internal static partial class Program
             ApplyRegOperand(state, modrm, "readwrite");
             ApplyRmOperand(state, modrm, hasMem, eaDesc, "read");
             state.WritesFlagsMask |= CfBit | OfBit;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id >= 0x50 && id <= 0x57)
@@ -412,7 +471,7 @@ internal static partial class Program
             state.ReadsGprMask |= RegMask(id - 0x50, 4);
             state.WritesGprMask |= RegMask(4);
             state.WritesMemory = true;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id >= 0x58 && id <= 0x5F)
@@ -420,7 +479,7 @@ internal static partial class Program
             state.ReadsGprMask |= RegMask(4);
             state.WritesGprMask |= RegMask(id - 0x58, 4);
             state.ReadsMemory = true;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0xE8 or 0xC2 or 0xC3)
@@ -429,7 +488,7 @@ internal static partial class Program
             state.WritesGprMask |= RegMask(4);
             state.ReadsMemory = id is 0xC2 or 0xC3;
             state.WritesMemory = id == 0xE8;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id == 0x6A)
@@ -437,7 +496,7 @@ internal static partial class Program
             state.ReadsGprMask |= RegMask(4);
             state.WritesGprMask |= RegMask(4);
             state.WritesMemory = true;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id == 0xFF && hasModrm)
@@ -467,19 +526,19 @@ internal static partial class Program
                 state.WritesMemory = true;
             }
 
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id >= 0xB8 && id <= 0xBF)
         {
             state.WritesGprMask |= RegMask(id - 0xB8);
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id >= 0xB0 && id <= 0xB7)
         {
             state.WritesGprMask |= RegMask(id - 0xB0);
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0x05 or 0x0D or 0x15 or 0x1D or 0x25 or 0x2D or 0x35 or 0x3D or 0xA9)
@@ -490,14 +549,14 @@ internal static partial class Program
             state.WritesFlagsMask |= AllStatusFlagsMask;
             if (id is 0x15 or 0x1D)
                 state.ReadsFlagsMask |= CfBit;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0x3C or 0xA8)
         {
             state.ReadsGprMask |= RegMask(0);
             state.WritesFlagsMask |= AllStatusFlagsMask;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id >= 0x40 && id <= 0x47)
@@ -506,7 +565,7 @@ internal static partial class Program
             state.ReadsGprMask |= RegMask(reg);
             state.WritesGprMask |= RegMask(reg);
             state.WritesFlagsMask |= AllStatusFlagsMask & ~CfBit;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id >= 0x48 && id <= 0x4F)
@@ -515,36 +574,36 @@ internal static partial class Program
             state.ReadsGprMask |= RegMask(reg);
             state.WritesGprMask |= RegMask(reg);
             state.WritesFlagsMask |= AllStatusFlagsMask & ~CfBit;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id == 0x99)
         {
             state.ReadsGprMask |= RegMask(0);
             state.WritesGprMask |= RegMask(2);
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id == 0xFC)
         {
             state.ReadsFlagsMask &= 0;
             state.WritesFlagsMask |= 1u << 10;
-            state.Note("cld clears direction flag");
-            return state.ToOpSemantics();
+            state.Note(NoteCldClearsDirectionFlag);
+            return state.ToSemanticSummary();
         }
 
         if (id is 0xA0 or 0xA1)
         {
             state.WritesGprMask |= RegMask(0);
             state.ReadsMemory = true;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         if (id is 0xA2 or 0xA3)
         {
             state.ReadsGprMask |= RegMask(0);
             state.WritesMemory = true;
-            return state.ToOpSemantics();
+            return state.ToSemanticSummary();
         }
 
         return null;
@@ -606,24 +665,41 @@ internal static partial class Program
             state.WritesGprMask |= RegMask(reg);
     }
 
-    private static List<string> MaskToRegNames(uint mask)
+    private static string[] MaskToRegNames(uint mask)
     {
-        var names = new List<string>();
+        if (mask == 0)
+            return [];
+        var count = 0;
         for (var i = 0; i < GprNames.Length; i++)
             if ((mask & (1u << i)) != 0)
-                names.Add(GprNames[i]);
+                count++;
+        var names = new string[count];
+        var index = 0;
+        for (var i = 0; i < GprNames.Length; i++)
+            if ((mask & (1u << i)) != 0)
+                names[index++] = GprNames[i];
         return names;
     }
 
-    private static List<string> MaskToFlagNames(uint mask)
+    private static string[] MaskToFlagNames(uint mask)
     {
-        var flags = new List<string>();
-        if ((mask & CfBit) != 0) flags.Add("cf");
-        if ((mask & PfBit) != 0) flags.Add("pf");
-        if ((mask & AfBit) != 0) flags.Add("af");
-        if ((mask & ZfBit) != 0) flags.Add("zf");
-        if ((mask & SfBit) != 0) flags.Add("sf");
-        if ((mask & OfBit) != 0) flags.Add("of");
+        if (mask == 0)
+            return [];
+        var count = 0;
+        if ((mask & CfBit) != 0) count++;
+        if ((mask & PfBit) != 0) count++;
+        if ((mask & AfBit) != 0) count++;
+        if ((mask & ZfBit) != 0) count++;
+        if ((mask & SfBit) != 0) count++;
+        if ((mask & OfBit) != 0) count++;
+        var flags = new string[count];
+        var index = 0;
+        if ((mask & CfBit) != 0) flags[index++] = "cf";
+        if ((mask & PfBit) != 0) flags[index++] = "pf";
+        if ((mask & AfBit) != 0) flags[index++] = "af";
+        if ((mask & ZfBit) != 0) flags[index++] = "zf";
+        if ((mask & SfBit) != 0) flags[index++] = "sf";
+        if ((mask & OfBit) != 0) flags[index++] = "of";
         return flags;
     }
 
@@ -666,42 +742,247 @@ internal static partial class Program
             return null;
 
         string relationKind;
-        string[] sharedResources;
+        ushort sharedResourceMask;
         var depWeight = 1;
         if (sharedRaw.Length > 0)
         {
             relationKind = "RAW";
-            sharedResources = sharedRaw;
+            sharedResourceMask = NamesToResourceMask(sharedRaw);
             depWeight = 2;
         }
         else if (sharedRar.Length > 0 && sharedWaw.Length > 0)
         {
             relationKind = "RAR/WAW";
-            sharedResources = sharedRar.Concat(sharedWaw).Distinct(StringComparer.Ordinal)
-                .OrderBy(x => x, StringComparer.Ordinal).ToArray();
+            sharedResourceMask = NamesToResourceMask(sharedRar.Concat(sharedWaw).Distinct(StringComparer.Ordinal));
         }
         else if (sharedRar.Length > 0)
         {
             relationKind = "RAR";
-            sharedResources = sharedRar;
+            sharedResourceMask = NamesToResourceMask(sharedRar);
         }
         else
         {
             relationKind = "WAW";
-            sharedResources = sharedWaw;
+            sharedResourceMask = NamesToResourceMask(sharedWaw);
         }
 
-        var legalityNotes = new List<string>();
+        uint legalityFlags = 0;
         if (secondInfo.ControlFlow)
-            legalityNotes.Add("second op is control-flow and needs strict mid-exit handling");
+            legalityFlags |= LegalitySecondControlFlow;
         if (firstInfo.MemorySideEffect || secondInfo.MemorySideEffect)
-            legalityNotes.Add("pair touches memory side effects and should keep restart semantics conservative");
+            legalityFlags |= LegalityMemorySideEffect;
         if (!string.Equals(relationKind, "RAW", StringComparison.Ordinal))
-            legalityNotes.Add(
-                "pair is non-RAW and may only be profitable when repeated reads or write coalescing can be shared");
+            legalityFlags |= LegalityNonRaw;
 
-        return new PairRelation(relationKind, depWeight, sharedResources, firstInfo, secondInfo,
-            legalityNotes.ToArray());
+        return new PairRelation(relationKind, depWeight, sharedResourceMask, legalityFlags);
+    }
+
+    private static PairRelation? ClassifyPair(string firstName, string secondName, BlockAnalysisOp firstOp,
+        BlockAnalysisOp secondOp)
+    {
+        var firstInfo = firstOp.semantic_summary;
+        var secondInfo = secondOp.semantic_summary;
+
+        var sharedRawMask = (ushort)(firstInfo.writes_mask & secondInfo.reads_mask);
+        var sharedRarMask = (ushort)(firstInfo.reads_mask & secondInfo.reads_mask);
+        var sharedWawMask = (ushort)(firstInfo.writes_mask & secondInfo.writes_mask);
+        if (sharedRawMask == 0 && sharedRarMask == 0 && sharedWawMask == 0)
+            return null;
+
+        string relationKind;
+        ushort sharedResourceMask;
+        var depWeight = 1;
+        if (sharedRawMask != 0)
+        {
+            relationKind = "RAW";
+            sharedResourceMask = sharedRawMask;
+            depWeight = 2;
+        }
+        else if (sharedRarMask != 0 && sharedWawMask != 0)
+        {
+            relationKind = "RAR/WAW";
+            sharedResourceMask = (ushort)(sharedRarMask | sharedWawMask);
+        }
+        else if (sharedRarMask != 0)
+        {
+            relationKind = "RAR";
+            sharedResourceMask = sharedRarMask;
+        }
+        else
+        {
+            relationKind = "WAW";
+            sharedResourceMask = sharedWawMask;
+        }
+
+        uint legalityFlags = 0;
+        if (secondInfo.control_flow)
+            legalityFlags |= LegalitySecondControlFlow;
+        if (firstInfo.memory_side_effect || secondInfo.memory_side_effect)
+            legalityFlags |= LegalityMemorySideEffect;
+        if (!string.Equals(relationKind, "RAW", StringComparison.Ordinal))
+            legalityFlags |= LegalityNonRaw;
+
+        return new PairRelation(relationKind, depWeight, sharedResourceMask, legalityFlags);
+    }
+
+    private static OpSemantics ToOpSemantics(OpSemanticSummary summary)
+    {
+        var reads = ResourceMaskToNames(summary.reads_mask);
+        var writes = ResourceMaskToNames(summary.writes_mask);
+        var notes = NoteFlagsToArray(summary.note_flags);
+        if (reads.Length == 0 && writes.Length == 0 && notes.Length == 0 && !summary.memory_side_effect &&
+            !summary.control_flow)
+            return new OpSemantics([], [], [], false, false);
+        return new OpSemantics(reads, writes, notes, summary.control_flow, summary.memory_side_effect);
+    }
+
+    private static OpSemanticSummary ToSemanticSummary(OpSemantics semantics)
+    {
+        return new OpSemanticSummary(
+            NamesToResourceMask(semantics.Reads),
+            NamesToResourceMask(semantics.Writes),
+            semantics.ControlFlow,
+            semantics.MemorySideEffect);
+    }
+
+    private static ushort NamesToResourceMask(IEnumerable<string> names)
+    {
+        ushort mask = 0;
+        foreach (var name in names)
+        {
+            switch (name)
+            {
+                case "eax": mask |= 1 << 0; break;
+                case "ecx": mask |= 1 << 1; break;
+                case "edx": mask |= 1 << 2; break;
+                case "ebx": mask |= 1 << 3; break;
+                case "esp": mask |= 1 << 4; break;
+                case "ebp": mask |= 1 << 5; break;
+                case "esi": mask |= 1 << 6; break;
+                case "edi": mask |= 1 << 7; break;
+                case "flag:cf": mask |= ResourceCf; break;
+                case "flag:pf": mask |= ResourcePf; break;
+                case "flag:af": mask |= ResourceAf; break;
+                case "flag:zf": mask |= ResourceZf; break;
+                case "flag:sf": mask |= ResourceSf; break;
+                case "flag:of": mask |= ResourceOf; break;
+                case "mem": mask |= ResourceMem; break;
+                case "flags":
+                    mask |= ResourceCf | ResourcePf | ResourceAf | ResourceZf | ResourceSf | ResourceOf;
+                    break;
+                case "gpr":
+                    mask |= 0xFF;
+                    break;
+            }
+        }
+
+        return mask;
+    }
+
+    private static uint LegalityArrayToFlags(IEnumerable<string> notes)
+    {
+        uint flags = 0;
+        foreach (var note in notes)
+        {
+            if (string.Equals(note, "second op is control-flow and needs strict mid-exit handling", StringComparison.Ordinal))
+                flags |= LegalitySecondControlFlow;
+            else if (string.Equals(note, "pair touches memory side effects and should keep restart semantics conservative", StringComparison.Ordinal))
+                flags |= LegalityMemorySideEffect;
+            else if (string.Equals(note, "pair is non-RAW and may only be profitable when repeated reads or write coalescing can be shared", StringComparison.Ordinal))
+                flags |= LegalityNonRaw;
+        }
+
+        return flags;
+    }
+
+    private static string[] ResourceMaskToNames(ushort mask)
+    {
+        if (mask == 0)
+            return [];
+
+        var cached = ResourceMaskNamesCache[mask];
+        if (cached is not null)
+            return cached;
+
+        var count = 0;
+        for (var i = 0; i < GprNames.Length; i++)
+            if ((mask & (1 << i)) != 0)
+                count++;
+        if ((mask & ResourceCf) != 0) count++;
+        if ((mask & ResourcePf) != 0) count++;
+        if ((mask & ResourceAf) != 0) count++;
+        if ((mask & ResourceZf) != 0) count++;
+        if ((mask & ResourceSf) != 0) count++;
+        if ((mask & ResourceOf) != 0) count++;
+        if ((mask & ResourceMem) != 0) count++;
+
+        var names = new string[count];
+        var index = 0;
+        for (var i = 0; i < GprNames.Length; i++)
+            if ((mask & (1 << i)) != 0)
+                names[index++] = GprNames[i];
+        if ((mask & ResourceCf) != 0) names[index++] = "flag:cf";
+        if ((mask & ResourcePf) != 0) names[index++] = "flag:pf";
+        if ((mask & ResourceAf) != 0) names[index++] = "flag:af";
+        if ((mask & ResourceZf) != 0) names[index++] = "flag:zf";
+        if ((mask & ResourceSf) != 0) names[index++] = "flag:sf";
+        if ((mask & ResourceOf) != 0) names[index++] = "flag:of";
+        if ((mask & ResourceMem) != 0) names[index++] = "mem";
+        ResourceMaskNamesCache[mask] = names;
+        return names;
+    }
+
+    private static ushort FlagMaskToResourceMask(uint mask)
+    {
+        ushort result = 0;
+        if ((mask & CfBit) != 0) result |= ResourceCf;
+        if ((mask & PfBit) != 0) result |= ResourcePf;
+        if ((mask & AfBit) != 0) result |= ResourceAf;
+        if ((mask & ZfBit) != 0) result |= ResourceZf;
+        if ((mask & SfBit) != 0) result |= ResourceSf;
+        if ((mask & OfBit) != 0) result |= ResourceOf;
+        return result;
+    }
+
+    private static string[] NoteFlagsToArray(uint flags)
+    {
+        if (flags == 0)
+            return [];
+
+        if (flags < NoteFlagsCache.Length)
+        {
+            var cached = NoteFlagsCache[flags];
+            if (cached is not null)
+                return cached;
+        }
+
+        var notes = new List<string>(8);
+        if ((flags & NoteLoopDecrementsEcx) != 0) notes.Add("loop family decrements ECX");
+        if ((flags & NoteJecxzReadsEcx) != 0) notes.Add("jecxz reads ECX");
+        if ((flags & NoteConditionalControlFlowConsumesFlags) != 0) notes.Add("conditional control flow consumes flags");
+        if ((flags & NoteUnconditionalJump) != 0) notes.Add("unconditional jump");
+        if ((flags & NoteCmovReadsDestination) != 0) notes.Add("cmov reads destination because the old value is kept on false predicate");
+        if ((flags & NoteLeaReadsAddressRegs) != 0) notes.Add("lea reads effective-address registers without touching memory");
+        if ((flags & NoteShiftCountComesFromCl) != 0) notes.Add("shift count comes from CL");
+        if ((flags & NoteCldClearsDirectionFlag) != 0) notes.Add("cld clears direction flag");
+        var result = notes.ToArray();
+        if (flags < NoteFlagsCache.Length)
+            NoteFlagsCache[flags] = result;
+        return result;
+    }
+
+    private static string[] LegalityFlagsToArray(uint flags)
+    {
+        if (flags == 0)
+            return [];
+        var notes = new List<string>(3);
+        if ((flags & LegalitySecondControlFlow) != 0)
+            notes.Add("second op is control-flow and needs strict mid-exit handling");
+        if ((flags & LegalityMemorySideEffect) != 0)
+            notes.Add("pair touches memory side effects and should keep restart semantics conservative");
+        if ((flags & LegalityNonRaw) != 0)
+            notes.Add("pair is non-RAW and may only be profitable when repeated reads or write coalescing can be shared");
+        return notes.ToArray();
     }
 
     private static bool IsJccPair(IEnumerable<string> pair)
@@ -733,9 +1014,12 @@ internal static partial class Program
         return jccMultiplier;
     }
 
-    private static bool StartsWithAny(string text, params string[] prefixes)
+    private static bool StartsWithAny(string text, string[] prefixes)
     {
-        return prefixes.Any(prefix => text.StartsWith(prefix, StringComparison.Ordinal));
+        foreach (var prefix in prefixes)
+            if (text.StartsWith(prefix, StringComparison.Ordinal))
+                return true;
+        return false;
     }
 
     private static List<string> ReadStringArray(JsonElement obj, string propertyName)
@@ -769,34 +1053,28 @@ internal static partial class Program
         public bool ReadsMemory { get; set; }
         public bool WritesMemory { get; set; }
         public bool ControlFlow { get; set; }
-        public List<string>? Notes { get; set; }
+        public uint NoteFlags { get; set; }
 
-        public void Note(string message)
+        public void Note(uint flag)
         {
-            Notes ??= new List<string>();
-            Notes.Add(message);
+            NoteFlags |= flag;
         }
 
-        public OpSemantics? ToOpSemantics()
+        public OpSemanticSummary? ToSemanticSummary()
         {
-            var combinedReads = ReadsGprMask | ReadsAddrGprMask;
-            var reads = new HashSet<string>(MaskToRegNames(combinedReads), StringComparer.Ordinal);
-            var writes = new HashSet<string>(MaskToRegNames(WritesGprMask), StringComparer.Ordinal);
-            foreach (var flag in MaskToFlagNames(ReadsFlagsMask))
-                reads.Add($"flag:{flag}");
-            foreach (var flag in MaskToFlagNames(WritesFlagsMask))
-                writes.Add($"flag:{flag}");
+            ushort reads = (ushort)(ReadsGprMask | ReadsAddrGprMask);
+            ushort writes = (ushort)WritesGprMask;
+            reads |= FlagMaskToResourceMask(ReadsFlagsMask);
+            writes |= FlagMaskToResourceMask(WritesFlagsMask);
             if (ReadsMemory)
-                reads.Add("mem");
+                reads |= ResourceMem;
             if (WritesMemory)
-                writes.Add("mem");
+                writes |= ResourceMem;
 
-            var notes = Notes ?? new List<string>();
-            if (reads.Count == 0 && writes.Count == 0 && notes.Count == 0 && !WritesMemory && !ControlFlow)
+            if (reads == 0 && writes == 0 && NoteFlags == 0 && !WritesMemory && !ControlFlow)
                 return null;
 
-            var outputNotes = new List<string>(notes);
-            return new OpSemantics(reads, writes, outputNotes, ControlFlow, WritesMemory);
+            return new OpSemanticSummary(reads, writes, ControlFlow, WritesMemory, NoteFlags);
         }
     }
 }

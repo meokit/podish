@@ -29,7 +29,6 @@ internal static class BenchmarkRunner
         var baseRootfs = Path.GetFullPath(options.Rootfs);
         var workDir = Path.GetFullPath(options.WorkDir);
         var jitConfiguration = DefaultJitConfiguration(projectRoot);
-        var fibercpuLibrary = DefaultFibercpuLibrary(projectRoot, jitConfiguration);
         var aotBinary = Path.GetFullPath(options.AotBinary ?? DefaultAotBinary(projectRoot));
 
         if (!Directory.Exists(baseRootfs))
@@ -79,7 +78,6 @@ internal static class BenchmarkRunner
         if (options.JitHandlerProfileBlockDump)
         {
             Console.WriteLine("[runner] jit_handler_profile_block_dump=enabled");
-            Console.WriteLine($"[runner] fibercpu_library={fibercpuLibrary}");
             if (disableSuperopcodesForRun)
                 Console.WriteLine("[runner] disable_superopcodes=enabled");
             if (!options.DisableSuperopcodes && disableSuperopcodesForRun)
@@ -120,7 +118,6 @@ internal static class BenchmarkRunner
                     options.KeepWorkdirs,
                     options.JitHandlerProfileBlockDump,
                     options.JitHandlerProfileBlockDump && !options.SkipAutoAnalyzeBlockDump,
-                    fibercpuLibrary,
                     options.BlockNGram,
                     options.BlockTopNGrams,
                     jitConfiguration);
@@ -230,7 +227,6 @@ internal static class BenchmarkRunner
         bool keepWorkdirs,
         bool exportBlockDump,
         bool autoAnalyzeBlockDump,
-        string fibercpuLibrary,
         int blockNGram,
         int blockTopNGrams,
         string jitConfiguration)
@@ -349,7 +345,6 @@ internal static class BenchmarkRunner
             blocksAnalysisJson = RunBlockAnalysisWithOptions(
                 projectRoot,
                 guestStatsDir,
-                fibercpuLibrary,
                 blockNGram,
                 blockTopNGrams);
 
@@ -515,30 +510,6 @@ internal static class BenchmarkRunner
         return "Release";
     }
 
-    private static string DefaultFibercpuLibrary(string projectRoot, string? jitConfiguration = null)
-    {
-        if (!string.IsNullOrWhiteSpace(jitConfiguration))
-        {
-            var cliDir = Path.Combine(projectRoot, "Podish.Cli", "bin", jitConfiguration, "net10.0");
-            foreach (var name in new[] { "libfibercpu.dylib", "libfibercpu.so", "fibercpu.dll" })
-            {
-                var candidate = Path.Combine(cliDir, name);
-                if (File.Exists(candidate))
-                    return candidate;
-            }
-        }
-
-        var hostDir = Path.Combine(projectRoot, "Fiberish.X86", "build_native", "host");
-        foreach (var name in new[] { "libfibercpu.dylib", "libfibercpu.so", "fibercpu.dll" })
-        {
-            var candidate = Path.Combine(hostDir, name);
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        return Path.Combine(hostDir, "libfibercpu.dylib");
-    }
-
     private static string DefaultRootfs()
     {
         return Path.Combine(RepoRoot(), "benchmark", "podish_perf", "rootfs", "coremark_i386_alpine");
@@ -579,17 +550,15 @@ internal static class BenchmarkRunner
     private static void RunBlockAnalysis(
         string projectRoot,
         string guestStatsDir,
-        string fibercpuLibrary,
         int nGram,
         int topNgrams)
     {
-        RunBlockAnalysisWithOptions(projectRoot, guestStatsDir, fibercpuLibrary, nGram, topNgrams);
+        RunBlockAnalysisWithOptions(projectRoot, guestStatsDir, nGram, topNgrams);
     }
 
     private static string RunBlockAnalysisWithOptions(
         string projectRoot,
         string guestStatsDir,
-        string fibercpuLibrary,
         int nGram,
         int topNgrams)
     {
@@ -599,10 +568,9 @@ internal static class BenchmarkRunner
             "analyze-blocks",
             "--input",
             guestStatsDir,
-            "--lib",
-            fibercpuLibrary,
             "--output",
-            outputPath
+            outputPath,
+            "--compact"
         };
         if (nGram > 0)
         {
@@ -864,7 +832,7 @@ internal static class BenchmarkRunner
         public string WorkDir { get; set; } = Path.Combine(RepoRoot(), "benchmark", "podish_perf", "work");
         public List<string> Cases { get; set; } = [];
         public int Repeat { get; set; } = 3;
-        public int Iterations { get; set; } = 3000;
+        public int Iterations { get; set; } = 30000;
         public int Timeout { get; set; } = 1800;
         public bool ReuseRootfs { get; set; }
         public bool KeepWorkdirs { get; set; }

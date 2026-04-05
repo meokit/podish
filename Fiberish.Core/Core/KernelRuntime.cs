@@ -8,7 +8,7 @@ namespace Fiberish.Core;
 /// <summary>
 ///     Global runtime objects that should be initialized once for the first process.
 /// </summary>
-public sealed class KernelRuntime
+public sealed class KernelRuntime : IDisposable
 {
     private KernelRuntime(Engine engine, VMAManager memory, SyscallManager syscalls, Configuration configuration,
         DeviceNumberManager deviceNumbers)
@@ -25,6 +25,96 @@ public sealed class KernelRuntime
     public SyscallManager Syscalls { get; }
     public Configuration Configuration { get; }
     public DeviceNumberManager DeviceNumbers { get; }
+
+    public bool EnableGuestStatsCollection { get; set; }
+    public System.Collections.Concurrent.ConcurrentQueue<Engine> RetiredEngines { get; } = new();
+
+    public void Dispose()
+    {
+        while (RetiredEngines.TryDequeue(out var engine))
+        {
+            engine.Dispose();
+        }
+    }
+
+    public unsafe void DumpAllBlocks(System.IO.Stream output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        using var writer = new System.IO.BinaryWriter(output, System.Text.Encoding.UTF8, true);
+        var imageBase = Engine.GetNativeImageBase().ToInt64();
+        
+        // Deduplicate blocks by ptr
+        var allBlocks = new System.Collections.Generic.HashSet<IntPtr>();
+        foreach (var ptr in Engine.GetBlockPointers())
+            allBlocks.Add(ptr);
+
+        foreach (var engine in RetiredEngines)
+        {
+            foreach (var ptr in engine.GetBlockPointers())
+            {
+                allBlocks.Add(ptr);
+            }
+        }
+        
+        var blocks = allBlocks.ToArray();
+
+        // Handlers are identical across engines since they map to native library functions
+        var handlerTable = Engine.BuildBlockDumpHandlerTable();
+
+        writer.Write(Engine.BlockDumpMagic);
+        writer.Write(Engine.BlockDumpFormatVersion);
+        writer.Write((ulong)imageBase);
+        writer.Write(blocks.Length);
+        writer.Write(handlerTable.Count);
+        foreach (var handler in handlerTable)
+        {
+            writer.Write(handler.HandlerId);
+            writer.Write(handler.OpId);
+            writer.Write(unchecked((ulong)handler.HandlerPtr.ToInt64()));
+            Engine.WriteLengthPrefixedUtf8(writer, handler.Symbol);
+        }
+
+        var handlerIdsByPtr = new System.Collections.Generic.Dictionary<nint, int>(handlerTable.Count);
+        foreach (var handler in handlerTable)
+        {
+            if (handler.HandlerPtr != IntPtr.Zero)
+                handlerIdsByPtr[(nint)handler.HandlerPtr] = handler.HandlerId;
+        }
+
+        foreach (var blockPtr in blocks)
+        {
+            if (blockPtr == IntPtr.Zero) continue;
+
+            var nativeBlock = (Fiberish.X86.Native.X86Native.BasicBlock*)blockPtr;
+            var startEip = nativeBlock->start_eip;
+            var instCount = (uint)nativeBlock->inst_count;
+            writer.Write(startEip);
+            writer.Write(nativeBlock->end_eip);
+            writer.Write(instCount);
+            writer.Write(nativeBlock->exec_count);
+
+            var ops = (Fiberish.X86.Native.X86Native.DecodedOp*)((byte*)nativeBlock + sizeof(Fiberish.X86.Native.X86Native.BasicBlock));
+            for (var i = 0; i < instCount; i++)
+            {
+                var op = ops[i];
+                var memPacked = Engine.PackDumpMem(op);
+                writer.Write(memPacked);
+                writer.Write(op.next_eip);
+                writer.Write(op.len);
+                writer.Write(op.modrm);
+                writer.Write(op.prefixes);
+                writer.Write(op.meta);
+                writer.Write(Engine.ExtractDumpImm(op));
+                writer.Write(0u);
+                writer.Write(op.handler.ToInt64());
+                var handlerId = handlerIdsByPtr.TryGetValue((nint)op.handler, out var knownHandlerId)
+                    ? knownHandlerId
+                    : Fiberish.X86.Native.X86Native.GetHandlerId(op.handler);
+                writer.Write(handlerId);
+            }
+        }
+    }
 
     public static KernelRuntime BootstrapBare(bool strace, TtyDiscipline? tty = null)
     {

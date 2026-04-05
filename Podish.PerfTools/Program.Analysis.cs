@@ -10,42 +10,63 @@ namespace Podish.PerfTools;
 
 internal static partial class Program
 {
-    private static Dictionary<string, object?> AnalyzeBlocks(string inputPath, string libPath, int nGram, int topNgrams)
+    private const uint BlockDumpMagic = 0x324b4c42; // "BLK2"
+    private const int BlockDumpFormatV1 = 1;
+    private const int BlockDumpFormatV2 = 2;
+    private static readonly string[] EmptyStrings = [];
+    private static readonly BlockDefUseInfo EmptyDefUseNode = new(EmptyStrings, EmptyStrings, EmptyStrings, false, false);
+
+    private static BlocksAnalysisOutput AnalyzeBlocks(string inputPath, string? libPath, int nGram, int topNgrams,
+        AnalysisOutputMode outputMode)
     {
         var (dumpFile, summaryFile, defaultOutput) = ResolveInputPaths(inputPath);
+        _ = defaultOutput;
         var summary = LoadSummary(summaryFile);
-        Console.Error.WriteLine($"[analyze-blocks] loading symbols from {libPath}");
-        var symbols = LoadSymbols(libPath);
-        Console.Error.WriteLine($"[analyze-blocks] loaded {symbols.Count} symbols");
-        using var opIdResolver = HandlerOpIdResolver.TryCreate(libPath);
-        Console.Error.WriteLine($"[analyze-blocks] parsing block dump {dumpFile}");
-        var (baseAddr, count, blocks, warnings) = ParseBlocks(dumpFile, symbols, opIdResolver);
-        Console.Error.WriteLine($"[analyze-blocks] parsed {blocks.Count}/{count} blocks");
-        var validation = BuildValidation(summary, count, blocks.Count, warnings);
 
-        var output = new Dictionary<string, object?>
+        Dictionary<ulong, string> symbols;
+        HandlerOpIdResolver? opIdResolver = null;
+        if (!string.IsNullOrWhiteSpace(libPath))
         {
-            ["metadata"] = new Dictionary<string, object?>
-            {
-                ["input_path"] = Path.GetFullPath(inputPath),
-                ["lib_path"] = Path.GetFullPath(libPath),
-                ["symbol_count"] = symbols.Count,
-                ["n_gram"] = nGram,
-                ["top_ngrams_limit"] = topNgrams,
-                ["base_addr"] = baseAddr,
-                ["declared_block_count"] = count,
-                ["parsed_block_count"] = blocks.Count
-            },
-            ["validation"] = validation,
-            ["blocks"] = blocks
-        };
+            Console.Error.WriteLine($"[analyze-blocks] loading symbols from {libPath}");
+            symbols = LoadSymbols(libPath);
+            Console.Error.WriteLine($"[analyze-blocks] loaded {symbols.Count} symbols");
+            opIdResolver = HandlerOpIdResolver.TryCreate(libPath);
+        }
+        else
+        {
+            symbols = new Dictionary<ulong, string>();
+        }
 
-        if (nGram > 0)
-            output["ngrams"] = AnalyzeNgrams(blocks, nGram, topNgrams);
+        Console.Error.WriteLine($"[analyze-blocks] parsing block dump {dumpFile}");
+        using (opIdResolver)
+        {
+            var parsed = ParseBlocks(dumpFile, symbols, opIdResolver, outputMode, nGram, topNgrams);
+            Console.Error.WriteLine($"[analyze-blocks] parsed {parsed.ParsedBlockCount}/{parsed.DeclaredBlockCount} blocks");
+            var validation = BuildValidation(summary, parsed.DeclaredBlockCount, parsed.ParsedBlockCount, parsed.Warnings);
 
-        Console.Error.WriteLine("[analyze-blocks] analysis object built");
+            var output = new BlocksAnalysisOutput(
+                new BlocksAnalysisMetadata(
+                    Path.GetFullPath(inputPath),
+                    string.IsNullOrWhiteSpace(libPath) ? null : Path.GetFullPath(libPath),
+                    symbols.Count,
+                    nGram,
+                    topNgrams,
+                    parsed.BaseAddr,
+                    parsed.DeclaredBlockCount,
+                    parsed.ParsedBlockCount,
+                    parsed.FormatVersion,
+                    outputMode == AnalysisOutputMode.Compact ? "compact" : "full",
+                    parsed.HasEmbeddedHandlerMetadata,
+                    parsed.HandlerMetadataCount,
+                    parsed.HasEmbeddedHandlerMetadata ? "embedded" : "library"),
+                validation,
+                parsed.Blocks.Count == 0 ? null : parsed.Blocks,
+                parsed.Ngrams,
+                parsed.CandidateSummary);
 
-        return output;
+            Console.Error.WriteLine("[analyze-blocks] analysis object built");
+            return output;
+        }
     }
 
     private static (string dumpFile, string? summaryFile, string defaultOutput) ResolveInputPaths(string inputPath)
@@ -717,42 +738,67 @@ internal static partial class Program
         }
     }
 
-    private static (ulong baseAddr, int count, List<Dictionary<string, object?>> blocks, List<string> warnings)
-        ParseBlocks(
-            string dumpFile, Dictionary<ulong, string> symbols, HandlerOpIdResolver? opIdResolver)
+    private static ParsedBlockDump ParseBlocks(
+        string dumpFile,
+        Dictionary<ulong, string> symbols,
+        HandlerOpIdResolver? opIdResolver,
+        AnalysisOutputMode outputMode,
+        int nGram,
+        int topNgrams)
     {
-        var blocks = new List<Dictionary<string, object?>>();
         var warnings = new List<string>();
 
         using var stream = File.OpenRead(dumpFile);
         using var reader = new BinaryReader(stream, Encoding.UTF8, true);
 
-        var baseAddr = reader.ReadUInt64();
-        var count = reader.ReadInt32();
+        var dumpHeader = ReadBlockDumpHeader(reader);
+        var blocks = new List<BlockAnalysisBlock>(Math.Max(dumpHeader.DeclaredBlockCount, 0));
+        if (!dumpHeader.HasEmbeddedHandlerMetadata && symbols.Count == 0 && opIdResolver is null)
+            throw new InvalidOperationException(
+                "blocks.bin dump format v1 does not embed handler metadata; rerun with --lib <libfibercpu> or regenerate the dump with the new runtime.");
 
-        for (var blockIndex = 0; blockIndex < count; blockIndex++)
+        var logicFuncCache = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var candidateNameCache = new Dictionary<string, string>(StringComparer.Ordinal);
+        var semanticSummaryCache = new Dictionary<string, OpSemanticSummary>(StringComparer.Ordinal);
+        var defUseCache = new Dictionary<DefUseCacheKey, CachedDefUse>();
+        var compactAnchors = outputMode == AnalysisOutputMode.Compact
+            ? new Dictionary<string, SampleAnchorStats>(StringComparer.Ordinal)
+            : null;
+        var compactPairs = outputMode == AnalysisOutputMode.Compact
+            ? new Dictionary<(string, string), SamplePairStats>()
+            : null;
+        var ngramAccumulator = nGram > 0 ? new NgramAccumulator(nGram) : null;
+        var blockHeader = new byte[20];
+        var opBytes = new byte[32];
+        var handlerIdBytes = new byte[4];
+        BlockAnalysisOp[]? compactOpsBuffer = null;
+        var parsedBlockCount = 0;
+
+        for (var blockIndex = 0; blockIndex < dumpHeader.DeclaredBlockCount; blockIndex++)
         {
-            var header = reader.ReadBytes(20);
-            if (header.Length != 20)
+            if (!TryReadExactly(stream, blockHeader))
             {
-                warnings.Add($"truncated block header at index {blockIndex}: expected 20 bytes, got {header.Length}");
+                warnings.Add(
+                    $"truncated block header at index {blockIndex}: expected 20 bytes, got {Math.Max(0, stream.Length - stream.Position)}");
                 break;
             }
 
-            var startEip = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(0, 4));
-            var endEip = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(4, 4));
-            var instCount = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(8, 4));
-            var execCount = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(12, 4));
+            var startEip = BinaryPrimitives.ReadUInt32LittleEndian(blockHeader.AsSpan(0, 4));
+            var endEip = BinaryPrimitives.ReadUInt32LittleEndian(blockHeader.AsSpan(4, 4));
+            var instCount = BinaryPrimitives.ReadUInt32LittleEndian(blockHeader.AsSpan(8, 4));
+            var execCount = BinaryPrimitives.ReadUInt64LittleEndian(blockHeader.AsSpan(12, 8));
 
-            var ops = new List<Dictionary<string, object?>>();
+            var opCapacity = instCount > int.MaxValue ? int.MaxValue : (int)instCount;
+            var ops = outputMode == AnalysisOutputMode.Compact ? null : new List<BlockAnalysisOp>(opCapacity);
+            if (outputMode == AnalysisOutputMode.Compact && opCapacity > 0)
+                EnsureCompactOpsBuffer(ref compactOpsBuffer, opCapacity);
             var truncatedBlock = false;
             for (uint opIndex = 0; opIndex < instCount; opIndex++)
             {
-                var opBytes = reader.ReadBytes(32);
-                if (opBytes.Length != 32)
+                if (!TryReadExactly(stream, opBytes))
                 {
                     warnings.Add(
-                        $"truncated op payload in block 0x{startEip:x} at op {opIndex}: expected 32 bytes, got {opBytes.Length}");
+                        $"truncated op payload in block 0x{startEip:x} at op {opIndex}: expected 32 bytes, got {Math.Max(0, stream.Length - stream.Position)}");
                     truncatedBlock = true;
                     break;
                 }
@@ -765,91 +811,206 @@ internal static partial class Program
                 var meta = opBytes[15];
                 var imm = BinaryPrimitives.ReadUInt32LittleEndian(opBytes.AsSpan(16, 4));
                 var handlerPtr = BinaryPrimitives.ReadUInt64LittleEndian(opBytes.AsSpan(24, 8));
+                var handlerId = -1;
+                EmbeddedHandlerInfo? embeddedHandler = null;
+                string? handlerSymbolSource = null;
+                if (dumpHeader.HasEmbeddedHandlerMetadata)
+                {
+                    if (!TryReadExactly(stream, handlerIdBytes))
+                    {
+                        warnings.Add(
+                            $"truncated handler metadata in block 0x{startEip:x} at op {opIndex}: expected 4 bytes, got {Math.Max(0, stream.Length - stream.Position)}");
+                        truncatedBlock = true;
+                        break;
+                    }
+
+                    handlerId = BinaryPrimitives.ReadInt32LittleEndian(handlerIdBytes);
+                    dumpHeader.HandlerMetadataById.TryGetValue(handlerId, out embeddedHandler);
+                    if (embeddedHandler is not null)
+                        handlerSymbolSource = "embedded";
+                }
 
                 var memDisp = (uint)(memPacked & 0xFFFFFFFF);
                 var eaDesc = (uint)(memPacked >> 32);
-                var handlerOffset = handlerPtr >= baseAddr ? handlerPtr - baseAddr : 0UL;
-                var symbolName = FindSymbol(handlerOffset, symbols);
-                var logicFunc = NormalizeLogicFuncName(symbolName);
-                var opId = opIdResolver?.Resolve(handlerPtr, handlerOffset);
-                var defUse = AnalyzeDefUse(opId, modrm, meta, prefixes, (int)eaDesc);
-                var defUseNode = defUse?.ToDictionary() ?? new Dictionary<string, object?>
+                var handlerOffset = handlerPtr >= dumpHeader.BaseAddr ? handlerPtr - dumpHeader.BaseAddr : 0UL;
+                var symbolName = embeddedHandler?.Symbol;
+                if (string.IsNullOrWhiteSpace(symbolName) && symbols.Count > 0)
                 {
-                    ["reads"] = Array.Empty<string>(),
-                    ["writes"] = Array.Empty<string>(),
-                    ["notes"] = Array.Empty<string>(),
-                    ["control_flow"] = false,
-                    ["memory_side_effect"] = false
-                };
+                    symbolName = FindSymbol(handlerOffset, symbols);
+                    if (!string.IsNullOrWhiteSpace(symbolName))
+                        handlerSymbolSource = "library";
+                }
 
-                ops.Add(new Dictionary<string, object?>
+                string? logicFunc = null;
+                if (!string.IsNullOrWhiteSpace(symbolName))
                 {
-                    ["index"] = opIndex,
-                    ["next_eip"] = nextEip,
-                    ["next_eip_hex"] = $"0x{nextEip:x}",
-                    ["handler_ptr"] = handlerPtr,
-                    ["handler_ptr_hex"] = $"0x{handlerPtr:x}",
-                    ["handler_offset"] = handlerOffset,
-                    ["handler_offset_hex"] = $"0x{handlerOffset:x}",
-                    ["symbol_raw"] = symbolName,
-                    ["logic_func"] = logicFunc,
-                    ["symbol"] = logicFunc ?? symbolName,
-                    ["op_id"] = opId,
-                    ["op_id_hex"] = opId is null ? null : $"0x{opId.Value:x}",
-                    ["imm"] = imm,
-                    ["imm_hex"] = $"0x{imm:x}",
-                    ["len"] = len,
-                    ["len_hex"] = $"0x{len:x}",
-                    ["prefixes"] = prefixes,
-                    ["prefixes_hex"] = $"0x{prefixes:x}",
-                    ["modrm"] = modrm,
-                    ["modrm_hex"] = $"0x{modrm:x}",
-                    ["meta"] = meta,
-                    ["meta_hex"] = $"0x{meta:x}",
-                    ["mem"] = new Dictionary<string, object?>
+                    if (!logicFuncCache.TryGetValue(symbolName, out logicFunc))
                     {
-                        ["disp"] = memDisp,
-                        ["disp_hex"] = $"0x{memDisp:x}",
-                        ["ea_desc"] = eaDesc,
-                        ["ea_desc_hex"] = $"0x{eaDesc:x}",
-                        ["base_offset"] = eaDesc & 0x3F,
-                        ["base_offset_hex"] = $"0x{eaDesc & 0x3F:x}",
-                        ["index_offset"] = (eaDesc >> 6) & 0x3F,
-                        ["index_offset_hex"] = $"0x{(eaDesc >> 6) & 0x3F:x}",
-                        ["scale"] = (eaDesc >> 12) & 0x3,
-                        ["scale_hex"] = $"0x{(eaDesc >> 12) & 0x3:x}",
-                        ["segment"] = (eaDesc >> 14) & 0x7,
-                        ["segment_hex"] = $"0x{(eaDesc >> 14) & 0x7:x}"
-                    },
-                    ["def_use"] = defUseNode
-                });
+                        logicFunc = NormalizeLogicFuncName(symbolName);
+                        logicFuncCache[symbolName] = logicFunc;
+                    }
+                }
+
+                var candidateSource = logicFunc ?? symbolName;
+                string? candidateName = null;
+                if (!string.IsNullOrWhiteSpace(candidateSource))
+                {
+                    if (!candidateNameCache.TryGetValue(candidateSource, out candidateName))
+                    {
+                        candidateName = NormalizeCandidateName(candidateSource);
+                        candidateNameCache[candidateSource] = candidateName;
+                    }
+                }
+
+                var opId = embeddedHandler?.OpId ?? opIdResolver?.Resolve(handlerPtr, handlerOffset);
+                var cacheKey = new DefUseCacheKey(opId, new OpSnapshot(eaDesc, modrm, meta, prefixes));
+                if (!defUseCache.TryGetValue(cacheKey, out var cachedDefUse))
+                {
+                    var summary = AnalyzeDefUseSummary(opId, modrm, meta, prefixes, (int)eaDesc) ?? default;
+                    cachedDefUse = new CachedDefUse(ToBlockDefUseInfo(summary), summary);
+                    defUseCache[cacheKey] = cachedDefUse;
+                }
+
+                var semanticSummary = cachedDefUse.Summary;
+                if (semanticSummary.reads_mask == 0 && semanticSummary.writes_mask == 0 && !semanticSummary.control_flow &&
+                    !semanticSummary.memory_side_effect && semanticSummary.note_flags == 0 &&
+                    !string.IsNullOrWhiteSpace(candidateName))
+                {
+                    if (!semanticSummaryCache.TryGetValue(candidateName!, out semanticSummary))
+                    {
+                        semanticSummary = ToSemanticSummary(InferSemantics(candidateName!));
+                        semanticSummaryCache[candidateName!] = semanticSummary;
+                    }
+                }
+
+                var op = BuildOpNode(
+                    outputMode,
+                    opIndex,
+                    nextEip,
+                    handlerPtr,
+                    handlerOffset,
+                    handlerId,
+                    symbolName,
+                    handlerSymbolSource,
+                    logicFunc,
+                    opId,
+                    imm,
+                    len,
+                    prefixes,
+                    modrm,
+                    meta,
+                    memDisp,
+                    eaDesc,
+                    cachedDefUse.Export,
+                    semanticSummary,
+                    candidateName);
+
+                if (ops is not null)
+                    ops.Add(op);
+                else
+                    compactOpsBuffer![(int)opIndex] = op;
             }
 
             if (truncatedBlock)
                 break;
 
-            blocks.Add(new Dictionary<string, object?>
+            parsedBlockCount++;
+            if (ops is not null)
             {
-                ["start_eip"] = startEip,
-                ["start_eip_hex"] = $"0x{startEip:x}",
-                ["end_eip"] = endEip,
-                ["end_eip_hex"] = $"0x{endEip:x}",
-                ["inst_count"] = instCount,
-                ["exec_count"] = execCount,
-                ["ops"] = ops
-            });
+                ngramAccumulator?.AddBlock(CollectionsMarshal.AsSpan(ops));
+                if (compactAnchors is not null && compactPairs is not null)
+                    AnalyzeSampleCandidates(CollectionsMarshal.AsSpan(ops), unchecked((long)execCount), $"0x{startEip:x}", compactAnchors, compactPairs);
+            }
+            else if (compactOpsBuffer is not null)
+            {
+                var span = compactOpsBuffer.AsSpan(0, opCapacity);
+                ngramAccumulator?.AddBlock(span);
+                if (compactAnchors is not null && compactPairs is not null)
+                    AnalyzeSampleCandidates(span, unchecked((long)execCount), $"0x{startEip:x}", compactAnchors, compactPairs);
+            }
+
+            if (outputMode != AnalysisOutputMode.Compact)
+                blocks.Add(new BlockAnalysisBlock(startEip, $"0x{startEip:x}", execCount, ops!, endEip, $"0x{endEip:x}", instCount));
         }
 
-        return (baseAddr, count, blocks, warnings);
+        return new ParsedBlockDump(
+            dumpHeader.FormatVersion,
+            dumpHeader.HasEmbeddedHandlerMetadata,
+            dumpHeader.BaseAddr,
+            dumpHeader.DeclaredBlockCount,
+            dumpHeader.HandlerMetadataById.Count,
+            parsedBlockCount,
+            blocks,
+            warnings,
+            ngramAccumulator?.ToResult(topNgrams),
+            compactAnchors is not null && compactPairs is not null
+                ? BuildCandidateSummary(compactAnchors, compactPairs)
+                : null);
     }
 
-    private static Dictionary<string, object?> BuildValidation(JsonElement? summary, int declaredBlockCount,
+    private static BlockDumpHeader ReadBlockDumpHeader(BinaryReader reader)
+    {
+        var stream = reader.BaseStream;
+        if (stream.Length < sizeof(ulong) + sizeof(int))
+            throw new InvalidOperationException("blocks.bin is too small to contain a valid header.");
+
+        var firstWord = reader.ReadUInt32();
+        if (firstWord != BlockDumpMagic)
+        {
+            stream.Position = 0;
+            return new BlockDumpHeader(
+                BlockDumpFormatV1,
+                false,
+                reader.ReadUInt64(),
+                reader.ReadInt32(),
+                new Dictionary<int, EmbeddedHandlerInfo>());
+        }
+
+        var version = reader.ReadInt32();
+        if (version != BlockDumpFormatV2)
+            throw new InvalidOperationException($"Unsupported blocks.bin format version: {version}");
+
+        var baseAddr = reader.ReadUInt64();
+        var declaredBlockCount = reader.ReadInt32();
+        var handlerMetadataCount = reader.ReadInt32();
+        var handlerMetadataById = new Dictionary<int, EmbeddedHandlerInfo>(Math.Max(handlerMetadataCount, 0));
+        for (var i = 0; i < handlerMetadataCount; i++)
+        {
+            var handlerId = reader.ReadInt32();
+            var opIdRaw = reader.ReadInt32();
+            var handlerPtr = reader.ReadUInt64();
+            var symbol = ReadLengthPrefixedUtf8(reader);
+            handlerMetadataById[handlerId] = new EmbeddedHandlerInfo(
+                handlerId,
+                handlerPtr,
+                opIdRaw >= 0 ? opIdRaw : null,
+                string.IsNullOrEmpty(symbol) ? null : symbol);
+        }
+
+        return new BlockDumpHeader(
+            version,
+            true,
+            baseAddr,
+            declaredBlockCount,
+            handlerMetadataById);
+    }
+
+    private static string ReadLengthPrefixedUtf8(BinaryReader reader)
+    {
+        var byteCount = reader.ReadInt32();
+        if (byteCount < 0)
+            throw new InvalidOperationException($"Encountered negative UTF-8 string length: {byteCount}");
+        var bytes = reader.ReadBytes(byteCount);
+        if (bytes.Length != byteCount)
+            throw new InvalidOperationException(
+                $"Unexpected end of file while reading UTF-8 string: expected {byteCount} bytes, got {bytes.Length}");
+        return Encoding.UTF8.GetString(bytes);
+    }
+
+    private static BlocksAnalysisValidation BuildValidation(JsonElement? summary, int declaredBlockCount,
         int parsedBlocks, List<string> parseWarnings)
     {
-        var validation = new Dictionary<string, object?>
-        {
-            ["warnings"] = parseWarnings.ToArray()
-        };
+        var warnings = parseWarnings.ToList();
 
         if (summary is { } summaryRoot)
             if (summaryRoot.TryGetProperty("native_stats", out var nativeStatsRaw) &&
@@ -862,22 +1023,19 @@ internal static partial class Program
                     {
                         var nativeCount = allBlocksCount.GetInt32();
                         if (nativeCount != declaredBlockCount)
-                            validation["warnings"] = ((string[])validation["warnings"]!).Append(
-                                    $"summary native_stats.all_blocks_count={nativeCount} but dump declared block count={declaredBlockCount}")
-                                .ToArray();
+                            warnings.Add(
+                                $"summary native_stats.all_blocks_count={nativeCount} but dump declared block count={declaredBlockCount}");
                         if (nativeCount > 0 && parsedBlocks == 0)
-                            validation["warnings"] = ((string[])validation["warnings"]!).Append(
-                                    "summary reports non-zero native all_blocks_count but parsed blocks are empty; dump/export format likely drifted")
-                                .ToArray();
+                            warnings.Add(
+                                "summary reports non-zero native all_blocks_count but parsed blocks are empty; dump/export format likely drifted");
                     }
                 }
                 catch
                 {
-                    validation["warnings"] = ((string[])validation["warnings"]!)
-                        .Append("summary native_stats is not valid JSON").ToArray();
+                    warnings.Add("summary native_stats is not valid JSON");
                 }
 
-        return validation;
+        return new BlocksAnalysisValidation(warnings.ToArray());
     }
 
     private static string FindSymbol(ulong offset, Dictionary<ulong, string> symbols)
@@ -911,27 +1069,44 @@ internal static partial class Program
         return null;
     }
 
-    private static Dictionary<string, object?> AnalyzeNgrams(List<Dictionary<string, object?>> blocks, int n,
+    private static BlockDefUseInfo ToBlockDefUseInfo(OpSemanticSummary defUse)
+    {
+        if (defUse.reads_mask == 0 && defUse.writes_mask == 0 && !defUse.control_flow && !defUse.memory_side_effect &&
+            defUse.note_flags == 0)
+            return EmptyDefUseNode;
+
+        return new BlockDefUseInfo(
+            ResourceMaskToNames(defUse.reads_mask),
+            ResourceMaskToNames(defUse.writes_mask),
+            NoteFlagsToArray(defUse.note_flags),
+            defUse.control_flow,
+            defUse.memory_side_effect);
+    }
+
+    private static BlocksAnalysisNgrams AnalyzeNgrams(List<BlockAnalysisBlock> blocks, int n,
         int topNgrams)
     {
         if (n <= 0)
-            return new Dictionary<string, object?>();
+            return new BlocksAnalysisNgrams(n, topNgrams, []);
+
+        if (n == 2)
+            return AnalyzeBigrams(blocks, topNgrams);
 
         var count = new Dictionary<string, int>(StringComparer.Ordinal);
         var blockCoverage = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var block in blocks)
         {
-            if (!block.TryGetValue("ops", out var opsObj) || opsObj is not List<Dictionary<string, object?>> ops)
-                continue;
-
-            var symbols = ops.Select(op => op.TryGetValue("symbol", out var sym) ? sym?.ToString() ?? "" : "").ToList();
-            if (symbols.Count < n)
+            var ops = block.ops;
+            if (ops.Count < n)
                 continue;
 
             var seenInBlock = new HashSet<string>(StringComparer.Ordinal);
-            for (var i = 0; i + n <= symbols.Count; i++)
+            for (var i = 0; i + n <= ops.Count; i++)
             {
-                var gram = string.Join(" -> ", symbols.Skip(i).Take(n));
+                var parts = new string[n];
+                for (var j = 0; j < n; j++)
+                    parts[j] = GetOpSymbol(ops[i + j]);
+                var gram = string.Join(" -> ", parts);
                 count[gram] = count.TryGetValue(gram, out var v) ? v + 1 : 1;
                 seenInBlock.Add(gram);
             }
@@ -940,22 +1115,286 @@ internal static partial class Program
                 blockCoverage[gram] = blockCoverage.TryGetValue(gram, out var v) ? v + 1 : 1;
         }
 
-        return new Dictionary<string, object?>
-        {
-            ["n"] = n,
-            ["top"] = topNgrams,
-            ["entries"] = count
+        return new BlocksAnalysisNgrams(
+            n,
+            topNgrams,
+            count
                 .OrderByDescending(kv => kv.Value)
                 .ThenBy(kv => kv.Key, StringComparer.Ordinal)
                 .Take(topNgrams)
-                .Select(kv => new Dictionary<string, object?>
-                {
-                    ["gram"] = kv.Key,
-                    ["count"] = kv.Value,
-                    ["block_coverage"] = blockCoverage.TryGetValue(kv.Key, out var cov) ? cov : 0
-                })
-                .ToList()
+                .Select(kv => new BlockAnalysisNgramEntry(
+                    kv.Key,
+                    kv.Value,
+                    blockCoverage.TryGetValue(kv.Key, out var cov) ? cov : 0))
+                .ToList());
+    }
+
+    private static BlocksAnalysisNgrams AnalyzeBigrams(List<BlockAnalysisBlock> blocks, int topNgrams)
+    {
+        var count = new Dictionary<(string First, string Second), int>();
+        var blockCoverage = new Dictionary<(string First, string Second), int>();
+        foreach (var block in blocks)
+        {
+            var ops = block.ops;
+            if (ops.Count < 2)
+                continue;
+
+            var seenInBlock = new HashSet<(string First, string Second)>();
+            for (var i = 0; i + 1 < ops.Count; i++)
+            {
+                var key = (GetOpSymbol(ops[i]), GetOpSymbol(ops[i + 1]));
+                count[key] = count.TryGetValue(key, out var existing) ? existing + 1 : 1;
+                seenInBlock.Add(key);
+            }
+
+            foreach (var key in seenInBlock)
+                blockCoverage[key] = blockCoverage.TryGetValue(key, out var existing) ? existing + 1 : 1;
+        }
+
+        return new BlocksAnalysisNgrams(
+            2,
+            topNgrams,
+            count
+                .OrderByDescending(kv => kv.Value)
+                .ThenBy(kv => kv.Key.First, StringComparer.Ordinal)
+                .ThenBy(kv => kv.Key.Second, StringComparer.Ordinal)
+                .Take(topNgrams)
+                .Select(kv => new BlockAnalysisNgramEntry(
+                    $"{kv.Key.First} -> {kv.Key.Second}",
+                    kv.Value,
+                    blockCoverage.TryGetValue(kv.Key, out var coverage) ? coverage : 0))
+                .ToList());
+    }
+
+    private static string GetOpSymbol(BlockAnalysisOp op)
+    {
+        return op.symbol ?? string.Empty;
+    }
+
+    private static BlockAnalysisOp BuildOpNode(
+        AnalysisOutputMode outputMode,
+        uint opIndex,
+        uint nextEip,
+        ulong handlerPtr,
+        ulong handlerOffset,
+        int handlerId,
+        string? symbolName,
+        string? handlerSymbolSource,
+        string? logicFunc,
+        int? opId,
+        uint imm,
+        byte len,
+        byte prefixes,
+        byte modrm,
+        byte meta,
+        uint memDisp,
+        uint eaDesc,
+        BlockDefUseInfo defUseNode,
+        OpSemanticSummary semanticSummary,
+        string? candidateName)
+    {
+        var memNode = BuildMemNode(outputMode, memDisp, eaDesc);
+        var symbol = logicFunc ?? symbolName;
+        if (outputMode == AnalysisOutputMode.Compact)
+            return new BlockAnalysisOp(
+                opIndex,
+                logicFunc,
+                symbol,
+                opId,
+                prefixes,
+                modrm,
+                null!,
+                meta,
+                null!,
+                memNode,
+                defUseNode)
+            {
+                semantic_summary = semanticSummary,
+                candidate_name = candidateName
+            };
+
+        return new BlockAnalysisOp(
+            opIndex,
+            logicFunc,
+            symbol,
+            opId,
+            prefixes,
+            modrm,
+            $"0x{modrm:x}",
+            meta,
+            $"0x{meta:x}",
+            memNode,
+            defUseNode,
+            nextEip,
+            $"0x{nextEip:x}",
+            handlerPtr,
+            $"0x{handlerPtr:x}",
+            handlerOffset,
+            $"0x{handlerOffset:x}",
+            handlerId >= 0 ? handlerId : null,
+            symbolName,
+            handlerSymbolSource,
+            symbolName,
+            opId is null ? null : $"0x{opId.Value:x}",
+            imm,
+            $"0x{imm:x}",
+            len,
+            $"0x{len:x}",
+            $"0x{prefixes:x}")
+        {
+            semantic_summary = semanticSummary,
+            candidate_name = candidateName
         };
+    }
+
+    private static BlockAnalysisMem BuildMemNode(AnalysisOutputMode outputMode, uint memDisp, uint eaDesc)
+    {
+        var baseOffset = eaDesc & 0x3F;
+        var indexOffset = (eaDesc >> 6) & 0x3F;
+        var scale = (eaDesc >> 12) & 0x3;
+        var segment = (eaDesc >> 14) & 0x7;
+
+        if (outputMode == AnalysisOutputMode.Compact)
+            return new BlockAnalysisMem(memDisp, eaDesc, baseOffset, indexOffset, scale, segment);
+
+        return new BlockAnalysisMem(
+            memDisp,
+            eaDesc,
+            baseOffset,
+            indexOffset,
+            scale,
+            segment,
+            $"0x{memDisp:x}",
+            $"0x{eaDesc:x}",
+            $"0x{baseOffset:x}",
+            $"0x{indexOffset:x}",
+            $"0x{scale:x}",
+            $"0x{segment:x}");
+    }
+
+    private static bool TryReadExactly(Stream stream, Span<byte> buffer)
+    {
+        var totalRead = 0;
+        while (totalRead < buffer.Length)
+        {
+            var read = stream.Read(buffer[totalRead..]);
+            if (read == 0)
+                return false;
+            totalRead += read;
+        }
+
+        return true;
+    }
+
+    private static void EnsureCompactOpsBuffer(ref BlockAnalysisOp[]? buffer, int minimumLength)
+    {
+        if (minimumLength <= 0)
+            return;
+        if (buffer is not null && buffer.Length >= minimumLength)
+            return;
+
+        var newLength = buffer is null ? 16 : buffer.Length;
+        while (newLength < minimumLength)
+            newLength = checked(newLength * 2);
+
+        buffer = new BlockAnalysisOp[newLength];
+    }
+
+    private sealed class NgramAccumulator
+    {
+        private readonly int _n;
+        private readonly Dictionary<string, int>? _genericCount;
+        private readonly Dictionary<string, int>? _genericCoverage;
+        private readonly Dictionary<string, int>? _genericLastSeenBlock;
+        private readonly Dictionary<(string First, string Second), int>? _bigramCount;
+        private readonly Dictionary<(string First, string Second), int>? _bigramCoverage;
+        private readonly Dictionary<(string First, string Second), int>? _bigramLastSeenBlock;
+        private int _blockId;
+
+        public NgramAccumulator(int n)
+        {
+            _n = n;
+            if (n == 2)
+            {
+                _bigramCount = new Dictionary<(string First, string Second), int>();
+                _bigramCoverage = new Dictionary<(string First, string Second), int>();
+                _bigramLastSeenBlock = new Dictionary<(string First, string Second), int>();
+            }
+            else
+            {
+                _genericCount = new Dictionary<string, int>(StringComparer.Ordinal);
+                _genericCoverage = new Dictionary<string, int>(StringComparer.Ordinal);
+                _genericLastSeenBlock = new Dictionary<string, int>(StringComparer.Ordinal);
+            }
+        }
+
+        public void AddBlock(ReadOnlySpan<BlockAnalysisOp> ops)
+        {
+            if (_n <= 0 || ops.Length < _n)
+                return;
+
+            _blockId++;
+
+            if (_n == 2)
+            {
+                for (var i = 0; i + 1 < ops.Length; i++)
+                {
+                    var key = (GetOpSymbol(ops[i]), GetOpSymbol(ops[i + 1]));
+                    _bigramCount![key] = _bigramCount.TryGetValue(key, out var count) ? count + 1 : 1;
+                    if (!_bigramLastSeenBlock!.TryGetValue(key, out var lastSeen) || lastSeen != _blockId)
+                    {
+                        _bigramLastSeenBlock[key] = _blockId;
+                        _bigramCoverage![key] = _bigramCoverage.TryGetValue(key, out var coverage) ? coverage + 1 : 1;
+                    }
+                }
+                return;
+            }
+
+            for (var i = 0; i + _n <= ops.Length; i++)
+            {
+                var parts = new string[_n];
+                for (var j = 0; j < _n; j++)
+                    parts[j] = GetOpSymbol(ops[i + j]);
+                var gram = string.Join(" -> ", parts);
+                _genericCount![gram] = _genericCount.TryGetValue(gram, out var count) ? count + 1 : 1;
+                if (!_genericLastSeenBlock!.TryGetValue(gram, out var lastSeen) || lastSeen != _blockId)
+                {
+                    _genericLastSeenBlock[gram] = _blockId;
+                    _genericCoverage![gram] = _genericCoverage.TryGetValue(gram, out var coverage) ? coverage + 1 : 1;
+                }
+            }
+        }
+
+        public BlocksAnalysisNgrams ToResult(int topNgrams)
+        {
+            if (_n == 2)
+                return new BlocksAnalysisNgrams(
+                    2,
+                    topNgrams,
+                    _bigramCount!
+                        .OrderByDescending(kv => kv.Value)
+                        .ThenBy(kv => kv.Key.First, StringComparer.Ordinal)
+                        .ThenBy(kv => kv.Key.Second, StringComparer.Ordinal)
+                        .Take(topNgrams)
+                        .Select(kv => new BlockAnalysisNgramEntry(
+                            $"{kv.Key.First} -> {kv.Key.Second}",
+                            kv.Value,
+                            _bigramCoverage!.TryGetValue(kv.Key, out var coverage) ? coverage : 0))
+                        .ToList());
+
+            return new BlocksAnalysisNgrams(
+                _n,
+                topNgrams,
+                _genericCount!
+                    .OrderByDescending(kv => kv.Value)
+                    .ThenBy(kv => kv.Key, StringComparer.Ordinal)
+                    .Take(topNgrams)
+                    .Select(kv => new BlockAnalysisNgramEntry(
+                        kv.Key,
+                        kv.Value,
+                        _genericCoverage!.TryGetValue(kv.Key, out var coverage) ? coverage : 0))
+                    .ToList());
+        }
     }
 
     private sealed class HandlerOpIdResolver : IDisposable
@@ -1031,12 +1470,41 @@ internal static partial class Program
         private delegate IntPtr GetLibAddressDelegate();
     }
 
+    private sealed record EmbeddedHandlerInfo(int HandlerId, ulong HandlerPtr, int? OpId, string? Symbol);
+
+    private sealed record BlockDumpHeader(
+        int FormatVersion,
+        bool HasEmbeddedHandlerMetadata,
+        ulong BaseAddr,
+        int DeclaredBlockCount,
+        Dictionary<int, EmbeddedHandlerInfo> HandlerMetadataById);
+
+    private sealed record ParsedBlockDump(
+        int FormatVersion,
+        bool HasEmbeddedHandlerMetadata,
+        ulong BaseAddr,
+        int DeclaredBlockCount,
+        int HandlerMetadataCount,
+        int ParsedBlockCount,
+        List<BlockAnalysisBlock> Blocks,
+        List<string> Warnings,
+        BlocksAnalysisNgrams? Ngrams,
+        BlockCandidateSummary? CandidateSummary);
+
+    private readonly record struct CachedDefUse(BlockDefUseInfo Export, OpSemanticSummary Summary);
+
     private enum BinaryFormat
     {
         Unknown,
         Elf,
         Pe,
         MachO
+    }
+
+    private enum AnalysisOutputMode
+    {
+        Full,
+        Compact
     }
 
     private sealed record PeSectionInfo(

@@ -56,6 +56,7 @@ public static class ProcessFactory
         try
         {
             mainTask = new FiberTask(proc.TGID, proc, runtime.Engine, scheduler);
+            mainTask.OwnsCPU = false;
             runtime.Engine.Owner = mainTask;
 
             proc.LoadExecutable(dentry, guestPath, args, envs, mount ?? runtime.Syscalls.RootMount!);

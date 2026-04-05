@@ -313,13 +313,13 @@ This avoids incorrectly selecting combinations that are merely adjacent in the p
 
 ## 9.1 Existing Runner / Block Dump Capability Assessment
 
-The current `benchmark/podish_perf/runner.py` now provides a usable end-to-end foundation for `SuperOpcode` candidate collection.
+The current `Podish.PerfTools runner` command now provides a usable end-to-end foundation for `SuperOpcode` candidate collection.
 
 ### Existing Capabilities
 
 - Supports batch running samples for fixed workloads
 - Supports block dump collection
-- Supports automatically calling `scripts/analyze_blocks.py`
+- Supports automatically calling `Podish.PerfTools analyze-blocks`
 - Supports block-local adjacency mining over decoded op streams
 - Supports `--aggregate-superopcode-candidates`
 - Supports writing aggregate outputs to `superopcode_candidates.json` and `.md`
@@ -342,7 +342,7 @@ This means:
 
 The old gaps around n-gram analysis and cross-sample aggregation are no longer the main blocker. The remaining deficiencies are narrower:
 
-1. `runner.py` treats block dump as a "byproduct"  
+1. `Podish.PerfTools runner` treats block dump as a "byproduct"  
    The current main goal is still benchmark timing, not building a stable op-sequence corpus.
 
 2. Workload coverage is still narrow by default  
@@ -358,8 +358,8 @@ The old gaps around n-gram analysis and cross-sample aggregation are no longer t
 
 The conclusion is:
 
-- `runner.py` is now sufficient as the main sampling entry point
-- `scripts/analyze_blocks.py` and `Podish.PerfTools analyze-superopcode-candidates` already provide the first usable post-processing path
+- `Podish.PerfTools runner` is now sufficient as the main sampling entry point
+- `Podish.PerfTools analyze-blocks` and `Podish.PerfTools analyze-superopcode-candidates` already provide the first usable post-processing path
 - The next step is to improve candidate quality and workload breadth, not to rebuild the data pipeline from scratch
 
 ## 9.2 Implementation Plan Based on Existing Runner
@@ -368,19 +368,19 @@ It is recommended to proceed from the current implementation, rather than treati
 
 ### Step 1: Keep Block Dump Readability Verified
 
-Keep validating that the chain `blocks.bin -> analyze_blocks.py -> blocks_analysis.json` stays readable as schemas evolve.
+Keep validating that the chain `blocks.bin -> Podish.PerfTools analyze-blocks -> blocks_analysis.json` stays readable as schemas evolve.
 
 Need to check:
 
-- Whether `blocks.bin` export format is consistent with script reading format
+- Whether `blocks.bin` export format is consistent with the PerfTool reader
 - Whether runtime base / handler pointer parsing is correct
-- Whether there is schema drift causing the script to read empty
+- Whether there is schema drift causing analysis output to go empty
 
 This remains a regression guard, not a missing first milestone.
 
-### Step 2: Continue Extending `analyze_blocks.py`
+### Step 2: Continue Extending `Podish.PerfTools analyze-blocks`
 
-`scripts/analyze_blocks.py` is already the first working block-order data source. Future work should build on it rather than replace it.
+`Podish.PerfTools analyze-blocks` is already the first working block-order data source. Future work should build on it directly.
 
 Recommended new capabilities:
 
@@ -449,7 +449,7 @@ This makes the resulting candidates less likely to be hijacked by a single progr
 
 ## 9.3 Specific Extension Recommendations for Runner
 
-If extending directly on the existing `benchmark/podish_perf/runner.py`, the following is recommended.
+If extending directly on the existing `Podish.PerfTools runner`, the following is recommended.
 
 ### A. Keep Existing SampleResult, but Add Fields
 
@@ -631,7 +631,7 @@ There are four main risk categories:
 ### Phase 1: Infrastructure
 
 - Add N-gram statistics scripts
-- Establish `blocks.bin -> analyze_blocks.py` readable chain
+- Establish `blocks.bin -> Podish.PerfTools analyze-blocks` readable chain
 - Enable runner to stably export block-op sequences
 - Define superopcode manifest format
 - Add code generation scripts

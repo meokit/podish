@@ -217,6 +217,8 @@ public sealed class ContainerRuntimeService
                 ExternalPageManager.MemoryQuotaBytes = request.MemoryQuotaBytes.Value;
 
             runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag);
+            scheduler.Runtime = runtime;
+            runtime.EnableGuestStatsCollection = !string.IsNullOrWhiteSpace(request.GuestStatsExportDir);
 
             if (effectiveNetworkMode == NetworkMode.Private)
                 networkBackend = new PrivateNetworkBackend(new DummySwitch());
@@ -467,7 +469,9 @@ public sealed class ContainerRuntimeService
                 "Scheduler run returned containerId={ContainerId} mainExited={MainExited}",
                 request.ContainerId, mainTask.Exited);
 
-            TryExportGuestStats(runtime.Engine, request);
+            TryExportGuestStats(runtime, request);
+            runtime.Engine.Dispose();
+            runtime.Dispose();
 
             if (!mainTask.Exited)
             {
@@ -891,8 +895,9 @@ public sealed class ContainerRuntimeService
         Console.Error.WriteLine("[Podish.HandlerProfile.End]");
     }
 
-    private void TryExportGuestStats(Engine engine, ContainerRunRequest request)
+    private void TryExportGuestStats(KernelRuntime runtime, ContainerRunRequest request)
     {
+        var engine = runtime.Engine;
         if (string.IsNullOrWhiteSpace(request.GuestStatsExportDir))
             return;
 
@@ -908,7 +913,7 @@ public sealed class ContainerRuntimeService
             if (!skipBlocksDump)
             {
                 using var fs = File.Create(blocksPath);
-                engine.DumpBlocks(fs);
+                runtime.DumpAllBlocks(fs);
             }
 
             var nativeStats = engine.DumpStats();

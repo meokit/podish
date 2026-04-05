@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -23,6 +24,12 @@ internal static partial class Program
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
+    private static readonly JsonSerializerOptions CompactJsonOptions = new()
+    {
+        WriteIndented = false,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
@@ -79,7 +86,7 @@ internal static partial class Program
                           Podish.PerfTools
 
                           Commands:
-                            analyze-blocks                 Parse a blocks.bin dump into blocks_analysis.json
+                            analyze-blocks                 Parse a blocks.bin dump into blocks_analysis.json (`--compact` emits a smaller/faster downstream schema)
                             analyze-sib-shapes             Aggregate SIB addressing shapes and opcode mix from blocks_analysis.json
                             analyze-superopcode-candidates Aggregate candidate pairs from analysis files
                             gen-superopcodes               Generate libfibercpu/generated/superopcodes.generated.cpp
@@ -98,14 +105,29 @@ internal static partial class Program
     private static int RunAnalyzeBlocks(string[] args)
     {
         var input = RequireValue(args, "--input", 0);
-        var libPath = RequireValue(args, "--lib", 1);
+        var libPath = GetValue(args, "--lib");
         var output = GetValue(args, "--output") ?? DefaultAnalysisOutput(input);
         var nGram = GetIntValue(args, "--n-gram", 2);
         var topNgrams = GetIntValue(args, "--top-ngrams", 100);
-
-        var result = AnalyzeBlocks(input, libPath, nGram, topNgrams);
+        var compact = HasFlag(args, "--compact");
+        var outputMode = compact ? AnalysisOutputMode.Compact : AnalysisOutputMode.Full;
+        var totalStopwatch = Stopwatch.StartNew();
+        var analyzeStopwatch = Stopwatch.StartNew();
+        var result = AnalyzeBlocks(input, libPath, nGram, topNgrams, outputMode);
+        analyzeStopwatch.Stop();
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
-        File.WriteAllText(output, JsonSerializer.Serialize(result, JsonOptions), Utf8NoBom);
+        var writeStopwatch = Stopwatch.StartNew();
+        using (var outputStream = File.Create(output))
+            JsonSerializer.Serialize(
+                outputStream,
+                result,
+                compact
+                    ? PerfToolsCompactJsonContext.Default.BlocksAnalysisOutput
+                    : PerfToolsIndentedJsonContext.Default.BlocksAnalysisOutput);
+        writeStopwatch.Stop();
+
+        Console.Error.WriteLine(
+            $"[analyze-blocks] analyze={analyzeStopwatch.Elapsed.TotalSeconds:F2}s write={writeStopwatch.Elapsed.TotalSeconds:F2}s total={totalStopwatch.Elapsed.TotalSeconds:F2}s mode={(compact ? "compact" : "full")}");
         Console.WriteLine($"Wrote analysis to {Path.GetFullPath(output)}");
         return 0;
     }
@@ -547,7 +569,7 @@ internal static partial class Program
 
                 anchorStats.WeightedExecCount += blockExecCount;
                 anchorStats.Occurrences += 1;
-                anchorStats.UniqueBlockStarts.Add(blockStart);
+                anchorStats.MarkBlock(blockStart);
                 anchorStats.Semantics ??= InferSemantics(anchor!);
                 if (anchorStats.ExampleBlocks.Count < 5)
                     anchorStats.ExampleBlocks.Add(new Dictionary<string, object?>
@@ -563,14 +585,15 @@ internal static partial class Program
                     var relation = ClassifyPair(first, anchor!, opsNode[i - 1], opsNode[i]);
                     if (relation is not null)
                     {
+                        var relationValue = relation.Value;
                         var pair = (first, anchor!);
                         if (!pairs.TryGetValue(pair, out var pairStats))
                         {
-                            pairStats = new SamplePairStats(pair.Item1, pair.Item2, anchor!, "predecessor", relation);
+                            pairStats = new SamplePairStats(pair.Item1, pair.Item2, anchor!, "predecessor", relationValue);
                             pairs[pair] = pairStats;
                         }
 
-                        pairStats.Add(blockExecCount, blockStart, i - 1, relation);
+                        pairStats.Add(blockExecCount, blockStart, i - 1, relationValue);
                     }
                 }
 
@@ -581,17 +604,211 @@ internal static partial class Program
                     if (relation is null)
                         continue;
 
+                    var relationValue = relation.Value;
                     var pair = (anchor!, second);
                     if (!pairs.TryGetValue(pair, out var pairStats))
                     {
-                        pairStats = new SamplePairStats(pair.Item1, pair.Item2, anchor!, "successor", relation);
+                        pairStats = new SamplePairStats(pair.Item1, pair.Item2, anchor!, "successor", relationValue);
                         pairs[pair] = pairStats;
                     }
 
-                    pairStats.Add(blockExecCount, blockStart, i, relation);
+                    pairStats.Add(blockExecCount, blockStart, i, relationValue);
                 }
             }
         }
+    }
+
+    private static void AnalyzeSampleCandidates(
+        ReadOnlySpan<BlockAnalysisOp> ops,
+        long blockExecCount,
+        string blockStart,
+        Dictionary<string, SampleAnchorStats> anchors,
+        Dictionary<(string, string), SamplePairStats> pairs)
+    {
+        var seq = new string?[ops.Length];
+        for (var i = 0; i < ops.Length; i++)
+            seq[i] = ops[i].candidate_name;
+
+        for (var i = 0; i < seq.Length; i++)
+        {
+            var anchor = seq[i];
+            if (string.IsNullOrWhiteSpace(anchor) || !anchor.StartsWith("op::Op", StringComparison.Ordinal))
+                continue;
+
+            if (!anchors.TryGetValue(anchor, out var anchorStats))
+            {
+                anchorStats = new SampleAnchorStats(anchor);
+                anchors[anchor] = anchorStats;
+            }
+
+            anchorStats.WeightedExecCount += blockExecCount;
+            anchorStats.Occurrences += 1;
+            anchorStats.MarkBlock(blockStart);
+            anchorStats.Semantics ??= InferSemantics(anchor);
+            if (anchorStats.ExampleBlocks.Count < 5)
+                anchorStats.ExampleBlocks.Add(new Dictionary<string, object?>
+                {
+                    ["start_eip_hex"] = blockStart,
+                    ["exec_count"] = blockExecCount,
+                    ["anchor_op_index"] = i
+                });
+
+            if (i > 0 && !string.IsNullOrWhiteSpace(seq[i - 1]))
+            {
+                var first = seq[i - 1]!;
+                var relation = ClassifyPair(first, anchor, ops[i - 1], ops[i]);
+                if (relation is not null)
+                {
+                    var relationValue = relation.Value;
+                    var pair = (first, anchor);
+                    if (!pairs.TryGetValue(pair, out var pairStats))
+                    {
+                        pairStats = new SamplePairStats(pair.Item1, pair.Item2, anchor, "predecessor", relationValue);
+                        pairs[pair] = pairStats;
+                    }
+
+                    pairStats.Add(blockExecCount, blockStart, i - 1, relationValue);
+                }
+            }
+
+            if (i + 1 < seq.Length && !string.IsNullOrWhiteSpace(seq[i + 1]))
+            {
+                var second = seq[i + 1]!;
+                var relation = ClassifyPair(anchor, second, ops[i], ops[i + 1]);
+                if (relation is null)
+                    continue;
+
+                var relationValue = relation.Value;
+                var pair = (anchor, second);
+                if (!pairs.TryGetValue(pair, out var pairStats))
+                {
+                    pairStats = new SamplePairStats(pair.Item1, pair.Item2, anchor, "successor", relationValue);
+                    pairs[pair] = pairStats;
+                }
+
+                pairStats.Add(blockExecCount, blockStart, i, relationValue);
+            }
+        }
+    }
+
+    private static BlockCandidateSummary BuildCandidateSummary(
+        Dictionary<string, SampleAnchorStats> anchors,
+        Dictionary<(string, string), SamplePairStats> pairs)
+    {
+        return new BlockCandidateSummary(
+            anchors.OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
+                .Select(kvp => new BlockCandidateAnchorSummary(
+                    kvp.Key,
+                    kvp.Value.WeightedExecCount,
+                    kvp.Value.Occurrences,
+                    kvp.Value.UniqueBlockCount,
+                    kvp.Value.ExampleBlocks.Select(example => new BlockCandidateExampleBlock(
+                        Convert.ToString(example["start_eip_hex"], CultureInfo.InvariantCulture) ?? "",
+                        Convert.ToInt64(example["exec_count"], CultureInfo.InvariantCulture),
+                        Convert.ToInt32(example["anchor_op_index"], CultureInfo.InvariantCulture)))
+                        .ToList(),
+                    kvp.Value.Semantics is null ? null : ToOpSemanticsExport(kvp.Value.Semantics)))
+                .ToList(),
+            pairs.OrderBy(kvp => kvp.Key.Item1, StringComparer.Ordinal)
+                .ThenBy(kvp => kvp.Key.Item2, StringComparer.Ordinal)
+                .Select(kvp => new BlockCandidatePairSummary(
+                    kvp.Value.FirstHandler,
+                    kvp.Value.SecondHandler,
+                    kvp.Value.AnchorHandler,
+                    kvp.Value.Direction,
+                    kvp.Value.RelationKind,
+                    kvp.Value.RelationPriority,
+                    ResourceMaskToNames(kvp.Value.SharedResourceMask),
+                    LegalityFlagsToArray(kvp.Value.LegalityFlags),
+                    kvp.Value.WeightedExecCount,
+                    kvp.Value.Occurrences,
+                    kvp.Value.UniqueBlockCount,
+                    kvp.Value.SharedResourceVariants.ToSortedDictionary(mask => string.Join(",", ResourceMaskToNames(mask))),
+                    kvp.Value.RelationKindVariants.ToSortedDictionary(),
+                    kvp.Value.ExampleBlocks.Select(example => new BlockCandidatePairExample(
+                        Convert.ToString(example["start_eip_hex"], CultureInfo.InvariantCulture) ?? "",
+                        Convert.ToInt64(example["exec_count"], CultureInfo.InvariantCulture),
+                        Convert.ToInt32(example["start_op_index"], CultureInfo.InvariantCulture),
+                        Convert.ToString(example["anchor_handler"], CultureInfo.InvariantCulture) ?? "",
+                        Convert.ToString(example["direction"], CultureInfo.InvariantCulture) ?? ""))
+                        .ToList()))
+                .ToList());
+    }
+
+    private static void LoadCandidateSummary(
+        BlockCandidateSummary summary,
+        Dictionary<string, SampleAnchorStats> anchors,
+        Dictionary<(string, string), SamplePairStats> pairs)
+    {
+        foreach (var anchor in summary.anchors)
+        {
+            var stats = new SampleAnchorStats(anchor.anchor)
+            {
+                WeightedExecCount = anchor.weighted_exec_count,
+                Occurrences = anchor.occurrences,
+                UniqueBlockCount = anchor.unique_block_count,
+                Semantics = anchor.semantics is null ? null : ToOpSemantics(anchor.semantics)
+            };
+            foreach (var example in anchor.example_blocks)
+                stats.ExampleBlocks.Add(new Dictionary<string, object?>
+                {
+                    ["start_eip_hex"] = example.start_eip_hex,
+                    ["exec_count"] = example.exec_count,
+                    ["anchor_op_index"] = example.anchor_op_index
+                });
+            anchors[anchor.anchor] = stats;
+        }
+
+        foreach (var pair in summary.pairs)
+        {
+            var relation = new PairRelation(
+                pair.relation_kind,
+                pair.relation_priority,
+                NamesToResourceMask(pair.shared_resources),
+                LegalityArrayToFlags(pair.legality_notes));
+            var stats = new SamplePairStats(pair.first_handler, pair.second_handler, pair.anchor_handler, pair.direction,
+                relation)
+            {
+                WeightedExecCount = pair.weighted_exec_count,
+                Occurrences = pair.occurrences,
+                UniqueBlockCount = pair.unique_block_count
+            };
+            foreach (var (key, value) in pair.shared_resource_variants)
+                stats.SharedResourceVariants[NamesToResourceMask(
+                    key.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))] = value;
+            foreach (var (key, value) in pair.relation_kind_variants)
+                stats.RelationKindVariants[key] = value;
+            foreach (var example in pair.example_blocks)
+                stats.ExampleBlocks.Add(new Dictionary<string, object?>
+                {
+                    ["start_eip_hex"] = example.start_eip_hex,
+                    ["exec_count"] = example.exec_count,
+                    ["start_op_index"] = example.start_op_index,
+                    ["anchor_handler"] = example.anchor_handler,
+                    ["direction"] = example.direction
+                });
+            pairs[(pair.first_handler, pair.second_handler)] = stats;
+        }
+    }
+
+    private static OpSemanticsExport ToOpSemanticsExport(OpSemantics semantics)
+    {
+        return new OpSemanticsExport(
+            semantics.Reads.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+            semantics.Writes.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+            semantics.Notes.ToArray(),
+            semantics.ControlFlow,
+            semantics.MemorySideEffect);
+    }
+
+    private static OpSemantics ToOpSemantics(OpSemanticsExport semantics)
+    {
+        return new OpSemantics(
+            semantics.reads,
+            semantics.writes,
+            semantics.notes,
+            semantics.control_flow,
+            semantics.memory_side_effect);
     }
 
     private static void MergeAnchorStats(
@@ -608,7 +825,7 @@ internal static partial class Program
 
         entry.WeightedExecCount += sampleStats.WeightedExecCount;
         entry.Occurrences += sampleStats.Occurrences;
-        entry.UniqueBlockCount += sampleStats.UniqueBlockStarts.Count;
+        entry.UniqueBlockCount += sampleStats.UniqueBlockCount;
         entry.SampleCount += 1;
         entry.EngineCounts.Add((string?)sampleMeta["engine"]);
         entry.CaseCounts.Add((string?)sampleMeta["case"]);
@@ -624,7 +841,7 @@ internal static partial class Program
                 ["iteration"] = sampleMeta["iteration"],
                 ["weighted_exec_count"] = sampleStats.WeightedExecCount,
                 ["occurrences"] = sampleStats.Occurrences,
-                ["unique_block_count"] = sampleStats.UniqueBlockStarts.Count,
+                ["unique_block_count"] = sampleStats.UniqueBlockCount,
                 ["example_blocks"] = sampleStats.ExampleBlocks
             });
     }
@@ -638,18 +855,18 @@ internal static partial class Program
         if (!aggregate.TryGetValue(pair, out var entry))
         {
             entry = new PairAggregate(pair.Item1, pair.Item2, sampleStats.AnchorHandler, sampleStats.Direction,
-                sampleStats.RelationKind, sampleStats.RelationPriority, sampleStats.SharedResources,
-                sampleStats.LegalityNotes);
+                sampleStats.RelationKind, sampleStats.RelationPriority, sampleStats.SharedResourceMask,
+                sampleStats.LegalityFlags);
             aggregate[pair] = entry;
         }
 
         entry.WeightedExecCount += sampleStats.WeightedExecCount;
         entry.Occurrences += sampleStats.Occurrences;
-        entry.UniqueBlockCount += sampleStats.UniqueBlockStarts.Count;
+        entry.UniqueBlockCount += sampleStats.UniqueBlockCount;
         entry.SampleCount += 1;
         entry.EngineCounts.Add((string?)sampleMeta["engine"]);
         entry.CaseCounts.Add((string?)sampleMeta["case"]);
-        entry.SharedResourceVariants.Add(string.Join(",", sampleStats.SharedResources));
+        entry.SharedResourceVariants.Add(sampleStats.SharedResourceMask);
         entry.RelationKindVariants.Add(sampleStats.RelationKind);
         if (entry.ExampleSources.Count < 5)
             entry.ExampleSources.Add(new Dictionary<string, object?>
@@ -662,7 +879,7 @@ internal static partial class Program
                 ["iteration"] = sampleMeta["iteration"],
                 ["weighted_exec_count"] = sampleStats.WeightedExecCount,
                 ["occurrences"] = sampleStats.Occurrences,
-                ["unique_block_count"] = sampleStats.UniqueBlockStarts.Count,
+                ["unique_block_count"] = sampleStats.UniqueBlockCount,
                 ["example_blocks"] = sampleStats.ExampleBlocks
             });
     }
@@ -696,7 +913,7 @@ internal static partial class Program
     {
         var dominantSharedVariant = entry.SharedResourceVariants
             .OrderByDescending(kvp => kvp.Value)
-            .ThenBy(kvp => kvp.Key, StringComparer.Ordinal)
+            .ThenBy(kvp => kvp.Key)
             .FirstOrDefault();
         var dominantRelation = entry.RelationKindVariants.TryGetValue("RAW", out var rawVariantCount)
             ?
@@ -710,10 +927,9 @@ internal static partial class Program
         var dominantRelationKind =
             string.IsNullOrWhiteSpace(dominantRelation.Key) ? entry.RelationKind : dominantRelation.Key;
         var dominantRelationCount = dominantRelation.Value;
-        var dominantShared = string.IsNullOrWhiteSpace(dominantSharedVariant.Key)
-            ? entry.SharedResources.ToArray()
-            : dominantSharedVariant.Key.Split(',',
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var dominantShared = dominantSharedVariant.Key == 0
+            ? ResourceMaskToNames(entry.SharedResourceMask)
+            : ResourceMaskToNames(dominantSharedVariant.Key);
         var dominantDepWeight = RelationDepWeight(dominantRelationKind, rawWeight, rarWeight, wawWeight);
         var baseFrequency = scoreBasis == "anchor"
             ? Convert.ToInt64(anchorEntry["weighted_exec_count"], CultureInfo.InvariantCulture)
@@ -741,14 +957,14 @@ internal static partial class Program
             ["sample_count"] = entry.SampleCount,
             ["engine_counts"] = entry.EngineCounts.ToSortedDictionary(),
             ["case_counts"] = entry.CaseCounts.ToSortedDictionary(),
-            ["shared_resource_variants"] = entry.SharedResourceVariants.ToSortedDictionary(),
+            ["shared_resource_variants"] = entry.SharedResourceVariants.ToSortedDictionary(mask => string.Join(",", ResourceMaskToNames(mask))),
             ["dominant_shared_resource_count"] = dominantSharedVariant.Value,
             ["dominant_shared_resource_ratio"] =
                 entry.Occurrences > 0 ? (double)dominantSharedVariant.Value / entry.Occurrences : 0.0,
             ["relation_kind_variants"] = entry.RelationKindVariants.ToSortedDictionary(),
             ["dominant_relation_kind_count"] = dominantRelationCount,
             ["example_sources"] = entry.ExampleSources,
-            ["legality_notes"] = entry.LegalityNotes,
+            ["legality_notes"] = LegalityFlagsToArray(entry.LegalityFlags),
             ["score"] = baseFrequency * dominantDepWeight * jccWeight,
             ["anchor_weighted_exec_count"] = anchorEntry["weighted_exec_count"],
             ["anchor_sample_count"] = anchorEntry["sample_count"],
@@ -865,9 +1081,19 @@ internal static partial class Program
         public string Anchor { get; }
         public long WeightedExecCount { get; set; }
         public long Occurrences { get; set; }
-        public HashSet<string> UniqueBlockStarts { get; } = new(StringComparer.Ordinal);
+        public int UniqueBlockCount { get; set; }
+        public string? LastBlockStart { get; private set; }
         public List<Dictionary<string, object?>> ExampleBlocks { get; } = new();
         public OpSemantics? Semantics { get; set; }
+
+        public void MarkBlock(string blockStart)
+        {
+            if (!string.Equals(LastBlockStart, blockStart, StringComparison.Ordinal))
+            {
+                LastBlockStart = blockStart;
+                UniqueBlockCount += 1;
+            }
+        }
     }
 
     private sealed class SamplePairStats
@@ -880,8 +1106,8 @@ internal static partial class Program
             Direction = direction;
             RelationKind = relation.RelationKind;
             RelationPriority = relation.RelationPriority;
-            SharedResources = relation.SharedResources.ToArray();
-            LegalityNotes = relation.LegalityNotes.ToArray();
+            SharedResourceMask = relation.SharedResourceMask;
+            LegalityFlags = relation.LegalityFlags;
         }
 
         public string FirstHandler { get; }
@@ -890,12 +1116,13 @@ internal static partial class Program
         public string Direction { get; }
         public string RelationKind { get; }
         public int RelationPriority { get; }
-        public string[] SharedResources { get; }
-        public string[] LegalityNotes { get; }
+        public ushort SharedResourceMask { get; }
+        public uint LegalityFlags { get; }
         public long WeightedExecCount { get; set; }
         public long Occurrences { get; set; }
-        public HashSet<string> UniqueBlockStarts { get; } = new(StringComparer.Ordinal);
-        public CountingMap SharedResourceVariants { get; } = new();
+        public int UniqueBlockCount { get; set; }
+        public string? LastBlockStart { get; private set; }
+        public MaskCountingMap SharedResourceVariants { get; } = new();
         public CountingMap RelationKindVariants { get; } = new();
         public List<Dictionary<string, object?>> ExampleBlocks { get; } = new();
 
@@ -903,8 +1130,12 @@ internal static partial class Program
         {
             WeightedExecCount += blockExecCount;
             Occurrences += 1;
-            UniqueBlockStarts.Add(blockStart);
-            SharedResourceVariants.Add(string.Join(",", relation.SharedResources));
+            if (!string.Equals(LastBlockStart, blockStart, StringComparison.Ordinal))
+            {
+                LastBlockStart = blockStart;
+                UniqueBlockCount += 1;
+            }
+            SharedResourceVariants.Add(relation.SharedResourceMask);
             RelationKindVariants.Add(relation.RelationKind);
             if (ExampleBlocks.Count < 3)
                 ExampleBlocks.Add(new Dictionary<string, object?>
@@ -939,7 +1170,7 @@ internal static partial class Program
     private sealed class PairAggregate
     {
         public PairAggregate(string first, string second, string anchor, string direction, string relationKind,
-            int relationPriority, IEnumerable<string> sharedResources, IEnumerable<string> legalityNotes)
+            int relationPriority, ushort sharedResourceMask, uint legalityFlags)
         {
             FirstHandler = first;
             SecondHandler = second;
@@ -947,8 +1178,8 @@ internal static partial class Program
             Direction = direction;
             RelationKind = relationKind;
             RelationPriority = relationPriority;
-            SharedResources = sharedResources.ToArray();
-            LegalityNotes = legalityNotes.ToArray();
+            SharedResourceMask = sharedResourceMask;
+            LegalityFlags = legalityFlags;
         }
 
         public string FirstHandler { get; }
@@ -957,15 +1188,15 @@ internal static partial class Program
         public string Direction { get; }
         public string RelationKind { get; }
         public int RelationPriority { get; }
-        public string[] SharedResources { get; }
-        public string[] LegalityNotes { get; }
+        public ushort SharedResourceMask { get; }
+        public uint LegalityFlags { get; }
         public long WeightedExecCount { get; set; }
         public long Occurrences { get; set; }
         public long UniqueBlockCount { get; set; }
         public long SampleCount { get; set; }
         public CountingMap EngineCounts { get; } = new();
         public CountingMap CaseCounts { get; } = new();
-        public CountingMap SharedResourceVariants { get; } = new();
+        public MaskCountingMap SharedResourceVariants { get; } = new();
         public CountingMap RelationKindVariants { get; } = new();
         public List<Dictionary<string, object?>> ExampleSources { get; } = new();
     }
@@ -987,6 +1218,20 @@ internal static partial class Program
         {
             return this.OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
                 .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.Ordinal);
+        }
+    }
+
+    private sealed class MaskCountingMap : Dictionary<ushort, int>
+    {
+        public void Add(ushort key)
+        {
+            this[key] = TryGetValue(key, out var count) ? count + 1 : 1;
+        }
+
+        public Dictionary<string, int> ToSortedDictionary(Func<ushort, string> formatter)
+        {
+            return this.OrderBy(kvp => formatter(kvp.Key), StringComparer.Ordinal)
+                .ToDictionary(kvp => formatter(kvp.Key), kvp => kvp.Value, StringComparer.Ordinal);
         }
     }
 
@@ -1024,13 +1269,11 @@ internal static partial class Program
         }
     }
 
-    private sealed record PairRelation(
+    private readonly record struct PairRelation(
         string RelationKind,
         int RelationPriority,
-        string[] SharedResources,
-        OpSemantics FirstSemantics,
-        OpSemantics SecondSemantics,
-        string[] LegalityNotes);
+        ushort SharedResourceMask,
+        uint LegalityFlags);
 
     private enum ProfileBackendKind
     {
@@ -1410,5 +1653,7 @@ internal static partial class Program
         int CodeSize,
         List<ProfileJitOpEntry> Ops);
 
-    private sealed record OpSnapshot(uint EaDesc, byte Modrm, byte Meta, byte Prefixes);
+    private readonly record struct OpSnapshot(uint EaDesc, byte Modrm, byte Meta, byte Prefixes);
+
+    private readonly record struct DefUseCacheKey(int? OpId, OpSnapshot Snapshot);
 }

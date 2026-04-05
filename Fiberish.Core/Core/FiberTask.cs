@@ -233,6 +233,8 @@ public class FiberTask
         _handlingAsyncSyscall = false;
     }
 
+    public bool OwnsCPU { get; set; } = true;
+
     public bool TryFinalizeTaskRetirement()
     {
         if (!AsyncScope.TryFinalizeTaskRetirement())
@@ -244,7 +246,17 @@ public class FiberTask
                 $"status={Status}, mode={ExecutionMode}, exited={Exited}");
         if (Interlocked.Exchange(ref _engineDisposed, 1) != 0)
             return false;
-        CPU.Dispose();
+        if (OwnsCPU)
+        {
+            if (CommonKernel.Runtime?.EnableGuestStatsCollection == true)
+            {
+                CommonKernel.Runtime.RetiredEngines.Enqueue(CPU);
+            }
+            else
+            {
+                CPU.Dispose();
+            }
+        }
         return true;
     }
 

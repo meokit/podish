@@ -302,23 +302,22 @@ Use `analyze-blocks` to convert `blocks.bin` into structured JSON:
  dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- \
    analyze-blocks \
    --input benchmark/podish_perf/results/<timestamp>/guest-stats/jit-run-01/blocks.bin \
-   --lib Podish.Cli/bin/Release/net10.0/libfibercpu.so \
    --output benchmark/podish_perf/results/<timestamp>/guest-stats/jit-run-01/blocks_analysis.json
 ```
 
 Common parameters:
 
 - `--input <blocks.bin>`
-- `--lib <libfibercpu.so|dylib|dll>`
+- `--lib <libfibercpu.so|dylib|dll>` (optional; only needed for legacy dumps without embedded handler metadata)
 - `--output <blocks_analysis.json>`
 - `--n-gram 2`
 - `--top-ngrams <n>`
 
 ### Critical Requirement
 
-`blocks.bin` must come from the same build as the provided `libfibercpu`.
+New-format `blocks.bin` embeds handler ids, handler symbols, and opcode ids, so it can be analyzed without reopening the native library.
 
-If they're mismatched, the most common issues are:
+If you're analyzing a legacy dump with `--lib`, `blocks.bin` must still come from the same build as the provided `libfibercpu`. If they're mismatched, the most common issues are:
 
 - Handler addresses can't be resolved
 - `logic_func` appears empty
@@ -484,7 +483,6 @@ libfibercpu/generated/superopcodes.generated.cpp
  dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- \
    analyze-blocks \
    --input <blocks.bin> \
-   --lib <libfibercpu.so> \
    --output <blocks_analysis.json>
 ```
 

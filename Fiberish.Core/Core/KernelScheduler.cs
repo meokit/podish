@@ -45,6 +45,8 @@ public class KernelScheduler
 
     private int _wakePending;
 
+    public KernelRuntime? Runtime { get; set; }
+
     public KernelScheduler()
     {
         _synchronizationContext = new KernelSyncContext(this);

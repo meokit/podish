@@ -242,6 +242,28 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_GetBlockList")]
     public static partial int GetBlockList(IntPtr state, IntPtr* buffer, int maxCount);
 
+    [LibraryImport(LibName, EntryPoint = "X86_GetHandlerCount")]
+    [SuppressGCTransition]
+    public static partial int GetHandlerCount();
+
+    [LibraryImport(LibName, EntryPoint = "X86_GetHandlerId")]
+    [SuppressGCTransition]
+    public static partial int GetHandlerId(IntPtr handler);
+
+    [LibraryImport(LibName, EntryPoint = "X86_GetHandlerById")]
+    [SuppressGCTransition]
+    public static partial IntPtr GetHandlerById(int handlerId);
+
+    [LibraryImport(LibName, EntryPoint = "X86_GetHandlerSymbolById")]
+    [SuppressGCTransition]
+    private static partial IntPtr GetHandlerSymbolByIdUtf8(int handlerId);
+
+    public static string? GetHandlerSymbolById(int handlerId)
+    {
+        var symbolPtr = GetHandlerSymbolByIdUtf8(handlerId);
+        return symbolPtr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(symbolPtr);
+    }
+
     [LibraryImport(LibName, EntryPoint = "X86_GetOpIdForHandler")]
     [SuppressGCTransition]
     public static partial int GetOpIdForHandler(IntPtr handler);

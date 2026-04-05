@@ -194,6 +194,12 @@ size_t X86_GetHandlerProfileStats(EmuState* state, X86_HandlerProfileEntry* buff
 size_t X86_GetBlockCount(EmuState* state);
 size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count);
 
+// Handler reflection APIs generated from fibercpu_core.
+int32_t X86_GetHandlerCount(void);
+int32_t X86_GetHandlerId(void* handler);
+void* X86_GetHandlerById(int32_t handler_id);
+const char* X86_GetHandlerSymbolById(int32_t handler_id);
+
 // Returns the base logical opcode id for a dispatch/specialized handler, or -1 if unknown.
 int32_t X86_GetOpIdForHandler(void* handler);
 
