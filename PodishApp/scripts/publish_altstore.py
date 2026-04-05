@@ -47,8 +47,23 @@ def check_requirements():
         print("Error: 'xcodebuild' is not found. Are you on macOS with Xcode installed?")
         sys.exit(1)
 
+def get_git_tag():
+    # Get the tag on the current commit
+    tag = run(["git", "describe", "--tags", "--exact-match"], check=False)
+    if not tag or "fatal" in tag:
+        print("Error: Current commit has no git tag. Please tag your commit first (e.g., git tag v0.0.5).")
+        sys.exit(1)
+    # Remove 'v' prefix if exists for the version number
+    version = tag[1:] if tag.startswith("v") else tag
+    return tag, version
+
 def main():
     check_requirements()
+    
+    # 0. Get Version from Git Tag
+    git_tag, version_num = get_git_tag()
+    print(f"Using version from Git tag: {git_tag} (Version: {version_num})")
+
     parser = argparse.ArgumentParser(description="Build and publish IPA to AltStore")
     parser.add_argument("--method", default="ad-hoc", choices=["ad-hoc", "development", "app-store"], help="Export method")
     args = parser.parse_args()
@@ -57,15 +72,19 @@ def main():
         shutil.rmtree(TEMP_DIR)
     os.makedirs(TEMP_DIR)
 
-    # 0. Get Build Settings
+    # 1. Fetch Build Settings & Info
     print("Fetching build settings...")
     settings = get_build_settings()
     bundle_id = settings.get("PRODUCT_BUNDLE_IDENTIFIER", "com.meokit.podish")
     app_name = settings.get("PRODUCT_NAME", "Podish")
-    
-    # 1. Archive
-    archive_path = f"{TEMP_DIR}/{app_name}.xcarchive"
-    print(f"Archiving {app_name}...")
+    full_version = version_num
+    tag = git_tag
+    print(f"Release version: {full_version}")
+
+    # 2. Archive
+    # We pass MARKETING_VERSION to sync IPA version with our Git tag
+    archive_path = f"{TEMP_DIR}/{SCHEME}.xcarchive"
+    print(f"Archiving {SCHEME} with version {version_num}...")
     run([
         "xcodebuild", "archive",
         "-project", PROJECT_PATH,
@@ -73,7 +92,9 @@ def main():
         "-archivePath", archive_path,
         "-configuration", "Release",
         "-destination", "generic/platform=iOS",
-        "SKIP_INSTALL=NO"
+        "SKIP_INSTALL=NO",
+        f"MARKETING_VERSION={version_num}",
+        f"CURRENT_PROJECT_VERSION=1"
     ])
 
     # 2. Manual IPA Creation (Payload method)
@@ -121,21 +142,6 @@ def main():
         sys.exit(1)
     
     ipa_filename = os.path.basename(ipa_path)
-
-    # 3. Get Version Info from Archive's Info.plist
-    # Find the app bundle inside the archive
-    app_bundle_dir = f"{archive_path}/Products/Applications"
-    app_bundle_name = [f for f in os.listdir(app_bundle_dir) if f.endswith(".app")][0]
-    info_plist_path = f"{app_bundle_dir}/{app_bundle_name}/Info.plist"
-    
-    with open(info_plist_path, "rb") as f:
-        info_plist = plistlib.load(f)
-    
-    marketing_version = info_plist.get("CFBundleShortVersionString", "0.0")
-    build_version = info_plist.get("CFBundleVersion", "1")
-    full_version = f"{marketing_version}.{build_version}"
-    tag = f"v{full_version}"
-    print(f"Release version: {full_version}")
 
     # 4. Clone/Prepare AltStore Repository
     altstore_repo_dir = f"{TEMP_DIR}/{REPO_NAME}"
@@ -213,7 +219,7 @@ def main():
     print("Committing and pushing to AltStore repo...")
     # Initialize if git status fails or if it's a new repo
     run(["git", "add", "apps.json", "icon.png"], cwd=altstore_repo_dir, check=False)
-    run(["git", "add", "apps.json"], cwd=altstore_repo_dir)
+    run(["git", "add", "apps.json", "icon.png"], cwd=altstore_repo_dir)
     run(["git", "commit", "-m", f"Update to version {full_version}"], cwd=altstore_repo_dir, check=False)
     run(["git", "push", "origin", "main"], cwd=altstore_repo_dir)
 

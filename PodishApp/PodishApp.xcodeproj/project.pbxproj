@@ -236,7 +236,6 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 4P59922UZ6;
 				ENABLE_PREVIEWS = YES;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
@@ -261,7 +260,6 @@
 				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64-simulator";
 				"LIBRARY_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/macos-arm64";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(PODISHCORE_BOOTSTRAPPER_OBJ)",
@@ -302,7 +300,6 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 4P59922UZ6;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
@@ -326,7 +323,6 @@
 				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64-simulator";
 				"LIBRARY_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/macos-arm64";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(PODISHCORE_BOOTSTRAPPER_OBJ)",
