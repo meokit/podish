@@ -4,6 +4,7 @@ using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
+using Fiberish.VFS;
 using Xunit;
 
 namespace Fiberish.Tests.Syscalls;
@@ -17,6 +18,8 @@ public class FcntlCloexecTests
     private const uint F_ADD_SEALS = 1033;
     private const uint F_GET_SEALS = 1034;
     private const uint MFD_ALLOW_SEALING = 0x0002;
+    private const uint MFD_NOEXEC_SEAL = 0x0008;
+    private const uint MFD_EXEC = 0x0010;
     private const uint F_SEAL_SEAL = 0x0001;
     private const uint F_SEAL_SHRINK = 0x0002;
     private const uint F_SEAL_GROW = 0x0004;
@@ -88,6 +91,56 @@ public class FcntlCloexecTests
 
         Assert.Equal(-(int)Errno.EPERM, await env.Call("SysFcntl64", (uint)fd, F_ADD_SEALS, F_SEAL_WRITE));
         Assert.Equal((int)F_SEAL_SEAL, await env.Call("SysFcntl64", (uint)fd, F_GET_SEALS));
+    }
+
+    [Fact]
+    public async Task Memfd_Create_WithExecFlag_SucceedsAndMarksFileExecutable()
+    {
+        using var env = new TestEnv();
+        const uint nameAddr = 0x24000;
+        env.MapUserPage(nameAddr);
+        env.WriteCString(nameAddr, "exec-memfd");
+
+        var fd = await env.Call("SysMemfdCreate", nameAddr, MFD_ALLOW_SEALING | MFD_EXEC);
+        Assert.True(fd >= 0);
+
+        var file = env.SyscallManager.GetFD(fd);
+        var inode = Assert.IsType<TmpfsInode>(file!.OpenedInode);
+        Assert.True((inode.Mode & 0x40) != 0);
+        Assert.True(inode.IsMemfdExecutable);
+        Assert.False(inode.IsMemfdNoExecSealed);
+    }
+
+    [Fact]
+    public async Task Memfd_Create_WithNoexecSeal_SucceedsAndRemainsNonExecutable()
+    {
+        using var env = new TestEnv();
+        const uint nameAddr = 0x25000;
+        env.MapUserPage(nameAddr);
+        env.WriteCString(nameAddr, "noexec-memfd");
+
+        var fd = await env.Call("SysMemfdCreate", nameAddr, MFD_ALLOW_SEALING | MFD_NOEXEC_SEAL);
+        Assert.True(fd >= 0);
+
+        var file = env.SyscallManager.GetFD(fd);
+        var inode = Assert.IsType<TmpfsInode>(file!.OpenedInode);
+        Assert.True((inode.Mode & 0x49) == 0);
+        Assert.False(inode.IsMemfdExecutable);
+        Assert.True(inode.IsMemfdNoExecSealed);
+        Assert.Equal(0, await env.Call("SysFcntl64", (uint)fd, F_ADD_SEALS, F_SEAL_WRITE));
+        Assert.Equal((int)F_SEAL_WRITE, await env.Call("SysFcntl64", (uint)fd, F_GET_SEALS));
+    }
+
+    [Fact]
+    public async Task Memfd_Create_WithExecAndNoexecSeal_ReturnsEinval()
+    {
+        using var env = new TestEnv();
+        const uint nameAddr = 0x26000;
+        env.MapUserPage(nameAddr);
+        env.WriteCString(nameAddr, "bad-memfd");
+
+        var rc = await env.Call("SysMemfdCreate", nameAddr, MFD_EXEC | MFD_NOEXEC_SEAL);
+        Assert.Equal(-(int)Errno.EINVAL, rc);
     }
 
     private sealed class TestEnv : IDisposable

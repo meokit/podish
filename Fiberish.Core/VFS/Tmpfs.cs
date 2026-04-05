@@ -159,14 +159,18 @@ public class TmpfsInode : IndexedMemoryInode
     public bool IsMemfd { get; set; }
     public bool AllowSealing { get; set; }
     public uint SealFlags { get; private set; } = F_SEAL_SEAL;
+    public bool IsMemfdExecutable { get; private set; }
+    public bool IsMemfdNoExecSealed { get; private set; }
 
     private TmpfsSuperBlock TmpfsSb => (TmpfsSuperBlock)SuperBlock;
 
-    public void InitializeMemfd(bool allowSealing)
+    public void InitializeMemfd(bool allowSealing, bool executable = false, bool noExecSeal = false)
     {
         IsMemfd = true;
         AllowSealing = allowSealing;
         SealFlags = allowSealing ? 0u : F_SEAL_SEAL;
+        IsMemfdExecutable = executable;
+        IsMemfdNoExecSealed = noExecSeal;
     }
 
     public int AddSeals(uint seals)

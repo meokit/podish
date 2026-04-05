@@ -297,22 +297,30 @@ public partial class SyscallManager
     {
         const uint MFD_CLOEXEC = 0x0001;
         const uint MFD_ALLOW_SEALING = 0x0002;
+        const uint MFD_NOEXEC_SEAL = 0x0008;
+        const uint MFD_EXEC = 0x0010;
 
 
         var name = engine.ReadStringSafe(a1);
         if (name == null) return -(int)Errno.EFAULT;
 
         var flags = a2;
-        var knownFlags = MFD_CLOEXEC | MFD_ALLOW_SEALING;
+        var knownFlags = MFD_CLOEXEC | MFD_ALLOW_SEALING | MFD_NOEXEC_SEAL | MFD_EXEC;
         if ((flags & ~knownFlags) != 0) return -(int)Errno.EINVAL;
+        if ((flags & MFD_EXEC) != 0 && (flags & MFD_NOEXEC_SEAL) != 0) return -(int)Errno.EINVAL;
 
         try
         {
             var inode = MemfdSuperBlock.AllocInode();
             inode.Type = InodeType.File;
-            inode.Mode = 0x180; // 0600
+            inode.Mode = (flags & MFD_EXEC) != 0 ? 0x1C0 : 0x180; // 0700 vs 0600
             if (inode is TmpfsInode tmpfsInode)
-                tmpfsInode.InitializeMemfd((flags & MFD_ALLOW_SEALING) != 0);
+            {
+                tmpfsInode.InitializeMemfd(
+                    (flags & MFD_ALLOW_SEALING) != 0,
+                    executable: (flags & MFD_EXEC) != 0,
+                    noExecSeal: (flags & MFD_NOEXEC_SEAL) != 0);
+            }
 
             var t = engine.Owner as FiberTask;
             inode.Uid = t?.Process.EUID ?? 0;
