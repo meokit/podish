@@ -49,17 +49,10 @@
             <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('OSX')) And '$(IsBrowserWasm)' != 'true'">$(CMakeArgs) -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++</CMakeArgs>
             <CMakeHandlerProfile Condition="'$(EnableHandlerProfile)' == 'true'">ON</CMakeHandlerProfile>
             <CMakeHandlerProfile Condition="'$(CMakeHandlerProfile)' == ''">OFF</CMakeHandlerProfile>
-            <CMakeJccProfile Condition="'$(EnableJccProfile)' == 'true'">ON</CMakeJccProfile>
-            <CMakeJccProfile Condition="'$(CMakeJccProfile)' == ''">OFF</CMakeJccProfile>
             <CMakeSuperOpcodes Condition="'$(EnableSuperOpcodes)' == 'false'">OFF</CMakeSuperOpcodes>
             <CMakeSuperOpcodes Condition="'$(CMakeSuperOpcodes)' == ''">ON</CMakeSuperOpcodes>
-            <CMakeJit Condition="'$(EnableJit)' == 'false' Or '$(IsBrowserWasm)' == 'true'">OFF</CMakeJit>
-            <CMakeJit Condition="$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('ios'))">OFF</CMakeJit>
-            <CMakeJit Condition="'$(CMakeJit)' == ''">ON</CMakeJit>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_HANDLER_PROFILE=$(CMakeHandlerProfile)</CMakeArgs>
-            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_JCC_PROFILE=$(CMakeJccProfile)</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_SUPEROPCODES=$(CMakeSuperOpcodes)</CMakeArgs>
-            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_JIT=$(CMakeJit)</CMakeArgs>
             <CMakeGeneratorArgs Condition="'$(IsBrowserWasm)' == 'true'">-G Ninja</CMakeGeneratorArgs>
             <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_TOOLCHAIN_FILE=&quot;$(EmscriptenToolchainFile)&quot; -DCMAKE_CROSSCOMPILING_EMULATOR=&quot;$(BrowserWasmNodeExecutable)&quot;</CMakeArgs>
         </PropertyGroup>

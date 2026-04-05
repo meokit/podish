@@ -42,9 +42,7 @@ option(ENABLE_TLB_STATS "Enable tracking of L1/L2 TLB hits and misses" OFF)
 option(FIBERCPU_BUILD_STATIC "Build fibercpu as a static library instead of shared" OFF)
 option(FIBERCPU_ENABLE_LTO "Enable interprocedural optimization (LTO/IPO)" ON)
 option(FIBERCPU_ENABLE_HANDLER_PROFILE "Enable approximate per-handler execution profiling" OFF)
-option(FIBERCPU_ENABLE_JCC_PROFILE "Enable conditional-branch profiling" OFF)
 option(FIBERCPU_ENABLE_SUPEROPCODES "Enable generated SuperOpcode matching and handlers" ON)
-option(FIBERCPU_ENABLE_JIT "Enable copy-and-patch JIT pipeline" OFF)
 
 set(FIBERCPU_GENERATED_SUPEROPCODES_FILE "${CMAKE_CURRENT_SOURCE_DIR}/generated/superopcodes.generated.cpp")
 set(FIBERCPU_HAVE_GENERATED_SUPEROPCODES OFF)
@@ -79,24 +77,10 @@ list(FILTER SOURCES EXCLUDE REGEX "3rdparty/softfloat/.*")
 if(NOT FIBERCPU_ENABLE_SUPEROPCODES)
     list(FILTER SOURCES EXCLUDE REGEX "generated/superopcodes\\.generated\\.cpp$")
 endif()
-list(FILTER SOURCES EXCLUDE REGEX "generated/stencil_kernels\\.generated\\.cpp$")
-
-# Separate JIT sources from core to break circular dependency
-set(SOURCES_CORE ${SOURCES})
-list(FILTER SOURCES_CORE EXCLUDE REGEX "jit/block_builder\\.cpp$")
-list(FILTER SOURCES_CORE EXCLUDE REGEX "jit/peephole\\.cpp$")
-list(FILTER SOURCES_CORE EXCLUDE REGEX "jit/stencil_kernels\\.cpp$")
-
-set(SOURCES_JIT)
-if(FIBERCPU_ENABLE_JIT)
-    list(APPEND SOURCES_JIT
-        jit/block_builder.cpp
-        jit/peephole.cpp
-    )
-endif()
+list(FILTER SOURCES EXCLUDE REGEX "jit/.*")
 
 # Object library for core parts (contains the opcodes to scan)
-add_library(fibercpu_core OBJECT ${SOURCES_CORE})
+add_library(fibercpu_core OBJECT ${SOURCES})
 set_target_properties(fibercpu_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(fibercpu_core PRIVATE .)
 target_include_directories(fibercpu_core SYSTEM PRIVATE ${simde_SOURCE_DIR})
@@ -150,110 +134,18 @@ if(USE_SOFTFLOAT)
     add_subdirectory(3rdparty/softfloat)
 endif()
 
-if(FIBERCPU_ENABLE_JIT)
-    # JIT Stencil Generation
-    set(FIBERCPU_JIT_STENCILS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/jit")
-    set(FIBERCPU_STENCIL_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_jit_stencils.py")
-    set(FIBERCPU_GENERATED_STENCILS_CPP "${CMAKE_CURRENT_SOURCE_DIR}/generated/stencil_kernels.generated.cpp")
-    set(FIBERCPU_GENERATED_STENCILS_INC "${CMAKE_CURRENT_SOURCE_DIR}/generated/stencils.generated.inc")
-
-    # JIT extraction steps
-    set(FIBERCPU_PROBE_CPP ${CMAKE_CURRENT_BINARY_DIR}/jit/probe_kernels.generated.cpp)
-    set(FIBERCPU_PROBE_OBJ ${CMAKE_CURRENT_BINARY_DIR}/jit/probe_kernels.o)
-    set(FIBERCPU_USAGE_JSON ${CMAKE_CURRENT_BINARY_DIR}/jit/usage_analysis.json)
-    set(FIBERCPU_JIT_COMPILE_FLAGS
-        -std=c++23
-        -O3
-        -fno-stack-protector
-        -fomit-frame-pointer
-        -fPIC
-        -fno-strict-aliasing
-        -I${CMAKE_CURRENT_SOURCE_DIR}
-        -I${CMAKE_CURRENT_SOURCE_DIR}/..
-        -isystem ${simde_SOURCE_DIR}
-        -I${unordered_dense_SOURCE_DIR}/include
-    )
-    if(APPLE)
-        list(APPEND FIBERCPU_JIT_COMPILE_FLAGS
-            -isysroot ${CMAKE_OSX_SYSROOT}
-            -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}
-        )
-    endif()
-
-    add_custom_command(
-        OUTPUT ${FIBERCPU_PROBE_CPP}
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/jit"
-        COMMAND python3 ${FIBERCPU_STENCIL_GENERATOR} --mode=probe $<TARGET_OBJECTS:fibercpu_core> ${FIBERCPU_PROBE_CPP}
-        DEPENDS fibercpu_core ${FIBERCPU_STENCIL_GENERATOR}
-        COMMENT "Generating JIT probe kernels (Pass 1)"
-        COMMAND_EXPAND_LISTS
-        VERBATIM
-    )
-
-    add_custom_command(
-        OUTPUT ${FIBERCPU_PROBE_OBJ}
-        COMMAND ${CMAKE_CXX_COMPILER} ${FIBERCPU_JIT_COMPILE_FLAGS} -c ${FIBERCPU_PROBE_CPP} -o ${FIBERCPU_PROBE_OBJ}
-        DEPENDS ${FIBERCPU_PROBE_CPP}
-        COMMENT "Compiling JIT probe kernels"
-        VERBATIM
-    )
-
-    add_custom_command(
-        OUTPUT ${FIBERCPU_USAGE_JSON}
-        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/extract_stencils_obj.py --mode=analyze ${FIBERCPU_PROBE_OBJ} ${FIBERCPU_USAGE_JSON}
-        DEPENDS ${FIBERCPU_PROBE_OBJ} ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/extract_stencils_obj.py
-        COMMENT "Analyzing DecodedOp field usage from probes"
-        VERBATIM
-    )
-
-    add_custom_command(
-        OUTPUT ${FIBERCPU_GENERATED_STENCILS_CPP}
-        COMMAND python3 ${FIBERCPU_STENCIL_GENERATOR} --mode=stencil --usage=${FIBERCPU_USAGE_JSON} $<TARGET_OBJECTS:fibercpu_core> ${FIBERCPU_GENERATED_STENCILS_CPP}
-        DEPENDS fibercpu_core ${FIBERCPU_STENCIL_GENERATOR} ${FIBERCPU_USAGE_JSON}
-        COMMENT "Generating optimized JIT stencil kernels (Pass 2)"
-        COMMAND_EXPAND_LISTS
-        VERBATIM
-    )
-
-    set(FIBERCPU_STENCIL_OBJ ${CMAKE_CURRENT_BINARY_DIR}/jit/stencil_kernels.o)
-    add_custom_command(
-        OUTPUT ${FIBERCPU_STENCIL_OBJ}
-        COMMAND ${CMAKE_CXX_COMPILER} ${FIBERCPU_JIT_COMPILE_FLAGS} -c ${FIBERCPU_GENERATED_STENCILS_CPP} -o ${FIBERCPU_STENCIL_OBJ}
-        DEPENDS ${FIBERCPU_GENERATED_STENCILS_CPP}
-        COMMENT "Compiling optimized JIT stencil kernels"
-        VERBATIM
-    )
-
-    add_custom_command(
-        OUTPUT ${FIBERCPU_GENERATED_STENCILS_INC}
-        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/extract_stencils_obj.py --mode=extract --usage=${FIBERCPU_USAGE_JSON} ${FIBERCPU_STENCIL_OBJ} ${FIBERCPU_GENERATED_STENCILS_INC}
-        DEPENDS ${FIBERCPU_STENCIL_OBJ} ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/extract_stencils_obj.py
-        COMMENT "Extracting final machine code stencils"
-        VERBATIM
-    )
-
-    add_custom_target(fibercpu_jit_stencils DEPENDS ${FIBERCPU_GENERATED_STENCILS_INC})
-endif()
-
-# Final library includes objects from core and the JIT sources
+# Final library includes objects from core
 set(FIBERCPU_LIBRARY_TYPE SHARED)
 if(FIBERCPU_BUILD_STATIC)
     set(FIBERCPU_LIBRARY_TYPE STATIC)
 endif()
 
 set(FIBERCPU_FINAL_SOURCES
-    ${SOURCES_JIT}
     $<TARGET_OBJECTS:fibercpu_core>
 )
-if(FIBERCPU_ENABLE_JIT)
-    list(APPEND FIBERCPU_FINAL_SOURCES ${FIBERCPU_STENCIL_OBJ})
-endif()
 
 add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${FIBERCPU_FINAL_SOURCES})
 set_target_properties(fibercpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
-if(FIBERCPU_ENABLE_JIT)
-    add_dependencies(fibercpu fibercpu_jit_stencils)
-endif()
 
 target_include_directories(fibercpu PRIVATE .)
 target_include_directories(fibercpu SYSTEM PRIVATE ${simde_SOURCE_DIR})
@@ -297,23 +189,12 @@ if(FIBERCPU_ENABLE_HANDLER_PROFILE)
     target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_ENABLE_HANDLER_PROFILE=1)
     target_compile_definitions(fibercpu PRIVATE FIBERCPU_ENABLE_HANDLER_PROFILE=1)
 endif()
-if(FIBERCPU_ENABLE_JCC_PROFILE)
-    target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_ENABLE_JCC_PROFILE=1)
-    target_compile_definitions(fibercpu PRIVATE FIBERCPU_ENABLE_JCC_PROFILE=1)
-endif()
 if(FIBERCPU_ENABLE_SUPEROPCODES)
     target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_ENABLE_SUPEROPCODES=1)
     target_compile_definitions(fibercpu PRIVATE FIBERCPU_ENABLE_SUPEROPCODES=1)
 else()
     target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_ENABLE_SUPEROPCODES=0)
     target_compile_definitions(fibercpu PRIVATE FIBERCPU_ENABLE_SUPEROPCODES=0)
-endif()
-if(FIBERCPU_ENABLE_JIT)
-    target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_ENABLE_JIT=1)
-    target_compile_definitions(fibercpu PRIVATE FIBERCPU_ENABLE_JIT=1)
-else()
-    target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_ENABLE_JIT=0)
-    target_compile_definitions(fibercpu PRIVATE FIBERCPU_ENABLE_JIT=0)
 endif()
 if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
     target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_HAVE_GENERATED_SUPEROPCODES=1)

@@ -3,7 +3,6 @@
 #include <limits>
 #include "decoder.h"
 #include "exec_utils.h"
-#include "jit/stencil.h"
 #include "logger.h"
 #include "specialization.h"
 #include "state.h"
@@ -48,20 +47,6 @@ extern ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, 
                                                       int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
                                                       uint64_t flags_cache);
 
-#ifdef FIBERCPU_ENABLE_JCC_PROFILE
-FORCE_INLINE void RecordConditionalBranchCacheResult(EmuState* state, const DecodedOp* op, bool cache_hit) {
-    if (!op->meta.flags.is_conditional_branch) return;
-    auto& counters = state->jcc_profile_counts[reinterpret_cast<uintptr_t>(op->handler)];
-    if (cache_hit) {
-        counters.cache_hit++;
-    } else {
-        counters.cache_miss++;
-    }
-}
-#else
-FORCE_INLINE void RecordConditionalBranchCacheResult(EmuState*, const DecodedOp*, bool) {}
-#endif
-
 template <ExtKind Kind>
 FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                                   int64_t instr_limit, mem::MicroTLB utlb,
@@ -87,7 +72,6 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
     auto header_ptr = reinterpret_cast<const BasicBlock*>(&header);
     auto entry = header_ptr->entry;
     if (header_ptr->MatchesChainTarget(target_eip)) [[likely]] {
-        RecordConditionalBranchCacheResult(state, op, true);
         state->last_block = next_block;
         instr_limit -= header_ptr->inst_count();
         DecodedOp* next_head = next_block->FirstOp();

@@ -114,8 +114,6 @@ static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT
                                                               int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
                                                               uint64_t flags_cache) {
     const uint32_t target_eip = branch;
-
-    RecordConditionalBranchCacheResult(state, op, false);
     auto it = state->block_cache.find(target_eip);
     BasicBlock* next_block = it == state->block_cache.end() ? &state->dummy_invalid_block : it->second;
 

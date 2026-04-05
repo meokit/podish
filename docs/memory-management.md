@@ -41,7 +41,7 @@ The native MMU lives in `libfibercpu`. It provides:
 - external-page mappings (`map_external_page`)
 - owned-page allocation
 - TLB flush
-- JIT code-cache reset
+- translated-block cache reset
 - mapping reprotect
 
 Relevant exported operations:
@@ -131,7 +131,7 @@ The current reconciliation step is:
 
 1. collect code-cache reset ranges since the engine's last seen sequence
 2. flush MMU TLB state for that engine
-3. reset JIT code cache for recorded ranges only
+3. reset translated block cache for recorded ranges only
 4. advance `AddressSpaceMapSequenceSeen`
 
 This is why:

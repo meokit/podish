@@ -12,19 +12,6 @@
 
 namespace fiberish {
 
-#ifdef FIBERCPU_ENABLE_JCC_PROFILE
-FORCE_INLINE void RecordConditionalBranchDecision(EmuState* state, const DecodedOp* op, bool taken) {
-    auto& counters = state->jcc_profile_counts[reinterpret_cast<uintptr_t>(op->handler)];
-    if (taken) {
-        counters.taken++;
-    } else {
-        counters.not_taken++;
-    }
-}
-#else
-FORCE_INLINE void RecordConditionalBranchDecision(EmuState*, const DecodedOp*, bool) {}
-#endif
-
 template <bool IsRel8>
 FORCE_INLINE LogicFlow OpJmp_Rel_Internal(LogicFuncParams) {
     // E9: JMP rel32, EB: JMP rel8
@@ -38,12 +25,10 @@ FORCE_INLINE LogicFlow OpJcc_Rel_Internal(LogicFuncParams) {
     // 0F 8x: Jcc rel32, 7x: Jcc rel8
     bool taken = CheckConditionFixed<Cond>(flags_cache);
     if (taken) {
-        RecordConditionalBranchDecision(state, op, true);
         (void)IsRel8;
         *branch = GetControlTargetEip(op);
         return LogicFlow::ExitToBranch;
     }
-    RecordConditionalBranchDecision(state, op, false);
     return LogicFlow::Continue;
 }
 
@@ -124,11 +109,9 @@ FORCE_INLINE LogicFlow OpJecxz(LogicFuncParams) {
     }
 
     if (jump) {
-        RecordConditionalBranchDecision(state, op, true);
         *branch = GetControlTargetEip(op);
         return LogicFlow::ExitToBranch;
     }
-    RecordConditionalBranchDecision(state, op, false);
     return LogicFlow::Continue;
 }
 
@@ -151,11 +134,9 @@ FORCE_INLINE LogicFlow OpLoop_Internal(LogicFuncParams) {
     }
 
     if (jump) {
-        RecordConditionalBranchDecision(state, op, true);
         *branch = GetControlTargetEip(op);
         return LogicFlow::ExitToBranch;
     }
-    RecordConditionalBranchDecision(state, op, false);
     return LogicFlow::Continue;
 }
 

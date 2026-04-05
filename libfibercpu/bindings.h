@@ -160,9 +160,6 @@ typedef struct {
     uint64_t block_concat_reject_size_limit;
     uint64_t block_concat_reject_loop;
     uint64_t block_concat_reject_target_missing;
-    uint64_t jit_compile_attempts;
-    uint64_t jit_compile_success;
-    uint64_t jit_compile_failure;
 } X86_BlockStats;
 
 void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats);
@@ -190,17 +187,6 @@ typedef struct {
 
 size_t X86_GetHandlerProfileCount(EmuState* state);
 size_t X86_GetHandlerProfileStats(EmuState* state, X86_HandlerProfileEntry* buffer, size_t max_count);
-
-typedef struct {
-    void* handler;
-    uint64_t taken;
-    uint64_t not_taken;
-    uint64_t cache_hit;
-    uint64_t cache_miss;
-} X86_JccProfileEntry;
-
-size_t X86_GetJccProfileCount(EmuState* state);
-size_t X86_GetJccProfileStats(EmuState* state, X86_JccProfileEntry* buffer, size_t max_count);
 
 // Block Coverage
 // Returns pointer to internal BasicBlock structures

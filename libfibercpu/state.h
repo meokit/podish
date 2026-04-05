@@ -64,9 +64,6 @@ struct BlockStats {
     uint64_t block_concat_reject_size_limit = 0;
     uint64_t block_concat_reject_loop = 0;
     uint64_t block_concat_reject_target_missing = 0;
-    uint64_t jit_compile_attempts = 0;
-    uint64_t jit_compile_success = 0;
-    uint64_t jit_compile_failure = 0;
 
     void Record(uint32_t inst_count, BlockStopReason reason) {
         block_count++;
@@ -74,13 +71,6 @@ struct BlockStats {
         stop_reason_counts[static_cast<size_t>(reason)]++;
         inst_histogram[std::min<uint32_t>(inst_count, 64)]++;
     }
-};
-
-struct JccProfileCounters {
-    uint64_t taken = 0;
-    uint64_t not_taken = 0;
-    uint64_t cache_hit = 0;
-    uint64_t cache_miss = 0;
 };
 
 enum class PendingMemOp : uint8_t {
@@ -151,9 +141,6 @@ struct EmuState {
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     ankerl::unordered_dense::map<uintptr_t, uint64_t> handler_exec_counts;
     DecodedOp* current_block_head = nullptr;
-#endif
-#ifdef FIBERCPU_ENABLE_JCC_PROFILE
-    ankerl::unordered_dense::map<uintptr_t, JccProfileCounters> jcc_profile_counts;
 #endif
 
     // TSC State

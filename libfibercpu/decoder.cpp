@@ -8,46 +8,12 @@
 #include "dfe_lut.h"
 #include "dispatch.h"
 #include "exec_utils.h"  // For Flag Masks
-#if FIBERCPU_ENABLE_JIT
-#include "jit/block_builder.h"
-#endif
-#include "ops.h"  // For g_Handlers
+#include "ops.h"         // For g_Handlers
 #include "specialization.h"
 #include "state.h"
 #include "superopcodes.h"
 
 namespace fiberish {
-
-namespace {
-#if FIBERCPU_ENABLE_JIT
-bool JitDebugEnabled() {
-#ifdef FIBERCPU_ENABLE_JIT_DEBUG_LOG
-    static bool enabled = [] {
-        const char* value = std::getenv("FIBERCPU_JIT_DEBUG");
-        return value != nullptr && value[0] != '\0' && value[0] != '0';
-    }();
-    return enabled;
-#else
-    return false;
-#endif
-}
-
-void JitDebugLog(const char* fmt, ...) {
-#ifdef FIBERCPU_ENABLE_JIT_DEBUG_LOG
-    if (!JitDebugEnabled()) return;
-    FILE* fp = std::fopen("/tmp/fibercpu_jit.log", "a");
-    if (!fp) return;
-    va_list args;
-    va_start(args, fmt);
-    std::vfprintf(fp, fmt, args);
-    va_end(args);
-    std::fclose(fp);
-#else
-    (void)fmt;
-#endif
-}
-#endif
-}  // namespace
 
 alignas(64) static const uint8_t kControlFlowMaps[2][32] = {
     // Map 0: Primary opcodes (Jcc short, CALL, JMP, RET, LOOP, INT, HLT, etc.)
@@ -103,11 +69,6 @@ static bool UsesControlFlowCacheStorage(uint16_t handler_index) {
         handler_index == 0xC3 || (handler_index >= 0xE0 && handler_index <= 0xE3)) {
         return true;
     }
-    return (handler_index >= 0x70 && handler_index <= 0x7F) || (handler_index >= 0x180 && handler_index <= 0x18F);
-}
-
-static bool IsConditionalBranchHandlerIndex(uint16_t handler_index) {
-    if (handler_index >= 0xE0 && handler_index <= 0xE3) return true;
     return (handler_index >= 0x70 && handler_index <= 0x7F) || (handler_index >= 0x180 && handler_index <= 0x18F);
 }
 
@@ -353,8 +314,6 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
         HandlerFunc ud2 = g_Handlers[0x10B];
         op->handler = ud2;
     }
-
-    op->meta.flags.is_conditional_branch = IsConditionalBranchHandlerIndex(*handler_index);
 
     return true;
 }
@@ -797,29 +756,6 @@ finalize:
     }
 
     block->entry = block->FirstOp()->handler;
-    block->jit_code = nullptr;
-
-    // Try JIT compilation
-#if FIBERCPU_ENABLE_JIT
-    if constexpr (true) {
-        state->block_stats.jit_compile_attempts++;
-        auto* jcb = jit::BlockBuilder::Get().CompileBlock(block);
-        if (jcb) {
-            state->block_stats.jit_compile_success++;
-            block->entry = reinterpret_cast<HandlerFunc>(jcb->entry);
-            if (JitDebugEnabled()) {
-                JitDebugLog("[jit] enable block start=%08x entry=%p code=%p size=%zu\n", block->start_eip(),
-                            reinterpret_cast<void*>(block->entry), jcb->entry, jcb->code_size);
-            }
-        } else if (JitDebugEnabled()) {
-            state->block_stats.jit_compile_failure++;
-            JitDebugLog("[jit] fallback block start=%08x entry=%p\n", block->start_eip(),
-                        reinterpret_cast<void*>(block->entry));
-        } else {
-            state->block_stats.jit_compile_failure++;
-        }
-    }
-#endif
 
     return block;
 }

@@ -231,14 +231,6 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial nuint GetHandlerProfileStats(IntPtr state, HandlerProfileEntry* buffer, nuint maxCount);
 
-    [LibraryImport(LibName, EntryPoint = "X86_GetJccProfileCount")]
-    [SuppressGCTransition]
-    public static partial nuint GetJccProfileCount(IntPtr state);
-
-    [LibraryImport(LibName, EntryPoint = "X86_GetJccProfileStats")]
-    [SuppressGCTransition]
-    public static partial nuint GetJccProfileStats(IntPtr state, JccProfileEntry* buffer, nuint maxCount);
-
     [LibraryImport(LibName, EntryPoint = "X86_GetBlockStats")]
     [SuppressGCTransition]
     public static partial void GetBlockStats(IntPtr state, BlockStats* stats);
@@ -290,12 +282,11 @@ public unsafe partial class X86Native
         }
     }
 
-    [StructLayout(LayoutKind.Sequential, Size = 64)]
+    [StructLayout(LayoutKind.Sequential, Size = 48)]
     public struct BasicBlock
     {
         public BasicBlockChainPrefix chain;
         public IntPtr entry;
-        public IntPtr jit_code;
         public uint end_eip;
         public uint slot_count;
         public uint sentinel_slot_index;
@@ -338,16 +329,6 @@ public unsafe partial class X86Native
         public ulong ExecCount;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    public struct JccProfileEntry
-    {
-        public IntPtr Handler;
-        public ulong Taken;
-        public ulong NotTaken;
-        public ulong CacheHit;
-        public ulong CacheMiss;
-    }
-
     public unsafe struct BlockStats
     {
         public ulong BlockCount;
@@ -363,9 +344,6 @@ public unsafe partial class X86Native
         public ulong BlockConcatRejectSizeLimit;
         public ulong BlockConcatRejectLoop;
         public ulong BlockConcatRejectTargetMissing;
-        public ulong JitCompileAttempts;
-        public ulong JitCompileSuccess;
-        public ulong JitCompileFailure;
     }
 }
 #endif

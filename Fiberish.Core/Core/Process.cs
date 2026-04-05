@@ -364,8 +364,8 @@ public class Process
         MemoryReleased = false;
         oldMem.ReleaseSharedRef(oldEngine);
 
-        // Clear old native MMU page tables + JIT cache.
-        // ResetAllCodeCache only clears JIT; ResetMemory also resets the native page directory
+        // Clear old native MMU page tables + translated block cache.
+        // ResetAllCodeCache only clears cached translated blocks; ResetMemory also resets the native page directory
         // so the new binary's pages are demand-faulted fresh (not stale from old image).
         Syscalls.CurrentSyscallEngine.ResetMemory();
 

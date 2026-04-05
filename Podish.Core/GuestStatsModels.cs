@@ -20,8 +20,6 @@ public sealed record GuestStatsSummary(
     GuestStatsBlockStats BlockStats,
     [property: JsonPropertyName("handler_profile")]
     GuestStatsHandlerProfileEntry[] HandlerProfile,
-    [property: JsonPropertyName("jcc_profile")]
-    GuestStatsJccProfileEntry[] JccProfile,
     [property: JsonPropertyName("files")]
     GuestStatsFiles Files);
 
@@ -51,13 +49,7 @@ public sealed record GuestStatsBlockStats(
     [property: JsonPropertyName("block_concat_reject_loop")]
     ulong BlockConcatRejectLoop,
     [property: JsonPropertyName("block_concat_reject_target_missing")]
-    ulong BlockConcatRejectTargetMissing,
-    [property: JsonPropertyName("jit_compile_attempts")]
-    ulong JitCompileAttempts,
-    [property: JsonPropertyName("jit_compile_success")]
-    ulong JitCompileSuccess,
-    [property: JsonPropertyName("jit_compile_failure")]
-    ulong JitCompileFailure)
+    ulong BlockConcatRejectTargetMissing)
 {
     public static GuestStatsBlockStats FromSnapshot(BlockStatsSnapshot snapshot)
     {
@@ -74,10 +66,7 @@ public sealed record GuestStatsBlockStats(
             snapshot.BlockConcatRejectCrossPage,
             snapshot.BlockConcatRejectSizeLimit,
             snapshot.BlockConcatRejectLoop,
-            snapshot.BlockConcatRejectTargetMissing,
-            snapshot.JitCompileAttempts,
-            snapshot.JitCompileSuccess,
-            snapshot.JitCompileFailure);
+            snapshot.BlockConcatRejectTargetMissing);
     }
 }
 
@@ -86,18 +75,6 @@ public sealed record GuestStatsHandlerProfileEntry(
     string Handler,
     [property: JsonPropertyName("exec_count")]
     ulong ExecCount);
-
-public sealed record GuestStatsJccProfileEntry(
-    [property: JsonPropertyName("handler")]
-    string Handler,
-    [property: JsonPropertyName("taken")]
-    ulong Taken,
-    [property: JsonPropertyName("not_taken")]
-    ulong NotTaken,
-    [property: JsonPropertyName("cache_hit")]
-    ulong CacheHit,
-    [property: JsonPropertyName("cache_miss")]
-    ulong CacheMiss);
 
 public sealed record GuestStatsFiles(
     [property: JsonPropertyName("blocks")]

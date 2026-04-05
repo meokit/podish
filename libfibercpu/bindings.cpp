@@ -12,9 +12,6 @@
 #include "decoder.h"
 #include "dispatch.h"
 #include "hooks.h"
-#if FIBERCPU_ENABLE_JIT
-#include "jit/block_builder.h"
-#endif
 #include "logger.h"
 #include "mem/mmu.h"
 #include "ops.h"
@@ -193,7 +190,6 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
 
     concat->set_start_eip(a->start_eip());
     concat->end_eip = b->end_eip;
-    concat->jit_code = nullptr;
     concat->set_inst_count(concat_inst_count);
     concat->slot_count = concat_slot_count;
     concat->sentinel_slot_index = concat_inst_count;
@@ -229,7 +225,6 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
 
     concat->set_start_eip(a->start_eip());
     concat->end_eip = b->end_eip;
-    concat->jit_code = nullptr;
     concat->set_inst_count(concat_inst_count);
     concat->slot_count = concat_slot_count;
     concat->sentinel_slot_index = concat_inst_count;
@@ -254,23 +249,6 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
     ApplySuperOpcodesToBlockOps(dst, concat_inst_count);
     concat->entry = concat->FirstOp()->handler;
     return concat;
-}
-
-static void MaybeJitCompileBlock(EmuState* state, BasicBlock* block) {
-#if FIBERCPU_ENABLE_JIT
-    if (!state || !block) return;
-    state->block_stats.jit_compile_attempts++;
-    auto* jcb = jit::BlockBuilder::Get().CompileBlock(block);
-    if (jcb) {
-        state->block_stats.jit_compile_success++;
-        block->entry = reinterpret_cast<HandlerFunc>(jcb->entry);
-    } else {
-        state->block_stats.jit_compile_failure++;
-    }
-#else
-    (void)state;
-    (void)block;
-#endif
 }
 
 static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuState* state, uint32_t eip,
@@ -313,7 +291,6 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
 
     BasicBlock* concat_block = is_direct_jmp ? BuildDirectJmpBlockConcat(state, new_block, successor_block)
                                              : BuildJccFallthroughBlockConcat(state, new_block, successor_block);
-    MaybeJitCompileBlock(state, concat_block);
     state->block_stats.block_concat_success++;
     if (is_direct_jmp) {
         state->block_stats.block_concat_success_direct_jmp++;
@@ -349,7 +326,6 @@ static void InitializeDummyInvalidBlock(EmuState* state) {
     block.fallthrough_eip = 0;
     block.exec_count = 0;
     block.entry = nullptr;
-    block.jit_code = nullptr;
 }
 
 // ----------------------------------------------------------------------------
@@ -721,9 +697,6 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     state->handler_exec_counts.clear();
     state->current_block_head = nullptr;
 #endif
-#ifdef FIBERCPU_ENABLE_JCC_PROFILE
-    state->jcc_profile_counts.clear();
-#endif
     uint64_t total_run_insts = 0;
 
     // Reset chaining state for this run
@@ -865,9 +838,6 @@ void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats) {
     stats->block_concat_reject_size_limit = src.block_concat_reject_size_limit;
     stats->block_concat_reject_loop = src.block_concat_reject_loop;
     stats->block_concat_reject_target_missing = src.block_concat_reject_target_missing;
-    stats->jit_compile_attempts = src.jit_compile_attempts;
-    stats->jit_compile_success = src.jit_compile_success;
-    stats->jit_compile_failure = src.jit_compile_failure;
 }
 
 void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats) {
@@ -921,39 +891,6 @@ size_t X86_GetHandlerProfileStats(EmuState* state, X86_HandlerProfileEntry* buff
         if (i == max_count) break;
         buffer[i].handler = reinterpret_cast<void*>(handler);
         buffer[i].exec_count = exec_count;
-        i++;
-    }
-    return total;
-#else
-    (void)state;
-    (void)buffer;
-    (void)max_count;
-    return 0;
-#endif
-}
-
-size_t X86_GetJccProfileCount(EmuState* state) {
-#ifdef FIBERCPU_ENABLE_JCC_PROFILE
-    return state ? state->jcc_profile_counts.size() : 0;
-#else
-    (void)state;
-    return 0;
-#endif
-}
-
-size_t X86_GetJccProfileStats(EmuState* state, X86_JccProfileEntry* buffer, size_t max_count) {
-#ifdef FIBERCPU_ENABLE_JCC_PROFILE
-    const size_t total = state ? state->jcc_profile_counts.size() : 0;
-    if (!state || !buffer || max_count == 0) return total;
-
-    size_t i = 0;
-    for (const auto& [handler, counters] : state->jcc_profile_counts) {
-        if (i == max_count) break;
-        buffer[i].handler = reinterpret_cast<void*>(handler);
-        buffer[i].taken = counters.taken;
-        buffer[i].not_taken = counters.not_taken;
-        buffer[i].cache_hit = counters.cache_hit;
-        buffer[i].cache_miss = counters.cache_miss;
         i++;
     }
     return total;

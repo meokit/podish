@@ -318,7 +318,7 @@ The current `benchmark/podish_perf/runner.py` now provides a usable end-to-end f
 ### Existing Capabilities
 
 - Supports batch running samples for fixed workloads
-- Supports `--jit-handler-profile-block-dump`
+- Supports block dump collection
 - Supports automatically calling `scripts/analyze_blocks.py`
 - Supports block-local adjacency mining over decoded op streams
 - Supports `--aggregate-superopcode-candidates`
@@ -352,7 +352,7 @@ The old gaps around n-gram analysis and cross-sample aggregation are no longer t
    The aggregation pipeline should explicitly encode anchor-neighbor def-use affinity, rather than treating every adjacent pair equally.
 
 4. CLI shape is still somewhat historical  
-   `--jit-handler-profile-block-dump` remains the main switch, even though the pipeline has grown beyond simple handler profiling.
+   Some naming still reflects older profiling-oriented workflows rather than the current block-analysis pipeline.
 
 ### Conclusion
 
@@ -424,13 +424,12 @@ Current options already include:
 
 - `--block-n-gram 2`
 - `--aggregate-superopcode-candidates`
-- `--jit-handler-profile-block-dump`
+- block dump related switches
 
 Among these:
 
-- `--jit-handler-profile-block-dump` can be kept for compatibility
 - `--block-n-gram 2` can remain as the block-window width, but selection should be anchor-driven rather than pure n-gram ranking
-- Long-term it is recommended to converge to more general block stats / adjacency semantics, rather than binding functionality to "handler profile build"
+- Long-term it is recommended to converge on more general block stats / adjacency semantics
 
 ### Step 5: Expand Workload Coverage
 
@@ -486,19 +485,7 @@ It is recommended that after all samples are complete, the runner can optionally
 
 This is much more efficient than manually flipping through multiple `blocks_analysis.json`.
 
-Now this step can already be run directly; the recommended flow is:
-
-```bash
-python3 benchmark/podish_perf/runner.py \
-  --engine jit \
-  --case run \
-  --repeat 3 \
-  --jit-handler-profile-block-dump \
-  --block-n-gram 2 \
-  --aggregate-superopcode-candidates
-```
-
-Or aggregate separately on existing results directories:
+Now this step can already be run directly by first collecting block-dump samples with the current runner workflow, then aggregating the exported `guest-stats` directories separately:
 
 ```bash
 dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- \

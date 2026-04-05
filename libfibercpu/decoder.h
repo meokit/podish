@@ -41,9 +41,6 @@
 namespace fiberish {
 struct EmuState;
 struct DecodedOp;
-namespace jit {
-struct JitCodeBlock;
-}
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
 using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
@@ -107,7 +104,7 @@ union Meta {
         uint8_t has_imm : 1;
         uint8_t is_control_flow : 1;
         uint8_t no_flags : 1;
-        uint8_t is_conditional_branch : 1;
+        uint8_t reserved0 : 1;
         uint8_t ext_kind : 2;
     } flags;
 };
@@ -289,7 +286,6 @@ struct BasicBlockChainPrefix {
 struct alignas(16) BasicBlock {
     BasicBlockChainPrefix chain;
     HandlerFunc entry = nullptr;
-    jit::JitCodeBlock* jit_code = nullptr;
     uint32_t end_eip;
     uint32_t slot_count;           // Total decoded ops including sentinel
     uint32_t sentinel_slot_index;  // Index where sentinel starts
@@ -339,11 +335,9 @@ static_assert(offsetof(BasicBlock, entry) == 8, "BasicBlock: entry must start at
 static_assert(sizeof(BasicBlockChainPrefix) == 8, "BasicBlockChainPrefix must be exactly 8 bytes");
 
 #if INTPTR_MAX == INT32_MAX
-static_assert(offsetof(BasicBlock, jit_code) == 12, "BasicBlock: jit_code must start at offset 12 on 32-bit");
 static_assert(offsetof(BasicBlock, slots) == 48, "BasicBlock: slots must start at offset 48 on 32-bit");
 #else
-static_assert(offsetof(BasicBlock, jit_code) == 16, "BasicBlock: jit_code must start at offset 16");
-static_assert(offsetof(BasicBlock, slots) == 64, "BasicBlock: slots must start at offset 64");
+static_assert(offsetof(BasicBlock, slots) == 48, "BasicBlock: slots must start at offset 48");
 #endif
 
 // Decoder Logic

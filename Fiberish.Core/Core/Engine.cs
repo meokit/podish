@@ -701,7 +701,7 @@ public class Engine : IDisposable
     }
 
     /// <summary>
-    ///     Reset entire native MMU page directory + JIT cache.
+    ///     Reset entire native MMU page directory + translated block cache.
     ///     Used during execve to clear all stale native pages before loading new binary.
     /// </summary>
     public void ResetMemory()
@@ -743,31 +743,6 @@ public class Engine : IDisposable
         return result;
     }
 
-    public unsafe JccProfileStat[] GetJccProfileStats()
-    {
-        var count = (int)X86Native.GetJccProfileCount(State);
-        if (count <= 0) return Array.Empty<JccProfileStat>();
-
-        var buffer = new X86Native.JccProfileEntry[count];
-        fixed (X86Native.JccProfileEntry* p = buffer)
-        {
-            var actual = (int)X86Native.GetJccProfileStats(State, p, (nuint)buffer.Length);
-            if (actual <= 0) return Array.Empty<JccProfileStat>();
-            if (actual < buffer.Length) Array.Resize(ref buffer, actual);
-        }
-
-        var result = new JccProfileStat[buffer.Length];
-        for (var i = 0; i < buffer.Length; i++)
-            result[i] = new JccProfileStat(
-                buffer[i].Handler,
-                buffer[i].Taken,
-                buffer[i].NotTaken,
-                buffer[i].CacheHit,
-                buffer[i].CacheMiss);
-
-        return result;
-    }
-
     public unsafe BlockStatsSnapshot GetBlockStats()
     {
         X86Native.BlockStats native = default;
@@ -793,10 +768,7 @@ public class Engine : IDisposable
             native.BlockConcatRejectCrossPage,
             native.BlockConcatRejectSizeLimit,
             native.BlockConcatRejectLoop,
-            native.BlockConcatRejectTargetMissing,
-            native.JitCompileAttempts,
-            native.JitCompileSuccess,
-            native.JitCompileFailure);
+            native.BlockConcatRejectTargetMissing);
     }
 
     public int GetBlockCount()
@@ -931,13 +903,6 @@ public class Engine : IDisposable
 
 public readonly record struct HandlerProfileStat(IntPtr Handler, ulong ExecCount);
 
-public readonly record struct JccProfileStat(
-    IntPtr Handler,
-    ulong Taken,
-    ulong NotTaken,
-    ulong CacheHit,
-    ulong CacheMiss);
-
 public readonly record struct BlockStatsSnapshot(
     ulong BlockCount,
     ulong TotalBlockInsts,
@@ -951,7 +916,4 @@ public readonly record struct BlockStatsSnapshot(
     ulong BlockConcatRejectCrossPage,
     ulong BlockConcatRejectSizeLimit,
     ulong BlockConcatRejectLoop,
-    ulong BlockConcatRejectTargetMissing,
-    ulong JitCompileAttempts,
-    ulong JitCompileSuccess,
-    ulong JitCompileFailure);
+    ulong BlockConcatRejectTargetMissing);
