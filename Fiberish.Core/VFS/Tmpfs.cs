@@ -160,14 +160,14 @@ public class TmpfsInode : IndexedMemoryInode
     public bool AllowSealing { get; set; }
     public uint SealFlags { get; private set; } = F_SEAL_SEAL;
 
+    private TmpfsSuperBlock TmpfsSb => (TmpfsSuperBlock)SuperBlock;
+
     public void InitializeMemfd(bool allowSealing)
     {
         IsMemfd = true;
         AllowSealing = allowSealing;
         SealFlags = allowSealing ? 0u : F_SEAL_SEAL;
     }
-
-    private TmpfsSuperBlock TmpfsSb => (TmpfsSuperBlock)SuperBlock;
 
     public int AddSeals(uint seals)
     {

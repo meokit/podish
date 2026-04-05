@@ -295,6 +295,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             using var session = _repository.OpenMetadataSession();
             SyncSelf(session);
         }
+
         return rc;
     }
 
@@ -738,6 +739,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             using var session = _repository.OpenMetadataSession();
             SyncSelf(session);
         }
+
         return rc;
     }
 
@@ -873,6 +875,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             using var session = _repository.OpenMetadataSession();
             session.SetXAttr((long)Ino, name, value);
         }
+
         return rc;
     }
 
@@ -884,6 +887,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             using var session = _repository.OpenMetadataSession();
             session.RemoveXAttr((long)Ino, name);
         }
+
         return rc;
     }
 

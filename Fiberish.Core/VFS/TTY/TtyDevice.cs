@@ -46,7 +46,7 @@ public class TtyDevice
 
     /// <summary>
     ///     True when the hardware input buffer contains unread bytes.
-    ///     Unlike <see cref="HasInterrupt"/>, this excludes resize-only notifications.
+    ///     Unlike <see cref="HasInterrupt" />, this excludes resize-only notifications.
     /// </summary>
     public bool HasBufferedInput => _interruptFlag;
 

@@ -175,6 +175,72 @@ public partial class SyscallManager
         return 0;
     }
 
+    private static bool IsValidSignalNumber(int signal)
+    {
+        return signal is >= 1 and <= 64;
+    }
+
+    private static int ValidatePosixTimerSigEvent(KernelScheduler scheduler, Process proc, in SigEvent sigEvent)
+    {
+        switch (sigEvent.Notify)
+        {
+            case LinuxConstants.SIGEV_SIGNAL:
+                return IsValidSignalNumber(sigEvent.Signo) ? 0 : -(int)Errno.EINVAL;
+
+            case LinuxConstants.SIGEV_NONE:
+                return 0;
+
+            case LinuxConstants.SIGEV_THREAD_ID:
+                if (!IsValidSignalNumber(sigEvent.Signo)) return -(int)Errno.EINVAL;
+                var targetTask = scheduler.GetTask(sigEvent.Tid);
+                return targetTask != null && targetTask.Process == proc ? 0 : -(int)Errno.EINVAL;
+
+            case LinuxConstants.SIGEV_THREAD:
+                // SIGEV_THREAD is largely implemented in user space by libc/NPTL on Linux.
+                // The raw timer_create syscall in this emulator does not model spawning a new
+                // guest thread to run sigev_notify_function, so reject it explicitly instead of
+                // silently creating a timer that never notifies.
+                return -(int)Errno.EINVAL;
+
+            default:
+                return -(int)Errno.EINVAL;
+        }
+    }
+
+    private static SigInfo BuildPosixTimerSigInfo(PosixTimer timer)
+    {
+        return new SigInfo
+        {
+            Signo = timer.SigEvent.Signo,
+            Errno = 0,
+            Code = 2, // SI_TIMER
+            Pid = 0,
+            Uid = 0,
+            Value = timer.SigEvent.Value,
+            TimerId = timer.Id,
+            Overrun = timer.OverrunCount
+        };
+    }
+
+    private static void DeliverPosixTimerNotification(KernelScheduler scheduler, Process proc, PosixTimer timer)
+    {
+        switch (timer.SigEvent.Notify)
+        {
+            case LinuxConstants.SIGEV_NONE:
+                return;
+
+            case LinuxConstants.SIGEV_SIGNAL:
+                scheduler.SignalProcessInfo(proc.TGID, timer.SigEvent.Signo, BuildPosixTimerSigInfo(timer));
+                return;
+
+            case LinuxConstants.SIGEV_THREAD_ID:
+                var targetTask = scheduler.GetTask(timer.SigEvent.Tid);
+                if (targetTask?.Process == proc)
+                    targetTask.PostSignalInfo(BuildPosixTimerSigInfo(timer));
+                return;
+        }
+    }
+
     private async ValueTask<int> SysTimerGetTime32(Engine engine, uint timerId, uint currPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
@@ -282,22 +348,7 @@ public partial class SyscallManager
         {
             void OnTimerTick()
             {
-                if (timer.SigEvent.Notify == LinuxConstants.SIGEV_SIGNAL)
-                {
-                    // Send signal
-                    var info = new SigInfo
-                    {
-                        Signo = timer.SigEvent.Signo,
-                        Errno = 0,
-                        Code = 2, // SI_TIMER
-                        Pid = 0,
-                        Uid = 0,
-                        Value = timer.SigEvent.Value,
-                        TimerId = (int)timerId,
-                        Overrun = timer.OverrunCount
-                    };
-                    scheduler.SignalProcessInfo(proc.TGID, timer.SigEvent.Signo, info);
-                }
+                DeliverPosixTimerNotification(scheduler, proc, timer);
 
                 if (timer.IntervalMs > 0)
                 {
@@ -367,22 +418,7 @@ public partial class SyscallManager
         {
             void OnTimerTick()
             {
-                if (timer.SigEvent.Notify == LinuxConstants.SIGEV_SIGNAL)
-                {
-                    // Send signal
-                    var info = new SigInfo
-                    {
-                        Signo = timer.SigEvent.Signo,
-                        Errno = 0,
-                        Code = 2, // SI_TIMER
-                        Pid = 0,
-                        Uid = 0,
-                        Value = timer.SigEvent.Value,
-                        TimerId = (int)timerId,
-                        Overrun = timer.OverrunCount
-                    };
-                    scheduler.SignalProcessInfo(proc.TGID, timer.SigEvent.Signo, info);
-                }
+                DeliverPosixTimerNotification(scheduler, proc, timer);
 
                 if (timer.IntervalMs > 0)
                 {
@@ -425,6 +461,7 @@ public partial class SyscallManager
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var proc = task.Process;
+        var scheduler = task.CommonKernel;
         var timerId = proc.NextPosixTimerId++;
 
         SigEvent sigEvent = default;
@@ -450,6 +487,9 @@ public partial class SyscallManager
             sigEvent.Signo = LinuxConstants.SIGALRM;
             sigEvent.Value = (ulong)timerId;
         }
+
+        var validateSigEventRc = ValidatePosixTimerSigEvent(scheduler, proc, sigEvent);
+        if (validateSigEventRc < 0) return validateSigEventRc;
 
         var timer = new PosixTimer(timerId, (int)clockId, sigEvent, proc);
         proc.PosixTimers[timerId] = timer;

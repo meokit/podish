@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using Fiberish.Core;
 using Fiberish.Core.Net;
 using Fiberish.Core.VFS.TTY;
@@ -129,7 +130,7 @@ public class WaitSyscallTests
         const uint bufPtr = 0x3A000;
         env.MapUserPage(bufPtr);
 
-        var (fd, _) = CreateTty(env, vmin: 0, vtime: 1);
+        var (fd, _) = CreateTty(env, 0, 1);
 
         var pending = env.StartOnScheduler(() => env.Invoke("SysRead", (uint)fd, bufPtr, 8, 0, 0, 0));
         var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
@@ -144,7 +145,7 @@ public class WaitSyscallTests
         const uint bufPtr = 0x3B000;
         env.MapUserPage(bufPtr);
 
-        var (fd, tty) = CreateTty(env, vmin: 2, vtime: 1);
+        var (fd, tty) = CreateTty(env, 2, 1);
 
         var pending = env.StartOnScheduler(() => env.Invoke("SysRead", (uint)fd, bufPtr, 8, 0, 0, 0));
         Assert.False(pending.IsCompleted);
@@ -155,7 +156,7 @@ public class WaitSyscallTests
         var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(1, rc);
-        Assert.Equal("a", System.Text.Encoding.ASCII.GetString(env.Read(bufPtr, 1)));
+        Assert.Equal("a", Encoding.ASCII.GetString(env.Read(bufPtr, 1)));
     }
 
     [Fact]
@@ -165,7 +166,7 @@ public class WaitSyscallTests
         const uint bufPtr = 0x3C000;
         env.MapUserPage(bufPtr);
 
-        var (fd, tty) = CreateTty(env, vmin: 2, vtime: 1);
+        var (fd, tty) = CreateTty(env, 2, 1);
 
         var pending = env.StartOnScheduler(() => env.Invoke("SysRead", (uint)fd, bufPtr, 8, 0, 0, 0));
         Assert.False(pending.IsCompleted);
@@ -177,7 +178,7 @@ public class WaitSyscallTests
         var rc = await pending.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(2, rc);
-        Assert.Equal("ab", System.Text.Encoding.ASCII.GetString(env.Read(bufPtr, 2)));
+        Assert.Equal("ab", Encoding.ASCII.GetString(env.Read(bufPtr, 2)));
     }
 
     [Fact]
@@ -261,6 +262,45 @@ public class WaitSyscallTests
     }
 
     [Fact]
+    public async Task ClockGetTime64_SupportedApproximateClocks_ReturnSuccessAndValidTimespec()
+    {
+        using var env = new TestEnv();
+        const uint tsPtr = 0x43000;
+        env.MapUserPage(tsPtr);
+
+        foreach (var clockId in new[]
+                 {
+                     LinuxConstants.CLOCK_REALTIME_COARSE,
+                     LinuxConstants.CLOCK_MONOTONIC_RAW,
+                     LinuxConstants.CLOCK_MONOTONIC_COARSE,
+                     LinuxConstants.CLOCK_BOOTTIME
+                 })
+        {
+            var rc = await env.Invoke("SysClockGetTime64", (uint)clockId, tsPtr, 0, 0, 0, 0);
+            Assert.Equal(0, rc);
+
+            var ts = env.Read(tsPtr, 16);
+            var sec = BinaryPrimitives.ReadInt64LittleEndian(ts.AsSpan(0, 8));
+            var nsec = BinaryPrimitives.ReadInt64LittleEndian(ts.AsSpan(8, 8));
+            Assert.True(sec >= 0);
+            Assert.InRange(nsec, 0, 999_999_999);
+        }
+    }
+
+    [Fact]
+    public async Task ClockGetTime64_CpuAccountingClocks_ReturnEinval()
+    {
+        using var env = new TestEnv();
+        const uint tsPtr = 0x44000;
+        env.MapUserPage(tsPtr);
+
+        Assert.Equal(-(int)Errno.EINVAL,
+            await env.Invoke("SysClockGetTime64", LinuxConstants.CLOCK_PROCESS_CPUTIME_ID, tsPtr, 0, 0, 0, 0));
+        Assert.Equal(-(int)Errno.EINVAL,
+            await env.Invoke("SysClockGetTime64", LinuxConstants.CLOCK_THREAD_CPUTIME_ID, tsPtr, 0, 0, 0, 0));
+    }
+
+    [Fact]
     public async Task FutexWait_Timeout_ReturnsEtimedout()
     {
         using var env = new TestEnv();
@@ -275,7 +315,7 @@ public class WaitSyscallTests
         BinaryPrimitives.WriteInt32LittleEndian(ts.AsSpan(4, 4), 50_000_000);
         env.Write(timeoutPtr, ts);
 
-        var rc = await env.Invoke("SysFutex", futexPtr, (uint)LinuxConstants.FUTEX_WAIT, 1, timeoutPtr, 0, 0);
+        var rc = await env.Invoke("SysFutex", futexPtr, LinuxConstants.FUTEX_WAIT, 1, timeoutPtr, 0, 0);
         Assert.Equal(-(int)Errno.ETIMEDOUT, rc);
     }
 
@@ -288,7 +328,8 @@ public class WaitSyscallTests
         env.MapUserPage(sopsPtr);
         env.MapUserPage(timeoutPtr);
 
-        var semid = await env.Invoke("SysSemGet", LinuxConstants.IPC_PRIVATE, 1, LinuxConstants.IPC_CREAT | 0x1FF, 0, 0, 0);
+        var semid = await env.Invoke("SysSemGet", LinuxConstants.IPC_PRIVATE, 1, LinuxConstants.IPC_CREAT | 0x1FF, 0, 0,
+            0);
         Assert.True(semid >= 0);
 
         var sops = new byte[6];
@@ -532,6 +573,67 @@ public class WaitSyscallTests
             BinaryPrimitives.ReadUInt32LittleEndian(env.Read(eventsPtr, 12).AsSpan(0, 4)));
         Assert.Equal(0x1122334455667788UL,
             BinaryPrimitives.ReadUInt64LittleEndian(env.Read(eventsPtr, 12).AsSpan(4, 8)));
+    }
+
+    [Fact]
+    public async Task EpollCtl_EpollWakeup_IsAcceptedAsNoOpHint()
+    {
+        using var env = new TestEnv();
+        const uint eventsPtr = 0x2A000;
+        const uint epollEventPtr = 0x2B000;
+        env.MapUserPage(eventsPtr);
+        env.MapUserPage(epollEventPtr);
+
+        var epfd = await Invoke(env, "SysEpollCreate1", 0, 0, 0, 0, 0, 0);
+        Assert.True(epfd >= 0);
+
+        var eventFd = new EventFdInode(111, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        var epollEvent = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(epollEvent.AsSpan(0, 4),
+            LinuxConstants.EPOLLIN | LinuxConstants.EPOLLWAKEUP);
+        BinaryPrimitives.WriteUInt64LittleEndian(epollEvent.AsSpan(4, 8), 0xABCDEF0123456789UL);
+        env.Write(epollEventPtr, epollEvent);
+
+        Assert.Equal(0, await Invoke(env, "SysEpollCtl", (uint)epfd, LinuxConstants.EPOLL_CTL_ADD, (uint)fd,
+            epollEventPtr, 0, 0));
+
+        var payload = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(payload, 1);
+        Assert.Equal(8, eventFd.WriteFromHost(null, file, payload, 0));
+
+        var rc = await Invoke(env, "SysEpollPwait2", (uint)epfd, eventsPtr, 1, 0, 0, 0);
+        Assert.Equal(1, rc);
+        Assert.Equal(LinuxConstants.EPOLLIN,
+            BinaryPrimitives.ReadUInt32LittleEndian(env.Read(eventsPtr, 12).AsSpan(0, 4)));
+    }
+
+    [Fact]
+    public async Task EpollCtl_EpollExclusive_ReturnsEinval()
+    {
+        using var env = new TestEnv();
+        const uint epollEventPtr = 0x2C000;
+        env.MapUserPage(epollEventPtr);
+
+        var epfd = await Invoke(env, "SysEpollCreate1", 0, 0, 0, 0, 0, 0);
+        Assert.True(epfd >= 0);
+
+        var eventFd = new EventFdInode(112, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+
+        var epollEvent = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(epollEvent.AsSpan(0, 4),
+            LinuxConstants.EPOLLIN | LinuxConstants.EPOLLEXCLUSIVE);
+        env.Write(epollEventPtr, epollEvent);
+
+        var rc = await Invoke(env, "SysEpollCtl", (uint)epfd, LinuxConstants.EPOLL_CTL_ADD, (uint)fd, epollEventPtr, 0,
+            0);
+        Assert.Equal(-(int)Errno.EINVAL, rc);
     }
 
     [Fact]
@@ -911,6 +1013,43 @@ public class WaitSyscallTests
         env.Write(tsPtr, ts);
     }
 
+    private static (int rfd, int wfd) ReadPipeFds(TestEnv env, uint fdsAddr)
+    {
+        var buf = env.Read(fdsAddr, 8);
+        var rfd = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
+        var wfd = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+        return (rfd, wfd);
+    }
+
+    private static (int fd, TtyDiscipline tty) CreateTty(TestEnv env, byte vmin, byte vtime)
+    {
+        env.Process.PGID = 100;
+        env.Process.SID = 100;
+
+        var tty = new TtyDiscipline(new TestTtyDriver(), new TestSignalBroadcaster(), NullLogger.Instance,
+            env.Scheduler)
+        {
+            ForegroundPgrp = 100,
+            SessionId = 100
+        };
+        env.Process.ControllingTty = tty;
+
+        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
+        tty.GetAttr(termios);
+        var lflag = BitConverter.ToUInt32(termios, 12);
+        lflag &= ~2u; // ICANON off
+        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
+        termios[17 + 6] = vmin;
+        termios[17 + 5] = vtime;
+        tty.SetAttr(0, termios);
+
+        var inode = new ConsoleInode(env.SyscallManager.MemfdSuperBlock, true, tty);
+        var file = new LinuxFile(new Dentry("tty-stdin", inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDONLY, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+        return (fd, tty);
+    }
+
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     private struct PollFd
     {
@@ -1133,42 +1272,6 @@ public class WaitSyscallTests
         {
             OwnerThreadIdField.SetValue(Scheduler, 0);
         }
-    }
-
-    private static (int rfd, int wfd) ReadPipeFds(TestEnv env, uint fdsAddr)
-    {
-        var buf = env.Read(fdsAddr, 8);
-        var rfd = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
-        var wfd = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
-        return (rfd, wfd);
-    }
-
-    private static (int fd, TtyDiscipline tty) CreateTty(TestEnv env, byte vmin, byte vtime)
-    {
-        env.Process.PGID = 100;
-        env.Process.SID = 100;
-
-        var tty = new TtyDiscipline(new TestTtyDriver(), new TestSignalBroadcaster(), NullLogger.Instance, env.Scheduler)
-        {
-            ForegroundPgrp = 100,
-            SessionId = 100
-        };
-        env.Process.ControllingTty = tty;
-
-        var termios = new byte[LinuxConstants.TERMIOS_SIZE_I386];
-        tty.GetAttr(termios);
-        var lflag = BitConverter.ToUInt32(termios, 12);
-        lflag &= ~2u; // ICANON off
-        BitConverter.GetBytes(lflag).CopyTo(termios, 12);
-        termios[17 + 6] = vmin;
-        termios[17 + 5] = vtime;
-        tty.SetAttr(0, termios);
-
-        var inode = new ConsoleInode(env.SyscallManager.MemfdSuperBlock, true, tty);
-        var file = new LinuxFile(new Dentry("tty-stdin", inode, null, env.SyscallManager.MemfdSuperBlock),
-            FileFlags.O_RDONLY, env.SyscallManager.AnonMount);
-        var fd = env.SyscallManager.AllocFD(file);
-        return (fd, tty);
     }
 
     private sealed class TestSignalBroadcaster : ISignalBroadcaster

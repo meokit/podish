@@ -93,7 +93,7 @@ public partial class SyscallManager
 
     public int ReadPathArgument(uint addr, out string path, bool allowEmpty = false)
     {
-        var result = ReadUserString(addr, LinuxConstants.PathMax);
+        var result = ReadUserString(addr);
         path = result.Success ? result.Value : "";
         if (!result.Success) return result.ErrorCode;
         if (!allowEmpty && path.Length == 0) return -(int)Errno.ENOENT;

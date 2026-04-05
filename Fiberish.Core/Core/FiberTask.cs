@@ -69,11 +69,11 @@ public class FiberTask
     private int _pageFaultDepth;
     private Exception? _pendingAsyncSyscallError;
     private int _pendingAsyncSyscallResult;
-    private long _signalWaitId;
-    private ulong _signalWaitMask;
-    private SignalWaitKind _signalWaitKind;
 
     private bool _pendingFaultFromInterrupt;
+    private long _signalWaitId;
+    private SignalWaitKind _signalWaitKind;
+    private ulong _signalWaitMask;
     private KernelSyncContext? _synchronizationContext;
 
     public uint SyscallArg1;
@@ -180,14 +180,9 @@ public class FiberTask
     // Blocking Syscall Support
     public Func<ValueTask<int>>? PendingSyscall { get; set; }
     public Timer? BlockingTimer { get; set; }
-    public event Action<int>? SignalPosted;
 
-    internal enum SignalWaitKind
-    {
-        None,
-        WaitSet,
-        Interrupting
-    }
+    public bool OwnsCPU { get; set; } = true;
+    public event Action<int>? SignalPosted;
 
     private TaskStateScope EnterTaskStateScope([CallerMemberName] string? caller = null)
     {
@@ -233,8 +228,6 @@ public class FiberTask
         _handlingAsyncSyscall = false;
     }
 
-    public bool OwnsCPU { get; set; } = true;
-
     public bool TryFinalizeTaskRetirement()
     {
         if (!AsyncScope.TryFinalizeTaskRetirement())
@@ -249,14 +242,11 @@ public class FiberTask
         if (OwnsCPU)
         {
             if (CommonKernel.Runtime?.EnableGuestStatsCollection == true)
-            {
                 CommonKernel.Runtime.RetiredEngines.Enqueue(CPU);
-            }
             else
-            {
                 CPU.Dispose();
-            }
         }
+
         return true;
     }
 
@@ -417,6 +407,7 @@ public class FiberTask
                 _signalWaitMask = 0;
                 _signalWaitKind = SignalWaitKind.None;
             }
+
             var reason = _activeWaitReason;
             _activeWaitContinuation = null;
             _activeWaitReason = WakeReason.None;
@@ -735,22 +726,37 @@ public class FiberTask
                 oldMask = SignalMask;
                 hasAction = Process.SignalActions.TryGetValue(i, out action);
 
-                // ATOMIC MASKING: Apply mask before delivering to guest
-                // This prevents reentrancy if another signal arrives during stack setup
-                if (hasAction && action.Handler > 1) // Not SIG_IGN (1) or SIG_DFL (0)
-                {
-                    var handlerMask = action.Mask;
-                    if ((action.Flags & LinuxConstants.SA_NODEFER) == 0) handlerMask |= mask;
-
-                    Logger.LogDebug("[ProcessPendingSignals] Setting SignalMask to {Mask} from {SignalMask}",
-                        SignalMask, SignalMask | handlerMask);
-                    SignalMask |= handlerMask;
-                }
+                // ATOMIC MASKING: Apply mask before delivering to guest.
+                // This prevents reentrancy if another signal arrives during stack setup,
+                // while still honoring SA_RESETHAND one-shot semantics.
+                if (hasAction)
+                    ApplySignalHandlerEntryStateUnsafe(i, action, mask, "ProcessPendingSignals");
             }
 
             DeliverSignal(i, action, hasAction, oldMask, dequeuedInfo);
             break; // Only one per slice
         }
+    }
+
+    private void ApplySignalHandlerEntryStateUnsafe(int sig, SigAction action, ulong signalBit, string source)
+    {
+        if (action.Handler <= 1) return;
+
+        if ((action.Flags & LinuxConstants.SA_RESETHAND) != 0)
+        {
+            Process.SignalActions.Remove(sig);
+            Logger.LogDebug("[{Source}] Reset disposition for signal {Sig} to SIG_DFL due to SA_RESETHAND",
+                source, sig);
+        }
+
+        var handlerMask = action.Mask;
+        var autoBlockSelf = (action.Flags & (LinuxConstants.SA_NODEFER | LinuxConstants.SA_RESETHAND)) == 0;
+        if (autoBlockSelf)
+            handlerMask |= signalBit;
+
+        Logger.LogDebug("[{Source}] Setting SignalMask to {Mask} from {SignalMask}",
+            source, SignalMask, SignalMask | handlerMask);
+        SignalMask |= handlerMask;
     }
 
     public bool HasUnblockedPendingSignal()
@@ -966,6 +972,8 @@ public class FiberTask
                     AltStackSp, AltStackSize);
                 sp = AltStackSp + AltStackSize;
             }
+            // If SA_ONSTACK is requested but sigaltstack(2) has not installed an alternate
+            // stack, Linux falls back to the current user stack. Leaving sp unchanged matches that.
 
             // Return address (restorer or some trampoline)
             var retAddr = Process.Syscalls.RtSigReturnAddr;
@@ -1025,14 +1033,7 @@ public class FiberTask
                 : DequeueSignalUnsafe(sig);
             info = dequeued ?? new SigInfo { Signo = sig };
 
-            // Apply handler mask (same logic as ProcessPendingSignals)
-            if (action.Handler > 1)
-            {
-                var handlerMask = action.Mask;
-                if ((action.Flags & LinuxConstants.SA_NODEFER) == 0)
-                    handlerMask |= mask;
-                SignalMask |= handlerMask;
-            }
+            ApplySignalHandlerEntryStateUnsafe(sig, action, mask, "DeliverSignalForRestart");
         }
 
         DeliverSignal(sig, action, true, oldMask, info);
@@ -1124,7 +1125,15 @@ public class FiberTask
 
         // Wake up parent's wait4
         var ppid = Process.PPID;
-        if (ppid > 0) CommonKernel.SignalProcess(ppid, (int)Signal.SIGCHLD);
+        var parentProc = ppid > 0 ? CommonKernel.GetProcess(ppid) : null;
+        if (ppid > 0 && SyscallManager.ShouldNotifyParentOfChildStateChange(parentProc))
+            CommonKernel.SignalProcessInfo(ppid, (int)Signal.SIGCHLD, new SigInfo
+            {
+                Signo = (int)Signal.SIGCHLD,
+                Pid = Process.TGID,
+                Status = sig,
+                Code = 5 // CLD_STOPPED
+            });
     }
 
     private void ContinueBySignal()
@@ -1149,7 +1158,15 @@ public class FiberTask
         ExecutionMode = TaskExecutionMode.RunningGuest;
 
         var ppid = Process.PPID;
-        if (ppid > 0) CommonKernel.SignalProcess(ppid, (int)Signal.SIGCHLD);
+        var parentProc = ppid > 0 ? CommonKernel.GetProcess(ppid) : null;
+        if (ppid > 0 && SyscallManager.ShouldNotifyParentOfChildStateChange(parentProc))
+            CommonKernel.SignalProcessInfo(ppid, (int)Signal.SIGCHLD, new SigInfo
+            {
+                Signo = (int)Signal.SIGCHLD,
+                Pid = Process.TGID,
+                Status = (int)Signal.SIGCONT,
+                Code = 6 // CLD_CONTINUED
+            });
 
         // Reschedule task
         CommonKernel.Schedule(this);
@@ -1779,6 +1796,13 @@ public class FiberTask
     private static string FormatVmaName(VmArea vma)
     {
         return string.IsNullOrWhiteSpace(vma.Name) ? "<anonymous>" : vma.Name;
+    }
+
+    internal enum SignalWaitKind
+    {
+        None,
+        WaitSet,
+        Interrupting
     }
 
     public readonly struct WaitToken

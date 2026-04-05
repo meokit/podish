@@ -12,22 +12,20 @@ internal interface IReadyDispatcher
 
 internal sealed class SchedulerReadyDispatcher : IReadyDispatcher
 {
-    private readonly KernelScheduler? _scheduler;
-
     public SchedulerReadyDispatcher(KernelScheduler? scheduler)
     {
-        _scheduler = scheduler;
+        Scheduler = scheduler;
     }
 
-    public bool CanDispatch => _scheduler != null;
+    public bool CanDispatch => Scheduler != null;
 
-    public FiberTask? CurrentTask => _scheduler?.CurrentTask;
+    public FiberTask? CurrentTask => Scheduler?.CurrentTask;
 
-    public KernelScheduler? Scheduler => _scheduler;
+    public KernelScheduler? Scheduler { get; }
 
     public void Post(Action callback)
     {
-        var scheduler = _scheduler;
+        var scheduler = Scheduler;
         if (scheduler == null)
         {
             callback();
@@ -41,6 +39,6 @@ internal sealed class SchedulerReadyDispatcher : IReadyDispatcher
     {
         return SynchronizationContext.Current is KernelSyncContext context
             ? new SchedulerReadyDispatcher(context.Scheduler)
-            : new SchedulerReadyDispatcher((KernelScheduler?)null);
+            : new SchedulerReadyDispatcher(null);
     }
 }

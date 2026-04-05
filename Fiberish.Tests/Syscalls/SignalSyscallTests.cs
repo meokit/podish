@@ -4,12 +4,15 @@ using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
+using Fiberish.X86.Native;
 using Xunit;
 
 namespace Fiberish.Tests.Syscalls;
 
 public class SignalSyscallTests
 {
+    private const uint StackBase = 0x70000000;
+
     [Fact]
     public async Task Kill_NegativeProcessGroup_IgnoresCallerSessionForExistingGroup()
     {
@@ -61,12 +64,121 @@ public class SignalSyscallTests
         Assert.Equal((1UL << ((int)Signal.SIGUSR1 - 1)) | (1UL << ((int)Signal.SIGRTMIN - 1)), visible);
     }
 
+    [Fact]
+    public void ProcessPendingSignals_SaResetHand_ResetsDisposition_AndDoesNotAutoBlockSameSignal()
+    {
+        using var env = new SignalEnv();
+        env.MapUserPage(StackBase);
+        env.TargetEngine.RegWrite(Reg.ESP, StackBase + LinuxConstants.PageSize - 0x20);
+        env.TargetEngine.Eip = 0x401000;
+
+        env.TargetGroupProcess.SignalActions[(int)Signal.SIGINT] = new SigAction
+        {
+            Handler = 0x40254F50,
+            Flags = LinuxConstants.SA_RESETHAND,
+            Restorer = 0,
+            Mask = 0
+        };
+
+        env.TargetTask.PostSignal((int)Signal.SIGINT);
+        InvokeTaskMethod(env.TargetTask, "ProcessPendingSignals");
+
+        Assert.False(env.TargetGroupProcess.SignalActions.ContainsKey((int)Signal.SIGINT));
+        Assert.Equal(0UL, env.TargetTask.SignalMask & (1UL << ((int)Signal.SIGINT - 1)));
+        Assert.Equal(0x40254F50u, env.TargetEngine.Eip);
+    }
+
+    [Fact]
+    public void DeliverSignalForRestart_SaResetHand_ResetsDisposition_AndDoesNotAutoBlockSameSignal()
+    {
+        using var env = new SignalEnv();
+        env.MapUserPage(StackBase);
+        env.TargetEngine.RegWrite(Reg.ESP, StackBase + LinuxConstants.PageSize - 0x20);
+        env.TargetEngine.Eip = 0x565BBE9B;
+
+        var action = new SigAction
+        {
+            Handler = 0x40254F50,
+            Flags = LinuxConstants.SA_RESETHAND,
+            Restorer = 0,
+            Mask = 0
+        };
+        env.TargetGroupProcess.SignalActions[(int)Signal.SIGINT] = action;
+
+        env.TargetTask.PostSignal((int)Signal.SIGINT);
+        InvokeTaskMethod(env.TargetTask, "DeliverSignalForRestart", (int)Signal.SIGINT, action);
+
+        Assert.False(env.TargetGroupProcess.SignalActions.ContainsKey((int)Signal.SIGINT));
+        Assert.Equal(0UL, env.TargetTask.SignalMask & (1UL << ((int)Signal.SIGINT - 1)));
+        Assert.Equal(0x40254F50u, env.TargetEngine.Eip);
+    }
+
+    [Fact]
+    public void StopBySignal_SaNoCldStop_SuppressesSigchldNotification_ButKeepsWaitableStop()
+    {
+        using var env = new SignalEnv();
+        env.TargetGroupProcess.PPID = env.CallerProcess.TGID;
+        env.CallerProcess.Children.Add(env.TargetGroupProcess.TGID);
+        env.CallerProcess.SignalActions[(int)Signal.SIGCHLD] = new SigAction
+        {
+            Handler = 0x401000,
+            Flags = LinuxConstants.SA_NOCLDSTOP,
+            Restorer = 0,
+            Mask = 0
+        };
+
+        InvokeTaskMethod(env.TargetTask, "StopBySignal", (int)Signal.SIGSTOP);
+
+        var sigchldMask = 1UL << ((int)Signal.SIGCHLD - 1);
+        Assert.Equal(0UL, env.CallerProcess.PendingProcessSignals & sigchldMask);
+        Assert.True(env.TargetGroupProcess.HasWaitableStop);
+        Assert.Equal(ProcessState.Stopped, env.TargetGroupProcess.State);
+    }
+
+    [Fact]
+    public void FinalizeProcessExit_SaNoCldWait_AutoReapsChild_ButStillQueuesSigchldForHandler()
+    {
+        using var env = new SignalEnv();
+        env.TargetGroupProcess.PPID = env.CallerProcess.TGID;
+        env.CallerProcess.Children.Add(env.TargetGroupProcess.TGID);
+        env.CallerProcess.SignalActions[(int)Signal.SIGCHLD] = new SigAction
+        {
+            Handler = 0x401000,
+            Flags = LinuxConstants.SA_NOCLDWAIT,
+            Restorer = 0,
+            Mask = 0
+        };
+
+        InvokeStaticSysMethod("FinalizeProcessExit", env.TargetTask, 0, false, 0, false);
+
+        var sigchldMask = 1UL << ((int)Signal.SIGCHLD - 1);
+        Assert.True((env.CallerProcess.PendingProcessSignals & sigchldMask) != 0);
+        Assert.Equal(ProcessState.Dead, env.TargetGroupProcess.State);
+        Assert.DoesNotContain(env.TargetGroupProcess.TGID, env.CallerProcess.Children);
+        Assert.Null(env.Scheduler.GetProcess(env.TargetGroupProcess.TGID));
+    }
+
     private static ValueTask<int> InvokeSys(SyscallManager sm, Engine engine, string methodName, uint a1, uint a2,
         uint a3, uint a4, uint a5, uint a6)
     {
         var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(method);
         return (ValueTask<int>)method!.Invoke(sm, [engine, a1, a2, a3, a4, a5, a6])!;
+    }
+
+    private static void InvokeTaskMethod(FiberTask task, string methodName, params object[] args)
+    {
+        var method = typeof(FiberTask).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(method);
+        method!.Invoke(task, args);
+    }
+
+    private static void InvokeStaticSysMethod(string methodName, params object[] args)
+    {
+        var method = typeof(SyscallManager).GetMethod(methodName,
+            BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Public);
+        Assert.NotNull(method);
+        method!.Invoke(null, args);
     }
 
     private sealed class SignalEnv : IDisposable

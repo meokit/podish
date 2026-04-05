@@ -11,6 +11,27 @@ namespace Fiberish.Tests.Syscalls;
 public class PosixTimerTests
 {
     // Call private static SyscallHandlers via reflection for testing
+    private static void WriteSigEvent(TestEnv env, uint ptr, int notify, int signo = 0, uint value = 0, int tid = 0)
+    {
+        var buf = new byte[64];
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0, 4), value);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), signo);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), notify);
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), tid);
+        env.Engine.CopyToUser(ptr, buf);
+    }
+
+    private static void WriteItimerSpec64(TestEnv env, uint ptr, long intervalSec, long intervalNsec, long valueSec,
+        long valueNsec)
+    {
+        var buf = new byte[32];
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), intervalSec);
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8, 8), intervalNsec);
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(16, 8), valueSec);
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(24, 8), valueNsec);
+        env.Engine.CopyToUser(ptr, buf);
+    }
+
     private ValueTask<int> CallSysTimerCreate(TestEnv env, uint clockId, uint sevpPtr, uint timerIdPtr)
     {
         var method = typeof(SyscallManager).GetMethod("SysTimerCreate", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -141,6 +162,96 @@ public class PosixTimerTests
         var result = await CallSysTimerDelete(env, timerId);
         Assert.Equal(0, result);
         Assert.False(env.Process.PosixTimers.ContainsKey((int)timerId));
+    }
+
+    [Fact]
+    public async Task TimerCreate_SigEvNone_DoesNotQueueSignalOnExpiration()
+    {
+        using var env = new TestEnv();
+        uint page = 0x10000;
+        env.MapUserPage(page);
+
+        var sevpPtr = page;
+        var timerIdPtr = page + 0x100;
+        var valuePtr = page + 0x200;
+
+        WriteSigEvent(env, sevpPtr, LinuxConstants.SIGEV_NONE);
+
+        var createRc = await CallSysTimerCreate(env, LinuxConstants.CLOCK_REALTIME, sevpPtr, timerIdPtr);
+        Assert.Equal(0, createRc);
+
+        var idBuf = new byte[4];
+        env.Engine.CopyFromUser(timerIdPtr, idBuf);
+        var timerId = (uint)BitConverter.ToInt32(idBuf);
+
+        WriteItimerSpec64(env, valuePtr, 0, 0, 1, 0);
+        var setRc = await CallSysTimerSetTime64(env, timerId, 0, valuePtr, 0);
+        Assert.Equal(0, setRc);
+
+        var timer = env.Process.PosixTimers[(int)timerId];
+        Assert.Equal(LinuxConstants.SIGEV_NONE, timer.SigEvent.Notify);
+        Assert.NotNull(timer.ActiveTimer?.Callback);
+
+        timer.ActiveTimer!.Callback!();
+
+        Assert.Equal(0UL, env.Task.PendingSignals);
+        env.Task.PendingSignalQueue.Lock(q => Assert.Empty(q));
+    }
+
+    [Fact]
+    public async Task TimerCreate_SigEvThread_IsRejected()
+    {
+        using var env = new TestEnv();
+        uint page = 0x10000;
+        env.MapUserPage(page);
+
+        var sevpPtr = page;
+        var timerIdPtr = page + 0x100;
+        WriteSigEvent(env, sevpPtr, LinuxConstants.SIGEV_THREAD, (int)Signal.SIGALRM, 123);
+
+        var result = await CallSysTimerCreate(env, LinuxConstants.CLOCK_REALTIME, sevpPtr, timerIdPtr);
+
+        Assert.Equal(-(int)Errno.EINVAL, result);
+        Assert.Empty(env.Process.PosixTimers);
+    }
+
+    [Fact]
+    public async Task TimerCreate_SigEvThreadId_TargetsSpecifiedThread()
+    {
+        using var env = new TestEnv();
+        uint page = 0x10000;
+        env.MapUserPage(page);
+
+        var sevpPtr = page;
+        var timerIdPtr = page + 0x100;
+        var valuePtr = page + 0x200;
+        WriteSigEvent(env, sevpPtr, LinuxConstants.SIGEV_THREAD_ID, (int)Signal.SIGUSR1, 77u, env.Task.TID);
+
+        var createRc = await CallSysTimerCreate(env, LinuxConstants.CLOCK_REALTIME, sevpPtr, timerIdPtr);
+        Assert.Equal(0, createRc);
+
+        var idBuf = new byte[4];
+        env.Engine.CopyFromUser(timerIdPtr, idBuf);
+        var timerId = (uint)BitConverter.ToInt32(idBuf);
+
+        WriteItimerSpec64(env, valuePtr, 0, 0, 1, 0);
+        var setRc = await CallSysTimerSetTime64(env, timerId, 0, valuePtr, 0);
+        Assert.Equal(0, setRc);
+
+        env.Task.PendingSignals = 0;
+        env.Task.PendingSignalQueue.Lock(q => q.Clear());
+
+        var timer = env.Process.PosixTimers[(int)timerId];
+        timer.ActiveTimer!.Callback!();
+
+        Assert.NotEqual(0UL, env.Task.PendingSignals & (1UL << ((int)Signal.SIGUSR1 - 1)));
+        env.Task.PendingSignalQueue.Lock(q =>
+        {
+            var signal = Assert.Single(q);
+            Assert.Equal((int)Signal.SIGUSR1, signal.Signo);
+            Assert.Equal((ulong)77, signal.Value);
+            Assert.Equal((int)timerId, signal.TimerId);
+        });
     }
 
     private sealed class TestEnv : IDisposable

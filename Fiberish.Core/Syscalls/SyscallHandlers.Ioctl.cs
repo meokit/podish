@@ -1,9 +1,9 @@
+using System.Buffers.Binary;
 using Fiberish.Core;
 using Fiberish.Diagnostics;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
-using System.Buffers.Binary;
 
 namespace Fiberish.Syscalls;
 

@@ -447,7 +447,7 @@ public class SysVShmManager
             if (!TryComputeRangeEnd(addr, size, out var end))
                 return 0;
             var hasOverlap = false;
-            uint maxEnd = addr;
+            var maxEnd = addr;
             vmaManager.VisitVmAreasInRange(addr, end, vma =>
             {
                 hasOverlap = true;

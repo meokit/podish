@@ -84,7 +84,8 @@ public class VfsStream : Stream
         var errnoName = Enum.IsDefined(typeof(Errno), errnoValue)
             ? ((Errno)errnoValue).ToString()
             : errnoValue.ToString();
-        return $"VFS {operation} failed: errno={errnoName} result={result} position={_position} requestedCount={requestedCount}";
+        return
+            $"VFS {operation} failed: errno={errnoName} result={result} position={_position} requestedCount={requestedCount}";
     }
 
     protected override void Dispose(bool disposing)

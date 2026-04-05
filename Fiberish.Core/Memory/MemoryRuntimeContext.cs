@@ -2,8 +2,6 @@ namespace Fiberish.Memory;
 
 public sealed class MemoryRuntimeContext
 {
-    public static MemoryRuntimeContext Default { get; } = new();
-
     public MemoryRuntimeContext()
         : this(HostMemoryMapGeometry.CreateCurrent())
     {
@@ -13,6 +11,8 @@ public sealed class MemoryRuntimeContext
     {
         HostMemoryMapGeometry = hostMemoryMapGeometry;
     }
+
+    public static MemoryRuntimeContext Default { get; } = new();
 
     public HostMemoryMapGeometry HostMemoryMapGeometry { get; }
 }

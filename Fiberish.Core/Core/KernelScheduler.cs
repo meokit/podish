@@ -45,12 +45,12 @@ public class KernelScheduler
 
     private int _wakePending;
 
-    public KernelRuntime? Runtime { get; set; }
-
     public KernelScheduler()
     {
         _synchronizationContext = new KernelSyncContext(this);
     }
+
+    public KernelRuntime? Runtime { get; set; }
 
     public long CurrentTick => _timerSystem.CurrentTick;
     public bool Running { get; set; } = true;
@@ -834,10 +834,7 @@ public class KernelScheduler
         if (OperatingSystem.IsBrowser() && BrowserSchedulerHostBridge.IsConfigured)
             BrowserSchedulerHostBridge.SignalSchedulerWake();
 
-        if (Interlocked.Exchange(ref _wakePending, 1) != 0)
-        {
-            return;
-        }
+        if (Interlocked.Exchange(ref _wakePending, 1) != 0) return;
 
         _events.Writer.TryWrite(SchedulerWorkItem.WakeScheduler());
     }

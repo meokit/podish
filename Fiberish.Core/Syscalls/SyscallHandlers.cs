@@ -822,7 +822,7 @@ public partial class SyscallManager
                 return SysMagicDebug(engine, ebx, ecx, edx, esi, edi, ebp);
             default:
                 handled = false;
-                return new ValueTask<int>(0);
+                return new ValueTask<int>(-(int)Errno.ENOSYS);
         }
     }
 }

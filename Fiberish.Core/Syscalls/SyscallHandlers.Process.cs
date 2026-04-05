@@ -96,15 +96,36 @@ public partial class SyscallManager
 
     private static int ValidateCloneFlags(uint flags)
     {
+        var exitSignal = flags & 0xffu;
         var cloneVm = (flags & LinuxConstants.CLONE_VM) != 0;
         var cloneThread = (flags & LinuxConstants.CLONE_THREAD) != 0;
         var cloneSighand = (flags & LinuxConstants.CLONE_SIGHAND) != 0;
         var cloneVfork = (flags & LinuxConstants.CLONE_VFORK) != 0;
+        var supportedFlags = LinuxConstants.CLONE_VM |
+                             LinuxConstants.CLONE_FS |
+                             LinuxConstants.CLONE_FILES |
+                             LinuxConstants.CLONE_SIGHAND |
+                             LinuxConstants.CLONE_PTRACE |
+                             LinuxConstants.CLONE_VFORK |
+                             LinuxConstants.CLONE_THREAD |
+                             LinuxConstants.CLONE_SETTLS |
+                             LinuxConstants.CLONE_PARENT_SETTID |
+                             LinuxConstants.CLONE_CHILD_CLEARTID |
+                             LinuxConstants.CLONE_DETACHED |
+                             LinuxConstants.CLONE_UNTRACED |
+                             LinuxConstants.CLONE_CHILD_SETTID;
+
+        if ((flags & ~(supportedFlags | exitSignal)) != 0)
+            return -(int)Errno.EINVAL;
 
         if (cloneThread && !cloneVm) return -(int)Errno.EINVAL;
         if (cloneSighand && !cloneVm) return -(int)Errno.EINVAL;
         if (cloneThread && !cloneSighand) return -(int)Errno.EINVAL;
         if (cloneVfork && !cloneVm) return -(int)Errno.EINVAL;
+
+        // CLONE_PTRACE / CLONE_UNTRACED are ptrace-facing hints; ptrace itself is not modeled,
+        // so we accept them as no-ops for compatibility. CLONE_DETACHED is obsolete and ignored
+        // on Linux as well.
 
         return 0;
     }
@@ -380,6 +401,39 @@ public partial class SyscallManager
         };
     }
 
+    internal static bool ShouldNotifyParentOfChildStateChange(Process? parentProc)
+    {
+        if (parentProc == null)
+            return true;
+
+        if (!parentProc.SignalActions.TryGetValue((int)Signal.SIGCHLD, out var action))
+            return true;
+
+        return (action.Flags & LinuxConstants.SA_NOCLDSTOP) == 0;
+    }
+
+    private static bool ShouldAutoReapExitedChild(Process? parentProc)
+    {
+        if (parentProc == null)
+            return false;
+
+        if (!parentProc.SignalActions.TryGetValue((int)Signal.SIGCHLD, out var action))
+            return false;
+
+        return action.Handler == 1 || (action.Flags & LinuxConstants.SA_NOCLDWAIT) != 0;
+    }
+
+    private static bool ShouldDeliverSigChldOnExit(Process? parentProc)
+    {
+        if (parentProc == null)
+            return false;
+
+        if (!parentProc.SignalActions.TryGetValue((int)Signal.SIGCHLD, out var action))
+            return true;
+
+        return action.Handler != 1;
+    }
+
     private static bool WriteSigInfo(Engine engine, uint addr, SigInfo info)
     {
         var buf = new byte[128];
@@ -408,8 +462,17 @@ public partial class SyscallManager
         var ppid = task.Process.PPID;
         if (ppid > 0)
         {
-            var parentTask = task.CommonKernel.GetTask(ppid);
-            if (parentTask != null) parentTask.CommonKernel.SignalProcess(parentTask.Process.TGID, (int)Signal.SIGCHLD);
+            var parentProc = task.CommonKernel.GetProcess(ppid);
+            if (ShouldDeliverSigChldOnExit(parentProc))
+                task.CommonKernel.SignalProcessInfo(ppid, (int)Signal.SIGCHLD, BuildSigchldInfoForExit(task.Process));
+
+            if (ShouldAutoReapExitedChild(parentProc))
+            {
+                _ = parentProc!.Children.Remove(task.Process.TGID);
+                task.Process.State = ProcessState.Dead;
+                task.CommonKernel.UnregisterProcess(task.Process.TGID);
+                task.CommonKernel.CleanupDeadProcess(task.Process);
+            }
         }
     }
 

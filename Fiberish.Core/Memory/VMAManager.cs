@@ -26,7 +26,6 @@ public class VMAManager
 
     private readonly List<CodeCacheResetEntry> _pendingCodeCacheResets = [];
     private readonly List<VmArea> _vmas = [];
-    private ProcessAddressSpaceHandle? _addressSpaceHandle;
     private int _futexKeyRefCount = 1;
     private VmArea? _lastFaultVma;
     private long _mapSequence;
@@ -39,8 +38,9 @@ public class VMAManager
 
     public ExternalPageManager ExternalPages { get; } = new();
     public VmBackingManager Backings { get; }
-    internal ProcessAddressSpaceHandle? AddressSpaceHandle => _addressSpaceHandle;
-    internal nuint AddressSpaceIdentity => _addressSpaceHandle?.Identity ?? 0;
+    internal ProcessAddressSpaceHandle? AddressSpaceHandle { get; private set; }
+
+    internal nuint AddressSpaceIdentity => AddressSpaceHandle?.Identity ?? 0;
 
     public long CurrentMapSequence => Interlocked.Read(ref _mapSequence);
 
@@ -141,54 +141,54 @@ public class VMAManager
         }
 
         Clear(engine);
-        _addressSpaceHandle?.Dispose();
-        _addressSpaceHandle = null;
+        AddressSpaceHandle?.Dispose();
+        AddressSpaceHandle = null;
         return 0;
     }
 
     internal void BindAddressSpaceHandle(ProcessAddressSpaceHandle handle)
     {
         ArgumentNullException.ThrowIfNull(handle);
-        if (_addressSpaceHandle == null)
+        if (AddressSpaceHandle == null)
         {
-            _addressSpaceHandle = handle;
+            AddressSpaceHandle = handle;
             return;
         }
 
-        if (_addressSpaceHandle.Identity == handle.Identity)
+        if (AddressSpaceHandle.Identity == handle.Identity)
         {
             handle.Dispose();
             return;
         }
 
-        _addressSpaceHandle.Dispose();
-        _addressSpaceHandle = handle;
+        AddressSpaceHandle.Dispose();
+        AddressSpaceHandle = handle;
     }
 
     internal void BindOrAssertAddressSpaceHandle(Engine engine)
     {
         ArgumentNullException.ThrowIfNull(engine);
-        if (_addressSpaceHandle == null)
+        if (AddressSpaceHandle == null)
         {
-            _addressSpaceHandle = ProcessAddressSpaceHandle.CaptureAttachedEngine(engine);
+            AddressSpaceHandle = ProcessAddressSpaceHandle.CaptureAttachedEngine(engine);
             return;
         }
 
-        if (!_addressSpaceHandle.IsAttachedTo(engine))
+        if (!AddressSpaceHandle.IsAttachedTo(engine))
             throw new InvalidOperationException(
-                $"Engine MMU identity {engine.CurrentMmuIdentityInternal} does not match address-space MMU identity {_addressSpaceHandle.Identity}.");
+                $"Engine MMU identity {engine.CurrentMmuIdentityInternal} does not match address-space MMU identity {AddressSpaceHandle.Identity}.");
     }
 
     internal bool TryAttachEngineToBoundAddressSpace(Engine engine)
     {
         ArgumentNullException.ThrowIfNull(engine);
-        if (_addressSpaceHandle == null)
+        if (AddressSpaceHandle == null)
             return false;
 
-        if (_addressSpaceHandle.IsAttachedTo(engine))
+        if (AddressSpaceHandle.IsAttachedTo(engine))
             return true;
 
-        _addressSpaceHandle.AttachEngine(engine);
+        AddressSpaceHandle.AttachEngine(engine);
         return true;
     }
 
@@ -637,6 +637,9 @@ public class VMAManager
         if (len == 0)
             throw new ArgumentException("Mapping length must be non-zero", nameof(len));
 
+        var isFixedNoReplace = (flags & MapFlags.FixedNoReplace) != 0;
+        var isFixed = (flags & MapFlags.Fixed) != 0 || isFixedNoReplace;
+
         if (addr == 0)
         {
             addr = FindFreeRegion(len);
@@ -658,7 +661,18 @@ public class VMAManager
             throw new OutOfMemoryException("Mapping exceeds user task address space");
 
         if (CheckOverlap(addr, end))
-            throw new InvalidOperationException("Overlap detected");
+        {
+            if (isFixed)
+                throw new InvalidOperationException("Overlap detected");
+
+            // Linux treats a non-MAP_FIXED address as a hint. If the hinted range is busy,
+            // the kernel is free to place the mapping elsewhere instead of failing.
+            addr = FindFreeRegion(len);
+            if (addr == 0)
+                throw new OutOfMemoryException("Execution out of memory");
+
+            end = checked(addr + len);
+        }
 
         var isShared = (flags & MapFlags.Shared) != 0;
         var isPrivate = (flags & MapFlags.Private) != 0;
@@ -722,27 +736,19 @@ public class VMAManager
 
             var clonedVma = newMM.FindVmArea(pageAddr);
             if (clonedVma == null)
-            {
                 throw new InvalidOperationException(
                     $"Clone external binding lost VMA context: page=0x{pageAddr:X8}, owner={binding.OwnerKind}");
-            }
 
             var pageIndex = clonedVma.GetPageIndex(pageAddr);
             MappedPageBinding clonedBinding;
             if (binding.OwnerKind == MappedPageOwnerKind.AnonVma &&
                 clonedVma.VmAnonVma?.PeekVmPage(pageIndex) is { } anonPage)
-            {
                 clonedBinding = MappedPageBinding.FromAnonVmaPage(clonedVma.VmAnonVma, pageIndex, anonPage);
-            }
             else if (binding.OwnerKind == MappedPageOwnerKind.AddressSpace &&
                      clonedVma.VmMapping?.PeekVmPage(pageIndex) is { } sharedPage)
-            {
                 clonedBinding = MappedPageBinding.FromAddressSpacePage(clonedVma.VmMapping, pageIndex, sharedPage);
-            }
             else
-            {
                 clonedBinding = MappedPageBinding.FromRaw(binding.Ptr);
-            }
 
             _ = newMM.ExternalPages.AddBinding(pageAddr, clonedBinding, out _);
         }
@@ -1005,7 +1011,6 @@ public class VMAManager
         }
 
         if (prot == Protection.None)
-        {
             TearDownNativeMappings(
                 engine,
                 addr,
@@ -1014,11 +1019,8 @@ public class VMAManager
                 resetCodeCacheRange,
                 true,
                 true);
-        }
         else
-        {
             ReprotectNativeMappings(engine, addr, len, prot, resetCodeCacheRange);
-        }
 
         return 0;
     }
@@ -1568,7 +1570,8 @@ public class VMAManager
         return HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
     }
 
-    internal void MigrateOverlayMappings(OverlayInode overlayInode, Inode newBackingInode, IReadOnlyList<Engine> engines)
+    internal void MigrateOverlayMappings(OverlayInode overlayInode, Inode newBackingInode,
+        IReadOnlyList<Engine> engines)
     {
         var invalidatedRanges = new List<NativeRange>();
 
@@ -1628,6 +1631,7 @@ public class VMAManager
             pageHandle.Dispose();
             return false;
         }
+
         var existing = mapping.PeekPage(pageIndex);
         if (existing != IntPtr.Zero)
         {

@@ -243,6 +243,22 @@ public static class LinuxConstants
     public const int FUTEX_PRIVATE_FLAG = 128;
     public const int FUTEX_CLOCK_REALTIME = 256;
 
+    public const uint FUTEX_BITSET_MATCH_ANY = 0xffffffff;
+
+    public const int FUTEX_OP_SET = 0;
+    public const int FUTEX_OP_ADD = 1;
+    public const int FUTEX_OP_OR = 2;
+    public const int FUTEX_OP_ANDN = 3;
+    public const int FUTEX_OP_XOR = 4;
+    public const int FUTEX_OP_OPARG_SHIFT = 8;
+
+    public const int FUTEX_OP_CMP_EQ = 0;
+    public const int FUTEX_OP_CMP_NE = 1;
+    public const int FUTEX_OP_CMP_LT = 2;
+    public const int FUTEX_OP_CMP_LE = 3;
+    public const int FUTEX_OP_CMP_GT = 4;
+    public const int FUTEX_OP_CMP_GE = 5;
+
     public const uint FUTEX_OWNER_DIED = 0x40000000;
     public const uint FUTEX_WAITERS = 0x80000000;
     public const uint FUTEX_TID_MASK = 0x3fffffff;

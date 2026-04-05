@@ -6,16 +6,16 @@ namespace Fiberish.Core;
 public sealed class VirtualDaemonContext
 {
     private readonly VirtualDaemonRuntime _runtime;
-    private readonly FiberTask _task;
 
     internal VirtualDaemonContext(VirtualDaemonRuntime runtime, FiberTask task)
     {
         _runtime = runtime;
-        _task = task;
+        Task = task;
     }
 
     public Process Process => _runtime.Process;
-    public FiberTask Task => _task;
+    public FiberTask Task { get; }
+
     public KernelScheduler Scheduler => _runtime.Scheduler;
     public SyscallManager Syscalls => _runtime.Syscalls;
     public LinuxFile? ListenFile => _runtime.ListenFile;
@@ -28,12 +28,12 @@ public sealed class VirtualDaemonContext
 
     public void Schedule(Action<VirtualDaemonContext> action)
     {
-        _runtime.Schedule(action, _task);
+        _runtime.Schedule(action, Task);
     }
 
     public void Schedule(Func<VirtualDaemonContext, ValueTask> action)
     {
-        _runtime.Schedule(action, _task);
+        _runtime.Schedule(action, Task);
     }
 
     public void ScheduleChild(Func<VirtualDaemonContext, ValueTask> action)
@@ -43,7 +43,7 @@ public sealed class VirtualDaemonContext
 
     public ValueTask<(int Rc, VirtualDaemonConnection? Connection)> AcceptAsync(int flags = 0)
     {
-        return _runtime.AcceptAsync(_task, flags);
+        return _runtime.AcceptAsync(Task, flags);
     }
 
     public void Exit(int exitCode = 0)

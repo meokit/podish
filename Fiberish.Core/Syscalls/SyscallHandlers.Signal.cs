@@ -5,6 +5,7 @@ using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
+using Timer = Fiberish.Core.Timer;
 
 namespace Fiberish.Syscalls;
 
@@ -415,8 +416,8 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// rt_sigtimedwait - wait for a signal with timeout (32-bit timespec)
-    /// syscall 177
+    ///     rt_sigtimedwait - wait for a signal with timeout (32-bit timespec)
+    ///     syscall 177
     /// </summary>
     private async ValueTask<int> SysRtSigTimedWait(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
@@ -464,10 +465,11 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// rt_sigtimedwait_time64 - wait for a signal with timeout (64-bit timespec)
-    /// syscall 421
+    ///     rt_sigtimedwait_time64 - wait for a signal with timeout (64-bit timespec)
+    ///     syscall 421
     /// </summary>
-    private async ValueTask<int> SysRtSigTimedWaitTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysRtSigTimedWaitTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
     {
         var setPtr = a1;
         var infoPtr = a2;
@@ -513,12 +515,13 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// Shared implementation for rt_sigtimedwait syscalls.
+    ///     Shared implementation for rt_sigtimedwait syscalls.
     /// </summary>
-    private async ValueTask<int> DoRtSigTimedWait(Engine engine, FiberTask task, ulong waitSet, long? timeoutMs, uint infoPtr)
+    private async ValueTask<int> DoRtSigTimedWait(Engine engine, FiberTask task, ulong waitSet, long? timeoutMs,
+        uint infoPtr)
     {
         // Remove SIGKILL and SIGSTOP from the wait set (they cannot be caught)
-        waitSet &= ~(1UL << 8);  // SIGKILL (9)
+        waitSet &= ~(1UL << 8); // SIGKILL (9)
         waitSet &= ~(1UL << 18); // SIGSTOP (19)
 
         if (waitSet == 0) return -(int)Errno.EINVAL;
@@ -546,7 +549,7 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// Try to consume a pending signal from the wait set.
+    ///     Try to consume a pending signal from the wait set.
     /// </summary>
     private static bool TryConsumePendingSignal(FiberTask task, ulong waitSet, out SigInfo info)
     {
@@ -592,7 +595,7 @@ public partial class SyscallManager
     }
 
     /// <summary>
-    /// Awaitable for rt_sigtimedwait operation.
+    ///     Awaitable for rt_sigtimedwait operation.
     /// </summary>
     private readonly struct SigTimedWaitAwaitable
     {
@@ -607,7 +610,10 @@ public partial class SyscallManager
             _timeoutMs = timeoutMs;
         }
 
-        public SigTimedWaitAwaiter GetAwaiter() => new(_task, _waitSet, _timeoutMs);
+        public SigTimedWaitAwaiter GetAwaiter()
+        {
+            return new SigTimedWaitAwaiter(_task, _waitSet, _timeoutMs);
+        }
     }
 
     private struct SigTimedWaitAwaiter : INotifyCompletion
@@ -660,10 +666,10 @@ public partial class SyscallManager
 
     private sealed class SigTimedWaitOperation
     {
+        private readonly TaskAsyncOperationHandle _operation;
         private readonly FiberTask _task;
         private readonly ulong _waitSet;
-        private readonly TaskAsyncOperationHandle _operation;
-        private Fiberish.Core.Timer? _timer;
+        private Timer? _timer;
 
         public SigTimedWaitOperation(FiberTask task, ulong waitSet, FiberTask.WaitToken token,
             Action continuation, TaskAsyncOperationHandle operation)
@@ -682,7 +688,8 @@ public partial class SyscallManager
 
         public void RegisterSignalWait()
         {
-            _operation.TryAddRegistration(TaskAsyncRegistration.From(new SigTimedWaitSignalRegistration(_task, _waitSet, OnSignal)));
+            _operation.TryAddRegistration(
+                TaskAsyncRegistration.From(new SigTimedWaitSignalRegistration(_task, _waitSet, OnSignal)));
         }
 
         private void OnTimeout()

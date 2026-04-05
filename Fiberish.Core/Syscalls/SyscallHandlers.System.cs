@@ -376,25 +376,8 @@ public partial class SyscallManager
         var clockId = (int)a1;
         var tsPtr = a2;
 
-        long secs;
-        long nsecs;
-
-        if (clockId == LinuxConstants.CLOCK_REALTIME)
-        {
-            var ticks = DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks;
-            secs = ticks / TimeSpan.TicksPerSecond;
-            nsecs = ticks % TimeSpan.TicksPerSecond * 100;
-        }
-        else
-        {
-            // CLOCK_MONOTONIC and others
-            // Use Stopwatch for high precision
-            var freq = Stopwatch.Frequency;
-            var ticks = Stopwatch.GetTimestamp();
-
-            secs = ticks / freq;
-            nsecs = ticks % freq * 1000000000 / freq;
-        }
+        if (!TryGetClockTime(clockId, out var secs, out var nsecs))
+            return -(int)Errno.EINVAL;
 
         var buf = new byte[8];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)secs);
@@ -410,24 +393,8 @@ public partial class SyscallManager
         var clockId = (int)a1;
         var tsPtr = a2;
 
-        long secs;
-        long nsecs;
-
-        if (clockId == LinuxConstants.CLOCK_REALTIME)
-        {
-            var ticks = DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks;
-            secs = ticks / TimeSpan.TicksPerSecond;
-            nsecs = ticks % TimeSpan.TicksPerSecond * 100;
-        }
-        else
-        {
-            // CLOCK_MONOTONIC and others
-            var freq = Stopwatch.Frequency;
-            var ticks = Stopwatch.GetTimestamp();
-
-            secs = ticks / freq;
-            nsecs = ticks % freq * 1000000000 / freq;
-        }
+        if (!TryGetClockTime(clockId, out var secs, out var nsecs))
+            return -(int)Errno.EINVAL;
 
         var buf = new byte[16];
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), secs);
@@ -478,6 +445,7 @@ public partial class SyscallManager
                 var remainingNs = Math.Max(0L, requestedNs - elapsedNs);
                 if (!WriteTimespec32(engine, a2, remainingNs)) return -(int)Errno.EFAULT;
             }
+
             return -(int)Errno.ERESTARTSYS;
         }
 
@@ -527,6 +495,7 @@ public partial class SyscallManager
                 var remainingNs = Math.Max(0L, durationNs - elapsedNs);
                 if (!WriteTimespec64(engine, remPtr, remainingNs)) return -(int)Errno.EFAULT;
             }
+
             return -(int)Errno.ERESTARTSYS;
         }
 
@@ -546,6 +515,44 @@ public partial class SyscallManager
         var secs = ticksNow / freq;
         var rem = ticksNow % freq;
         return secs * 1_000_000_000L + rem * 1_000_000_000L / freq;
+    }
+
+    private static bool TryGetClockTime(int clockId, out long secs, out long nsecs)
+    {
+        switch (clockId)
+        {
+            case LinuxConstants.CLOCK_REALTIME:
+            case LinuxConstants.CLOCK_REALTIME_COARSE:
+            {
+                var ticks = DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks;
+                secs = ticks / TimeSpan.TicksPerSecond;
+                nsecs = ticks % TimeSpan.TicksPerSecond * 100;
+                return true;
+            }
+            case LinuxConstants.CLOCK_MONOTONIC:
+            case LinuxConstants.CLOCK_MONOTONIC_RAW:
+            case LinuxConstants.CLOCK_MONOTONIC_COARSE:
+            case LinuxConstants.CLOCK_BOOTTIME:
+            {
+                // We currently have one monotonic time source and no suspend accounting,
+                // so RAW/COARSE/BOOTTIME are approximated with the scheduler monotonic clock.
+                var freq = Stopwatch.Frequency;
+                var ticks = Stopwatch.GetTimestamp();
+                secs = ticks / freq;
+                nsecs = ticks % freq * 1_000_000_000L / freq;
+                return true;
+            }
+            case LinuxConstants.CLOCK_PROCESS_CPUTIME_ID:
+            case LinuxConstants.CLOCK_THREAD_CPUTIME_ID:
+                // We don't maintain per-process or per-thread CPU accounting yet.
+                secs = 0;
+                nsecs = 0;
+                return false;
+            default:
+                secs = 0;
+                nsecs = 0;
+                return false;
+        }
     }
 
     private static bool WriteTimespec32(Engine engine, uint ptr, long totalNs)

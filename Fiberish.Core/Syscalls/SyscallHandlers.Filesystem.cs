@@ -100,7 +100,7 @@ public partial class SyscallManager
     {
         var pathErr = ReadPathArgument(a1, out var path);
         if (pathErr != 0) return pathErr;
-        var lookup = PathWalker.PathWalkWithData(path, LookupFlags.FollowSymlink);
+        var lookup = PathWalker.PathWalkWithData(path);
         if (lookup.HasError) return lookup.ErrorCode;
         var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
@@ -594,8 +594,7 @@ public partial class SyscallManager
         var pathErr = ReadPathArgument(a2, out var path);
         if (pathErr != 0) return pathErr;
         var flags = a3;
-        const uint AT_REMOVEDIR = 0x200;
-        if ((flags & ~AT_REMOVEDIR) != 0) return -(int)Errno.EINVAL;
+        if ((flags & ~LinuxConstants.AT_REMOVEDIR) != 0) return -(int)Errno.EINVAL;
 
         PathLocation startLoc = default;
         if (dirfd != -100 && !path.StartsWith("/"))
@@ -614,7 +613,7 @@ public partial class SyscallManager
         var targetLoc = targetLookup.Path;
         if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
-        if ((flags & AT_REMOVEDIR) != 0) // AT_REMOVEDIR
+        if ((flags & LinuxConstants.AT_REMOVEDIR) != 0)
         {
             if (path == "." || path.EndsWith("/.", StringComparison.Ordinal)) return -(int)Errno.EINVAL;
             if (targetLoc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
@@ -800,7 +799,7 @@ public partial class SyscallManager
 
         if (timesAddr == 0)
         {
-            var permissionRc = CheckUtimensPermissions(engine, loc, useCurrentTimeShortcut: true);
+            var permissionRc = CheckUtimensPermissions(engine, loc, true);
             if (permissionRc < 0) return permissionRc;
             var resolved = ResolveRequestedTimes(loc.Dentry.Inode.ATime, loc.Dentry.Inode.MTime, true);
             return loc.Dentry.Inode.UpdateTimes(resolved.Atime, resolved.Mtime, resolved.Ctime);
@@ -862,7 +861,7 @@ public partial class SyscallManager
 
         if (timesAddr == 0)
         {
-            var permissionRc = CheckUtimensPermissions(engine, loc, useCurrentTimeShortcut: true);
+            var permissionRc = CheckUtimensPermissions(engine, loc, true);
             if (permissionRc < 0) return permissionRc;
             var resolved = ResolveRequestedTimes(loc.Dentry.Inode.ATime, loc.Dentry.Inode.MTime, true);
             return loc.Dentry.Inode.UpdateTimes(resolved.Atime, resolved.Mtime, resolved.Ctime);
@@ -886,7 +885,7 @@ public partial class SyscallManager
         var permissionRc = CheckUtimensPermissions(
             engine,
             loc,
-            useCurrentTimeShortcut: false,
+            false,
             atimeNsec,
             mtimeNsec);
         if (permissionRc < 0)
@@ -905,7 +904,8 @@ public partial class SyscallManager
         return inode.UpdateTimes(requested.Atime, requested.Mtime, requested.Ctime);
     }
 
-    private int CheckUtimensPermissions(Engine engine, PathLocation loc, bool useCurrentTimeShortcut, int? atimeNsec = null,
+    private int CheckUtimensPermissions(Engine engine, PathLocation loc, bool useCurrentTimeShortcut,
+        int? atimeNsec = null,
         int? mtimeNsec = null)
     {
         var task = engine.Owner as FiberTask;
@@ -973,8 +973,7 @@ public partial class SyscallManager
 
         var lookup = PathWalker.PathWalkWithData(
             path,
-            startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
-            LookupFlags.FollowSymlink);
+            startLoc.IsValid ? startLoc : CurrentWorkingDirectory);
         if (lookup.HasError) return lookup.ErrorCode;
         var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
@@ -1267,7 +1266,7 @@ public partial class SyscallManager
     {
         var pathErr = ReadPathArgument(a1, out var path);
         if (pathErr != 0) return pathErr;
-        var lookup = PathWalker.PathWalkWithData(path, LookupFlags.FollowSymlink);
+        var lookup = PathWalker.PathWalkWithData(path);
         if (lookup.HasError) return lookup.ErrorCode;
         var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
@@ -1310,17 +1309,41 @@ public partial class SyscallManager
         var mask = a4;
         var statxAddr = a5;
 
+        var knownFlags = LinuxConstants.AT_EMPTY_PATH |
+                         LinuxConstants.AT_SYMLINK_NOFOLLOW |
+                         LinuxConstants.AT_NO_AUTOMOUNT |
+                         LinuxConstants.AT_STATX_SYNC_TYPE;
+        if ((flags & ~knownFlags) != 0) return -(int)Errno.EINVAL;
+
+        var syncFlags = flags & LinuxConstants.AT_STATX_SYNC_TYPE;
+        if (syncFlags != LinuxConstants.AT_STATX_SYNC_AS_STAT &&
+            syncFlags != LinuxConstants.AT_STATX_FORCE_SYNC &&
+            syncFlags != LinuxConstants.AT_STATX_DONT_SYNC)
+            return -(int)Errno.EINVAL;
+
         if (path == "" && (flags & LinuxConstants.AT_EMPTY_PATH) != 0)
         {
+            if (dirfd == unchecked((int)LinuxConstants.AT_FDCWD))
+            {
+                if (!WriteStatx(engine, statxAddr, CurrentWorkingDirectory.Dentry!.Inode!, mask,
+                        CurrentWorkingDirectory.Mount))
+                    return -(int)Errno.EFAULT;
+
+                return 0;
+            }
+
             var f = GetFD(dirfd);
             if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
             RefreshHostfsProjectionForCaller(this, f.OpenedInode);
 
-            if (!WriteStatx(engine, statxAddr, f.OpenedInode, mask))
+            if (!WriteStatx(engine, statxAddr, f.OpenedInode, mask, f.Mount))
                 return -(int)Errno.EFAULT;
 
             return 0;
         }
+
+        if (path.Length == 0)
+            return -(int)Errno.ENOENT;
 
         PathLocation startLoc = default;
         if (dirfd != unchecked((int)LinuxConstants.AT_FDCWD) && !path.StartsWith("/"))
@@ -1341,7 +1364,10 @@ public partial class SyscallManager
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
 
-        if (!WriteStatx(engine, statxAddr, loc.Dentry.Inode, mask))
+        // We don't model automount transitions or remote-filesystem sync policy yet.
+        // Linux treats these as lookup/stat hints, so accept them and use local cached state.
+
+        if (!WriteStatx(engine, statxAddr, loc.Dentry.Inode, mask, loc.Mount))
             return -(int)Errno.EFAULT;
 
         return 0;
@@ -1353,7 +1379,7 @@ public partial class SyscallManager
         if (pathErr != 0) return pathErr;
         var mode = a2;
 
-        var lookup = PathWalker.PathWalkWithData(path, LookupFlags.FollowSymlink);
+        var lookup = PathWalker.PathWalkWithData(path);
         if (lookup.HasError) return lookup.ErrorCode;
         var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
@@ -1391,7 +1417,7 @@ public partial class SyscallManager
         var uid = (int)a2;
         var gid = (int)a3;
 
-        var lookup = PathWalker.PathWalkWithData(path, LookupFlags.FollowSymlink);
+        var lookup = PathWalker.PathWalkWithData(path);
         if (lookup.HasError) return lookup.ErrorCode;
         var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
@@ -1516,7 +1542,7 @@ public partial class SyscallManager
         if (pathErr != 0) return pathErr;
         var mode = (int)a2;
         if ((mode & ~7) != 0) return -(int)Errno.EINVAL;
-        var lookup = PathWalker.PathWalkWithData(path, LookupFlags.FollowSymlink);
+        var lookup = PathWalker.PathWalkWithData(path);
         if (lookup.HasError) return lookup.ErrorCode;
         var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
@@ -1697,11 +1723,13 @@ public partial class SyscallManager
         if (!engine.CopyToUser(addr, buf)) return;
     }
 
-    private static bool WriteStatx(Engine engine, uint addr, Inode inode, uint mask)
+    private static bool WriteStatx(Engine engine, uint addr, Inode inode, uint mask, Mount? mount)
     {
         var buf = new byte[256];
 
-        var actualMask = mask & LinuxConstants.STATX_BASIC_STATS;
+        var actualMask = LinuxConstants.STATX_BASIC_STATS;
+        if ((mask & LinuxConstants.STATX_MNT_ID) != 0 && mount != null)
+            actualMask |= LinuxConstants.STATX_MNT_ID;
 
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x00), actualMask);
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x04), 4096); // blksize
@@ -1722,11 +1750,14 @@ public partial class SyscallManager
         {
             var dto = new DateTimeOffset(dt);
             BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(offset), dto.ToUnixTimeSeconds());
-            BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(offset + 8), (uint)(dto.Millisecond * 1000000));
+            var nsec = (uint)(dto.UtcDateTime.Ticks % TimeSpan.TicksPerSecond * 100);
+            BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(offset + 8), nsec);
         }
 
         writeTime(0x40, inode.ATime);
-        writeTime(0x50, DateTime.UnixEpoch); // btime (creation) - not supported yet
+        // We don't track a filesystem-independent birth time yet, so leave stx_btime zeroed
+        // and keep STATX_BTIME clear in stx_mask.
+        writeTime(0x50, DateTime.UnixEpoch);
         writeTime(0x60, inode.CTime);
         writeTime(0x70, inode.MTime);
 
@@ -1735,6 +1766,12 @@ public partial class SyscallManager
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x84), inode.Rdev & 0xFF); // rdev_minor
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x88), (inode.Dev >> 8) & 0xFF); // dev_major
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x8C), inode.Dev & 0xFF); // dev_minor
+        BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0x90), mount != null ? (ulong)mount.Id : 0);
+
+        // STATX_DIOALIGN is intentionally left unsupported for now: most in-memory/virtual
+        // filesystems in the emulator don't expose direct-I/O alignment constraints.
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x98), 0); // stx_dio_mem_align
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0x9C), 0); // stx_dio_offset_align
 
         return engine.CopyToUser(addr, buf);
     }

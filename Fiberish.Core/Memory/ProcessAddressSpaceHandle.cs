@@ -4,7 +4,7 @@ namespace Fiberish.Memory;
 
 internal sealed class ProcessAddressSpaceHandle : IDisposable
 {
-    private MmuHandle _mmu;
+    private readonly MmuHandle _mmu;
 
     private ProcessAddressSpaceHandle(MmuHandle mmu)
     {

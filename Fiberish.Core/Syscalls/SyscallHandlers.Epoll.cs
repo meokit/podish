@@ -8,6 +8,41 @@ namespace Fiberish.Syscalls;
 public partial class SyscallManager
 {
 #pragma warning disable CS1998
+    private static int ValidateAndNormalizeEpollCtlEvents(ref uint events)
+    {
+        const uint supportedEvents = LinuxConstants.EPOLLIN |
+                                     LinuxConstants.EPOLLPRI |
+                                     LinuxConstants.EPOLLOUT |
+                                     LinuxConstants.EPOLLERR |
+                                     LinuxConstants.EPOLLHUP |
+                                     LinuxConstants.EPOLLRDNORM |
+                                     LinuxConstants.EPOLLRDBAND |
+                                     LinuxConstants.EPOLLWRNORM |
+                                     LinuxConstants.EPOLLWRBAND |
+                                     LinuxConstants.EPOLLMSG |
+                                     LinuxConstants.EPOLLRDHUP |
+                                     LinuxConstants.EPOLLET |
+                                     LinuxConstants.EPOLLONESHOT |
+                                     LinuxConstants.EPOLLWAKEUP |
+                                     LinuxConstants.EPOLLEXCLUSIVE;
+
+        if ((events & ~supportedEvents) != 0)
+            return -(int)Errno.EINVAL;
+
+        if ((events & LinuxConstants.EPOLLWAKEUP) != 0)
+            // Linux may silently ignore EPOLLWAKEUP if the caller lacks CAP_BLOCK_SUSPEND.
+            // We don't model autosleep/capability-gated wake locks yet, so accept the flag
+            // but treat it as a no-op hint.
+            events &= ~LinuxConstants.EPOLLWAKEUP;
+
+        if ((events & LinuxConstants.EPOLLEXCLUSIVE) != 0)
+            // Exclusive wakeups require kernel-level thundering-herd avoidance across
+            // multiple epoll instances. We don't model that dispatch policy yet.
+            return -(int)Errno.EINVAL;
+
+        return 0;
+    }
+
     private async ValueTask<int> SysEpollCreate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
@@ -72,6 +107,9 @@ public partial class SyscallManager
 
             events = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
             data = BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(4, 8));
+
+            var validateRc = ValidateAndNormalizeEpollCtlEvents(ref events);
+            if (validateRc != 0) return validateRc;
         }
 
         return epollInode.Ctl(task, op, fd, targetFile, events, data);

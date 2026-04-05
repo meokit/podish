@@ -4,7 +4,8 @@ namespace Fiberish.Core;
 
 public sealed class VirtualDaemonConnection : IDisposable
 {
-    internal VirtualDaemonConnection(VirtualDaemonRuntime runtime, FiberTask task, LinuxFile file, LinuxFile listenerFile)
+    internal VirtualDaemonConnection(VirtualDaemonRuntime runtime, FiberTask task, LinuxFile file,
+        LinuxFile listenerFile)
     {
         Runtime = runtime;
         Task = task;
@@ -16,6 +17,11 @@ public sealed class VirtualDaemonConnection : IDisposable
     public FiberTask Task { get; private set; }
     public LinuxFile File { get; }
     public LinuxFile ListenerFile { get; }
+
+    public void Dispose()
+    {
+        File.Close();
+    }
 
     public void BindTask(FiberTask task)
     {
@@ -51,10 +57,5 @@ public sealed class VirtualDaemonConnection : IDisposable
     {
         if (!File.TryGetSocketEndpointOps(out var ops)) return 0;
         return ops.Shutdown(File, Task, how);
-    }
-
-    public void Dispose()
-    {
-        File.Close();
     }
 }

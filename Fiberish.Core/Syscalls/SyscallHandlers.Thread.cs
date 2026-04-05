@@ -5,6 +5,7 @@ using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
+using Timer = Fiberish.Core.Timer;
 
 namespace Fiberish.Syscalls;
 
@@ -18,81 +19,25 @@ public partial class SyscallManager
         var val = a3;
 
         var opCode = op & 0x7F;
-        var isPrivate = (op & 0x80) != 0; // FUTEX_PRIVATE_FLAG = 128
+        var isPrivate = (op & LinuxConstants.FUTEX_PRIVATE_FLAG) != 0;
+        var useClockRealtime = (op & LinuxConstants.FUTEX_CLOCK_REALTIME) != 0;
+
+        if (ValidateFutexAddress(uaddr) != 0) return -(int)Errno.EINVAL;
+        if (useClockRealtime && !SupportsFutexClockRealtime(opCode)) return -(int)Errno.ENOSYS;
 
         if (opCode == 0) // WAIT
         {
-            var tidBuf = new byte[4];
-            if (!engine.CopyFromUser(uaddr, tidBuf)) return -(int)Errno.EFAULT;
-            var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(tidBuf);
-            if (currentVal != val) return -(int)Errno.EAGAIN;
-
-            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var waitKey, out var error))
-                return error;
-
-            var waiter = Futex.PrepareWait(waitKey);
-            var registration = Futex.CreateWaitRegistration(waitKey, waiter);
-
-            var task = engine.Owner as FiberTask;
-            if (task == null)
-            {
-                registration.Cancel();
-                return -(int)Errno.EINVAL;
-            }
-
-            // Linux FUTEX_WAIT(2const): compare-and-block must not lose a wake that races with
-            // queue insertion, so we re-check the futex word after registering the waiter.
-            if (!engine.CopyFromUser(uaddr, tidBuf))
-            {
-                registration.Cancel();
-                return -(int)Errno.EFAULT;
-            }
-
-            currentVal = BinaryPrimitives.ReadUInt32LittleEndian(tidBuf);
-            if (currentVal != val)
-            {
-                registration.Cancel();
-                return -(int)Errno.EAGAIN;
-            }
-
             int? timeoutMs = null;
             if (a4 != 0)
             {
                 if (!TryReadTimespec32TimeoutMs(engine, a4, out var parsedTimeout, out var timeoutErr))
-                {
-                    registration.Cancel();
                     return timeoutErr;
-                }
 
                 timeoutMs = parsedTimeout;
-                if (timeoutMs == 0)
-                {
-                    registration.Cancel();
-                    return -(int)Errno.ETIMEDOUT;
-                }
             }
 
-            Logger.LogInformation(
-                "[SysFutex WAIT] TID={TID} uaddr=0x{Uaddr:x} val={Val} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset} WakeReason={WR} PendingSig=0x{PS:x}",
-                task.TID, uaddr, val, isPrivate, waitKey.Kind, waitKey.PageValue, waitKey.OffsetWithinPage,
-                task.WakeReason, task.PendingSignals);
-            var result = await new FutexAwaitable(waiter, task, registration, timeoutMs);
-            Logger.LogInformation(
-                "[SysFutex WAIT] TID={TID} awaiter result={Result} WakeReason={WR} PendingSig=0x{PS:x}",
-                task.TID, result, task.WakeReason, task.PendingSignals);
-            if (result == FutexWaitOutcome.Interrupted)
-            {
-                Futex.CancelWait(waitKey, waiter);
-                return -(int)Errno.ERESTARTSYS;
-            }
-
-            if (result == FutexWaitOutcome.TimedOut)
-            {
-                Futex.CancelWait(waitKey, waiter);
-                return -(int)Errno.ETIMEDOUT;
-            }
-
-            return 0;
+            return await FutexWait(engine, uaddr, val, timeoutMs, isPrivate, LinuxConstants.FUTEX_BITSET_MATCH_ANY,
+                "WAIT");
         }
 
         if (opCode == 1) // WAKE
@@ -102,6 +47,154 @@ public partial class SyscallManager
                 return error;
 
             return Futex.Wake(wakeKey, count);
+        }
+
+        if (opCode == LinuxConstants.FUTEX_WAIT_BITSET)
+        {
+            if (a6 == 0) return -(int)Errno.EINVAL;
+
+            int? timeoutMs = null;
+            if (a4 != 0)
+            {
+                if (!TryReadAbsoluteTimespec32TimeoutMs(engine, a4,
+                        useClockRealtime ? LinuxConstants.CLOCK_REALTIME : LinuxConstants.CLOCK_MONOTONIC,
+                        out var parsedTimeout, out var timeoutErr))
+                    return timeoutErr;
+
+                timeoutMs = parsedTimeout;
+            }
+
+            return await FutexWait(engine, uaddr, val, timeoutMs, isPrivate, a6, "WAIT_BITSET");
+        }
+
+        if (opCode == LinuxConstants.FUTEX_WAKE_BITSET)
+        {
+            if (a6 == 0) return -(int)Errno.EINVAL;
+
+            var count = (int)val;
+            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var wakeKey, out var error))
+                return error;
+
+            return Futex.Wake(wakeKey, count, a6);
+        }
+
+        if (opCode == LinuxConstants.FUTEX_WAIT_REQUEUE_PI)
+        {
+            var uaddr2 = a5;
+            if (uaddr2 == 0 || uaddr2 == uaddr) return -(int)Errno.EINVAL;
+            if (ValidateFutexAddress(uaddr2) != 0) return -(int)Errno.EINVAL;
+            if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, out _, out var targetError))
+                return targetError;
+
+            int? timeoutMs = null;
+            if (a4 != 0)
+            {
+                if (!TryReadAbsoluteTimespec32TimeoutMs(engine, a4,
+                        useClockRealtime ? LinuxConstants.CLOCK_REALTIME : LinuxConstants.CLOCK_MONOTONIC,
+                        out var parsedTimeout, out var timeoutErr))
+                    return timeoutErr;
+
+                timeoutMs = parsedTimeout;
+            }
+
+            return await FutexWait(engine, uaddr, val, timeoutMs, isPrivate, LinuxConstants.FUTEX_BITSET_MATCH_ANY,
+                "WAIT_REQUEUE_PI");
+        }
+
+        if (opCode == LinuxConstants.FUTEX_REQUEUE)
+        {
+            var wakeCount = (int)val;
+            var requeueCount = (int)a4;
+            var uaddr2 = a5;
+
+            if (ValidateFutexAddress(uaddr2) != 0) return -(int)Errno.EINVAL;
+            if (wakeCount < 0 || requeueCount < 0 || uaddr2 == 0) return -(int)Errno.EINVAL;
+            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var sourceKey, out var sourceError))
+                return sourceError;
+            if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, out var targetKey, out var targetError))
+                return targetError;
+
+            var woke = Futex.Wake(sourceKey, wakeCount);
+            return woke + Futex.Requeue(sourceKey, targetKey, requeueCount);
+        }
+
+        if (opCode == LinuxConstants.FUTEX_CMP_REQUEUE_PI)
+        {
+            var wakeCount = (int)val;
+            var requeueCount = (int)a4;
+            var uaddr2 = a5;
+            var expected = a6;
+
+            if (wakeCount != 1 || requeueCount < 0 || uaddr2 == 0 || uaddr2 == uaddr) return -(int)Errno.EINVAL;
+            if (ValidateFutexAddress(uaddr2) != 0) return -(int)Errno.EINVAL;
+
+            var currentBuf = new byte[4];
+            if (!engine.CopyFromUser(uaddr, currentBuf)) return -(int)Errno.EFAULT;
+            var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(currentBuf);
+            if (currentVal != expected) return -(int)Errno.EAGAIN;
+
+            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var sourceKey, out var sourceError))
+                return sourceError;
+            if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, out var targetKey, out var targetError))
+                return targetError;
+
+            var woke = Futex.Wake(sourceKey, wakeCount);
+            return woke + Futex.Requeue(sourceKey, targetKey, requeueCount);
+        }
+
+        if (opCode == LinuxConstants.FUTEX_CMP_REQUEUE)
+        {
+            var wakeCount = (int)val;
+            var requeueCount = (int)a4;
+            var uaddr2 = a5;
+            var expected = a6;
+
+            if (ValidateFutexAddress(uaddr2) != 0) return -(int)Errno.EINVAL;
+            if (wakeCount < 0 || requeueCount < 0 || uaddr2 == 0) return -(int)Errno.EINVAL;
+
+            var currentBuf = new byte[4];
+            if (!engine.CopyFromUser(uaddr, currentBuf)) return -(int)Errno.EFAULT;
+            var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(currentBuf);
+            if (currentVal != expected) return -(int)Errno.EAGAIN;
+
+            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var sourceKey, out var sourceError))
+                return sourceError;
+            if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, out var targetKey, out var targetError))
+                return targetError;
+
+            var woke = Futex.Wake(sourceKey, wakeCount);
+            return woke + Futex.Requeue(sourceKey, targetKey, requeueCount);
+        }
+
+        if (opCode == LinuxConstants.FUTEX_WAKE_OP)
+        {
+            var wakeCount = (int)val;
+            var wakeCount2 = (int)a4;
+            var uaddr2 = a5;
+
+            if (ValidateFutexAddress(uaddr2) != 0) return -(int)Errno.EINVAL;
+            if (wakeCount < 0 || wakeCount2 < 0 || uaddr2 == 0) return -(int)Errno.EINVAL;
+
+            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var sourceKey, out var sourceError))
+                return sourceError;
+            if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, out var targetKey, out var targetError))
+                return targetError;
+
+            var futexWord = new byte[4];
+            if (!engine.CopyFromUser(uaddr2, futexWord)) return -(int)Errno.EFAULT;
+            var oldVal = BinaryPrimitives.ReadUInt32LittleEndian(futexWord);
+
+            if (!TryApplyWakeOp(a6, oldVal, out var newVal, out var wakeSecond, out var wakeOpErr))
+                return wakeOpErr;
+
+            BinaryPrimitives.WriteUInt32LittleEndian(futexWord, newVal);
+            if (!engine.CopyToUser(uaddr2, futexWord)) return -(int)Errno.EFAULT;
+
+            var woke = Futex.Wake(sourceKey, wakeCount);
+            if (wakeSecond)
+                woke += Futex.Wake(targetKey, wakeCount2);
+
+            return woke;
         }
 
         if (opCode is LinuxConstants.FUTEX_LOCK_PI or LinuxConstants.FUTEX_TRYLOCK_PI)
@@ -193,7 +286,75 @@ public partial class SyscallManager
             return 0;
         }
 
+        if (opCode == LinuxConstants.FUTEX_FD)
+            return -(int)Errno.ENOSYS;
+
         return -(int)Errno.ENOSYS;
+    }
+
+    private async ValueTask<int> FutexWait(Engine engine, uint uaddr, uint expectedValue, int? timeoutMs,
+        bool isPrivate,
+        uint bitsetMask, string opName)
+    {
+        var futexWord = new byte[4];
+        if (!engine.CopyFromUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
+        var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(futexWord);
+        if (currentVal != expectedValue) return -(int)Errno.EAGAIN;
+
+        if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var waitKey, out var error))
+            return error;
+
+        var waiter = Futex.PrepareWait(waitKey, bitsetMask);
+        var registration = Futex.CreateWaitRegistration(waitKey, waiter);
+
+        var task = engine.Owner as FiberTask;
+        if (task == null)
+        {
+            registration.Cancel();
+            return -(int)Errno.EINVAL;
+        }
+
+        // Linux FUTEX_WAIT compare-and-block must not lose a racing wake, so re-check after enqueue.
+        if (!engine.CopyFromUser(uaddr, futexWord))
+        {
+            registration.Cancel();
+            return -(int)Errno.EFAULT;
+        }
+
+        currentVal = BinaryPrimitives.ReadUInt32LittleEndian(futexWord);
+        if (currentVal != expectedValue)
+        {
+            registration.Cancel();
+            return -(int)Errno.EAGAIN;
+        }
+
+        if (timeoutMs == 0)
+        {
+            registration.Cancel();
+            return -(int)Errno.ETIMEDOUT;
+        }
+
+        Logger.LogInformation(
+            "[SysFutex {Op}] TID={TID} uaddr=0x{Uaddr:x} val={Val} bitset=0x{Bitset:x8} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset} WakeReason={WR} PendingSig=0x{PS:x}",
+            opName, task.TID, uaddr, expectedValue, bitsetMask, isPrivate, waitKey.Kind, waitKey.PageValue,
+            waitKey.OffsetWithinPage, task.WakeReason, task.PendingSignals);
+        var result = await new FutexAwaitable(waiter, task, registration, timeoutMs);
+        Logger.LogInformation(
+            "[SysFutex {Op}] TID={TID} awaiter result={Result} WakeReason={WR} PendingSig=0x{PS:x}",
+            opName, task.TID, result, task.WakeReason, task.PendingSignals);
+        if (result == FutexWaitOutcome.Interrupted)
+        {
+            Futex.CancelWait(waitKey, waiter);
+            return -(int)Errno.ERESTARTSYS;
+        }
+
+        if (result == FutexWaitOutcome.TimedOut)
+        {
+            Futex.CancelWait(waitKey, waiter);
+            return -(int)Errno.ETIMEDOUT;
+        }
+
+        return 0;
     }
 
     private readonly struct FutexAwaitable
@@ -226,6 +387,122 @@ public partial class SyscallManager
         if (includeShared && TryResolveSharedFutexKey(engine, uaddr, out var sharedKey))
             woke += Futex.Wake(sharedKey, count);
         return woke;
+    }
+
+    private static int ValidateFutexAddress(uint uaddr)
+    {
+        return (uaddr & 0x3) == 0 ? 0 : -(int)Errno.EINVAL;
+    }
+
+    private static bool SupportsFutexClockRealtime(int opCode)
+    {
+        return opCode == LinuxConstants.FUTEX_WAIT ||
+               opCode == LinuxConstants.FUTEX_WAIT_BITSET ||
+               opCode == LinuxConstants.FUTEX_WAIT_REQUEUE_PI;
+    }
+
+    private static bool TryReadAbsoluteTimespec32TimeoutMs(Engine engine, uint timespecPtr, int clockId,
+        out int timeoutMs, out int err)
+    {
+        timeoutMs = -1;
+        err = 0;
+        if (timespecPtr == 0) return true;
+
+        var buf = new byte[8];
+        if (!engine.CopyFromUser(timespecPtr, buf))
+        {
+            err = -(int)Errno.EFAULT;
+            return false;
+        }
+
+        var sec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
+        var nsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+        if (sec < 0 || nsec < 0 || nsec >= NSEC_PER_SEC)
+        {
+            err = -(int)Errno.EINVAL;
+            return false;
+        }
+
+        var deadlineNs = checked(sec * 1_000_000_000L + nsec);
+        var nowNs = GetSleepClockNs(clockId);
+        var remainingNs = Math.Max(0L, deadlineNs - nowNs);
+        return TryConvertTimespecToTimeoutMs(remainingNs / 1_000_000_000L, remainingNs % 1_000_000_000L,
+            out timeoutMs, out err);
+    }
+
+    private static bool TryApplyWakeOp(uint encodedWakeOp, uint oldValue, out uint newValue, out bool wakeSecond,
+        out int error)
+    {
+        newValue = oldValue;
+        wakeSecond = false;
+        error = 0;
+
+        var op = (int)((encodedWakeOp >> 28) & 0xF);
+        var cmp = (int)((encodedWakeOp >> 24) & 0xF);
+        var opArg = SignExtend12Bit((int)((encodedWakeOp >> 12) & 0xFFF));
+        var cmpArg = SignExtend12Bit((int)(encodedWakeOp & 0xFFF));
+
+        var shiftArg = (op & LinuxConstants.FUTEX_OP_OPARG_SHIFT) != 0;
+        var baseOp = op & ~LinuxConstants.FUTEX_OP_OPARG_SHIFT;
+        if (shiftArg)
+        {
+            if (opArg < 0 || opArg > 31)
+            {
+                error = -(int)Errno.EINVAL;
+                return false;
+            }
+
+            opArg = unchecked((int)(1u << opArg));
+        }
+
+        var oldSigned = unchecked((int)oldValue);
+        int newSigned;
+        switch (baseOp)
+        {
+            case LinuxConstants.FUTEX_OP_SET:
+                newSigned = opArg;
+                break;
+            case LinuxConstants.FUTEX_OP_ADD:
+                newSigned = oldSigned + opArg;
+                break;
+            case LinuxConstants.FUTEX_OP_OR:
+                newSigned = oldSigned | opArg;
+                break;
+            case LinuxConstants.FUTEX_OP_ANDN:
+                newSigned = oldSigned & ~opArg;
+                break;
+            case LinuxConstants.FUTEX_OP_XOR:
+                newSigned = oldSigned ^ opArg;
+                break;
+            default:
+                error = -(int)Errno.EINVAL;
+                return false;
+        }
+
+        newValue = unchecked((uint)newSigned);
+        wakeSecond = cmp switch
+        {
+            LinuxConstants.FUTEX_OP_CMP_EQ => oldSigned == cmpArg,
+            LinuxConstants.FUTEX_OP_CMP_NE => oldSigned != cmpArg,
+            LinuxConstants.FUTEX_OP_CMP_LT => oldSigned < cmpArg,
+            LinuxConstants.FUTEX_OP_CMP_LE => oldSigned <= cmpArg,
+            LinuxConstants.FUTEX_OP_CMP_GT => oldSigned > cmpArg,
+            LinuxConstants.FUTEX_OP_CMP_GE => oldSigned >= cmpArg,
+            _ => false
+        };
+
+        if (cmp is < LinuxConstants.FUTEX_OP_CMP_EQ or > LinuxConstants.FUTEX_OP_CMP_GE)
+        {
+            error = -(int)Errno.EINVAL;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static int SignExtend12Bit(int value)
+    {
+        return (value & 0x800) != 0 ? value | unchecked((int)0xFFFFF000) : value;
     }
 
     private bool TryResolveFutexKey(Engine engine, uint uaddr, bool fshared, out FutexKey key, out int error)
@@ -361,8 +638,8 @@ public partial class SyscallManager
         {
             private readonly TaskAsyncOperationHandle _operation;
             private readonly FiberTask _task;
+            private readonly Timer? _timer;
             private readonly FiberTask.WaitToken _token;
-            private Fiberish.Core.Timer? _timer;
 
             public FutexCompletionHandler(FiberTask task, FiberTask.WaitToken token, Action continuation,
                 TaskAsyncOperationHandle operation, int? timeoutMs)

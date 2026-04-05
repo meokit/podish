@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Native;
+using Timer = Fiberish.Core.Timer;
 
 namespace Fiberish.Syscalls;
 
@@ -96,7 +97,7 @@ public readonly struct SemWaitAwaiter : INotifyCompletion
     {
         private readonly TaskAsyncOperationHandle _operation;
         private readonly SemWaitState _state;
-        private Fiberish.Core.Timer? _timer;
+        private readonly Timer? _timer;
 
         public SemWaitOperation(SemWaitState state, Action continuation, TaskAsyncOperationHandle operation,
             long? timeoutMs)
@@ -191,7 +192,9 @@ public class SysVSemManager
         if (!_setsBySemid.TryGetValue(semid, out var set))
             return -(int)Errno.EINVAL;
 
-        var deadlineMs = timeoutMs.HasValue ? Stopwatch.GetTimestamp() + timeoutMs.Value * Stopwatch.Frequency / 1000 : 0;
+        var deadlineMs = timeoutMs.HasValue
+            ? Stopwatch.GetTimestamp() + timeoutMs.Value * Stopwatch.Frequency / 1000
+            : 0;
 
         while (true)
         {

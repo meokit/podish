@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using Fiberish.Core;
 
 namespace Fiberish.VFS;
 
@@ -77,7 +76,6 @@ public class MountNamespace
 
     private static NamespaceScope EnterNamespaceScope([CallerMemberName] string? caller = null)
     {
-        
         return default;
     }
 

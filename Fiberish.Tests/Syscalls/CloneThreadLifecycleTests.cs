@@ -98,6 +98,29 @@ public class CloneThreadLifecycleTests
     }
 
     [Fact]
+    public async Task SysClone_NewNsWithoutNamespaceSupport_ReturnsEinval()
+    {
+        using var env = new TestEnv(114, 114);
+
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysClone", LinuxConstants.CLONE_NEWNS);
+
+        Assert.Equal(-(int)Errno.EINVAL, rc);
+    }
+
+    [Fact]
+    public async Task SysClone_PtraceRelatedHints_AreAcceptedAsNoOps()
+    {
+        using var env = new TestEnv(115, 115);
+
+        var flags = LinuxConstants.CLONE_PTRACE | LinuxConstants.CLONE_UNTRACED | LinuxConstants.CLONE_DETACHED;
+        var childTid = await CallSys(env.SyscallManager, env.Engine, "SysClone", flags);
+
+        Assert.True(childTid > 0);
+        Assert.NotNull(env.Scheduler.GetTask(childTid));
+        Assert.Contains(env.Process.Children, pid => pid == childTid);
+    }
+
+    [Fact]
     public async Task SysExit_ClearsChildTidAndWakesFutexWaiters()
     {
         using var env = new TestEnv(200, 201);
@@ -220,6 +243,198 @@ public class CloneThreadLifecycleTests
 
         Assert.Equal(1, env.SyscallManager.Futex.Wake(parentKey, 1));
         Assert.True(waiter.Tcs.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task FutexRequeuePrivate_MovesWaiterToTargetQueue_AndCancelTracksNewKey()
+    {
+        using var env = new TestEnv(265, 265);
+        const uint sourceAddr = 0x00624000;
+        const uint targetAddr = 0x00625000;
+        env.MapUserPage(sourceAddr);
+        env.MapUserPage(targetAddr);
+
+        var sourceKey = ResolvePrivateKey(env.Vma, sourceAddr);
+        var targetKey = ResolvePrivateKey(env.Vma, targetAddr);
+        var waiter = env.SyscallManager.Futex.PrepareWait(sourceKey);
+        using var registration = env.SyscallManager.Futex.CreateWaitRegistration(sourceKey, waiter);
+
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysFutex", sourceAddr,
+            LinuxConstants.FUTEX_REQUEUE | LinuxConstants.FUTEX_PRIVATE_FLAG, 0, 1, targetAddr);
+
+        Assert.Equal(1, rc);
+        Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(sourceKey));
+        Assert.Equal(1, env.SyscallManager.Futex.GetWaiterCount(targetKey));
+        Assert.False(waiter.Tcs.Task.IsCompleted);
+
+        registration.Cancel();
+
+        Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(sourceKey));
+        Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(targetKey));
+        Assert.True(waiter.Tcs.Task.IsCompleted);
+        Assert.False(waiter.Tcs.Task.Result);
+    }
+
+    [Fact]
+    public async Task FutexCmpRequeuePrivate_CompareMismatch_ReturnsEagain_WithoutMovingWaiters()
+    {
+        using var env = new TestEnv(266, 266);
+        const uint sourceAddr = 0x00626000;
+        const uint targetAddr = 0x00627000;
+        env.MapUserPage(sourceAddr);
+        env.MapUserPage(targetAddr);
+        Assert.True(env.Engine.CopyToUser(sourceAddr, BitConverter.GetBytes(1u)));
+
+        var sourceKey = ResolvePrivateKey(env.Vma, sourceAddr);
+        var targetKey = ResolvePrivateKey(env.Vma, targetAddr);
+        var waiter = env.SyscallManager.Futex.PrepareWait(sourceKey);
+
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysFutex", sourceAddr,
+            LinuxConstants.FUTEX_CMP_REQUEUE | LinuxConstants.FUTEX_PRIVATE_FLAG, 0, 1, targetAddr, 2);
+
+        Assert.Equal(-(int)Errno.EAGAIN, rc);
+        Assert.Equal(1, env.SyscallManager.Futex.GetWaiterCount(sourceKey));
+        Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(targetKey));
+        Assert.False(waiter.Tcs.Task.IsCompleted);
+
+        Assert.Equal(1, env.SyscallManager.Futex.Wake(sourceKey, 1));
+        Assert.True(waiter.Tcs.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task FutexWaitBitset_ZeroMask_ReturnsEinval()
+    {
+        using var env = new TestEnv(267, 267);
+        const uint futexAddr = 0x00628000;
+        env.MapUserPage(futexAddr);
+        Assert.True(env.Engine.CopyToUser(futexAddr, BitConverter.GetBytes(0u)));
+
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysFutex", futexAddr,
+            LinuxConstants.FUTEX_WAIT_BITSET | LinuxConstants.FUTEX_PRIVATE_FLAG);
+
+        Assert.Equal(-(int)Errno.EINVAL, rc);
+    }
+
+    [Fact]
+    public async Task FutexWaitBitset_AbsolutePastDeadline_ReturnsEtimedout()
+    {
+        using var env = new TestEnv(268, 268);
+        const uint futexAddr = 0x00629000;
+        const uint timeoutPtr = 0x0062A000;
+        env.MapUserPage(futexAddr);
+        env.MapUserPage(timeoutPtr);
+        Assert.True(env.Engine.CopyToUser(futexAddr, BitConverter.GetBytes(0u)));
+        Assert.True(env.Engine.CopyToUser(timeoutPtr, new byte[8]));
+
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysFutex", futexAddr,
+            LinuxConstants.FUTEX_WAIT_BITSET | LinuxConstants.FUTEX_PRIVATE_FLAG, 0, timeoutPtr, 0,
+            LinuxConstants.FUTEX_BITSET_MATCH_ANY);
+
+        Assert.Equal(-(int)Errno.ETIMEDOUT, rc);
+    }
+
+    [Fact]
+    public async Task FutexWakeBitset_WakesOnlyMatchingWaiters()
+    {
+        using var env = new TestEnv(269, 269);
+        const uint futexAddr = 0x0062B000;
+        env.MapUserPage(futexAddr);
+
+        var key = ResolvePrivateKey(env.Vma, futexAddr);
+        var waiterA = env.SyscallManager.Futex.PrepareWait(key, 0b0001);
+        var waiterB = env.SyscallManager.Futex.PrepareWait(key, 0b0010);
+
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysFutex", futexAddr,
+            LinuxConstants.FUTEX_WAKE_BITSET | LinuxConstants.FUTEX_PRIVATE_FLAG, 2, 0, 0, 0b0001);
+
+        Assert.Equal(1, rc);
+        Assert.True(waiterA.Tcs.Task.IsCompleted);
+        Assert.False(waiterB.Tcs.Task.IsCompleted);
+        Assert.Equal(1, env.SyscallManager.Futex.GetWaiterCount(key));
+    }
+
+    [Fact]
+    public async Task FutexWakeOp_UpdatesSecondWord_AndConditionallyWakesBothQueues()
+    {
+        using var env = new TestEnv(2691, 2691);
+        const uint sourceAddr = 0x0062C000;
+        const uint targetAddr = 0x0062D000;
+        env.MapUserPage(sourceAddr);
+        env.MapUserPage(targetAddr);
+        Assert.True(env.Engine.CopyToUser(targetAddr, BitConverter.GetBytes(0u)));
+
+        var sourceKey = ResolvePrivateKey(env.Vma, sourceAddr);
+        var targetKey = ResolvePrivateKey(env.Vma, targetAddr);
+        var sourceWaiter = env.SyscallManager.Futex.PrepareWait(sourceKey);
+        var targetWaiter = env.SyscallManager.Futex.PrepareWait(targetKey);
+
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysFutex", sourceAddr,
+            LinuxConstants.FUTEX_WAKE_OP | LinuxConstants.FUTEX_PRIVATE_FLAG, 1, 1, targetAddr,
+            EncodeWakeOp(LinuxConstants.FUTEX_OP_ADD, 1, LinuxConstants.FUTEX_OP_CMP_EQ, 0));
+
+        Assert.Equal(2, rc);
+        Assert.True(sourceWaiter.Tcs.Task.IsCompleted);
+        Assert.True(targetWaiter.Tcs.Task.IsCompleted);
+
+        var valueBuf = new byte[4];
+        Assert.True(env.Engine.CopyFromUser(targetAddr, valueBuf));
+        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(valueBuf));
+    }
+
+    [Fact]
+    public async Task FutexWake_WithClockRealtimeFlag_ReturnsEnosys()
+    {
+        using var env = new TestEnv(2692, 2692);
+        const uint futexAddr = 0x0062E000;
+        env.MapUserPage(futexAddr);
+
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysFutex", futexAddr,
+            LinuxConstants.FUTEX_WAKE | LinuxConstants.FUTEX_PRIVATE_FLAG | LinuxConstants.FUTEX_CLOCK_REALTIME, 1);
+
+        Assert.Equal(-(int)Errno.ENOSYS, rc);
+    }
+
+    [Fact]
+    public async Task FutexMisalignedAddress_ReturnsEinval()
+    {
+        using var env = new TestEnv(2693, 2693);
+        const uint alignedAddr = 0x0062F000;
+        env.MapUserPage(alignedAddr);
+
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysFutex", alignedAddr + 1,
+            LinuxConstants.FUTEX_WAKE | LinuxConstants.FUTEX_PRIVATE_FLAG, 1);
+
+        Assert.Equal(-(int)Errno.EINVAL, rc);
+    }
+
+    [Fact]
+    public async Task FutexWaitRequeuePi_SameSourceAndTarget_ReturnsEinval()
+    {
+        using var env = new TestEnv(2694, 2694);
+        const uint futexAddr = 0x00631000;
+        env.MapUserPage(futexAddr);
+        Assert.True(env.Engine.CopyToUser(futexAddr, BitConverter.GetBytes(0u)));
+
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysFutex", futexAddr,
+            LinuxConstants.FUTEX_WAIT_REQUEUE_PI | LinuxConstants.FUTEX_PRIVATE_FLAG, 0, 0, futexAddr);
+
+        Assert.Equal(-(int)Errno.EINVAL, rc);
+    }
+
+    [Fact]
+    public async Task FutexCmpRequeuePi_WakeCountMustBeOne()
+    {
+        using var env = new TestEnv(2695, 2695);
+        const uint sourceAddr = 0x00632000;
+        const uint targetAddr = 0x00633000;
+        env.MapUserPage(sourceAddr);
+        env.MapUserPage(targetAddr);
+        Assert.True(env.Engine.CopyToUser(sourceAddr, BitConverter.GetBytes(0u)));
+
+        var rc = await CallSys(env.SyscallManager, env.Engine, "SysFutex", sourceAddr,
+            LinuxConstants.FUTEX_CMP_REQUEUE_PI | LinuxConstants.FUTEX_PRIVATE_FLAG, 2, 0, targetAddr);
+
+        Assert.Equal(-(int)Errno.EINVAL, rc);
     }
 
     [Fact]
@@ -459,6 +674,11 @@ public class CloneThreadLifecycleTests
         Assert.True(ok);
         error = (int)args[4]!;
         return (FutexKey)args[3]!;
+    }
+
+    private static uint EncodeWakeOp(int op, int opArg, int cmp, int cmpArg)
+    {
+        return (uint)(((op & 0xF) << 28) | ((cmp & 0xF) << 24) | ((opArg & 0xFFF) << 12) | (cmpArg & 0xFFF));
     }
 
     private sealed class TestEnv : IDisposable

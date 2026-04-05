@@ -1,7 +1,10 @@
+using System.Collections.Concurrent;
+using System.Text;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Memory;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
+using Fiberish.X86.Native;
 
 namespace Fiberish.Core;
 
@@ -27,36 +30,29 @@ public sealed class KernelRuntime : IDisposable
     public DeviceNumberManager DeviceNumbers { get; }
 
     public bool EnableGuestStatsCollection { get; set; }
-    public System.Collections.Concurrent.ConcurrentQueue<Engine> RetiredEngines { get; } = new();
+    public ConcurrentQueue<Engine> RetiredEngines { get; } = new();
 
     public void Dispose()
     {
-        while (RetiredEngines.TryDequeue(out var engine))
-        {
-            engine.Dispose();
-        }
+        while (RetiredEngines.TryDequeue(out var engine)) engine.Dispose();
     }
 
-    public unsafe void DumpAllBlocks(System.IO.Stream output)
+    public unsafe void DumpAllBlocks(Stream output)
     {
         ArgumentNullException.ThrowIfNull(output);
 
-        using var writer = new System.IO.BinaryWriter(output, System.Text.Encoding.UTF8, true);
+        using var writer = new BinaryWriter(output, Encoding.UTF8, true);
         var imageBase = Engine.GetNativeImageBase().ToInt64();
-        
+
         // Deduplicate blocks by ptr
-        var allBlocks = new System.Collections.Generic.HashSet<IntPtr>();
+        var allBlocks = new HashSet<IntPtr>();
         foreach (var ptr in Engine.GetBlockPointers())
             allBlocks.Add(ptr);
 
         foreach (var engine in RetiredEngines)
-        {
-            foreach (var ptr in engine.GetBlockPointers())
-            {
-                allBlocks.Add(ptr);
-            }
-        }
-        
+        foreach (var ptr in engine.GetBlockPointers())
+            allBlocks.Add(ptr);
+
         var blocks = allBlocks.ToArray();
 
         // Handlers are identical across engines since they map to native library functions
@@ -75,18 +71,16 @@ public sealed class KernelRuntime : IDisposable
             Engine.WriteLengthPrefixedUtf8(writer, handler.Symbol);
         }
 
-        var handlerIdsByPtr = new System.Collections.Generic.Dictionary<nint, int>(handlerTable.Count);
+        var handlerIdsByPtr = new Dictionary<nint, int>(handlerTable.Count);
         foreach (var handler in handlerTable)
-        {
             if (handler.HandlerPtr != IntPtr.Zero)
-                handlerIdsByPtr[(nint)handler.HandlerPtr] = handler.HandlerId;
-        }
+                handlerIdsByPtr[handler.HandlerPtr] = handler.HandlerId;
 
         foreach (var blockPtr in blocks)
         {
             if (blockPtr == IntPtr.Zero) continue;
 
-            var nativeBlock = (Fiberish.X86.Native.X86Native.BasicBlock*)blockPtr;
+            var nativeBlock = (X86Native.BasicBlock*)blockPtr;
             var startEip = nativeBlock->start_eip;
             var instCount = (uint)nativeBlock->inst_count;
             writer.Write(startEip);
@@ -94,7 +88,8 @@ public sealed class KernelRuntime : IDisposable
             writer.Write(instCount);
             writer.Write(nativeBlock->exec_count);
 
-            var ops = (Fiberish.X86.Native.X86Native.DecodedOp*)((byte*)nativeBlock + sizeof(Fiberish.X86.Native.X86Native.BasicBlock));
+            var ops = (X86Native.DecodedOp*)((byte*)nativeBlock +
+                                             sizeof(X86Native.BasicBlock));
             for (var i = 0; i < instCount; i++)
             {
                 var op = ops[i];
@@ -108,9 +103,9 @@ public sealed class KernelRuntime : IDisposable
                 writer.Write(Engine.ExtractDumpImm(op));
                 writer.Write(0u);
                 writer.Write(op.handler.ToInt64());
-                var handlerId = handlerIdsByPtr.TryGetValue((nint)op.handler, out var knownHandlerId)
+                var handlerId = handlerIdsByPtr.TryGetValue(op.handler, out var knownHandlerId)
                     ? knownHandlerId
-                    : Fiberish.X86.Native.X86Native.GetHandlerId(op.handler);
+                    : X86Native.GetHandlerId(op.handler);
                 writer.Write(handlerId);
             }
         }

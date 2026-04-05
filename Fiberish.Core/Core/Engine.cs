@@ -819,10 +819,8 @@ public class Engine : IDisposable
 
         var handlerIdsByPtr = new Dictionary<nint, int>(handlerTable.Count);
         foreach (var handler in handlerTable)
-        {
             if (handler.HandlerPtr != IntPtr.Zero)
-                handlerIdsByPtr[(nint)handler.HandlerPtr] = handler.HandlerId;
-        }
+                handlerIdsByPtr[handler.HandlerPtr] = handler.HandlerId;
 
         foreach (var blockPtr in blocks)
         {
@@ -850,7 +848,7 @@ public class Engine : IDisposable
                 writer.Write(ExtractDumpImm(op));
                 writer.Write(0u);
                 writer.Write(op.handler.ToInt64());
-                var handlerId = handlerIdsByPtr.TryGetValue((nint)op.handler, out var knownHandlerId)
+                var handlerId = handlerIdsByPtr.TryGetValue(op.handler, out var knownHandlerId)
                     ? knownHandlerId
                     : X86Native.GetHandlerId(op.handler);
                 writer.Write(handlerId);
@@ -910,8 +908,6 @@ public class Engine : IDisposable
         return X86Native.GetLibAddress();
     }
 
-    internal sealed record BlockDumpHandlerEntry(int HandlerId, IntPtr HandlerPtr, int OpId, string Symbol);
-
     protected virtual void Dispose(bool disposing)
     {
         if (!_disposed)
@@ -951,6 +947,8 @@ public class Engine : IDisposable
     {
         Dispose(false);
     }
+
+    internal sealed record BlockDumpHandlerEntry(int HandlerId, IntPtr HandlerPtr, int OpId, string Symbol);
 }
 
 public readonly record struct HandlerProfileStat(IntPtr Handler, ulong ExecCount);

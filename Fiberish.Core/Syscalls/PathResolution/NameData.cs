@@ -1,3 +1,4 @@
+using Fiberish.Native;
 using Fiberish.VFS;
 
 namespace Fiberish.Syscalls;
@@ -12,7 +13,7 @@ public class NameData
     /// <summary>
     ///     Maximum symlink recursion depth (Linux default is 40).
     /// </summary>
-    public const int MaxSymlinkDepth = 40;
+    public const int MaxSymlinkDepth = LinuxConstants.MaxSymlinkDepth;
 
     /// <summary>
     ///     Creates a new NameData with the specified starting location.

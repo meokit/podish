@@ -756,7 +756,8 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
         return MapSocketError(error);
     }
 
-    public override async ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task, IReadOnlyList<Iovec> iovs,
+    public override async ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task,
+        IReadOnlyList<Iovec> iovs,
         long offset, int flags)
     {
         if (offset != -1)
@@ -849,7 +850,9 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
         if (LinuxSocketType != SocketType.Stream && totalLength > 65536)
             return -(int)Errno.EMSGSIZE;
 
-        var rentLength = LinuxSocketType == SocketType.Stream ? (int)Math.Min(totalLength, 64 * 1024) : (int)totalLength;
+        var rentLength = LinuxSocketType == SocketType.Stream
+            ? (int)Math.Min(totalLength, 64 * 1024)
+            : (int)totalLength;
         var buffer = ArrayPool<byte>.Shared.Rent(rentLength);
         try
         {

@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using System.Text;
 using Fiberish.Native;
 using Fiberish.Syscalls;
@@ -11,7 +12,6 @@ public sealed class VirtualDaemonRuntime
     private int _exiting;
     private int _listenFd = -1;
     private UnixSocketInode? _listenInode;
-    private Exception? _lastScheduledFailure;
 
     internal VirtualDaemonRuntime(KernelScheduler scheduler, FiberTask task, IVirtualDaemon daemon)
     {
@@ -29,7 +29,7 @@ public sealed class VirtualDaemonRuntime
     public SyscallManager Syscalls { get; }
     public IVirtualDaemon Daemon { get; }
     public LinuxFile? ListenFile => _listenFd >= 0 ? Syscalls.GetFD(_listenFd) : null;
-    internal Exception? LastScheduledFailure => _lastScheduledFailure;
+    internal Exception? LastScheduledFailure { get; private set; }
 
     public void Start(int backlog = 16)
     {
@@ -46,7 +46,7 @@ public sealed class VirtualDaemonRuntime
 
         EnsureParentDirectories(Daemon.UnixPath);
 
-        var inode = new UnixSocketInode(0, Syscalls.MemfdSuperBlock, System.Net.Sockets.SocketType.Stream, Scheduler);
+        var inode = new UnixSocketInode(0, Syscalls.MemfdSuperBlock, SocketType.Stream, Scheduler);
         var dentry = new Dentry($"socket:[{inode.Ino}]", inode, null, Syscalls.MemfdSuperBlock);
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, Syscalls.AnonMount);
         var bindRc = inode.Bind(file, Task, new UnixSockaddrInfo
@@ -78,28 +78,28 @@ public sealed class VirtualDaemonRuntime
         if (string.IsNullOrWhiteSpace(unixPath) || unixPath[0] != '/')
             return;
 
-        int slash = unixPath.LastIndexOf('/');
+        var slash = unixPath.LastIndexOf('/');
         if (slash <= 0)
             return;
 
-        string directoryPath = unixPath[..slash];
-        string[] parts = directoryPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var directoryPath = unixPath[..slash];
+        var parts = directoryPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0)
             return;
 
-        PathLocation current = Syscalls.Root;
-        foreach (string part in parts)
+        var current = Syscalls.Root;
+        foreach (var part in parts)
             current = EnsureDirectory(current, part);
     }
 
     private static PathLocation EnsureDirectory(PathLocation parent, string name)
     {
-        Dentry parentDentry = parent.Dentry ?? throw new InvalidOperationException("Parent dentry is missing");
+        var parentDentry = parent.Dentry ?? throw new InvalidOperationException("Parent dentry is missing");
 
-        if (parentDentry.TryGetCachedChild(name, out Dentry? cached))
+        if (parentDentry.TryGetCachedChild(name, out var cached))
             return new PathLocation(cached, parent.Mount);
 
-        Dentry? dentry = parentDentry.Inode!.Lookup(name);
+        var dentry = parentDentry.Inode!.Lookup(name);
         if (dentry == null)
         {
             dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
@@ -235,7 +235,7 @@ public sealed class VirtualDaemonRuntime
         }
         catch (Exception ex)
         {
-            _lastScheduledFailure = ex;
+            LastScheduledFailure = ex;
             if (completionTask != null)
                 RetireChildTask(completionTask);
             Exit(1);
@@ -261,7 +261,7 @@ public sealed class VirtualDaemonRuntime
         }
         catch (Exception ex)
         {
-            _lastScheduledFailure = ex;
+            LastScheduledFailure = ex;
             if (completionTask != null)
                 RetireChildTask(completionTask);
             Exit(1);

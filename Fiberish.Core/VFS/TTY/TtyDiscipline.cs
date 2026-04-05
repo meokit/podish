@@ -1299,12 +1299,12 @@ public class TtyDiscipline
             return true;
 
         if (vmin > 0 && vtime == 0)
-            return available >= Math.Min((int)vmin, requestedCount);
+            return available >= Math.Min(vmin, requestedCount);
 
         if (vmin == 0 && vtime > 0)
             return available > 0 || timedOut;
 
-        return available >= Math.Min((int)vmin, requestedCount) || (timedOut && available > 0);
+        return available >= Math.Min(vmin, requestedCount) || (timedOut && available > 0);
     }
 
     private int GetReadTimeoutMs()

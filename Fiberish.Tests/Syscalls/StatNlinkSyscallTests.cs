@@ -170,6 +170,67 @@ public class StatNlinkSyscallTests
         Assert.Equal(1u, await ReadStatxNlink(env, 0x29000, 0x2B000));
     }
 
+    [Fact]
+    public async Task Statx_MountIdAndEmptyPath_OnAtFdcwd_ReportCurrentWorkingDirectoryMount()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x2C000);
+        env.MapUserPage(0x2D000);
+
+        env.WriteCString(0x2C000, string.Empty);
+
+        var rc = await env.Call("SysStatx", LinuxConstants.AT_FDCWD, 0x2C000,
+            LinuxConstants.AT_EMPTY_PATH | LinuxConstants.AT_STATX_DONT_SYNC,
+            LinuxConstants.STATX_MNT_ID,
+            0x2D000);
+
+        Assert.Equal(0, rc);
+        var returnedMask = env.ReadUInt32(0x2D000);
+        Assert.True((returnedMask & LinuxConstants.STATX_BASIC_STATS) == LinuxConstants.STATX_BASIC_STATS);
+        Assert.True((returnedMask & LinuxConstants.STATX_MNT_ID) != 0);
+        Assert.Equal((ulong)env.SyscallManager.RootMount!.Id, env.ReadUInt64(0x2D000 + 0x90));
+    }
+
+    [Fact]
+    public async Task Statx_InvalidSyncFlagsCombination_ReturnsEinval()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x2E000);
+        env.MapUserPage(0x2F000);
+
+        env.WriteCString(0x2E000, "/");
+
+        var rc = await env.Call("SysStatx", LinuxConstants.AT_FDCWD, 0x2E000,
+            LinuxConstants.AT_STATX_FORCE_SYNC | LinuxConstants.AT_STATX_DONT_SYNC,
+            LinuxConstants.STATX_BASIC_STATS,
+            0x2F000);
+
+        Assert.Equal(-(int)Errno.EINVAL, rc);
+    }
+
+    [Fact]
+    public async Task Statx_UnsupportedRequestedBits_AreClearedFromReturnedMask()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x30000);
+        env.MapUserPage(0x31000);
+
+        env.WriteCString(0x30000, "/");
+
+        var rc = await env.Call("SysStatx", LinuxConstants.AT_FDCWD, 0x30000, 0,
+            LinuxConstants.STATX_BTIME | LinuxConstants.STATX_DIOALIGN | LinuxConstants.STATX_MNT_ID,
+            0x31000);
+
+        Assert.Equal(0, rc);
+        var returnedMask = env.ReadUInt32(0x31000);
+        Assert.True((returnedMask & LinuxConstants.STATX_MNT_ID) != 0);
+        Assert.Equal(0u, returnedMask & LinuxConstants.STATX_BTIME);
+        Assert.Equal(0u, returnedMask & LinuxConstants.STATX_DIOALIGN);
+        Assert.Equal(0UL, env.ReadUInt64(0x31000 + 0x50));
+        Assert.Equal(0u, env.ReadUInt32(0x31000 + 0x98));
+        Assert.Equal(0u, env.ReadUInt32(0x31000 + 0x9C));
+    }
+
     private static async ValueTask<uint> ReadStatxNlink(TestEnv env, uint pathPtr, uint statxBuf)
     {
         var rc = await env.Call("SysStatx", LinuxConstants.AT_FDCWD, pathPtr, 0, LinuxConstants.STATX_BASIC_STATS,
@@ -230,6 +291,13 @@ public class StatNlinkSyscallTests
             Span<byte> buf = stackalloc byte[4];
             Assert.True(Engine.CopyFromUser(addr, buf));
             return BinaryPrimitives.ReadUInt32LittleEndian(buf);
+        }
+
+        public ulong ReadUInt64(uint addr)
+        {
+            Span<byte> buf = stackalloc byte[8];
+            Assert.True(Engine.CopyFromUser(addr, buf));
+            return BinaryPrimitives.ReadUInt64LittleEndian(buf);
         }
 
         public async ValueTask<int> Call(string methodName, uint a1 = 0, uint a2 = 0, uint a3 = 0, uint a4 = 0,

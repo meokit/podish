@@ -14,7 +14,8 @@ internal sealed class HostSocketReadiness : IDisposable
         _probeEngine = new HostSocketProbeEngine(owner, socket, logger);
         _waiter = new ReadinessWaiter(
             (file, events) => _probeEngine.Poll(events),
-            (file, dispatcher, callback, events) => _probeEngine.RegisterWaitHandle(file, dispatcher, callback, events));
+            (file, dispatcher, callback, events) =>
+                _probeEngine.RegisterWaitHandle(file, dispatcher, callback, events));
     }
 
     public void Dispose()

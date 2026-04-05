@@ -195,6 +195,11 @@ public partial class SyscallManager
         var oldVma = Mem.FindVmArea(oldAddr);
         if (oldVma == null) return -(int)Errno.EFAULT;
 
+        // Linux mremap operates on an existing mapping, not an arbitrary subrange inside a
+        // larger VMA. Treat subrange remaps conservatively instead of mutating adjacent VMAs
+        // into a shape the guest didn't actually own.
+        if (oldAddr != oldVma.Start) return -(int)Errno.EINVAL;
+
         // Verify the old range is fully contained within the VMA
         if (oldAddr + oldLenAligned > oldVma.End) return -(int)Errno.EFAULT;
 

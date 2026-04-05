@@ -196,8 +196,8 @@ public class EventFdInode : TmpfsInode
     private sealed class CallbackRegistration : IDisposable
     {
         private readonly Action _callback;
-        private readonly EventFdInode _owner;
         private readonly short _events;
+        private readonly EventFdInode _owner;
         private int _disposed;
 
         public CallbackRegistration(EventFdInode owner, Action callback, short events)
@@ -356,6 +356,7 @@ public class TimerFdInode : TmpfsInode
                 callback();
                 return NoopWaitRegistration.Instance;
             }
+
             _waiters.Add(callback);
         }
 

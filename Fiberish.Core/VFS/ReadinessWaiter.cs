@@ -29,7 +29,8 @@ internal sealed class ReadinessWaiter
             IDisposable? registration = null;
             try
             {
-                registration = _registerWaitHandle(file, dispatcher, () => DispatchSignal(waitQueue, dispatcher), events);
+                registration =
+                    _registerWaitHandle(file, dispatcher, () => DispatchSignal(waitQueue, dispatcher), events);
 
                 if (registration == null)
                 {

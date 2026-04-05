@@ -1000,7 +1000,7 @@ public partial class SyscallManager
             Mem.BindOrAssertAddressSpaceHandle(engine);
         }
         catch (InvalidOperationException) when (engine.Owner == null && engine.CurrentMmuAttachmentCount == 1 &&
-                                               Mem.TryAttachEngineToBoundAddressSpace(engine))
+                                                Mem.TryAttachEngineToBoundAddressSpace(engine))
         {
         }
 

@@ -309,7 +309,9 @@ public sealed class OverlayNodeState
     public void SetUpperDentry(Dentry upper)
     {
         lock (SyncRoot)
+        {
             UpperDentry = upper;
+        }
     }
 
     public void RegisterAlias(OverlayInode inode)
@@ -346,6 +348,7 @@ public sealed class OverlayNodeState
                 _children[name] = state;
                 return state;
             }
+
             state.UpdateBackings(lowers, upper);
             return state;
         }
@@ -496,14 +499,6 @@ public class OverlayInode : Inode
         }
     }
 
-    public override uint GetLinkCountForStat()
-    {
-        if (Type == InodeType.Directory)
-            return (uint)Math.Max(0, ComputeMergedDirectoryLinkCount());
-
-        return SourceInode?.GetLinkCountForStat() ?? base.GetLinkCountForStat();
-    }
-
     /// <summary>
     ///     Lower dentries ordered from top-most lower layer to bottom-most lower layer.
     ///     Lookup resolves in this order.
@@ -515,6 +510,14 @@ public class OverlayInode : Inode
 
     public Inode? LowerInode => LowerDentry?.Inode;
     public Inode? UpperInode => UpperDentry?.Inode;
+
+    public override uint GetLinkCountForStat()
+    {
+        if (Type == InodeType.Directory)
+            return (uint)Math.Max(0, ComputeMergedDirectoryLinkCount());
+
+        return SourceInode?.GetLinkCountForStat() ?? base.GetLinkCountForStat();
+    }
 
     private static InodeRefKind GetBackingRefKind(LinuxFile linuxFile)
     {

@@ -53,7 +53,10 @@ public class PtyMaster
         return OutputBuffer.Read(buffer);
     }
 
-    public int Read(Span<byte> buffer, FileFlags flags) => Read(null, buffer, flags);
+    public int Read(Span<byte> buffer, FileFlags flags)
+    {
+        return Read(null, buffer, flags);
+    }
 
     /// <summary>
     ///     Writes data to the slave (input from the slave's perspective).
@@ -67,7 +70,10 @@ public class PtyMaster
         return InputBuffer.Write(buffer);
     }
 
-    public int Write(ReadOnlySpan<byte> buffer) => Write(null, buffer);
+    public int Write(ReadOnlySpan<byte> buffer)
+    {
+        return Write(null, buffer);
+    }
 
     /// <summary>
     ///     Handles ioctl requests for the master side.
@@ -167,7 +173,8 @@ public class PtySlave
     /// <summary>
     ///     Gets or creates the TTY discipline for this slave.
     /// </summary>
-    public TtyDiscipline GetOrCreateDiscipline(ISignalBroadcaster broadcaster, ILogger logger, KernelScheduler scheduler)
+    public TtyDiscipline GetOrCreateDiscipline(ISignalBroadcaster broadcaster, ILogger logger,
+        KernelScheduler scheduler)
     {
         if (Discipline != null) return Discipline;
 
@@ -189,7 +196,10 @@ public class PtySlave
         return _pair.Master.InputBuffer.Read(buffer);
     }
 
-    public int Read(Span<byte> buffer, FileFlags flags) => Read(null, buffer, flags);
+    public int Read(Span<byte> buffer, FileFlags flags)
+    {
+        return Read(null, buffer, flags);
+    }
 
     /// <summary>
     ///     Writes data to the PTY (output to master).
@@ -203,7 +213,10 @@ public class PtySlave
         return _pair.Master.OutputBuffer.Write(buffer);
     }
 
-    public int Write(ReadOnlySpan<byte> buffer) => Write(null, buffer);
+    public int Write(ReadOnlySpan<byte> buffer)
+    {
+        return Write(null, buffer);
+    }
 }
 
 /// <summary>
