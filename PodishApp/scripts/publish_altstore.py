@@ -122,7 +122,40 @@ def main():
     # Copy .app to Payload
     shutil.copytree(app_bundle_path, f"{payload_dir}/{app_bundle_name}")
     
-    # Zip to .ipa
+    # 3. Update Info.plist and Entitlements
+    target_info_plist = f"{payload_dir}/{app_bundle_name}/Info.plist"
+    print(f"Updating Info.plist in {app_bundle_name} to version {full_version}...")
+    run(["plutil", "-replace", "CFBundleShortVersionString", "-string", full_version, target_info_plist])
+    run(["plutil", "-replace", "CFBundleVersion", "-string", "1", target_info_plist])
+
+    # Re-sign with Ad-hoc and remove get-task-allow
+    print(f"Re-signing {app_bundle_name} with Ad-hoc signature and stripping get-task-allow...")
+    entitlements_plist = f"{TEMP_DIR}/entitlements.plist"
+    target_app_path = f"{payload_dir}/{app_bundle_name}"
+    
+    # Extract existing entitlements
+    run(["codesign", "-d", "--entitlements", entitlements_plist, target_app_path])
+    
+    # Use plutil to convert to a clean XML first (codesign output can have a blob header)
+    run(["plutil", "-convert", "xml1", entitlements_plist], check=False)
+
+    with open(entitlements_plist, 'rb') as fp:
+        try:
+            ent_data = plistlib.load(fp)
+        except Exception:
+            ent_data = {}
+
+    if 'get-task-allow' in ent_data:
+        print("Removing get-task-allow entitlement...")
+        del ent_data['get-task-allow']
+        
+    with open(entitlements_plist, 'wb') as fp:
+        plistlib.dump(ent_data, fp)
+        
+    # Re-sign the app bundle using Ad-hoc signature ('-')
+    run(["codesign", "--force", "--sign", "-", "--entitlements", entitlements_plist, "--deep", target_app_path])
+
+    # 4. Zip to .ipa
     ipa_filename = f"{app_name}.ipa"
     ipa_path = os.path.join(ipa_export_dir, ipa_filename)
     

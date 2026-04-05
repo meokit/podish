@@ -22,5 +22,13 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>PodishCoreBootstrapperPath</key>
+	<string>$(PODISHCORE_BOOTSTRAPPER_OBJ)</string>
+	<key>PodishCoreSliceName</key>
+	<string>$(PODISHCORE_SLICE_NAME)</string>
+	<key>PodishCoreStaticLibPath</key>
+	<string>$(PODISHCORE_STATIC_LIB)</string>
+	<key>PodishSeedImageReference</key>
+	<string>$(PODISH_SEED_IMAGE_REF)</string>
 </dict>
 </plist>

@@ -1,14 +1,32 @@
 import SwiftUI
 
 struct NewContainerSheetView: View {
+    private enum DnsMode: String, CaseIterable, Identifiable {
+        case host
+        case custom
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .host:
+                return "Host"
+            case .custom:
+                return "Custom"
+            }
+        }
+    }
+
     @ObservedObject var store: PodishUiStore
     @Environment(\.dismiss) private var dismiss
 
-    @State private var pullImageRef = "docker.io/i386/alpine:latest"
+    @State private var pullImageRef = PodishSeedImageConfig.imageReference
     @State private var selectedImageId: String?
     @State private var containerName = ""
     @State private var memoryLimitText = "\(PodishMemoryLimits.defaultMemoryQuotaMB)"
     @State private var networkMode: PodishNetworkMode = .host
+    @State private var dnsMode: DnsMode = .host
+    @State private var dnsServersText = ""
     @State private var portMappingsText = ""
     @State private var createError: String?
 
@@ -19,6 +37,7 @@ struct NewContainerSheetView: View {
                 nameSection
                 memorySection
                 networkSection
+                dnsSection
                 imageListSection
                 if let createError {
                     Text(createError)
@@ -43,9 +62,11 @@ struct NewContainerSheetView: View {
                         if let imageRef = selectedImageRef {
                             let trimmed = containerName.trimmingCharacters(in: .whitespacesAndNewlines)
                             let mappings: [PodishPortMapping]
+                            let dnsServers: [String]
                             let memoryQuotaBytes: Int64?
                             do {
                                 mappings = try parsePortMappings()
+                                dnsServers = try parseDnsServers()
                                 memoryQuotaBytes = try parseMemoryQuotaBytes()
                             } catch {
                                 createError = error.localizedDescription
@@ -57,6 +78,7 @@ struct NewContainerSheetView: View {
                                 fromImage: imageRef,
                                 name: trimmed.isEmpty ? nil : trimmed,
                                 networkMode: networkMode,
+                                dnsServers: dnsServers,
                                 portMappings: mappings,
                                 memoryQuotaBytes: memoryQuotaBytes
                             )
@@ -90,7 +112,7 @@ struct NewContainerSheetView: View {
                 .font(.headline)
 
             HStack(spacing: 8) {
-                TextField("docker.io/library/alpine:latest", text: $pullImageRef)
+                TextField(PodishSeedImageConfig.imageReference, text: $pullImageRef)
                     #if os(macOS)
                     .textFieldStyle(.roundedBorder)
                     #endif
@@ -101,6 +123,11 @@ struct NewContainerSheetView: View {
                     pullImageRef = trimmed
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(store.imagePullStatus?.isActive == true)
+            }
+
+            if let status = store.imagePullStatus {
+                imagePullStatusCard(status)
             }
         }
     }
@@ -129,6 +156,7 @@ struct NewContainerSheetView: View {
             } else {
                 List(selection: $selectedImageId) {
                     ForEach(store.images) { image in
+                        let blockedReason = store.imageRemovalBlockedReason(image.repoTag)
                         HStack(spacing: 8) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(image.repoTag)
@@ -138,6 +166,12 @@ struct NewContainerSheetView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
+                                if let blockedReason {
+                                    Text(blockedReason)
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                        .lineLimit(1)
+                                }
                             }
                             Spacer()
                             Button(role: .destructive) {
@@ -146,11 +180,13 @@ struct NewContainerSheetView: View {
                                 Image(systemName: "trash")
                             }
                             .buttonStyle(.borderless)
+                            .disabled(blockedReason != nil)
                         }
                         .tag(image.id)
                     }
                 }
                 .listStyle(.inset)
+                .frame(minHeight: 180, maxHeight: 240)
             }
         }
     }
@@ -207,9 +243,155 @@ struct NewContainerSheetView: View {
         }
     }
 
+    private var dnsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("DNS")
+                .font(.headline)
+            Picker("DNS", selection: $dnsMode) {
+                ForEach(DnsMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text(dnsMode == .host
+                 ? "Use the host DNS configuration by default."
+                 : "Enter one DNS server per line. Commas and semicolons are also supported.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if dnsMode == .custom {
+                TextEditor(text: $dnsServersText)
+                    .frame(minHeight: 90)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(.secondary.opacity(0.25), lineWidth: 1)
+                    )
+            }
+        }
+    }
+
     private var selectedImageRef: String? {
         guard let selectedImageId else { return nil }
         return store.images.first(where: { $0.id == selectedImageId })?.repoTag
+    }
+
+    @ViewBuilder
+    private func imagePullStatusCard(_ status: PodishImagePullStatus) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: statusIconName(status.phase))
+                    .foregroundStyle(statusTint(status.phase))
+                Text(statusTitle(status))
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                if let progressText = progressText(status) {
+                    Text(progressText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let fraction = status.progressFraction {
+                ProgressView(value: fraction)
+                    .progressViewStyle(.linear)
+            } else if status.isActive {
+                ProgressView()
+                    .progressViewStyle(.linear)
+            }
+
+            Text(status.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 12) {
+                if let layerText = layerText(status) {
+                    Label(layerText, systemImage: "square.stack.3d.down.forward")
+                }
+                if let bytesText = bytesText(status) {
+                    Label(bytesText, systemImage: "arrow.down.circle")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(statusTint(status.phase).opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(statusTint(status.phase).opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func statusTitle(_ status: PodishImagePullStatus) -> String {
+        switch status.phase {
+        case .resolving:
+            return "Resolving \(status.imageReference)"
+        case .downloading:
+            return "Pulling \(status.imageReference)"
+        case .extracting:
+            return "Preparing \(status.imageReference)"
+        case .completed:
+            return "Pulled \(status.imageReference)"
+        case .failed:
+            return "Failed to pull \(status.imageReference)"
+        }
+    }
+
+    private func statusIconName(_ phase: PodishImagePullPhase) -> String {
+        switch phase {
+        case .resolving:
+            return "magnifyingglass"
+        case .downloading:
+            return "arrow.down.circle.fill"
+        case .extracting:
+            return "shippingbox.fill"
+        case .completed:
+            return "checkmark.circle.fill"
+        case .failed:
+            return "xmark.octagon.fill"
+        }
+    }
+
+    private func statusTint(_ phase: PodishImagePullPhase) -> Color {
+        switch phase {
+        case .resolving:
+            return .blue
+        case .downloading:
+            return .teal
+        case .extracting:
+            return .orange
+        case .completed:
+            return .green
+        case .failed:
+            return .red
+        }
+    }
+
+    private func progressText(_ status: PodishImagePullStatus) -> String? {
+        guard let fraction = status.progressFraction else { return nil }
+        return "\(Int((fraction * 100).rounded()))%"
+    }
+
+    private func layerText(_ status: PodishImagePullStatus) -> String? {
+        guard let layerIndex = status.layerIndex, let layerCount = status.layerCount, layerCount > 0 else {
+            return nil
+        }
+        return "Layer \(layerIndex)/\(layerCount)"
+    }
+
+    private func bytesText(_ status: PodishImagePullStatus) -> String? {
+        guard let totalBytes = status.overallTotalBytes, totalBytes > 0 else { return nil }
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useGB]
+        formatter.countStyle = .file
+        let completed = formatter.string(fromByteCount: status.overallBytes ?? 0)
+        let total = formatter.string(fromByteCount: totalBytes)
+        return "\(completed) / \(total)"
     }
 
     private func parsePortMappings() throws -> [PodishPortMapping] {
@@ -258,6 +440,27 @@ struct NewContainerSheetView: View {
             throw ParseError("Memory limit must be at least \(PodishMemoryLimits.minimumMemoryQuotaMB) MB.")
         }
         return memoryMB * PodishMemoryLimits.bytesPerMiB
+    }
+
+    private func parseDnsServers() throws -> [String] {
+        guard dnsMode == .custom else {
+            return []
+        }
+
+        let servers = dnsServersText
+            .components(separatedBy: CharacterSet(charactersIn: ",;\n"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !servers.isEmpty else {
+            throw ParseError("Enter at least one DNS server, or switch DNS back to Host.")
+        }
+
+        for server in servers where server.contains(where: { $0.isWhitespace }) {
+            throw ParseError("DNS server '\(server)' is invalid.")
+        }
+
+        return servers
     }
 
     private struct ParseError: LocalizedError {

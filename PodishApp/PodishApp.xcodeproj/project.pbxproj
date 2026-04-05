@@ -42,6 +42,7 @@
 		A0000000000000000000002D /* PodishApp/MacInfo.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PodishApp/MacInfo.plist; sourceTree = SOURCE_ROOT; };
 		A0000000000000000000002E /* Sources/Podish/PodishLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/PodishLog.swift; sourceTree = SOURCE_ROOT; };
 		A0000000000000000000002F /* PodishApp/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = PodishApp/Assets.xcassets; sourceTree = SOURCE_ROOT; };
+		A00000000000000000000088 /* artifacts/podish-native/PodishCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = artifacts/podish-native/PodishCore.xcframework; sourceTree = SOURCE_ROOT; };
 		A00000000000000000000087 /* Sources/Podish/Models/PodishTerminalAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Podish/Models/PodishTerminalAppearance.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -85,6 +86,7 @@
 				A0000000000000000000002D /* PodishApp/MacInfo.plist */,
 				A0000000000000000000002E /* Sources/Podish/PodishLog.swift */,
 				A0000000000000000000002F /* PodishApp/Assets.xcassets */,
+				A00000000000000000000088 /* artifacts/podish-native/PodishCore.xcframework */,
 			);
 			path = PodishApp;
 			sourceTree = "<group>";
@@ -107,6 +109,7 @@
 				A00000000000000000000040 /* Sources */,
 				A00000000000000000000041 /* Frameworks */,
 				A00000000000000000000042 /* Resources */,
+				A00000000000000000000089 /* Prepare Seed OCI Image */,
 			);
 			buildRules = (
 			);
@@ -129,7 +132,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2600;
-				LastUpgradeCheck = 2600;
+				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					A00000000000000000000050 = {
 						CreatedOnToolsVersion = 26.2;
@@ -199,16 +202,47 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 4P59922UZ6;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_OPTIMIZATION_LEVEL = 0;
 				GCC_PREPROCESSOR_DEFINITIONS = (
 					"DEBUG=1",
 					"$(inherited)",
 				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				ONLY_ACTIVE_ARCH = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -220,11 +254,41 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 4P59922UZ6;
 				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 			};
@@ -236,8 +300,9 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 4P59922UZ6;
+				DEAD_CODE_STRIPPING = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = "$(inherited)";
@@ -247,6 +312,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = PodishApp/Info.plist;
 				"INFOPLIST_FILE[sdk=macosx*]" = PodishApp/MacInfo.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -263,7 +329,7 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(PODISHCORE_BOOTSTRAPPER_OBJ)",
-					"-lPodishCore",
+					"$(PODISHCORE_STATIC_LIB)",
 					"-framework",
 					Foundation,
 					"-framework",
@@ -285,6 +351,16 @@
 				"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/_staging/ios-arm64/podish_bootstrapper.o";
 				"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/_staging/iossimulator-arm64/podish_bootstrapper.o";
 				"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/_staging/osx-arm64/podish_bootstrapper.o";
+				PODISHCORE_SLICE_NAME = "";
+				"PODISHCORE_SLICE_NAME[sdk=iphoneos*]" = ios-arm64;
+				"PODISHCORE_SLICE_NAME[sdk=iphonesimulator*]" = ios-arm64-simulator;
+				"PODISHCORE_SLICE_NAME[sdk=macosx*]" = macos-arm64;
+				PODISHCORE_STATIC_LIB = "";
+				"PODISHCORE_STATIC_LIB[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64/libPodishCore.a";
+				"PODISHCORE_STATIC_LIB[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64-simulator/libPodishCore.a";
+				"PODISHCORE_STATIC_LIB[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/macos-arm64/libPodishCore.a";
+				PODISH_SEED_IMAGE_BASE_URL = "https://podish.meokit.com/rootfs";
+				PODISH_SEED_IMAGE_REF = "docker.io/i386/alpine:3.23";
 				PRODUCT_BUNDLE_IDENTIFIER = com.meokit.podish;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos macosx";
@@ -300,7 +376,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 4P59922UZ6;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = "$(inherited)";
@@ -310,6 +387,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = PodishApp/Info.plist;
 				"INFOPLIST_FILE[sdk=macosx*]" = PodishApp/MacInfo.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -326,7 +404,7 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(PODISHCORE_BOOTSTRAPPER_OBJ)",
-					"-lPodishCore",
+					"$(PODISHCORE_STATIC_LIB)",
 					"-framework",
 					Foundation,
 					"-framework",
@@ -348,6 +426,16 @@
 				"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/_staging/ios-arm64/podish_bootstrapper.o";
 				"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/_staging/iossimulator-arm64/podish_bootstrapper.o";
 				"PODISHCORE_BOOTSTRAPPER_OBJ[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/_staging/osx-arm64/podish_bootstrapper.o";
+				PODISHCORE_SLICE_NAME = "";
+				"PODISHCORE_SLICE_NAME[sdk=iphoneos*]" = ios-arm64;
+				"PODISHCORE_SLICE_NAME[sdk=iphonesimulator*]" = ios-arm64-simulator;
+				"PODISHCORE_SLICE_NAME[sdk=macosx*]" = macos-arm64;
+				PODISHCORE_STATIC_LIB = "";
+				"PODISHCORE_STATIC_LIB[sdk=iphoneos*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64/libPodishCore.a";
+				"PODISHCORE_STATIC_LIB[sdk=iphonesimulator*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/ios-arm64-simulator/libPodishCore.a";
+				"PODISHCORE_STATIC_LIB[sdk=macosx*]" = "$(SRCROOT)/artifacts/podish-native/PodishCore.xcframework/macos-arm64/libPodishCore.a";
+				PODISH_SEED_IMAGE_BASE_URL = "https://podish.meokit.com/rootfs";
+				PODISH_SEED_IMAGE_REF = "docker.io/i386/alpine:3.23";
 				PRODUCT_BUNDLE_IDENTIFIER = com.meokit.podish;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos macosx";

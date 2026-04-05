@@ -33,6 +33,45 @@ struct PodishImage: Identifiable, Hashable {
     var createdAt: Date
 }
 
+enum PodishImagePullPhase: String, Decodable, Hashable {
+    case resolving
+    case downloading
+    case extracting
+    case completed
+    case failed
+
+    var isTerminal: Bool {
+        switch self {
+        case .completed, .failed:
+            return true
+        case .resolving, .downloading, .extracting:
+            return false
+        }
+    }
+}
+
+struct PodishImagePullStatus: Hashable {
+    let imageReference: String
+    let phase: PodishImagePullPhase
+    let message: String
+    let overallBytes: Int64?
+    let overallTotalBytes: Int64?
+    let layerBytes: Int64?
+    let layerTotalBytes: Int64?
+    let layerIndex: Int?
+    let layerCount: Int?
+
+    var progressFraction: Double? {
+        guard let overallBytes, let overallTotalBytes, overallTotalBytes > 0 else { return nil }
+        let clamped = min(max(overallBytes, 0), overallTotalBytes)
+        return Double(clamped) / Double(overallTotalBytes)
+    }
+
+    var isActive: Bool {
+        !phase.isTerminal
+    }
+}
+
 struct NativeImageListItem: Decodable, Hashable, Sendable {
     let imageReference: String
     let manifestDigest: String

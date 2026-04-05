@@ -1,7 +1,9 @@
 using System.Formats.Tar;
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -13,6 +15,13 @@ public class OciPullService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private static readonly HttpClient _httpClient = new();
+    private const string PullProgressMarker = "PODISH_IMAGE_PULL ";
+    private static readonly TimeSpan[] NetworkPermissionRetryDelays =
+    [
+        TimeSpan.FromSeconds(1),
+        TimeSpan.FromSeconds(2),
+        TimeSpan.FromSeconds(3)
+    ];
     private readonly ILogger _logger;
 
     public OciPullService(ILogger logger)
@@ -20,136 +29,385 @@ public class OciPullService
         _logger = logger;
     }
 
-    public async Task PullAndExtractImageAsync(string imageReference, string outputDirectory)
+    private sealed class ProgressReportingReadStream : Stream
     {
-        // Parse image reference: registry/repository:tag
-        // E.g. docker.io/library/alpine:latest or ghcr.io/namespace/image:tag
-        var parsed = ParseImageReference(imageReference);
-        var registry = parsed.Registry;
-        var repository = parsed.Repository;
-        var tag = parsed.Tag;
+        private readonly Stream _inner;
+        private readonly Action<long, bool> _onProgress;
+        private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+        private readonly long _reportStepBytes;
+        private long _lastReportedBytes;
+        private long _reportedBytes;
+        private bool _completed;
 
-        _logger.LogInformation("Pulling {Registry}/{Repository}:{Tag} into {OutputDir}...", registry, repository, tag,
-            outputDirectory);
-
-        try
+        public ProgressReportingReadStream(Stream inner, long reportStepBytes, Action<long, bool> onProgress)
         {
-            // 1. Get Auth Token
-            var token = await GetAuthTokenAsync(registry, repository);
-            if (token != null)
-                _logger.LogDebug("Successfully obtained auth token.");
-            else
-                _logger.LogDebug("No auth token needed, or anonymous access granted immediately.");
+            _inner = inner;
+            _onProgress = onProgress;
+            _reportStepBytes = Math.Max(32 * 1024, reportStepBytes);
+        }
 
-            // 2. Get Manifest
-            var manifestStr = await GetManifestAsync(registry, repository, tag, token);
-            var manifestDoc = JsonDocument.Parse(manifestStr);
+        public override bool CanRead => _inner.CanRead;
+        public override bool CanSeek => _inner.CanSeek;
+        public override bool CanWrite => _inner.CanWrite;
+        public override long Length => _inner.CanSeek ? _inner.Length : _reportedBytes;
 
-            var schemaVersion = manifestDoc.RootElement.GetProperty("schemaVersion").GetInt32();
-            if (schemaVersion != 2) throw new NotSupportedException($"Unsupported schema version: {schemaVersion}");
-
-            var (layers, _) = await ResolveImageLayersAsync(registry, repository, token, manifestDoc, manifestStr);
-
-            _logger.LogInformation("Found {Count} layers to download.", layers.Count);
-
-            // 3. Download and Extract each layer (sequentially for simplicity, or in parallel)
-            Directory.CreateDirectory(outputDirectory);
-
-            foreach (var layer in layers)
+        public override long Position
+        {
+            get => _inner.CanSeek ? _inner.Position : _reportedBytes;
+            set
             {
-                var digest = layer.Digest;
-                var mediaType = layer.MediaType;
-                var size = layer.Size;
+                if (!_inner.CanSeek)
+                    throw new NotSupportedException();
+                _inner.Position = value;
+            }
+        }
 
-                _logger.LogInformation("Downloading layer {Digest} ({Size} bytes) type {MediaType}...",
-                    digest[..15] + "...", size, mediaType);
-                await DownloadAndExtractLayerAsync(registry, repository, digest, token, outputDirectory);
+        public override void Flush()
+        {
+            _inner.Flush();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var bytesRead = _inner.Read(buffer, offset, count);
+            ReportProgress(bytesRead);
+            return bytesRead;
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            var bytesRead = _inner.Read(buffer);
+            ReportProgress(bytesRead);
+            return bytesRead;
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var bytesRead = await _inner.ReadAsync(buffer, cancellationToken);
+            ReportProgress(bytesRead);
+            return bytesRead;
+        }
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            var bytesRead = await _inner.ReadAsync(buffer.AsMemory(offset, count), cancellationToken);
+            ReportProgress(bytesRead);
+            return bytesRead;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            return _inner.Seek(offset, origin);
+        }
+
+        public override void SetLength(long value)
+        {
+            _inner.SetLength(value);
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            _inner.Write(buffer, offset, count);
+        }
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            _inner.Write(buffer);
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            return _inner.WriteAsync(buffer, cancellationToken);
+        }
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            return _inner.WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                ReportCompletion();
+            base.Dispose(disposing);
+        }
+
+        private void ReportProgress(int bytesRead)
+        {
+            if (bytesRead > 0)
+                _reportedBytes += bytesRead;
+
+            if (bytesRead <= 0)
+            {
+                ReportCompletion();
+                return;
             }
 
-            _logger.LogInformation("Successfully pulled and extracted {Registry}/{Repository}:{Tag} to {OutputDir}",
-                registry, repository, tag, outputDirectory);
+            if (_reportedBytes - _lastReportedBytes < _reportStepBytes &&
+                _stopwatch.ElapsedMilliseconds < 150)
+                return;
+
+            _lastReportedBytes = _reportedBytes;
+            _stopwatch.Restart();
+            _onProgress(_reportedBytes, false);
         }
-        catch (Exception ex)
+
+        private void ReportCompletion()
         {
-            _logger.LogError(ex, "Failed to pull image {ImageReference}: {Message}", imageReference, ex.Message);
-            throw;
+            if (_completed)
+                return;
+
+            _completed = true;
+            _lastReportedBytes = _reportedBytes;
+            _onProgress(_reportedBytes, true);
         }
+    }
+
+    public async Task PullAndExtractImageAsync(string imageReference, string outputDirectory)
+    {
+        await ExecuteWithInitialNetworkRetryAsync(imageReference, async () =>
+        {
+            // Parse image reference: registry/repository:tag
+            // E.g. docker.io/library/alpine:latest or ghcr.io/namespace/image:tag
+            var parsed = ParseImageReference(imageReference);
+            var registry = parsed.Registry;
+            var repository = parsed.Repository;
+            var tag = parsed.Tag;
+
+            _logger.LogInformation("Pulling {Registry}/{Repository}:{Tag} into {OutputDir}...", registry, repository,
+                tag,
+                outputDirectory);
+
+            try
+            {
+                // 1. Get Auth Token
+                var token = await GetAuthTokenAsync(registry, repository);
+                if (token != null)
+                    _logger.LogDebug("Successfully obtained auth token.");
+                else
+                    _logger.LogDebug("No auth token needed, or anonymous access granted immediately.");
+
+                // 2. Get Manifest
+                var manifestStr = await GetManifestAsync(registry, repository, tag, token);
+                var manifestDoc = JsonDocument.Parse(manifestStr);
+
+                var schemaVersion = manifestDoc.RootElement.GetProperty("schemaVersion").GetInt32();
+                if (schemaVersion != 2) throw new NotSupportedException($"Unsupported schema version: {schemaVersion}");
+
+                var (layers, _) = await ResolveImageLayersAsync(registry, repository, token, manifestDoc, manifestStr);
+
+                _logger.LogInformation("Found {Count} layers to download.", layers.Count);
+
+                // 3. Download and Extract each layer (sequentially for simplicity, or in parallel)
+                Directory.CreateDirectory(outputDirectory);
+
+                foreach (var layer in layers)
+                {
+                    var digest = layer.Digest;
+                    var mediaType = layer.MediaType;
+                    var size = layer.Size;
+
+                    _logger.LogInformation("Downloading layer {Digest} ({Size} bytes) type {MediaType}...",
+                        digest[..15] + "...", size, mediaType);
+                    await DownloadAndExtractLayerAsync(registry, repository, digest, token, outputDirectory);
+                }
+
+                _logger.LogInformation(
+                    "Successfully pulled and extracted {Registry}/{Repository}:{Tag} to {OutputDir}",
+                    registry, repository, tag, outputDirectory);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to pull image {ImageReference}: {Message}", imageReference, ex.Message);
+                throw;
+            }
+        });
     }
 
     public async Task<OciStoredImage> PullAndStoreImageAsync(string imageReference, string storeDirectory)
     {
-        var storeName =
-            Path.GetFileName(storeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        if (string.IsNullOrEmpty(storeName))
-            storeName = "oci-store";
-        var lockDir = Path.GetDirectoryName(storeDirectory) ?? storeDirectory;
-        var lockPath = Path.Combine(lockDir, $".{storeName}.pull.lock");
-        using var storeLock = CooperativeFileLock.Acquire(lockPath, TimeSpan.FromMinutes(10));
-
-        var parsed = ParseImageReference(imageReference);
-        var registry = parsed.Registry;
-        var repository = parsed.Repository;
-        var tag = parsed.Tag;
-
-        _logger.LogInformation("Pulling {Registry}/{Repository}:{Tag} into OCI store {StoreDir}...", registry,
-            repository,
-            tag, storeDirectory);
-
-        Directory.CreateDirectory(storeDirectory);
-        var blobsDir = Path.Combine(storeDirectory, "blobs", "sha256");
-        var indexesDir = Path.Combine(storeDirectory, "indexes");
-        Directory.CreateDirectory(blobsDir);
-        Directory.CreateDirectory(indexesDir);
-
-        var token = await GetAuthTokenAsync(registry, repository);
-        var manifestStr = await GetManifestAsync(registry, repository, tag, token);
-        using var manifestDoc = JsonDocument.Parse(manifestStr);
-        var (layers, manifestDigest) =
-            await ResolveImageLayersAsync(registry, repository, token, manifestDoc, manifestStr);
-
-        var storedLayers = new List<OciStoredLayer>(layers.Count);
-        foreach (var layer in layers)
+        return await ExecuteWithInitialNetworkRetryAsync(imageReference, async () =>
         {
-            var digestHex = DigestHex(layer.Digest);
-            var tarBlobPath = Path.Combine(blobsDir, $"{digestHex}.tar");
-            var indexPath = Path.Combine(indexesDir, $"{digestHex}.json");
+            var storeName =
+                Path.GetFileName(storeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (string.IsNullOrEmpty(storeName))
+                storeName = "oci-store";
+            var lockDir = Path.GetDirectoryName(storeDirectory) ?? storeDirectory;
+            var lockPath = Path.Combine(lockDir, $".{storeName}.pull.lock");
+            using var storeLock = CooperativeFileLock.Acquire(lockPath, TimeSpan.FromMinutes(10));
 
-            if (!File.Exists(tarBlobPath))
-                await DownloadAndExpandLayerAsTarAsync(registry, repository, layer.Digest, token, tarBlobPath);
+            var parsed = ParseImageReference(imageReference);
+            var registry = parsed.Registry;
+            var repository = parsed.Repository;
+            var tag = parsed.Tag;
 
-            if (!File.Exists(indexPath))
+            _logger.LogInformation("Pulling {Registry}/{Repository}:{Tag} into OCI store {StoreDir}...", registry,
+                repository,
+                tag, storeDirectory);
+            EmitPullProgress(imageReference, "resolving", $"Resolving image {imageReference}");
+
+            try
             {
-                using var tarStream = File.OpenRead(tarBlobPath);
-                var index = OciLayerIndexBuilder.BuildFromTar(tarStream, layer.Digest);
-                var persistedEntries = index.Entries.Values
-                    .Select(e => e with { InlineData = null })
-                    .ToList();
-                await File.WriteAllTextAsync(indexPath,
-                    JsonSerializer.Serialize(persistedEntries, PodishJsonContext.Default.ListLayerIndexEntry));
+                Directory.CreateDirectory(storeDirectory);
+                var blobsDir = Path.Combine(storeDirectory, "blobs", "sha256");
+                var indexesDir = Path.Combine(storeDirectory, "indexes");
+                Directory.CreateDirectory(blobsDir);
+                Directory.CreateDirectory(indexesDir);
+
+                var token = await GetAuthTokenAsync(registry, repository);
+                var manifestStr = await GetManifestAsync(registry, repository, tag, token);
+                using var manifestDoc = JsonDocument.Parse(manifestStr);
+                var (layers, manifestDigest) =
+                    await ResolveImageLayersAsync(registry, repository, token, manifestDoc, manifestStr);
+                var overallTotalBytes = layers.Sum(layer => Math.Max(0, layer.Size));
+                var overallCompletedBytes = 0L;
+                EmitPullProgress(imageReference, "downloading",
+                    $"Found {layers.Count} layer{(layers.Count == 1 ? string.Empty : "s")} to download",
+                    overallCompletedBytes, overallTotalBytes, 0, overallTotalBytes, 0, layers.Count);
+
+                var storedLayers = new List<OciStoredLayer>(layers.Count);
+                for (var layerIndex = 0; layerIndex < layers.Count; layerIndex++)
+                {
+                    var layer = layers[layerIndex];
+                    var digestHex = DigestHex(layer.Digest);
+                    var tarBlobPath = Path.Combine(blobsDir, $"{digestHex}.tar");
+                    var indexPath = Path.Combine(indexesDir, $"{digestHex}.json");
+                    var humanLayerIndex = layerIndex + 1;
+
+                    if (!File.Exists(tarBlobPath))
+                    {
+                        EmitPullProgress(imageReference, "downloading",
+                            $"Downloading layer {humanLayerIndex}/{layers.Count}",
+                            overallCompletedBytes, overallTotalBytes, 0, layer.Size, humanLayerIndex, layers.Count);
+                        await DownloadAndExpandLayerAsTarAsync(
+                            registry,
+                            repository,
+                            layer.Digest,
+                            token,
+                            tarBlobPath,
+                            imageReference,
+                            humanLayerIndex,
+                            layers.Count,
+                            overallCompletedBytes,
+                            overallTotalBytes,
+                            layer.Size);
+                    }
+                    else
+                    {
+                        EmitPullProgress(imageReference, "extracting",
+                            $"Reusing cached layer {humanLayerIndex}/{layers.Count}",
+                            overallCompletedBytes + layer.Size,
+                            overallTotalBytes,
+                            layer.Size,
+                            layer.Size,
+                            humanLayerIndex,
+                            layers.Count);
+                    }
+
+                    if (!File.Exists(indexPath))
+                    {
+                        EmitPullProgress(imageReference, "extracting",
+                            $"Indexing layer {humanLayerIndex}/{layers.Count}",
+                            overallCompletedBytes + layer.Size,
+                            overallTotalBytes,
+                            layer.Size,
+                            layer.Size,
+                            humanLayerIndex,
+                            layers.Count);
+                        using var tarStream = File.OpenRead(tarBlobPath);
+                        var index = OciLayerIndexBuilder.BuildFromTar(tarStream, layer.Digest);
+                        var persistedEntries = index.Entries.Values
+                            .Select(e => e with { InlineData = null })
+                            .ToList();
+                        await File.WriteAllTextAsync(indexPath,
+                            JsonSerializer.Serialize(persistedEntries, PodishJsonContext.Default.ListLayerIndexEntry));
+                    }
+
+                    storedLayers.Add(new OciStoredLayer(
+                        layer.Digest,
+                        layer.MediaType,
+                        layer.Size,
+                        OciStorePath.ToStoredPath(storeDirectory, tarBlobPath),
+                        OciStorePath.ToStoredPath(storeDirectory, indexPath)));
+                    overallCompletedBytes += layer.Size;
+                    EmitPullProgress(imageReference, "extracting",
+                        $"Prepared layer {humanLayerIndex}/{layers.Count}",
+                        overallCompletedBytes,
+                        overallTotalBytes,
+                        layer.Size,
+                        layer.Size,
+                        humanLayerIndex,
+                        layers.Count);
+                }
+
+                var image = new OciStoredImage(
+                    imageReference,
+                    registry,
+                    repository,
+                    tag,
+                    manifestDigest,
+                    OciStorePath.RelativeStoreDirectory,
+                    storedLayers);
+                await File.WriteAllTextAsync(Path.Combine(storeDirectory, "image.json"),
+                    JsonSerializer.Serialize(image, PodishJsonContext.Default.OciStoredImage));
+
+                _logger.LogInformation("Stored image {ImageReference} in OCI store {StoreDir} with {LayerCount} layers",
+                    imageReference, storeDirectory, storedLayers.Count);
+                EmitPullProgress(imageReference, "completed", $"Finished pulling {imageReference}",
+                    overallTotalBytes, overallTotalBytes, null, null, layers.Count, layers.Count);
+                return image;
             }
+            catch (Exception ex)
+            {
+                EmitPullProgress(imageReference, "failed", ex.Message);
+                throw;
+            }
+        });
+    }
 
-            storedLayers.Add(new OciStoredLayer(
-                layer.Digest,
-                layer.MediaType,
-                layer.Size,
-                OciStorePath.ToStoredPath(storeDirectory, tarBlobPath),
-                OciStorePath.ToStoredPath(storeDirectory, indexPath)));
+    private async Task<T> ExecuteWithInitialNetworkRetryAsync<T>(string imageReference, Func<Task<T>> action)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await action();
+            }
+            catch (Exception ex) when (attempt < NetworkPermissionRetryDelays.Length && IsRetryableInitialNetworkFailure(ex))
+            {
+                var delay = NetworkPermissionRetryDelays[attempt];
+                _logger.LogWarning(ex,
+                    "Initial network access failed while pulling {ImageReference}; retrying in {DelaySeconds}s",
+                    imageReference, delay.TotalSeconds);
+                EmitPullProgress(
+                    imageReference,
+                    "resolving",
+                    $"Waiting for network access... If macOS shows a permission dialog, allow it to continue. Retrying in {delay.Seconds}s."
+                );
+                await Task.Delay(delay);
+            }
         }
+    }
 
-        var image = new OciStoredImage(
-            imageReference,
-            registry,
-            repository,
-            tag,
-            manifestDigest,
-            OciStorePath.RelativeStoreDirectory,
-            storedLayers);
-        await File.WriteAllTextAsync(Path.Combine(storeDirectory, "image.json"),
-            JsonSerializer.Serialize(image, PodishJsonContext.Default.OciStoredImage));
+    private async Task ExecuteWithInitialNetworkRetryAsync(string imageReference, Func<Task> action)
+    {
+        await ExecuteWithInitialNetworkRetryAsync(imageReference, async () =>
+        {
+            await action();
+            return true;
+        });
+    }
 
-        _logger.LogInformation("Stored image {ImageReference} in OCI store {StoreDir} with {LayerCount} layers",
-            imageReference, storeDirectory, storedLayers.Count);
-        return image;
+    private static bool IsRetryableInitialNetworkFailure(Exception ex)
+    {
+        return ex switch
+        {
+            OperationCanceledException => false,
+            HttpRequestException httpEx => httpEx.StatusCode == null || (int)httpEx.StatusCode >= 500,
+            SocketException => true,
+            _ when ex.InnerException != null => IsRetryableInitialNetworkFailure(ex.InnerException),
+            _ => false
+        };
     }
 
     private async Task<string?> GetAuthTokenAsync(string registry, string repository)
@@ -305,7 +563,13 @@ public class OciPullService
 
     private async Task DownloadAndExpandLayerAsTarAsync(string registry, string repository, string digest,
         string? token,
-        string outputTarPath)
+        string outputTarPath,
+        string imageReference,
+        int layerIndex,
+        int layerCount,
+        long overallCompletedBytesBeforeLayer,
+        long overallTotalBytes,
+        long layerTotalBytes)
     {
         var blobUrl = $"https://{registry}/v2/{repository}/blobs/{digest}";
         var request = new HttpRequestMessage(HttpMethod.Get, blobUrl);
@@ -316,9 +580,51 @@ public class OciPullService
         response.EnsureSuccessStatusCode();
 
         await using var contentStream = await response.Content.ReadAsStreamAsync();
-        await using var gzipStream = new GZipStream(contentStream, CompressionMode.Decompress);
+        await using var reportingStream = new ProgressReportingReadStream(
+            contentStream,
+            Math.Max(128 * 1024, layerTotalBytes / 40),
+            (layerBytes, completed) =>
+            {
+                var clampedLayerBytes = Math.Min(layerTotalBytes, Math.Max(0, layerBytes));
+                EmitPullProgress(imageReference, completed ? "extracting" : "downloading",
+                    completed
+                        ? $"Downloaded layer {layerIndex}/{layerCount}"
+                        : $"Downloading layer {layerIndex}/{layerCount}",
+                    Math.Min(overallTotalBytes, overallCompletedBytesBeforeLayer + clampedLayerBytes),
+                    overallTotalBytes,
+                    clampedLayerBytes,
+                    layerTotalBytes,
+                    layerIndex,
+                    layerCount);
+            });
+        await using var gzipStream = new GZipStream(reportingStream, CompressionMode.Decompress);
         await using var file = File.Open(outputTarPath, FileMode.Create, FileAccess.Write, FileShare.Read);
         await gzipStream.CopyToAsync(file);
+    }
+
+    private void EmitPullProgress(
+        string imageReference,
+        string state,
+        string message,
+        long? overallBytes = null,
+        long? overallTotalBytes = null,
+        long? layerBytes = null,
+        long? layerTotalBytes = null,
+        int? layerIndex = null,
+        int? layerCount = null)
+    {
+        var payload = new ImagePullProgressMessage(
+            imageReference,
+            state,
+            message,
+            overallBytes,
+            overallTotalBytes,
+            layerBytes,
+            layerTotalBytes,
+            layerIndex,
+            layerCount);
+        _logger.LogInformation("{Payload}",
+            PullProgressMarker + JsonSerializer.Serialize(payload, PodishJsonContext.Default.ImagePullProgressMessage));
     }
 
     private async Task<(List<LayerDescriptor> Layers, string ManifestDigest)> ResolveImageLayersAsync(
@@ -416,3 +722,14 @@ public class OciPullService
 
     private readonly record struct LayerDescriptor(string Digest, string MediaType, long Size);
 }
+
+internal sealed record ImagePullProgressMessage(
+    string ImageReference,
+    string State,
+    string Message,
+    long? OverallBytes = null,
+    long? OverallTotalBytes = null,
+    long? LayerBytes = null,
+    long? LayerTotalBytes = null,
+    int? LayerIndex = null,
+    int? LayerCount = null);

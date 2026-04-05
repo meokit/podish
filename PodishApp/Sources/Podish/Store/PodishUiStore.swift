@@ -11,19 +11,14 @@ final class PodishUiStore: ObservableObject {
     @Published var images: [PodishImage] = []
     @Published private(set) var pendingContainerActions: [String: PendingContainerAction] = [:]
     @Published private(set) var recentContainerIDs: [String] = []
-
-    @Published var events: [String] = [
-        "container-start alpine-shell",
-        "image-pull docker.io/i386/alpine:latest",
-        "container-exit openssl-test (0)"
-    ]
+    @Published private(set) var imagePullStatus: PodishImagePullStatus?
 
     @Published var selectedContainerID: String?
     var onStartContainer: ((String) -> Void)?
     var onStopContainer: ((String) -> Void)?
     var onRemoveContainer: ((String) -> Void)?
     var onAttachContainer: ((String) -> Void)?
-    var onCreateContainer: ((String, String?, PodishNetworkMode, [PodishPortMapping], Int64?) -> Void)?
+    var onCreateContainer: ((String, String?, PodishNetworkMode, [String], [PodishPortMapping], Int64?) -> Void)?
     var onPullImage: ((String) -> Void)?
     var onRemoveImage: ((String) -> Void)?
     var onShowNewContainer: (() -> Void)?
@@ -158,10 +153,11 @@ final class PodishUiStore: ObservableObject {
         fromImage imageRef: String,
         name: String?,
         networkMode: PodishNetworkMode,
+        dnsServers: [String],
         portMappings: [PodishPortMapping],
         memoryQuotaBytes: Int64?
     ) {
-        onCreateContainer?(imageRef, name, networkMode, portMappings, memoryQuotaBytes)
+        onCreateContainer?(imageRef, name, networkMode, dnsServers, portMappings, memoryQuotaBytes)
     }
 
     func pullImage(_ imageRef: String) {
@@ -172,6 +168,26 @@ final class PodishUiStore: ObservableObject {
         onRemoveImage?(imageRef)
     }
 
+    func containersUsingImage(_ imageRef: String) -> [PodishContainer] {
+        containers.filter { $0.image == imageRef }
+    }
+
+    func canRemoveImage(_ imageRef: String) -> Bool {
+        containersUsingImage(imageRef).isEmpty
+    }
+
+    func imageRemovalBlockedReason(_ imageRef: String) -> String? {
+        let matchingContainers = containersUsingImage(imageRef)
+        guard !matchingContainers.isEmpty else { return nil }
+
+        if matchingContainers.count == 1 {
+            let name = matchingContainers[0].name
+            return "Used by container \(name)"
+        }
+
+        return "Used by \(matchingContainers.count) containers"
+    }
+
     func showNewContainer() {
         onShowNewContainer?()
     }
@@ -179,5 +195,9 @@ final class PodishUiStore: ObservableObject {
     func markRecentlyUsed(_ containerId: String) {
         recentContainerIDs.removeAll { $0 == containerId }
         recentContainerIDs.insert(containerId, at: 0)
+    }
+
+    func updateImagePullStatus(_ status: PodishImagePullStatus?) {
+        imagePullStatus = status
     }
 }

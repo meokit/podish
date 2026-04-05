@@ -1093,6 +1093,20 @@ public static class PodishNativeApi
             if (string.IsNullOrWhiteSpace(imageRef))
                 return SetErrorAndReturn(ctx, "image ref is required", PodEinval);
 
+            var referencingContainers = FindContainersReferencingImage(ctx, imageRef);
+            if (referencingContainers.Count > 0)
+            {
+                var preview = string.Join(", ", referencingContainers.Take(3));
+                if (referencingContainers.Count > 3)
+                    preview += ", ...";
+
+                return SetErrorAndReturn(
+                    ctx,
+                    $"image is still used by existing container(s): {preview}. Remove those containers first.",
+                    PodEbusy
+                );
+            }
+
             var safe = imageRef.Replace("/", "_").Replace(":", "_");
             var dir = Path.Combine(ctx.Context.OciStoreImagesDir, safe);
             if (!Directory.Exists(dir))
@@ -1466,6 +1480,16 @@ public static class PodishNativeApi
         }
 
         return result;
+    }
+
+    private static List<string> FindContainersReferencingImage(NativeContext ctx, string imageRef)
+    {
+        return BuildContainerListSnapshot(ctx)
+            .Where(item => string.Equals(item.Image, imageRef, StringComparison.Ordinal))
+            .Select(item => string.IsNullOrWhiteSpace(item.Name) ? item.ContainerId : item.Name)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
     }
 
     internal static List<NativeContainerListItem> BuildContainerListSnapshot(NativeContext ctx)

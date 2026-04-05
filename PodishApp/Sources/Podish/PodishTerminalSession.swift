@@ -10,7 +10,7 @@ private enum NativeIpcEvent {
 }
 
 enum PodishRuntimeEvent: Sendable {
-    case log(String)
+    case log(level: Int32, message: String)
     case containerState([NativeContainerListItem])
 }
 
@@ -60,6 +60,18 @@ private func decodeNativeIpcEvent(_ frame: [UInt8]) -> NativeIpcEvent? {
     } catch {
         return nil
     }
+}
+
+private struct ImagePullProgressPayload: Decodable {
+    let imageReference: String
+    let state: PodishImagePullPhase
+    let message: String
+    let overallBytes: Int64?
+    let overallTotalBytes: Int64?
+    let layerBytes: Int64?
+    let layerTotalBytes: Int64?
+    let layerIndex: Int?
+    let layerCount: Int?
 }
 
 private struct PodishRunSpec: Codable {
@@ -189,26 +201,8 @@ final class PodishRuntimeActor: @unchecked Sendable {
     func startDefaultShell() async throws -> StartupState {
         try await perform { [self] state in
             try self.ensureContext(state: &state)
-            var containers = try self.listContainers(state: state)
-            var attached: String?
-
-            if containers.isEmpty {
-                try self.pullImageInternal("docker.io/i386/alpine:latest", state: state)
-                _ = try self.createAndStartContainer(
-                    imageRef: "docker.io/i386/alpine:latest",
-                    name: nil,
-                    networkMode: .host,
-                    portMappings: [],
-                    memoryQuotaBytes: nil,
-                    state: &state
-                )
-                containers = try self.listContainers(state: state)
-                attached = containers.first(where: { $0.running })?.containerId ?? containers.first?.containerId
-                if let attached {
-                    try self.ensureTerminalSession(containerId: attached, state: &state)
-                }
-            }
-
+            let containers = try self.listContainers(state: state)
+            let attached = containers.first(where: { $0.running })?.containerId
             return StartupState(containers: containers, attachedContainerId: attached)
         }
     }
@@ -304,10 +298,52 @@ final class PodishRuntimeActor: @unchecked Sendable {
     }
 
     func pullImage(imageRef: String) async throws -> [NativeImageListItem] {
-        try await perform { [self] state in
-            try self.ensureContext(state: &state)
-            try self.pullImageInternal(imageRef, state: state)
-            return try self.listImages(state: state)
+        try await withCheckedThrowingContinuation { continuation in
+            enqueue { [self] state in
+                do {
+                    try self.ensureContext(state: &state)
+                    guard let ctx = state.ctx else {
+                        throw PodishRuntimeError.native(code: -1, message: "context nil")
+                    }
+                    let ctxAddress = UInt(bitPattern: ctx)
+
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        guard let ctx = UnsafeMutableRawPointer(bitPattern: ctxAddress) else {
+                            self.enqueue { _ in
+                                continuation.resume(
+                                    throwing: PodishRuntimeError.native(code: -1, message: "context nil")
+                                )
+                            }
+                            return
+                        }
+
+                        let result: Result<Void, Error>
+                        let rc = imageRef.withCString { pod_image_pull(ctx, $0) }
+                        if rc == 0 {
+                            result = .success(())
+                        } else {
+                            result = .failure(
+                                PodishRuntimeError.native(code: rc, message: self.lastError(ctx: ctx))
+                            )
+                        }
+
+                        self.enqueue { state in
+                            switch result {
+                            case .success:
+                                do {
+                                    continuation.resume(returning: try self.listImages(state: state))
+                                } catch {
+                                    continuation.resume(throwing: error)
+                                }
+                            case .failure(let error):
+                                continuation.resume(throwing: error)
+                            }
+                        }
+                    }
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
         }
     }
 
@@ -326,6 +362,7 @@ final class PodishRuntimeActor: @unchecked Sendable {
         imageRef: String,
         name: String?,
         networkMode: PodishNetworkMode,
+        dnsServers: [String],
         portMappings: [PodishPortMapping],
         memoryQuotaBytes: Int64?
     ) async throws -> String {
@@ -335,6 +372,7 @@ final class PodishRuntimeActor: @unchecked Sendable {
                 imageRef: imageRef,
                 name: name,
                 networkMode: networkMode,
+                dnsServers: dnsServers,
                 portMappings: portMappings,
                 memoryQuotaBytes: memoryQuotaBytes,
                 state: &state
@@ -453,7 +491,7 @@ final class PodishRuntimeActor: @unchecked Sendable {
                     do {
                         _ = try self.stopContainer(containerId: containerId, signal: 15, timeoutMs: stopTimeoutMs, state: &state)
                     } catch {
-                        self.emitLog("shutdown: stop container \(containerId) failed: \(error.localizedDescription)")
+                        self.emitLog(level: 4, message: "shutdown: stop container \(containerId) failed: \(error.localizedDescription)")
                     }
                 }
             }
@@ -561,9 +599,9 @@ final class PodishRuntimeActor: @unchecked Sendable {
             switch event {
             case .none:
                 return
-            case .log(_, let message):
+            case .log(let level, let message):
                 if !message.isEmpty {
-                    emitLog(message)
+                    emitLog(level: level, message: message)
                 }
             case .containerStateChanged:
                 if let items = try? listContainers(state: state) {
@@ -587,8 +625,8 @@ final class PodishRuntimeActor: @unchecked Sendable {
         }
     }
 
-    private func emitLog(_ message: String) {
-        emitEvent(.log(message))
+    private func emitLog(level: Int32, message: String) {
+        emitEvent(.log(level: level, message: message))
     }
 
     private func emitContainerState(_ items: [NativeContainerListItem]) {
@@ -621,7 +659,7 @@ final class PodishRuntimeActor: @unchecked Sendable {
 
         var out: UnsafeMutableRawPointer?
         let rc = workDir.withCString { cwd in
-            "warn".withCString { level in
+            "info".withCString { level in
                 var opts = PodCtxOptionsNative(work_dir_utf8: cwd, log_level_utf8: level, log_file_utf8: nil)
                 return pod_ctx_create(&opts, &out)
             }
@@ -692,14 +730,6 @@ final class PodishRuntimeActor: @unchecked Sendable {
         return try listContainers(state: state)
     }
 
-    private func pullImageInternal(_ image: String, state: WorkerState) throws {
-        guard let c = state.ctx else { throw PodishRuntimeError.native(code: -1, message: "context nil") }
-        let rc = image.withCString { pod_image_pull(c, $0) }
-        if rc != 0 {
-            throw PodishRuntimeError.native(code: rc, message: lastError(state: state))
-        }
-    }
-
     private func listContainers(state: WorkerState) throws -> [NativeContainerListItem] {
         guard let c = state.ctx else { throw PodishRuntimeError.native(code: -1, message: "context nil") }
 
@@ -768,6 +798,7 @@ final class PodishRuntimeActor: @unchecked Sendable {
         imageRef: String,
         name: String?,
         networkMode: PodishNetworkMode,
+        dnsServers: [String],
         portMappings: [PodishPortMapping],
         memoryQuotaBytes: Int64?,
         state: inout WorkerState
@@ -791,7 +822,7 @@ final class PodishRuntimeActor: @unchecked Sendable {
             exeArgs: ["-i"],
             volumes: [],
             env: [],
-            dns: [],
+            dns: dnsServers,
             interactive: true,
             tty: true,
             strace: false,
@@ -841,9 +872,13 @@ final class PodishRuntimeActor: @unchecked Sendable {
     }
 
     private func lastError(state: WorkerState) -> String {
-        guard let c = state.ctx else { return "unknown" }
+        lastError(ctx: state.ctx)
+    }
+
+    private func lastError(ctx: UnsafeMutableRawPointer?) -> String {
+        guard let ctx else { return "unknown" }
         var buf = [UInt8](repeating: 0, count: 1024)
-        _ = pod_ctx_last_error(c, &buf, Int32(buf.count))
+        _ = pod_ctx_last_error(ctx, &buf, Int32(buf.count))
         let end = buf.firstIndex(of: 0) ?? buf.count
         return String(decoding: buf[..<end], as: UTF8.self)
     }
@@ -851,6 +886,8 @@ final class PodishRuntimeActor: @unchecked Sendable {
 
 @MainActor
 final class PodishTerminalSession: ObservableObject {
+    private static let imagePullProgressMarker = "PODISH_IMAGE_PULL "
+
     let appearance: PodishTerminalAppearance
     private let placeholderView: TerminalView
     private let runtime: PodishRuntimeActor
@@ -868,7 +905,9 @@ final class PodishTerminalSession: ObservableObject {
     var onContainerList: (([NativeContainerListItem]) -> Void)?
     var onContainerStateChanged: (([NativeContainerListItem]) -> Void)?
     var onImageList: (([NativeImageListItem]) -> Void)?
+    var onImagePullStatus: ((PodishImagePullStatus?) -> Void)?
     private var lastContainerSnapshot: [NativeContainerListItem] = []
+    private var latestImagePullStatus: PodishImagePullStatus?
 
     var currentTerminalView: TerminalView {
         if let id = activeContainerId, let view = terminalViews[id] {
@@ -989,14 +1028,45 @@ final class PodishTerminalSession: ObservableObject {
 
     private func handleRuntimeEvent(_ event: PodishRuntimeEvent) {
         switch event {
-        case .log(let line):
-            PodishLog.core(line)
+        case .log(let level, let line):
+            if handleImagePullProgressLog(line) {
+                return
+            }
+            if level >= 4 {
+                PodishLog.coreError(line)
+            } else {
+                PodishLog.core(line)
+            }
         case .containerState(let items):
             lastContainerSnapshot = items
             reconcileRunningSessions(items)
             onContainerList?(items)
             onContainerStateChanged?(items)
         }
+    }
+
+    private func handleImagePullProgressLog(_ line: String) -> Bool {
+        guard let markerRange = line.range(of: Self.imagePullProgressMarker) else { return false }
+        let payloadText = String(line[markerRange.upperBound...])
+        guard let data = payloadText.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(ImagePullProgressPayload.self, from: data) else {
+            return false
+        }
+
+        let status = PodishImagePullStatus(
+            imageReference: payload.imageReference,
+            phase: payload.state,
+            message: payload.message,
+            overallBytes: payload.overallBytes,
+            overallTotalBytes: payload.overallTotalBytes,
+            layerBytes: payload.layerBytes,
+            layerTotalBytes: payload.layerTotalBytes,
+            layerIndex: payload.layerIndex,
+            layerCount: payload.layerCount
+        )
+        latestImagePullStatus = status
+        onImagePullStatus?(status)
+        return true
     }
 
     func refreshContainerList() {
@@ -1131,15 +1201,59 @@ final class PodishTerminalSession: ObservableObject {
     }
 
     func pullImage(_ imageRef: String) {
+        let initialStatus = PodishImagePullStatus(
+            imageReference: imageRef,
+            phase: .resolving,
+            message: "Resolving image reference...",
+            overallBytes: nil,
+            overallTotalBytes: nil,
+            layerBytes: nil,
+            layerTotalBytes: nil,
+            layerIndex: nil,
+            layerCount: nil
+        )
+        latestImagePullStatus = initialStatus
+        onImagePullStatus?(initialStatus)
         Task {
             do {
                 let items = try await runtime.pullImage(imageRef: imageRef)
                 await MainActor.run {
                     self.onImageList?(items)
+                    if self.latestImagePullStatus?.imageReference != imageRef ||
+                        self.latestImagePullStatus?.phase != .completed {
+                        let completedStatus = PodishImagePullStatus(
+                            imageReference: imageRef,
+                            phase: .completed,
+                            message: "Image pull finished.",
+                            overallBytes: nil,
+                            overallTotalBytes: nil,
+                            layerBytes: nil,
+                            layerTotalBytes: nil,
+                            layerIndex: nil,
+                            layerCount: nil
+                        )
+                        self.latestImagePullStatus = completedStatus
+                        self.onImagePullStatus?(completedStatus)
+                    }
                     self.startupError = nil
                 }
             } catch {
-                await MainActor.run { self.startupError = error.localizedDescription }
+                await MainActor.run {
+                    let failedStatus = PodishImagePullStatus(
+                        imageReference: imageRef,
+                        phase: .failed,
+                        message: error.localizedDescription,
+                        overallBytes: nil,
+                        overallTotalBytes: nil,
+                        layerBytes: nil,
+                        layerTotalBytes: nil,
+                        layerIndex: nil,
+                        layerCount: nil
+                    )
+                    self.latestImagePullStatus = failedStatus
+                    self.onImagePullStatus?(failedStatus)
+                    self.startupError = error.localizedDescription
+                }
             }
         }
     }
@@ -1162,6 +1276,7 @@ final class PodishTerminalSession: ObservableObject {
         from imageRef: String,
         name: String?,
         networkMode: PodishNetworkMode,
+        dnsServers: [String],
         portMappings: [PodishPortMapping],
         memoryQuotaBytes: Int64?
     ) {
@@ -1172,6 +1287,7 @@ final class PodishTerminalSession: ObservableObject {
                     imageRef: imageRef,
                     name: name,
                     networkMode: networkMode,
+                    dnsServers: dnsServers,
                     portMappings: portMappings,
                     memoryQuotaBytes: memoryQuotaBytes
                 )
@@ -1375,12 +1491,7 @@ final class PodishTerminalSession: ObservableObject {
     }
 
     private static func makeWorkDir() -> String {
-        let fm = FileManager.default
-        let base = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
-            ?? URL(fileURLWithPath: fm.currentDirectoryPath)
-        let dir = base.appendingPathComponent("Podish", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.path
+        PodishSeedImageConfig.workDirectoryURL().path
     }
 }
 

@@ -169,6 +169,11 @@ struct PodishRootView: View {
                 store.applyImageList(items)
             }
         }
+        session.onImagePullStatus = { status in
+            Task { @MainActor in
+                store.updateImagePullStatus(status)
+            }
+        }
         session.onContainerStateChanged = { items in
             Task { @MainActor in
                 store.applyContainerList(items)
@@ -191,11 +196,12 @@ struct PodishRootView: View {
         store.onRemoveContainer = { containerId in
             session.removeContainer(containerId)
         }
-        store.onCreateContainer = { imageRef, name, networkMode, portMappings, memoryQuotaBytes in
+        store.onCreateContainer = { imageRef, name, networkMode, dnsServers, portMappings, memoryQuotaBytes in
             session.createContainer(
                 from: imageRef,
                 name: name,
                 networkMode: networkMode,
+                dnsServers: dnsServers,
                 portMappings: portMappings,
                 memoryQuotaBytes: memoryQuotaBytes
             )
@@ -235,41 +241,48 @@ private struct IOSHomeView: View {
 
     var body: some View {
         List {
-            IOSDashboardSummaryBar(
-                totalCount: store.containers.count,
-                runningCount: store.runningContainers.count,
-                stoppedCount: store.containers.filter { $0.state != .running }.count
-            )
-            .listRowInsets(cardInsets)
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
+            Section {
+                IOSDashboardSummaryBar(
+                    totalCount: store.containers.count,
+                    runningCount: store.runningContainers.count,
+                    stoppedCount: store.containers.filter { $0.state != .running }.count
+                )
+                .listRowInsets(cardInsets)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+            }
 
-            if orderedContainers.isEmpty {
-                IOSDashboardEmptyState(message: "No containers")
-                    .listRowInsets(cardInsets)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-            } else {
-                ForEach(orderedContainers) { container in
-                    IOSContainerListRow(
-                        container: container,
-                        pendingAction: store.pendingAction(for: container.containerId),
-                        primaryActionSymbol: container.state == .running ? "stop.fill" : "play.fill",
-                        onOpen: { onOpenContainer(container) },
-                        onPrimaryAction: {
-                            if container.state == .running {
-                                store.stop(container)
-                            } else {
-                                store.start(container)
-                            }
-                        },
-                        onShowDetails: { onShowDetails(container) },
-                        onDelete: { store.remove(container) }
-                    )
-                    .listRowInsets(cardInsets)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
+            Section {
+                if orderedContainers.isEmpty {
+                    IOSDashboardEmptyState(message: "No containers")
+                        .listRowInsets(cardInsets)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                } else {
+                    ForEach(orderedContainers) { container in
+                        IOSContainerListRow(
+                            container: container,
+                            pendingAction: store.pendingAction(for: container.containerId),
+                            primaryActionSymbol: container.state == .running ? "stop.fill" : "play.fill",
+                            onOpen: { onOpenContainer(container) },
+                            onPrimaryAction: {
+                                if container.state == .running {
+                                    store.stop(container)
+                                } else {
+                                    store.start(container)
+                                }
+                            },
+                            onShowDetails: { onShowDetails(container) },
+                            onDelete: { store.remove(container) }
+                        )
+                        .id(container.id)
+                        .listRowInsets(cardInsets)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                    }
                 }
+            } header: {
+                Text("Containers")
             }
         }
         .listStyle(.plain)
