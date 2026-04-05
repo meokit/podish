@@ -23,11 +23,22 @@ let httpRpc = null;
 const BROWSER_ASSEMBLY_NAME = 'Podish.Browser';
 const SAB_PACKET_BUFFER_SIZE = 64 * 1024;
 
+function shouldUseRawWasm() {
+    try {
+        const rawWasm = new URL(self.location.href).searchParams.get('rawwasm');
+        return rawWasm === '1' || rawWasm === 'true';
+    } catch {
+        return false;
+    }
+}
+
 function resolveBootResource(type, name, defaultUri) {
     if (typeof defaultUri !== 'string' || defaultUri.length === 0)
         return null;
     if (type !== 'dotnetwasm' && !(typeof name === 'string' && name.endsWith('.wasm')))
         return null;
+    if (shouldUseRawWasm())
+        return defaultUri;
     return `${defaultUri}.br`;
 }
 

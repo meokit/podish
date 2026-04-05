@@ -29,6 +29,17 @@
         <ManualWasmSafetyLevel>safe3</ManualWasmSafetyLevel>
     </PropertyGroup>
 
+    <PropertyGroup Condition="'$(Configuration)' == 'RelWithDebInfo'">
+        <EmccLinkOptimizationFlag>-O0</EmccLinkOptimizationFlag>
+        <WasmLinkOptimizationFlag>-O0</WasmLinkOptimizationFlag>
+        <WasmBitcodeCompileOptimizationFlag>-O0</WasmBitcodeCompileOptimizationFlag>
+        <RunManualWasmOptBeforeBundle>false</RunManualWasmOptBeforeBundle>
+        <WasmNativeStrip>false</WasmNativeStrip>
+        <WasmStripILAfterAOT>false</WasmStripILAfterAOT>
+        <DebugType>portable</DebugType>
+        <DebugSymbols>true</DebugSymbols>
+    </PropertyGroup>
+
     <ItemGroup>
         <WasmExtraConfig Include="stackSize" Value="8388608"/>
     </ItemGroup>
@@ -82,7 +93,8 @@
         <Copy SourceFiles="@(BrowserSpecificSymbols)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="false"/>
     </Target>
 
-    <Target Name="FrontendBuild" BeforeTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <Target Name="FrontendBuild" BeforeTargets="Build"
+            Condition="'$(Configuration)' == 'Release' Or '$(Configuration)' == 'RelWithDebInfo'">
         <Message Importance="high" Text="Building frontend with Vite..."/>
         <Exec WorkingDirectory="frontend" Command="npm install"/>
         <Exec WorkingDirectory="frontend" Command="npm run build"/>

@@ -61,7 +61,14 @@ function attachTimerControl(buffer) {
 }
 
 function createPodishWorkerClient() {
-    const worker = new Worker('/podish-worker.mjs', {type: 'module'})
+    const workerUrl = new URL('/podish-worker.mjs', globalThis.location?.href ?? 'http://localhost/')
+    const pageSearch = globalThis.location?.search
+    if (pageSearch) {
+        const rawWasm = new URLSearchParams(pageSearch).get('rawwasm')
+        if (rawWasm === '1' || rawWasm === 'true')
+            workerUrl.searchParams.set('rawwasm', rawWasm)
+    }
+    const worker = new Worker(workerUrl, {type: 'module'})
     let nextRequestId = 1
     const pending = new Map()
     const sabState = {
