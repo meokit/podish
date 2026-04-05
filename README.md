@@ -1,6 +1,6 @@
-# x86emu
+# Podish
 
-`x86emu` is a mixed-language workspace for running Linux x86 userland on modern hosts.
+`Podish` is a mixed-language workspace for running Linux x86 userland on modern hosts.
 
 At a high level:
 
@@ -183,4 +183,6 @@ Then open or build the Swift package in `PodishApp/`.
 
 ## License
 
-MIT License
+Dual-licensing: GPLv3 (Open Source Track) and Commercial Track.
+
+For open-source, non-commercial use this project is licensed under the GNU GPLv3. For commercial use or proprietary distribution, obtain a commercial license from `giantneko@icloud.com`. See the `LICENSE` file for full details.
