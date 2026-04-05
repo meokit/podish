@@ -121,6 +121,24 @@ public class CloneThreadLifecycleTests
     }
 
     [Fact]
+    public async Task SysClone_ThreadWithSysvsem_IsAccepted()
+    {
+        using var env = new TestEnv(116, 116);
+
+        var flags = LinuxConstants.CLONE_VM |
+                    LinuxConstants.CLONE_SIGHAND |
+                    LinuxConstants.CLONE_THREAD |
+                    LinuxConstants.CLONE_SYSVSEM;
+        var childTid = await CallSys(env.SyscallManager, env.Engine, "SysClone", flags);
+
+        Assert.True(childTid > 0);
+        var child = env.Scheduler.GetTask(childTid);
+        Assert.NotNull(child);
+        Assert.Same(env.Process, child!.Process);
+        Assert.Equal(2, env.Process.Threads.Count);
+    }
+
+    [Fact]
     public async Task SysExit_ClearsChildTidAndWakesFutexWaiters()
     {
         using var env = new TestEnv(200, 201);

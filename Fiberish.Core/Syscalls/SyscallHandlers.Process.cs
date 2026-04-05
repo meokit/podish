@@ -108,6 +108,7 @@ public partial class SyscallManager
                              LinuxConstants.CLONE_PTRACE |
                              LinuxConstants.CLONE_VFORK |
                              LinuxConstants.CLONE_THREAD |
+                             LinuxConstants.CLONE_SYSVSEM |
                              LinuxConstants.CLONE_SETTLS |
                              LinuxConstants.CLONE_PARENT_SETTID |
                              LinuxConstants.CLONE_CHILD_CLEARTID |
