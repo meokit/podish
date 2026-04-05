@@ -639,6 +639,7 @@ public partial class SyscallManager
         }
 
         if (targetLoc.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
+        if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
         var taskForUnlinkAt = engine.Owner as FiberTask;
         if (taskForUnlinkAt?.Process != null)
         {
@@ -1521,6 +1522,7 @@ public partial class SyscallManager
         var targetLoc = targetLookup.Path;
         if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (targetLoc.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
+        if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
         var task = engine.Owner as FiberTask;
         if (task?.Process != null)
         {

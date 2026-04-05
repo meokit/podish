@@ -10,6 +10,7 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <RuntimeIdentifiers>browser-wasm</RuntimeIdentifiers>
         <IsBrowserWasm Condition="'$(RuntimeIdentifier)' == 'browser-wasm' Or '$(FiberishForceBrowserWasm)' == 'true'">true</IsBrowserWasm>
     </PropertyGroup>

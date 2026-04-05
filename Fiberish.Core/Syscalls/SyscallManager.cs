@@ -518,6 +518,37 @@ public partial class SyscallManager
         return dentry;
     }
 
+    private static Dentry EnsureRegularFile(PathLocation parent, string name, int mode)
+    {
+        var parentDentry = parent.Dentry!;
+
+        if (parentDentry.TryGetCachedChild(name, out var cachedDentry))
+        {
+            if (cachedDentry.Inode?.Type != InodeType.File)
+                throw new Exception($"Path /{name} exists but is not a file");
+            return cachedDentry;
+        }
+
+        var dentry = parentDentry.Inode!.Lookup(name);
+        if (dentry == null)
+        {
+            dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
+            var createRc = parentDentry.Inode.Create(dentry, mode, 0, 0);
+            if (createRc < 0)
+            {
+                Logger.LogWarning("Failed to create file {Name}: rc={Rc}", name, createRc);
+                throw new IOException($"Failed to create file {name}: rc={createRc}");
+            }
+        }
+        else if (dentry.Inode?.Type != InodeType.File)
+        {
+            throw new Exception($"Path /{name} exists but is not a file");
+        }
+
+        parentDentry.CacheChild(dentry, "SyscallManager.EnsureRegularFile");
+        return dentry;
+    }
+
     public void MountHostfs(string hostPath, string guestPath, bool readOnly = false)
     {
         var parts = guestPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -629,6 +660,144 @@ public partial class SyscallManager
         finally
         {
             mountHandle.Close();
+        }
+    }
+
+    public Mount CreateDetachedTmpfsMount(string sourceName, bool readOnly = false)
+    {
+        var fsCtx = new FsContextFile(AnonMount.Root, AnonMount, "tmpfs");
+        fsCtx.SetString("source", $"detached:{sourceName}");
+        fsCtx.SetFlag("nosuid");
+        fsCtx.SetFlag("nodev");
+        if (readOnly)
+            fsCtx.SetFlag("ro");
+        else
+            fsCtx.SetFlag("rw");
+        fsCtx.State = FsContextState.Created;
+
+        var mountRc = CreateDetachedMountFromFsContext(fsCtx, 0, out var detachedMount);
+        if (mountRc != 0 || detachedMount == null)
+            throw new IOException($"Failed to create detached tmpfs mount: rc={mountRc}");
+
+        return detachedMount;
+    }
+
+    public void WriteFileInDetachedMount(Mount sourceMount, string relativePath, ReadOnlySpan<byte> content,
+        int mode = 0x1A4)
+    {
+        relativePath = relativePath.Trim('/');
+        var parts = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) throw new ArgumentException("Cannot write detached mount root", nameof(relativePath));
+
+        var current = new PathLocation(sourceMount.Root, sourceMount);
+        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, parts[i]);
+
+        var name = parts[^1];
+        EnsureRegularFile(current, name, mode);
+
+        var loc = PathWalkWithFlags(relativePath, new PathLocation(sourceMount.Root, sourceMount),
+            LookupFlags.FollowSymlink);
+        if (!loc.IsValid || loc.Dentry?.Inode?.Type != InodeType.File)
+            throw new IOException($"Detached mount file path not found after ensure: {relativePath}");
+
+        var file = new LinuxFile(loc.Dentry, FileFlags.O_WRONLY, sourceMount);
+        try
+        {
+            var truncateRc = file.OpenedInode!.Truncate(0);
+            if (truncateRc < 0)
+                throw new IOException($"Failed to truncate detached mount file {relativePath}: rc={truncateRc}");
+
+            if (!content.IsEmpty)
+            {
+                var writeRc = file.OpenedInode.WriteFromHost(null, file, content, 0);
+                if (writeRc < 0)
+                    throw new IOException($"Failed to write detached mount file {relativePath}: rc={writeRc}");
+                if (writeRc != content.Length)
+                    throw new IOException(
+                        $"Short write while writing detached mount file {relativePath}: expected={content.Length} actual={writeRc}");
+            }
+        }
+        finally
+        {
+            file.Close();
+        }
+    }
+
+    public void BindMountSubtree(Mount sourceMount, string relativePath, string guestPath, bool readOnly = false)
+    {
+        relativePath = relativePath.Trim('/');
+        var srcLoc = PathWalkWithFlags(relativePath, new PathLocation(sourceMount.Root, sourceMount),
+            LookupFlags.FollowSymlink);
+        if (!srcLoc.IsValid || srcLoc.Dentry?.Inode == null)
+            throw new FileNotFoundException("Detached mount source path not found", relativePath);
+
+        var parts = guestPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) throw new ArgumentException("Cannot mount at root", nameof(guestPath));
+
+        var current = Root;
+        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, parts[i]);
+
+        var name = parts[^1];
+        if (srcLoc.Dentry.Inode.Type == InodeType.Directory)
+            EnsureDirectory(current, name);
+        else
+            EnsureFileMountPoint(current, name);
+
+        var bindMount = sourceMount.Clone(srcLoc.Dentry);
+        bindMount.Source = string.IsNullOrWhiteSpace(relativePath)
+            ? sourceMount.Source
+            : $"{sourceMount.Source}:{relativePath}";
+        bindMount.FsType = "none";
+        bindMount.Flags = sourceMount.Flags & (LinuxConstants.MS_NOSUID | LinuxConstants.MS_NODEV |
+                                               LinuxConstants.MS_NOEXEC);
+        if (readOnly)
+            bindMount.Flags |= LinuxConstants.MS_RDONLY;
+        bindMount.Options = BuildMountOptions(bindMount.Flags);
+
+        if (!current.Dentry!.TryGetCachedChild(name, out var mountPoint))
+            throw new IOException($"Mount point not found after ensure: {name}");
+
+        var targetLoc = new PathLocation(mountPoint, current.Mount);
+        var attachRc = AttachDetachedMount(bindMount, targetLoc);
+        if (attachRc != 0)
+            throw new IOException($"Failed to attach bind mount for {relativePath} -> {guestPath}: rc={attachRc}");
+    }
+
+    public void WriteGuestFile(string guestPath, ReadOnlySpan<byte> content, int mode = 0x1A4)
+    {
+        var parts = guestPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) throw new ArgumentException("Cannot write root");
+
+        var current = Root;
+        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, parts[i]);
+
+        var name = parts[^1];
+        EnsureRegularFile(current, name, mode);
+
+        var loc = PathWalk(guestPath);
+        if (!loc.IsValid || loc.Dentry?.Inode?.Type != InodeType.File || loc.Mount == null)
+            throw new IOException($"Guest file path not found after ensure: {guestPath}");
+
+        var file = new LinuxFile(loc.Dentry, FileFlags.O_WRONLY, loc.Mount);
+        try
+        {
+            var truncateRc = file.OpenedInode!.Truncate(0);
+            if (truncateRc < 0)
+                throw new IOException($"Failed to truncate guest file {guestPath}: rc={truncateRc}");
+
+            if (!content.IsEmpty)
+            {
+                var writeRc = file.OpenedInode.WriteFromHost(null, file, content, 0);
+                if (writeRc < 0)
+                    throw new IOException($"Failed to write guest file {guestPath}: rc={writeRc}");
+                if (writeRc != content.Length)
+                    throw new IOException(
+                        $"Short write while writing guest file {guestPath}: expected={content.Length} actual={writeRc}");
+            }
+        }
+        finally
+        {
+            file.Close();
         }
     }
 

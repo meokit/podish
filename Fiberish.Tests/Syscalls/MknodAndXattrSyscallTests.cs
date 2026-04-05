@@ -153,6 +153,109 @@ public class MknodAndXattrSyscallTests
         Assert.Contains("nameserver 8.8.8.8", text);
     }
 
+    [Fact]
+    public async Task BindMountSubtree_FileMount_IsWritableAndUsesFileMountRoot()
+    {
+        using var env = new TestEnv(true);
+        var sourceHandle = CreateBoundGeneratedFile(env);
+        try
+        {
+            var loc = env.SyscallManager.PathWalkWithFlags("/etc/resolv.conf", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+            Assert.Equal("none", loc.Mount!.FsType);
+            Assert.Equal(InodeType.File, loc.Dentry!.Inode!.Type);
+            Assert.Same(loc.Dentry, loc.Mount.Root);
+            Assert.NotSame(loc.Mount.SB.Root, loc.Mount.Root);
+
+            env.MapUserPage(0x19000);
+            env.WriteCString(0x19000, "/etc/resolv.conf");
+            env.MapUserPage(0x1A000);
+            var payload = Encoding.UTF8.GetBytes("nameserver 9.9.9.9\n");
+            env.WriteBytes(0x1A000, payload);
+
+            var fd = await env.Call("SysOpen", 0x19000, (uint)(FileFlags.O_WRONLY | FileFlags.O_TRUNC));
+            Assert.True(fd >= 0);
+            Assert.Equal(payload.Length, await env.Call("SysWrite", (uint)fd, 0x1A000, (uint)payload.Length));
+            Assert.Equal(0, await env.Call("SysClose", (uint)fd));
+
+            loc = env.SyscallManager.PathWalkWithFlags("/etc/resolv.conf", LookupFlags.FollowSymlink);
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+            try
+            {
+                var buf = new byte[64];
+                var n = loc.Dentry!.Inode!.ReadToHost(null, file, buf, 0);
+                Assert.True(n > 0);
+                Assert.Equal("nameserver 9.9.9.9\n", Encoding.UTF8.GetString(buf, 0, n));
+            }
+            finally
+            {
+                file.Close();
+            }
+        }
+        finally
+        {
+            sourceHandle.Close();
+        }
+    }
+
+    [Fact]
+    public async Task BindMountSubtree_FileMount_UnlinkReturnsEbusyAndPreservesMount()
+    {
+        using var env = new TestEnv(true);
+        var sourceHandle = CreateBoundGeneratedFile(env);
+        try
+        {
+            env.MapUserPage(0x1B000);
+            env.WriteCString(0x1B000, "/etc/resolv.conf");
+
+            Assert.Equal(-(int)Errno.EBUSY, await env.Call("SysUnlink", 0x1B000));
+
+            var loc = env.SyscallManager.PathWalkWithFlags("/etc/resolv.conf", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+            Assert.NotSame(env.SyscallManager.RootMount, loc.Mount);
+        }
+        finally
+        {
+            sourceHandle.Close();
+        }
+    }
+
+    [Fact]
+    public async Task BindMountSubtree_FileMount_RenameReturnsEbusyAndPreservesMount()
+    {
+        using var env = new TestEnv(true);
+        var sourceHandle = CreateBoundGeneratedFile(env);
+        try
+        {
+            env.MapUserPage(0x1C000);
+            env.MapUserPage(0x1D000);
+            env.WriteCString(0x1C000, "/etc/resolv.conf");
+            env.WriteCString(0x1D000, "/etc/resolv-next.conf");
+
+            Assert.Equal(-(int)Errno.EBUSY, await env.Call("SysRename", 0x1C000, 0x1D000));
+
+            var loc = env.SyscallManager.PathWalkWithFlags("/etc/resolv.conf", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+            Assert.False(env.SyscallManager.PathWalkWithFlags("/etc/resolv-next.conf", LookupFlags.FollowSymlink)
+                .IsValid);
+        }
+        finally
+        {
+            sourceHandle.Close();
+        }
+    }
+
+    private static MountFile CreateBoundGeneratedFile(TestEnv env)
+    {
+        var handle = new MountFile(env.SyscallManager.CreateDetachedTmpfsMount("podish-config"));
+        env.SyscallManager.WriteFileInDetachedMount(
+            handle.Mount,
+            "resolv.conf",
+            Encoding.UTF8.GetBytes("nameserver 1.1.1.1\n"));
+        env.SyscallManager.BindMountSubtree(handle.Mount, "resolv.conf", "/etc/resolv.conf");
+        return handle;
+    }
+
     private sealed class TestEnv : IDisposable
     {
         private readonly string? _tempLowerDir;
