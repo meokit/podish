@@ -226,6 +226,7 @@ public partial class SyscallManager
 
     public void CloseAllFileDescriptors()
     {
+        if (IsClosed) return;
         var fds = FDs.Keys.ToList();
         foreach (var fd in fds)
             FreeFD(fd);

@@ -2254,12 +2254,13 @@ public class LinuxFile
                 // Ignore cleanup errors
             }
 
+        var dentry = Dentry;
         OpenedInode?.Release(this);
         var refKind = Kind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
         OpenedInode?.ReleaseRef(refKind, "LinuxFile.Close");
-        Dentry.Put("LinuxFile.Close");
-        if (Dentry.DentryRefCount == 0 && !Dentry.IsHashed && Dentry.Inode == null && Dentry.Parent != null)
-            Dentry.UntrackFromSuperBlock("LinuxFile.Close.unlinked-dentry");
+        dentry?.Put("LinuxFile.Close");
+        if (dentry != null && dentry.DentryRefCount == 0 && !dentry.IsHashed && dentry.Inode == null && dentry.Parent != null && dentry.IsTrackedBySuperBlock)
+            dentry.UntrackFromSuperBlock("LinuxFile.Close.unlinked-dentry");
         // Note: Mount reference is not released here as it's typically
         // managed by the filesystem/superblock lifecycle
     }

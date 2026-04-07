@@ -35,6 +35,8 @@ public partial class SyscallManager
     private int _closed;
     private SharedLoopbackNetNamespace? _privateNetNamespace;
 
+    public bool IsClosed => Volatile.Read(ref _closed) != 0;
+
     public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null,
         DeviceNumberManager? deviceNumbers = null)
     {
