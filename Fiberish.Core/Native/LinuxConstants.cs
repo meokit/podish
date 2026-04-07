@@ -508,10 +508,14 @@ public static class LinuxConstants
     public const int SO_RCVTIMEO = 20;
     public const int SO_SNDTIMEO = 21;
 
+    public const int SCHED_OTHER = 0;
+    public const int SCHED_FIFO = 1;
+    public const int SCHED_RR = 2;
+
     public const int TCP_NODELAY = 1;
-    public const int TCP_KEEPIDLE = 8;
-    public const int TCP_KEEPINTVL = 9;
-    public const int TCP_KEEPCNT = 10;
+    public const int TCP_KEEPIDLE = 4;
+    public const int TCP_KEEPINTVL = 5;
+    public const int TCP_KEEPCNT = 6;
 
     public const int IPV6_V6ONLY = 26;
     public const int MSG_MORE = 0x8000;

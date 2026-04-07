@@ -222,7 +222,8 @@ public abstract class IndexedMemoryInode : Inode
             if (unlinkedInode != null)
             {
                 NamespaceOps.OnEntryRemoved(unlinkedInode, "IndexedMemoryInode.Unlink");
-                dentry.UnbindInode("IndexedMemoryInode.Unlink");
+                if (!unlinkedInode.HasActiveRuntimeRefs)
+                    dentry.UnbindInode("IndexedMemoryInode.Unlink");
             }
 
             ChildNames.Remove(name);

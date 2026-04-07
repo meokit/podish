@@ -556,7 +556,7 @@ public partial class SyscallManager
         else
         {
             var f = GetFD(dfd);
-            if (f != null) startLoc = new PathLocation(f.Dentry, f.Mount);
+            if (f != null) startLoc = f.LivePath;
             else return -(int)Errno.EBADF;
         }
 
@@ -585,7 +585,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = new PathLocation(fdir.Dentry, fdir.Mount);
+            startAt = fdir.LivePath;
         }
 
         return ImplOpen(this, path, (uint)flags, (uint)mode, startAt);

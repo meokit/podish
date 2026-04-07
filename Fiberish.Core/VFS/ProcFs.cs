@@ -607,22 +607,28 @@ file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode, IContextual
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
-    public bool TryResolveLink(FiberTask task, out LinuxFile file)
+    public bool TryResolveLink(FiberTask task, out PathLocation path)
     {
         var process = task.CommonKernel.GetProcess(_pid);
         if (process == null)
         {
-            file = null!;
+            path = PathLocation.None;
             return false;
         }
 
         if (!process.Syscalls.FDs.TryGetValue(_fd, out var existing) || existing == null)
         {
-            file = null!;
+            path = PathLocation.None;
             return false;
         }
 
-        file = existing;
+        if (!existing.LivePath.IsValid || existing.LivePath.Dentry!.Inode == null)
+        {
+            path = PathLocation.None;
+            return false;
+        }
+
+        path = existing.LivePath;
         return true;
     }
 
@@ -632,16 +638,18 @@ file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode, IContextual
         if (process == null) return string.Empty;
         if (!process.Syscalls.FDs.TryGetValue(_fd, out var file)) return string.Empty;
 
-        if (file.Mount?.FsType == "anon_inodefs")
+        if (file.Mount?.FsType == "anon_inodefs" && file.OpenedInode is not TmpfsInode { IsMemfd: true })
             return $"anon_inode:{file.Dentry.Name}";
 
-        var loc = new PathLocation(file.Dentry, file.Mount);
-        return process.Syscalls.GetAbsolutePath(loc);
+        var path = process.Syscalls.GetAbsolutePath(file.LivePath);
+        if (!file.LivePath.Dentry!.IsHashed && file.OpenedInode is not TmpfsInode { IsMemfd: true })
+            path += " (deleted)";
+        return path;
     }
 
-    public bool TryResolveLink(out LinuxFile file)
+    public bool TryResolveLink(out PathLocation path)
     {
-        file = null!;
+        path = PathLocation.None;
         return false;
     }
 

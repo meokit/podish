@@ -226,7 +226,7 @@ public class SysVShmManager
         AddressSpace? sharedObject = null;
         try
         {
-            segmentFile = new LinuxFile(segment.BackingFile.Dentry, FileFlags.O_RDWR, segment.BackingFile.Mount,
+            segmentFile = new LinuxFile(segment.BackingFile.LivePath, FileFlags.O_RDWR,
                 LinuxFile.ReferenceKind.MmapHold, segment.BackingFile.OpenedInode);
             sharedObject = vmaManager.Backings.GetOrCreateMapping(segmentFile.OpenedInode!);
 

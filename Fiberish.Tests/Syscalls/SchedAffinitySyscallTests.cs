@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Reflection;
 using Fiberish.Core;
 using Fiberish.Memory;
@@ -39,6 +40,43 @@ public class SchedAffinitySyscallTests
         Assert.Equal(-(int)Errno.EINVAL, rc);
     }
 
+    [Fact]
+    public async Task SchedGetParam_ReturnsZeroPriorityForCurrentTask()
+    {
+        using var env = new TestEnv();
+        const uint paramPtr = 0x12000;
+        env.MapUserPage(paramPtr);
+
+        var rc = await env.Invoke("SysSchedGetParam", 0, paramPtr, 0, 0, 0, 0);
+
+        Assert.Equal(0, rc);
+        Assert.Equal(0, env.ReadInt32(paramPtr));
+    }
+
+    [Fact]
+    public async Task SchedGetScheduler_ReturnsSchedOtherForCurrentTask()
+    {
+        using var env = new TestEnv();
+
+        var rc = await env.Invoke("SysSchedGetScheduler", 0, 0, 0, 0, 0, 0);
+
+        Assert.Equal(LinuxConstants.SCHED_OTHER, rc);
+    }
+
+    [Fact]
+    public async Task ClockGetRes_WritesMillisecondResolutionTimespec32()
+    {
+        using var env = new TestEnv();
+        const uint resPtr = 0x13000;
+        env.MapUserPage(resPtr);
+
+        var rc = await env.Invoke("SysClockGetRes", LinuxConstants.CLOCK_MONOTONIC, resPtr, 0, 0, 0, 0);
+
+        Assert.Equal(0, rc);
+        Assert.Equal(0, env.ReadInt32(resPtr));
+        Assert.Equal(1_000_000, env.ReadInt32(resPtr + 4));
+    }
+
     private sealed class TestEnv : IDisposable
     {
         public TestEnv()
@@ -76,6 +114,13 @@ public class SchedAffinitySyscallTests
             Vma.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
                 MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[test]", Engine);
             Assert.True(Vma.HandleFault(addr, true, Engine));
+        }
+
+        public int ReadInt32(uint addr)
+        {
+            var buf = new byte[4];
+            Assert.True(Engine.CopyFromUser(addr, buf));
+            return BinaryPrimitives.ReadInt32LittleEndian(buf);
         }
     }
 }

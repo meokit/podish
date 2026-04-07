@@ -114,7 +114,7 @@ public partial class SyscallManager
         try
         {
             if (f != null)
-                mmapFile = new LinuxFile(f.Dentry, f.Flags, f.Mount, LinuxFile.ReferenceKind.MmapHold, f.OpenedInode);
+                mmapFile = new LinuxFile(f.LivePath, f.Flags, LinuxFile.ReferenceKind.MmapHold, f.OpenedInode);
 
             var res = ProcessAddressSpaceSync.Mmap(Mem, engine, addr, len, (Protection)prot, (MapFlags)flags,
                 mmapFile, offset, "MMAP2");

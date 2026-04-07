@@ -3,6 +3,7 @@ using Fiberish.Core;
 using Fiberish.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.Native;
+using Fiberish.Syscalls;
 using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
@@ -694,6 +695,7 @@ public abstract class Inode : IAddressSpaceOperations
 
         RefCount = before - 1;
         VfsDebugTrace.RecordRefChange(this, $"Inode.ReleaseRef.{kind}", before, RefCount, reason);
+        ReleaseUnlinkedAliasDentriesIfUnused($"ReleaseRef.{kind}", reason);
         TryFinalizeDelete($"ReleaseRef.{kind}", reason);
     }
 
@@ -737,6 +739,7 @@ public abstract class Inode : IAddressSpaceOperations
         LinkCount = before - 1;
         CTime = DateTime.Now;
         VfsDebugTrace.RecordLinkChange(this, "Inode.DecLink", before, LinkCount, reason);
+        ReleaseUnlinkedAliasDentriesIfUnused("DecLink", reason);
         TryFinalizeDelete("DecLink", reason);
     }
 
@@ -781,6 +784,21 @@ public abstract class Inode : IAddressSpaceOperations
     private int GetDefaultLinkCountForType()
     {
         return Type == InodeType.Directory ? 2 : 1;
+    }
+
+    private void ReleaseUnlinkedAliasDentriesIfUnused(string operation, string? reason)
+    {
+        if (LinkCount != 0 || HasActiveRuntimeRefs || _dentries.Count == 0)
+            return;
+
+        foreach (var dentry in _dentries.Where(d => !d.IsHashed).ToArray())
+        {
+            if (!dentry.UnbindInode($"{operation}.unlinked-alias"))
+                continue;
+
+            if (dentry.DentryRefCount == 0)
+                dentry.UntrackFromSuperBlock($"{operation}.unlinked-alias");
+        }
     }
 
     private void IncrementRefKind(InodeRefKind kind)
@@ -1606,12 +1624,12 @@ public struct DirectoryEntry
 
 public interface IMagicSymlinkInode
 {
-    bool TryResolveLink(out LinuxFile file);
+    bool TryResolveLink(out PathLocation path);
 }
 
 public interface IContextualMagicSymlinkInode
 {
-    bool TryResolveLink(FiberTask task, out LinuxFile file);
+    bool TryResolveLink(FiberTask task, out PathLocation path);
 }
 
 public interface IContextualSymlinkInode
@@ -2166,13 +2184,13 @@ public class LinuxFile
 
     private int _refCount = 1;
 
-    public LinuxFile(Dentry dentry, FileFlags flags, Mount mount, ReferenceKind referenceKind = ReferenceKind.Normal,
+    public LinuxFile(PathLocation livePath, FileFlags flags, ReferenceKind referenceKind = ReferenceKind.Normal,
         Inode? openedInode = null)
     {
-        Dentry = dentry;
-        OpenedInode = openedInode ?? dentry.Inode;
+        Dentry = livePath.Dentry ?? throw new ArgumentNullException(nameof(livePath));
+        OpenedInode = openedInode ?? Dentry.Inode;
         Flags = flags;
-        Mount = mount; // The mount this file was opened through
+        Mount = livePath.Mount;
         Kind = referenceKind;
         Dentry.Get("LinuxFile.ctor");
         var refKind = referenceKind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
@@ -2181,15 +2199,21 @@ public class LinuxFile
         // Note: Mount reference is managed by caller if provided
     }
 
-    public Dentry Dentry { get; set; }
+    public LinuxFile(Dentry dentry, FileFlags flags, Mount? mount, ReferenceKind referenceKind = ReferenceKind.Normal,
+        Inode? openedInode = null)
+        : this(new PathLocation(dentry, mount), flags, referenceKind, openedInode)
+    {
+    }
+
+    public PathLocation LivePath => new(Dentry, Mount);
+    public Dentry Dentry { get; }
     public Inode? OpenedInode { get; }
     public long Position { get; set; }
     public FileFlags Flags { get; set; }
-    public Mount Mount { get; set; }
+    public Mount? Mount { get; protected set; }
     public object? PrivateData { get; set; }
     public bool IsTmpFile { get; set; }
     public ReferenceKind Kind { get; }
-
     /// <summary>
     ///     Check if write operation is allowed (mount read-only check).
     ///     Similar to Linux kernel's mnt_want_write().
@@ -2234,6 +2258,8 @@ public class LinuxFile
         var refKind = Kind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
         OpenedInode?.ReleaseRef(refKind, "LinuxFile.Close");
         Dentry.Put("LinuxFile.Close");
+        if (Dentry.DentryRefCount == 0 && !Dentry.IsHashed && Dentry.Inode == null && Dentry.Parent != null)
+            Dentry.UntrackFromSuperBlock("LinuxFile.Close.unlinked-dentry");
         // Note: Mount reference is not released here as it's typically
         // managed by the filesystem/superblock lifecycle
     }

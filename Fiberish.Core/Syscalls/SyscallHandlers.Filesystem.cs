@@ -58,7 +58,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(olddirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            oldStartLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+            oldStartLoc = fdir.LivePath;
         }
 
         PathLocation newStartLoc = default;
@@ -66,7 +66,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(newdirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            newStartLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+            newStartLoc = fdir.LivePath;
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_FOLLOW) != 0;
@@ -117,7 +117,7 @@ public partial class SyscallManager
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         if (f.OpenedInode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
-        UpdateCurrentWorkingDirectory(new PathLocation(f.Dentry, f.Mount), "SysFchdir");
+        UpdateCurrentWorkingDirectory(f.LivePath, "SysFchdir");
         return 0;
     }
 
@@ -311,7 +311,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+            startLoc = fdir.LivePath;
         }
 
         var (parentLoc, name, err) = PathWalkForCreate(path, startLoc.IsValid ? startLoc : null);
@@ -572,7 +572,7 @@ public partial class SyscallManager
 
         var fdir = sm.GetFD(dirfd);
         if (fdir == null) return -(int)Errno.EBADF;
-        startAt = new PathLocation(fdir.Dentry, fdir.Mount);
+        startAt = fdir.LivePath;
         return 0;
     }
 
@@ -601,7 +601,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+            startLoc = fdir.LivePath;
         }
 
         var (parentLoc, name, err) = PathWalkForCreate(path, startLoc.IsValid ? startLoc : null);
@@ -742,7 +742,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+            startLoc = fdir.LivePath;
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
@@ -772,7 +772,7 @@ public partial class SyscallManager
         {
             var file = GetFD(dirfd);
             if (file == null) return -(int)Errno.EBADF;
-            loc = new PathLocation(file.Dentry, file.Mount);
+            loc = file.LivePath;
         }
         else
         {
@@ -783,7 +783,7 @@ public partial class SyscallManager
             {
                 var fdir = GetFD(dirfd);
                 if (fdir == null) return -(int)Errno.EBADF;
-                startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+                startLoc = fdir.LivePath;
             }
 
             var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
@@ -834,7 +834,7 @@ public partial class SyscallManager
         {
             var file = GetFD(dirfd);
             if (file == null) return -(int)Errno.EBADF;
-            loc = new PathLocation(file.Dentry, file.Mount);
+            loc = file.LivePath;
         }
         else
         {
@@ -845,7 +845,7 @@ public partial class SyscallManager
             {
                 var fdir = GetFD(dirfd);
                 if (fdir == null) return -(int)Errno.EBADF;
-                startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+                startLoc = fdir.LivePath;
             }
 
             var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
@@ -938,7 +938,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+            startLoc = fdir.LivePath;
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
@@ -969,7 +969,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+            startLoc = fdir.LivePath;
         }
 
         var lookup = PathWalker.PathWalkWithData(
@@ -997,7 +997,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+            startLoc = fdir.LivePath;
         }
 
         const uint AT_EACCESS = 0x200;
@@ -1089,7 +1089,7 @@ public partial class SyscallManager
         {
             var f = sm.GetFD(oldDirFd);
             if (f == null) return -(int)Errno.EBADF;
-            oldStart = new PathLocation(f.Dentry, f.Mount);
+            oldStart = f.LivePath;
         }
 
         PathLocation? newStart = null;
@@ -1097,7 +1097,7 @@ public partial class SyscallManager
         {
             var f = sm.GetFD(newDirFd);
             if (f == null) return -(int)Errno.EBADF;
-            newStart = new PathLocation(f.Dentry, f.Mount);
+            newStart = f.LivePath;
         }
 
         var (oldParentLoc, oldName, oldErr) = sm.PathWalkForCreate(oldPath, oldStart);
@@ -1351,7 +1351,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startLoc = new PathLocation(fdir.Dentry, fdir.Mount);
+            startLoc = fdir.LivePath;
         }
 
         var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
@@ -2006,7 +2006,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = new PathLocation(fdir.Dentry, fdir.Mount);
+            startAt = fdir.LivePath;
         }
 
         var lookup = PathWalker.PathWalkWithData(path, startAt ?? CurrentWorkingDirectory, LookupFlags.None);
@@ -2050,7 +2050,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = new PathLocation(fdir.Dentry, fdir.Mount);
+            startAt = fdir.LivePath;
         }
 
         var (parentLoc, name, err) = PathWalkForCreate(linkpath, startAt);
@@ -2378,7 +2378,7 @@ public partial class SyscallManager
             // Use dfd directly
             var f = GetFD(dfd);
             if (f == null) return -(int)Errno.EBADF;
-            loc = new PathLocation(f.Dentry, f.Mount);
+            loc = f.LivePath;
         }
         else
         {
@@ -2440,7 +2440,7 @@ public partial class SyscallManager
         {
             var f = GetFD(toDfd);
             if (f == null) return -(int)Errno.EBADF;
-            toLoc = new PathLocation(f.Dentry, f.Mount);
+            toLoc = f.LivePath;
         }
         else
         {
@@ -2478,7 +2478,7 @@ public partial class SyscallManager
         {
             var f = GetFD(dfd);
             if (f == null) return -(int)Errno.EBADF;
-            loc = new PathLocation(f.Dentry, f.Mount);
+            loc = f.LivePath;
         }
         else
         {

@@ -586,7 +586,7 @@ public partial class SyscallManager
             if (!current.Dentry!.TryGetCachedChild(name, out var mountPoint))
                 throw new IOException($"Mount point not found after ensure: {name}");
             var targetLoc = new PathLocation(mountPoint, current.Mount);
-            var attachRc = AttachDetachedMount(mountHandle.Mount, targetLoc);
+            var attachRc = AttachDetachedMount(mountHandle.Mount!, targetLoc);
             if (attachRc != 0)
                 throw new IOException($"Failed to attach detached hostfs mount: rc={attachRc}");
         }
@@ -651,9 +651,9 @@ public partial class SyscallManager
             if (!current.Dentry!.TryGetCachedChild(name, out var mountPoint))
                 throw new IOException($"Mount point not found after ensure: {name}");
             var targetLoc = new PathLocation(mountPoint, current.Mount);
-            var attachRc = AttachDetachedMount(mountHandle.Mount, targetLoc);
+            var attachRc = AttachDetachedMount(mountHandle.Mount!, targetLoc);
             if (attachRc != 0) throw new IOException($"Failed to attach detached tmpfs mount: rc={attachRc}");
-            PinContainerMount(mountHandle.Mount);
+            PinContainerMount(mountHandle.Mount!);
         }
         finally
         {

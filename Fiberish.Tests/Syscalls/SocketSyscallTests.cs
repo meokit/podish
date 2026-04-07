@@ -420,6 +420,28 @@ public class SocketSyscallTests
     }
 
     [Fact]
+    public async Task SetSockOpt_TcpKeepAliveOptions_OnHostStreamSocket_AreAccepted()
+    {
+        using var env = new TestEnv();
+
+        var fd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(fd >= 0);
+
+        env.MapUserPage(0x1C000);
+        env.WriteInt32(0x1C000, 30);
+
+        Assert.Equal(0,
+            await CallSysSetSockOpt(env, (uint)fd, LinuxConstants.IPPROTO_TCP, LinuxConstants.TCP_KEEPIDLE, 0x1C000,
+                4));
+        Assert.Equal(0,
+            await CallSysSetSockOpt(env, (uint)fd, LinuxConstants.IPPROTO_TCP, LinuxConstants.TCP_KEEPINTVL, 0x1C000,
+                4));
+        Assert.Equal(0,
+            await CallSysSetSockOpt(env, (uint)fd, LinuxConstants.IPPROTO_TCP, LinuxConstants.TCP_KEEPCNT, 0x1C000,
+                4));
+    }
+
+    [Fact]
     public async Task Shutdown_UnconnectedSocket_WithSoLingerZero_ReturnsEnotconnAndKeepsFdAlive()
     {
         using var env = new TestEnv();

@@ -326,15 +326,15 @@ public class PathWalker
                 // Try to resolve magic link
                 if ((shouldFollow || mustFollow) && currentTask != null &&
                     next.Inode is IContextualMagicSymlinkInode contextualMagicLink &&
-                    contextualMagicLink.TryResolveLink(currentTask, out var contextualResolvedFile))
+                    contextualMagicLink.TryResolveLink(currentTask, out var contextualResolvedPath))
                 {
-                    nd.Path = new PathLocation(contextualResolvedFile.Dentry, contextualResolvedFile.Mount);
+                    nd.Path = contextualResolvedPath;
                     return true;
                 }
 
-                if ((shouldFollow || mustFollow) && magicLink.TryResolveLink(out var resolvedFile))
+                if ((shouldFollow || mustFollow) && magicLink.TryResolveLink(out var resolvedPath))
                 {
-                    nd.Path = new PathLocation(resolvedFile.Dentry, resolvedFile.Mount);
+                    nd.Path = resolvedPath;
                     return true;
                 }
             }

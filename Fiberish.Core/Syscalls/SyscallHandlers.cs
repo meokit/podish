@@ -484,6 +484,9 @@ public partial class SyscallManager
             case X86SyscallNumbers.clock_gettime:
                 handled = true;
                 return SysClockGetTime(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.clock_getres:
+                handled = true;
+                return SysClockGetRes(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.gettimeofday:
                 handled = true;
                 return SysGetTimeOfDay(engine, ebx, ecx, edx, esi, edi, ebp);
@@ -508,6 +511,12 @@ public partial class SyscallManager
             case X86SyscallNumbers.gettid:
                 handled = true;
                 return SysGettid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sched_getparam:
+                handled = true;
+                return SysSchedGetParam(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sched_getscheduler:
+                handled = true;
+                return SysSchedGetScheduler(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.sched_getaffinity:
                 handled = true;
                 return SysSchedGetAffinity(engine, ebx, ecx, edx, esi, edi, ebp);

@@ -214,6 +214,46 @@ public partial class SyscallManager
         return task?.TID ?? -1;
     }
 
+    private async ValueTask<int> SysSchedGetParam(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        var task = engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+
+        var pid = (int)a1;
+        var paramPtr = a2;
+        if (paramPtr == 0) return -(int)Errno.EFAULT;
+
+        if (pid != 0)
+        {
+            var targetTask = task.CommonKernel.GetTask(pid);
+            if (targetTask == null) return -(int)Errno.ESRCH;
+        }
+
+        // Linux i386 struct sched_param currently only contains one int sched_priority.
+        Span<byte> param = stackalloc byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(param, 0);
+        if (!engine.CopyToUser(paramPtr, param)) return -(int)Errno.EFAULT;
+
+        return 0;
+    }
+
+    private async ValueTask<int> SysSchedGetScheduler(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        var task = engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+
+        var pid = (int)a1;
+        if (pid != 0)
+        {
+            var targetTask = task.CommonKernel.GetTask(pid);
+            if (targetTask == null) return -(int)Errno.ESRCH;
+        }
+
+        return LinuxConstants.SCHED_OTHER;
+    }
+
     private async ValueTask<int> SysSchedGetAffinity(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
@@ -387,6 +427,21 @@ public partial class SyscallManager
         return 0;
     }
 
+    private async ValueTask<int> SysClockGetRes(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        var clockId = (int)a1;
+        var resPtr = a2;
+
+        if (!TryGetClockResolution(clockId, out var resolutionNs))
+            return -(int)Errno.EINVAL;
+
+        if (resPtr != 0 && !WriteTimespec32(engine, resPtr, resolutionNs))
+            return -(int)Errno.EFAULT;
+
+        return 0;
+    }
+
     private async ValueTask<int> SysClockGetTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
@@ -551,6 +606,28 @@ public partial class SyscallManager
             default:
                 secs = 0;
                 nsecs = 0;
+                return false;
+        }
+    }
+
+    private static bool TryGetClockResolution(int clockId, out long resolutionNs)
+    {
+        switch (clockId)
+        {
+            case LinuxConstants.CLOCK_REALTIME:
+            case LinuxConstants.CLOCK_REALTIME_COARSE:
+            case LinuxConstants.CLOCK_MONOTONIC:
+            case LinuxConstants.CLOCK_MONOTONIC_RAW:
+            case LinuxConstants.CLOCK_MONOTONIC_COARSE:
+            case LinuxConstants.CLOCK_BOOTTIME:
+                resolutionNs = 1_000_000;
+                return true;
+            case LinuxConstants.CLOCK_PROCESS_CPUTIME_ID:
+            case LinuxConstants.CLOCK_THREAD_CPUTIME_ID:
+                resolutionNs = 0;
+                return false;
+            default:
+                resolutionNs = 0;
                 return false;
         }
     }

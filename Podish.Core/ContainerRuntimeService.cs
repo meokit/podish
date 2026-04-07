@@ -357,7 +357,7 @@ public sealed class ContainerRuntimeService
                     if (!string.IsNullOrWhiteSpace(request.Hostname))
                     {
                         runtime.Syscalls.WriteFileInDetachedMount(
-                            configMount,
+                            configMount!,
                             "hostname",
                             Encoding.UTF8.GetBytes(BuildHostnameFileContent(request.Hostname)));
                     }
@@ -365,25 +365,25 @@ public sealed class ContainerRuntimeService
                     if (!string.IsNullOrWhiteSpace(request.Hostname))
                     {
                         runtime.Syscalls.WriteFileInDetachedMount(
-                            configMount,
+                            configMount!,
                             "hosts",
                             Encoding.UTF8.GetBytes(BuildHostsFileContent(request.Hostname, request.ContainerName)));
                     }
 
                     var resolvConf = BuildResolvConfContent(request.DnsServers);
                     runtime.Syscalls.WriteFileInDetachedMount(
-                        configMount,
+                        configMount!,
                         "resolv.conf",
                         Encoding.UTF8.GetBytes(resolvConf));
 
                     _logger.LogInformation("Bind-mounting generated network config into /etc/*.");
                     if (!string.IsNullOrWhiteSpace(request.Hostname))
-                        runtime.Syscalls.BindMountSubtree(configMount, "hostname", "/etc/hostname");
+                        runtime.Syscalls.BindMountSubtree(configMount!, "hostname", "/etc/hostname");
 
                     if (!string.IsNullOrWhiteSpace(request.Hostname))
-                        runtime.Syscalls.BindMountSubtree(configMount, "hosts", "/etc/hosts");
+                        runtime.Syscalls.BindMountSubtree(configMount!, "hosts", "/etc/hosts");
 
-                    runtime.Syscalls.BindMountSubtree(configMount, "resolv.conf", "/etc/resolv.conf");
+                    runtime.Syscalls.BindMountSubtree(configMount!, "resolv.conf", "/etc/resolv.conf");
                 }
                 finally
                 {

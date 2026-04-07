@@ -1691,7 +1691,8 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
 
         sb.MetadataStore.RemovePath(subPath);
         NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Unlink");
-        dentry?.UnbindInode("HostInode.Unlink");
+        if (dentry?.Inode != null && !dentry.Inode.HasActiveRuntimeRefs)
+            dentry.UnbindInode("HostInode.Unlink");
         if (Dentries.Count > 0)
             _ = Dentries[0].TryUncacheChild(name, "HostInode.Unlink", out _);
         sb.RemoveDentry(subPath);
