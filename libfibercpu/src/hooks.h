@@ -36,4 +36,4 @@ private:
     std::array<InterruptHook, 256> handlers_;
 };
 
-}  // namespace x86emu
+}  // namespace fiberish

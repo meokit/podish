@@ -71,7 +71,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 # Source files
-file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "*.cpp" "*.c" "*.h")
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp" "src/*.c" "src/*.h")
 list(FILTER SOURCES EXCLUDE REGEX "main.cpp")
 list(FILTER SOURCES EXCLUDE REGEX "build/.*")
 list(FILTER SOURCES EXCLUDE REGEX "3rdparty/softfloat/.*")
@@ -159,14 +159,14 @@ endif()
 
 set(FIBERCPU_FINAL_SOURCES
     $<TARGET_OBJECTS:fibercpu_core>
-    handler_reflection_exports.cpp
+    src/handler_reflection_exports.cpp
     ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
 )
 
 add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${FIBERCPU_FINAL_SOURCES})
 set_target_properties(fibercpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-target_include_directories(fibercpu PRIVATE .)
+target_include_directories(fibercpu PRIVATE src)
 target_include_directories(fibercpu SYSTEM PRIVATE ${simde_SOURCE_DIR})
 target_link_libraries(fibercpu PRIVATE unordered_dense::unordered_dense)
 
