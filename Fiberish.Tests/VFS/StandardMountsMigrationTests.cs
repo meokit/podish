@@ -10,6 +10,46 @@ namespace Fiberish.Tests.VFS;
 public class StandardMountsMigrationTests
 {
     [Fact]
+    public void Close_ReleasesDevStdioBeforeUnmountingNamespace()
+    {
+        var strictBefore = VfsDebugTrace.StrictInvariants;
+        var enabledBefore = VfsDebugTrace.Enabled;
+        using var engine = new Engine();
+        var vma = new VMAManager();
+        var sm = new SyscallManager(engine, vma, 0);
+        var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+        var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+        var rootMount = new Mount(rootSb, rootSb.Root)
+        {
+            Source = "tmpfs",
+            FsType = "tmpfs",
+            Options = "rw"
+        };
+        sm.InitializeRoot(rootSb.Root, rootMount);
+
+        try
+        {
+            VfsDebugTrace.StrictInvariants = true;
+            VfsDebugTrace.Enabled = false;
+
+            sm.MountStandardDev();
+
+            var stdin = sm.FDs[0];
+            var ex = Record.Exception(() => sm.Close());
+
+            Assert.Null(ex);
+            Assert.Equal(0, stdin.Dentry.DentryRefCount);
+        }
+        finally
+        {
+            VfsDebugTrace.StrictInvariants = strictBefore;
+            VfsDebugTrace.Enabled = enabledBefore;
+            if (!sm.IsClosed)
+                sm.Close();
+        }
+    }
+
+    [Fact]
     public void StandardMounts_AttachThroughDetachedFlow_AndRemainAccessible()
     {
         using var engine = new Engine();

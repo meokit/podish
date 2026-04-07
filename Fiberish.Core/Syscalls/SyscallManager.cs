@@ -1409,17 +1409,6 @@ public partial class SyscallManager
         if (CurrentSyscallEngine is not null)
             UnregisterEngine(CurrentSyscallEngine);
 
-        // Release explicit container-owned mount pins (e.g. resolv.conf detached mount).
-        ReleaseContainerPins();
-        _privateNetNamespace?.Release();
-        _privateNetNamespace = null;
-
-        // Release this process' reference to the mount namespace.
-        // Mount detach/unmount is controlled by umount(2), not by process exit.
-        _mountNamespace.Put();
-
-        _sharedFsState.Release("close");
-
         if (_sharedFdTable.ReleaseRef())
         {
             foreach (var fd in FDs.Values)
@@ -1427,6 +1416,20 @@ public partial class SyscallManager
             FDs.Clear();
             FdCloseOnExecSet.Clear();
         }
+
+        // Release explicit container-owned mount pins (e.g. resolv.conf detached mount).
+        ReleaseContainerPins();
+        _privateNetNamespace?.Release();
+        _privateNetNamespace = null;
+
+        // Close FDs before dropping path and mount references.
+        // Device-backed files such as stdio on /dev do not own a mount ref directly,
+        // so their dentries/superblocks must stay alive until fd.Close() completes.
+        _sharedFsState.Release("close");
+
+        // Release this process' reference to the mount namespace.
+        // Mount detach/unmount is controlled by umount(2), not by process exit.
+        _mountNamespace.Put();
 
         if (_sharedUnixSocketNamespace.ReleaseRef())
             _sharedUnixSocketNamespace.Clear();
