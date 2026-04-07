@@ -49,6 +49,8 @@ public class StandardMountsMigrationTests
             Assert.Equal("tmpfs", shmLoc.Mount!.FsType);
             Assert.Contains("nosuid", shmLoc.Mount.Options);
             Assert.Contains("nodev", shmLoc.Mount.Options);
+            Assert.NotSame(sm.MemfdSuperBlock, shmLoc.Mount.SB);
+            Assert.Same(sm.DevShmRoot, shmLoc.Dentry);
         }
         finally
         {

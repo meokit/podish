@@ -86,7 +86,7 @@ public class FcntlCloexecTests
         env.MapUserPage(nameAddr);
         env.WriteCString(nameAddr, "plain-memfd");
 
-        var fd = await env.Call("SysMemfdCreate", nameAddr, 0);
+        var fd = await env.Call("SysMemfdCreate", nameAddr);
         Assert.True(fd >= 0);
 
         Assert.Equal(-(int)Errno.EPERM, await env.Call("SysFcntl64", (uint)fd, F_ADD_SEALS, F_SEAL_WRITE));
@@ -109,6 +109,23 @@ public class FcntlCloexecTests
         Assert.True((inode.Mode & 0x40) != 0);
         Assert.True(inode.IsMemfdExecutable);
         Assert.False(inode.IsMemfdNoExecSealed);
+        Assert.Same(env.SyscallManager.MemfdSuperBlock, inode.SuperBlock);
+        Assert.Same(env.Engine.MemoryContext.GetOrCreateShmSuperBlock(), inode.SuperBlock);
+    }
+
+    [Fact]
+    public void MountStandardShm_UsesSeparateVisibleTmpfsSuperblock()
+    {
+        using var env = new TestEnv();
+
+        env.SyscallManager.MountStandardDev();
+        env.SyscallManager.MountStandardShm();
+
+        var shmLoc = env.SyscallManager.PathWalk("/dev/shm");
+        Assert.True(shmLoc.IsValid);
+        Assert.NotSame(env.SyscallManager.MemfdSuperBlock, shmLoc.Mount!.SB);
+        Assert.NotSame(env.Engine.MemoryContext.GetOrCreateShmSuperBlock(), shmLoc.Mount.SB);
+        Assert.Same(env.SyscallManager.DevShmRoot, shmLoc.Dentry);
     }
 
     [Fact]

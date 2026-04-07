@@ -1,6 +1,7 @@
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
+using Fiberish.VFS;
 
 namespace Fiberish.Syscalls;
 
@@ -24,7 +25,8 @@ public class SysVShmSegment
     public int Lpid { get; set; } // Last operator PID
     public int NAttch { get; set; } // Attach count
     public bool MarkedForDelete { get; set; }
-    public AddressSpace BackingObject { get; set; } = null!;
+    public LinuxFile BackingFile { get; set; } = null!;
+    public AddressSpace? BackingObject => BackingFile.OpenedInode?.Mapping;
 
     /// <summary>
     ///     Number of pages in this segment.
@@ -51,14 +53,20 @@ public class SysVShmAttach
 public class SysVShmManager
 {
     private readonly List<SysVShmAttach> _attaches = new();
-    private readonly VmBackingManager _backings;
+    private readonly MemoryRuntimeContext _memoryContext;
     private readonly Dictionary<int, SysVShmSegment> _segmentsByKey = new();
     private readonly Dictionary<int, SysVShmSegment> _segmentsByShmid = new();
     private int _nextShmid = 1;
 
-    public SysVShmManager(VmBackingManager? backings = null)
+    public SysVShmManager()
+        : this(MemoryRuntimeContext.Default)
     {
-        _backings = backings ?? new VmBackingManager();
+    }
+
+    internal SysVShmManager(MemoryRuntimeContext memoryContext, DeviceNumberManager? deviceNumbers = null)
+    {
+        _memoryContext = memoryContext;
+        _memoryContext.GetOrCreateShmSuperBlock(deviceNumbers);
     }
 
     /// <summary>
@@ -102,25 +110,33 @@ public class SysVShmManager
 
         // Create new segment
         var shmid = _nextShmid++;
-        var segment = new SysVShmSegment
+        SysVShmSegment segment;
+        try
         {
-            Key = key,
-            Shmid = shmid,
-            Size = alignedSize,
-            Mode = flags & 0x1FF, // Lower 9 bits are permissions
-            Uid = uid,
-            Gid = gid,
-            CUid = uid,
-            CGid = gid,
-            Cpid = pid,
-            Lpid = pid,
-            CTime = DateTime.UtcNow,
-            ATime = DateTime.UtcNow,
-            DTime = DateTime.UtcNow,
-            NAttch = 0,
-            MarkedForDelete = false,
-            BackingObject = _backings.CreateSharedAnonymous()
-        };
+            segment = new SysVShmSegment
+            {
+                Key = key,
+                Shmid = shmid,
+                Size = alignedSize,
+                Mode = flags & 0x1FF, // Lower 9 bits are permissions
+                Uid = uid,
+                Gid = gid,
+                CUid = uid,
+                CGid = gid,
+                Cpid = pid,
+                Lpid = pid,
+                CTime = DateTime.UtcNow,
+                ATime = DateTime.UtcNow,
+                DTime = DateTime.UtcNow,
+                NAttch = 0,
+                MarkedForDelete = false,
+                BackingFile = _memoryContext.CreateSysVSharedMemoryFile(shmid, alignedSize, uid, gid)
+            };
+        }
+        catch
+        {
+            return -(int)Errno.ENOMEM;
+        }
 
         _segmentsByShmid[shmid] = segment;
         if (key != LinuxConstants.IPC_PRIVATE)
@@ -206,22 +222,28 @@ public class SysVShmManager
         }
 
         // Create VmArea for this mapping
+        LinuxFile? segmentFile = null;
+        AddressSpace? sharedObject = null;
         try
         {
-            // Create a special VmArea that references the segment's backing object
+            segmentFile = new LinuxFile(segment.BackingFile.Dentry, FileFlags.O_RDWR, segment.BackingFile.Mount,
+                LinuxFile.ReferenceKind.MmapHold, segment.BackingFile.OpenedInode);
+            sharedObject = vmaManager.Backings.GetOrCreateMapping(segmentFile.OpenedInode!);
+
             var vma = new VmArea
             {
                 Start = attachAddr,
                 End = attachEnd,
                 Perms = prot,
                 Flags = MapFlags.Shared | MapFlags.Fixed | MapFlags.Anonymous,
-                FileMapping = null,
+                FileMapping = new VmaFileMapping(segmentFile),
                 Offset = 0,
                 Name = $"[sysv shm:{shmid}]",
-                VmMapping = segment.BackingObject,
+                VmMapping = sharedObject,
                 VmPgoff = 0
             };
-            segment.BackingObject.AddRef();
+            segmentFile = null;
+            sharedObject = null;
 
             // Add VmArea to manager
             vmaManager.AddVma(vma);
@@ -246,6 +268,8 @@ public class SysVShmManager
         }
         catch
         {
+            sharedObject?.Release();
+            segmentFile?.Close();
             return -(int)Errno.ENOMEM;
         }
     }
@@ -394,7 +418,7 @@ public class SysVShmManager
     {
         long bytes = 0;
         foreach (var segment in _segmentsByShmid.Values)
-            bytes += (long)segment.BackingObject.PageCount * LinuxConstants.PageSize;
+            bytes += (long)(segment.BackingObject?.PageCount ?? 0) * LinuxConstants.PageSize;
 
         return bytes;
     }
@@ -404,7 +428,7 @@ public class SysVShmManager
         _segmentsByShmid.Remove(segment.Shmid);
         if (segment.Key != LinuxConstants.IPC_PRIVATE)
             _segmentsByKey.Remove(segment.Key);
-        segment.BackingObject.Release();
+        segment.BackingFile.Close();
     }
 
     private bool CheckPermission(SysVShmSegment segment, int uid, int gid, int flags)

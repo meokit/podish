@@ -107,6 +107,25 @@ public class SysVShmManagerTests
     }
 
     [Fact]
+    public void ShmAt_UsesRuntimeShmMountFileBacking()
+    {
+        var runtime = new MemoryRuntimeContext();
+        using var ctx = new TestContext(runtime: runtime);
+
+        var shmid = ctx.Manager.ShmGet(LinuxConstants.IPC_PRIVATE, 4096, 0x1FF, 0, 0, 2000);
+        Assert.True(shmid > 0);
+
+        const uint addr = 0x21800000;
+        var attachRet = ctx.Manager.ShmAt(shmid, addr, 0, 2000, ctx.Vma, ctx.Engine, ctx.Process);
+        Assert.Equal(addr, attachRet);
+
+        var vma = Assert.IsType<VmArea>(ctx.Vma.FindVmArea(addr));
+        Assert.True(vma.IsFileBacked);
+        Assert.NotNull(vma.File?.OpenedInode);
+        Assert.Same(runtime.GetOrCreateShmSuperBlock(), vma.File!.OpenedInode!.SuperBlock);
+    }
+
+    [Fact]
     public void OnProcessExit_ShouldDetachAndUnmapAllAttachments()
     {
         using var ctx = new TestContext();
@@ -220,11 +239,13 @@ public class SysVShmManagerTests
     {
         private readonly FiberTask _task;
 
-        public TestContext(SysVShmManager? manager = null, int processId = 2000, VMAManager? vma = null)
+        public TestContext(SysVShmManager? manager = null, int processId = 2000, VMAManager? vma = null,
+            MemoryRuntimeContext? runtime = null)
         {
-            Engine = new Engine();
+            var memoryContext = runtime ?? MemoryRuntimeContext.Default;
+            Engine = new Engine(memoryContext);
             Vma = vma ?? new VMAManager();
-            Manager = manager ?? new SysVShmManager();
+            Manager = manager ?? new SysVShmManager(memoryContext);
 
             var kernel = new KernelScheduler();
             Process = new Process(processId, Vma, null!)

@@ -299,6 +299,8 @@ public class VMAManager
 
     private void InsertVmaSorted(VmArea vma)
     {
+        ValidateVmaBindings(vma);
+
         var left = 0;
         var right = _vmas.Count - 1;
         var insertIndex = _vmas.Count;
@@ -319,6 +321,18 @@ public class VMAManager
 
         _vmas.Insert(insertIndex, vma);
         TrackMappedInodeOnVmaAdded(vma);
+    }
+
+    private static void ValidateVmaBindings(VmArea vma)
+    {
+        if ((vma.Flags & MapFlags.Shared) == 0)
+            return;
+
+        if (vma.File?.OpenedInode != null)
+            return;
+
+        VfsDebugTrace.FailInvariant(
+            $"Shared VMA missing file backing start=0x{vma.Start:X8} end=0x{vma.End:X8} flags={vma.Flags} perms={vma.Perms}");
     }
 
     public VmArea? FindVmArea(uint addr)
@@ -681,43 +695,58 @@ public class VMAManager
         ulong vmPgoff = 0;
         VmaFileMapping? fileMapping = null;
 
-        if (file == null)
+        LinuxFile? anonymousSharedFile = null;
+        try
         {
-            sharedObj = isShared ? Backings.CreateSharedAnonymous() : null;
+            if (file == null)
+            {
+                if (isShared)
+                {
+                    // Linux models MAP_SHARED|MAP_ANONYMOUS with an internal shmem/tmpfs backing object.
+                    anonymousSharedFile = engine.MemoryContext.CreateSharedAnonymousMappingFile(len);
+                    file = anonymousSharedFile;
+                    sharedObj = Backings.GetOrCreateMapping(ResolveCurrentFileBacking(file)!);
+                    fileMapping = new VmaFileMapping(file);
+                }
+            }
+            else if (isShared)
+            {
+                // MAP_SHARED file: share the inode's global page cache
+                sharedObj = Backings.GetOrCreateMapping(ResolveCurrentFileBacking(file)!);
+                vmPgoff = (ulong)(offset / LinuxConstants.PageSize);
+                fileMapping = new VmaFileMapping(file);
+            }
+            else
+            {
+                // MAP_PRIVATE file: clean reads come from inode mapping, private COW pages are created lazily.
+                sharedObj = Backings.GetOrCreateMapping(ResolveCurrentFileBacking(file)!);
+                vmPgoff = (ulong)(offset / LinuxConstants.PageSize);
+                fileMapping = new VmaFileMapping(file);
+            }
+
+            var vma = new VmArea
+            {
+                Start = addr,
+                End = end,
+                Perms = perms,
+                Flags = flags,
+                FileMapping = fileMapping,
+                Offset = offset,
+                VmPgoff = vmPgoff,
+                Name = name,
+                VmMapping = sharedObj,
+                VmAnonVma = privateObj
+            };
+
+            InsertVmaSorted(vma);
+            anonymousSharedFile = null;
+            return addr;
         }
-        else if (isShared)
+        catch
         {
-            // MAP_SHARED file: share the inode's global page cache
-            sharedObj = Backings.GetOrCreateMapping(ResolveCurrentFileBacking(file)!);
-            vmPgoff = (ulong)(offset / LinuxConstants.PageSize);
-            fileMapping = new VmaFileMapping(file);
+            anonymousSharedFile?.Close();
+            throw;
         }
-        else
-        {
-            // MAP_PRIVATE file: clean reads come from inode mapping, private COW pages are created lazily.
-            sharedObj = Backings.GetOrCreateMapping(ResolveCurrentFileBacking(file)!);
-            vmPgoff = (ulong)(offset / LinuxConstants.PageSize);
-            fileMapping = new VmaFileMapping(file);
-        }
-
-
-        var vma = new VmArea
-        {
-            Start = addr,
-            End = end,
-            Perms = perms,
-            Flags = flags,
-            FileMapping = fileMapping,
-            Offset = offset,
-            VmPgoff = vmPgoff,
-            Name = name,
-            VmMapping = sharedObj,
-            VmAnonVma = privateObj
-        };
-
-        InsertVmaSorted(vma);
-
-        return addr;
     }
 
     public VMAManager Clone()

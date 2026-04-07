@@ -49,7 +49,7 @@ public partial class SyscallManager
         BrkBase = brk;
         Tty = tty;
         Futex = new FutexManager();
-        SysVShm = new SysVShmManager(mem.Backings);
+        SysVShm = new SysVShmManager(MemoryContext, DeviceNumbers);
         SysVSem = new SysVSemManager();
 
         RegisterEngine(engine);
@@ -71,10 +71,8 @@ public partial class SyscallManager
         var signalBroadcaster = new SignalBroadcasterImpl();
         _devptsFsType = CreateDevPtsFileSystemType(signalBroadcaster);
 
-        // Default memfd superblock
-        var tmpFsType = FileSystemRegistry.Get("tmpfs")!;
-        MemfdSuperBlock = tmpFsType.CreateFileSystem(DeviceNumbers).ReadSuper(tmpFsType, 0, "memfd", null);
-        MemfdSuperBlock.MemoryContext = CurrentSyscallEngine.MemoryContext;
+        // Linux routes memfd, shared-anon and SysV SHM through a shared internal shmem mount.
+        MemfdSuperBlock = MemoryContext.GetOrCreateShmSuperBlock(DeviceNumbers);
 
         // Anonymous inode mount (like Linux's anon_inodefs)
         // Used for timerfd, eventfd, epoll, socket, etc.

@@ -7,8 +7,7 @@ namespace Fiberish.Core;
 internal enum FutexKeyKind : byte
 {
     Private,
-    SharedFile,
-    SharedAnonymous
+    SharedFile
 }
 
 internal readonly struct FutexKey : IEquatable<FutexKey>
@@ -37,11 +36,6 @@ internal readonly struct FutexKey : IEquatable<FutexKey>
         return new FutexKey(FutexKeyKind.SharedFile, inode, pageIndex, offsetWithinPage);
     }
 
-    public static FutexKey SharedAnonymous(AddressSpace backingObject, uint pageIndex, ushort offsetWithinPage)
-    {
-        return new FutexKey(FutexKeyKind.SharedAnonymous, backingObject, pageIndex, offsetWithinPage);
-    }
-
     public void AcquireRef()
     {
         switch (Kind)
@@ -51,9 +45,6 @@ internal readonly struct FutexKey : IEquatable<FutexKey>
                 break;
             case FutexKeyKind.SharedFile:
                 ((Inode)_identity).AcquireRef(InodeRefKind.KernelInternal, "FutexKey");
-                break;
-            case FutexKeyKind.SharedAnonymous:
-                ((AddressSpace)_identity).AddRef();
                 break;
         }
     }
@@ -67,9 +58,6 @@ internal readonly struct FutexKey : IEquatable<FutexKey>
                 break;
             case FutexKeyKind.SharedFile:
                 ((Inode)_identity).ReleaseRef(InodeRefKind.KernelInternal, "FutexKey");
-                break;
-            case FutexKeyKind.SharedAnonymous:
-                ((AddressSpace)_identity).Release();
                 break;
         }
     }

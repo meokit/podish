@@ -167,6 +167,47 @@ public class PageCacheConsistencyTests
     }
 
     [Fact]
+    public void SharedAnonymousCloneStyleMappings_UseHiddenInodeBacking_AndShareBytes()
+    {
+        var runtime = new MemoryRuntimeContext();
+        using var writeEngine = new Engine(runtime);
+        using var readEngine = new Engine(runtime);
+        var writeMm = new VMAManager();
+        writeMm.BindOrAssertAddressSpaceHandle(writeEngine);
+
+        const uint writeAddr = 0x47400000;
+        var code1 = new byte[] { 0xB8, 0x78, 0x56, 0x34, 0x12 };
+        var code2 = new byte[] { 0xB8, 0xEF, 0xBE, 0xAD, 0xDE };
+
+        writeMm.Mmap(writeAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+            MapFlags.Shared | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "MAP_SHARED_ANON", writeEngine);
+
+        var writeVma = Assert.IsType<VmArea>(writeMm.FindVmArea(writeAddr));
+        Assert.True(writeVma.IsFileBacked);
+        Assert.NotNull(writeVma.File?.OpenedInode);
+        Assert.Same(runtime.GetOrCreateShmSuperBlock(), writeVma.File!.OpenedInode!.SuperBlock);
+
+        var readMm = writeMm.Clone();
+        readMm.BindOrAssertAddressSpaceHandle(readEngine);
+        Assert.Equal(0, readMm.Mprotect(writeAddr, LinuxConstants.PageSize, Protection.Read, readEngine, out _));
+
+        var readVma = Assert.IsType<VmArea>(readMm.FindVmArea(writeAddr));
+        Assert.True(readVma.IsFileBacked);
+        Assert.Same(writeVma.File!.OpenedInode, readVma.File!.OpenedInode);
+
+        Assert.True(writeMm.HandleFault(writeAddr, true, writeEngine));
+        Assert.True(writeEngine.CopyToUser(writeAddr, code1));
+        Assert.True(readMm.HandleFault(writeAddr, false, readEngine));
+        var mapped = new byte[code1.Length];
+        Assert.True(readEngine.CopyFromUser(writeAddr, mapped));
+        Assert.Equal(code1, mapped);
+
+        Assert.True(writeEngine.CopyToUser(writeAddr, code2));
+        Assert.True(readEngine.CopyFromUser(writeAddr, mapped));
+        Assert.Equal(code2, mapped);
+    }
+
+    [Fact]
     public void Overlay_MapSharedDirtyPage_IsVisibleToRead_BeforeWriteback()
     {
         var tempLower = Path.Combine(Path.GetTempPath(), "overlay-pc-lower-" + Guid.NewGuid().ToString("N"));

@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
+using Fiberish.VFS;
 using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
 using Timer = Fiberish.Core.Timer;
@@ -512,6 +513,9 @@ public partial class SyscallManager
             if (TryResolveSharedFutexKey(engine, uaddr, out key, out error))
                 return true;
 
+            if (error == -(int)Errno.EINVAL)
+                return false;
+
             // Linux allows non-private futex ops on private mappings too. When
             // the address is not actually backed by shared memory, fall back to
             // an mm-scoped private key instead of failing with EFAULT.
@@ -572,12 +576,9 @@ public partial class SyscallManager
             return true;
         }
 
-        if (vma.VmMapping != null)
-        {
-            key = FutexKey.SharedAnonymous(vma.VmMapping, pageIndex, offsetWithinPage);
-            error = 0;
-            return true;
-        }
+        VfsDebugTrace.FailInvariant(
+            $"Shared futex VMA missing file backing start=0x{vma.Start:X8} end=0x{vma.End:X8} flags={vma.Flags} perms={vma.Perms}");
+        error = -(int)Errno.EINVAL;
 
         return false;
     }

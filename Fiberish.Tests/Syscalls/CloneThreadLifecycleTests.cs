@@ -534,6 +534,20 @@ public class CloneThreadLifecycleTests
     }
 
     [Fact]
+    public void FutexWithoutPrivateFlag_OnSharedAnonymousMapping_UsesSharedFileKey()
+    {
+        using var env = new TestEnv(277, 277);
+        const uint futexAddr = 0x00642000;
+        env.MapSharedAnonymousPage(futexAddr);
+        Assert.True(env.Engine.CopyToUser(futexAddr, BitConverter.GetBytes(0u)));
+
+        var resolved = ResolveKey(env.SyscallManager, env.Engine, futexAddr, true, out var error);
+
+        Assert.Equal(0, error);
+        Assert.Equal(ResolveSharedKey(env.Vma, futexAddr), resolved);
+    }
+
+    [Fact]
     public async Task SysMunmap_FromOneThread_UnmapsPeerEngineMappings()
     {
         using var env = new TestEnv(300, 301);
@@ -673,12 +687,10 @@ public class CloneThreadLifecycleTests
         var vma = mm.FindVmArea(uaddr);
         Assert.NotNull(vma);
         Assert.True((vma!.Flags & MapFlags.Shared) != 0);
+        Assert.True(vma.IsFileBacked);
         var pageIndex = vma.GetPageIndex(uaddr & LinuxConstants.PageMask);
         var offset = (ushort)(uaddr & LinuxConstants.PageOffsetMask);
-        if (vma.IsFileBacked)
-            return FutexKey.SharedFile(vma.File!.OpenedInode!, pageIndex, offset);
-        Assert.NotNull(vma.VmMapping);
-        return FutexKey.SharedAnonymous(vma.VmMapping!, pageIndex, offset);
+        return FutexKey.SharedFile(vma.File!.OpenedInode!, pageIndex, offset);
     }
 
     private static FutexKey ResolveKey(SyscallManager sm, Engine engine, uint uaddr, bool fshared, out int error)

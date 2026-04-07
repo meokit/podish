@@ -52,14 +52,6 @@ public sealed class VmBackingManager
         inode.MappingManager = null;
     }
 
-    public AddressSpace CreateSharedAnonymous()
-    {
-        var obj = new AddressSpace(AddressSpaceKind.Shmem);
-        GlobalAddressSpaceCacheManager.TrackAddressSpace(obj,
-            GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem);
-        return obj;
-    }
-
     public AnonVma CreatePrivateOverlay()
     {
         return new AnonVma();

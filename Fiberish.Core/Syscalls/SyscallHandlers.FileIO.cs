@@ -311,27 +311,20 @@ public partial class SyscallManager
 
         try
         {
-            var inode = MemfdSuperBlock.AllocInode();
-            inode.Type = InodeType.File;
-            inode.Mode = (flags & MFD_EXEC) != 0 ? 0x1C0 : 0x180; // 0700 vs 0600
-            if (inode is TmpfsInode tmpfsInode)
-            {
-                tmpfsInode.InitializeMemfd(
-                    (flags & MFD_ALLOW_SEALING) != 0,
-                    executable: (flags & MFD_EXEC) != 0,
-                    noExecSeal: (flags & MFD_NOEXEC_SEAL) != 0);
-            }
-
             var t = engine.Owner as FiberTask;
-            inode.Uid = t?.Process.EUID ?? 0;
-            inode.Gid = t?.Process.EGID ?? 0;
+            var uid = t?.Process.EUID ?? 0;
+            var gid = t?.Process.EGID ?? 0;
 
             var display = string.IsNullOrEmpty(name) ? "memfd:anon" : $"memfd:{name}";
-            var dentry = new Dentry(display, inode, MemfdSuperBlock.Root, MemfdSuperBlock);
 
             var fdFlags = FileFlags.O_RDWR;
             if ((flags & MFD_CLOEXEC) != 0) fdFlags |= FileFlags.O_CLOEXEC;
-            var file = new LinuxFile(dentry, fdFlags, AnonMount);
+            var mode = (flags & MFD_EXEC) != 0 ? 0x1C0 : 0x180; // 0700 vs 0600
+            var file = MemoryContext.CreateMemfdFile(display, fdFlags, mode, uid, gid,
+                (flags & MFD_ALLOW_SEALING) != 0,
+                (flags & MFD_EXEC) != 0,
+                (flags & MFD_NOEXEC_SEAL) != 0,
+                AnonMount);
             return AllocFD(file);
         }
         catch (Exception ex)
