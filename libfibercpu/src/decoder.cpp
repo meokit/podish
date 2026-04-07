@@ -490,7 +490,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             sentinel.head.handler = exit_h;
 
             // Sentinel next_block initialization to dummy
-            SetNextBlock(&sentinel.head, &state->dummy_invalid_block);
+            SetNextBlock(&sentinel.head, state->mmu.invalid_code_block());
             sentinel.head.next_eip = current_eip;
 
             temp_ops.push_back(sentinel);
@@ -529,7 +529,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         ApplySpecializedHandler(handler_index, inst.head);
 
         if (GetExtKind(&inst.head) == ExtKind::ControlFlow) {
-            SetCachedTarget(&inst.head, &state->dummy_invalid_block);
+            SetCachedTarget(&inst.head, state->mmu.invalid_code_block());
         }
 
         // Recover index logic (to keep op_indices in sync)
@@ -621,7 +621,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             branch_carrying_sentinel ? g_ExitHandlersBranch[exit_idx] : g_ExitHandlersFallthrough[exit_idx];
         sentinel.head.handler = exit_h;
         sentinel.head.next_eip = temp_ops.back().head.next_eip;  // Copy next_eip from last op
-        SetNextBlock(&sentinel.head, &state->dummy_invalid_block);
+        SetNextBlock(&sentinel.head, state->mmu.invalid_code_block());
         temp_ops.push_back(sentinel);
     }
     end_eip = current_eip;
@@ -715,9 +715,9 @@ finalize:
     size_t slot_count = temp_ops.size();
 
     size_t alloc_size = BasicBlock::CalculateSize(slot_count);
-    void* mem = state->block_pool.allocate(alloc_size);
+    void* mem = state->mmu.allocate_block_bytes(alloc_size);
     BasicBlock* block = new (mem) BasicBlock;
-    state->RememberAllocatedBlock(block);
+    state->mmu.remember_allocated_block(block);
 
     assert((start_eip & BasicBlock::kInvalidStartEipBit) == 0 && "BasicBlock start_eip must stay in low 2G");
     block->set_start_eip(start_eip);

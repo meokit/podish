@@ -42,8 +42,9 @@ inline EmuState* Mmu::get_state() {
 FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
     const uint32_t l1_idx = vaddr >> 22;
     const uint32_t l2_idx = (vaddr >> 12) & 0x3FF;
-    if (!page_dir) return;
-    auto& chunk = page_dir->l1_directory[l1_idx];
+    auto* dir = current_page_directory();
+    if (!dir) return;
+    auto& chunk = dir->l1_directory[l1_idx];
     if (chunk) {
         chunk->permissions[l2_idx] = chunk->permissions[l2_idx] | Property::Dirty;
     }
@@ -51,24 +52,26 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
 
 // Resolve Slow
 [[nodiscard]] FORCE_INLINE MemResult<HostAddr> Mmu::resolve_slow(GuestAddr addr, Property req_perm) {
-    if (!page_dir) return std::unexpected(FaultCode::PageFault);
+    auto* dir = current_page_directory();
+    if (!dir) return std::unexpected(FaultCode::PageFault);
 
     const uint32_t l1_idx = addr >> 22;
     const uint32_t l2_idx = (addr >> 12) & 0x3FF;
     const uint32_t offset = addr & 0xFFF;
 
     // 1. Check L1 Directory
-    if (!page_dir->l1_directory[l1_idx]) {
+    if (!dir->l1_directory[l1_idx]) {
         auto status = signal_fault(addr, (int)has_property(req_perm, Property::Write));
         if (status != EmuStatus::Running) return std::unexpected(FaultCode::PageFault);
 
         // Retry after fault handler
-        if (!page_dir || !page_dir->l1_directory[l1_idx]) {
+        dir = current_page_directory();
+        if (!dir || !dir->l1_directory[l1_idx]) {
             return std::unexpected(FaultCode::PageFault);
         }
     }
 
-    auto* chunk = page_dir->l1_directory[l1_idx].get();
+    auto* chunk = dir->l1_directory[l1_idx].get();
 
     // 2. Check Permissions
     Property current_perm = chunk->permissions[l2_idx];
@@ -77,9 +80,10 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
         if (status != EmuStatus::Running) return std::unexpected(FaultCode::PageFault);
 
         // Retry: Refetch chunk/perm because handler might have changed them
-        if (!page_dir || !page_dir->l1_directory[l1_idx]) return std::unexpected(FaultCode::PageFault);
+        dir = current_page_directory();
+        if (!dir || !dir->l1_directory[l1_idx]) return std::unexpected(FaultCode::PageFault);
 
-        chunk = page_dir->l1_directory[l1_idx].get();
+        chunk = dir->l1_directory[l1_idx].get();
         current_perm = chunk->permissions[l2_idx];
 
         if (!has_property(current_perm, req_perm)) {

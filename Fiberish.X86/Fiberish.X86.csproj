@@ -6,7 +6,6 @@
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
-        <RuntimeIdentifiers>browser-wasm</RuntimeIdentifiers>
         <IsBrowserWasm Condition="'$(RuntimeIdentifier)' == 'browser-wasm' Or '$(FiberishForceBrowserWasm)' == 'true'">true</IsBrowserWasm>
         <RuntimeIdentifier Condition="'$(IsBrowserWasm)' == 'true' and '$(RuntimeIdentifier)' == ''">browser-wasm</RuntimeIdentifier>
         <DefineConstants Condition="'$(IsBrowserWasm)' == 'true'">$(DefineConstants);FIBERISH_BROWSER_WASM</DefineConstants>

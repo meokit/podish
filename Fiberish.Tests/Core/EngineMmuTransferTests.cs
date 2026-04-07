@@ -1,15 +1,20 @@
 using System.Runtime.InteropServices;
 using System.Reflection;
+using System.Text.Json;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.VFS;
+using Fiberish.X86.Native;
 using Xunit;
 
 namespace Fiberish.Tests.Core;
 
 public class EngineMmuTransferTests
 {
+    private const uint CodeAddr = 0x00401000;
+    private static readonly byte[] SimpleCode = [0x90, 0x90];
+
     [Fact]
     public void DetachThenAttach_RestoresMappings_AndConsumesHandle()
     {
@@ -162,6 +167,147 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
+    public void SharedClone_ReusesSharedCodeCache()
+    {
+        using var parent = new Engine();
+        InstallSimpleCode(parent);
+        WarmSimpleCode(parent);
+
+        var parentStats = ReadCodeCacheStats(parent);
+        Assert.True(parent.GetBlockCount() > 0);
+        Assert.True(parentStats.BlockCacheSize > 0);
+
+        using var child = parent.Clone(true);
+        Assert.Equal(parent.CurrentMmuIdentity, child.CurrentMmuIdentity);
+        Assert.Equal(parent.GetBlockCount(), child.GetBlockCount());
+        Assert.Equal(parentStats.BlockCacheSize, ReadCodeCacheStats(child).BlockCacheSize);
+
+        WarmSimpleCode(child);
+
+        Assert.Equal(parent.GetBlockCount(), child.GetBlockCount());
+        Assert.Equal(parentStats.BlockCacheSize, ReadCodeCacheStats(parent).BlockCacheSize);
+    }
+
+    [Fact]
+    public void SharedClone_ResetAllCodeCache_InvalidatesSharedCore()
+    {
+        using var parent = new Engine();
+        InstallSimpleCode(parent);
+        WarmSimpleCode(parent);
+
+        using var child = parent.Clone(true);
+        Assert.True(ReadCodeCacheStats(parent).BlockCacheSize > 0);
+
+        child.ResetAllCodeCache();
+
+        Assert.Equal(0, ReadCodeCacheStats(parent).BlockCacheSize);
+        Assert.Equal(0, ReadCodeCacheStats(child).BlockCacheSize);
+    }
+
+    [Fact]
+    public void SharedClone_ResetCodeCacheByRange_AndMemUnmap_InvalidateSharedCore()
+    {
+        using var parent = new Engine();
+        InstallSimpleCode(parent);
+        WarmSimpleCode(parent);
+
+        using var child = parent.Clone(true);
+        child.ResetCodeCacheByRange(CodeAddr, 1);
+        Assert.Equal(0, ReadCodeCacheStats(parent).BlockCacheSize);
+
+        WarmSimpleCode(parent);
+        Assert.True(ReadCodeCacheStats(child).BlockCacheSize > 0);
+
+        child.MemUnmap(CodeAddr, LinuxConstants.PageSize);
+
+        Assert.Equal(0, ReadCodeCacheStats(parent).BlockCacheSize);
+        Assert.False(parent.HasMappedPage(CodeAddr, 1));
+        Assert.False(child.HasMappedPage(CodeAddr, 1));
+    }
+
+    [Fact]
+    public void DetachAndReattach_PreservesOriginalCoreCodeCache()
+    {
+        using var engine = new Engine();
+        InstallSimpleCode(engine);
+        WarmSimpleCode(engine);
+
+        var warmedBlockCount = engine.GetBlockCount();
+        var warmedStats = ReadCodeCacheStats(engine);
+        Assert.True(warmedBlockCount > 0);
+        Assert.True(warmedStats.BlockCacheSize > 0);
+
+        using var detached = engine.DetachMmu();
+        Assert.Equal(0, engine.GetBlockCount());
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+
+        engine.ReplaceMmu(detached);
+
+        Assert.Equal(warmedBlockCount, engine.GetBlockCount());
+        Assert.Equal(warmedStats.BlockCacheSize, ReadCodeCacheStats(engine).BlockCacheSize);
+    }
+
+    [Fact]
+    public void ForkedOrClonedMmu_StartsWithEmptyCodeCache()
+    {
+        using var parent = new Engine();
+        InstallSimpleCode(parent);
+        WarmSimpleCode(parent);
+        Assert.True(parent.GetBlockCount() > 0);
+
+        using (var forked = parent.Clone(false))
+        {
+            Assert.NotEqual(parent.CurrentMmuIdentity, forked.CurrentMmuIdentity);
+            Assert.Equal(0, forked.GetBlockCount());
+            Assert.Equal(0, ReadCodeCacheStats(forked).BlockCacheSize);
+            WarmSimpleCode(forked);
+            Assert.True(forked.GetBlockCount() > 0);
+        }
+
+        using var freshEngine = new Engine();
+        using var cloned = parent.CurrentMmu.CloneSkipExternal();
+        freshEngine.ReplaceMmu(cloned);
+        Assert.Equal(0, freshEngine.GetBlockCount());
+        Assert.Equal(0, ReadCodeCacheStats(freshEngine).BlockCacheSize);
+    }
+
+    [Fact]
+    public void DisposingSharedPeer_DoesNotCorruptSharedCodeCache()
+    {
+        using var parent = new Engine();
+        InstallSimpleCode(parent);
+        WarmSimpleCode(parent);
+        var warmedBlockCount = parent.GetBlockCount();
+
+        using (var child = parent.Clone(true))
+        {
+            WarmSimpleCode(child);
+            Assert.Equal(warmedBlockCount, child.GetBlockCount());
+        }
+
+        WarmSimpleCode(parent);
+
+        Assert.Equal(EmuStatus.Stopped, parent.Status);
+        Assert.Equal(warmedBlockCount, parent.GetBlockCount());
+        Assert.True(ReadCodeCacheStats(parent).BlockCacheSize > 0);
+    }
+
+    [Fact]
+    public void SharedClone_ResetMemory_ClearsMappingsAndSharedCodeCache()
+    {
+        using var parent = new Engine();
+        InstallSimpleCode(parent);
+        WarmSimpleCode(parent);
+
+        using var child = parent.Clone(true);
+        child.ResetMemory();
+
+        Assert.Equal(0, ReadCodeCacheStats(parent).BlockCacheSize);
+        Assert.False(parent.HasMappedPage(CodeAddr, 1));
+        Assert.False(child.HasMappedPage(CodeAddr, 1));
+    }
+
+    [Fact]
     public void AddressSpaceHandle_BindsSharedClone_AndRejectsForkedMmu()
     {
         using var parent = new Engine();
@@ -210,6 +356,37 @@ public class EngineMmuTransferTests
         Assert.False(resolved);
         Assert.Equal(1, fixture.Inode.DisposeCount);
     }
+
+    private static void InstallSimpleCode(Engine engine)
+    {
+        var perms = (byte)(Protection.Read | Protection.Write | Protection.Exec);
+        var page = engine.AllocatePage(CodeAddr, perms);
+        Assert.NotEqual(IntPtr.Zero, page);
+        Marshal.Copy(SimpleCode, 0, page, SimpleCode.Length);
+    }
+
+    private static void WarmSimpleCode(Engine engine)
+    {
+        engine.Eip = CodeAddr;
+        engine.Run(CodeAddr + (uint)SimpleCode.Length, 16);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(CodeAddr + (uint)SimpleCode.Length, engine.Eip);
+    }
+
+    private static CodeCacheStats ReadCodeCacheStats(Engine engine)
+    {
+        var json = engine.DumpStats();
+        Assert.False(string.IsNullOrEmpty(json));
+
+        using var doc = JsonDocument.Parse(json!);
+        var root = doc.RootElement;
+        return new CodeCacheStats(
+            root.GetProperty("all_blocks_count").GetInt32(),
+            root.GetProperty("block_cache_size").GetInt32(),
+            root.GetProperty("page_to_blocks_size").GetInt32());
+    }
+
+    private readonly record struct CodeCacheStats(int AllBlocksCount, int BlockCacheSize, int PageToBlocksSize);
 
     private sealed class MappedPageFixture : IDisposable
     {

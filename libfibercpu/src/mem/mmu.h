@@ -1,9 +1,11 @@
 #pragma once
+#include <ankerl/unordered_dense.h>
 #include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <memory_resource>
 #include <vector>
 #include "../common.h"
 #include "../decoder.h"
@@ -81,11 +83,97 @@ struct PageDirectory {
     PageDirectory& operator=(const PageDirectory&) = delete;
 };
 
+inline void InitializeInvalidBasicBlock(BasicBlock& block) {
+    block.set_start_eip(BasicBlock::kInvalidStartEipBit);
+    block.end_eip = 0;
+    block.set_inst_count(0);
+    block.slot_count = 0;
+    block.sentinel_slot_index = 0;
+    block.branch_target_eip = 0;
+    block.fallthrough_eip = 0;
+    block.set_terminal_kind(BlockTerminalKind::None);
+    block.exec_count = 0;
+    block.entry = nullptr;
+}
+
+struct CodeCacheState {
+    std::pmr::monotonic_buffer_resource block_pool;
+    ankerl::unordered_dense::map<uint32_t, BasicBlock*> block_cache;
+    std::vector<BasicBlock*> all_blocks;
+    BasicBlock dummy_invalid_block;
+    ankerl::unordered_dense::map<uint32_t, std::vector<uint32_t>> page_to_blocks;
+
+    CodeCacheState() { InitializeInvalidBasicBlock(dummy_invalid_block); }
+
+    void ResetReachability() {
+        block_cache.clear();
+        page_to_blocks.clear();
+    }
+
+    void RememberAllocatedBlock(BasicBlock* block) {
+        if (block != nullptr) all_blocks.push_back(block);
+    }
+
+    BasicBlock* LookupBlock(uint32_t eip) {
+        auto it = block_cache.find(eip);
+        return it == block_cache.end() ? nullptr : it->second;
+    }
+
+    const BasicBlock* LookupBlock(uint32_t eip) const {
+        auto it = block_cache.find(eip);
+        return it == block_cache.end() ? nullptr : it->second;
+    }
+
+    void RegisterBlockPages(uint32_t cache_eip, const BasicBlock* block) {
+        uint32_t page_idx = cache_eip >> 12;
+        page_to_blocks[page_idx].push_back(cache_eip);
+        if (block && block->end_eip > block->start_eip() && ((block->end_eip - 1) >> 12) != page_idx) {
+            uint32_t page2 = (block->end_eip - 1) >> 12;
+            page_to_blocks[page2].push_back(cache_eip);
+        }
+    }
+
+    BasicBlock* CacheDecodedBlock(uint32_t cache_eip, BasicBlock* block) {
+        auto [it, inserted] = block_cache.insert({cache_eip, block});
+        if (inserted) {
+            RegisterBlockPages(cache_eip, block);
+            return block;
+        }
+        return it->second;
+    }
+
+    void InvalidatePageIndex(uint32_t page_idx) {
+        auto it = page_to_blocks.find(page_idx);
+        if (it == page_to_blocks.end()) return;
+
+        for (uint32_t eip : it->second) {
+            auto block_it = block_cache.find(eip);
+            if (block_it != block_cache.end()) {
+                block_it->second->Invalidate();
+                block_cache.erase(block_it);
+            }
+        }
+        page_to_blocks.erase(it);
+    }
+
+    void InvalidatePage(uint32_t page_addr) { InvalidatePageIndex(page_addr >> 12); }
+
+    void InvalidateRange(uint32_t addr, uint32_t size) {
+        if (size == 0) return;
+        uint32_t start_page = addr >> 12;
+        uint32_t end_page = (addr + size - 1) >> 12;
+        for (uint32_t p = start_page; p <= end_page; ++p) {
+            InvalidatePageIndex(p);
+        }
+    }
+};
+
 struct MmuCore {
     std::atomic<uint32_t> ref_count{1};
     std::unique_ptr<PageDirectory> page_directory;
     uintptr_t identity = 0;
     uint32_t state_flags = 0;
+    CodeCacheState code_cache;
 };
 
 class Mmu {
@@ -117,6 +205,15 @@ private:
 
     // Slow Path: Resolve address, handle allocation/permissions/faults
     [[nodiscard]] MemResult<HostAddr> resolve_slow(GuestAddr addr, Property req_perm);
+
+    [[nodiscard]] PageDirectory* current_page_directory() {
+        page_dir = core_ ? core_->page_directory.get() : nullptr;
+        return page_dir;
+    }
+
+    [[nodiscard]] const PageDirectory* current_page_directory() const {
+        return core_ ? core_->page_directory.get() : nullptr;
+    }
 
     static uintptr_t next_identity() {
         static std::atomic<uintptr_t> identity{1};
@@ -158,14 +255,15 @@ private:
 public:
     // Safe resolution without faulting
     [[nodiscard]] HostAddr resolve_safe(GuestAddr addr, Property req_perm) {
-        if (!page_dir) return nullptr;
+        auto* dir = current_page_directory();
+        if (!dir) return nullptr;
 
         const uint32_t l1_idx = addr >> 22;
         const uint32_t l2_idx = (addr >> 12) & 0x3FF;
         const uint32_t offset = addr & 0xFFF;
 
         // 1. Check L1
-        auto& chunk = page_dir->l1_directory[l1_idx];
+        auto& chunk = dir->l1_directory[l1_idx];
         if (!chunk) return nullptr;
 
         // 2. Check Permissions
@@ -195,13 +293,13 @@ public:
 
     Mmu(const Mmu& other) {
         core_ = other.core_;
-        page_dir = other.page_dir;
+        page_dir = core_ ? core_->page_directory.get() : nullptr;
         retain_core(core_);
     }
 
     Mmu(Mmu&& other) noexcept {
         core_ = other.core_;
-        page_dir = other.page_dir;
+        page_dir = core_ ? core_->page_directory.get() : nullptr;
         other.core_ = nullptr;
         other.page_dir = nullptr;
     }
@@ -211,7 +309,7 @@ public:
         retain_core(other.core_);
         auto* old_core = core_;
         core_ = other.core_;
-        page_dir = other.page_dir;
+        page_dir = core_ ? core_->page_directory.get() : nullptr;
         release_core(old_core);
         tlb.flush();
         return *this;
@@ -221,7 +319,7 @@ public:
         if (this == &other) return *this;
         release_core(core_);
         core_ = other.core_;
-        page_dir = other.page_dir;
+        page_dir = core_ ? core_->page_directory.get() : nullptr;
         other.core_ = nullptr;
         other.page_dir = nullptr;
         tlb.flush();
@@ -317,6 +415,36 @@ public:
 
     [[nodiscard]] MmuCore* core_handle() const { return core_; }
 
+    [[nodiscard]] CodeCacheState& code_cache() { return core_->code_cache; }
+
+    [[nodiscard]] const CodeCacheState& code_cache() const { return core_->code_cache; }
+
+    [[nodiscard]] PageDirectory* page_directory() { return current_page_directory(); }
+
+    [[nodiscard]] const PageDirectory* page_directory() const { return current_page_directory(); }
+
+    [[nodiscard]] BasicBlock* invalid_code_block() { return &code_cache().dummy_invalid_block; }
+
+    [[nodiscard]] const BasicBlock* invalid_code_block() const { return &code_cache().dummy_invalid_block; }
+
+    [[nodiscard]] void* allocate_block_bytes(size_t size) { return code_cache().block_pool.allocate(size); }
+
+    void remember_allocated_block(BasicBlock* block) { code_cache().RememberAllocatedBlock(block); }
+
+    [[nodiscard]] BasicBlock* lookup_cached_block(uint32_t eip) { return code_cache().LookupBlock(eip); }
+
+    [[nodiscard]] const BasicBlock* lookup_cached_block(uint32_t eip) const { return code_cache().LookupBlock(eip); }
+
+    [[nodiscard]] BasicBlock* cache_decoded_block(uint32_t cache_eip, BasicBlock* block) {
+        return code_cache().CacheDecodedBlock(cache_eip, block);
+    }
+
+    void reset_code_cache() { code_cache().ResetReachability(); }
+
+    void invalidate_code_cache_page(uint32_t page_addr) { code_cache().InvalidatePage(page_addr); }
+
+    void invalidate_code_cache_range(uint32_t addr, uint32_t size) { code_cache().InvalidateRange(addr, size); }
+
     // Callback Setup
     void set_fault_callback(FaultHandler handler, void* opaque) {
         fault_handler = handler;
@@ -336,16 +464,18 @@ public:
     }
 
     [[nodiscard]] Property get_property(GuestAddr addr) const {
-        if (!page_dir) return Property::None;
+        auto* dir = current_page_directory();
+        if (!dir) return Property::None;
         const uint32_t l1_idx = addr >> 22;
         const uint32_t l2_idx = (addr >> 12) & 0x3FF;
-        auto& chunk = page_dir->l1_directory[l1_idx];
+        auto& chunk = dir->l1_directory[l1_idx];
         if (!chunk) return Property::None;
         return chunk->permissions[l2_idx];
     }
 
     // API: mmap
     void mmap(GuestAddr addr, uint32_t size, uint8_t perms_raw) {
+        auto* dir = current_page_directory();
         Property perms = static_cast<Property>(perms_raw);
         uint32_t start = addr & ~PAGE_MASK;
         uint32_t end_addr = (addr + size + PAGE_MASK) & ~PAGE_MASK;
@@ -354,11 +484,11 @@ public:
             uint32_t l1_idx = curr >> 22;
             uint32_t l2_idx = (curr >> 12) & 0x3FF;
 
-            if (!page_dir->l1_directory[l1_idx]) {
-                page_dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
+            if (!dir->l1_directory[l1_idx]) {
+                dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
             }
 
-            auto& entry_perms = page_dir->l1_directory[l1_idx]->permissions[l2_idx];
+            auto& entry_perms = dir->l1_directory[l1_idx]->permissions[l2_idx];
             // Preserve state bits across permission changes.
             // mprotect/mmap should not clear dirty tracking, and must keep external ownership marker.
             Property preserved = Property::None;
@@ -370,7 +500,8 @@ public:
     }
 
     void reprotect_mapped_range(GuestAddr addr, uint32_t size, uint8_t perms_raw) {
-        if (!page_dir || size == 0) return;
+        auto* dir = current_page_directory();
+        if (!dir || size == 0) return;
 
         Property perms = static_cast<Property>(perms_raw);
         uint32_t start = addr & ~PAGE_MASK;
@@ -380,7 +511,7 @@ public:
             uint32_t l1_idx = curr >> 22;
             uint32_t l2_idx = (curr >> 12) & 0x3FF;
 
-            auto& chunk = page_dir->l1_directory[l1_idx];
+            auto& chunk = dir->l1_directory[l1_idx];
             if (!chunk) continue;
 
             auto& entry_perms = chunk->permissions[l2_idx];
@@ -399,16 +530,17 @@ public:
     // Sets permissions and allocates memory in one call
     // Returns the host address of the allocated page, or nullptr on failure
     [[nodiscard]] HostAddr allocate_page(GuestAddr addr, uint8_t perms_raw) {
+        auto* dir = current_page_directory();
         Property perms = static_cast<Property>(perms_raw);
         uint32_t page_addr = addr & ~PAGE_MASK;
         uint32_t l1_idx = page_addr >> 22;
         uint32_t l2_idx = (page_addr >> 12) & 0x3FF;
 
-        if (!page_dir->l1_directory[l1_idx]) {
-            page_dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
+        if (!dir->l1_directory[l1_idx]) {
+            dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
         }
 
-        auto& chunk = page_dir->l1_directory[l1_idx];
+        auto& chunk = dir->l1_directory[l1_idx];
 
         // Allocate page if not already allocated
         if (!chunk->pages[l2_idx]) {
@@ -427,16 +559,17 @@ public:
     // For mmap passthrough, shared memory, etc.
     // Returns true on success
     bool map_external_page(GuestAddr addr, HostAddr external_page, uint8_t perms_raw) {
+        auto* dir = current_page_directory();
         Property perms = static_cast<Property>(perms_raw);
         uint32_t page_addr = addr & ~PAGE_MASK;
         uint32_t l1_idx = page_addr >> 22;
         uint32_t l2_idx = (page_addr >> 12) & 0x3FF;
 
-        if (!page_dir->l1_directory[l1_idx]) {
-            page_dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
+        if (!dir->l1_directory[l1_idx]) {
+            dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
         }
 
-        auto& chunk = page_dir->l1_directory[l1_idx];
+        auto& chunk = dir->l1_directory[l1_idx];
 
         // Free existing page if owned
         if (chunk->pages[l2_idx] && !has_property(chunk->permissions[l2_idx], Property::External)) {
@@ -453,6 +586,7 @@ public:
 
     // API: munmap - Clear pages and permissions
     void munmap(GuestAddr addr, uint32_t size) {
+        auto* dir = current_page_directory();
         uint32_t start = addr & ~PAGE_MASK;
         uint32_t end_addr = (addr + size + PAGE_MASK) & ~PAGE_MASK;
 
@@ -460,7 +594,7 @@ public:
             uint32_t l1_idx = curr >> 22;
             uint32_t l2_idx = (curr >> 12) & 0x3FF;
 
-            auto& chunk = page_dir->l1_directory[l1_idx];
+            auto& chunk = dir->l1_directory[l1_idx];
             if (chunk) {
                 // Delete the page data only if not external
                 if (chunk->pages[l2_idx] && !has_property(chunk->permissions[l2_idx], Property::External)) {
@@ -484,6 +618,7 @@ public:
         }
         core_->page_directory = std::make_unique<PageDirectory>();
         page_dir = core_->page_directory.get();
+        core_->code_cache.ResetReachability();
         tlb.flush();
     }
 
@@ -559,10 +694,11 @@ public:
 
     // Probe Execution (Check if address is executable without faulting)
     [[nodiscard]] inline bool probe_exec(GuestAddr addr) {
-        if (!page_dir) return false;
+        auto* dir = current_page_directory();
+        if (!dir) return false;
         const uint32_t l1_idx = addr >> 22;
         const uint32_t l2_idx = (addr >> 12) & 0x3FF;
-        auto& chunk = page_dir->l1_directory[l1_idx];
+        auto& chunk = dir->l1_directory[l1_idx];
         if (!chunk) return false;
 
         // Check only permissions. The page might be mapped but not yet populated (demand paging).

@@ -19,7 +19,6 @@
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
-        <RuntimeIdentifiers>browser-wasm</RuntimeIdentifiers>
         <IsBrowserWasm Condition="'$(RuntimeIdentifier)' == 'browser-wasm' Or '$(FiberishForceBrowserWasm)' == 'true'">true</IsBrowserWasm>
         <DefineConstants Condition="'$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true'">$(DefineConstants);PODISH_STATIC_NATIVE</DefineConstants>
         <DefineConstants Condition="'$(RuntimeIdentifier)' == 'osx-arm64' Or '$(RuntimeIdentifier)' == 'ios-arm64' Or '$(RuntimeIdentifier)' == 'iossimulator-arm64'">$(DefineConstants);HOSTFS_DARWIN;HOSTFS_ARCH_ARM64</DefineConstants>

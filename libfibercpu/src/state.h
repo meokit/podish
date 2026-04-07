@@ -5,9 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <memory_resource>
 #include <variant>
-#include <vector>
 #include "common.h"
 #include "decoder.h"  // For BasicBlock definition
 #include "hooks.h"
@@ -85,26 +83,6 @@ struct EmuState {
     HookManager hooks;
     EmuStatus status = EmuStatus::Stopped;
 
-    // PMR Allocation
-    std::pmr::monotonic_buffer_resource block_pool;
-    std::pmr::polymorphic_allocator<BasicBlock> block_alloc{&block_pool};
-
-    // Block Cache - Stores raw pointers. Blocks are owned by block_pool.
-    ankerl::unordered_dense::map<uint32_t, BasicBlock*> block_cache;
-    // Historical block list for stats export. Blocks are never individually freed;
-    // cache invalidation only removes reachability from block_cache/page_to_blocks.
-    std::vector<BasicBlock*> all_blocks;
-
-    // Optimization: Dummy "Invalid" block.
-    // next_block pointers are initialized to the address of this object instead of nullptr.
-    // Keeping the storage inline avoids an extra pool allocation and makes the sentinel pointer
-    // a simple address within EmuState.
-    BasicBlock dummy_invalid_block;
-
-    // Reverse Mapping: Page Address (aligned) -> List of EIPs in that page
-    // Using vector is simple enough. For massive code pages, a set might be better but overhead is higher.
-    ankerl::unordered_dense::map<uint32_t, std::vector<uint32_t>> page_to_blocks;
-
     // Fault Info
     uint8_t fault_vector = 0xFF;  // 0xFF = No Fault
     uint32_t fault_addr = 0;
@@ -149,10 +127,6 @@ struct EmuState {
     int tsc_mode = 1;                // 0: Fixed Increment, 1: Real-time
     uint64_t tsc_fixed_counter = 0;  // For mode 0
     std::chrono::steady_clock::time_point tsc_start_time;
-
-    void RememberAllocatedBlock(BasicBlock* block) {
-        if (block != nullptr) all_blocks.push_back(block);
-    }
 
     // Helper function to sync eip
     void sync_eip_to_op_start(const DecodedOp* op) { ctx.eip = op->next_eip - op->len; }

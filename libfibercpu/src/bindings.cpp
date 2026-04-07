@@ -74,33 +74,13 @@ static void InternalMemHookBridge(void* opaque, uint32_t addr, uint32_t size, in
 
 // Invalidate all translated blocks linked to one guest page.
 static void X86_InvalidateCodeCacheByPage(EmuState* state, uint32_t page_addr) {
-    uint32_t page_idx = page_addr >> 12;
-    auto it = state->page_to_blocks.find(page_idx);
-    if (it != state->page_to_blocks.end()) {
-        // Remove all referenced blocks from the cache
-        for (uint32_t eip : it->second) {
-            auto block_it = state->block_cache.find(eip);
-            if (block_it != state->block_cache.end()) {
-                block_it->second->Invalidate();
-                state->block_cache.erase(block_it);
-            }
-        }
-        // Crucial: Remove the entire mapping for this page to prevent
-        // the vector from growing indefinitely with stale EIPs.
-        state->page_to_blocks.erase(it);
-    }
+    state->mmu.invalidate_code_cache_page(page_addr);
 }
 
 static void InternalSmcBridge(void* opaque, uint32_t addr) {
     EmuState* state = static_cast<EmuState*>(opaque);
     // Invalidate the page containing 'addr'
     X86_InvalidateCodeCacheByPage(state, addr);
-}
-
-static void X86_ResetCodeCache(EmuState* state) {
-    if (!state) return;
-    state->block_cache.clear();
-    state->page_to_blocks.clear();
 }
 
 static bool BlockCrossesPage(const BasicBlock* block) {
@@ -120,27 +100,12 @@ static bool BlockFormsSmallLoopWith(const BasicBlock* source, const BasicBlock* 
     return target->branch_target_eip == source->start_eip();
 }
 
-static void RegisterBlockPages(EmuState* state, uint32_t cache_eip, const BasicBlock* block) {
-    uint32_t page_idx = cache_eip >> 12;
-    state->page_to_blocks[page_idx].push_back(cache_eip);
-    if (block && block->end_eip > block->start_eip() && ((block->end_eip - 1) >> 12) != page_idx) {
-        uint32_t page2 = (block->end_eip - 1) >> 12;
-        state->page_to_blocks[page2].push_back(cache_eip);
-    }
-}
-
 static BasicBlock* CacheDecodedBlock(EmuState* state, uint32_t cache_eip, BasicBlock* block) {
-    auto [it, inserted] = state->block_cache.insert({cache_eip, block});
-    if (inserted) {
-        RegisterBlockPages(state, cache_eip, block);
-        return block;
-    }
-    return it->second;
+    return state->mmu.cache_decoded_block(cache_eip, block);
 }
 
 static BasicBlock* LookupOrDecodeBlockConcatSuccessor(EmuState* state, uint32_t eip, uint32_t end_eip) {
-    auto it = state->block_cache.find(eip);
-    if (it != state->block_cache.end()) return it->second;
+    if (BasicBlock* block = state->mmu.lookup_cached_block(eip)) return block;
 
     const EmuStatus saved_status = state->status;
     const uint8_t saved_fault_vector = state->fault_vector;
@@ -184,9 +149,9 @@ static bool CanBlockConcatWithSuccessor(const BasicBlock* a, const BasicBlock* b
 static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
     const uint32_t concat_inst_count = a->inst_count() - 1 + b->inst_count();
     const uint32_t concat_slot_count = concat_inst_count + 1;
-    void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(concat_slot_count));
+    void* mem = state->mmu.allocate_block_bytes(BasicBlock::CalculateSize(concat_slot_count));
     BasicBlock* concat = new (mem) BasicBlock;
-    state->RememberAllocatedBlock(concat);
+    state->mmu.remember_allocated_block(concat);
 
     concat->set_start_eip(a->start_eip());
     concat->end_eip = b->end_eip;
@@ -219,9 +184,9 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
 static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
     const uint32_t concat_inst_count = a->inst_count() + b->inst_count();
     const uint32_t concat_slot_count = concat_inst_count + 1;
-    void* mem = state->block_pool.allocate(BasicBlock::CalculateSize(concat_slot_count));
+    void* mem = state->mmu.allocate_block_bytes(BasicBlock::CalculateSize(concat_slot_count));
     BasicBlock* concat = new (mem) BasicBlock;
-    state->RememberAllocatedBlock(concat);
+    state->mmu.remember_allocated_block(concat);
 
     concat->set_start_eip(a->start_eip());
     concat->end_eip = b->end_eip;
@@ -314,20 +279,6 @@ void SignalHandler(int sig) {
 
 static bool g_SignalRegistered = false;
 
-static void InitializeDummyInvalidBlock(EmuState* state) {
-    BasicBlock& block = state->dummy_invalid_block;
-    block.chain = {};
-    block.set_start_eip(BasicBlock::kInvalidStartEipBit);
-    block.end_eip = 0;
-    block.set_inst_count(0);
-    block.slot_count = 0;
-    block.sentinel_slot_index = 0;
-    block.branch_target_eip = 0;
-    block.fallthrough_eip = 0;
-    block.exec_count = 0;
-    block.entry = nullptr;
-}
-
 // ----------------------------------------------------------------------------
 // Creation / Destruction
 // ----------------------------------------------------------------------------
@@ -354,7 +305,6 @@ EmuState* X86_Create() {
     state->ctx.fpu_cw = 0x037F;
     // Hooks initialized by default constructor of HookManager
 
-    InitializeDummyInvalidBlock(state);
     state->ctx.fpu_sw = 0x0000;
     state->ctx.fpu_tw = 0xFFFF;
     state->ctx.fpu_top = 0;
@@ -422,17 +372,13 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
     state->log_callback = parent->log_callback;
     state->log_userdata = parent->log_userdata;
 
-    // Initialize Dummy Invalid Block (same as X86_Create)
-    // This is CRITICAL for OpExitBlock which assumes next_block is never nullptr
-    InitializeDummyInvalidBlock(state);
-
     return state;
 }
 
 void X86_Destroy(EmuState* state) {
     if (state) {
-        // Monotonic buffer resource will automatically release all memory
-        // allocated from it (BasicBlocks and their vectors) when 'state' is deleted.
+        // MmuCore owns the block pool/code cache lifetime and will release it
+        // when the last attached engine or external MMU handle goes away.
         delete state;
     }
 }
@@ -587,37 +533,18 @@ X86_MmuHandle* X86_EngineGetMmu(EmuState* state) {
 X86_MmuHandle* X86_EngineDetachMmu(EmuState* state) {
     if (!state) return nullptr;
     auto* detached_core = state->mmu.detach_core();
-    X86_ResetCodeCache(state);
     return X86_NewMmuHandle(detached_core, false);
 }
 
 int X86_EngineAttachMmu(EmuState* state, X86_MmuHandle* mmu) {
     if (!state || !mmu || !mmu->core) return 0;
     state->mmu.attach_core(mmu->core, true);
-    X86_ResetCodeCache(state);
     return 1;
 }
 
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
     state->mmu.munmap(addr, size);
-
-    // Also invalidate the derived block cache for this range.
-    uint32_t start_page = addr >> 12;
-    uint32_t end_page = (addr + size + 0xFFF) >> 12;
-    for (uint32_t p = start_page; p < end_page; ++p) {
-        auto it = state->page_to_blocks.find(p);
-        if (it != state->page_to_blocks.end()) {
-            for (uint32_t block_eip : it->second) {
-                // Remove from block cache if it exists
-                auto block_it = state->block_cache.find(block_eip);
-                if (block_it != state->block_cache.end()) {
-                    block_it->second->Invalidate();
-                    state->block_cache.erase(block_it);
-                }
-            }
-            state->page_to_blocks.erase(it);
-        }
-    }
+    state->mmu.invalidate_code_cache_range(addr, size);
 }
 
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size) {
@@ -648,7 +575,8 @@ void* X86_ResolvePtr(EmuState* state, uint32_t addr, int is_write) {
 
 size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86_PageMapping* buffer,
                               size_t max_count) {
-    if (!state || !buffer || max_count == 0 || size == 0 || !state->mmu.page_dir) return 0;
+    auto* page_dir = state ? state->mmu.page_directory() : nullptr;
+    if (!state || !buffer || max_count == 0 || size == 0 || !page_dir) return 0;
 
     constexpr uint64_t kPageSize = static_cast<uint64_t>(mem::PAGE_SIZE);
     constexpr uint64_t kPageMask = static_cast<uint64_t>(~mem::PAGE_MASK);
@@ -663,7 +591,7 @@ size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86
         const uint32_t l1_idx = page_addr >> 22;
         const uint32_t l2_idx = (page_addr >> 12) & 0x3FF;
 
-        auto& chunk = state->mmu.page_dir->l1_directory[l1_idx];
+        auto& chunk = page_dir->l1_directory[l1_idx];
         if (!chunk) continue;
 
         auto* page_ptr = chunk->pages[l2_idx];
@@ -700,7 +628,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     uint64_t total_run_insts = 0;
 
     // Reset chaining state for this run
-    state->last_block = &state->dummy_invalid_block;
+    state->last_block = state->mmu.invalid_code_block();
     state->smc_write_to_exec = false;
     state->allow_write_exec_page = false;
     state->intercept_exec_write_for_smc = false;
@@ -774,7 +702,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             }
             state->smc_write_to_exec = false;
             state->allow_write_exec_page = true;
-            state->last_block = &state->dummy_invalid_block;
+            state->last_block = state->mmu.invalid_code_block();
             BasicBlock* single_block = DecodeBlock(state, eip, end_eip, 1);
             if (!single_block) {
                 state->allow_write_exec_page = false;
@@ -785,13 +713,14 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             }
             execute_block(single_block);
             state->allow_write_exec_page = false;
-            state->last_block = &state->dummy_invalid_block;
+            state->last_block = state->mmu.invalid_code_block();
             continue;
         }
 
-        auto it = state->block_cache.find(eip);
-        BasicBlock* block_ptr =
-            it == state->block_cache.end() ? ResolveBlockForRunSlow(state, eip, end_eip) : it->second;
+        BasicBlock* block_ptr = state->mmu.lookup_cached_block(eip);
+        if (!block_ptr) {
+            block_ptr = ResolveBlockForRunSlow(state, eip, end_eip);
+        }
         if (!block_ptr) {
             break;
         }
@@ -802,11 +731,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             // Re-decode? Or Fault?
             // If it's in cache but invalid, it means we messed up invalidation logic (didn't erase).
             // Let's treat it as a miss and re-decode.
-            if (it != state->block_cache.end()) {
-                state->block_cache.erase(it);
-            } else {
-                state->block_cache.erase(eip);
-            }
+            state->mmu.code_cache().block_cache.erase(eip);
             continue;
         }
 
@@ -857,9 +782,10 @@ void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats) {
         }
     };
 
-    for (const auto& [eip, block] : state->block_cache) {
+    const BasicBlock* invalid_block = state->mmu.invalid_code_block();
+    for (const auto& [eip, block] : state->mmu.code_cache().block_cache) {
         (void)eip;
-        if (!block || block == &state->dummy_invalid_block || block->inst_count() == 0) continue;
+        if (!block || block == invalid_block || block->inst_count() == 0) continue;
         stats->executed_block_entries += block->exec_count;
         stats->executed_inst_total += block->exec_count * block->inst_count();
         stats->exec_weighted_histogram[std::min<uint32_t>(block->inst_count(), 64)] += block->exec_count;
@@ -916,7 +842,7 @@ void X86_EmuYield(EmuState* state) {
 
 int X86_Step(EmuState* state) {
     state->status = EmuStatus::Running;
-    state->last_block = &state->dummy_invalid_block;
+    state->last_block = state->mmu.invalid_code_block();
     const bool prev_allow_write_exec_page = state->allow_write_exec_page;
     const bool prev_intercept_exec_write_for_smc = state->intercept_exec_write_for_smc;
     state->allow_write_exec_page = true;
@@ -959,7 +885,7 @@ int X86_Step(EmuState* state) {
     HandlerFunc exit_h = g_ExitHandlersFallthrough[0];
     sentinel.handler = exit_h;
     sentinel.next_eip = head->next_eip;
-    SetNextBlock(&sentinel, &state->dummy_invalid_block);
+    SetNextBlock(&sentinel, state->mmu.invalid_code_block());
     std::memcpy(head + 1, &sentinel, sizeof(sentinel));
 
     // Run first op
@@ -1033,10 +959,7 @@ int32_t X86_GetFaultVector(EmuState* state) {
 }
 
 void X86_ResetAllCodeCache(EmuState* state) {
-    if (state) {
-        state->block_cache.clear();
-        state->page_to_blocks.clear();
-    }
+    if (state) state->mmu.reset_code_cache();
 }
 
 void X86_FlushMmuTlb(EmuState* state) {
@@ -1046,32 +969,12 @@ void X86_FlushMmuTlb(EmuState* state) {
 }
 
 void X86_ResetMemory(EmuState* state) {
-    if (state) {
-        state->mmu.reset_memory();
-        state->block_cache.clear();
-        state->page_to_blocks.clear();
-    }
+    if (state) state->mmu.reset_memory();
 }
 
 void X86_ResetCodeCacheByRange(EmuState* state, uint32_t addr, uint32_t size) {
-    if (!state || size == 0) return;
-
-    uint32_t start_page = addr >> 12;
-    uint32_t end_page = (addr + size - 1) >> 12;
-
-    for (uint32_t p = start_page; p <= end_page; ++p) {
-        auto it = state->page_to_blocks.find(p);
-        if (it != state->page_to_blocks.end()) {
-            for (uint32_t eip : it->second) {
-                auto block_it = state->block_cache.find(eip);
-                if (block_it != state->block_cache.end()) {
-                    block_it->second->Invalidate();
-                    state->block_cache.erase(block_it);
-                }
-            }
-            state->page_to_blocks.erase(it);
-        }
-    }
+    if (!state) return;
+    state->mmu.invalidate_code_cache_range(addr, size);
 }
 
 void X86_SetTscFrequency(EmuState* state, uint64_t freq) {
@@ -1118,6 +1021,7 @@ void X86_ResetTlbStats(EmuState* state) {
 
 int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
     if (!state || !buffer || buffer_size == 0) return -1;
+    const auto& code_cache = state->mmu.code_cache();
 #ifdef ENABLE_TLB_STATS
     auto& s = state->mmu.stats;
     int n = snprintf(buffer, buffer_size,
@@ -1129,26 +1033,26 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
                      (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits,
                      (unsigned long long)s.l2_read_hits, (unsigned long long)s.l2_write_hits,
                      (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
-                     (unsigned long long)s.total_reads, (unsigned long long)s.total_writes, state->all_blocks.size(),
-                     state->block_cache.size(), state->page_to_blocks.size());
+                     (unsigned long long)s.total_reads, (unsigned long long)s.total_writes,
+                     code_cache.all_blocks.size(), code_cache.block_cache.size(), code_cache.page_to_blocks.size());
     return n;
 #else
     return snprintf(buffer, buffer_size,
                     "{\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu}",
-                    state->all_blocks.size(), state->block_cache.size(), state->page_to_blocks.size());
+                    code_cache.all_blocks.size(), code_cache.block_cache.size(), code_cache.page_to_blocks.size());
 #endif
 }
 
 size_t X86_GetBlockCount(EmuState* state) {
     if (!state) return 0;
-    return state->all_blocks.size();
+    return state->mmu.code_cache().all_blocks.size();
 }
 
 size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count) {
     if (!state || !buffer || max_count == 0) return 0;
 
     size_t count = 0;
-    for (BasicBlock* block : state->all_blocks) {
+    for (BasicBlock* block : state->mmu.code_cache().all_blocks) {
         if (count >= max_count) break;
         buffer[count] = block;
         count++;
