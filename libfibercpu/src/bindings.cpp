@@ -105,12 +105,13 @@ static BasicBlock* CacheDecodedBlock(EmuState* state, uint32_t cache_eip, BasicB
 }
 
 static BasicBlock* LookupOrDecodeBlockConcatSuccessor(EmuState* state, uint32_t eip, uint32_t end_eip) {
-    if (BasicBlock* block = state->mmu.lookup_cached_block(eip)) return block;
+    BasicBlock* cached_block = state->mmu.lookup_cached_block(eip);
+    if (cached_block && cached_block->is_valid()) return cached_block;
 
     const EmuStatus saved_status = state->status;
     const uint8_t saved_fault_vector = state->fault_vector;
     const uint32_t saved_fault_addr = state->fault_addr;
-    BasicBlock* block = DecodeBlock(state, eip, end_eip, 0);
+    BasicBlock* block = DecodeBlock(state, eip, end_eip, 0, cached_block);
     state->status = saved_status;
     state->fault_vector = saved_fault_vector;
     state->fault_addr = saved_fault_addr;
@@ -217,8 +218,8 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
 }
 
 static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuState* state, uint32_t eip,
-                                                                          uint32_t end_eip) {
-    BasicBlock* new_block = DecodeBlock(state, eip, end_eip, 0);
+                                                                          uint32_t end_eip, BasicBlock* cached_block) {
+    BasicBlock* new_block = DecodeBlock(state, eip, end_eip, 0, cached_block);
 
     if (!new_block) {
         if (FaultTraceEnabled()) {
@@ -543,8 +544,9 @@ int X86_EngineAttachMmu(EmuState* state, X86_MmuHandle* mmu) {
 }
 
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
+    auto host_page_bases = state->mmu.collect_host_page_bases_for_guest_range(addr, size);
     state->mmu.munmap(addr, size);
-    state->mmu.invalidate_code_cache_range(addr, size);
+    state->mmu.invalidate_code_cache_host_pages(host_page_bases);
 }
 
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size) {
@@ -718,21 +720,11 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         }
 
         BasicBlock* block_ptr = state->mmu.lookup_cached_block(eip);
-        if (!block_ptr) {
-            block_ptr = ResolveBlockForRunSlow(state, eip, end_eip);
+        if (!block_ptr || !block_ptr->is_valid()) {
+            block_ptr = ResolveBlockForRunSlow(state, eip, end_eip, block_ptr);
         }
         if (!block_ptr) {
             break;
-        }
-
-        // Skip invalid blocks (shouldn't happen if we erase them on invalidation,
-        // but safe to check if we change logic)
-        if (!block_ptr->is_valid()) {
-            // Re-decode? Or Fault?
-            // If it's in cache but invalid, it means we messed up invalidation logic (didn't erase).
-            // Let's treat it as a miss and re-decode.
-            state->mmu.code_cache().block_cache.erase(eip);
-            continue;
         }
 
         execute_block(block_ptr);
@@ -783,9 +775,9 @@ void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats) {
     };
 
     const BasicBlock* invalid_block = state->mmu.invalid_code_block();
-    for (const auto& [eip, block] : state->mmu.code_cache().block_cache) {
-        (void)eip;
-        if (!block || block == invalid_block || block->inst_count() == 0) continue;
+    for (const auto& [key, block] : state->mmu.code_cache().block_cache) {
+        (void)key;
+        if (!block || block == invalid_block || !block->is_valid() || block->inst_count() == 0) continue;
         stats->executed_block_entries += block->exec_count;
         stats->executed_inst_total += block->exec_count * block->inst_count();
         stats->exec_weighted_histogram[std::min<uint32_t>(block->inst_count(), 64)] += block->exec_count;
@@ -1034,12 +1026,12 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
                      (unsigned long long)s.l2_read_hits, (unsigned long long)s.l2_write_hits,
                      (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
                      (unsigned long long)s.total_reads, (unsigned long long)s.total_writes,
-                     code_cache.all_blocks.size(), code_cache.block_cache.size(), code_cache.page_to_blocks.size());
+                     code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size());
     return n;
 #else
     return snprintf(buffer, buffer_size,
                     "{\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu}",
-                    code_cache.all_blocks.size(), code_cache.block_cache.size(), code_cache.page_to_blocks.size());
+                    code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size());
 #endif
 }
 

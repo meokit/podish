@@ -13,6 +13,8 @@ namespace Fiberish.Tests.Core;
 public class EngineMmuTransferTests
 {
     private const uint CodeAddr = 0x00401000;
+    private const uint AliasCodeAddrA = 0x00402000;
+    private const uint AliasCodeAddrB = 0x00406000;
     private static readonly byte[] SimpleCode = [0x90, 0x90];
 
     [Fact]
@@ -226,6 +228,106 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
+    public void ResetCodeCacheByRange_ReusesInvalidatedBlock_WhenCodeUnchanged()
+    {
+        using var engine = new Engine();
+        InstallSimpleCode(engine);
+        WarmSimpleCode(engine);
+
+        var initialBlockCount = engine.GetBlockCount();
+        Assert.True(initialBlockCount > 0);
+
+        engine.ResetCodeCacheByRange(CodeAddr, 1);
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+
+        WarmSimpleCode(engine);
+
+        Assert.Equal(initialBlockCount, engine.GetBlockCount());
+        Assert.Equal(1, ReadCodeCacheStats(engine).BlockCacheSize);
+    }
+
+    [Fact]
+    public void ExternalAlias_ResetCodeCacheByRange_InvalidatesAllAliasBlocks()
+    {
+        using var engine = new Engine();
+        var external = Marshal.AllocHGlobal(LinuxConstants.PageSize);
+
+        try
+        {
+            InstallExternalCodeAlias(engine, external, AliasCodeAddrA, AliasCodeAddrB);
+            WarmSimpleCode(engine, AliasCodeAddrA);
+            WarmSimpleCode(engine, AliasCodeAddrB);
+
+            Assert.Equal(2, ReadCodeCacheStats(engine).BlockCacheSize);
+
+            engine.ResetCodeCacheByRange(AliasCodeAddrA, 1);
+
+            var stats = ReadCodeCacheStats(engine);
+            Assert.Equal(0, stats.BlockCacheSize);
+            Assert.Equal(0, stats.PageToBlocksSize);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(external);
+        }
+    }
+
+    [Fact]
+    public void ExternalAlias_MemUnmap_InvalidatesPeerAliasBlocks()
+    {
+        using var engine = new Engine();
+        var external = Marshal.AllocHGlobal(LinuxConstants.PageSize);
+
+        try
+        {
+            InstallExternalCodeAlias(engine, external, AliasCodeAddrA, AliasCodeAddrB);
+            WarmSimpleCode(engine, AliasCodeAddrA);
+            WarmSimpleCode(engine, AliasCodeAddrB);
+
+            engine.MemUnmap(AliasCodeAddrA, LinuxConstants.PageSize);
+
+            Assert.False(engine.HasMappedPage(AliasCodeAddrA, 1));
+            Assert.True(engine.HasMappedPage(AliasCodeAddrB, 1));
+            Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+
+            WarmSimpleCode(engine, AliasCodeAddrB);
+            Assert.Equal(1, ReadCodeCacheStats(engine).BlockCacheSize);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(external);
+        }
+    }
+
+    [Fact]
+    public void RemappingSameGuestPageToDifferentHostPage_RebuildsCodeCacheEntry()
+    {
+        using var engine = new Engine();
+        var external1 = Marshal.AllocHGlobal(LinuxConstants.PageSize);
+        var external2 = Marshal.AllocHGlobal(LinuxConstants.PageSize);
+
+        try
+        {
+            InstallExternalCode(engine, external1, AliasCodeAddrA);
+            WarmSimpleCode(engine, AliasCodeAddrA);
+            var initialBlockCount = engine.GetBlockCount();
+            Assert.Equal(1, ReadCodeCacheStats(engine).BlockCacheSize);
+
+            engine.MemUnmap(AliasCodeAddrA, LinuxConstants.PageSize);
+            InstallExternalCode(engine, external2, AliasCodeAddrA);
+            WarmSimpleCode(engine, AliasCodeAddrA);
+
+            Assert.True(engine.GetBlockCount() > initialBlockCount);
+            Assert.Equal(1, ReadCodeCacheStats(engine).BlockCacheSize);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(external1);
+            Marshal.FreeHGlobal(external2);
+        }
+    }
+
+    [Fact]
     public void DetachAndReattach_PreservesOriginalCoreCodeCache()
     {
         using var engine = new Engine();
@@ -359,18 +461,42 @@ public class EngineMmuTransferTests
 
     private static void InstallSimpleCode(Engine engine)
     {
+        InstallSimpleCode(engine, CodeAddr);
+    }
+
+    private static void InstallSimpleCode(Engine engine, uint addr)
+    {
         var perms = (byte)(Protection.Read | Protection.Write | Protection.Exec);
-        var page = engine.AllocatePage(CodeAddr, perms);
+        var page = engine.AllocatePage(addr, perms);
         Assert.NotEqual(IntPtr.Zero, page);
         Marshal.Copy(SimpleCode, 0, page, SimpleCode.Length);
     }
 
     private static void WarmSimpleCode(Engine engine)
     {
-        engine.Eip = CodeAddr;
-        engine.Run(CodeAddr + (uint)SimpleCode.Length, 16);
+        WarmSimpleCode(engine, CodeAddr);
+    }
+
+    private static void WarmSimpleCode(Engine engine, uint addr)
+    {
+        engine.Eip = addr;
+        engine.Run(addr + (uint)SimpleCode.Length, 16);
         Assert.Equal(EmuStatus.Stopped, engine.Status);
-        Assert.Equal(CodeAddr + (uint)SimpleCode.Length, engine.Eip);
+        Assert.Equal(addr + (uint)SimpleCode.Length, engine.Eip);
+    }
+
+    private static void InstallExternalCode(Engine engine, IntPtr externalPage, uint addr)
+    {
+        var init = new byte[LinuxConstants.PageSize];
+        Array.Copy(SimpleCode, init, SimpleCode.Length);
+        Marshal.Copy(init, 0, externalPage, init.Length);
+        Assert.True(engine.MapExternalPage(addr, externalPage, (byte)(Protection.Read | Protection.Write | Protection.Exec)));
+    }
+
+    private static void InstallExternalCodeAlias(Engine engine, IntPtr externalPage, uint addrA, uint addrB)
+    {
+        InstallExternalCode(engine, externalPage, addrA);
+        Assert.True(engine.MapExternalPage(addrB, externalPage, (byte)(Protection.Read | Protection.Write | Protection.Exec)));
     }
 
     private static CodeCacheStats ReadCodeCacheStats(Engine engine)

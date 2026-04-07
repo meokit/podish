@@ -375,7 +375,51 @@ static void ApplySpecializedHandler(uint16_t handler_index, DecodedOp& op) {
     }
 }
 
-BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts) {
+static bool DecodedOpSemanticallyEquals(const DecodedOp& decoded, const DecodedOp& cached) {
+    if (decoded.handler != cached.handler || decoded.next_eip != cached.next_eip || decoded.len != cached.len ||
+        decoded.modrm != cached.modrm || decoded.prefixes.all != cached.prefixes.all ||
+        decoded.meta.all != cached.meta.all) {
+        return false;
+    }
+
+    switch (GetExtKind(&decoded)) {
+        case ExtKind::Data:
+            return std::memcmp(&decoded.ext.data, &cached.ext.data, sizeof(decoded.ext.data)) == 0;
+        case ExtKind::Link:
+            return decoded.ext.link.reserved == cached.ext.link.reserved;
+        case ExtKind::ControlFlow:
+            return decoded.ext.control.imm == cached.ext.control.imm &&
+                   decoded.ext.control.target_eip == cached.ext.control.target_eip;
+    }
+
+    return false;
+}
+
+static bool BasicBlockMatchesDecodedCandidate(const BasicBlock* candidate, uint32_t start_eip, uint32_t end_eip,
+                                              uint32_t inst_count, uint32_t slot_count, BlockTerminalKind terminal_kind,
+                                              uint32_t branch_target_eip, uint32_t fallthrough_eip, HandlerFunc entry,
+                                              const std::vector<DecodedInstTmp>& temp_ops) {
+    if (!candidate || candidate->is_valid()) return false;
+    if (candidate->canonical_start_eip() != start_eip || candidate->end_eip != end_eip ||
+        candidate->inst_count() != inst_count || candidate->slot_count != slot_count ||
+        candidate->sentinel_slot_index != slot_count - 1 || candidate->terminal_kind() != terminal_kind ||
+        candidate->branch_target_eip != branch_target_eip || candidate->fallthrough_eip != fallthrough_eip ||
+        candidate->entry != entry) {
+        return false;
+    }
+
+    const DecodedOp* cached_ops = candidate->FirstOp();
+    for (uint32_t i = 0; i < slot_count; ++i) {
+        if (!DecodedOpSemanticallyEquals(temp_ops[i].head, cached_ops[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts,
+                        BasicBlock* invalidated_candidate) {
     // 1. Decode into temporary storage
     // Use a small buffer on stack to avoid heap allocation for common small blocks?
     // Or just std::vector. std::vector is safer for now.
@@ -712,7 +756,33 @@ finalize:
 
     state->block_stats.Record(inst_count, stop_reason);
 
-    size_t slot_count = temp_ops.size();
+    const uint32_t slot_count = static_cast<uint32_t>(temp_ops.size());
+    const uint32_t decoded_inst_count = slot_count == 0 ? 0 : slot_count - 1;
+    ApplySuperOpcodesToBlockOps(reinterpret_cast<DecodedOp*>(temp_ops.data()), decoded_inst_count);
+
+    BlockTerminalKind terminal_kind = BlockTerminalKind::None;
+    uint32_t branch_target_eip = 0;
+    uint32_t fallthrough_eip = end_eip;
+    HandlerFunc entry = temp_ops.front().head.handler;
+    if (decoded_inst_count != 0 && !op_indices.empty()) {
+        const uint16_t last_handler_index = op_indices.back();
+        const DecodedOp& last_op = temp_ops[decoded_inst_count - 1].head;
+        if (IsDirectRelativeJmpHandlerIndex(last_handler_index)) {
+            terminal_kind = BlockTerminalKind::DirectJmpRel;
+            branch_target_eip = GetControlTargetEip(&last_op);
+        } else if (IsDirectRelativeJccHandlerIndex(last_handler_index)) {
+            terminal_kind = BlockTerminalKind::DirectJccRel;
+            branch_target_eip = GetControlTargetEip(&last_op);
+        } else if (last_op.meta.flags.is_control_flow) {
+            terminal_kind = BlockTerminalKind::OtherControlFlow;
+        }
+    }
+
+    if (BasicBlockMatchesDecodedCandidate(invalidated_candidate, start_eip, end_eip, inst_count, slot_count,
+                                          terminal_kind, branch_target_eip, fallthrough_eip, entry, temp_ops)) {
+        invalidated_candidate->Revalidate();
+        return invalidated_candidate;
+    }
 
     size_t alloc_size = BasicBlock::CalculateSize(slot_count);
     void* mem = state->mmu.allocate_block_bytes(alloc_size);
@@ -723,39 +793,18 @@ finalize:
     block->set_start_eip(start_eip);
     block->end_eip = end_eip;
     block->set_inst_count(inst_count);
-    block->slot_count = (uint32_t)slot_count;
+    block->slot_count = slot_count;
     block->exec_count = 0;
-    block->sentinel_slot_index = 0;
-    block->branch_target_eip = 0;
-    block->fallthrough_eip = end_eip;
-    block->set_terminal_kind(BlockTerminalKind::None);
+    block->sentinel_slot_index = slot_count - 1;
+    block->branch_target_eip = branch_target_eip;
+    block->fallthrough_eip = fallthrough_eip;
+    block->set_terminal_kind(terminal_kind);
+    block->entry = entry;
 
     DecodedOp* dst = block->FirstOp();
-    for (size_t i = 0; i < temp_ops.size(); ++i) {
-        const auto& inst = temp_ops[i];
-        if (i == temp_ops.size() - 1) {
-            block->sentinel_slot_index = static_cast<uint32_t>(i);
-        }
-        dst[i] = inst.head;
+    for (uint32_t i = 0; i < slot_count; ++i) {
+        dst[i] = temp_ops[i].head;
     }
-
-    const uint32_t decoded_inst_count = slot_count == 0 ? 0 : static_cast<uint32_t>(slot_count - 1);
-    ApplySuperOpcodesToBlockOps(dst, decoded_inst_count);
-    if (decoded_inst_count != 0 && !op_indices.empty()) {
-        const uint16_t last_handler_index = op_indices.back();
-        const DecodedOp& last_op = dst[decoded_inst_count - 1];
-        if (IsDirectRelativeJmpHandlerIndex(last_handler_index)) {
-            block->set_terminal_kind(BlockTerminalKind::DirectJmpRel);
-            block->branch_target_eip = GetControlTargetEip(&last_op);
-        } else if (IsDirectRelativeJccHandlerIndex(last_handler_index)) {
-            block->set_terminal_kind(BlockTerminalKind::DirectJccRel);
-            block->branch_target_eip = GetControlTargetEip(&last_op);
-        } else if (last_op.meta.flags.is_control_flow) {
-            block->set_terminal_kind(BlockTerminalKind::OtherControlFlow);
-        }
-    }
-
-    block->entry = block->FirstOp()->handler;
 
     return block;
 }
@@ -769,5 +818,7 @@ void BasicBlock::Invalidate() {
     chain.start_eip = start_eip() | kInvalidStartEipBit;
     // No unlinking needed because OpExitBlock checks start_eip's invalid bit.
 }
+
+void BasicBlock::Revalidate() { chain.start_eip = canonical_start_eip(); }
 
 }  // namespace fiberish

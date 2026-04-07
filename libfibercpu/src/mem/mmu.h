@@ -6,6 +6,7 @@
 #include <iostream>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <vector>
 #include "../common.h"
 #include "../decoder.h"
@@ -96,75 +97,127 @@ inline void InitializeInvalidBasicBlock(BasicBlock& block) {
     block.entry = nullptr;
 }
 
+struct BlockCacheKey {
+    uintptr_t host_page_base = 0;
+    uint32_t guest_eip = 0;
+
+    bool operator==(const BlockCacheKey& other) const = default;
+};
+
+struct BlockCacheKeyHash {
+    size_t operator()(const BlockCacheKey& key) const noexcept {
+        size_t hash = static_cast<size_t>(key.host_page_base);
+        hash ^= static_cast<size_t>(key.guest_eip) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+        return hash;
+    }
+};
+
 struct CodeCacheState {
     std::pmr::monotonic_buffer_resource block_pool;
-    ankerl::unordered_dense::map<uint32_t, BasicBlock*> block_cache;
+    ankerl::unordered_dense::map<BlockCacheKey, BasicBlock*, BlockCacheKeyHash> block_cache;
     std::vector<BasicBlock*> all_blocks;
     BasicBlock dummy_invalid_block;
-    ankerl::unordered_dense::map<uint32_t, std::vector<uint32_t>> page_to_blocks;
+    ankerl::unordered_dense::map<uintptr_t, std::vector<BlockCacheKey>> page_to_blocks;
+    ankerl::unordered_dense::map<BlockCacheKey, std::vector<uintptr_t>, BlockCacheKeyHash> block_to_host_pages;
 
     CodeCacheState() { InitializeInvalidBasicBlock(dummy_invalid_block); }
 
     void ResetReachability() {
         block_cache.clear();
         page_to_blocks.clear();
+        block_to_host_pages.clear();
     }
 
     void RememberAllocatedBlock(BasicBlock* block) {
         if (block != nullptr) all_blocks.push_back(block);
     }
 
-    BasicBlock* LookupBlock(uint32_t eip) {
-        auto it = block_cache.find(eip);
+    BasicBlock* LookupBlock(const BlockCacheKey& key) {
+        auto it = block_cache.find(key);
         return it == block_cache.end() ? nullptr : it->second;
     }
 
-    const BasicBlock* LookupBlock(uint32_t eip) const {
-        auto it = block_cache.find(eip);
+    const BasicBlock* LookupBlock(const BlockCacheKey& key) const {
+        auto it = block_cache.find(key);
         return it == block_cache.end() ? nullptr : it->second;
     }
 
-    void RegisterBlockPages(uint32_t cache_eip, const BasicBlock* block) {
-        uint32_t page_idx = cache_eip >> 12;
-        page_to_blocks[page_idx].push_back(cache_eip);
-        if (block && block->end_eip > block->start_eip() && ((block->end_eip - 1) >> 12) != page_idx) {
-            uint32_t page2 = (block->end_eip - 1) >> 12;
-            page_to_blocks[page2].push_back(cache_eip);
+    void RegisterBlockHostPages(const BlockCacheKey& cache_key, const std::vector<uintptr_t>& host_page_bases) {
+        block_to_host_pages[cache_key] = host_page_bases;
+        for (uintptr_t host_page_base : host_page_bases) {
+            page_to_blocks[host_page_base].push_back(cache_key);
         }
     }
 
-    BasicBlock* CacheDecodedBlock(uint32_t cache_eip, BasicBlock* block) {
-        auto [it, inserted] = block_cache.insert({cache_eip, block});
-        if (inserted) {
-            RegisterBlockPages(cache_eip, block);
-            return block;
-        }
-        return it->second;
-    }
+    void RemoveBlockHostPages(const BlockCacheKey& cache_key) {
+        auto host_pages_it = block_to_host_pages.find(cache_key);
+        if (host_pages_it == block_to_host_pages.end()) return;
 
-    void InvalidatePageIndex(uint32_t page_idx) {
-        auto it = page_to_blocks.find(page_idx);
-        if (it == page_to_blocks.end()) return;
+        for (uintptr_t host_page_base : host_pages_it->second) {
+            auto page_it = page_to_blocks.find(host_page_base);
+            if (page_it == page_to_blocks.end()) continue;
 
-        for (uint32_t eip : it->second) {
-            auto block_it = block_cache.find(eip);
-            if (block_it != block_cache.end()) {
-                block_it->second->Invalidate();
-                block_cache.erase(block_it);
+            auto& cache_keys = page_it->second;
+            cache_keys.erase(std::remove(cache_keys.begin(), cache_keys.end(), cache_key), cache_keys.end());
+            if (cache_keys.empty()) {
+                page_to_blocks.erase(page_it);
             }
         }
-        page_to_blocks.erase(it);
+
+        block_to_host_pages.erase(host_pages_it);
     }
 
-    void InvalidatePage(uint32_t page_addr) { InvalidatePageIndex(page_addr >> 12); }
+    BasicBlock* CacheDecodedBlock(const BlockCacheKey& cache_key, const std::vector<uintptr_t>& host_page_bases,
+                                  BasicBlock* block) {
+        auto [it, inserted] = block_cache.insert({cache_key, block});
+        if (!inserted) {
+            BasicBlock* existing = it->second;
+            if (existing != nullptr && existing->is_valid() && existing != block) {
+                return existing;
+            }
 
-    void InvalidateRange(uint32_t addr, uint32_t size) {
-        if (size == 0) return;
-        uint32_t start_page = addr >> 12;
-        uint32_t end_page = (addr + size - 1) >> 12;
-        for (uint32_t p = start_page; p <= end_page; ++p) {
-            InvalidatePageIndex(p);
+            it->second = block;
         }
+
+        RemoveBlockHostPages(cache_key);
+        RegisterBlockHostPages(cache_key, host_page_bases);
+        return block;
+    }
+
+    void EraseBlock(const BlockCacheKey& cache_key) {
+        RemoveBlockHostPages(cache_key);
+        block_cache.erase(cache_key);
+    }
+
+    void InvalidateHostPage(uintptr_t host_page_base) {
+        auto it = page_to_blocks.find(host_page_base);
+        if (it == page_to_blocks.end()) return;
+
+        const std::vector<BlockCacheKey> cache_keys = it->second;
+        for (const BlockCacheKey& cache_key : cache_keys) {
+            auto block_it = block_cache.find(cache_key);
+            if (block_it != block_cache.end()) {
+                block_it->second->Invalidate();
+            }
+            RemoveBlockHostPages(cache_key);
+        }
+    }
+
+    void InvalidateHostPages(const std::vector<uintptr_t>& host_page_bases) {
+        for (uintptr_t host_page_base : host_page_bases) {
+            InvalidateHostPage(host_page_base);
+        }
+    }
+
+    size_t CountValidBlocks() const {
+        size_t count = 0;
+        for (const auto& [key, block] : block_cache) {
+            (void)key;
+            if (block && block->is_valid()) {
+                count++;
+            }
+        }
+        return count;
     }
 };
 
@@ -423,6 +476,45 @@ public:
 
     [[nodiscard]] const PageDirectory* page_directory() const { return current_page_directory(); }
 
+    [[nodiscard]] std::optional<uintptr_t> try_get_host_page_base(GuestAddr addr) const {
+        auto* dir = current_page_directory();
+        if (!dir) return std::nullopt;
+
+        const uint32_t l1_idx = addr >> 22;
+        const uint32_t l2_idx = (addr >> 12) & 0x3FF;
+        const auto& chunk = dir->l1_directory[l1_idx];
+        if (!chunk) return std::nullopt;
+
+        auto* page_ptr = chunk->pages[l2_idx];
+        if (!page_ptr) return std::nullopt;
+        return reinterpret_cast<uintptr_t>(page_ptr);
+    }
+
+    [[nodiscard]] std::optional<BlockCacheKey> make_block_cache_key(uint32_t guest_eip) const {
+        auto host_page_base = try_get_host_page_base(guest_eip);
+        if (!host_page_base) return std::nullopt;
+        return BlockCacheKey{*host_page_base, guest_eip};
+    }
+
+    [[nodiscard]] std::vector<uintptr_t> collect_host_page_bases_for_guest_range(uint32_t addr, uint32_t size) const {
+        std::vector<uintptr_t> host_page_bases;
+        if (size == 0) return host_page_bases;
+
+        const uint64_t start_page = static_cast<uint64_t>(addr) & ~static_cast<uint64_t>(PAGE_MASK);
+        const uint64_t last_addr = static_cast<uint64_t>(addr) + static_cast<uint64_t>(size) - 1;
+        const uint64_t end_page = last_addr & ~static_cast<uint64_t>(PAGE_MASK);
+        for (uint64_t page = start_page;; page += PAGE_SIZE) {
+            if (auto host_page_base = try_get_host_page_base(static_cast<uint32_t>(page))) {
+                host_page_bases.push_back(*host_page_base);
+            }
+            if (page == end_page) break;
+        }
+
+        std::sort(host_page_bases.begin(), host_page_bases.end());
+        host_page_bases.erase(std::unique(host_page_bases.begin(), host_page_bases.end()), host_page_bases.end());
+        return host_page_bases;
+    }
+
     [[nodiscard]] BasicBlock* invalid_code_block() { return &code_cache().dummy_invalid_block; }
 
     [[nodiscard]] const BasicBlock* invalid_code_block() const { return &code_cache().dummy_invalid_block; }
@@ -431,19 +523,49 @@ public:
 
     void remember_allocated_block(BasicBlock* block) { code_cache().RememberAllocatedBlock(block); }
 
-    [[nodiscard]] BasicBlock* lookup_cached_block(uint32_t eip) { return code_cache().LookupBlock(eip); }
+    [[nodiscard]] BasicBlock* lookup_cached_block(uint32_t eip) {
+        auto cache_key = make_block_cache_key(eip);
+        return cache_key ? code_cache().LookupBlock(*cache_key) : nullptr;
+    }
 
-    [[nodiscard]] const BasicBlock* lookup_cached_block(uint32_t eip) const { return code_cache().LookupBlock(eip); }
+    [[nodiscard]] const BasicBlock* lookup_cached_block(uint32_t eip) const {
+        auto cache_key = make_block_cache_key(eip);
+        return cache_key ? code_cache().LookupBlock(*cache_key) : nullptr;
+    }
 
     [[nodiscard]] BasicBlock* cache_decoded_block(uint32_t cache_eip, BasicBlock* block) {
-        return code_cache().CacheDecodedBlock(cache_eip, block);
+        auto cache_key = make_block_cache_key(cache_eip);
+        if (!cache_key) return block;
+
+        const uint32_t last_guest_addr =
+            block && block->end_eip > cache_eip ? static_cast<uint32_t>(block->end_eip - 1) : cache_eip;
+        auto host_page_bases = collect_host_page_bases_for_guest_range(cache_eip, last_guest_addr - cache_eip + 1);
+        return code_cache().CacheDecodedBlock(*cache_key, host_page_bases, block);
     }
 
     void reset_code_cache() { code_cache().ResetReachability(); }
 
-    void invalidate_code_cache_page(uint32_t page_addr) { code_cache().InvalidatePage(page_addr); }
+    void erase_cached_block(uint32_t guest_eip) {
+        auto cache_key = make_block_cache_key(guest_eip);
+        if (cache_key) {
+            code_cache().EraseBlock(*cache_key);
+        }
+    }
 
-    void invalidate_code_cache_range(uint32_t addr, uint32_t size) { code_cache().InvalidateRange(addr, size); }
+    void invalidate_code_cache_page(uint32_t guest_addr) {
+        auto host_page_base = try_get_host_page_base(guest_addr);
+        if (host_page_base) {
+            code_cache().InvalidateHostPage(*host_page_base);
+        }
+    }
+
+    void invalidate_code_cache_range(uint32_t addr, uint32_t size) {
+        code_cache().InvalidateHostPages(collect_host_page_bases_for_guest_range(addr, size));
+    }
+
+    void invalidate_code_cache_host_pages(const std::vector<uintptr_t>& host_page_bases) {
+        code_cache().InvalidateHostPages(host_page_bases);
+    }
 
     // Callback Setup
     void set_fault_callback(FaultHandler handler, void* opaque) {

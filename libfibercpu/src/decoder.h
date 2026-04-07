@@ -320,6 +320,7 @@ struct alignas(16) BasicBlock {
     uint32_t start_eip() const { return static_cast<uint32_t>(chain.start_eip); }
     void set_start_eip(uint32_t start_eip) { chain.start_eip = start_eip; }
     bool is_valid() const { return (start_eip() & kInvalidStartEipBit) == 0; }
+    uint32_t canonical_start_eip() const { return start_eip() & ~kInvalidStartEipBit; }
 
     uint32_t inst_count() const { return chain.inst_count; }
     void set_inst_count(uint32_t count) { chain.inst_count = static_cast<uint8_t>(count); }
@@ -328,6 +329,7 @@ struct alignas(16) BasicBlock {
 
     // Mark block as invalid
     void Invalidate();
+    void Revalidate();
 };
 
 static_assert(offsetof(BasicBlock, chain) == 0, "BasicBlock: chain must start at offset 0");
@@ -344,6 +346,7 @@ static_assert(offsetof(BasicBlock, slots) == 48, "BasicBlock: slots must start a
 bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index);
 
 // Start EIP, Limit EIP, Max Instructions -> Returns Pointer to allocated block or nullptr
-BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts);
+BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts,
+                        BasicBlock* invalidated_candidate = nullptr);
 
 }  // namespace fiberish
