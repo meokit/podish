@@ -46,6 +46,7 @@ public partial class SyscallManager
         _sharedFsState = new SharedFsState();
         DeviceNumbers = deviceNumbers ?? new DeviceNumberManager();
         CurrentSyscallEngine = engine;
+        MemoryContext = engine.MemoryContext;
         Mem = mem;
         BrkAddr = brk;
         BrkBase = brk;
@@ -100,9 +101,11 @@ public partial class SyscallManager
         PtyManager ptyManager,
         MountNamespace mountNamespace,
         SharedLoopbackNetNamespace? privateNetNamespace,
-        DeviceNumberManager deviceNumbers)
+        DeviceNumberManager deviceNumbers,
+        MemoryRuntimeContext memoryContext)
     {
         Mem = mem;
+        MemoryContext = memoryContext;
         _sharedFdTable = sharedFdTable;
         _sharedUnixSocketNamespace = sharedUnixSocketNamespace;
         DeviceNumbers = deviceNumbers;
@@ -139,6 +142,7 @@ public partial class SyscallManager
     public Engine CurrentSyscallEngine { get; set; } = null!;
     internal FiberTask? CurrentTask => CurrentSyscallEngine.Owner as FiberTask;
     internal Process? CurrentProcess => CurrentTask?.Process;
+    internal MemoryRuntimeContext MemoryContext { get; }
 
     public VMAManager Mem { get; set; }
 
@@ -1210,7 +1214,7 @@ public partial class SyscallManager
         var newSys = new SyscallManager(newMem, newSharedFdTable, _sharedUnixSocketNamespace.AddRef(), sharedFsState,
             Futex, SysVShm, SysVSem, BrkAddr, BrkBase,
             Strace, DevShmRoot, MemfdSuperBlock, AnonMount, Tty, PtyManager,
-            sharedNamespace, _privateNetNamespace?.AddRef(), DeviceNumbers)
+            sharedNamespace, _privateNetNamespace?.AddRef(), DeviceNumbers, MemoryContext)
         {
             NetworkMode = NetworkMode,
             CloneHandler = CloneHandler,
