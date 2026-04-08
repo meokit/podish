@@ -8,7 +8,7 @@ It currently handles two main workflows:
    Records and analyzes runtime hotspots, automatically selecting the backend based on platform.
 2. `superopcode` pipeline
    Extracts opcode adjacency relationships from guest block dumps, filters candidates, and generates
-   `libfibercpu/generated/superopcodes.generated.cpp`.
+   `libfibercpu/src/generated/superopcodes.generated.cpp`.
 
 This README focuses on the complete, usable workflow rather than just listing commands.
 
@@ -96,7 +96,7 @@ benchmark/podish_perf/results/
 Superopcode generation results are written to:
 
 ```text
-libfibercpu/generated/superopcodes.generated.cpp
+libfibercpu/src/generated/superopcodes.generated.cpp
 ```
 
 ## One: Profile Pipeline
@@ -236,7 +236,7 @@ The superopcode pipeline consists of four steps:
 1. Run guest workload and export `blocks.bin`
 2. Parse `blocks.bin` to generate `blocks_analysis.json`
 3. Aggregate candidates to produce `superopcode_candidates.json/.md`
-4. Generate `libfibercpu/generated/superopcodes.generated.cpp` from candidates
+4. Generate `libfibercpu/src/generated/superopcodes.generated.cpp` from candidates
 
 ### Core Concepts
 
@@ -372,14 +372,14 @@ Where:
  dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- \
    gen-superopcodes \
    --input benchmark/podish_perf/results/<timestamp>/superopcode_candidates.json \
-   --output libfibercpu/generated/superopcodes.generated.cpp \
+   --output libfibercpu/src/generated/superopcodes.generated.cpp \
    --top 256
 ```
 
 Output:
 
 ```text
-libfibercpu/generated/superopcodes.generated.cpp
+libfibercpu/src/generated/superopcodes.generated.cpp
 ```
 
 This step only generates code—it doesn't build or validate.
@@ -402,7 +402,7 @@ It performs these actions:
 2. Runs benchmark with `EnableSuperOpcodes=false`
 3. Exports handler profile block dump
 4. Aggregates candidates
-5. Generates `libfibercpu/generated/superopcodes.generated.cpp`
+5. Generates `libfibercpu/src/generated/superopcodes.generated.cpp`
 6. Optionally rebuilds `Podish.Cli` for verification
 
 Common parameters:
@@ -470,7 +470,7 @@ Then examine:
 3. Confirm generated output
 
 ```text
-libfibercpu/generated/superopcodes.generated.cpp
+libfibercpu/src/generated/superopcodes.generated.cpp
 ```
 
 4. Rebuild `Podish.Cli`, then run CoreMark/profile validation

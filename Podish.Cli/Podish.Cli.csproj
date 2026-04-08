@@ -25,6 +25,8 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <RuntimeIdentifiers Condition="'$(RuntimeIdentifier)' != '' and '$(RuntimeIdentifiers)' == ''">$(RuntimeIdentifier)</RuntimeIdentifiers>
+        <RuntimeIdentifiers Condition="'$(RuntimeIdentifier)' != '' and '$(RuntimeIdentifiers)' != '' and !$(RuntimeIdentifiers.Contains('$(RuntimeIdentifier)'))">$(RuntimeIdentifiers);$(RuntimeIdentifier)</RuntimeIdentifiers>
         <PublishAotUsingRuntimePack Condition="'$(PublishAot)' == 'true'">true</PublishAotUsingRuntimePack>
         <SelfContained Condition="'$(PublishAot)' == 'true'">true</SelfContained>
         <StripSymbols Condition="'$(PublishAot)' == 'true'">false</StripSymbols>

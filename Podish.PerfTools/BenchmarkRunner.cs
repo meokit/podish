@@ -183,7 +183,7 @@ internal static class BenchmarkRunner
             ResultsDir = GetValue(args, "--results-dir"),
             WorkDir = GetValue(args, "--work-dir") ?? Path.Combine(RepoRoot(), "benchmark", "podish_perf", "work"),
             Repeat = GetIntValue(args, "--repeat", 3),
-            Iterations = GetIntValue(args, "--iterations", 3000),
+            Iterations = GetIntValue(args, "--iterations", 30000),
             Timeout = GetIntValue(args, "--timeout", 1800),
             ReuseRootfs = HasFlag(args, "--reuse-rootfs"),
             KeepWorkdirs = HasFlag(args, "--keep-workdirs"),

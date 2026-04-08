@@ -547,7 +547,7 @@ Generator input recommendations:
 Generator output recommendations:
 
 - `libfibercpu/generated/superopcodes.generated.h`
-- `libfibercpu/generated/superopcodes.generated.cpp`
+- `libfibercpu/src/generated/superopcodes.generated.cpp`
 
 Each superopcode metadata should include:
 

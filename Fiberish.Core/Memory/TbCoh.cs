@@ -15,14 +15,12 @@ internal static class TbCoh
         var pages = mm.SnapshotTbWpPages();
         if (pages.Count == 0) return;
 
-        Console.WriteLine($"[TbCoh] SyncWp mm={mm.GetHashCode():X} pages={pages.Count}");
 
         foreach (var pageStart in pages)
         {
             var vma = mm.FindVmArea(pageStart);
             if (vma == null || (vma.Perms & Protection.Write) == 0)
             {
-                Console.WriteLine($"[TbCoh] SyncWp drop mm={mm.GetHashCode():X} page=0x{pageStart:X8}");
                 mm.UnmarkTbWp(pageStart);
                 continue;
             }
@@ -30,7 +28,6 @@ internal static class TbCoh
             if (!mm.ExternalPages.TryGet(pageStart, out _))
                 continue;
 
-            Console.WriteLine($"[TbCoh] SyncWp reprotect mm={mm.GetHashCode():X} page=0x{pageStart:X8} perms={vma.Perms}");
             engine.ReprotectMappedRange(pageStart, LinuxConstants.PageSize, (byte)(vma.Perms & ~Protection.Write));
         }
     }
@@ -53,7 +50,6 @@ internal static class TbCoh
         VmRmap.ResolveHostPageHolders(hostPage.Ptr, hits);
         if (hits.Count == 0) return;
 
-        Console.WriteLine($"[TbCoh] ApplyWx host=0x{hostPage.Ptr.ToInt64():X} hits={hits.Count}");
 
         var execIdentities = new HashSet<nuint>();
         foreach (var hit in hits)
@@ -80,12 +76,10 @@ internal static class TbCoh
                 }
             if (hasCrossMmuExecPeer)
             {
-                Console.WriteLine($"[TbCoh] ApplyWx mark-wp mm={hit.Mm.GetHashCode():X} page=0x{pageStart:X8}");
                 hit.Mm.MarkTbWp(pageStart);
             }
             else
             {
-                Console.WriteLine($"[TbCoh] ApplyWx clear-wp mm={hit.Mm.GetHashCode():X} page=0x{pageStart:X8}");
                 hit.Mm.UnmarkTbWp(pageStart);
             }
         }
@@ -123,8 +117,6 @@ internal static class TbCoh
         if (invByMm.Count == 0)
             return;
 
-        Console.WriteLine(
-            $"[TbCoh] OnWriteFault writerMm={writerMm.GetHashCode():X} page=0x{pageStart:X8} host=0x{hostPage.Ptr.ToInt64():X} targets={invByMm.Count}");
         ApplyWx(hostPage);
         writerMm.MarkTbWp(pageStart);
 

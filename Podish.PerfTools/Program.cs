@@ -89,7 +89,7 @@ internal static partial class Program
                             analyze-blocks                 Parse a blocks.bin dump into blocks_analysis.json (`--compact` emits a smaller/faster downstream schema)
                             analyze-sib-shapes             Aggregate SIB addressing shapes and opcode mix from blocks_analysis.json
                             analyze-superopcode-candidates Aggregate candidate pairs from analysis files
-                            gen-superopcodes               Generate libfibercpu/generated/superopcodes.generated.cpp
+                            gen-superopcodes               Generate libfibercpu/src/generated/superopcodes.generated.cpp
                             pipeline                       Run the full benchmark + analysis pipeline
                             runner                         Run the benchmark harness and optional block analysis
                             profile                        Record/analyze runtime profiles with auto-selected backend
@@ -137,8 +137,10 @@ internal static partial class Program
         var input = RequireValue(args, "--input", 0);
         var output = RequireValue(args, "--output", 1);
         var top = GetIntValue(args, "--top", 32);
+        var workload = GetValue(args, "--workload") ?? "";
+        var generationParams = GetMultiValue(args, "--generation-param");
 
-        var generated = GenerateSuperopcodes(input, top);
+        var generated = GenerateSuperopcodes(input, top, workload, generationParams);
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
         File.WriteAllText(output, generated, Utf8NoBom);
         Console.WriteLine($"Wrote {top} superopcodes to {Path.GetFullPath(output)}");
@@ -153,13 +155,13 @@ internal static partial class Program
                                           "coremark_i386_alpine"));
         var candidateTop = GetIntValue(args, "--candidate-top", 100);
         var superopcodeTop = GetIntValue(args, "--superopcode-top", 32);
-        var iterations = GetIntValue(args, "--iterations", 3000);
+        var iterations = GetIntValue(args, "--iterations", 30000);
         var repeat = GetIntValue(args, "--repeat", 1);
         var timeout = GetIntValue(args, "--timeout", 1800);
         var resultsDir = GetValue(args, "--results-dir");
         var workDir = GetValue(args, "--work-dir");
         var generatedOutput =
-            GetValue(args, "--generated-output") ?? "libfibercpu/generated/superopcodes.generated.cpp";
+            GetValue(args, "--generated-output") ?? "libfibercpu/src/generated/superopcodes.generated.cpp";
         var reuseRootfs = HasFlag(args, "--reuse-rootfs");
         var keepWorkdirs = HasFlag(args, "--keep-workdirs");
         var skipVerifyBuild = HasFlag(args, "--skip-verify-build");
@@ -208,7 +210,18 @@ internal static partial class Program
         {
             "--input", candidateJson,
             "--output", generatedOutputPath,
-            "--top", superopcodeTop.ToString(CultureInfo.InvariantCulture)
+            "--top", superopcodeTop.ToString(CultureInfo.InvariantCulture),
+            "--workload", string.Join(",", cases),
+            "--generation-param", $"--rootfs={rootfs}",
+            "--generation-param", $"--candidate-top={candidateTop}",
+            "--generation-param", $"--superopcode-top={superopcodeTop}",
+            "--generation-param", $"--iterations={iterations}",
+            "--generation-param", $"--repeat={repeat}",
+            "--generation-param", $"--timeout={timeout}",
+            "--generation-param", $"--results-dir={resultsDir}",
+            "--generation-param", $"--reuse-rootfs={reuseRootfs}",
+            "--generation-param", $"--keep-workdirs={keepWorkdirs}",
+            "--generation-param", $"--skip-verify-build={skipVerifyBuild}"
         });
 
         if (!skipVerifyBuild)
