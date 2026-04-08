@@ -81,8 +81,6 @@ void* X86_ResolvePtr(EmuState* state, uint32_t addr, int is_write);
 size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86_PageMapping* buffer, size_t max_count);
 // Allocate a single page with given permissions, returns host pointer to page
 void* X86_AllocatePage(EmuState* state, uint32_t addr, uint8_t perms);
-// Map external memory to guest address (caller owns memory), returns 1 on success
-int X86_MapExternalPage(EmuState* state, uint32_t addr, void* external_page, uint8_t perms);
 // MMU handle management (intrusive refcount in native core).
 X86_MmuHandle* X86_MmuCreateEmpty();
 X86_MmuHandle* X86_MmuCloneSkipExternal(X86_MmuHandle* mmu);

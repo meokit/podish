@@ -3,21 +3,37 @@ namespace Fiberish.Memory;
 public enum AddressSpaceKind
 {
     File,
-    Shmem
+    Shmem,
+    Zero
 }
 
 public sealed class AddressSpace
 {
     private int _refCount = 1;
+    private readonly Lock _rmapLock = new();
+    private readonly List<RmapAttachment> _rmapAttachments = [];
+    private readonly HostPageKind _pageKind;
 
     public AddressSpace(AddressSpaceKind kind)
     {
         Kind = kind;
+        _pageKind = kind switch
+        {
+            AddressSpaceKind.Zero => HostPageKind.Zero,
+            _ => HostPageKind.PageCache
+        };
+        Pages = new VmPageSlots(pageIndex => new HostPageOwnerRef
+        {
+            OwnerKind = HostPageOwnerKind.AddressSpace,
+            Mapping = this,
+            PageIndex = pageIndex
+        });
     }
 
     public AddressSpaceKind Kind { get; }
-    public VmPageSlots Pages { get; } = new();
+    internal VmPageSlots Pages { get; }
     public bool IsRecoverableWithoutSwap => Kind == AddressSpaceKind.File;
+    internal bool IsZeroBacking => Kind == AddressSpaceKind.Zero;
     public int PageCount => Pages.PageCount;
 
     public void AddRef()
@@ -28,6 +44,7 @@ public sealed class AddressSpace
     public void Release()
     {
         if (Interlocked.Decrement(ref _refCount) > 0) return;
+        ClearRmapAttachments();
         Pages.ReleaseAll();
     }
 
@@ -41,19 +58,25 @@ public sealed class AddressSpace
         return Pages.PeekPage(pageIndex);
     }
 
-    public VmPage? PeekVmPage(uint pageIndex)
+    internal HostPage? PeekHostPage(uint pageIndex)
+    {
+        return Pages.PeekHostPage(pageIndex);
+    }
+
+    internal VmPage? PeekVmPage(uint pageIndex)
     {
         return Pages.PeekVmPage(pageIndex);
     }
 
     public IntPtr SetPageIfAbsent(uint pageIndex, IntPtr ptr, out bool inserted)
     {
-        return Pages.InstallPageIfAbsent(pageIndex, ptr, out inserted);
+        return Pages.InstallPageIfAbsent(pageIndex, ptr, _pageKind, out inserted);
     }
 
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew)
     {
-        return Pages.GetOrCreatePage(pageIndex, onFirstCreate, out isNew);
+        return Pages.GetOrCreatePage(pageIndex, onFirstCreate, out isNew, false, AllocationClass.PageCache,
+            _pageKind);
     }
 
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew,
@@ -61,7 +84,7 @@ public sealed class AddressSpace
         AllocationSource allocationSource = AllocationSource.Unknown)
     {
         return Pages.GetOrCreatePage(pageIndex, onFirstCreate, out isNew, strictQuota, allocationClass,
-            allocationSource);
+            _pageKind, allocationSource);
     }
 
     public void MarkDirty(uint pageIndex)
@@ -104,17 +127,87 @@ public sealed class AddressSpace
         return Pages.TryEvictCleanPage(pageIndex);
     }
 
-    public int RemovePagesInRange(uint startPageIndex, uint endPageIndex, Func<VmPage, bool>? predicate = null)
+    internal int RemovePagesInRange(uint startPageIndex, uint endPageIndex, Func<VmPage, bool>? predicate = null)
     {
         return Pages.RemovePagesInRange(startPageIndex, endPageIndex, predicate);
+    }
+
+    internal void AddRmapAttachment(VMAManager mm, VmArea vma, uint startPageIndex, uint endPageIndexExclusive)
+    {
+        if (startPageIndex >= endPageIndexExclusive)
+            return;
+
+        lock (_rmapLock)
+        {
+            _rmapAttachments.Add(new RmapAttachment
+            {
+                Mm = mm,
+                Vma = vma,
+                StartPageIndex = startPageIndex,
+                EndPageIndexExclusive = endPageIndexExclusive
+            });
+        }
+    }
+
+    internal void RemoveRmapAttachments(VmArea vma)
+    {
+        lock (_rmapLock)
+        {
+            _rmapAttachments.RemoveAll(attachment => ReferenceEquals(attachment.Vma, vma));
+        }
+    }
+
+    internal void CollectRmapHits(HostPage hostPage, uint pageIndex, List<RmapHit> output,
+        HashSet<(VMAManager Mm, VmArea Vma, HostPageOwnerKind OwnerKind, uint PageIndex)> seen)
+    {
+        List<RmapAttachment> attachments;
+        lock (_rmapLock)
+        {
+            attachments = _rmapAttachments.Where(attachment => attachment.Covers(pageIndex)).ToList();
+        }
+
+        foreach (var attachment in attachments)
+        {
+            if (!ReferenceEquals(attachment.Vma.VmMapping, this))
+                continue;
+            if ((attachment.Vma.Flags & MapFlags.Private) != 0 &&
+                attachment.Vma.VmAnonVma?.PeekHostPage(pageIndex) != null)
+                continue;
+            if (PeekHostPage(pageIndex) != hostPage)
+                continue;
+
+            if (seen.Add((attachment.Mm, attachment.Vma, HostPageOwnerKind.AddressSpace, pageIndex)))
+                output.Add(new RmapHit(hostPage, attachment.Mm, attachment.Vma, HostPageOwnerKind.AddressSpace,
+                    pageIndex));
+        }
+    }
+
+    private void ClearRmapAttachments()
+    {
+        lock (_rmapLock)
+        {
+            _rmapAttachments.Clear();
+        }
     }
 }
 
 public sealed class AnonVma
 {
     private int _refCount = 1;
+    private readonly Lock _rmapLock = new();
+    private readonly List<RmapAttachment> _rmapAttachments = [];
 
-    public VmPageSlots Pages { get; } = new();
+    public AnonVma()
+    {
+        Pages = new VmPageSlots(pageIndex => new HostPageOwnerRef
+        {
+            OwnerKind = HostPageOwnerKind.AnonVma,
+            AnonVma = this,
+            PageIndex = pageIndex
+        });
+    }
+
+    internal VmPageSlots Pages { get; }
     public int PageCount => Pages.PageCount;
 
     public void AddRef()
@@ -125,6 +218,7 @@ public sealed class AnonVma
     public void Release()
     {
         if (Interlocked.Decrement(ref _refCount) > 0) return;
+        ClearRmapAttachments();
         Pages.ReleaseAll();
     }
 
@@ -135,7 +229,7 @@ public sealed class AnonVma
         {
             var page = Pages.PeekVmPage(state.PageIndex)!;
             ExternalPageManager.AddRef(page.Ptr);
-            clone.Pages.InstallPage(state.PageIndex, page.Ptr);
+            clone.Pages.InstallExistingHostPage(state.PageIndex, page.HostPage);
             var clonedPage = clone.Pages.PeekVmPage(state.PageIndex)!;
             clonedPage.Dirty = page.Dirty;
             clonedPage.Uptodate = page.Uptodate;
@@ -155,14 +249,19 @@ public sealed class AnonVma
         return Pages.PeekPage(pageIndex);
     }
 
-    public VmPage? PeekVmPage(uint pageIndex)
+    internal HostPage? PeekHostPage(uint pageIndex)
+    {
+        return Pages.PeekHostPage(pageIndex);
+    }
+
+    internal VmPage? PeekVmPage(uint pageIndex)
     {
         return Pages.PeekVmPage(pageIndex);
     }
 
     public void SetPage(uint pageIndex, IntPtr ptr)
     {
-        Pages.ReplacePage(pageIndex, ptr);
+        Pages.ReplacePage(pageIndex, ptr, HostPageKind.Anon);
     }
 
     public void MarkDirty(uint pageIndex)
@@ -195,12 +294,12 @@ public sealed class AnonVma
         return Pages.CountPagesInRange(startPageIndex, endPageIndex);
     }
 
-    public int RemovePagesInRange(uint startPageIndex, uint endPageIndex, Func<VmPage, bool>? predicate = null)
+    internal int RemovePagesInRange(uint startPageIndex, uint endPageIndex, Func<VmPage, bool>? predicate = null)
     {
         return Pages.RemovePagesInRange(startPageIndex, endPageIndex, predicate);
     }
 
-    public bool RemovePageIfMatches(uint pageIndex, VmPage page)
+    internal bool RemovePageIfMatches(uint pageIndex, VmPage page)
     {
         return Pages.RemovePageIfMatches(pageIndex, page);
     }
@@ -208,5 +307,60 @@ public sealed class AnonVma
     public void TruncateToSize(long size)
     {
         Pages.TruncateToSize(size);
+    }
+
+    internal void AddRmapAttachment(VMAManager mm, VmArea vma, uint startPageIndex, uint endPageIndexExclusive)
+    {
+        if (startPageIndex >= endPageIndexExclusive)
+            return;
+
+        lock (_rmapLock)
+        {
+            _rmapAttachments.Add(new RmapAttachment
+            {
+                Mm = mm,
+                Vma = vma,
+                StartPageIndex = startPageIndex,
+                EndPageIndexExclusive = endPageIndexExclusive
+            });
+        }
+    }
+
+    internal void RemoveRmapAttachments(VmArea vma)
+    {
+        lock (_rmapLock)
+        {
+            _rmapAttachments.RemoveAll(attachment => ReferenceEquals(attachment.Vma, vma));
+        }
+    }
+
+    internal void CollectRmapHits(HostPage hostPage, uint pageIndex, List<RmapHit> output,
+        HashSet<(VMAManager Mm, VmArea Vma, HostPageOwnerKind OwnerKind, uint PageIndex)> seen)
+    {
+        List<RmapAttachment> attachments;
+        lock (_rmapLock)
+        {
+            attachments = _rmapAttachments.Where(attachment => attachment.Covers(pageIndex)).ToList();
+        }
+
+        foreach (var attachment in attachments)
+        {
+            if (!ReferenceEquals(attachment.Vma.VmAnonVma, this))
+                continue;
+            if (!ReferenceEquals(PeekHostPage(pageIndex), hostPage))
+                continue;
+
+            if (seen.Add((attachment.Mm, attachment.Vma, HostPageOwnerKind.AnonVma, pageIndex)))
+                output.Add(new RmapHit(hostPage, attachment.Mm, attachment.Vma, HostPageOwnerKind.AnonVma,
+                    pageIndex));
+        }
+    }
+
+    private void ClearRmapAttachments()
+    {
+        lock (_rmapLock)
+        {
+            _rmapAttachments.Clear();
+        }
     }
 }

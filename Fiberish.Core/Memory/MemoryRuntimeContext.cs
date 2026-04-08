@@ -1,4 +1,5 @@
 using Fiberish.Core;
+using Fiberish.Native;
 using Fiberish.VFS;
 
 namespace Fiberish.Memory;
@@ -8,6 +9,8 @@ public sealed class MemoryRuntimeContext
     private readonly Lock _shmGate = new();
     private long _nextSharedAnonymousBackingId;
     private SuperBlock? _shmSuperBlock;
+    private LinuxFile? _zeroBackingFile;
+    private AddressSpace? _zeroAddressSpace;
 
     public MemoryRuntimeContext()
         : this(HostMemoryMapGeometry.CreateCurrent())
@@ -59,6 +62,52 @@ public sealed class MemoryRuntimeContext
     {
         return CreateUnlinkedShmFile(displayName, 0, mode, uid, gid, fileFlags, mount,
             LinuxFile.ReferenceKind.Normal, inode => inode.InitializeMemfd(allowSealing, executable, noExecSeal));
+    }
+
+    internal AddressSpace AcquireZeroAddressSpace()
+    {
+        lock (_shmGate)
+        {
+            EnsureZeroBackingCreated();
+            _zeroAddressSpace!.AddRef();
+            return _zeroAddressSpace;
+        }
+    }
+
+    internal bool IsZeroAddressSpace(AddressSpace? mapping)
+    {
+        lock (_shmGate)
+        {
+            return mapping != null && ReferenceEquals(mapping, _zeroAddressSpace);
+        }
+    }
+
+    internal IntPtr GetOrCreateZeroPage(uint pageIndex)
+    {
+        lock (_shmGate)
+        {
+            EnsureZeroBackingCreated();
+            var zeroPtr = ZeroPageProvider.GetPointer();
+            if (zeroPtr == IntPtr.Zero)
+                return IntPtr.Zero;
+
+            return _zeroAddressSpace!.SetPageIfAbsent(pageIndex, zeroPtr, out _);
+        }
+    }
+
+    private void EnsureZeroBackingCreated()
+    {
+        if (_zeroAddressSpace != null)
+            return;
+
+        _zeroBackingFile = CreateUnlinkedShmFile(".zero_page", LinuxConstants.PageSize, 0x100, 0, 0,
+            FileFlags.O_RDONLY, null!, LinuxFile.ReferenceKind.MmapHold);
+        _zeroAddressSpace = new AddressSpace(AddressSpaceKind.Zero);
+        if (_zeroBackingFile.OpenedInode != null)
+        {
+            _zeroBackingFile.OpenedInode.Mapping = _zeroAddressSpace;
+            _zeroBackingFile.OpenedInode.MappingManager = null;
+        }
     }
 
     private LinuxFile CreateUnlinkedShmFile(string name, uint length, int mode, int uid, int gid, FileFlags fileFlags,

@@ -490,8 +490,8 @@ void X86_ReprotectMappedRange(EmuState* state, uint32_t addr, uint32_t size, uin
 
 void* X86_AllocatePage(EmuState* state, uint32_t addr, uint8_t perms) { return state->mmu.allocate_page(addr, perms); }
 
-int X86_MapExternalPage(EmuState* state, uint32_t addr, void* external_page, uint8_t perms) {
-    return state->mmu.map_external_page(addr, static_cast<mem::HostAddr>(external_page), perms) ? 1 : 0;
+extern "C" int X86_InternalMapManagedPage(EmuState* state, uint32_t addr, void* host_page, uint8_t perms) {
+    return state->mmu.map_external_page(addr, static_cast<mem::HostAddr>(host_page), perms) ? 1 : 0;
 }
 
 static X86_MmuHandle* X86_NewMmuHandle(mem::MmuCore* core, bool add_ref) {

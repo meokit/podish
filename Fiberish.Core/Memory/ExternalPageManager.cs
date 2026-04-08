@@ -30,36 +30,25 @@ public enum ExternalPageBackend
 
 public enum MappedPageOwnerKind
 {
-    RawPointer,
     AddressSpace,
-    AnonVma,
-    ZeroPage,
-    Special
+    AnonVma
 }
 
-public sealed class MappedPageBinding
+internal sealed class MappedPageBinding
 {
-    public required IntPtr Ptr { get; init; }
+    public required HostPage HostPage { get; init; }
+    public IntPtr Ptr => HostPage.Ptr;
     public required MappedPageOwnerKind OwnerKind { get; init; }
     public AddressSpace? Mapping { get; init; }
     public AnonVma? AnonVma { get; init; }
     public VmPage? Page { get; init; }
     public uint PageIndex { get; init; }
 
-    public static MappedPageBinding FromRaw(IntPtr ptr)
+    internal static MappedPageBinding FromAddressSpacePage(AddressSpace mapping, uint pageIndex, VmPage page)
     {
         return new MappedPageBinding
         {
-            Ptr = ptr,
-            OwnerKind = ZeroPageProvider.IsZeroPage(ptr) ? MappedPageOwnerKind.ZeroPage : MappedPageOwnerKind.RawPointer
-        };
-    }
-
-    public static MappedPageBinding FromAddressSpacePage(AddressSpace mapping, uint pageIndex, VmPage page)
-    {
-        return new MappedPageBinding
-        {
-            Ptr = page.Ptr,
+            HostPage = page.HostPage,
             OwnerKind = MappedPageOwnerKind.AddressSpace,
             Mapping = mapping,
             Page = page,
@@ -67,11 +56,11 @@ public sealed class MappedPageBinding
         };
     }
 
-    public static MappedPageBinding FromAnonVmaPage(AnonVma anonVma, uint pageIndex, VmPage page)
+    internal static MappedPageBinding FromAnonVmaPage(AnonVma anonVma, uint pageIndex, VmPage page)
     {
         return new MappedPageBinding
         {
-            Ptr = page.Ptr,
+            HostPage = page.HostPage,
             OwnerKind = MappedPageOwnerKind.AnonVma,
             AnonVma = anonVma,
             Page = page,
@@ -105,7 +94,7 @@ public sealed class ExternalPageManager
     {
         var previous = ScopedState.Value;
         ScopedState.Value = new State();
-        return new ScopeRestore(previous);
+        return new ScopeRestore(previous, HostPageManager.BeginIsolatedScope());
     }
 
     public bool TryGet(uint pageAddr, out IntPtr ptr)
@@ -120,7 +109,7 @@ public sealed class ExternalPageManager
         return false;
     }
 
-    public bool TryGetBinding(uint pageAddr, out MappedPageBinding? binding)
+    internal bool TryGetBinding(uint pageAddr, out MappedPageBinding? binding)
     {
         if (_pages.TryGetValue(pageAddr, out var existing))
         {
@@ -132,47 +121,7 @@ public sealed class ExternalPageManager
         return false;
     }
 
-    public IntPtr GetOrAllocate(uint pageAddr, out bool isNew, bool strictQuota = false,
-        AllocationClass allocationClass = AllocationClass.KernelInternal,
-        AllocationSource allocationSource = AllocationSource.Unknown)
-    {
-        if (_pages.TryGetValue(pageAddr, out var page))
-        {
-            isNew = false;
-            return page.Ptr;
-        }
-
-        IntPtr ptr;
-        if (strictQuota)
-        {
-            if (!TryAllocateExternalPageStrict(out ptr, allocationClass, allocationSource))
-            {
-                isNew = false;
-                return IntPtr.Zero;
-            }
-        }
-        else
-        {
-            ptr = AllocateExternalPage(allocationClass, allocationSource);
-        }
-
-        if (ptr == IntPtr.Zero)
-        {
-            isNew = false;
-            return IntPtr.Zero;
-        }
-
-        _pages[pageAddr] = MappedPageBinding.FromRaw(ptr);
-        isNew = true;
-        return ptr;
-    }
-
-    public bool AddMapping(uint pageAddr, IntPtr ptr, out bool addedRef)
-    {
-        return AddBinding(pageAddr, MappedPageBinding.FromRaw(ptr), out addedRef);
-    }
-
-    public bool AddBinding(uint pageAddr, MappedPageBinding binding, out bool addedRef)
+    internal bool AddBinding(uint pageAddr, MappedPageBinding binding, out bool addedRef)
     {
         addedRef = false;
         if (binding.Ptr == IntPtr.Zero) return false;
@@ -184,9 +133,7 @@ public sealed class ExternalPageManager
             addedRef = true;
         }
 
-        if (binding.Page != null)
-            binding.Page.MapCount++;
-
+        binding.HostPage.MapCount++;
         _pages[pageAddr] = binding;
         return true;
     }
@@ -195,8 +142,8 @@ public sealed class ExternalPageManager
     {
         if (!_pages.TryGetValue(pageAddr, out var binding)) return;
         _pages.Remove(pageAddr);
-        if (binding.Page != null && binding.Page.MapCount > 0)
-            binding.Page.MapCount--;
+        if (binding.HostPage.MapCount > 0)
+            binding.HostPage.MapCount--;
 
         if (!ZeroPageProvider.IsZeroPage(binding.Ptr))
             ReleaseGlobalRef(binding.Ptr);
@@ -204,8 +151,11 @@ public sealed class ExternalPageManager
         if (!preserveOwnerBinding &&
             binding.OwnerKind == MappedPageOwnerKind.AnonVma &&
             binding.AnonVma is { } anonVma &&
-            binding.Page is { MapCount: <= 0, PinCount: <= 0 } anonPage)
+            binding.Page is { } anonPage &&
+            anonPage.HostPage is { MapCount: <= 0, PinCount: <= 0, RefCount: <= 0 })
             anonVma.RemovePageIfMatches(binding.PageIndex, anonPage);
+
+        HostPageManager.TryRemoveIfUnused(binding.HostPage);
     }
 
     public void ReleaseRange(uint addr, uint length, bool preserveOwnerBinding = false)
@@ -321,6 +271,7 @@ public sealed class ExternalPageManager
     {
         if (ptr == IntPtr.Zero) return;
         var state = CurrentState;
+        HostPageManager.TryRetainExisting(ptr);
         lock (state.GlobalLock)
         {
             var key = ptr;
@@ -420,10 +371,12 @@ public sealed class ExternalPageManager
                 if (segment.LivePages <= 0)
                 {
                     state.Segments.Remove(entry.SegmentId);
-                    segmentToFree = segment;
+            segmentToFree = segment;
                 }
             }
         }
+
+        HostPageManager.Release(ptr);
 
         Interlocked.Increment(ref state.FreedPagesByClass[(int)allocationClass]);
         Interlocked.Increment(ref state.FreedPagesBySource[(int)allocationSource]);
@@ -704,16 +657,19 @@ public sealed class ExternalPageManager
 
     private sealed class ScopeRestore : IDisposable
     {
+        private readonly IDisposable _hostPageScope;
         private readonly State? _previous;
 
-        public ScopeRestore(State? previous)
+        public ScopeRestore(State? previous, IDisposable hostPageScope)
         {
             _previous = previous;
+            _hostPageScope = hostPageScope;
         }
 
         public void Dispose()
         {
             ScopedState.Value = _previous;
+            _hostPageScope.Dispose();
         }
     }
 

@@ -218,8 +218,10 @@ public class VMAManager
             return false;
         }
 
+        vma.VmMapping?.RemoveRmapAttachments(vma);
         vma.VmMapping?.Release();
         vma.VmMapping = resolvedMapping;
+        RegisterVmAreaMappingAttachment(vma);
         return true;
     }
 
@@ -240,6 +242,45 @@ public class VMAManager
         return (startPageIndex, endPageIndexExclusive);
     }
 
+    private static (uint StartPageIndex, uint EndPageIndexExclusive) GetVmAreaPageRange(VmArea vma)
+    {
+        if (vma.Length == 0)
+            return (0, 0);
+
+        var startPageIndex = vma.GetPageIndex(vma.Start);
+        return (startPageIndex, startPageIndex + vma.Length / LinuxConstants.PageSize);
+    }
+
+    private void RegisterVmAreaMappingAttachment(VmArea vma)
+    {
+        if (vma.VmMapping == null || vma.Length == 0)
+            return;
+
+        var (startPageIndex, endPageIndexExclusive) = GetVmAreaPageRange(vma);
+        vma.VmMapping.AddRmapAttachment(this, vma, startPageIndex, endPageIndexExclusive);
+    }
+
+    private void RegisterVmAreaAnonAttachment(VmArea vma)
+    {
+        if (vma.VmAnonVma == null || vma.Length == 0)
+            return;
+
+        var (startPageIndex, endPageIndexExclusive) = GetVmAreaPageRange(vma);
+        vma.VmAnonVma.AddRmapAttachment(this, vma, startPageIndex, endPageIndexExclusive);
+    }
+
+    private void RegisterVmAreaAttachments(VmArea vma)
+    {
+        RegisterVmAreaMappingAttachment(vma);
+        RegisterVmAreaAnonAttachment(vma);
+    }
+
+    private static void UnregisterVmAreaAttachments(VmArea vma)
+    {
+        vma.VmMapping?.RemoveRmapAttachments(vma);
+        vma.VmAnonVma?.RemoveRmapAttachments(vma);
+    }
+
     private static void ReleaseUnmappedObjectPages(VmArea vma, uint guestStart, uint guestEndExclusive)
     {
         if (guestStart >= guestEndExclusive) return;
@@ -252,18 +293,16 @@ public class VMAManager
         return vma.GetPageIndex(guestPageStart);
     }
 
-    private static MappedPageBinding CreateResolvedPageBinding(VmArea vma, uint pageIndex, IntPtr pagePtr)
+    private MappedPageBinding CreateResolvedPageBinding(VmArea vma, uint pageIndex, IntPtr pagePtr)
     {
-        if (ZeroPageProvider.IsZeroPage(pagePtr))
-            return MappedPageBinding.FromRaw(pagePtr);
-
         if (vma.VmAnonVma?.PeekVmPage(pageIndex) is { } privatePage && privatePage.Ptr == pagePtr)
             return MappedPageBinding.FromAnonVmaPage(vma.VmAnonVma, pageIndex, privatePage);
 
         if (vma.VmMapping?.PeekVmPage(pageIndex) is { } sharedPage && sharedPage.Ptr == pagePtr)
             return MappedPageBinding.FromAddressSpacePage(vma.VmMapping, pageIndex, sharedPage);
 
-        return MappedPageBinding.FromRaw(pagePtr);
+        throw new InvalidOperationException(
+            $"Failed to resolve managed page binding for VMA '{vma.Name}' pageIndex={pageIndex} ptr={pagePtr}.");
     }
 
     private void TrackMappedInodeOnVmaAdded(VmArea vma)
@@ -708,6 +747,10 @@ public class VMAManager
                     sharedObj = Backings.GetOrCreateMapping(ResolveCurrentFileBacking(file)!);
                     fileMapping = new VmaFileMapping(file);
                 }
+                else if (isPrivate)
+                {
+                    sharedObj = engine.MemoryContext.AcquireZeroAddressSpace();
+                }
             }
             else if (isShared)
             {
@@ -739,6 +782,7 @@ public class VMAManager
             };
 
             InsertVmaSorted(vma);
+            RegisterVmAreaAttachments(vma);
             anonymousSharedFile = null;
             return addr;
         }
@@ -757,6 +801,7 @@ public class VMAManager
             var cloned = vma.Clone();
             newMM._vmas.Add(cloned);
             newMM.TrackMappedInodeOnVmaAdded(cloned);
+            newMM.RegisterVmAreaAttachments(cloned);
         }
 
         foreach (var pageAddr in ExternalPages.SnapshotMappedPages())
@@ -777,7 +822,8 @@ public class VMAManager
                      clonedVma.VmMapping?.PeekVmPage(pageIndex) is { } sharedPage)
                 clonedBinding = MappedPageBinding.FromAddressSpacePage(clonedVma.VmMapping, pageIndex, sharedPage);
             else
-                clonedBinding = MappedPageBinding.FromRaw(binding.Ptr);
+                throw new InvalidOperationException(
+                    $"Clone encountered unmanaged page binding owner={binding.OwnerKind} page=0x{pageAddr:X8}.");
 
             _ = newMM.ExternalPages.AddBinding(pageAddr, clonedBinding, out _);
         }
@@ -791,6 +837,7 @@ public class VMAManager
     internal void AddVmaInternal(VmArea vma)
     {
         InsertVmaSorted(vma);
+        RegisterVmAreaAttachments(vma);
     }
 
     public void Munmap(uint addr, uint length, Engine engine)
@@ -819,6 +866,7 @@ public class VMAManager
             {
                 SyncVmArea(vma, engine, vma.Start, vma.End);
                 ReleaseUnmappedObjectPages(vma, vma.Start, vma.End);
+                UnregisterVmAreaAttachments(vma);
                 if (ReferenceEquals(_lastFaultVma, vma)) _lastFaultVma = null;
                 vma.VmMapping?.Release();
                 vma.VmAnonVma?.Release();
@@ -833,6 +881,7 @@ public class VMAManager
             {
                 SyncVmArea(vma, engine, addr, end);
                 ReleaseUnmappedObjectPages(vma, addr, end);
+                UnregisterVmAreaAttachments(vma);
                 var tailStart = end;
                 var tailEnd = vma.End;
                 long tailOffset = 0;
@@ -861,6 +910,8 @@ public class VMAManager
                 TrackMappedInodeOnVmaAdded(tailVmArea);
 
                 vma.End = addr;
+                RegisterVmAreaAttachments(vma);
+                RegisterVmAreaAttachments(tailVmArea);
 
                 continue;
             }
@@ -870,11 +921,13 @@ public class VMAManager
             {
                 SyncVmArea(vma, engine, vma.Start, end);
                 ReleaseUnmappedObjectPages(vma, vma.Start, end);
+                UnregisterVmAreaAttachments(vma);
                 var diff = end - vma.Start;
                 vma.Start = end;
                 vma.VmPgoff = vma.GetPageIndex(end);
                 if (vma.File != null)
                     vma.Offset += diff;
+                RegisterVmAreaAttachments(vma);
 
                 continue;
             }
@@ -884,7 +937,9 @@ public class VMAManager
             {
                 SyncVmArea(vma, engine, addr, vma.End);
                 ReleaseUnmappedObjectPages(vma, addr, vma.End);
+                UnregisterVmAreaAttachments(vma);
                 vma.End = addr;
+                RegisterVmAreaAttachments(vma);
             }
         }
 
@@ -946,6 +1001,8 @@ public class VMAManager
                 continue;
             }
 
+            UnregisterVmAreaAttachments(vma);
+
             // Prepare middle (the protected slice).
             var midDiff = (long)overlapStart - oldStart;
             var originalFileMapping = vma.FileMapping;
@@ -974,6 +1031,7 @@ public class VMAManager
                 vma.Start = oldStart;
                 vma.End = overlapStart;
                 vma.Perms = oldPerms;
+                RegisterVmAreaAttachments(vma);
             }
 
             // Right tail (if any) keeps old perms.
@@ -1021,18 +1079,23 @@ public class VMAManager
                 {
                     _vmas.Insert(i + 1, right);
                     TrackMappedInodeOnVmaAdded(right);
+                    RegisterVmAreaAttachments(right);
                     i++;
                 }
+
+                RegisterVmAreaAttachments(vma);
             }
             else
             {
                 // Keep left in current slot; insert middle and optional right.
                 _vmas.Insert(i + 1, mid);
                 TrackMappedInodeOnVmaAdded(mid);
+                RegisterVmAreaAttachments(mid);
                 if (right != null)
                 {
                     _vmas.Insert(i + 2, right);
                     TrackMappedInodeOnVmaAdded(right);
+                    RegisterVmAreaAttachments(right);
                 }
 
                 i += right != null ? 2 : 1;
@@ -1067,6 +1130,7 @@ public class VMAManager
                 false,
                 true,
                 true);
+            UnregisterVmAreaAttachments(vma);
             vma.VmMapping?.Release();
             vma.VmAnonVma?.Release();
             vma.FileMapping?.Release();
@@ -1164,7 +1228,9 @@ public class VMAManager
             if (IsAnonymousPrivateZeroSource(vma))
             {
                 if (!ExternalPages.TryGetBinding(pageAddr, out var binding) ||
-                    binding?.OwnerKind != MappedPageOwnerKind.ZeroPage)
+                    binding == null ||
+                    binding.OwnerKind != MappedPageOwnerKind.AddressSpace ||
+                    !ReferenceEquals(binding.Mapping, vma.VmMapping))
                     continue;
             }
             else
@@ -1213,7 +1279,7 @@ public class VMAManager
 
     private static bool IsAnonymousPrivateZeroSource(VmArea vma)
     {
-        return !vma.IsFileBacked && vma.VmMapping == null;
+        return !vma.IsFileBacked && vma.VmMapping is { IsZeroBacking: true };
     }
 
     private static bool HasReclaimableMapping(VmArea vma)
@@ -1381,7 +1447,11 @@ public class VMAManager
         pagePtr = IntPtr.Zero;
         if (IsAnonymousPrivateZeroSource(vma))
         {
-            pagePtr = ZeroPageProvider.GetPointer();
+            var mapping = RequireVmMapping(vma);
+            if (!engine.MemoryContext.IsZeroAddressSpace(mapping))
+                return FaultResult.Segv;
+
+            pagePtr = engine.MemoryContext.GetOrCreateZeroPage(pageIndex);
             return pagePtr != IntPtr.Zero ? FaultResult.Handled : FaultResult.Oom;
         }
 
@@ -1390,11 +1460,6 @@ public class VMAManager
                 preferWritableMappedPage, out pagePtr);
 
         return ResolveAnonymousSharedAddressSpacePage(vma, pageIndex, vmaRelativeOffset, engine, out pagePtr);
-    }
-
-    private FaultResult EnsureExternalMapping(uint pageStart, IntPtr pagePtr, byte perms, Engine engine)
-    {
-        return EnsureExternalMapping(pageStart, MappedPageBinding.FromRaw(pagePtr), perms, engine);
     }
 
     private FaultResult MapResolvedBackingPage(
@@ -1458,7 +1523,7 @@ public class VMAManager
 
         if (!ExternalPages.AddBinding(pageStart, binding, out var addedRef))
             return FaultResult.Segv;
-        if (!engine.MapExternalPage(pageStart, pagePtr, perms))
+        if (!engine.MapManagedPage(pageStart, pagePtr, perms))
         {
             if (addedRef) ExternalPages.Release(pageStart);
             return FaultResult.Segv;
@@ -1566,6 +1631,7 @@ public class VMAManager
         {
             privateObject = Backings.CreatePrivateOverlay();
             vma.VmAnonVma = privateObject;
+            RegisterVmAreaAnonAttachment(vma);
         }
 
         return InstallPrivatePageAndMap(privateObject, pageStart, pageIndex, sourcePage, (byte)vma.Perms, engine,
@@ -1616,8 +1682,10 @@ public class VMAManager
                 continue;
             }
 
+            vma.VmMapping?.RemoveRmapAttachments(vma);
             vma.VmMapping?.Release();
             vma.VmMapping = replacementMapping;
+            RegisterVmAreaMappingAttachment(vma);
             invalidatedRanges.Add(new NativeRange(vma.Start, vma.Length));
         }
 

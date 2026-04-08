@@ -75,7 +75,8 @@ public class CowForkCloneTests
         var parentVma = Assert.Single(parentMm.VMAs);
         Assert.Equal(FaultResult.Handled, parentMm.HandleFaultDetailed(mapAddr, false, parentEngine));
         Assert.Null(parentVma.VmAnonVma);
-        Assert.Null(parentVma.VmMapping);
+        Assert.NotNull(parentVma.VmMapping);
+        Assert.True(parentVma.VmMapping!.IsZeroBacking);
 
         var childMm = parentMm.Clone();
         using var childEngine = parentEngine.Clone(false);
@@ -84,8 +85,10 @@ public class CowForkCloneTests
             (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
 
         var childVma = Assert.Single(childMm.VMAs);
-        Assert.Null(parentVma.VmMapping);
-        Assert.Null(childVma.VmMapping);
+        Assert.NotNull(parentVma.VmMapping);
+        Assert.NotNull(childVma.VmMapping);
+        Assert.True(parentVma.VmMapping!.IsZeroBacking);
+        Assert.True(childVma.VmMapping!.IsZeroBacking);
         Assert.Null(childVma.VmAnonVma);
 
         Assert.True(childEngine.CopyToUser(mapAddr, new[] { (byte)'C' }));
@@ -133,8 +136,11 @@ public class CowForkCloneTests
 
         var vmas = mm.VMAs.OrderBy(vma => vma.Start).ToArray();
         Assert.Equal(2, vmas.Length);
-        Assert.Null(vmas[0].VmMapping);
-        Assert.Null(vmas[1].VmMapping);
+        Assert.NotNull(vmas[0].VmMapping);
+        Assert.NotNull(vmas[1].VmMapping);
+        Assert.True(vmas[0].VmMapping!.IsZeroBacking);
+        Assert.True(vmas[1].VmMapping!.IsZeroBacking);
+        Assert.Same(vmas[0].VmMapping, vmas[1].VmMapping);
 
         Assert.True(engine.CopyToUser(map1, new[] { (byte)'Z' }));
         Assert.True(engine.CopyFromUser(map1, buf));
@@ -162,7 +168,8 @@ public class CowForkCloneTests
         var pageIndex = vma.GetPageIndex(vma.Start);
         var privatePage = vma.VmAnonVma!.GetPage(pageIndex);
         Assert.NotEqual(IntPtr.Zero, privatePage);
-        Assert.Null(vma.VmMapping);
+        Assert.NotNull(vma.VmMapping);
+        Assert.True(vma.VmMapping!.IsZeroBacking);
 
         var probe = new byte[1];
         Assert.True(engine.CopyFromUser(mapAddr, probe));

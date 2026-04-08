@@ -77,7 +77,8 @@ public class MemoryPressureCoordinatorTests
         Assert.True(engine.CopyFromUser(addr, new byte[1]));
         var vma = Assert.Single(mm.VMAs);
         var pageIndex = vma.GetPageIndex(vma.Start);
-        Assert.Null(vma.VmMapping);
+        Assert.NotNull(vma.VmMapping);
+        Assert.True(vma.VmMapping!.IsZeroBacking);
         Assert.Null(vma.VmAnonVma);
         Assert.True(mm.ExternalPages.TryGet(addr, out _));
 
@@ -85,7 +86,8 @@ public class MemoryPressureCoordinatorTests
 
         Assert.True(result.MadeProgress);
         Assert.False(mm.ExternalPages.TryGet(addr, out _));
-        Assert.Null(vma.VmMapping);
+        Assert.NotNull(vma.VmMapping);
+        Assert.True(vma.VmMapping!.IsZeroBacking);
         Assert.True(engine.CopyFromUser(addr, new byte[1]));
     }
 

@@ -59,9 +59,9 @@ public class Engine : IDisposable
             throw new ArgumentException("Use parameterless constructor for real engine", nameof(mock));
     }
 
-    internal unsafe Engine(IntPtr state)
+    internal unsafe Engine(IntPtr state, MemoryRuntimeContext memoryContext)
     {
-        MemoryContext = MemoryRuntimeContext.Default;
+        MemoryContext = memoryContext;
         State = state;
         _gcHandle = GCHandle.Alloc(this);
         X86Native.SetFaultCallback(State, &OnNativeFault, GCHandle.ToIntPtr(_gcHandle));
@@ -314,7 +314,7 @@ public class Engine : IDisposable
         if (newState == IntPtr.Zero)
             throw new InvalidOperationException("Failed to clone Fiberish state.");
 
-        var newEngine = new Engine(newState)
+        var newEngine = new Engine(newState, MemoryContext)
         {
             FaultHandler = FaultHandler,
             InterruptHandler = InterruptHandler,
@@ -440,13 +440,9 @@ public class Engine : IDisposable
         return (IntPtr)X86Native.AllocatePage(State, addr, perms);
     }
 
-    /// <summary>
-    ///     Map external memory to guest address. Caller owns the memory.
-    ///     Useful for mmap passthrough, shared memory, etc.
-    /// </summary>
-    public unsafe bool MapExternalPage(uint addr, IntPtr externalPage, byte perms)
+    internal unsafe bool MapManagedPage(uint addr, IntPtr hostPage, byte perms)
     {
-        return X86Native.MapExternalPage(State, addr, (void*)externalPage, perms) != 0;
+        return X86Native.MapManagedPage(State, addr, (void*)hostPage, perms) != 0;
     }
 
     /// <summary>

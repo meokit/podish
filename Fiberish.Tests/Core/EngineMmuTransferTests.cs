@@ -13,8 +13,6 @@ namespace Fiberish.Tests.Core;
 public class EngineMmuTransferTests
 {
     private const uint CodeAddr = 0x00401000;
-    private const uint AliasCodeAddrA = 0x00402000;
-    private const uint AliasCodeAddrB = 0x00406000;
     private static readonly byte[] SimpleCode = [0x90, 0x90];
 
     [Fact]
@@ -41,114 +39,6 @@ public class EngineMmuTransferTests
         Assert.Equal((byte)0x5A, read[0]);
         detached.Dispose();
         Assert.Throws<ObjectDisposedException>(() => engine.ReplaceMmu(detached));
-    }
-
-    [Fact]
-    public void CloneMmu_DropsExternalMappings_ButKeepsOwnedPages()
-    {
-        using var parent = new Engine();
-        using var child = new Engine();
-        const uint externalAddr = 0x00500000;
-        const uint ownedAddr = 0x00600000;
-        var perms = (byte)(Protection.Read | Protection.Write);
-        var external = Marshal.AllocHGlobal(LinuxConstants.PageSize);
-
-        try
-        {
-            var init = new byte[LinuxConstants.PageSize];
-            init[0] = 0x11;
-            Marshal.Copy(init, 0, external, init.Length);
-            Assert.True(parent.MapExternalPage(externalAddr, external, perms));
-
-            var owned = parent.AllocatePage(ownedAddr, perms);
-            Assert.NotEqual(IntPtr.Zero, owned);
-            Marshal.WriteByte(owned, 0x22);
-
-            using var cloned = parent.CurrentMmu.CloneSkipExternal();
-            child.ReplaceMmu(cloned);
-
-            var read = new byte[1];
-            Assert.False(child.CopyFromUser(externalAddr, read));
-            Assert.True(child.CopyFromUser(ownedAddr, read));
-            Assert.Equal((byte)0x22, read[0]);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(external);
-        }
-    }
-
-    [Fact]
-    public void CloneFork_PreservesExternalMappings_ByDefault()
-    {
-        using var parent = new Engine();
-        const uint externalAddr = 0x00700000;
-        const uint ownedAddr = 0x00800000;
-        var perms = (byte)(Protection.Read | Protection.Write);
-        var external = Marshal.AllocHGlobal(LinuxConstants.PageSize);
-
-        try
-        {
-            var init = new byte[LinuxConstants.PageSize];
-            init[0] = 0x44;
-            Marshal.Copy(init, 0, external, init.Length);
-            Assert.True(parent.MapExternalPage(externalAddr, external, perms));
-
-            var owned = parent.AllocatePage(ownedAddr, perms);
-            Assert.NotEqual(IntPtr.Zero, owned);
-            Marshal.WriteByte(owned, 0x66);
-
-            using var child = parent.Clone(false);
-            Assert.NotEqual(parent.CurrentMmuIdentity, child.CurrentMmuIdentity);
-
-            var read = new byte[1];
-            Assert.True(child.CopyFromUser(externalAddr, read));
-            Assert.Equal((byte)0x44, read[0]);
-            Assert.True(child.CopyFromUser(ownedAddr, read));
-            Assert.Equal((byte)0x66, read[0]);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(external);
-        }
-    }
-
-    [Fact]
-    public void CloneForkWithSkipMmu_AllowsManualCloneAttachFlow()
-    {
-        using var parent = new Engine();
-        const uint externalAddr = 0x00900000;
-        const uint ownedAddr = 0x00A00000;
-        var perms = (byte)(Protection.Read | Protection.Write);
-        var external = Marshal.AllocHGlobal(LinuxConstants.PageSize);
-
-        try
-        {
-            var init = new byte[LinuxConstants.PageSize];
-            init[0] = 0x7A;
-            Marshal.Copy(init, 0, external, init.Length);
-            Assert.True(parent.MapExternalPage(externalAddr, external, perms));
-
-            var owned = parent.AllocatePage(ownedAddr, perms);
-            Assert.NotEqual(IntPtr.Zero, owned);
-            Marshal.WriteByte(owned, 0x3C);
-
-            using var child = parent.Clone(false, EngineCloneMemoryMode.SkipMmu);
-            var read = new byte[1];
-            Assert.False(child.CopyFromUser(externalAddr, read));
-            Assert.False(child.CopyFromUser(ownedAddr, read));
-
-            using var cloned = parent.CurrentMmu.CloneSkipExternal();
-            child.ReplaceMmu(cloned);
-
-            Assert.False(child.CopyFromUser(externalAddr, read));
-            Assert.True(child.CopyFromUser(ownedAddr, read));
-            Assert.Equal((byte)0x3C, read[0]);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(external);
-        }
     }
 
     [Fact]
@@ -244,87 +134,6 @@ public class EngineMmuTransferTests
 
         Assert.Equal(initialBlockCount, engine.GetBlockCount());
         Assert.Equal(1, ReadCodeCacheStats(engine).BlockCacheSize);
-    }
-
-    [Fact]
-    public void ExternalAlias_ResetCodeCacheByRange_InvalidatesAllAliasBlocks()
-    {
-        using var engine = new Engine();
-        var external = Marshal.AllocHGlobal(LinuxConstants.PageSize);
-
-        try
-        {
-            InstallExternalCodeAlias(engine, external, AliasCodeAddrA, AliasCodeAddrB);
-            WarmSimpleCode(engine, AliasCodeAddrA);
-            WarmSimpleCode(engine, AliasCodeAddrB);
-
-            Assert.Equal(2, ReadCodeCacheStats(engine).BlockCacheSize);
-
-            engine.ResetCodeCacheByRange(AliasCodeAddrA, 1);
-
-            var stats = ReadCodeCacheStats(engine);
-            Assert.Equal(0, stats.BlockCacheSize);
-            Assert.Equal(0, stats.PageToBlocksSize);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(external);
-        }
-    }
-
-    [Fact]
-    public void ExternalAlias_MemUnmap_InvalidatesPeerAliasBlocks()
-    {
-        using var engine = new Engine();
-        var external = Marshal.AllocHGlobal(LinuxConstants.PageSize);
-
-        try
-        {
-            InstallExternalCodeAlias(engine, external, AliasCodeAddrA, AliasCodeAddrB);
-            WarmSimpleCode(engine, AliasCodeAddrA);
-            WarmSimpleCode(engine, AliasCodeAddrB);
-
-            engine.MemUnmap(AliasCodeAddrA, LinuxConstants.PageSize);
-
-            Assert.False(engine.HasMappedPage(AliasCodeAddrA, 1));
-            Assert.True(engine.HasMappedPage(AliasCodeAddrB, 1));
-            Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
-
-            WarmSimpleCode(engine, AliasCodeAddrB);
-            Assert.Equal(1, ReadCodeCacheStats(engine).BlockCacheSize);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(external);
-        }
-    }
-
-    [Fact]
-    public void RemappingSameGuestPageToDifferentHostPage_RebuildsCodeCacheEntry()
-    {
-        using var engine = new Engine();
-        var external1 = Marshal.AllocHGlobal(LinuxConstants.PageSize);
-        var external2 = Marshal.AllocHGlobal(LinuxConstants.PageSize);
-
-        try
-        {
-            InstallExternalCode(engine, external1, AliasCodeAddrA);
-            WarmSimpleCode(engine, AliasCodeAddrA);
-            var initialBlockCount = engine.GetBlockCount();
-            Assert.Equal(1, ReadCodeCacheStats(engine).BlockCacheSize);
-
-            engine.MemUnmap(AliasCodeAddrA, LinuxConstants.PageSize);
-            InstallExternalCode(engine, external2, AliasCodeAddrA);
-            WarmSimpleCode(engine, AliasCodeAddrA);
-
-            Assert.True(engine.GetBlockCount() > initialBlockCount);
-            Assert.Equal(1, ReadCodeCacheStats(engine).BlockCacheSize);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(external1);
-            Marshal.FreeHGlobal(external2);
-        }
     }
 
     [Fact]
@@ -483,20 +292,6 @@ public class EngineMmuTransferTests
         engine.Run(addr + (uint)SimpleCode.Length, 16);
         Assert.Equal(EmuStatus.Stopped, engine.Status);
         Assert.Equal(addr + (uint)SimpleCode.Length, engine.Eip);
-    }
-
-    private static void InstallExternalCode(Engine engine, IntPtr externalPage, uint addr)
-    {
-        var init = new byte[LinuxConstants.PageSize];
-        Array.Copy(SimpleCode, init, SimpleCode.Length);
-        Marshal.Copy(init, 0, externalPage, init.Length);
-        Assert.True(engine.MapExternalPage(addr, externalPage, (byte)(Protection.Read | Protection.Write | Protection.Exec)));
-    }
-
-    private static void InstallExternalCodeAlias(Engine engine, IntPtr externalPage, uint addrA, uint addrB)
-    {
-        InstallExternalCode(engine, externalPage, addrA);
-        Assert.True(engine.MapExternalPage(addrB, externalPage, (byte)(Protection.Read | Protection.Write | Protection.Exec)));
     }
 
     private static CodeCacheStats ReadCodeCacheStats(Engine engine)

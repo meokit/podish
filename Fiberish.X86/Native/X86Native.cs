@@ -184,9 +184,9 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial void* AllocatePage(IntPtr state, uint addr, byte perms);
 
-    [LibraryImport(LibName, EntryPoint = "X86_MapExternalPage")]
+    [LibraryImport(LibName, EntryPoint = "X86_InternalMapManagedPage")]
     [SuppressGCTransition]
-    public static partial int MapExternalPage(IntPtr state, uint addr, void* externalPage, byte perms);
+    internal static partial int MapManagedPage(IntPtr state, uint addr, void* hostPage, byte perms);
 
     [LibraryImport(LibName, EntryPoint = "X86_MmuCreateEmpty")]
     [SuppressGCTransition]
