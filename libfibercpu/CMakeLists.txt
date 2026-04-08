@@ -45,7 +45,9 @@ option(FIBERCPU_ENABLE_LTO "Enable interprocedural optimization (LTO/IPO)" ON)
 option(FIBERCPU_ENABLE_HANDLER_PROFILE "Enable approximate per-handler execution profiling" OFF)
 option(FIBERCPU_ENABLE_SUPEROPCODES "Enable generated SuperOpcode matching and handlers" ON)
 
-set(FIBERCPU_GENERATED_SUPEROPCODES_FILE "${CMAKE_CURRENT_SOURCE_DIR}/generated/superopcodes.generated.cpp")
+set(FIBERCPU_GENERATED_SUPEROPCODES_FILE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/generated/superopcodes.generated.cpp")
+
 set(FIBERCPU_HAVE_GENERATED_SUPEROPCODES OFF)
 if(FIBERCPU_ENABLE_SUPEROPCODES AND EXISTS "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}")
     set(FIBERCPU_HAVE_GENERATED_SUPEROPCODES ON)

@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Fiberish.Memory;
 
 internal enum HostPageKind
@@ -42,17 +44,59 @@ internal sealed class RmapAttachment
     }
 }
 
+internal readonly record struct HostPageRmapKey(
+    VMAManager Mm,
+    VmArea Vma,
+    HostPageOwnerKind OwnerKind,
+    uint PageIndex)
+{
+    public bool Equals(HostPageRmapKey other)
+    {
+        return ReferenceEquals(Mm, other.Mm) &&
+               ReferenceEquals(Vma, other.Vma) &&
+               OwnerKind == other.OwnerKind &&
+               PageIndex == other.PageIndex;
+    }
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(RuntimeHelpers.GetHashCode(Mm));
+        hash.Add(RuntimeHelpers.GetHashCode(Vma));
+        hash.Add((int)OwnerKind);
+        hash.Add(PageIndex);
+        return hash.ToHashCode();
+    }
+}
+
+internal struct HostPageRmapRef
+{
+    public required VMAManager Mm { get; init; }
+    public required VmArea Vma { get; init; }
+    public required HostPageOwnerKind OwnerKind { get; init; }
+    public required uint PageIndex { get; init; }
+    public required uint GuestPageStart { get; set; }
+
+    public readonly HostPageRmapKey GetKey()
+    {
+        return new HostPageRmapKey(Mm, Vma, OwnerKind, PageIndex);
+    }
+}
+
 internal readonly record struct RmapHit(
     HostPage HostPage,
     VMAManager Mm,
     VmArea Vma,
     HostPageOwnerKind OwnerKind,
-    uint PageIndex);
+    uint PageIndex,
+    uint GuestPageStart);
 
 internal sealed class HostPage
 {
     private readonly Lock _gate = new();
     private readonly List<HostPageOwnerRef> _ownerRefs = [];
+    private readonly List<HostPageRmapRef> _rmapRefs = [];
+    private readonly Dictionary<HostPageRmapKey, int> _rmapRefIndices = [];
 
     public HostPage(IntPtr ptr, HostPageKind kind)
     {
@@ -122,29 +166,62 @@ internal sealed class HostPage
         }
     }
 
+    public void AddOrUpdateRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex,
+        uint guestPageStart)
+    {
+        var key = new HostPageRmapKey(mm, vma, ownerKind, pageIndex);
+        lock (_gate)
+        {
+            if (_rmapRefIndices.TryGetValue(key, out var existingIndex))
+            {
+                var existing = _rmapRefs[existingIndex];
+                if (existing.GuestPageStart == guestPageStart)
+                    return;
+
+                existing.GuestPageStart = guestPageStart;
+                _rmapRefs[existingIndex] = existing;
+                return;
+            }
+
+            _rmapRefIndices.Add(key, _rmapRefs.Count);
+            _rmapRefs.Add(new HostPageRmapRef
+            {
+                Mm = mm,
+                Vma = vma,
+                OwnerKind = ownerKind,
+                PageIndex = pageIndex,
+                GuestPageStart = guestPageStart
+            });
+        }
+    }
+
+    public void RemoveRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex)
+    {
+        var key = new HostPageRmapKey(mm, vma, ownerKind, pageIndex);
+        lock (_gate)
+        {
+            if (!_rmapRefIndices.Remove(key, out var index))
+                return;
+
+            var lastIndex = _rmapRefs.Count - 1;
+            if (index != lastIndex)
+            {
+                var swapped = _rmapRefs[lastIndex];
+                _rmapRefs[index] = swapped;
+                _rmapRefIndices[swapped.GetKey()] = index;
+            }
+
+            _rmapRefs.RemoveAt(lastIndex);
+        }
+    }
+
     public void CollectRmapHits(List<RmapHit> output)
     {
         ArgumentNullException.ThrowIfNull(output);
-
-        List<HostPageOwnerRef> ownerRefs;
         lock (_gate)
-        {
-            ownerRefs = _ownerRefs.ToList();
-        }
-
-        var seen = new HashSet<(VMAManager Mm, VmArea Vma, HostPageOwnerKind OwnerKind, uint PageIndex)>();
-        foreach (var ownerRef in ownerRefs)
-        {
-            switch (ownerRef.OwnerKind)
-            {
-                case HostPageOwnerKind.AddressSpace:
-                    ownerRef.Mapping?.CollectRmapHits(this, ownerRef.PageIndex, output, seen);
-                    break;
-                case HostPageOwnerKind.AnonVma:
-                    ownerRef.AnonVma?.CollectRmapHits(this, ownerRef.PageIndex, output, seen);
-                    break;
-            }
-        }
+            foreach (var rmapRef in _rmapRefs)
+                output.Add(new RmapHit(this, rmapRef.Mm, rmapRef.Vma, rmapRef.OwnerKind, rmapRef.PageIndex,
+                    rmapRef.GuestPageStart));
     }
 }
 

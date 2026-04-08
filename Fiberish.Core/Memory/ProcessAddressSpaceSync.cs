@@ -191,6 +191,44 @@ internal static class ProcessAddressSpaceSync
         return end < addr ? uint.MaxValue : end;
     }
 
+    private static bool HasExecRole(Protection perms)
+    {
+        return (perms & Protection.Exec) != 0;
+    }
+
+    private static bool HasSharedWriterRole(MapFlags flags, Protection perms)
+    {
+        return (flags & MapFlags.Shared) != 0 && (perms & Protection.Write) != 0;
+    }
+
+    private static bool ShouldApplyWxForMapping(MapFlags flags, Protection perms)
+    {
+        return HasExecRole(perms) || HasSharedWriterRole(flags, perms);
+    }
+
+    private static bool WouldMprotectAffectTbCoh(VMAManager vmaManager, uint addr, uint len, Protection newProt)
+    {
+        if (len == 0) return false;
+
+        var end = ComputeRangeEnd(addr, len);
+        var changed = false;
+        vmaManager.VisitVmAreasInRange(addr, end, vma =>
+        {
+            if (changed)
+                return;
+
+            var overlapStart = Math.Max(vma.Start, addr);
+            var overlapEnd = Math.Min(vma.End, end);
+            if (overlapStart >= overlapEnd)
+                return;
+
+            if (HasExecRole(vma.Perms) != HasExecRole(newProt) ||
+                HasSharedWriterRole(vma.Flags, vma.Perms) != HasSharedWriterRole(vma.Flags, newProt))
+                changed = true;
+        });
+        return changed;
+    }
+
     private static void SyncSharedMappingsForEngines(VMAManager vmaManager, IReadOnlyList<Engine> engines, uint addr,
         uint len)
     {
@@ -225,13 +263,16 @@ internal static class ProcessAddressSpaceSync
     {
         if (len == 0) return 0;
         using var scope = EnterAddressSpaceScope(engine, process);
+        var alignedLen = AlignLengthToPage(len);
+        var shouldApplyWx = WouldMprotectAffectTbCoh(vmaManager, addr, len, prot);
         using var snapshot = RentEngineSnapshot();
         FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
         SyncSharedMappingsForEngines(vmaManager, snapshot.Engines, addr, len);
         var rc = vmaManager.Mprotect(addr, len, prot, engine, out var resetCodeCacheRange);
         if (rc == 0)
         {
-            TbCoh.ApplyWxRange(vmaManager, addr, AlignLengthToPage(len));
+            if (shouldApplyWx)
+                TbCoh.ApplyWxRange(vmaManager, addr, alignedLen);
             PublishInvalidation(vmaManager, engine, addr, len, resetCodeCacheRange);
         }
         return rc;
@@ -271,7 +312,8 @@ internal static class ProcessAddressSpaceSync
             MunmapCore(vmaManager, engine, addr, alignedLen);
 
         var mapped = vmaManager.Mmap(addr, len, perms, flags, file, offset, name, engine);
-        TbCoh.ApplyWxRange(vmaManager, mapped, alignedLen);
+        if (alignedLen != 0 && ShouldApplyWxForMapping(flags, perms))
+            TbCoh.ApplyWxRange(vmaManager, mapped, alignedLen);
         PublishInvalidation(vmaManager, engine, mapped, alignedLen, true);
         return mapped;
     }

@@ -6,11 +6,14 @@ internal sealed class VmPageSlots
 {
     private readonly Lock _lock = new();
     private readonly Func<uint, HostPageOwnerRef> _ownerRefFactory;
+    private readonly Action<uint, HostPage?, HostPage?>? _pageBindingChanged;
     private readonly Dictionary<uint, VmPage> _pages = [];
 
-    internal VmPageSlots(Func<uint, HostPageOwnerRef> ownerRefFactory)
+    internal VmPageSlots(Func<uint, HostPageOwnerRef> ownerRefFactory,
+        Action<uint, HostPage?, HostPage?>? pageBindingChanged = null)
     {
         _ownerRefFactory = ownerRefFactory;
+        _pageBindingChanged = pageBindingChanged;
     }
 
     public int PageCount
@@ -70,21 +73,36 @@ internal sealed class VmPageSlots
 
     internal void InstallExistingHostPage(uint pageIndex, HostPage hostPage)
     {
+        VmPage? oldPage = null;
         lock (_lock)
         {
-            var entry = new VmPage
+            if (_pages.TryGetValue(pageIndex, out var existing))
+            {
+                if (ReferenceEquals(existing.HostPage, hostPage))
+                {
+                    existing.HostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+                    return;
+                }
+
+                oldPage = existing;
+            }
+
+            hostPage.AddOwnerRef(_ownerRefFactory(pageIndex));
+            _pages[pageIndex] = new VmPage
             {
                 HostPage = hostPage
             };
-            hostPage.AddOwnerRef(_ownerRefFactory(pageIndex));
-            _pages[pageIndex] = entry;
             hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
         }
+
+        if (oldPage != null)
+            ReleasePageOwnership(pageIndex, oldPage, false);
+        _pageBindingChanged?.Invoke(pageIndex, oldPage?.HostPage, hostPage);
     }
 
     internal void ReplacePage(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind)
     {
-        var oldPage = default(VmPage);
+        VmPage? oldPage = null;
         var hostPage = HostPageManager.GetOrCreate(ptr, hostPageKind);
 
         lock (_lock)
@@ -109,7 +127,8 @@ internal sealed class VmPageSlots
         }
 
         if (oldPage != null)
-            ReleasePageOwnership(pageIndex, oldPage);
+            ReleasePageOwnership(pageIndex, oldPage, false);
+        _pageBindingChanged?.Invoke(pageIndex, oldPage?.HostPage, hostPage);
     }
 
     internal IntPtr InstallPageIfAbsent(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind, out bool inserted)
@@ -132,8 +151,10 @@ internal sealed class VmPageSlots
             };
             hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
             inserted = true;
-            return ptr;
         }
+
+        _pageBindingChanged?.Invoke(pageIndex, null, hostPage);
+        return ptr;
     }
 
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew,
@@ -195,8 +216,10 @@ internal sealed class VmPageSlots
             };
             hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
             isNew = true;
-            return ptr;
         }
+
+        _pageBindingChanged?.Invoke(pageIndex, null, hostPage);
+        return ptr;
     }
 
     public void MarkDirty(uint pageIndex)
@@ -247,20 +270,22 @@ internal sealed class VmPageSlots
             var removeFrom = tailBytes == 0 ? keepPageIndex : keepPageIndex + 1;
             if (_pages.Count == 0) return;
 
-            var keysToDrop = _pages.Keys.Where(k => k >= removeFrom).ToArray();
-            if (keysToDrop.Length == 0) return;
-
-            toRelease = new List<(uint PageIndex, VmPage Page)>(keysToDrop.Length);
-            foreach (var key in keysToDrop)
+            foreach (var (pageIndex, page) in _pages)
             {
-                toRelease.Add((key, _pages[key]));
-                _pages.Remove(key);
+                if (pageIndex < removeFrom)
+                    continue;
+
+                toRelease ??= [];
+                toRelease.Add((pageIndex, page));
             }
+
+            if (toRelease == null) return;
+            foreach (var (pageIndex, _) in toRelease)
+                _pages.Remove(pageIndex);
         }
 
-        if (toRelease == null) return;
         foreach (var (pageIndex, page) in toRelease)
-            ReleasePageOwnership(pageIndex, page);
+            ReleasePageOwnership(pageIndex, page, true);
     }
 
     public IReadOnlyList<VmPageState> SnapshotPageStates()
@@ -279,6 +304,18 @@ internal sealed class VmPageSlots
             foreach (var (pageIndex, entry) in _pages)
                 visitor(new VmPageState(pageIndex, entry.Ptr, entry.Dirty, entry.LastAccessTicks));
         }
+    }
+
+    internal void VisitResidentPagesInRange(uint startPageIndex, uint endPageIndexExclusive, Action<uint, VmPage> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        if (startPageIndex >= endPageIndexExclusive)
+            return;
+
+        lock (_lock)
+            foreach (var (pageIndex, page) in _pages)
+                if (pageIndex >= startPageIndex && pageIndex < endPageIndexExclusive)
+                    visitor(pageIndex, page);
     }
 
     public long CountPagesInRange(uint startPageIndex, uint endPageIndex)
@@ -310,7 +347,7 @@ internal sealed class VmPageSlots
             _pages.Remove(pageIndex);
         }
 
-        ReleasePageOwnership(pageIndex, page);
+        ReleasePageOwnership(pageIndex, page, true);
         return true;
     }
 
@@ -318,31 +355,28 @@ internal sealed class VmPageSlots
     {
         if (startPageIndex >= endPageIndex) return 0;
         List<(uint PageIndex, VmPage Page)>? toRelease = null;
-        var removedCount = 0;
         lock (_lock)
         {
             if (_pages.Count == 0) return 0;
-            var keysToDrop = _pages
-                .Where(kv => kv.Key >= startPageIndex && kv.Key < endPageIndex &&
-                             (predicate == null || predicate(kv.Value)))
-                .Select(kv => kv.Key)
-                .ToArray();
-            if (keysToDrop.Length == 0) return 0;
-
-            toRelease = new List<(uint PageIndex, VmPage Page)>(keysToDrop.Length);
-            foreach (var key in keysToDrop)
+            foreach (var (pageIndex, page) in _pages)
             {
-                toRelease.Add((key, _pages[key]));
-                _pages.Remove(key);
+                if (pageIndex < startPageIndex || pageIndex >= endPageIndex)
+                    continue;
+                if (predicate != null && !predicate(page))
+                    continue;
+
+                toRelease ??= [];
+                toRelease.Add((pageIndex, page));
             }
 
-            removedCount = keysToDrop.Length;
+            if (toRelease == null) return 0;
+            foreach (var (pageIndex, _) in toRelease)
+                _pages.Remove(pageIndex);
         }
 
-        if (toRelease != null)
-            foreach (var (pageIndex, page) in toRelease)
-                ReleasePageOwnership(pageIndex, page);
-        return removedCount;
+        foreach (var (pageIndex, page) in toRelease)
+            ReleasePageOwnership(pageIndex, page, true);
+        return toRelease.Count;
     }
 
     public bool RemovePageIfMatches(uint pageIndex, VmPage page)
@@ -354,7 +388,7 @@ internal sealed class VmPageSlots
             _pages.Remove(pageIndex);
         }
 
-        ReleasePageOwnership(pageIndex, page);
+        ReleasePageOwnership(pageIndex, page, true);
         return true;
     }
 
@@ -364,16 +398,20 @@ internal sealed class VmPageSlots
         lock (_lock)
         {
             if (_pages.Count == 0) return;
-            toRelease = _pages.Select(static kv => (kv.Key, kv.Value)).ToList();
+            toRelease = new List<(uint PageIndex, VmPage Page)>(_pages.Count);
+            foreach (var (pageIndex, page) in _pages)
+                toRelease.Add((pageIndex, page));
             _pages.Clear();
         }
 
         foreach (var (pageIndex, page) in toRelease)
-            ReleasePageOwnership(pageIndex, page);
+            ReleasePageOwnership(pageIndex, page, true);
     }
 
-    private void ReleasePageOwnership(uint pageIndex, VmPage page)
+    private void ReleasePageOwnership(uint pageIndex, VmPage page, bool notify)
     {
+        if (notify)
+            _pageBindingChanged?.Invoke(pageIndex, page.HostPage, null);
         page.HostPage.RemoveOwnerRef(_ownerRefFactory(pageIndex));
         ExternalPageManager.ReleasePtr(page.Ptr);
     }

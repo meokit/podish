@@ -300,6 +300,104 @@ public class TbCohTests
         }
     }
 
+    [Fact]
+    public void UnfaultedRemoteSharedReadPeer_MmapDoesNotChangeWriterWpState()
+    {
+        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var fixture = new TmpfsFileFixture(IncEaxTwice());
+        var runtime = new MemoryRuntimeContext();
+        using var writeEngine = new Engine(runtime);
+        using var readEngine = new Engine(runtime);
+        var writeMm = new VMAManager();
+        writeMm.BindOrAssertAddressSpaceHandle(writeEngine);
+        writeEngine.PageFaultResolver =
+            (addr, isWrite) => writeMm.HandleFaultDetailed(addr, isWrite, writeEngine) == FaultResult.Handled;
+
+        var rwFile = fixture.Open();
+        var readFile = fixture.Open();
+        try
+        {
+            const uint rwAddr = 0x48C00000;
+            Assert.Equal(rwAddr,
+                writeMm.Mmap(rwAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                    MapFlags.Shared | MapFlags.Fixed, rwFile, 0, "tbcoh-unfaulted-read-rw", writeEngine));
+            Assert.True(writeMm.HandleFault(rwAddr, false, writeEngine));
+
+            var readMm = new VMAManager();
+            readMm.BindOrAssertAddressSpaceHandle(readEngine);
+            readEngine.PageFaultResolver =
+                (addr, isWrite) => readMm.HandleFaultDetailed(addr, isWrite, readEngine) == FaultResult.Handled;
+            Assert.Equal(rwAddr,
+                ProcessAddressSpaceSync.Mmap(readMm, readEngine, rwAddr, LinuxConstants.PageSize, Protection.Read,
+                    MapFlags.Shared | MapFlags.Fixed, readFile, 0, "tbcoh-unfaulted-read-peer"));
+
+            ProcessAddressSpaceSync.SyncEngineBeforeRun(writeMm, writeEngine);
+            Assert.True(writeEngine.CopyToUser(rwAddr, DecEaxTwice()));
+            ProcessAddressSpaceSync.SyncEngineBeforeRun(writeMm, writeEngine);
+            Assert.NotEqual(IntPtr.Zero, writeEngine.GetPhysicalAddressSafe(rwAddr, true));
+        }
+        finally
+        {
+            rwFile.Close();
+            readFile.Close();
+        }
+    }
+
+    [Fact]
+    public void UnfaultedRemotePrivateWritePeer_MmapAndMprotectDoNotChangeWriterWpState()
+    {
+        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var fixture = new TmpfsFileFixture(IncEaxTwice());
+        var runtime = new MemoryRuntimeContext();
+        using var writeEngine = new Engine(runtime);
+        using var privateEngine = new Engine(runtime);
+        var writeMm = new VMAManager();
+        writeMm.BindOrAssertAddressSpaceHandle(writeEngine);
+        writeEngine.PageFaultResolver =
+            (addr, isWrite) => writeMm.HandleFaultDetailed(addr, isWrite, writeEngine) == FaultResult.Handled;
+
+        var rwFile = fixture.Open();
+        var privateFile = fixture.Open();
+        try
+        {
+            const uint rwAddr = 0x48D00000;
+            Assert.Equal(rwAddr,
+                writeMm.Mmap(rwAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                    MapFlags.Shared | MapFlags.Fixed, rwFile, 0, "tbcoh-unfaulted-private-rw", writeEngine));
+            Assert.True(writeMm.HandleFault(rwAddr, false, writeEngine));
+
+            var privateMm = new VMAManager();
+            privateMm.BindOrAssertAddressSpaceHandle(privateEngine);
+            privateEngine.PageFaultResolver =
+                (addr, isWrite) =>
+                    privateMm.HandleFaultDetailed(addr, isWrite, privateEngine) == FaultResult.Handled;
+            Assert.Equal(rwAddr,
+                ProcessAddressSpaceSync.Mmap(privateMm, privateEngine, rwAddr, LinuxConstants.PageSize,
+                    Protection.Read, MapFlags.Private | MapFlags.Fixed, privateFile, 0,
+                    "tbcoh-unfaulted-private-peer"));
+
+            ProcessAddressSpaceSync.SyncEngineBeforeRun(writeMm, writeEngine);
+            Assert.True(writeEngine.CopyToUser(rwAddr, DecEaxTwice()));
+            ProcessAddressSpaceSync.SyncEngineBeforeRun(writeMm, writeEngine);
+            Assert.NotEqual(IntPtr.Zero, writeEngine.GetPhysicalAddressSafe(rwAddr, true));
+
+            Assert.Equal(0,
+                ProcessAddressSpaceSync.Mprotect(privateMm, privateEngine, rwAddr, LinuxConstants.PageSize,
+                    Protection.Read | Protection.Write));
+            ProcessAddressSpaceSync.SyncEngineBeforeRun(writeMm, writeEngine);
+            Assert.True(writeEngine.CopyToUser(rwAddr, IncEaxTwice()));
+            ProcessAddressSpaceSync.SyncEngineBeforeRun(writeMm, writeEngine);
+            Assert.NotEqual(IntPtr.Zero, writeEngine.GetPhysicalAddressSafe(rwAddr, true));
+        }
+        finally
+        {
+            rwFile.Close();
+            privateFile.Close();
+        }
+    }
+
     private static byte[] IncEaxTwice()
     {
         return [0x40, 0x40];

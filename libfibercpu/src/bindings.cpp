@@ -779,8 +779,8 @@ void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats) {
     };
 
     const BasicBlock* invalid_block = state->mmu.invalid_code_block();
-    for (const auto& [key, block] : state->mmu.code_cache().block_cache) {
-        (void)key;
+    for (const auto& entry : state->mmu.code_cache().block_entries) {
+        const BasicBlock* block = entry.block;
         if (!block || block == invalid_block || !block->is_valid() || block->inst_count() == 0) continue;
         stats->executed_block_entries += block->exec_count;
         stats->executed_inst_total += block->exec_count * block->inst_count();

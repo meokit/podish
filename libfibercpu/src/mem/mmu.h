@@ -105,27 +105,55 @@ struct BlockCacheKey {
 };
 
 struct BlockCacheKeyHash {
+    using is_avalanching = void;
+
     size_t operator()(const BlockCacheKey& key) const noexcept {
-        size_t hash = static_cast<size_t>(key.host_page_base);
-        hash ^= static_cast<size_t>(key.guest_eip) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
-        return hash;
+        uint64_t hash = static_cast<uint64_t>(key.host_page_base);
+        hash ^= static_cast<uint64_t>(key.guest_eip) + 0x9e3779b97f4a7c15ULL;
+        hash ^= hash >> 30;
+        hash *= 0xbf58476d1ce4e5b9ULL;
+        hash ^= hash >> 27;
+        hash *= 0x94d049bb133111ebULL;
+        hash ^= hash >> 31;
+        return static_cast<size_t>(hash);
     }
 };
 
 struct CodeCacheState {
+    struct BlockHostPageRef {
+        uintptr_t host_page_base = 0;
+        uint32_t page_slot = 0;
+    };
+
+    struct PageBlockRef {
+        uint32_t block_index = 0;
+        uint32_t host_page_index = 0;
+    };
+
+    struct BlockCacheEntry {
+        BlockCacheKey cache_key{};
+        BasicBlock* block = nullptr;
+        std::vector<BlockHostPageRef> host_pages;
+    };
+
     std::pmr::monotonic_buffer_resource block_pool;
-    ankerl::unordered_dense::map<BlockCacheKey, BasicBlock*, BlockCacheKeyHash> block_cache;
+    ankerl::unordered_dense::map<BlockCacheKey, uint32_t, BlockCacheKeyHash> block_cache;
+    std::vector<BlockCacheEntry> block_entries;
     std::vector<BasicBlock*> all_blocks;
     BasicBlock dummy_invalid_block;
-    ankerl::unordered_dense::map<uintptr_t, std::vector<BlockCacheKey>> page_to_blocks;
-    ankerl::unordered_dense::map<BlockCacheKey, std::vector<uintptr_t>, BlockCacheKeyHash> block_to_host_pages;
+    ankerl::unordered_dense::map<uintptr_t, std::vector<PageBlockRef>> page_to_blocks;
 
     CodeCacheState() { InitializeInvalidBasicBlock(dummy_invalid_block); }
 
     void ResetReachability() {
+        for (auto& entry : block_entries) {
+            if (entry.block != nullptr) {
+                entry.block->Invalidate();
+            }
+        }
         block_cache.clear();
+        block_entries.clear();
         page_to_blocks.clear();
-        block_to_host_pages.clear();
     }
 
     void RememberAllocatedBlock(BasicBlock* block) {
@@ -134,72 +162,133 @@ struct CodeCacheState {
 
     BasicBlock* LookupBlock(const BlockCacheKey& key) {
         auto it = block_cache.find(key);
-        return it == block_cache.end() ? nullptr : it->second;
+        return it == block_cache.end() ? nullptr : block_entries[it->second].block;
     }
 
     const BasicBlock* LookupBlock(const BlockCacheKey& key) const {
         auto it = block_cache.find(key);
-        return it == block_cache.end() ? nullptr : it->second;
+        return it == block_cache.end() ? nullptr : block_entries[it->second].block;
     }
 
-    void RegisterBlockHostPages(const BlockCacheKey& cache_key, const std::vector<uintptr_t>& host_page_bases) {
-        block_to_host_pages[cache_key] = host_page_bases;
-        for (uintptr_t host_page_base : host_page_bases) {
-            page_to_blocks[host_page_base].push_back(cache_key);
+    void RegisterBlockHostPages(uint32_t block_index, const std::vector<uintptr_t>& host_page_bases) {
+        auto& entry = block_entries[block_index];
+        entry.host_pages.resize(host_page_bases.size());
+        for (uint32_t i = 0; i < host_page_bases.size(); ++i) {
+            const uintptr_t host_page_base = host_page_bases[i];
+            auto& page_refs = page_to_blocks[host_page_base];
+            const uint32_t page_slot = static_cast<uint32_t>(page_refs.size());
+            page_refs.push_back(PageBlockRef{block_index, i});
+            entry.host_pages[i] = BlockHostPageRef{host_page_base, page_slot};
         }
     }
 
-    void RemoveBlockHostPages(const BlockCacheKey& cache_key) {
-        auto host_pages_it = block_to_host_pages.find(cache_key);
-        if (host_pages_it == block_to_host_pages.end()) return;
-
-        for (uintptr_t host_page_base : host_pages_it->second) {
-            auto page_it = page_to_blocks.find(host_page_base);
+    void RemoveBlockHostPagesByIndex(uint32_t block_index) {
+        auto& entry = block_entries[block_index];
+        for (int32_t i = static_cast<int32_t>(entry.host_pages.size()) - 1; i >= 0; --i) {
+            const auto host_page_ref = entry.host_pages[static_cast<size_t>(i)];
+            auto page_it = page_to_blocks.find(host_page_ref.host_page_base);
             if (page_it == page_to_blocks.end()) continue;
 
-            auto& cache_keys = page_it->second;
-            cache_keys.erase(std::remove(cache_keys.begin(), cache_keys.end(), cache_key), cache_keys.end());
-            if (cache_keys.empty()) {
+            auto& page_refs = page_it->second;
+            const uint32_t remove_slot = host_page_ref.page_slot;
+            if (remove_slot >= page_refs.size()) continue;
+
+            const uint32_t last_slot = static_cast<uint32_t>(page_refs.size() - 1);
+            if (remove_slot != last_slot) {
+                const PageBlockRef moved_ref = page_refs[last_slot];
+                page_refs[remove_slot] = moved_ref;
+                block_entries[moved_ref.block_index].host_pages[moved_ref.host_page_index].page_slot = remove_slot;
+            }
+
+            page_refs.pop_back();
+            if (page_refs.empty()) {
                 page_to_blocks.erase(page_it);
             }
         }
 
-        block_to_host_pages.erase(host_pages_it);
+        entry.host_pages.clear();
+    }
+
+    void RemoveBlockHostPages(const BlockCacheKey& cache_key) {
+        auto block_it = block_cache.find(cache_key);
+        if (block_it == block_cache.end()) return;
+        RemoveBlockHostPagesByIndex(block_it->second);
+    }
+
+    void FixupMovedBlockIndex(uint32_t block_index) {
+        auto& entry = block_entries[block_index];
+        for (uint32_t i = 0; i < entry.host_pages.size(); ++i) {
+            const auto host_page_ref = entry.host_pages[i];
+            auto page_it = page_to_blocks.find(host_page_ref.host_page_base);
+            if (page_it == page_to_blocks.end()) continue;
+
+            auto& page_refs = page_it->second;
+            if (host_page_ref.page_slot >= page_refs.size()) continue;
+
+            auto& page_ref = page_refs[host_page_ref.page_slot];
+            page_ref.block_index = block_index;
+            page_ref.host_page_index = i;
+        }
     }
 
     BasicBlock* CacheDecodedBlock(const BlockCacheKey& cache_key, const std::vector<uintptr_t>& host_page_bases,
                                   BasicBlock* block) {
-        auto [it, inserted] = block_cache.insert({cache_key, block});
-        if (!inserted) {
-            BasicBlock* existing = it->second;
+        auto [it, inserted] = block_cache.try_emplace(cache_key, static_cast<uint32_t>(block_entries.size()));
+        if (inserted) {
+            block_entries.push_back(BlockCacheEntry{cache_key, block, {}});
+        } else {
+            auto& entry = block_entries[it->second];
+            BasicBlock* existing = entry.block;
             if (existing != nullptr && existing->is_valid() && existing != block) {
                 return existing;
             }
 
-            it->second = block;
+            entry.block = block;
+            RemoveBlockHostPagesByIndex(it->second);
         }
 
-        RemoveBlockHostPages(cache_key);
-        RegisterBlockHostPages(cache_key, host_page_bases);
+        RegisterBlockHostPages(it->second, host_page_bases);
         return block;
     }
 
     void EraseBlock(const BlockCacheKey& cache_key) {
-        RemoveBlockHostPages(cache_key);
-        block_cache.erase(cache_key);
+        auto it = block_cache.find(cache_key);
+        if (it == block_cache.end()) return;
+
+        const uint32_t block_index = it->second;
+        auto& entry = block_entries[block_index];
+        if (entry.block != nullptr) {
+            entry.block->Invalidate();
+        }
+
+        RemoveBlockHostPagesByIndex(block_index);
+        block_cache.erase(it);
+
+        const uint32_t last_index = static_cast<uint32_t>(block_entries.size() - 1);
+        if (block_index != last_index) {
+            const BlockCacheKey moved_key = block_entries[last_index].cache_key;
+            block_entries[block_index] = std::move(block_entries[last_index]);
+            auto moved_it = block_cache.find(moved_key);
+            if (moved_it != block_cache.end()) {
+                moved_it->second = block_index;
+            }
+            FixupMovedBlockIndex(block_index);
+        }
+
+        block_entries.pop_back();
     }
 
     void InvalidateHostPage(uintptr_t host_page_base) {
         auto it = page_to_blocks.find(host_page_base);
         if (it == page_to_blocks.end()) return;
 
-        const std::vector<BlockCacheKey> cache_keys = it->second;
-        for (const BlockCacheKey& cache_key : cache_keys) {
-            auto block_it = block_cache.find(cache_key);
-            if (block_it != block_cache.end()) {
-                block_it->second->Invalidate();
+        const std::vector<PageBlockRef> block_refs = it->second;
+        for (const PageBlockRef& block_ref : block_refs) {
+            auto& entry = block_entries[block_ref.block_index];
+            if (entry.block != nullptr) {
+                entry.block->Invalidate();
             }
-            RemoveBlockHostPages(cache_key);
+            RemoveBlockHostPagesByIndex(block_ref.block_index);
         }
     }
 
@@ -211,9 +300,8 @@ struct CodeCacheState {
 
     size_t CountValidBlocks() const {
         size_t count = 0;
-        for (const auto& [key, block] : block_cache) {
-            (void)key;
-            if (block && block->is_valid()) {
+        for (const auto& entry : block_entries) {
+            if (entry.block && entry.block->is_valid()) {
                 count++;
             }
         }
@@ -365,6 +453,14 @@ public:
 private:
     MmuCore* core_ = nullptr;
     SoftTlb tlb;
+    struct BlockLookupCacheEntry {
+        uintptr_t host_page_base = 0;
+        uint32_t guest_eip = 0;
+        BasicBlock* block = nullptr;
+    };
+    static constexpr size_t kBlockLookupCacheSize = 128;
+    static constexpr size_t kBlockLookupCacheMask = kBlockLookupCacheSize - 1;
+    mutable std::array<BlockLookupCacheEntry, kBlockLookupCacheSize> block_lookup_cache{};
 
     // Callbacks
     FaultHandler fault_handler = nullptr;
@@ -467,6 +563,46 @@ private:
     [[nodiscard]] EmuStatus signal_fault(uint32_t addr, int is_write);
     void sync_dirty(GuestAddr vaddr);
 
+    static size_t block_lookup_cache_slot(uintptr_t host_page_base, uint32_t guest_eip) {
+        uint64_t hash = static_cast<uint64_t>(host_page_base);
+        hash ^= static_cast<uint64_t>(guest_eip) * 0x9e3779b97f4a7c15ULL;
+        hash ^= hash >> 32;
+        return static_cast<size_t>(hash) & kBlockLookupCacheMask;
+    }
+
+    void clear_block_lookup_cache() const {
+        for (auto& entry : block_lookup_cache) {
+            entry = {};
+        }
+    }
+
+    void invalidate_block_lookup_cache_entry(uintptr_t host_page_base, uint32_t guest_eip) const {
+        auto& entry = block_lookup_cache[block_lookup_cache_slot(host_page_base, guest_eip)];
+        if (entry.host_page_base == host_page_base && entry.guest_eip == guest_eip) {
+            entry = {};
+        }
+    }
+
+    void invalidate_block_lookup_cache_page(uintptr_t host_page_base) const {
+        for (auto& entry : block_lookup_cache) {
+            if (entry.host_page_base == host_page_base) {
+                entry = {};
+            }
+        }
+    }
+
+    void remember_block_lookup_cache(uintptr_t host_page_base, uint32_t guest_eip, BasicBlock* block) const {
+        if (block == nullptr) return;
+        block_lookup_cache[block_lookup_cache_slot(host_page_base, guest_eip)] =
+            BlockLookupCacheEntry{host_page_base, guest_eip, block};
+    }
+
+    BasicBlock* try_lookup_block_cache(uintptr_t host_page_base, uint32_t guest_eip) const {
+        const auto& entry = block_lookup_cache[block_lookup_cache_slot(host_page_base, guest_eip)];
+        if (entry.host_page_base != host_page_base || entry.guest_eip != guest_eip) return nullptr;
+        return entry.block;
+    }
+
     // Slow Path: Resolve address, handle allocation/permissions/faults
     [[nodiscard]] MemResult<HostAddr> resolve_slow(GuestAddr addr, Property req_perm);
 
@@ -514,6 +650,7 @@ private:
         page_dir = core_ ? core_->page_directory.get() : nullptr;
         release_core(old_core);
         tlb.flush();
+        clear_block_lookup_cache();
     }
 
 public:
@@ -576,12 +713,14 @@ public:
     Mmu() {
         core_ = create_core(std::make_unique<PageDirectory>());
         page_dir = core_->page_directory.get();
+        clear_block_lookup_cache();
     }
 
     Mmu(const Mmu& other) {
         core_ = other.core_;
         page_dir = core_ ? core_->page_directory.get() : nullptr;
         retain_core(core_);
+        clear_block_lookup_cache();
     }
 
     Mmu(Mmu&& other) noexcept {
@@ -589,6 +728,8 @@ public:
         page_dir = core_ ? core_->page_directory.get() : nullptr;
         other.core_ = nullptr;
         other.page_dir = nullptr;
+        clear_block_lookup_cache();
+        other.clear_block_lookup_cache();
     }
 
     Mmu& operator=(const Mmu& other) {
@@ -599,6 +740,7 @@ public:
         page_dir = core_ ? core_->page_directory.get() : nullptr;
         release_core(old_core);
         tlb.flush();
+        clear_block_lookup_cache();
         return *this;
     }
 
@@ -610,6 +752,8 @@ public:
         other.core_ = nullptr;
         other.page_dir = nullptr;
         tlb.flush();
+        clear_block_lookup_cache();
+        other.clear_block_lookup_cache();
         return *this;
     }
 
@@ -758,13 +902,29 @@ public:
     void remember_allocated_block(BasicBlock* block) { code_cache().RememberAllocatedBlock(block); }
 
     [[nodiscard]] BasicBlock* lookup_cached_block(uint32_t eip) {
-        auto cache_key = make_block_cache_key(eip);
-        return cache_key ? code_cache().LookupBlock(*cache_key) : nullptr;
+        auto host_page_base = try_get_host_page_base(eip);
+        if (!host_page_base) return nullptr;
+
+        if (BasicBlock* cached = try_lookup_block_cache(*host_page_base, eip)) {
+            return cached;
+        }
+
+        BasicBlock* block = code_cache().LookupBlock(BlockCacheKey{*host_page_base, eip});
+        remember_block_lookup_cache(*host_page_base, eip, block);
+        return block;
     }
 
     [[nodiscard]] const BasicBlock* lookup_cached_block(uint32_t eip) const {
-        auto cache_key = make_block_cache_key(eip);
-        return cache_key ? code_cache().LookupBlock(*cache_key) : nullptr;
+        auto host_page_base = try_get_host_page_base(eip);
+        if (!host_page_base) return nullptr;
+
+        if (BasicBlock* cached = try_lookup_block_cache(*host_page_base, eip)) {
+            return cached;
+        }
+
+        const BasicBlock* block = code_cache().LookupBlock(BlockCacheKey{*host_page_base, eip});
+        remember_block_lookup_cache(*host_page_base, eip, const_cast<BasicBlock*>(block));
+        return block;
     }
 
     [[nodiscard]] BasicBlock* cache_decoded_block(uint32_t cache_eip, BasicBlock* block) {
@@ -774,14 +934,20 @@ public:
         const uint32_t last_guest_addr =
             block && block->end_eip > cache_eip ? static_cast<uint32_t>(block->end_eip - 1) : cache_eip;
         auto host_page_bases = collect_host_page_bases_for_guest_range(cache_eip, last_guest_addr - cache_eip + 1);
-        return code_cache().CacheDecodedBlock(*cache_key, host_page_bases, block);
+        block = code_cache().CacheDecodedBlock(*cache_key, host_page_bases, block);
+        remember_block_lookup_cache(cache_key->host_page_base, cache_key->guest_eip, block);
+        return block;
     }
 
-    void reset_code_cache() { code_cache().ResetReachability(); }
+    void reset_code_cache() {
+        clear_block_lookup_cache();
+        code_cache().ResetReachability();
+    }
 
     void erase_cached_block(uint32_t guest_eip) {
         auto cache_key = make_block_cache_key(guest_eip);
         if (cache_key) {
+            invalidate_block_lookup_cache_entry(cache_key->host_page_base, cache_key->guest_eip);
             code_cache().EraseBlock(*cache_key);
         }
     }
@@ -789,21 +955,30 @@ public:
     void invalidate_code_cache_page(uint32_t guest_addr) {
         auto host_page_base = try_get_host_page_base(guest_addr);
         if (host_page_base) {
+            invalidate_block_lookup_cache_page(*host_page_base);
             code_cache().InvalidateHostPage(*host_page_base);
         }
     }
 
     void invalidate_code_cache_range(uint32_t addr, uint32_t size) {
-        code_cache().InvalidateHostPages(collect_host_page_bases_for_guest_range(addr, size));
+        auto host_page_bases = collect_host_page_bases_for_guest_range(addr, size);
+        for (uintptr_t host_page_base : host_page_bases) {
+            invalidate_block_lookup_cache_page(host_page_base);
+        }
+        code_cache().InvalidateHostPages(host_page_bases);
     }
 
     void invalidate_code_cache_host_pages(const std::vector<uintptr_t>& host_page_bases) {
+        for (uintptr_t host_page_base : host_page_bases) {
+            invalidate_block_lookup_cache_page(host_page_base);
+        }
         code_cache().InvalidateHostPages(host_page_bases);
     }
 
     void invalidate_code_cache_host_pages(const uintptr_t* host_page_bases, size_t count) {
         if (!host_page_bases || count == 0) return;
         for (size_t i = 0; i < count; ++i) {
+            invalidate_block_lookup_cache_page(host_page_bases[i]);
             code_cache().InvalidateHostPage(host_page_bases[i]);
         }
     }

@@ -97,6 +97,27 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
+    public void SharedClone_ResetAllCodeCache_ForcesParentToRehydrateBlocks()
+    {
+        using var parent = new Engine();
+        InstallSimpleCode(parent);
+        WarmSimpleCode(parent);
+
+        using var child = parent.Clone(true);
+
+        // Prime the engine-local lookup cache before clearing the shared block map.
+        WarmSimpleCode(parent);
+        Assert.True(ReadCodeCacheStats(parent).BlockCacheSize > 0);
+
+        child.ResetAllCodeCache();
+        Assert.Equal(0, ReadCodeCacheStats(parent).BlockCacheSize);
+
+        WarmSimpleCode(parent);
+
+        Assert.True(ReadCodeCacheStats(parent).BlockCacheSize > 0);
+    }
+
+    [Fact]
     public void SharedClone_ResetCodeCacheByRange_AndMemUnmap_InvalidateSharedCore()
     {
         using var parent = new Engine();

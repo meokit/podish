@@ -176,6 +176,48 @@ public class RmapTests
         }
     }
 
+    [Fact]
+    public void MprotectSplit_RebuildsDirectRefsOnlyForResidentPages()
+    {
+        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var engine = new Engine();
+        var mm = new VMAManager();
+
+        const uint addr = 0x55000000;
+        var secondPageAddr = addr + LinuxConstants.PageSize;
+        mm.Mmap(addr, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
+            MapFlags.Shared | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "MAP_SHARED_ANON_2P", engine);
+        Assert.True(mm.HandleFault(secondPageAddr, false, engine));
+
+        var originalSecondVma = Assert.IsType<VmArea>(mm.FindVmArea(secondPageAddr));
+        var secondPageIndex = originalSecondVma.GetPageIndex(secondPageAddr);
+        Assert.Equal(IntPtr.Zero, originalSecondVma.VmMapping!.PeekPage(originalSecondVma.GetPageIndex(addr)));
+        var secondPagePtr = originalSecondVma.VmMapping.PeekPage(secondPageIndex);
+        Assert.NotEqual(IntPtr.Zero, secondPagePtr);
+
+        Assert.Equal(0, mm.Mprotect(secondPageAddr, LinuxConstants.PageSize, Protection.Read, engine, out _));
+
+        var secondHitsAfterSplit = ResolveHits(secondPagePtr);
+        var secondHit = Assert.Single(secondHitsAfterSplit);
+        Assert.Same(mm, secondHit.Mm);
+        Assert.Equal(secondPageAddr, secondHit.Vma.Start);
+        Assert.Equal(secondPageAddr + LinuxConstants.PageSize, secondHit.Vma.End);
+
+        Assert.True(mm.HandleFault(addr, false, engine));
+        var firstVma = Assert.IsType<VmArea>(mm.FindVmArea(addr));
+        var firstPagePtr = firstVma.VmMapping!.PeekPage(firstVma.GetPageIndex(addr));
+        Assert.NotEqual(IntPtr.Zero, firstPagePtr);
+
+        var firstHits = ResolveHits(firstPagePtr);
+        var firstHit = Assert.Single(firstHits);
+        Assert.Same(mm, firstHit.Mm);
+        Assert.Equal(addr, firstHit.Vma.Start);
+        Assert.Equal(addr + LinuxConstants.PageSize, firstHit.Vma.End);
+
+        secondHitsAfterSplit = ResolveHits(secondPagePtr);
+        Assert.Single(secondHitsAfterSplit);
+    }
+
     private static List<RmapHit> ResolveHits(IntPtr ptr)
     {
         var hits = new List<RmapHit>();
