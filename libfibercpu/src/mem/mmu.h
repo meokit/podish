@@ -222,6 +222,128 @@ struct CodeCacheState {
 };
 
 struct MmuCore {
+    struct GuestPageSet {
+        static constexpr uint32_t InlineCapacity = 2;
+
+        union Storage {
+            std::array<uint32_t, InlineCapacity> inline_pages;
+            uint32_t* spill;
+
+            Storage() : inline_pages{} {}
+        } storage;
+
+        uint32_t size = 0;
+        uint32_t capacity = InlineCapacity;
+
+        GuestPageSet() = default;
+
+        GuestPageSet(const GuestPageSet& other) { copy_from(other); }
+
+        GuestPageSet& operator=(const GuestPageSet& other) {
+            if (this != &other) {
+                reset();
+                copy_from(other);
+            }
+            return *this;
+        }
+
+        GuestPageSet(GuestPageSet&& other) noexcept { move_from(std::move(other)); }
+
+        GuestPageSet& operator=(GuestPageSet&& other) noexcept {
+            if (this != &other) {
+                reset();
+                move_from(std::move(other));
+            }
+            return *this;
+        }
+
+        ~GuestPageSet() { reset(); }
+
+        [[nodiscard]] bool empty() const { return size == 0; }
+
+        [[nodiscard]] bool contains(uint32_t page) const {
+            const uint32_t* pages = data();
+            for (uint32_t i = 0; i < size; ++i) {
+                if (pages[i] == page) return true;
+            }
+            return false;
+        }
+
+        bool push_unique(uint32_t page) {
+            if (contains(page)) return false;
+            push_back(page);
+            return true;
+        }
+
+        bool erase(uint32_t page) {
+            uint32_t* pages = data();
+            for (uint32_t i = 0; i < size; ++i) {
+                if (pages[i] != page) continue;
+                pages[i] = pages[size - 1];
+                --size;
+                return true;
+            }
+            return false;
+        }
+
+        [[nodiscard]] const uint32_t* begin() const { return data(); }
+        [[nodiscard]] const uint32_t* end() const { return data() + size; }
+
+    private:
+        [[nodiscard]] bool is_inline() const { return capacity == InlineCapacity; }
+
+        [[nodiscard]] uint32_t* data() { return is_inline() ? storage.inline_pages.data() : storage.spill; }
+
+        [[nodiscard]] const uint32_t* data() const { return is_inline() ? storage.inline_pages.data() : storage.spill; }
+
+        void push_back(uint32_t page) {
+            if (size == capacity) grow();
+            data()[size++] = page;
+        }
+
+        void grow() {
+            const uint32_t new_capacity = capacity * 2;
+            auto* new_pages = new uint32_t[new_capacity];
+            std::copy_n(data(), size, new_pages);
+            if (!is_inline()) delete[] storage.spill;
+            storage.spill = new_pages;
+            capacity = new_capacity;
+        }
+
+        void reset() {
+            if (!is_inline()) delete[] storage.spill;
+            storage.inline_pages = {};
+            size = 0;
+            capacity = InlineCapacity;
+        }
+
+        void copy_from(const GuestPageSet& other) {
+            size = other.size;
+            capacity = other.capacity;
+            if (other.is_inline()) {
+                storage.inline_pages = other.storage.inline_pages;
+                return;
+            }
+
+            storage.spill = new uint32_t[capacity];
+            std::copy_n(other.storage.spill, size, storage.spill);
+        }
+
+        void move_from(GuestPageSet&& other) {
+            size = other.size;
+            capacity = other.capacity;
+            if (other.is_inline()) {
+                storage.inline_pages = other.storage.inline_pages;
+            } else {
+                storage.spill = other.storage.spill;
+            }
+
+            other.storage.inline_pages = {};
+            other.size = 0;
+            other.capacity = InlineCapacity;
+        }
+    };
+
     std::atomic<uint32_t> ref_count{1};
     std::unique_ptr<PageDirectory> page_directory;
     uintptr_t identity = 0;
@@ -230,7 +352,7 @@ struct MmuCore {
     struct ExternalAliasState {
         uint32_t exec_count = 0;
         uint32_t write_count = 0;
-        std::vector<uint32_t> guest_pages;
+        GuestPageSet guest_pages;
     };
     ankerl::unordered_dense::map<uintptr_t, ExternalAliasState> external_aliases;
 };
@@ -275,7 +397,7 @@ public:
         if (it == core_->external_aliases.end()) return;
 
         auto& guest_pages = it->second.guest_pages;
-        guest_pages.erase(std::remove(guest_pages.begin(), guest_pages.end(), guest_page), guest_pages.end());
+        guest_pages.erase(guest_page);
         if (has_property(perms, Property::Exec) && it->second.exec_count > 0) it->second.exec_count--;
         if (has_property(perms, Property::Write) && it->second.write_count > 0) it->second.write_count--;
         if (it->second.exec_count == 0 && it->second.write_count == 0 && guest_pages.empty())
@@ -286,14 +408,16 @@ public:
         if (!core_ || !should_track_external_alias(perms, page)) return;
 
         auto& state = core_->external_aliases[reinterpret_cast<uintptr_t>(page)];
-        if (std::find(state.guest_pages.begin(), state.guest_pages.end(), guest_page) == state.guest_pages.end())
-            state.guest_pages.push_back(guest_page);
+        state.guest_pages.push_unique(guest_page);
         if (has_property(perms, Property::Exec)) state.exec_count++;
         if (has_property(perms, Property::Write)) state.write_count++;
     }
 
     void refresh_force_write_slow_for_host_page(HostAddr page) {
         if (!core_ || page == nullptr) return;
+
+        auto* dir = current_page_directory();
+        if (!dir) return;
 
         auto it = core_->external_aliases.find(reinterpret_cast<uintptr_t>(page));
         if (it == core_->external_aliases.end()) return;
@@ -302,9 +426,6 @@ public:
         // Keep the page-table bit as the single source of truth for write-fast-path
         // eligibility so read-path refill never needs to consult alias metadata.
         for (uint32_t guest_page : it->second.guest_pages) {
-            auto* dir = current_page_directory();
-            if (!dir) return;
-
             const uint32_t l1_idx = guest_page >> 22;
             const uint32_t l2_idx = (guest_page >> 12) & 0x3FF;
             auto& chunk = dir->l1_directory[l1_idx];
