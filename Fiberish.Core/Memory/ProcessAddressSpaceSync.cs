@@ -230,7 +230,10 @@ internal static class ProcessAddressSpaceSync
         SyncSharedMappingsForEngines(vmaManager, snapshot.Engines, addr, len);
         var rc = vmaManager.Mprotect(addr, len, prot, engine, out var resetCodeCacheRange);
         if (rc == 0)
+        {
+            TbCoh.ApplyWxRange(vmaManager, addr, AlignLengthToPage(len));
             PublishInvalidation(vmaManager, engine, addr, len, resetCodeCacheRange);
+        }
         return rc;
     }
 
@@ -238,6 +241,7 @@ internal static class ProcessAddressSpaceSync
     {
         if (vmaManager == null) return;
         using var scope = EnterAddressSpaceScope(engine, process);
+        TbCoh.SyncWp(vmaManager, engine);
         if (engine.AddressSpaceMapSequenceSeen >= vmaManager.CurrentMapSequence) return;
 
         var ranges = engine.AddressSpaceInvalidationScratch;
@@ -267,6 +271,7 @@ internal static class ProcessAddressSpaceSync
             MunmapCore(vmaManager, engine, addr, alignedLen);
 
         var mapped = vmaManager.Mmap(addr, len, perms, flags, file, offset, name, engine);
+        TbCoh.ApplyWxRange(vmaManager, mapped, alignedLen);
         PublishInvalidation(vmaManager, engine, mapped, alignedLen, true);
         return mapped;
     }

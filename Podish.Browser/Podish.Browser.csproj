@@ -45,13 +45,21 @@
     </ItemGroup>
 
     <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0"/>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0"/>
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="../Podish.Core/Podish.Core.csproj">
+            <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
             <AdditionalProperties>FiberishForceBrowserWasm=true;WasmBuildNative=true;RuntimeIdentifier=browser-wasm</AdditionalProperties>
         </ProjectReference>
         <ProjectReference Include="../Fiberish.Core/Fiberish.Core.csproj">
+            <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
             <AdditionalProperties>FiberishForceBrowserWasm=true;WasmBuildNative=true;RuntimeIdentifier=browser-wasm</AdditionalProperties>
         </ProjectReference>
         <ProjectReference Include="../Fiberish.X86/Fiberish.X86.csproj">
+            <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
             <AdditionalProperties>FiberishForceBrowserWasm=true;WasmBuildNative=true;RuntimeIdentifier=browser-wasm</AdditionalProperties>
         </ProjectReference>
     </ItemGroup>
@@ -64,15 +72,15 @@
 
     <ItemGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
         <Reference Include="Podish.Core">
-            <HintPath>$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Podish.Core.dll</HintPath>
+            <HintPath>$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/Podish.Core.dll</HintPath>
             <Private>true</Private>
         </Reference>
         <Reference Include="Fiberish.Core">
-            <HintPath>$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.Core.dll</HintPath>
+            <HintPath>$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/Fiberish.Core.dll</HintPath>
             <Private>true</Private>
         </Reference>
         <Reference Include="Fiberish.X86">
-            <HintPath>$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.X86.dll</HintPath>
+            <HintPath>$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/browser-wasm/Fiberish.X86.dll</HintPath>
             <Private>true</Private>
         </Reference>
         <NativeFileReference Include="$(MSBuildProjectDirectory)/../Fiberish.X86/build_native/browser-wasm/libfibercpu.a"/>
@@ -81,12 +89,12 @@
     <Target Name="CopyBrowserSpecificProjectOutputs" AfterTargets="Build"
             Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
         <ItemGroup>
-            <BrowserSpecificManaged Include="$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Podish.Core.dll"/>
-            <BrowserSpecificManaged Include="$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.Core.dll"/>
-            <BrowserSpecificManaged Include="$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.X86.dll"/>
-            <BrowserSpecificSymbols Include="$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Podish.Core.pdb" Condition="Exists('$(MSBuildProjectDirectory)/../../Podish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Podish.Core.pdb')"/>
-            <BrowserSpecificSymbols Include="$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.Core.pdb" Condition="Exists('$(MSBuildProjectDirectory)/../../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.Core.pdb')"/>
-            <BrowserSpecificSymbols Include="$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.X86.pdb" Condition="Exists('$(MSBuildProjectDirectory)/../../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/browser-wasm/$(TargetFramework)/browser-wasm/Fiberish.X86.pdb')"/>
+            <BrowserSpecificManaged Include="$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/Podish.Core.dll"/>
+            <BrowserSpecificManaged Include="$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/Fiberish.Core.dll"/>
+            <BrowserSpecificManaged Include="$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/browser-wasm/Fiberish.X86.dll"/>
+            <BrowserSpecificSymbols Include="$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/Podish.Core.pdb" Condition="Exists('$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/Podish.Core.pdb')"/>
+            <BrowserSpecificSymbols Include="$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/Fiberish.Core.pdb" Condition="Exists('$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/browser-wasm/Fiberish.Core.pdb')"/>
+            <BrowserSpecificSymbols Include="$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/browser-wasm/Fiberish.X86.pdb" Condition="Exists('$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/browser-wasm/Fiberish.X86.pdb')"/>
         </ItemGroup>
 
         <Copy SourceFiles="@(BrowserSpecificManaged)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="false"/>

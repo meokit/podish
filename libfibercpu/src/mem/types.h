@@ -40,6 +40,7 @@ enum class Property : uint32_t {
     Exec = 1 << 2,
     Dirty = 1 << 3,
     External = 1 << 4,  // Page memory is not owned by MMU (for mmap passthrough)
+    ForceWriteSlow = 1 << 5,
     Valid = 1 << 11,
     // Combinations
     RW = Read | Write,

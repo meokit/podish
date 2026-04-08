@@ -107,14 +107,7 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
 
     // 4. Fill TLB
     if (!mem_hook) {
-        bool is_exec = has_property(current_perm, Property::Exec);
         tlb.fill(addr, page_base, current_perm);
-
-        // Trap SMC (Self-Modifying Code) on executable pages
-        if (is_exec) {
-            const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
-            tlb.write_tlb[idx].tag = 1;  // Invalidate write tag to force slow-path for SMC detection
-        }
     }
 
     return page_base + offset;
@@ -222,8 +215,9 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
 #if !defined(__wasm32__)
         utlb->tag_r = target_tag;
         utlb->addend = entry.addend;
-        // Writing to executable pages must go through the slow path so SMC invalidation can fire.
-        utlb->tag_w = (has_property(entry.perm, Property::Write) && !has_property(entry.perm, Property::Exec))
+        // Read-path refill must stay cheap: whether writes may fast-path is
+        // encoded entirely in ForceWriteSlow, with no alias lookup here.
+        utlb->tag_w = (has_property(entry.perm, Property::Write) && !has_property(entry.perm, Property::ForceWriteSlow))
                           ? target_tag
                           : std::numeric_limits<decltype(utlb->tag_w)>::max();
 #endif
@@ -350,7 +344,7 @@ template <typename T>
 [[nodiscard]] MemResult<void> Mmu::write_slow(GuestAddr addr, T val) {
     if (smc_handler) {
         Property p = get_property(addr);
-        if (has_property(p, Property::Exec)) {
+        if (has_property(p, Property::ForceWriteSlow)) {
             EmuState* state = get_state();
             if (ShouldInterceptExecWriteForSmc(state, addr)) {
                 state->smc_write_to_exec = true;
@@ -428,11 +422,12 @@ template <typename T>
     if (smc_handler) {
         Property prop1 = get_property(addr);
         Property prop2 = get_property(addr2);
-        const bool touches_exec = has_property(prop1, Property::Exec) || has_property(prop2, Property::Exec);
+        const bool touches_exec =
+            has_property(prop1, Property::ForceWriteSlow) || has_property(prop2, Property::ForceWriteSlow);
         if (touches_exec) {
             EmuState* state = get_state();
-            if ((has_property(prop1, Property::Exec) && ShouldInterceptExecWriteForSmc(state, addr)) ||
-                (has_property(prop2, Property::Exec) && ShouldInterceptExecWriteForSmc(state, addr2))) {
+            if ((has_property(prop1, Property::ForceWriteSlow) && ShouldInterceptExecWriteForSmc(state, addr)) ||
+                (has_property(prop2, Property::ForceWriteSlow) && ShouldInterceptExecWriteForSmc(state, addr2))) {
                 state->smc_write_to_exec = true;
                 return std::unexpected(FaultCode::PageFault);
             }
@@ -447,10 +442,10 @@ template <typename T>
 
     if (smc_handler) {
         Property prop1 = get_property(addr);
-        if (has_property(prop1, Property::Exec)) smc_handler(smc_opaque, addr);
+        if (has_property(prop1, Property::ForceWriteSlow)) smc_handler(smc_opaque, addr);
 
         Property prop2 = get_property(addr2);
-        if (has_property(prop2, Property::Exec)) smc_handler(smc_opaque, addr2);
+        if (has_property(prop2, Property::ForceWriteSlow)) smc_handler(smc_opaque, addr2);
     }
 
     std::byte* src = reinterpret_cast<std::byte*>(&val);

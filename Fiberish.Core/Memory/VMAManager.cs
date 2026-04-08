@@ -25,6 +25,7 @@ public class VMAManager
     private readonly Dictionary<Inode, int> _mappedInodeRefCounts = [];
 
     private readonly List<CodeCacheResetEntry> _pendingCodeCacheResets = [];
+    private readonly HashSet<uint> _tbWpPages = [];
     private readonly List<VmArea> _vmas = [];
     private int _futexKeyRefCount = 1;
     private VmArea? _lastFaultVma;
@@ -111,6 +112,31 @@ public class VMAManager
             removeCount++;
         if (removeCount > 0)
             _pendingCodeCacheResets.RemoveRange(0, removeCount);
+    }
+
+    internal void MarkTbWp(uint pageStart)
+    {
+        _tbWpPages.Add(pageStart & LinuxConstants.PageMask);
+    }
+
+    internal void UnmarkTbWp(uint pageStart)
+    {
+        _tbWpPages.Remove(pageStart & LinuxConstants.PageMask);
+    }
+
+    internal IReadOnlyList<uint> SnapshotTbWpPages()
+    {
+        if (_tbWpPages.Count == 0) return Array.Empty<uint>();
+        return _tbWpPages.ToArray();
+    }
+
+    internal void ClearTbWpRange(uint addr, uint len)
+    {
+        if (len == 0 || _tbWpPages.Count == 0) return;
+        var (start, endExclusive) = ComputePageAlignedRange(addr, len);
+        if (endExclusive <= start) return;
+
+        _tbWpPages.RemoveWhere(page => page >= start && page < endExclusive);
     }
 
     private void CompactCodeCacheResetRanges(long sequence)
@@ -291,6 +317,38 @@ public class VMAManager
     private static uint GetVmaPageIndex(VmArea vma, uint guestPageStart)
     {
         return vma.GetPageIndex(guestPageStart);
+    }
+
+    internal void CollectManagedHostPagesInRange(uint addr, uint len, HashSet<HostPage> output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        if (len == 0) return;
+
+        var endExclusive = ComputeRangeEnd(addr, len);
+        foreach (var vma in FindVmAreasInRange(addr, endExclusive))
+        {
+            var overlapStart = Math.Max(vma.Start, addr);
+            var overlapEnd = Math.Min(vma.End, endExclusive);
+            CollectHostPagesForVmaRange(vma, overlapStart, overlapEnd, output);
+        }
+    }
+
+    private static void CollectHostPagesForVmaRange(VmArea vma, uint guestStart, uint guestEndExclusive,
+        HashSet<HostPage> output)
+    {
+        ArgumentNullException.ThrowIfNull(vma);
+        ArgumentNullException.ThrowIfNull(output);
+        if (guestStart >= guestEndExclusive) return;
+
+        var startPage = guestStart & LinuxConstants.PageMask;
+        var endPageExclusive = (guestEndExclusive + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
+        for (var page = startPage; page < endPageExclusive; page += LinuxConstants.PageSize)
+        {
+            var pageIndex = vma.GetPageIndex(page);
+            var hostPage = vma.VmAnonVma?.PeekHostPage(pageIndex) ?? vma.VmMapping?.PeekHostPage(pageIndex);
+            if (hostPage != null)
+                output.Add(hostPage);
+        }
     }
 
     private MappedPageBinding CreateResolvedPageBinding(VmArea vma, uint pageIndex, IntPtr pagePtr)
@@ -843,6 +901,7 @@ public class VMAManager
     public void Munmap(uint addr, uint length, Engine engine)
     {
         if (length == 0) return;
+        var unmappedHostPages = new HashSet<HostPage>();
         uint end;
         try
         {
@@ -865,6 +924,7 @@ public class VMAManager
             if (addr <= vma.Start && end >= vma.End)
             {
                 SyncVmArea(vma, engine, vma.Start, vma.End);
+                CollectHostPagesForVmaRange(vma, vma.Start, vma.End, unmappedHostPages);
                 ReleaseUnmappedObjectPages(vma, vma.Start, vma.End);
                 UnregisterVmAreaAttachments(vma);
                 if (ReferenceEquals(_lastFaultVma, vma)) _lastFaultVma = null;
@@ -880,6 +940,7 @@ public class VMAManager
             if (addr > vma.Start && end < vma.End)
             {
                 SyncVmArea(vma, engine, addr, end);
+                CollectHostPagesForVmaRange(vma, addr, end, unmappedHostPages);
                 ReleaseUnmappedObjectPages(vma, addr, end);
                 UnregisterVmAreaAttachments(vma);
                 var tailStart = end;
@@ -920,6 +981,7 @@ public class VMAManager
             if (addr <= vma.Start && end < vma.End)
             {
                 SyncVmArea(vma, engine, vma.Start, end);
+                CollectHostPagesForVmaRange(vma, vma.Start, end, unmappedHostPages);
                 ReleaseUnmappedObjectPages(vma, vma.Start, end);
                 UnregisterVmAreaAttachments(vma);
                 var diff = end - vma.Start;
@@ -936,6 +998,7 @@ public class VMAManager
             if (addr > vma.Start && end >= vma.End)
             {
                 SyncVmArea(vma, engine, addr, vma.End);
+                CollectHostPagesForVmaRange(vma, addr, vma.End, unmappedHostPages);
                 ReleaseUnmappedObjectPages(vma, addr, vma.End);
                 UnregisterVmAreaAttachments(vma);
                 vma.End = addr;
@@ -950,6 +1013,9 @@ public class VMAManager
             false,
             true,
             true);
+        ClearTbWpRange(addr, length);
+        foreach (var hostPage in unmappedHostPages)
+            TbCoh.ApplyWx(hostPage);
     }
 
     public int Mprotect(uint addr, uint len, Protection prot, Engine engine, out bool resetCodeCacheRange)
@@ -1470,7 +1536,11 @@ public class VMAManager
         byte perms,
         Engine engine)
     {
-        return EnsureExternalMapping(pageStart, CreateResolvedPageBinding(vma, pageIndex, pagePtr), perms, engine);
+        var binding = CreateResolvedPageBinding(vma, pageIndex, pagePtr);
+        var result = EnsureExternalMapping(pageStart, binding, perms, engine);
+        if (result == FaultResult.Handled && (vma.Perms & Protection.Exec) != 0)
+            TbCoh.ApplyWx(binding.HostPage);
+        return result;
     }
 
     private FaultResult ResolveAndMapSharedBackingPage(
@@ -1503,6 +1573,7 @@ public class VMAManager
         anonVma.SetPage(pageIndex, pagePtr);
         if (markDirty)
             anonVma.MarkDirty(pageIndex);
+        UnmarkTbWp(pageStart);
         return EnsureExternalMapping(pageStart,
             MappedPageBinding.FromAnonVmaPage(anonVma, pageIndex, anonVma.PeekVmPage(pageIndex)!),
             perms, engine);
@@ -1544,6 +1615,7 @@ public class VMAManager
         if (nonOwnerRefs <= 0)
         {
             privateObject.MarkDirty(pageIndex);
+            TbCoh.OnWriteFault(this, pageStart, privateObject.PeekVmPage(pageIndex)!.HostPage);
             return EnsureExternalMapping(pageStart,
                 MappedPageBinding.FromAnonVmaPage(privateObject, pageIndex, privateObject.PeekVmPage(pageIndex)!),
                 perms, engine);
@@ -1584,6 +1656,25 @@ public class VMAManager
         var vmaRelativeOffset = vma.GetRelativeOffsetForPageIndex(pageIndex);
         var absoluteFileOffset = vma.GetAbsoluteFileOffsetForPageIndex(pageIndex);
         var tempPerms = vma.Perms | Protection.Write;
+        if (isWrite)
+        {
+            var writeSourceResult = ResolveSharedBackingPage(vma, pageIndex, vmaRelativeOffset, absoluteFileOffset,
+                WantsWritableMappedFilePage(vma), engine, out var writePagePtr);
+            if (writeSourceResult != FaultResult.Handled)
+                return writeSourceResult;
+
+            TbCoh.OnWriteFault(this, pageStart, CreateResolvedPageBinding(vma, pageIndex, writePagePtr).HostPage);
+            var writeMapResult = MapResolvedBackingPage(vma, pageStart, pageIndex, writePagePtr, (byte)tempPerms,
+                engine);
+            if (writeMapResult != FaultResult.Handled)
+                return writeMapResult;
+
+            if (tempPerms != vma.Perms)
+                engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)vma.Perms);
+
+            return FaultResult.Handled;
+        }
+
         var mappingResult = ResolveAndMapSharedBackingPage(vma, pageStart, pageIndex, vmaRelativeOffset,
             absoluteFileOffset, WantsWritableMappedFilePage(vma), (byte)tempPerms, engine);
         if (mappingResult != FaultResult.Handled)
@@ -1606,9 +1697,14 @@ public class VMAManager
         if (!isWrite)
         {
             if (existingPrivate != IntPtr.Zero)
-                return EnsureExternalMapping(pageStart,
-                    MappedPageBinding.FromAnonVmaPage(privateObject!, pageIndex, privateObject!.PeekVmPage(pageIndex)!),
-                    readPerms, engine);
+            {
+                var binding =
+                    MappedPageBinding.FromAnonVmaPage(privateObject!, pageIndex, privateObject!.PeekVmPage(pageIndex)!);
+                var result = EnsureExternalMapping(pageStart, binding, readPerms, engine);
+                if (result == FaultResult.Handled && (vma.Perms & Protection.Exec) != 0)
+                    TbCoh.ApplyWx(binding.HostPage);
+                return result;
+            }
 
             return ResolveAndMapSharedBackingPage(vma, pageStart, pageIndex, vmaRelativeOffset, absoluteFileOffset,
                 false, readPerms, engine);

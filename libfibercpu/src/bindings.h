@@ -71,12 +71,14 @@ void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base);
 void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms);
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size);
 void X86_ReprotectMappedRange(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms);
-// DEPRECATED: Use ResolvePtr + direct memcpy instead. These are slow (byte-by-byte) and for testing only.
+// DEPRECATED: Use ResolvePtrForRead/ResolvePtrForWrite + direct memcpy instead. These are slow (byte-by-byte) and for
+// testing only.
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size);
 void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size);
 int X86_MemIsDirty(EmuState* state, uint32_t addr);
 // Returns physical address (pointer) if valid, or NULL if not mapped/no-perm
-void* X86_ResolvePtr(EmuState* state, uint32_t addr, int is_write);
+void* X86_ResolvePtrForRead(EmuState* state, uint32_t addr);
+void* X86_ResolvePtrForWrite(EmuState* state, uint32_t addr);
 // Collect present page mappings in [addr, addr + size), one record per mapped page.
 size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86_PageMapping* buffer, size_t max_count);
 // Allocate a single page with given permissions, returns host pointer to page
@@ -114,6 +116,7 @@ void X86_ResetAllCodeCache(EmuState* state);
 void X86_FlushMmuTlb(EmuState* state);
 void X86_ResetMemory(EmuState* state);
 void X86_ResetCodeCacheByRange(EmuState* state, uint32_t addr, uint32_t size);
+void X86_InvalidateCodeCacheHostPages(EmuState* state, const void* const* host_pages, size_t count);
 
 // Diagnostics
 int32_t X86_GetFaultVector(EmuState* state);

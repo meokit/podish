@@ -461,7 +461,7 @@ public class Engine : IDisposable
     public unsafe IntPtr GetPhysicalAddressSafe(uint vaddr, bool isWrite)
     {
         EnsureAddressSpaceSynchronized();
-        return (IntPtr)X86Native.ResolvePtr(State, vaddr, isWrite ? 1 : 0);
+        return (IntPtr)(isWrite ? X86Native.ResolvePtrForWrite(State, vaddr) : X86Native.ResolvePtrForRead(State, vaddr));
     }
 
     public unsafe bool CopyToUser(uint vaddr, ReadOnlySpan<byte> data)
@@ -475,10 +475,10 @@ public class Engine : IDisposable
             while (written < len)
             {
                 var currAddr = vaddr + (uint)written;
-                var ptr = X86Native.ResolvePtr(State, currAddr, 1); // 1 = Write
+                var ptr = X86Native.ResolvePtrForWrite(State, currAddr);
                 if (ptr == null)
                     if (TryResolveUserAccessFault(currAddr, true))
-                        ptr = X86Native.ResolvePtr(State, currAddr, 1);
+                        ptr = X86Native.ResolvePtrForWrite(State, currAddr);
 
                 if (ptr == null) return false;
 
@@ -504,10 +504,10 @@ public class Engine : IDisposable
             while (read < len)
             {
                 var currAddr = vaddr + (uint)read;
-                var ptr = X86Native.ResolvePtr(State, currAddr, 0); // 0 = Read
+                var ptr = X86Native.ResolvePtrForRead(State, currAddr);
                 if (ptr == null)
                     if (TryResolveUserAccessFault(currAddr, false))
-                        ptr = X86Native.ResolvePtr(State, currAddr, 0);
+                        ptr = X86Native.ResolvePtrForRead(State, currAddr);
 
                 if (ptr == null) return false;
 
@@ -548,7 +548,7 @@ public class Engine : IDisposable
             while (read < len)
             {
                 var currAddr = vaddr + (uint)read;
-                var ptr = X86Native.ResolvePtr(State, currAddr, 0); // 0 = Read
+                var ptr = X86Native.ResolvePtrForRead(State, currAddr);
                 if (ptr == null) return read;
 
                 var pageOffset = currAddr & 0xFFF;
@@ -572,14 +572,14 @@ public class Engine : IDisposable
 
         while (sb.Length < limit)
         {
-            var ptr = X86Native.ResolvePtr(State, current, 0); // Read
+            var ptr = X86Native.ResolvePtrForRead(State, current);
             if (ptr == null)
                 if (TryResolveUserAccessFault(current, false))
-                    ptr = X86Native.ResolvePtr(State, current, 0);
+                    ptr = X86Native.ResolvePtrForRead(State, current);
 
             if (ptr == null) return null; // Fault
 
-            // NOTE: X86_ResolvePtr/resolve_safe returns pointer with offset already applied
+            // NOTE: X86_ResolvePtrForRead/resolve_safe_for_read returns a pointer with the guest-page offset already applied
             // So ptr is the exact byte pointer for 'current' address
             var pageOffset = current & 0xFFF;
             var p = (byte*)ptr; // Already includes offset
@@ -679,6 +679,17 @@ public class Engine : IDisposable
     {
         AssertNotDisposed();
         X86Native.ResetCodeCacheByRange(State, addr, size);
+    }
+
+    public unsafe void InvalidateCodeCacheHostPages(ReadOnlySpan<nint> hostPages)
+    {
+        AssertNotDisposed();
+        if (hostPages.Length == 0) return;
+
+        fixed (nint* pHostPages = hostPages)
+        {
+            X86Native.InvalidateCodeCacheHostPages(State, (IntPtr*)pHostPages, (nuint)hostPages.Length);
+        }
     }
 
     public void FlushMmuTlbOnly()

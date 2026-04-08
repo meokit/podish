@@ -171,9 +171,13 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial int IsDirty(IntPtr state, uint addr);
 
-    [LibraryImport(LibName, EntryPoint = "X86_ResolvePtr")]
+    [LibraryImport(LibName, EntryPoint = "X86_ResolvePtrForRead")]
     [SuppressGCTransition]
-    public static partial void* ResolvePtr(IntPtr state, uint addr, int isWrite);
+    public static partial void* ResolvePtrForRead(IntPtr state, uint addr);
+
+    [LibraryImport(LibName, EntryPoint = "X86_ResolvePtrForWrite")]
+    [SuppressGCTransition]
+    public static partial void* ResolvePtrForWrite(IntPtr state, uint addr);
 
     [LibraryImport(LibName, EntryPoint = "X86_CollectMappedPages")]
     [SuppressGCTransition]
@@ -232,6 +236,9 @@ public unsafe partial class X86Native
 
     [LibraryImport(LibName, EntryPoint = "X86_ResetCodeCacheByRange")]
     public static partial void ResetCodeCacheByRange(IntPtr state, uint addr, uint size);
+
+    [LibraryImport(LibName, EntryPoint = "X86_InvalidateCodeCacheHostPages")]
+    public static partial void InvalidateCodeCacheHostPages(IntPtr state, IntPtr* hostPages, nuint count);
 
     [LibraryImport(LibName, EntryPoint = "X86_ReprotectMappedRange")]
     [SuppressGCTransition]

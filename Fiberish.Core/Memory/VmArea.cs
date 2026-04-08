@@ -91,6 +91,11 @@ public class VmArea
         return (long)(pageIndex - checked((uint)VmPgoff)) * LinuxConstants.PageSize;
     }
 
+    public uint GetGuestPageStart(uint pageIndex)
+    {
+        return Start + (uint)GetRelativeOffsetForPageIndex(pageIndex);
+    }
+
     public long GetAbsoluteFileOffsetForPageIndex(uint pageIndex)
     {
         return Offset + GetRelativeOffsetForPageIndex(pageIndex);

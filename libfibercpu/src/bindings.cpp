@@ -569,10 +569,14 @@ int X86_MemIsDirty(EmuState* state, uint32_t addr) {
     return mem::has_property(p, mem::Property::Dirty) ? 1 : 0;
 }
 
-void* X86_ResolvePtr(EmuState* state, uint32_t addr, int is_write) {
+void* X86_ResolvePtrForRead(EmuState* state, uint32_t addr) {
     if (!state) return nullptr;
-    mem::Property perm = is_write ? mem::Property::Write : mem::Property::Read;
-    return state->mmu.resolve_safe(addr, perm);
+    return state->mmu.resolve_safe_for_read(addr);
+}
+
+void* X86_ResolvePtrForWrite(EmuState* state, uint32_t addr) {
+    if (!state) return nullptr;
+    return state->mmu.resolve_safe_for_write(addr);
 }
 
 size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86_PageMapping* buffer,
@@ -967,6 +971,22 @@ void X86_ResetMemory(EmuState* state) {
 void X86_ResetCodeCacheByRange(EmuState* state, uint32_t addr, uint32_t size) {
     if (!state) return;
     state->mmu.invalidate_code_cache_range(addr, size);
+}
+
+void X86_InvalidateCodeCacheHostPages(EmuState* state, const void* const* host_pages, size_t count) {
+    if (!state || !host_pages || count == 0) return;
+
+    std::vector<uintptr_t> page_bases;
+    page_bases.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        if (!host_pages[i]) continue;
+        page_bases.push_back(reinterpret_cast<uintptr_t>(host_pages[i]));
+    }
+
+    if (page_bases.empty()) return;
+    std::sort(page_bases.begin(), page_bases.end());
+    page_bases.erase(std::unique(page_bases.begin(), page_bases.end()), page_bases.end());
+    state->mmu.invalidate_code_cache_host_pages(page_bases.data(), page_bases.size());
 }
 
 void X86_SetTscFrequency(EmuState* state, uint64_t freq) {

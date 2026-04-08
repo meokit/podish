@@ -227,6 +227,12 @@ struct MmuCore {
     uintptr_t identity = 0;
     uint32_t state_flags = 0;
     CodeCacheState code_cache;
+    struct ExternalAliasState {
+        uint32_t exec_count = 0;
+        uint32_t write_count = 0;
+        std::vector<uint32_t> guest_pages;
+    };
+    ankerl::unordered_dense::map<uintptr_t, ExternalAliasState> external_aliases;
 };
 
 class Mmu {
@@ -250,6 +256,90 @@ private:
     SmcHandler smc_handler = nullptr;
     void* smc_opaque = nullptr;
 
+public:
+    // Invariant: any executable mapping must also force writes down the slow path.
+    // External writable aliases inherit ForceWriteSlow when they share a host page
+    // with any executable alias in the same MMU.
+    static Property normalize_mapping_perms(Property perms) {
+        return has_property(perms, Property::Exec) ? (perms | Property::ForceWriteSlow) : perms;
+    }
+
+    static bool should_track_external_alias(Property perms, HostAddr page) {
+        return page != nullptr && has_property(perms, Property::External);
+    }
+
+    void remove_external_alias(GuestAddr guest_page, HostAddr page, Property perms) {
+        if (!core_ || !should_track_external_alias(perms, page)) return;
+
+        auto it = core_->external_aliases.find(reinterpret_cast<uintptr_t>(page));
+        if (it == core_->external_aliases.end()) return;
+
+        auto& guest_pages = it->second.guest_pages;
+        guest_pages.erase(std::remove(guest_pages.begin(), guest_pages.end(), guest_page), guest_pages.end());
+        if (has_property(perms, Property::Exec) && it->second.exec_count > 0) it->second.exec_count--;
+        if (has_property(perms, Property::Write) && it->second.write_count > 0) it->second.write_count--;
+        if (it->second.exec_count == 0 && it->second.write_count == 0 && guest_pages.empty())
+            core_->external_aliases.erase(it);
+    }
+
+    void add_external_alias(GuestAddr guest_page, HostAddr page, Property perms) {
+        if (!core_ || !should_track_external_alias(perms, page)) return;
+
+        auto& state = core_->external_aliases[reinterpret_cast<uintptr_t>(page)];
+        if (std::find(state.guest_pages.begin(), state.guest_pages.end(), guest_page) == state.guest_pages.end())
+            state.guest_pages.push_back(guest_page);
+        if (has_property(perms, Property::Exec)) state.exec_count++;
+        if (has_property(perms, Property::Write)) state.write_count++;
+    }
+
+    void refresh_force_write_slow_for_host_page(HostAddr page) {
+        if (!core_ || page == nullptr) return;
+
+        auto it = core_->external_aliases.find(reinterpret_cast<uintptr_t>(page));
+        if (it == core_->external_aliases.end()) return;
+
+        const bool any_exec_alias = it->second.exec_count != 0;
+        // Keep the page-table bit as the single source of truth for write-fast-path
+        // eligibility so read-path refill never needs to consult alias metadata.
+        for (uint32_t guest_page : it->second.guest_pages) {
+            auto* dir = current_page_directory();
+            if (!dir) return;
+
+            const uint32_t l1_idx = guest_page >> 22;
+            const uint32_t l2_idx = (guest_page >> 12) & 0x3FF;
+            auto& chunk = dir->l1_directory[l1_idx];
+            if (!chunk || chunk->pages[l2_idx] != page) continue;
+
+            auto perms = chunk->permissions[l2_idx] & ~Property::ForceWriteSlow;
+            if (has_property(perms, Property::Exec) || (any_exec_alias && has_property(perms, Property::Write)))
+                perms = perms | Property::ForceWriteSlow;
+
+            chunk->permissions[l2_idx] = perms;
+            tlb.flush_page(guest_page);
+        }
+    }
+
+    void remap_external_alias(GuestAddr guest_page, HostAddr old_page, Property old_perms, HostAddr new_page,
+                              Property new_perms) {
+        remove_external_alias(guest_page, old_page, old_perms);
+        add_external_alias(guest_page, new_page, new_perms);
+        refresh_force_write_slow_for_host_page(old_page);
+        refresh_force_write_slow_for_host_page(new_page);
+    }
+
+    [[nodiscard]] bool has_external_exec_alias(HostAddr page) const {
+        if (!core_ || page == nullptr) return false;
+
+        auto it = core_->external_aliases.find(reinterpret_cast<uintptr_t>(page));
+        return it != core_->external_aliases.end() && it->second.exec_count != 0;
+    }
+
+    [[nodiscard]] bool should_trap_external_alias_write(Property perms, HostAddr page) const {
+        return should_track_external_alias(perms, page) && has_property(perms, Property::Write) &&
+               has_property(perms, Property::ForceWriteSlow);
+    }
+
+private:
     EmuState* get_state();
 
     // Updated signal_fault to take context
@@ -307,7 +397,7 @@ private:
 
 public:
     // Safe resolution without faulting
-    [[nodiscard]] HostAddr resolve_safe(GuestAddr addr, Property req_perm) {
+    [[nodiscard]] HostAddr resolve_safe_for_read(GuestAddr addr) {
         auto* dir = current_page_directory();
         if (!dir) return nullptr;
 
@@ -321,13 +411,7 @@ public:
 
         // 2. Check Permissions
         Property current_perm = chunk->permissions[l2_idx];
-        if (!has_property(current_perm, req_perm)) return nullptr;
-
-        // --- Triggered Dirty Bit Update ---
-        if (has_property(req_perm, Property::Write) && !has_property(current_perm, Property::Dirty)) {
-            current_perm = current_perm | Property::Dirty;
-            chunk->permissions[l2_idx] = current_perm;
-        }
+        if (!has_property(current_perm, Property::Read)) return nullptr;
 
         // 3. Return existing page only (no lazy allocation for safe resolution)
         if (!chunk->pages[l2_idx]) {
@@ -335,6 +419,35 @@ public:
         }
 
         HostAddr page_base = chunk->pages[l2_idx];
+        return page_base + offset;
+    }
+
+    [[nodiscard]] HostAddr resolve_safe_for_write(GuestAddr addr) {
+        auto* dir = current_page_directory();
+        if (!dir) return nullptr;
+
+        const uint32_t l1_idx = addr >> 22;
+        const uint32_t l2_idx = (addr >> 12) & 0x3FF;
+        const uint32_t offset = addr & 0xFFF;
+
+        auto& chunk = dir->l1_directory[l1_idx];
+        if (!chunk) return nullptr;
+
+        Property current_perm = chunk->permissions[l2_idx];
+        if (!has_property(current_perm, Property::Write)) return nullptr;
+
+        if (!has_property(current_perm, Property::Dirty)) {
+            current_perm = current_perm | Property::Dirty;
+            chunk->permissions[l2_idx] = current_perm;
+        }
+
+        auto* page_base = chunk->pages[l2_idx];
+        if (!page_base) return nullptr;
+
+        if (has_property(current_perm, Property::ForceWriteSlow)) {
+            invalidate_code_cache_page(addr);
+        }
+
         return page_base + offset;
     }
 
@@ -567,6 +680,13 @@ public:
         code_cache().InvalidateHostPages(host_page_bases);
     }
 
+    void invalidate_code_cache_host_pages(const uintptr_t* host_page_bases, size_t count) {
+        if (!host_page_bases || count == 0) return;
+        for (size_t i = 0; i < count; ++i) {
+            code_cache().InvalidateHostPage(host_page_bases[i]);
+        }
+    }
+
     // Callback Setup
     void set_fault_callback(FaultHandler handler, void* opaque) {
         fault_handler = handler;
@@ -598,7 +718,7 @@ public:
     // API: mmap
     void mmap(GuestAddr addr, uint32_t size, uint8_t perms_raw) {
         auto* dir = current_page_directory();
-        Property perms = static_cast<Property>(perms_raw);
+        Property perms = normalize_mapping_perms(static_cast<Property>(perms_raw));
         uint32_t start = addr & ~PAGE_MASK;
         uint32_t end_addr = (addr + size + PAGE_MASK) & ~PAGE_MASK;
 
@@ -610,13 +730,19 @@ public:
                 dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
             }
 
-            auto& entry_perms = dir->l1_directory[l1_idx]->permissions[l2_idx];
+            auto& chunk = dir->l1_directory[l1_idx];
+            auto* page = chunk->pages[l2_idx];
+            auto& entry_perms = chunk->permissions[l2_idx];
+            const auto old_perms = entry_perms;
             // Preserve state bits across permission changes.
             // mprotect/mmap should not clear dirty tracking, and must keep external ownership marker.
             Property preserved = Property::None;
             if (has_property(entry_perms, Property::External)) preserved = preserved | Property::External;
             if (has_property(entry_perms, Property::Dirty)) preserved = preserved | Property::Dirty;
-            entry_perms = perms | preserved;
+            entry_perms = normalize_mapping_perms(perms | preserved);
+            if (page && has_property(entry_perms, Property::External)) {
+                remap_external_alias(curr, page, old_perms, page, entry_perms);
+            }
         }
         tlb.flush();
     }
@@ -625,7 +751,7 @@ public:
         auto* dir = current_page_directory();
         if (!dir || size == 0) return;
 
-        Property perms = static_cast<Property>(perms_raw);
+        Property perms = normalize_mapping_perms(static_cast<Property>(perms_raw));
         uint32_t start = addr & ~PAGE_MASK;
         uint32_t end_addr = (addr + size + PAGE_MASK) & ~PAGE_MASK;
 
@@ -636,13 +762,17 @@ public:
             auto& chunk = dir->l1_directory[l1_idx];
             if (!chunk) continue;
 
+            auto* page = chunk->pages[l2_idx];
             auto& entry_perms = chunk->permissions[l2_idx];
             if (entry_perms == Property::None) continue;
+
+            const Property old_perms = entry_perms;
 
             Property preserved = Property::None;
             if (has_property(entry_perms, Property::External)) preserved = preserved | Property::External;
             if (has_property(entry_perms, Property::Dirty)) preserved = preserved | Property::Dirty;
-            entry_perms = perms | preserved;
+            entry_perms = normalize_mapping_perms(perms | preserved);
+            remap_external_alias(curr, page, old_perms, page, entry_perms);
         }
 
         tlb.flush();
@@ -653,7 +783,7 @@ public:
     // Returns the host address of the allocated page, or nullptr on failure
     [[nodiscard]] HostAddr allocate_page(GuestAddr addr, uint8_t perms_raw) {
         auto* dir = current_page_directory();
-        Property perms = static_cast<Property>(perms_raw);
+        Property perms = normalize_mapping_perms(static_cast<Property>(perms_raw));
         uint32_t page_addr = addr & ~PAGE_MASK;
         uint32_t l1_idx = page_addr >> 22;
         uint32_t l2_idx = (page_addr >> 12) & 0x3FF;
@@ -670,7 +800,7 @@ public:
             std::memset(chunk->pages[l2_idx], 0, PAGE_SIZE);
         }
 
-        chunk->permissions[l2_idx] = perms;
+        chunk->permissions[l2_idx] = normalize_mapping_perms(perms);
         tlb.flush_page(page_addr);
 
         return chunk->pages[l2_idx];
@@ -682,7 +812,7 @@ public:
     // Returns true on success
     bool map_external_page(GuestAddr addr, HostAddr external_page, uint8_t perms_raw) {
         auto* dir = current_page_directory();
-        Property perms = static_cast<Property>(perms_raw);
+        Property perms = normalize_mapping_perms(static_cast<Property>(perms_raw));
         uint32_t page_addr = addr & ~PAGE_MASK;
         uint32_t l1_idx = page_addr >> 22;
         uint32_t l2_idx = (page_addr >> 12) & 0x3FF;
@@ -693,6 +823,9 @@ public:
 
         auto& chunk = dir->l1_directory[l1_idx];
 
+        auto* old_page = chunk->pages[l2_idx];
+        const Property old_perms = chunk->permissions[l2_idx];
+
         // Free existing page if owned
         if (chunk->pages[l2_idx] && !has_property(chunk->permissions[l2_idx], Property::External)) {
             delete[] chunk->pages[l2_idx];
@@ -700,7 +833,8 @@ public:
 
         // Set external page (caller owns this memory)
         chunk->pages[l2_idx] = external_page;
-        chunk->permissions[l2_idx] = perms | Property::External;  // Mark as external
+        chunk->permissions[l2_idx] = normalize_mapping_perms(perms | Property::External);  // Mark as external
+        remap_external_alias(page_addr, old_page, old_perms, external_page, chunk->permissions[l2_idx]);
         tlb.flush_page(page_addr);
 
         return true;
@@ -718,6 +852,8 @@ public:
 
             auto& chunk = dir->l1_directory[l1_idx];
             if (chunk) {
+                auto* old_page = chunk->pages[l2_idx];
+                const Property old_perms = chunk->permissions[l2_idx];
                 // Delete the page data only if not external
                 if (chunk->pages[l2_idx] && !has_property(chunk->permissions[l2_idx], Property::External)) {
                     delete[] chunk->pages[l2_idx];
@@ -725,6 +861,8 @@ public:
                 chunk->pages[l2_idx] = nullptr;
                 // Clear permissions
                 chunk->permissions[l2_idx] = Property::None;
+                remove_external_alias(curr, old_page, old_perms);
+                refresh_force_write_slow_for_host_page(old_page);
             }
         }
         tlb.flush();
@@ -741,6 +879,7 @@ public:
         core_->page_directory = std::make_unique<PageDirectory>();
         page_dir = core_->page_directory.get();
         core_->code_cache.ResetReachability();
+        core_->external_aliases.clear();
         tlb.flush();
     }
 

@@ -89,8 +89,10 @@ public:
             read_tlb[idx] = {tag, property, addend};
         }
 
-        // Write TLB: Only if Write AND Dirty are set
-        if (has_property(property, Property::Write) && has_property(property, Property::Dirty)) {
+        // Write fast path is permission-bit only: callers must precompute
+        // ForceWriteSlow before reaching TLB fill.
+        if (has_property(property, Property::Write) && has_property(property, Property::Dirty) &&
+            !has_property(property, Property::ForceWriteSlow)) {
             write_tlb[idx] = {tag, property, addend};
         }
 
