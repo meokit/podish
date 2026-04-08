@@ -5,6 +5,8 @@ using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Microsoft.Extensions.Logging;
+using System.Runtime.CompilerServices;
+using System.Diagnostics;
 
 namespace Fiberish.VFS;
 
@@ -504,11 +506,30 @@ public abstract class SuperBlock
     }
 }
 
+internal static class VfsFileHolderTracking
+{
+    [Conditional("VFS_FILE_HOLDER_TRACKING")]
+    public static void Register(Inode? inode, LinuxFile file, string attachReason)
+    {
+        inode?.RegisterActiveFileHolderCore(file, attachReason);
+    }
+
+    [Conditional("VFS_FILE_HOLDER_TRACKING")]
+    public static void Unregister(Inode? inode, LinuxFile file)
+    {
+        inode?.UnregisterActiveFileHolderCore(file);
+    }
+}
+
 public abstract class Inode : IAddressSpaceOperations
 {
     // All dentries pointing to this inode (hard links / aliases).
     // Exposed as read-only; callers must go through BindInode/UnbindInode.
     private readonly List<Dentry> _dentries = [];
+#if VFS_FILE_HOLDER_TRACKING
+    private readonly object _activeFileHoldersSync = new();
+    private readonly Dictionary<LinuxFile, string> _activeFileHolders = [];
+#endif
     private int _lookupFailureError = -(int)Errno.ENOENT;
     private VMAManager[] _mappedAddressSpaces = [];
 
@@ -562,6 +583,44 @@ public abstract class Inode : IAddressSpaceOperations
     ///     Most inodes (devices, sockets, proc dynamic files, anon inodes) do not.
     /// </summary>
     public virtual bool SupportsMmap => false;
+
+    internal void RegisterActiveFileHolderCore(LinuxFile file, string attachReason)
+    {
+#if VFS_FILE_HOLDER_TRACKING
+        lock (_activeFileHoldersSync)
+        {
+            _activeFileHolders[file] = attachReason;
+        }
+#endif
+    }
+
+    internal void UnregisterActiveFileHolderCore(LinuxFile file)
+    {
+#if VFS_FILE_HOLDER_TRACKING
+        lock (_activeFileHoldersSync)
+        {
+            _activeFileHolders.Remove(file);
+        }
+#endif
+    }
+
+    internal string DescribeActiveFileHoldersForDebug()
+    {
+#if VFS_FILE_HOLDER_TRACKING
+        lock (_activeFileHoldersSync)
+        {
+            if (_activeFileHolders.Count == 0)
+                return "<none>";
+
+            return string.Join(" || ",
+                _activeFileHolders
+                    .OrderBy(kv => kv.Key.DebugId)
+                    .Select(kv => $"{kv.Key.GetDebugSummary()} attach={kv.Value}"));
+        }
+#else
+        return "<tracking-disabled>";
+#endif
+    }
 
     public virtual int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
     {
@@ -2174,8 +2233,12 @@ public static class VfsDebugTrace
     }
 }
 
-public class LinuxFile
+public class LinuxFile : IDisposable
 {
+#if VFS_FILE_HOLDER_TRACKING
+    private static int _nextDebugId;
+#endif
+
     public enum ReferenceKind
     {
         Normal = 0,
@@ -2185,14 +2248,25 @@ public class LinuxFile
     private int _refCount = 1;
 
     public LinuxFile(PathLocation livePath, FileFlags flags, ReferenceKind referenceKind = ReferenceKind.Normal,
-        Inode? openedInode = null)
+        Inode? openedInode = null,
+        [CallerMemberName] string callerMember = "",
+        [CallerFilePath] string callerFile = "",
+        [CallerLineNumber] int callerLine = 0)
     {
         Dentry = livePath.Dentry ?? throw new ArgumentNullException(nameof(livePath));
         OpenedInode = openedInode ?? Dentry.Inode;
         Flags = flags;
         Mount = livePath.Mount;
         Kind = referenceKind;
+#if VFS_FILE_HOLDER_TRACKING
+        DebugId = Interlocked.Increment(ref _nextDebugId);
+        DebugOrigin = FormatDebugOrigin(callerMember, callerFile, callerLine);
+#else
+        DebugId = 0;
+        DebugOrigin = string.Empty;
+#endif
         Dentry.Get("LinuxFile.ctor");
+        VfsFileHolderTracking.Register(OpenedInode, this, $"LinuxFile.ctor/{referenceKind}");
         var refKind = referenceKind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
         OpenedInode?.AcquireRef(refKind, "LinuxFile.ctor");
         OpenedInode?.Open(this);
@@ -2200,14 +2274,19 @@ public class LinuxFile
     }
 
     public LinuxFile(Dentry dentry, FileFlags flags, Mount? mount, ReferenceKind referenceKind = ReferenceKind.Normal,
-        Inode? openedInode = null)
-        : this(new PathLocation(dentry, mount), flags, referenceKind, openedInode)
+        Inode? openedInode = null,
+        [CallerMemberName] string callerMember = "",
+        [CallerFilePath] string callerFile = "",
+        [CallerLineNumber] int callerLine = 0)
+        : this(new PathLocation(dentry, mount), flags, referenceKind, openedInode, callerMember, callerFile, callerLine)
     {
     }
 
     public PathLocation LivePath => new(Dentry, Mount);
     public Dentry Dentry { get; }
     public Inode? OpenedInode { get; }
+    public int DebugId { get; }
+    public string DebugOrigin { get; }
     public long Position { get; set; }
     public FileFlags Flags { get; set; }
     public Mount? Mount { get; protected set; }
@@ -2258,11 +2337,33 @@ public class LinuxFile
         OpenedInode?.Release(this);
         var refKind = Kind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
         OpenedInode?.ReleaseRef(refKind, "LinuxFile.Close");
+        VfsFileHolderTracking.Unregister(OpenedInode, this);
         dentry?.Put("LinuxFile.Close");
         if (dentry != null && dentry.DentryRefCount == 0 && !dentry.IsHashed && dentry.Inode == null && dentry.Parent != null && dentry.IsTrackedBySuperBlock)
             dentry.UntrackFromSuperBlock("LinuxFile.Close.unlinked-dentry");
         // Note: Mount reference is not released here as it's typically
         // managed by the filesystem/superblock lifecycle
+    }
+
+    public void Dispose()
+    {
+        Close();
+    }
+
+    public string GetDebugSummary()
+    {
+#if VFS_FILE_HOLDER_TRACKING
+        return
+            $"id={DebugId} path={GetBestEffortPath()} flags=0x{(uint)Flags:X} kind={Kind} origin={DebugOrigin}";
+#else
+        return $"path={GetBestEffortPath()} flags=0x{(uint)Flags:X} kind={Kind}";
+#endif
+    }
+
+    private static string FormatDebugOrigin(string callerMember, string callerFile, int callerLine)
+    {
+        var fileName = string.IsNullOrEmpty(callerFile) ? "<unknown>" : Path.GetFileName(callerFile);
+        return $"{fileName}:{callerLine} {callerMember}";
     }
 
     public string GetBestEffortPath()

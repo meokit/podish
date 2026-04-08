@@ -545,7 +545,7 @@ public partial class SyscallManager
         if (dentry.Inode != null)
         {
             // Use Inode.Read() so this works for any filesystem, not just HostInode
-            var tmpFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
+            using var tmpFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
             headerLen = dentry.Inode.ReadToHost(task, tmpFile, headerBuf.AsSpan(), 0);
             if (headerLen < 0) headerLen = 0;
         }

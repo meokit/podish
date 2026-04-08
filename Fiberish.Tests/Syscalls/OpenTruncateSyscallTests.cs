@@ -292,6 +292,69 @@ public class OpenTruncateSyscallTests
     }
 
     [Fact]
+    public async Task OverlayOpenWithCreat_UnlinkWhileStillOpen_RecreateSameName_OnSilkfsUpper_MustSucceed()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"open-recreate-silk-live-{Guid.NewGuid():N}");
+        try
+        {
+            var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+            var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "open-recreate-live-lower", null);
+            var silkType = new FileSystemType { Name = "silkfs" };
+            var upperSb = new SilkFileSystem().ReadSuper(silkType, 0, silkRoot, null);
+
+            var overlayFs = new OverlayFileSystem();
+            var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+                new FileSystemType { Name = "overlay" },
+                0,
+                "open-recreate-live-overlay",
+                new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+            var mount = new Mount(overlaySb, overlaySb.Root)
+            {
+                Source = "overlay",
+                FsType = "overlay",
+                Options = "rw"
+            };
+
+            using var env = new TestEnv((overlaySb.Root, mount));
+            env.MapUserPage(0x71000); // path
+            env.MapUserPage(0x72000); // old payload
+            env.MapUserPage(0x73000); // new payload
+            env.MapUserPage(0x74000); // read buffer
+            env.WriteCString(0x71000, "/recreate-before-close");
+
+            var oldFd = await env.Call("SysOpen", 0x71000,
+                (uint)(FileFlags.O_RDWR | FileFlags.O_CREAT | FileFlags.O_TRUNC));
+            Assert.True(oldFd >= 0);
+            env.WriteBytes(0x72000, "A"u8.ToArray());
+            Assert.Equal(1, await env.Call("SysWrite", (uint)oldFd, 0x72000, 1));
+
+            Assert.Equal(0, await env.Call("SysUnlink", 0x71000));
+
+            var newFd = await env.Call("SysOpen", 0x71000,
+                (uint)(FileFlags.O_WRONLY | FileFlags.O_CREAT | FileFlags.O_TRUNC));
+            Assert.True(newFd >= 0);
+            env.WriteBytes(0x73000, "B"u8.ToArray());
+            Assert.Equal(1, await env.Call("SysWrite", (uint)newFd, 0x73000, 1));
+
+            Assert.Equal(0, await env.Call("SysClose", (uint)newFd));
+            Assert.Equal(0, await env.Call("SysLseek", (uint)oldFd, 0));
+            Assert.Equal(1, await env.Call("SysRead", (uint)oldFd, 0x74000, 16));
+            Assert.Equal("A", Encoding.ASCII.GetString(env.ReadBytes(0x74000, 1)));
+            Assert.Equal(0, await env.Call("SysClose", (uint)oldFd));
+
+            var readFd = await env.Call("SysOpen", 0x71000, (uint)FileFlags.O_RDONLY);
+            Assert.True(readFd >= 0);
+            Assert.Equal(1, await env.Call("SysRead", (uint)readFd, 0x74000, 16));
+            Assert.Equal("B", Encoding.ASCII.GetString(env.ReadBytes(0x74000, 1)));
+            Assert.Equal(0, await env.Call("SysClose", (uint)readFd));
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
     public async Task OverlayOpenWithCreatAppend_OnMissingFile_MustCreateThenAppend()
     {
         using var env = new TestEnv(CreateOverlayRootWithLowerFile("present", ":xxx:yyy:zzz"));

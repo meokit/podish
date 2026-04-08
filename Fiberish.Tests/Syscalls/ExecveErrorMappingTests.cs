@@ -108,6 +108,69 @@ public class ExecveErrorMappingTests
     }
 
     [Fact]
+    public async Task SysExecve_WhenOverlayUpperExecutableClearsAddressSpace_ReleasesTransientExecFileHolders()
+    {
+        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+
+        using var engine = new Engine();
+        var mm = new VMAManager();
+        var sm = new SyscallManager(engine, mm, 0);
+        var scheduler = new KernelScheduler();
+        var process = new Process(9206, mm, sm);
+        scheduler.RegisterProcess(process);
+        var task = new FiberTask(process.TGID, process, engine, scheduler);
+        engine.Owner = task;
+
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"execve-overlay-upper-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(silkRoot);
+
+        const uint pathAddr = 0x6100D000;
+        MapUserPage(mm, engine, pathAddr);
+
+        try
+        {
+            var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+            var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "execve-upper-lower", null);
+            lowerSb.MemoryContext = engine.MemoryContext;
+            sm.MountRootOverlayWithLower(lowerSb, "silkfs", silkRoot);
+
+            var helloBytes = File.ReadAllBytes(Path.Combine(ResolveGuestRootForHelloStatic(), "hello_static"));
+            sm.WriteFileInDetachedMount(sm.RootMount!, "hello_static", helloBytes, 0x1ED);
+
+            WriteCString(engine, pathAddr, "/hello_static");
+            var execRc = await Call(sm, "SysExecve", pathAddr);
+            Assert.Equal(0, execRc);
+            Assert.NotSame(mm, process.Mem);
+
+            var (execLoc, _) = sm.ResolvePath("/hello_static");
+            var overlayInode = Assert.IsType<OverlayInode>(execLoc.Dentry!.Inode);
+            var upperInode = Assert.IsAssignableFrom<IndexedMemoryInode>(overlayInode.UpperInode);
+            var holdersAfterExec = upperInode.DescribeActiveFileHoldersForDebug();
+
+            Assert.DoesNotContain("SysExecve", holdersAfterExec, StringComparison.Ordinal);
+            Assert.DoesNotContain("ResolveExecutableImage", holdersAfterExec, StringComparison.Ordinal);
+
+            mm.Clear(engine);
+
+            var holdersAfterClear = upperInode.DescribeActiveFileHoldersForDebug();
+            Assert.DoesNotContain("SysExecve", holdersAfterClear, StringComparison.Ordinal);
+            Assert.DoesNotContain("ResolveExecutableImage", holdersAfterClear, StringComparison.Ordinal);
+            Assert.Contains("LoadSegments", holdersAfterClear, StringComparison.Ordinal);
+
+            process.Mem.Clear(engine);
+
+            Assert.Equal("<none>", upperInode.DescribeActiveFileHoldersForDebug());
+        }
+        finally
+        {
+            sm.Close();
+            if (Directory.Exists(silkRoot))
+                Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
     public async Task ProcFdReadlink_WhenMemfd_DoesNotAppendDeletedSuffix()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();

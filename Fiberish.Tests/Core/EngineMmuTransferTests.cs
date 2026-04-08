@@ -13,6 +13,7 @@ namespace Fiberish.Tests.Core;
 public class EngineMmuTransferTests
 {
     private const uint CodeAddr = 0x00401000;
+    private const uint CrossPageCodeAddr = CodeAddr + LinuxConstants.PageSize - 1;
     private static readonly byte[] SimpleCode = [0x90, 0x90];
 
     [Fact]
@@ -152,6 +153,26 @@ public class EngineMmuTransferTests
         Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
 
         WarmSimpleCode(engine);
+
+        Assert.Equal(initialBlockCount, engine.GetBlockCount());
+        Assert.Equal(1, ReadCodeCacheStats(engine).BlockCacheSize);
+    }
+
+    [Fact]
+    public void ResetCodeCacheByRange_OnTrailingPage_InvalidatesCrossPageBlock()
+    {
+        using var engine = new Engine();
+        InstallCrossPageCode(engine);
+        WarmSimpleCode(engine, CrossPageCodeAddr);
+
+        var initialBlockCount = engine.GetBlockCount();
+        Assert.True(initialBlockCount > 0);
+        Assert.Equal(1, ReadCodeCacheStats(engine).BlockCacheSize);
+
+        engine.ResetCodeCacheByRange(CrossPageCodeAddr + 1, 1);
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+
+        WarmSimpleCode(engine, CrossPageCodeAddr);
 
         Assert.Equal(initialBlockCount, engine.GetBlockCount());
         Assert.Equal(1, ReadCodeCacheStats(engine).BlockCacheSize);
@@ -300,6 +321,18 @@ public class EngineMmuTransferTests
         var page = engine.AllocatePage(addr, perms);
         Assert.NotEqual(IntPtr.Zero, page);
         Marshal.Copy(SimpleCode, 0, page, SimpleCode.Length);
+    }
+
+    private static void InstallCrossPageCode(Engine engine)
+    {
+        var perms = (byte)(Protection.Read | Protection.Write | Protection.Exec);
+        var firstPage = engine.AllocatePage(CodeAddr, perms);
+        var secondPage = engine.AllocatePage(CodeAddr + LinuxConstants.PageSize, perms);
+        Assert.NotEqual(IntPtr.Zero, firstPage);
+        Assert.NotEqual(IntPtr.Zero, secondPage);
+
+        Marshal.WriteByte(firstPage, LinuxConstants.PageSize - 1, SimpleCode[0]);
+        Marshal.WriteByte(secondPage, 0, SimpleCode[1]);
     }
 
     private static void WarmSimpleCode(Engine engine)

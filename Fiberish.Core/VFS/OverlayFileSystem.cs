@@ -564,6 +564,7 @@ public class OverlayInode : Inode
 
         var refKind = GetBackingRefKind(linuxFile);
         backing.AcquireRef(refKind, reason);
+        VfsFileHolderTracking.Register(backing, linuxFile, reason);
         backing.Open(linuxFile);
         _openBackingByFile[linuxFile] = backing;
     }
@@ -574,6 +575,7 @@ public class OverlayInode : Inode
             return;
 
         backing.Release(linuxFile);
+        VfsFileHolderTracking.Unregister(backing, linuxFile);
         backing.ReleaseRef(GetBackingRefKind(linuxFile), reason);
     }
 
@@ -1010,7 +1012,11 @@ public class OverlayInode : Inode
         }
 
         if (overlayEntry.Inode is OverlayInode overlayChild)
+        {
             overlayChild.RefreshOverlayLinkCountFromSource("OverlayInode.Unlink.child-refresh");
+            DetachRemovedChildState(name, overlayEntry);
+        }
+
         return 0;
     }
 
@@ -1060,7 +1066,18 @@ public class OverlayInode : Inode
         }
 
         RefreshOverlayLinkCountFromSource("OverlayInode.Rmdir.parent-refresh");
+        DetachRemovedChildState(name, overlayEntry);
         return 0;
+    }
+
+    private bool DetachRemovedChildState(string name, Dentry overlayEntry)
+    {
+        if (overlayEntry.Inode is not OverlayInode overlayChild)
+            return false;
+
+        // Removing the namespace mapping lets a later recreate of the same name
+        // get a fresh child state without retargeting still-open aliases.
+        return _state.TryRemoveChildState(name, overlayChild._state);
     }
 
     private int RemoveUpperOverlayInternalEntries(Dentry upperDir)

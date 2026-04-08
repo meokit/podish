@@ -24,6 +24,9 @@
         <RuntimeIdentifiers Condition="'$(IsBrowserWasm)' == 'true' and '$(RuntimeIdentifiers)' == ''">browser-wasm</RuntimeIdentifiers>
         <RuntimeIdentifiers Condition="'$(IsBrowserWasm)' == 'true' and '$(RuntimeIdentifiers)' != '' and !$(RuntimeIdentifiers.Contains('browser-wasm'))">$(RuntimeIdentifiers);browser-wasm</RuntimeIdentifiers>
         <DefineConstants Condition="'$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true'">$(DefineConstants);PODISH_STATIC_NATIVE</DefineConstants>
+        <!-- Debug builds default this on so holder-lifecycle tests can assert transient exec/file mappings without paying the cost in Release. -->
+        <EnableVfsFileHolderTracking Condition="'$(EnableVfsFileHolderTracking)' == '' and '$(Configuration)' == 'Debug'">true</EnableVfsFileHolderTracking>
+        <DefineConstants Condition="'$(EnableVfsFileHolderTracking)' == 'true'">$(DefineConstants);VFS_FILE_HOLDER_TRACKING</DefineConstants>
         <DefineConstants Condition="'$(RuntimeIdentifier)' == 'osx-arm64' Or '$(RuntimeIdentifier)' == 'ios-arm64' Or '$(RuntimeIdentifier)' == 'iossimulator-arm64'">$(DefineConstants);HOSTFS_DARWIN;HOSTFS_ARCH_ARM64</DefineConstants>
         <DefineConstants Condition="'$(RuntimeIdentifier)' == 'linux-x64'">$(DefineConstants);HOSTFS_LINUX;HOSTFS_ARCH_X64</DefineConstants>
         <DefineConstants Condition="'$(RuntimeIdentifier)' == 'linux-arm64'">$(DefineConstants);HOSTFS_LINUX;HOSTFS_ARCH_ARM64</DefineConstants>
