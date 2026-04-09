@@ -228,7 +228,7 @@ public class SysVShmManager
         {
             segmentFile = new LinuxFile(segment.BackingFile.LivePath, FileFlags.O_RDWR,
                 LinuxFile.ReferenceKind.MmapHold, segment.BackingFile.OpenedInode);
-            sharedObject = vmaManager.Backings.GetOrCreateMapping(segmentFile.OpenedInode!);
+            sharedObject = segmentFile.OpenedInode!.AcquireMappingRef();
 
             var vma = new VmArea
             {

@@ -1,21 +1,19 @@
-using Fiberish.Memory;
 using Fiberish.VFS;
 using Xunit;
 
 namespace Fiberish.Tests.Memory;
 
-public class VmBackingManagerTests
+public class InodeMappingTests
 {
     [Fact]
     public void InodePageCache_DoesNotCollide_ForDifferentInodesWithSameIno()
     {
-        var manager = new VmBackingManager();
         var sb = new TestSuperBlock();
         var inodeA = new TestInode(sb, 42);
         var inodeB = new TestInode(sb, 42);
 
-        var cacheA = manager.GetOrCreateMapping(inodeA);
-        var cacheB = manager.GetOrCreateMapping(inodeB);
+        var cacheA = inodeA.AcquireMappingRef();
+        var cacheB = inodeB.AcquireMappingRef();
 
         try
         {
@@ -23,34 +21,27 @@ public class VmBackingManagerTests
         }
         finally
         {
-            manager.ReleaseMapping(inodeA);
-            manager.ReleaseMapping(inodeB);
             cacheA.Release();
             cacheB.Release();
         }
     }
 
     [Fact]
-    public void InodePageCache_IsIsolatedAcrossManagers()
+    public void InodePageCache_ReusesSameMappingAcrossAcquireCalls()
     {
-        var managerA = new VmBackingManager();
-        var managerB = new VmBackingManager();
         var sb = new TestSuperBlock();
         var inode = new TestInode(sb, 99);
 
-        var cacheA = managerA.GetOrCreateMapping(inode);
-        managerA.ReleaseMapping(inode);
-        cacheA.Release();
-
-        var cacheB = managerB.GetOrCreateMapping(inode);
+        var cacheA = inode.AcquireMappingRef();
+        var cacheB = inode.AcquireMappingRef();
 
         try
         {
-            Assert.NotSame(cacheA, cacheB);
+            Assert.Same(cacheA, cacheB);
         }
         finally
         {
-            managerB.ReleaseMapping(inode);
+            cacheA.Release();
             cacheB.Release();
         }
     }

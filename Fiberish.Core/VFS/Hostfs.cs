@@ -1341,7 +1341,7 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
             if (Type == InodeType.Symlink) return 0;
             try
             {
-                return (ulong)new FileInfo(HostPath).Length;
+                return Math.Max((ulong)new FileInfo(HostPath).Length, base.Size);
             }
             catch
             {
@@ -1413,6 +1413,11 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         {
             return _mappedPageCache?.Trim(aggressive) ?? 0;
         }
+    }
+
+    internal override bool PreferHostMappedMappingPage(PageCacheAccessMode accessMode)
+    {
+        return Type == InodeType.File;
     }
 
     private static int NegErrnoFromPInvoke(int fallback = (int)Errno.EIO)
@@ -2070,7 +2075,18 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
 
     protected internal override int WriteSpan(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
-        return WriteWithPageCache(linuxFile, buffer, offset, BackendWrite);
+        var originalSize = (long)Size;
+        var rc = WriteWithPageCache(linuxFile, buffer, offset, BackendWrite);
+        if (rc > 0 && linuxFile != null && offset + rc > originalSize)
+        {
+            var startPage = offset / LinuxConstants.PageSize;
+            var endPage = (offset + rc - 1) / LinuxConstants.PageSize;
+            var syncRc = WritePages(linuxFile, new WritePagesRequest(startPage, endPage, true));
+            if (syncRc < 0)
+                return syncRc;
+        }
+
+        return rc;
     }
 
     protected override int AopsReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
@@ -2083,27 +2099,48 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         return rc < 0 ? rc : 0;
     }
 
+    internal override void OnOwnedMappingPageReleased(uint pageIndex, InodePageRecord record)
+    {
+        lock (_dirtyPageLock)
+        {
+            _dirtyPageIndexes.Remove(pageIndex);
+        }
+    }
+
+    internal override int SyncMappedOwnedPage(LinuxFile? linuxFile, AddressSpace mapping,
+        PageSyncRequest request, InodePageRecord record)
+    {
+        _ = linuxFile;
+        _ = mapping;
+        _ = record;
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.TryFlushPage(request.PageIndex) == true ? 0 : -(int)Errno.EIO;
+        }
+    }
+
+    internal override void CompleteCachedPageSync(LinuxFile? linuxFile, AddressSpace mapping, uint pageIndex,
+        InodePageRecord? record)
+    {
+        lock (_dirtyPageLock)
+        {
+            _dirtyPageIndexes.Remove(pageIndex);
+        }
+
+        base.CompleteCachedPageSync(linuxFile, mapping, pageIndex, record);
+    }
+
     protected override int AopsReadahead(LinuxFile? linuxFile, ReadaheadRequest request)
     {
         if (request.PageCount <= 0 || Mapping == null) return 0;
-        var page = new byte[LinuxConstants.PageSize];
         for (var i = 0; i < request.PageCount; i++)
         {
             var pageIndex = request.StartPageIndex + i;
             if (Mapping.PeekPage((uint)pageIndex) != IntPtr.Zero) continue;
-
-            var ptr = Mapping.GetOrCreatePage((uint)pageIndex, p =>
-            {
-                var n = BackendRead(linuxFile, page, pageIndex * LinuxConstants.PageSize);
-                unsafe
-                {
-                    var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
-                    dst.Clear();
-                    if (n > 0) page.AsSpan(0, n).CopyTo(dst);
-                }
-
-                return n >= 0;
-            }, out _, true, AllocationClass.Readahead);
+            var fileOffset = pageIndex * LinuxConstants.PageSize;
+            var readLen = (int)Math.Min(LinuxConstants.PageSize, Math.Max(0, (long)Size - fileOffset));
+            var ptr = AcquireOwnedMappingPage(linuxFile, (uint)pageIndex, fileOffset, PageCacheAccessMode.Read,
+                readLen);
 
             if (ptr == IntPtr.Zero) return 0;
         }

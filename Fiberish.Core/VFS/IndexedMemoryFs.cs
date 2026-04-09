@@ -54,7 +54,6 @@ public abstract class IndexedMemoryInode : Inode
     protected readonly Dictionary<string, byte[]> XAttrs = new(StringComparer.Ordinal);
     private LinuxFile? _exclusiveHolder;
     private int _lockType; // 0: None, 1: Shared, 2: Exclusive
-    protected bool OwnsPageCache;
     protected byte[]? SymlinkData;
 
     protected IndexedMemoryInode(ulong ino, IndexedMemorySuperBlock sb)
@@ -66,6 +65,15 @@ public abstract class IndexedMemoryInode : Inode
 
     protected virtual GlobalAddressSpaceCacheManager.AddressSpaceCacheClass CacheClass =>
         GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem;
+
+    protected override bool UsesInodeOwnedMappingPages => Type == InodeType.File;
+
+    protected override AddressSpaceKind MappingKind =>
+        CacheClass == GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem
+            ? AddressSpaceKind.Shmem
+            : AddressSpaceKind.File;
+
+    protected override GlobalAddressSpaceCacheManager.AddressSpaceCacheClass? MappingCacheClass => CacheClass;
 
     protected virtual bool PinNamespaceDentries => false;
 
@@ -345,7 +353,6 @@ public abstract class IndexedMemoryInode : Inode
                 }
                 else
                 {
-                    existingDentry.Inode.Mapping = null;
                     var unlinkRc = targetParent.Unlink(newName);
                     if (unlinkRc < 0)
                         return unlinkRc;
@@ -485,7 +492,7 @@ public abstract class IndexedMemoryInode : Inode
         }
     }
 
-    protected virtual int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
+    protected virtual int ReadFromPageCache(LinuxFile? linuxFile, Span<byte> buffer, long offset)
     {
         lock (Lock)
         {
@@ -503,15 +510,27 @@ public abstract class IndexedMemoryInode : Inode
             if (offset >= fileSize) return 0;
 
             var count = Math.Min(buffer.Length, (int)(fileSize - offset));
-            var pageCache = EnsurePageCacheLocked();
+            var pageCache = Mapping;
+            if (pageCache == null)
+            {
+                buffer[..count].Clear();
+                return count;
+            }
+
             ReadFromPageCacheLocked(pageCache, offset, buffer[..count]);
             return count;
         }
     }
 
+    // Keep the old hook for derived in-memory filesystems that still customize storage reads.
+    protected virtual int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
+    {
+        return ReadFromPageCache(linuxFile, buffer, offset);
+    }
+
     protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)
     {
-        return BackendRead(linuxFile, buffer, offset);
+        return ReadFromPageCache(linuxFile, buffer, offset);
     }
 
     public override ReadableSegmentEnumerator GetReadableSegments(LinuxFile? linuxFile, long offset, int length)
@@ -530,10 +549,10 @@ public abstract class IndexedMemoryInode : Inode
             if (offset > fileSize || length > fileSize - offset)
                 return ReadableSegmentEnumerator.Failed;
 
-            // EnsurePageCacheLocked allocates the address space if not yet present.
-            // The returned AddressSpace is safe to iterate after releasing the lock
-            // because in-memory pages are never evicted or moved.
-            var pageCache = EnsurePageCacheLocked();
+            var pageCache = Mapping;
+            if (pageCache == null)
+                return ReadableSegmentEnumerator.Failed;
+
             return new ReadableSegmentEnumerator(this, linuxFile, pageCache, offset, length, fileSize);
         }
     }
@@ -594,7 +613,7 @@ public abstract class IndexedMemoryInode : Inode
         }
     }
 
-    protected virtual int BackendWrite(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected virtual int WriteToPageCache(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         lock (Lock)
         {
@@ -603,7 +622,36 @@ public abstract class IndexedMemoryInode : Inode
             if (offset < 0) return -(int)Errno.EINVAL;
 
             var pageCache = EnsurePageCacheLocked();
-            WriteToPageCacheLocked(pageCache, offset, buffer);
+            var consumed = 0;
+            while (consumed < buffer.Length)
+            {
+                var absolute = offset + consumed;
+                var pageIndex = (uint)(absolute / LinuxConstants.PageSize);
+                var pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
+                var chunk = Math.Min(buffer.Length - consumed, LinuxConstants.PageSize - pageOffset);
+                var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
+                var pageReadLen = 0;
+                var fullPageWrite = pageOffset == 0 && chunk == LinuxConstants.PageSize;
+                if (!fullPageWrite && pageFileOffset < (long)Size)
+                    pageReadLen = (int)Math.Min(LinuxConstants.PageSize, (long)Size - pageFileOffset);
+
+                var pagePtr = AcquireOwnedMappingPage(linuxFile, pageIndex, pageFileOffset, PageCacheAccessMode.Write,
+                    pageReadLen, false);
+                if (pagePtr == IntPtr.Zero)
+                    throw new OutOfMemoryException("Failed to allocate indexed page cache page");
+
+                unsafe
+                {
+                    fixed (byte* src = &buffer[consumed])
+                    {
+                        var dst = (byte*)pagePtr + pageOffset;
+                        Buffer.MemoryCopy(src, dst, chunk, chunk);
+                    }
+                }
+
+                consumed += chunk;
+            }
+
             MarkDirtyRangeLocked(pageCache, offset, buffer.Length);
             var end = offset + buffer.Length;
             if (end > (long)Size) Size = (ulong)end;
@@ -613,9 +661,15 @@ public abstract class IndexedMemoryInode : Inode
         }
     }
 
+    // Keep the old hook for derived in-memory filesystems that still customize storage writes.
+    protected virtual int BackendWrite(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        return WriteToPageCache(linuxFile, buffer, offset);
+    }
+
     protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
-        return BackendWrite(linuxFile, buffer, offset);
+        return WriteToPageCache(linuxFile, buffer, offset);
     }
 
     protected override int AopsReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
@@ -624,7 +678,7 @@ public abstract class IndexedMemoryInode : Inode
             return -(int)Errno.EINVAL;
         pageBuffer.Clear();
         if (request.Length == 0) return 0;
-        var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        var rc = ReadFromPageCache(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         return rc < 0 ? rc : 0;
     }
 
@@ -648,7 +702,7 @@ public abstract class IndexedMemoryInode : Inode
             return 0;
         }
 
-        var rc = BackendWrite(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        var rc = WriteToPageCache(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         if (rc < 0) return rc;
         lock (Lock)
         {
@@ -787,7 +841,6 @@ public abstract class IndexedMemoryInode : Inode
     protected override void OnEvictCache()
     {
         if (Type == InodeType.Symlink) SymlinkData = null;
-        ReleaseOwnedPageCache();
         ChildNames.Clear();
         base.OnEvictCache();
     }
@@ -801,22 +854,8 @@ public abstract class IndexedMemoryInode : Inode
 
     protected AddressSpace EnsurePageCacheLocked()
     {
-        if (Mapping != null) return Mapping;
-        Mapping = new AddressSpace(CacheClass == GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem
-            ? AddressSpaceKind.Shmem
-            : AddressSpaceKind.File);
-        GlobalAddressSpaceCacheManager.TrackAddressSpace(Mapping, CacheClass);
-        OwnsPageCache = true;
-        return Mapping;
-    }
-
-    protected void ReleaseOwnedPageCache()
-    {
-        if (!OwnsPageCache || Mapping == null) return;
-        Mapping.Release();
-        Mapping = null;
-        OwnsPageCache = false;
-        DirtyPageIndexes.Clear();
+        return EnsureOwnedMapping() ??
+               throw new InvalidOperationException("Indexed file inode requires an owned mapping.");
     }
 
     protected static void ReadFromPageCacheLocked(AddressSpace pageCache, long offset, Span<byte> destination)
@@ -842,41 +881,6 @@ public abstract class IndexedMemoryInode : Inode
                 }
 
             copied += chunk;
-        }
-    }
-
-    protected static void WriteToPageCacheLocked(AddressSpace pageCache, long offset, ReadOnlySpan<byte> source)
-    {
-        var consumed = 0;
-        while (consumed < source.Length)
-        {
-            var absolute = offset + consumed;
-            var pageIndex = (uint)(absolute / LinuxConstants.PageSize);
-            var pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
-            var chunk = Math.Min(source.Length - consumed, LinuxConstants.PageSize - pageOffset);
-            var pagePtr = pageCache.GetOrCreatePage(pageIndex, ptr =>
-            {
-                unsafe
-                {
-                    new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
-                }
-
-                return true;
-            }, out _, true, AllocationClass.PageCache);
-
-            if (pagePtr == IntPtr.Zero)
-                throw new OutOfMemoryException("Failed to allocate indexed page cache page");
-
-            unsafe
-            {
-                fixed (byte* src = &source[consumed])
-                {
-                    var dst = (byte*)pagePtr + pageOffset;
-                    Buffer.MemoryCopy(src, dst, chunk, chunk);
-                }
-            }
-
-            consumed += chunk;
         }
     }
 

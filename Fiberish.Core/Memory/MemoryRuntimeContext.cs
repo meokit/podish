@@ -1,4 +1,3 @@
-using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
 
@@ -9,8 +8,7 @@ public sealed class MemoryRuntimeContext
     private readonly Lock _shmGate = new();
     private long _nextSharedAnonymousBackingId;
     private SuperBlock? _shmSuperBlock;
-    private LinuxFile? _zeroBackingFile;
-    private AddressSpace? _zeroAddressSpace;
+    private ZeroInode? _zeroInode;
 
     public MemoryRuntimeContext()
         : this(HostMemoryMapGeometry.CreateCurrent())
@@ -64,13 +62,12 @@ public sealed class MemoryRuntimeContext
             LinuxFile.ReferenceKind.Normal, inode => inode.InitializeMemfd(allowSealing, executable, noExecSeal));
     }
 
-    internal AddressSpace AcquireZeroAddressSpace()
+    internal AddressSpace AcquireZeroMappingRef()
     {
         lock (_shmGate)
         {
-            EnsureZeroBackingCreated();
-            _zeroAddressSpace!.AddRef();
-            return _zeroAddressSpace;
+            EnsureZeroInodeCreated();
+            return _zeroInode!.AcquireMappingRef();
         }
     }
 
@@ -78,36 +75,25 @@ public sealed class MemoryRuntimeContext
     {
         lock (_shmGate)
         {
-            return mapping != null && ReferenceEquals(mapping, _zeroAddressSpace);
+            return mapping != null && ReferenceEquals(mapping, _zeroInode?.Mapping);
         }
     }
 
-    internal IntPtr GetOrCreateZeroPage(uint pageIndex)
+    internal IntPtr AcquireZeroMappingPage(uint pageIndex)
     {
         lock (_shmGate)
         {
-            EnsureZeroBackingCreated();
-            var zeroPtr = ZeroPageProvider.GetPointer();
-            if (zeroPtr == IntPtr.Zero)
-                return IntPtr.Zero;
-
-            return _zeroAddressSpace!.SetPageIfAbsent(pageIndex, zeroPtr, out _);
+            EnsureZeroInodeCreated();
+            return _zeroInode!.AcquireOwnedMappingPage(null, pageIndex, 0, PageCacheAccessMode.Read, 0, false);
         }
     }
 
-    private void EnsureZeroBackingCreated()
+    private void EnsureZeroInodeCreated()
     {
-        if (_zeroAddressSpace != null)
+        if (_zeroInode != null)
             return;
 
-        _zeroBackingFile = CreateUnlinkedShmFile(".zero_page", LinuxConstants.PageSize, 0x100, 0, 0,
-            FileFlags.O_RDONLY, null!, LinuxFile.ReferenceKind.MmapHold);
-        _zeroAddressSpace = new AddressSpace(AddressSpaceKind.Zero);
-        if (_zeroBackingFile.OpenedInode != null)
-        {
-            _zeroBackingFile.OpenedInode.Mapping = _zeroAddressSpace;
-            _zeroBackingFile.OpenedInode.MappingManager = null;
-        }
+        _zeroInode = new ZeroInode();
     }
 
     private LinuxFile CreateUnlinkedShmFile(string name, uint length, int mode, int uid, int gid, FileFlags fileFlags,
@@ -149,4 +135,19 @@ public sealed class MemoryRuntimeContext
             }
         }
     }
+}
+
+internal sealed class ZeroInode : Inode
+{
+    public ZeroInode()
+    {
+        Ino = 0;
+        Type = InodeType.File;
+        Mode = 0x124;
+        Size = LinuxConstants.PageSize;
+    }
+
+    protected override bool UsesInodeOwnedMappingPages => true;
+    protected override AddressSpaceKind MappingKind => AddressSpaceKind.Zero;
+    protected override GlobalAddressSpaceCacheManager.AddressSpaceCacheClass? MappingCacheClass => null;
 }

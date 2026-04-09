@@ -9,10 +9,10 @@ public enum AddressSpaceKind
 
 public sealed class AddressSpace
 {
-    private int _refCount = 1;
-    private readonly Lock _rmapLock = new();
-    private readonly List<RmapAttachment> _rmapAttachments = [];
     private readonly HostPageKind _pageKind;
+    private readonly List<RmapAttachment> _rmapAttachments = [];
+    private readonly Lock _rmapLock = new();
+    private int _refCount = 1;
 
     public AddressSpace(AddressSpaceKind kind)
     {
@@ -66,6 +66,12 @@ public sealed class AddressSpace
     public IntPtr SetPageIfAbsent(uint pageIndex, IntPtr ptr, out bool inserted)
     {
         return Pages.InstallPageIfAbsent(pageIndex, ptr, _pageKind, out inserted);
+    }
+
+    internal IntPtr InstallHostPageIfAbsent(uint pageIndex, HostPage hostPage, Action<VmPage>? onReleased,
+        out bool inserted)
+    {
+        return Pages.InstallHostPageIfAbsent(pageIndex, hostPage, onReleased, out inserted);
     }
 
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew)
@@ -143,7 +149,7 @@ public sealed class AddressSpace
         lock (_rmapLock)
         {
             _rmapAttachments.Add(attachment);
-            SyncResidentPagesForAttachmentLocked(attachment, add: true);
+            SyncResidentPagesForAttachmentLocked(attachment, true);
         }
     }
 
@@ -157,7 +163,7 @@ public sealed class AddressSpace
                 if (!ReferenceEquals(attachment.Vma, vma))
                     continue;
 
-                SyncResidentPagesForAttachmentLocked(attachment, add: false);
+                SyncResidentPagesForAttachmentLocked(attachment, false);
                 _rmapAttachments.RemoveAt(i);
             }
         }
@@ -192,13 +198,14 @@ public sealed class AddressSpace
 
     private void SyncResidentPagesForAttachmentLocked(RmapAttachment attachment, bool add)
     {
-        Pages.VisitResidentPagesInRange(attachment.StartPageIndex, attachment.EndPageIndexExclusive, (pageIndex, page) =>
-        {
-            if (add)
-                AddDirectRefLocked(attachment, pageIndex, page.HostPage);
-            else
-                RemoveDirectRefLocked(attachment, pageIndex, page.HostPage);
-        });
+        Pages.VisitResidentPagesInRange(attachment.StartPageIndex, attachment.EndPageIndexExclusive,
+            (pageIndex, page) =>
+            {
+                if (add)
+                    AddDirectRefLocked(attachment, pageIndex, page.HostPage);
+                else
+                    RemoveDirectRefLocked(attachment, pageIndex, page.HostPage);
+            });
     }
 
     private void AddDirectRefLocked(RmapAttachment attachment, uint pageIndex, HostPage hostPage)
@@ -229,9 +236,9 @@ public sealed class AddressSpace
 
 public sealed class AnonVma
 {
-    private int _refCount = 1;
-    private readonly Lock _rmapLock = new();
     private readonly List<RmapAttachment> _rmapAttachments = [];
+    private readonly Lock _rmapLock = new();
+    private int _refCount = 1;
 
     public AnonVma()
     {
@@ -356,7 +363,7 @@ public sealed class AnonVma
         lock (_rmapLock)
         {
             _rmapAttachments.Add(attachment);
-            SyncResidentPagesForAttachmentLocked(attachment, add: true);
+            SyncResidentPagesForAttachmentLocked(attachment, true);
         }
     }
 
@@ -370,7 +377,7 @@ public sealed class AnonVma
                 if (!ReferenceEquals(attachment.Vma, vma))
                     continue;
 
-                SyncResidentPagesForAttachmentLocked(attachment, add: false);
+                SyncResidentPagesForAttachmentLocked(attachment, false);
                 _rmapAttachments.RemoveAt(i);
             }
         }
@@ -413,13 +420,14 @@ public sealed class AnonVma
 
     private void SyncResidentPagesForAttachmentLocked(RmapAttachment attachment, bool add)
     {
-        Pages.VisitResidentPagesInRange(attachment.StartPageIndex, attachment.EndPageIndexExclusive, (pageIndex, page) =>
-        {
-            if (add)
-                AddDirectRefLocked(attachment, pageIndex, page.HostPage);
-            else
-                RemoveDirectRefLocked(attachment, pageIndex, page.HostPage);
-        });
+        Pages.VisitResidentPagesInRange(attachment.StartPageIndex, attachment.EndPageIndexExclusive,
+            (pageIndex, page) =>
+            {
+                if (add)
+                    AddDirectRefLocked(attachment, pageIndex, page.HostPage);
+                else
+                    RemoveDirectRefLocked(attachment, pageIndex, page.HostPage);
+            });
     }
 
     private void AddDirectRefLocked(RmapAttachment attachment, uint pageIndex, HostPage hostPage)

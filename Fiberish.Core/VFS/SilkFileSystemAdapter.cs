@@ -53,6 +53,25 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
         return dropped;
     }
 
+    protected override void Shutdown()
+    {
+        List<SilkInode> trackedInodes;
+        lock (Lock)
+        {
+            trackedInodes = Inodes.OfType<SilkInode>()
+                .Where(inode => !inode.IsFinalized)
+                .ToList();
+        }
+
+        using (var session = Repository.OpenMetadataSession())
+        {
+            foreach (var inode in trackedInodes)
+                inode.FlushMetadataForShutdown(session);
+        }
+
+        base.Shutdown();
+    }
+
     internal static long ToUnixNanoseconds(DateTime value)
     {
         var utc = value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
@@ -183,14 +202,13 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 {
     private static readonly AsyncLocal<int> NamespaceMutationDepth = new();
     private static readonly AsyncLocal<MetadataSessionScopeState?> MetadataSessionScope = new();
-    private static readonly VmBackingManager BufferedWriteMappings = new();
-    private int _metadataDirty;
     private readonly HashSet<long> _dirtyPageIndexes = [];
     private readonly Lock _dirtyPageLock = new();
     private readonly Lock _mappedCacheLock = new();
     private readonly SilkRepository _repository;
     private List<DirectoryEntry>? _cachedEntries;
     private MappedFilePageCache? _mappedPageCache;
+    private int _metadataDirty;
 
     public SilkInode(ulong ino, IndexedMemorySuperBlock sb, SilkRepository repository) : base(ino, sb)
     {
@@ -213,6 +231,11 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         {
             return _mappedPageCache?.Trim(aggressive) ?? 0;
         }
+    }
+
+    internal override bool PreferHostMappedMappingPage(PageCacheAccessMode accessMode)
+    {
+        return Type == InodeType.File;
     }
 
     public static SilkInodeKind MapInodeKind(InodeType type)
@@ -333,14 +356,9 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         FlushDirtyMetadataIfNeeded(session);
     }
 
-    private void EnsureBufferedWriteMapping()
+    internal void FlushMetadataForShutdown(SilkMetadataSession session)
     {
-        if (Type != InodeType.File || Mapping != null)
-            return;
-
-        var manager = MappingManager ?? BufferedWriteMappings;
-        var mapping = manager.GetOrCreateMapping(this);
-        mapping.Release();
+        FlushDirtyMetadataIfNeeded(session);
     }
 
     public override int UpdateTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
@@ -791,7 +809,6 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
-        EnsureBufferedWriteMapping();
         var rc = WriteWithPageCache(linuxFile, buffer, offset, BackendWrite);
         if (rc > 0)
             MarkMetadataDirty();
@@ -824,6 +841,37 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (request.Length == 0) return 0;
         var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         return rc < 0 ? rc : 0;
+    }
+
+    internal override void OnOwnedMappingPageReleased(uint pageIndex, InodePageRecord record)
+    {
+        lock (_dirtyPageLock)
+        {
+            _dirtyPageIndexes.Remove(pageIndex);
+        }
+    }
+
+    internal override int SyncMappedOwnedPage(LinuxFile? linuxFile, AddressSpace mapping,
+        PageSyncRequest request, InodePageRecord record)
+    {
+        _ = linuxFile;
+        _ = mapping;
+        _ = record;
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.TryFlushPage(request.PageIndex) == true ? 0 : -(int)Errno.EIO;
+        }
+    }
+
+    internal override void CompleteCachedPageSync(LinuxFile? linuxFile, AddressSpace mapping, uint pageIndex,
+        InodePageRecord? record)
+    {
+        lock (_dirtyPageLock)
+        {
+            _dirtyPageIndexes.Remove(pageIndex);
+        }
+
+        base.CompleteCachedPageSync(linuxFile, mapping, pageIndex, record);
     }
 
     protected override int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer,
@@ -1046,9 +1094,6 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     public override bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex)
     {
-        if (Type == InodeType.File)
-            return false;
-
         lock (_mappedCacheLock)
         {
             if (_mappedPageCache?.TryFlushPage(pageIndex) != true)

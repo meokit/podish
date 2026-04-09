@@ -707,26 +707,40 @@ public class OverlayInode : Inode
 
                 if (lowerInode != null)
                 {
+                    LinuxFile? copyFile = null;
+                    if (linuxFile == null && LowerDentry != null)
+                    {
+                        copyFile = new LinuxFile(LowerDentry, FileFlags.O_RDONLY, null!);
+                        lowerInode.Open(copyFile);
+                    }
+
                     var buf = new byte[4096];
                     long pos = 0;
-                    while (true)
+                    try
                     {
-                        var n = lowerInode.ReadToHost(null, null!, buf, pos);
-                        if (n < 0)
+                        while (true)
                         {
-                            copyPayloadRc = n;
-                            break;
-                        }
+                            var n = lowerInode.ReadToHost(null, copyFile ?? linuxFile!, buf, pos);
+                            if (n < 0)
+                            {
+                                copyPayloadRc = n;
+                                break;
+                            }
 
-                        if (n == 0) break;
-                        var writeRc = upperDentry.Inode!.WriteFromHost(null, null!, buf.AsSpan(0, n), pos);
-                        if (writeRc != n)
-                        {
-                            copyPayloadRc = writeRc < 0 ? writeRc : -(int)Errno.EIO;
-                            break;
-                        }
+                            if (n == 0) break;
+                            var writeRc = upperDentry.Inode!.WriteFromHost(null, null!, buf.AsSpan(0, n), pos);
+                            if (writeRc != n)
+                            {
+                                copyPayloadRc = writeRc < 0 ? writeRc : -(int)Errno.EIO;
+                                break;
+                            }
 
-                        pos += n;
+                            pos += n;
+                        }
+                    }
+                    finally
+                    {
+                        copyFile?.Close();
                     }
                 }
 
@@ -1516,6 +1530,20 @@ public class OverlayInode : Inode
     {
         var source = ResolveSourceForFile(linuxFile);
         return source?.TryFlushMappedPage(linuxFile, pageIndex) == true;
+    }
+
+    internal override int SyncCachedPage(LinuxFile? linuxFile, AddressSpace mapping,
+        PageSyncRequest request)
+    {
+        var source = ResolveSourceForFile(linuxFile);
+        return source?.SyncCachedPage(linuxFile, mapping, request) ?? 0;
+    }
+
+    internal override int SyncCachedPages(LinuxFile? linuxFile, AddressSpace mapping,
+        WritePagesRequest request)
+    {
+        var source = ResolveSourceForFile(linuxFile);
+        return source?.SyncCachedPages(linuxFile, mapping, request) ?? 0;
     }
 
     public override void Open(LinuxFile linuxFile)

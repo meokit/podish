@@ -191,10 +191,10 @@ public class TmpfsInode : IndexedMemoryInode
         return IsMemfd ? (int)SealFlags : -(int)Errno.EINVAL;
     }
 
-    protected override int BackendWrite(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    protected override int WriteToPageCache(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (Type != InodeType.File)
-            return base.BackendWrite(linuxFile, buffer, offset);
+            return base.WriteToPageCache(linuxFile, buffer, offset);
         if (offset < 0)
             return -(int)Errno.EINVAL;
 
@@ -220,7 +220,7 @@ public class TmpfsInode : IndexedMemoryInode
 
         try
         {
-            var rc = base.BackendWrite(linuxFile, buffer, offset);
+            var rc = base.WriteToPageCache(linuxFile, buffer, offset);
             if (rc < 0 && growth > 0)
                 TmpfsSb.ReleaseDataBytes(growth);
             return rc;

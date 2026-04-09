@@ -77,7 +77,7 @@ Current code-cache reset behavior:
 
 - sorted `VmArea` list
 - one `ExternalPageManager`
-- one `VmBackingManager`
+- inode-owned `AddressSpace` refs
 - mapping-change sequence / deferred invalidation state
 
 Its job is to:
@@ -469,7 +469,7 @@ Current ownership boundaries:
 | Object | Owned By | Holds | Purpose |
 |---|---|---|---|
 | `Engine` | runtime / `FiberTask` | native CPU state + current MMU | execution |
-| `VMAManager` | `Process` | `VmArea[]`, `ExternalPageManager`, `VmBackingManager` | address-space semantics |
+| `VMAManager` | `Process` | `VmArea[]`, `ExternalPageManager` | address-space semantics |
 | `VmArea` | `VMAManager` | mapping metadata + refs to `AddressSpace` / `AnonVma` | virtual range description |
 | `AddressSpace` | `Inode.Mapping` or shmem owner | `VmPageSlots` | file/shmem page cache |
 | `AnonVma` | private mappings | `VmPageSlots` | anonymous/private COW pages |

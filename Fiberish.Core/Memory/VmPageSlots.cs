@@ -71,7 +71,7 @@ internal sealed class VmPageSlots
         InstallExistingHostPage(pageIndex, hostPage);
     }
 
-    internal void InstallExistingHostPage(uint pageIndex, HostPage hostPage)
+    internal void InstallExistingHostPage(uint pageIndex, HostPage hostPage, Action<VmPage>? onReleased = null)
     {
         VmPage? oldPage = null;
         lock (_lock)
@@ -90,7 +90,8 @@ internal sealed class VmPageSlots
             hostPage.AddOwnerRef(_ownerRefFactory(pageIndex));
             _pages[pageIndex] = new VmPage
             {
-                HostPage = hostPage
+                HostPage = hostPage,
+                OnReleased = onReleased
             };
             hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
         }
@@ -134,6 +135,13 @@ internal sealed class VmPageSlots
     internal IntPtr InstallPageIfAbsent(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind, out bool inserted)
     {
         var hostPage = HostPageManager.GetOrCreate(ptr, hostPageKind);
+        return InstallHostPageIfAbsent(pageIndex, hostPage, null, out inserted);
+    }
+
+    internal IntPtr InstallHostPageIfAbsent(uint pageIndex, HostPage hostPage, Action<VmPage>? onReleased,
+        out bool inserted)
+    {
+        var ptr = hostPage.Ptr;
 
         lock (_lock)
         {
@@ -147,7 +155,8 @@ internal sealed class VmPageSlots
             hostPage.AddOwnerRef(_ownerRefFactory(pageIndex));
             _pages[pageIndex] = new VmPage
             {
-                HostPage = hostPage
+                HostPage = hostPage,
+                OnReleased = onReleased
             };
             hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
             inserted = true;
@@ -306,16 +315,19 @@ internal sealed class VmPageSlots
         }
     }
 
-    internal void VisitResidentPagesInRange(uint startPageIndex, uint endPageIndexExclusive, Action<uint, VmPage> visitor)
+    internal void VisitResidentPagesInRange(uint startPageIndex, uint endPageIndexExclusive,
+        Action<uint, VmPage> visitor)
     {
         ArgumentNullException.ThrowIfNull(visitor);
         if (startPageIndex >= endPageIndexExclusive)
             return;
 
         lock (_lock)
+        {
             foreach (var (pageIndex, page) in _pages)
                 if (pageIndex >= startPageIndex && pageIndex < endPageIndexExclusive)
                     visitor(pageIndex, page);
+        }
     }
 
     public long CountPagesInRange(uint startPageIndex, uint endPageIndex)
@@ -413,13 +425,17 @@ internal sealed class VmPageSlots
         if (notify)
             _pageBindingChanged?.Invoke(pageIndex, page.HostPage, null);
         page.HostPage.RemoveOwnerRef(_ownerRefFactory(pageIndex));
-        ExternalPageManager.ReleasePtr(page.Ptr);
+        if (page.OnReleased != null)
+            page.OnReleased(page);
+        else
+            ExternalPageManager.ReleasePtr(page.Ptr);
     }
 }
 
 internal sealed class VmPage
 {
     public required HostPage HostPage { get; set; }
+    public Action<VmPage>? OnReleased { get; set; }
     public IntPtr Ptr => HostPage.Ptr;
 
     public bool Dirty

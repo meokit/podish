@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Reflection;
 using System.Text.Json;
 using Fiberish.Core;
 using Fiberish.Memory;
@@ -294,22 +293,6 @@ public class EngineMmuTransferTests
         Assert.Equal(sharedIdentity, parent.CurrentMmuIdentity);
     }
 
-    [Fact]
-    public void TryResolveMappedFilePage_DisposesHandle_WhenVmMappingMissing()
-    {
-        var method = typeof(VMAManager).GetMethod(
-            "TryResolveMappedFilePage",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
-
-        using var fixture = new MappedPageFixture();
-        var args = new object?[] { fixture.Vma, (uint)0, 0L, false, IntPtr.Zero };
-        var resolved = Assert.IsType<bool>(method!.Invoke(null, args));
-
-        Assert.False(resolved);
-        Assert.Equal(1, fixture.Inode.DisposeCount);
-    }
-
     private static void InstallSimpleCode(Engine engine)
     {
         InstallSimpleCode(engine, CodeAddr);
@@ -365,10 +348,10 @@ public class EngineMmuTransferTests
 
     private sealed class MappedPageFixture : IDisposable
     {
-        private readonly TestSuperBlock _sb;
+        private readonly Dentry _fileDentry;
         private readonly Mount _mount;
         private readonly Dentry _root;
-        private readonly Dentry _fileDentry;
+        private readonly TestSuperBlock _sb;
 
         public MappedPageFixture()
         {

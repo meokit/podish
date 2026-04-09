@@ -32,13 +32,7 @@ public class VMAManager
     private long _mapSequence;
     private int _sharedRefCount = 1;
 
-    public VMAManager(VmBackingManager? backings = null)
-    {
-        Backings = backings ?? new VmBackingManager();
-    }
-
     public ExternalPageManager ExternalPages { get; } = new();
-    public VmBackingManager Backings { get; }
     internal ProcessAddressSpaceHandle? AddressSpaceHandle { get; private set; }
 
     internal nuint AddressSpaceIdentity => AddressSpaceHandle?.Identity ?? 0;
@@ -237,7 +231,7 @@ public class VMAManager
         if (backingInode == null)
             return false;
 
-        var resolvedMapping = Backings.GetOrCreateMapping(backingInode);
+        var resolvedMapping = backingInode.AcquireMappingRef();
         if (ReferenceEquals(vma.VmMapping, resolvedMapping))
         {
             resolvedMapping.Release();
@@ -802,25 +796,25 @@ public class VMAManager
                     // Linux models MAP_SHARED|MAP_ANONYMOUS with an internal shmem/tmpfs backing object.
                     anonymousSharedFile = engine.MemoryContext.CreateSharedAnonymousMappingFile(len);
                     file = anonymousSharedFile;
-                    sharedObj = Backings.GetOrCreateMapping(ResolveCurrentFileBacking(file)!);
+                    sharedObj = ResolveCurrentFileBacking(file)!.AcquireMappingRef();
                     fileMapping = new VmaFileMapping(file);
                 }
                 else if (isPrivate)
                 {
-                    sharedObj = engine.MemoryContext.AcquireZeroAddressSpace();
+                    sharedObj = engine.MemoryContext.AcquireZeroMappingRef();
                 }
             }
             else if (isShared)
             {
                 // MAP_SHARED file: share the inode's global page cache
-                sharedObj = Backings.GetOrCreateMapping(ResolveCurrentFileBacking(file)!);
+                sharedObj = ResolveCurrentFileBacking(file)!.AcquireMappingRef();
                 vmPgoff = (ulong)(offset / LinuxConstants.PageSize);
                 fileMapping = new VmaFileMapping(file);
             }
             else
             {
                 // MAP_PRIVATE file: clean reads come from inode mapping, private COW pages are created lazily.
-                sharedObj = Backings.GetOrCreateMapping(ResolveCurrentFileBacking(file)!);
+                sharedObj = ResolveCurrentFileBacking(file)!.AcquireMappingRef();
                 vmPgoff = (ulong)(offset / LinuxConstants.PageSize);
                 fileMapping = new VmaFileMapping(file);
             }
@@ -853,7 +847,7 @@ public class VMAManager
 
     public VMAManager Clone()
     {
-        var newMM = new VMAManager(Backings);
+        var newMM = new VMAManager();
         foreach (var vma in _vmas)
         {
             var cloned = vma.Clone();
@@ -1489,15 +1483,23 @@ public class VMAManager
         if (vmaRelativeOffset >= vma.GetFileBackingLength())
             return FaultResult.BusError;
 
-        if (TryResolveMappedFilePage(vma, pageIndex, absoluteFileOffset, preferWritableMappedPage, out pagePtr))
-            return pagePtr != IntPtr.Zero ? FaultResult.Handled : FaultResult.Segv;
+        if (preferWritableMappedPage && vma.File?.OpenedInode is OverlayInode overlayInode)
+        {
+            var copyRc = overlayInode.CopyUp(null);
+            if (copyRc < 0)
+                return FaultResult.Segv;
+        }
+
+        var inode = ResolveCurrentFileBacking(vma.File);
+        if (inode == null)
+            return FaultResult.Segv;
 
         if (!TryGetVmMapping(vma, out var mapping))
             return FaultResult.Segv;
 
-        pagePtr = mapping.GetOrCreatePage(pageIndex,
-            ptr => TryPopulateFileBackedAddressSpacePage(vma, pageIndex, absoluteFileOffset, vmaRelativeOffset, ptr),
-            out _, false, AllocationClass.PageCache);
+        var readLen = (int)Math.Min(LinuxConstants.PageSize, vma.GetFileBackingLength() - vmaRelativeOffset);
+        pagePtr = inode.AcquireOwnedMappingPage(vma.File, pageIndex, absoluteFileOffset,
+            preferWritableMappedPage ? PageCacheAccessMode.Write : PageCacheAccessMode.Read, readLen);
         return pagePtr != IntPtr.Zero ? FaultResult.Handled : FaultResult.Segv;
     }
 
@@ -1517,7 +1519,7 @@ public class VMAManager
             if (!engine.MemoryContext.IsZeroAddressSpace(mapping))
                 return FaultResult.Segv;
 
-            pagePtr = engine.MemoryContext.GetOrCreateZeroPage(pageIndex);
+            pagePtr = engine.MemoryContext.AcquireZeroMappingPage(pageIndex);
             return pagePtr != IntPtr.Zero ? FaultResult.Handled : FaultResult.Oom;
         }
 
@@ -1725,7 +1727,7 @@ public class VMAManager
         Interlocked.Increment(ref _cowAllocFirstCount);
         if (privateObject == null)
         {
-            privateObject = Backings.CreatePrivateOverlay();
+            privateObject = new AnonVma();
             vma.VmAnonVma = privateObject;
             RegisterVmAreaAnonAttachment(vma);
         }
@@ -1771,7 +1773,7 @@ public class VMAManager
             if (!ReferenceEquals(vma.File?.OpenedInode, overlayInode))
                 continue;
 
-            var replacementMapping = Backings.GetOrCreateMapping(newBackingInode);
+            var replacementMapping = newBackingInode.AcquireMappingRef();
             if (ReferenceEquals(vma.VmMapping, replacementMapping))
             {
                 replacementMapping.Release();
@@ -1800,46 +1802,6 @@ public class VMAManager
         foreach (var range in invalidatedRanges)
             TearDownNativeMappings(primary, range.Start, range.Length, false, true, true);
         primary.AddressSpaceMapSequenceSeen = sequence;
-    }
-
-    private static bool TryResolveMappedFilePage(VmArea vma, uint pageIndex, long absoluteFileOffset, bool writable,
-        out IntPtr pagePtr)
-    {
-        pagePtr = IntPtr.Zero;
-        var inode = vma.File?.OpenedInode;
-        if (inode == null) return false;
-        if (!inode.TryAcquireMappedPageHandle(vma.File, pageIndex, absoluteFileOffset, writable, out var pageHandle))
-            return false;
-        if (pageHandle == null) return false;
-
-        var mappedPtr = pageHandle.Pointer;
-        if (mappedPtr == IntPtr.Zero)
-        {
-            pageHandle.Dispose();
-            return false;
-        }
-
-        if (!TryGetVmMapping(vma, out var mapping))
-        {
-            pageHandle.Dispose();
-            return false;
-        }
-
-        var existing = mapping.PeekPage(pageIndex);
-        if (existing != IntPtr.Zero)
-        {
-            pageHandle.Dispose();
-            pagePtr = existing;
-            return true;
-        }
-
-        ExternalPageManager.AddRefPtr(mappedPtr, pageHandle);
-        var finalPtr = mapping.SetPageIfAbsent(pageIndex, mappedPtr, out var inserted);
-        if (!inserted)
-            ExternalPageManager.ReleasePtr(mappedPtr);
-
-        pagePtr = finalPtr;
-        return pagePtr != IntPtr.Zero;
     }
 
     internal bool PrefaultRange(uint addr, uint len, Engine engine, bool writeIntent)
@@ -2005,58 +1967,9 @@ public class VMAManager
                 mapping.MarkDirty(pageIndex);
                 inode.SetPageDirty(pageIndex);
             }
-
-            SyncSharedFilePage(vma, inode, mapping, page, pageIndex);
         }
 
-        inode.WritePages(vma.File, new WritePagesRequest(startPageIndex, endPageIndex, true));
-    }
-
-    private static void SyncSharedFilePage(VmArea vma, Inode inode, AddressSpace mapping, uint pageAddr, uint pageIndex)
-    {
-        if (!mapping.IsDirty(pageIndex)) return;
-        var pagePtr = mapping.PeekPage(pageIndex);
-        if (pagePtr == IntPtr.Zero) return;
-
-        long vmaRelativeOffset = pageAddr - vma.Start;
-        var absoluteFileOffset = vma.Offset + vmaRelativeOffset;
-
-        var writeLen = LinuxConstants.PageSize;
-        var fileBackingLength = vma.GetFileBackingLength();
-        if (fileBackingLength > 0)
-        {
-            var remainingBackingBytes = vma.GetRemainingBackingBytes(vmaRelativeOffset);
-            if (remainingBackingBytes <= 0)
-                writeLen = 0;
-            else if (remainingBackingBytes < LinuxConstants.PageSize)
-                writeLen = (int)remainingBackingBytes;
-        }
-
-        if (writeLen <= 0) return;
-
-        unsafe
-        {
-            ReadOnlySpan<byte> pageData = new((void*)pagePtr, LinuxConstants.PageSize);
-            GlobalAddressSpaceCacheManager.BeginAddressSpaceWriteback();
-            try
-            {
-                if (inode.TryFlushMappedPage(vma.File, pageIndex))
-                {
-                    mapping.ClearDirty(pageIndex);
-                }
-                else
-                {
-                    var rc = inode.WritePage(vma.File, new PageIoRequest(pageIndex, absoluteFileOffset, writeLen),
-                        pageData, true);
-                    if (rc == 0)
-                        mapping.ClearDirty(pageIndex);
-                }
-            }
-            finally
-            {
-                GlobalAddressSpaceCacheManager.EndAddressSpaceWriteback();
-            }
-        }
+        _ = inode.SyncCachedPages(vma.File, mapping, new WritePagesRequest(startPageIndex, endPageIndex, true));
     }
 
     public void LogVmAreas()

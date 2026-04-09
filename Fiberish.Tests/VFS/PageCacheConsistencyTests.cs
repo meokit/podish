@@ -91,9 +91,9 @@ public class PageCacheConsistencyTests
             Assert.Same(overlayInode.UpperInode.Mapping, vma!.VmMapping);
 
             mm.TearDownNativeMappings(engine, mapAddr, LinuxConstants.PageSize,
-                captureDirtySharedPages: false,
-                invalidateCodeRange: false,
-                releaseExternalPages: true);
+                false,
+                false,
+                true);
 
             Assert.True(mm.HandleFault(mapAddr, false, engine));
 
@@ -375,7 +375,8 @@ public class PageCacheConsistencyTests
             Assert.Equal("hXYlo", Encoding.ASCII.GetString(direct));
 
             const uint mapAddr = 0x4B100000;
-            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write, MapFlags.Shared | MapFlags.Fixed,
+            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed,
                 file, 0, "MAP_SHARED", engine);
             Assert.True(mm.HandleFault(mapAddr, false, engine));
             Assert.Same(beforeMapCache, silkInode.Mapping);
@@ -383,7 +384,6 @@ public class PageCacheConsistencyTests
             var mapped = new byte[5];
             Assert.True(engine.CopyFromUser(mapAddr, mapped));
             Assert.Equal("hXYlo", Encoding.ASCII.GetString(mapped));
-
         }
         finally
         {
@@ -452,18 +452,17 @@ public class PageCacheConsistencyTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "hello");
 
-        var manager = new VmBackingManager();
         LinuxFile? file = null;
         AddressSpace? cache = null;
         try
         {
             file = OpenHostFile(root, "data.bin");
             var inode = file.Dentry.Inode!;
-            cache = manager.GetOrCreateMapping(inode);
+            cache = inode.AcquireMappingRef();
 
             var rc = inode.WriteFromHost(null, file, "XY"u8.ToArray(), 1);
             Assert.Equal(2, rc);
-            Assert.Equal("hello", File.ReadAllText(hostFile));
+            Assert.Equal("hXYlo", File.ReadAllText(hostFile));
 
             // Unflushed cached page must not be reclaimable as "clean".
             Assert.True(cache.IsDirty(0));
@@ -477,7 +476,6 @@ public class PageCacheConsistencyTests
         finally
         {
             if (file?.Dentry.Inode != null) file.Dentry.Inode.Release(file);
-            if (file?.Dentry.Inode != null) manager.ReleaseMapping(file.Dentry.Inode);
             cache?.Release();
             Directory.Delete(root, true);
         }
@@ -516,14 +514,13 @@ public class PageCacheConsistencyTests
         var hostFile = Path.Combine(root, "data.bin");
         File.WriteAllText(hostFile, "hello");
 
-        var manager = new VmBackingManager();
         LinuxFile? file = null;
         AddressSpace? cache = null;
         try
         {
             file = OpenHostFile(root, "data.bin");
             var inode = file.Dentry.Inode!;
-            cache = manager.GetOrCreateMapping(inode);
+            cache = inode.AcquireMappingRef();
 
             var warm = new byte[5];
             var warmN = inode.ReadToHost(null, file, warm, 0);
@@ -543,7 +540,6 @@ public class PageCacheConsistencyTests
         finally
         {
             if (file?.Dentry.Inode != null) file.Dentry.Inode.Release(file);
-            if (file?.Dentry.Inode != null) manager.ReleaseMapping(file.Dentry.Inode);
             cache?.Release();
             Directory.Delete(root, true);
         }

@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -6,9 +7,7 @@ using Fiberish.Memory;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Cli;
-using Podish.Wayland;
 using Xunit;
 using static Podish.Wayland.Tests.WaylandTestHelpers;
 
@@ -22,16 +21,16 @@ public sealed class WaylandWireTests
         using var env = new TestEnv();
         env.InvokeOnScheduler(() =>
         {
-            LinuxFile fd = env.CreateMemfdLikeFile("wayland-wire", "hello-fd");
+            var fd = env.CreateMemfdLikeFile("wayland-wire", "hello-fd");
             var writer = new WaylandWireWriter();
             writer.WriteString("hello");
             writer.WriteArray([1, 2, 3]);
             writer.WriteFd(fd);
 
-            WaylandOutgoingMessage outgoing = writer.ToOutgoingMessage(7, 9);
+            var outgoing = writer.ToOutgoingMessage(7, 9);
             Assert.Equal(1, outgoing.Fds?.Count);
 
-            WaylandMessageHeader header = WaylandMessageHeader.Decode(outgoing.Buffer);
+            var header = WaylandMessageHeader.Decode(outgoing.Buffer);
             Assert.Equal<uint>(7, header.ObjectId);
             Assert.Equal<ushort>(9, header.Opcode);
             Assert.Equal(outgoing.Buffer.Length, header.Size);
@@ -51,7 +50,7 @@ public sealed class WaylandRuntimeTests
     [Fact]
     public void Theme_BreezeLight_HasStableDecorationTokens()
     {
-        WaylandUiTheme theme = WaylandUiTheme.BreezeLight;
+        var theme = WaylandUiTheme.BreezeLight;
 
         Assert.Equal((byte)142, theme.Desktop.Background.R);
         Assert.Equal((byte)158, theme.Desktop.Background.G);
@@ -67,19 +66,20 @@ public sealed class WaylandRuntimeTests
     [Fact]
     public void Theme_Layout_UsesThemeSpacingForWindowAndButtons()
     {
-        WaylandUiTheme theme = WaylandUiTheme.BreezeLight;
+        var theme = WaylandUiTheme.BreezeLight;
         WaylandDecorationSceneState decoration = new(true, true, false, false, "foot");
         WaylandSurfaceBounds content = new(100, 120, 640, 400);
 
-        WaylandSurfaceBounds window = WaylandDecorationLayout.GetWindowBounds(content, decoration, theme);
+        var window = WaylandDecorationLayout.GetWindowBounds(content, decoration, theme);
         Assert.Equal(content.X - theme.Spacing.WindowBorderThickness, window.X);
         Assert.Equal(content.Y - theme.Spacing.TitlebarHeight, window.Y);
         Assert.Equal(content.Width + theme.Spacing.WindowBorderThickness * 2, window.Width);
-        Assert.Equal(content.Height + theme.Spacing.TitlebarHeight + theme.Spacing.WindowBorderThickness, window.Height);
+        Assert.Equal(content.Height + theme.Spacing.TitlebarHeight + theme.Spacing.WindowBorderThickness,
+            window.Height);
 
-        WaylandSurfaceBounds close = WaylandDecorationLayout.GetCloseButtonBounds(window, theme);
-        WaylandSurfaceBounds maximize = WaylandDecorationLayout.GetMaximizeButtonBounds(window, theme);
-        WaylandSurfaceBounds minimize = WaylandDecorationLayout.GetMinimizeButtonBounds(window, theme);
+        var close = WaylandDecorationLayout.GetCloseButtonBounds(window, theme);
+        var maximize = WaylandDecorationLayout.GetMaximizeButtonBounds(window, theme);
+        var minimize = WaylandDecorationLayout.GetMinimizeButtonBounds(window, theme);
 
         Assert.Equal(theme.Spacing.ButtonSize, close.Width);
         Assert.Equal(theme.Spacing.ButtonSize, maximize.Width);
@@ -103,7 +103,7 @@ public sealed class WaylandRuntimeTests
             });
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
-            List<GlobalInfo> globals = ParseGlobals(sent, 2);
+            var globals = ParseGlobals(sent, 2);
 
             Assert.Contains(globals, static g => g.Interface == WpCursorShapeManagerV1Protocol.InterfaceName);
         });
@@ -125,8 +125,8 @@ public sealed class WaylandRuntimeTests
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
             var globals = ParseGlobals(sent, 2);
-            uint seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
-            uint cursorShapeName = globals.Single(x => x.Interface == WpCursorShapeManagerV1Protocol.InterfaceName).Name;
+            var seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
+            var cursorShapeName = globals.Single(x => x.Interface == WpCursorShapeManagerV1Protocol.InterfaceName).Name;
 
             sent.Clear();
             await SendRequestAsync(client, 2, 0, writer =>
@@ -179,8 +179,8 @@ public sealed class WaylandRuntimeTests
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
             var globals = ParseGlobals(sent, 2);
-            uint seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
-            uint cursorShapeName = globals.Single(x => x.Interface == WpCursorShapeManagerV1Protocol.InterfaceName).Name;
+            var seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
+            var cursorShapeName = globals.Single(x => x.Interface == WpCursorShapeManagerV1Protocol.InterfaceName).Name;
 
             sent.Clear();
             await SendRequestAsync(client, 2, 0, writer =>
@@ -231,11 +231,11 @@ public sealed class WaylandRuntimeTests
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
             var globals = ParseGlobals(sent, 2);
-            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
-            uint shmName = globals.Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
-            uint seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
-            uint cursorShapeName = globals.Single(x => x.Interface == WpCursorShapeManagerV1Protocol.InterfaceName).Name;
-            uint xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
+            var compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            var shmName = globals.Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
+            var seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
+            var cursorShapeName = globals.Single(x => x.Interface == WpCursorShapeManagerV1Protocol.InterfaceName).Name;
+            var xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
 
             sent.Clear();
             await SendRequestAsync(client, 2, 0, writer =>
@@ -289,11 +289,11 @@ public sealed class WaylandRuntimeTests
                 writer.WriteObjectId(120);
             });
             await SendRequestAsync(client, 101, 1, writer => writer.WriteNewId(102));
-            uint serial = new WaylandWireReader(sent.Last().Buffer[WaylandMessageHeader.SizeInBytes..]).ReadUInt();
+            var serial = new WaylandWireReader(sent.Last().Buffer[WaylandMessageHeader.SizeInBytes..]).ReadUInt();
             await SendRequestAsync(client, 101, 4, writer => writer.WriteUInt(serial));
 
             // Commit a buffer to the XDG surface so PresentSurfaceAsync registers its bounds
-            LinuxFile sharedFd = env.CreateMemfdLikeFile("xdg-shm", new string('x', 64));
+            var sharedFd = env.CreateMemfdLikeFile("xdg-shm", new string('x', 64));
             await SendRequestAsync(client, 4, 0, writer =>
             {
                 writer.WriteNewId(50);
@@ -320,9 +320,9 @@ public sealed class WaylandRuntimeTests
 
             sent.Clear();
             await server.HandlePointerMotionAsync(10, 10, 1);
-            uint enterSerial = sent
+            var enterSerial = sent
                 .Select(message => new DecodedMessage(
-                    WaylandTestHelpers.DecodeHeader(message),
+                    DecodeHeader(message),
                     message.Buffer[WaylandMessageHeader.SizeInBytes..]))
                 .Where(m => m.Header.ObjectId == 6 && m.Header.Opcode == 0)
                 .Select(m => new WaylandWireReader(m.Body).ReadUInt())
@@ -335,7 +335,7 @@ public sealed class WaylandRuntimeTests
             });
             Assert.Equal(WaylandSystemCursorShape.Text, presenter.LastSystemCursor);
 
-            LinuxFile fd = env.CreateMemfdLikeFile("wl-cursor", new string('z', 64));
+            var fd = env.CreateMemfdLikeFile("wl-cursor", new string('z', 64));
             await SendRequestAsync(client, 4, 0, writer =>
             {
                 writer.WriteNewId(10);
@@ -393,9 +393,9 @@ public sealed class WaylandRuntimeTests
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
             var globals = ParseGlobals(sent, 2);
-            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
-            uint shmName = globals.Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
-            uint xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
+            var compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            var shmName = globals.Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
+            var xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
 
             sent.Clear();
             await SendRequestAsync(client, 2, 0, writer =>
@@ -438,12 +438,12 @@ public sealed class WaylandRuntimeTests
             Assert.Equal<uint>(8, DecodeHeader(sent[0]).ObjectId);
             Assert.Equal<uint>(7, DecodeHeader(sent[1]).ObjectId);
             var configureReader = new WaylandWireReader(sent[1].Buffer[WaylandMessageHeader.SizeInBytes..]);
-            uint serial = configureReader.ReadUInt();
+            var serial = configureReader.ReadUInt();
             configureReader.EnsureExhausted();
 
             await SendRequestAsync(client, 7, 4, writer => writer.WriteUInt(serial));
 
-            LinuxFile fd = env.CreateMemfdLikeFile("wl-shm", new string('a', 128));
+            var fd = env.CreateMemfdLikeFile("wl-shm", new string('a', 128));
             await SendRequestAsync(client, 4, 0, writer =>
             {
                 writer.WriteNewId(9);
@@ -499,9 +499,9 @@ public sealed class WaylandRuntimeTests
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
             var globals = ParseGlobals(sent, 2);
-            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
-            uint shmName = globals.Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
-            uint xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
+            var compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            var shmName = globals.Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
+            var xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
 
             sent.Clear();
             await SendRequestAsync(client, 2, 0, writer =>
@@ -534,10 +534,10 @@ public sealed class WaylandRuntimeTests
                 writer.WriteObjectId(6);
             });
             await SendRequestAsync(client, 7, 1, writer => writer.WriteNewId(8));
-            uint serial = new WaylandWireReader(sent[1].Buffer[WaylandMessageHeader.SizeInBytes..]).ReadUInt();
+            var serial = new WaylandWireReader(sent[1].Buffer[WaylandMessageHeader.SizeInBytes..]).ReadUInt();
             await SendRequestAsync(client, 7, 4, writer => writer.WriteUInt(serial));
 
-            LinuxFile fd = env.CreateMemfdLikeFile("wl-shm-release", new string('c', 128));
+            var fd = env.CreateMemfdLikeFile("wl-shm-release", new string('c', 128));
             await SendRequestAsync(client, 4, 0, writer =>
             {
                 writer.WriteNewId(9);
@@ -590,9 +590,9 @@ public sealed class WaylandRuntimeTests
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
             var globals = ParseGlobals(sent, 2);
-            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
-            uint subcompositorName = globals.Single(x => x.Interface == WlSubcompositorProtocol.InterfaceName).Name;
-            uint xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
+            var compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            var subcompositorName = globals.Single(x => x.Interface == WlSubcompositorProtocol.InterfaceName).Name;
+            var xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
 
             await SendRequestAsync(client, 2, 0, writer =>
             {
@@ -626,12 +626,12 @@ public sealed class WaylandRuntimeTests
             });
 
             object childSurface = client.Objects.Require(7);
-            object? subsurface = childSurface.GetType()
+            var subsurface = childSurface.GetType()
                 .GetProperty("Subsurface", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
                 .GetValue(childSurface);
             Assert.NotNull(subsurface);
 
-            WaylandProtocolException roleEx = await Assert.ThrowsAsync<WaylandProtocolException>(async () =>
+            var roleEx = await Assert.ThrowsAsync<WaylandProtocolException>(async () =>
                 await SendRequestAsync(client, 5, 2, writer =>
                 {
                     writer.WriteNewId(9);
@@ -658,9 +658,9 @@ public sealed class WaylandRuntimeTests
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
             var globals = ParseGlobals(sent, 2);
-            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
-            uint xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
-            uint decorationName = globals.Single(x => x.Interface == ZxdgDecorationManagerV1Protocol.InterfaceName).Name;
+            var compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            var xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
+            var decorationName = globals.Single(x => x.Interface == ZxdgDecorationManagerV1Protocol.InterfaceName).Name;
 
             sent.Clear();
             await SendRequestAsync(client, 2, 0, writer =>
@@ -721,9 +721,9 @@ public sealed class WaylandRuntimeTests
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
             var globals = ParseGlobals(sent, 2);
-            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
-            uint xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
-            uint decorationName = globals.Single(x => x.Interface == ZxdgDecorationManagerV1Protocol.InterfaceName).Name;
+            var compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            var xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
+            var decorationName = globals.Single(x => x.Interface == ZxdgDecorationManagerV1Protocol.InterfaceName).Name;
 
             await SendRequestAsync(client, 2, 0, writer =>
             {
@@ -759,7 +759,7 @@ public sealed class WaylandRuntimeTests
                 writer.WriteObjectId(8);
             });
 
-            WaylandProtocolException ex = await Assert.ThrowsAsync<WaylandProtocolException>(async () =>
+            var ex = await Assert.ThrowsAsync<WaylandProtocolException>(async () =>
                 await SendRequestAsync(client, 5, 1, writer =>
                 {
                     writer.WriteNewId(10);
@@ -785,8 +785,8 @@ public sealed class WaylandRuntimeTests
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
             var globals = ParseGlobals(sent, 2);
-            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
-            uint subcompositorName = globals.Single(x => x.Interface == WlSubcompositorProtocol.InterfaceName).Name;
+            var compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            var subcompositorName = globals.Single(x => x.Interface == WlSubcompositorProtocol.InterfaceName).Name;
 
             await SendRequestAsync(client, 2, 0, writer =>
             {
@@ -837,8 +837,8 @@ public sealed class WaylandRuntimeTests
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
             var globals = ParseGlobals(sent, 2);
-            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
-            uint seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
+            var compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            var seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
 
             sent.Clear();
             await SendRequestAsync(client, 2, 0, writer =>
@@ -860,13 +860,15 @@ public sealed class WaylandRuntimeTests
             await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(7));
 
             object surface = client.Objects.Require(7);
-            ulong sceneSurfaceId = (ulong)(surface.GetType().GetProperty("SceneSurfaceId", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            var sceneSurfaceId = (ulong)(surface.GetType().GetProperty("SceneSurfaceId",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
                 .GetValue(surface) ?? 0UL);
             presenter.SetSurfaceBounds(sceneSurfaceId, new WaylandSurfaceBounds(100, 100, 300, 300));
 
             sent.Clear();
             await server.HandlePointerMotionAsync(120, 130, 1);
-            Assert.DoesNotContain(sent, message => DecodeHeader(message).ObjectId == 6 && DecodeHeader(message).Opcode == 1);
+            Assert.DoesNotContain(sent,
+                message => DecodeHeader(message).ObjectId == 6 && DecodeHeader(message).Opcode == 1);
 
             await server.HandlePointerButtonAsync(0x110, true, 2);
             Assert.Contains(sent, message => DecodeHeader(message).ObjectId == 6 && DecodeHeader(message).Opcode == 1);
@@ -890,8 +892,8 @@ public sealed class WaylandRuntimeTests
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
             var globals = ParseGlobals(sent, 2);
-            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
-            uint seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
+            var compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            var seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
 
             sent.Clear();
             await SendRequestAsync(client, 2, 0, writer =>
@@ -912,7 +914,8 @@ public sealed class WaylandRuntimeTests
             await SendRequestAsync(client, 3, 0, writer => writer.WriteNewId(6));
 
             object surface = client.Objects.Require(6);
-            ulong sceneSurfaceId = (ulong)(surface.GetType().GetProperty("SceneSurfaceId", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            var sceneSurfaceId = (ulong)(surface.GetType().GetProperty("SceneSurfaceId",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
                 .GetValue(surface) ?? 0UL);
             presenter.SetSurfaceBounds(sceneSurfaceId, new WaylandSurfaceBounds(100, 100, 300, 300));
 
@@ -921,37 +924,38 @@ public sealed class WaylandRuntimeTests
 
             sent.Clear();
             await server.HandleKeyboardKeyAsync(42, true, 3);
-            WaylandOutgoingMessage shiftModifiers = Assert.Single(sent.Where(message =>
+            var shiftModifiers = Assert.Single(sent.Where(message =>
                 DecodeHeader(message).ObjectId == 5 && DecodeHeader(message).Opcode == 4));
             var shiftReader = new WaylandWireReader(shiftModifiers.Buffer[WaylandMessageHeader.SizeInBytes..]);
             _ = shiftReader.ReadUInt();
-            uint shiftDepressed = shiftReader.ReadUInt();
+            var shiftDepressed = shiftReader.ReadUInt();
             _ = shiftReader.ReadUInt();
-            uint shiftLocked = shiftReader.ReadUInt();
+            var shiftLocked = shiftReader.ReadUInt();
             Assert.Equal<uint>(1, shiftDepressed);
             Assert.Equal<uint>(0, shiftLocked);
 
             sent.Clear();
             await server.HandleKeyboardKeyAsync(58, true, 4);
-            WaylandOutgoingMessage capsModifiers = Assert.Single(sent.Where(message =>
+            var capsModifiers = Assert.Single(sent.Where(message =>
                 DecodeHeader(message).ObjectId == 5 && DecodeHeader(message).Opcode == 4));
             var capsReader = new WaylandWireReader(capsModifiers.Buffer[WaylandMessageHeader.SizeInBytes..]);
             _ = capsReader.ReadUInt();
-            uint capsDepressed = capsReader.ReadUInt();
+            var capsDepressed = capsReader.ReadUInt();
             _ = capsReader.ReadUInt();
-            uint capsLocked = capsReader.ReadUInt();
+            var capsLocked = capsReader.ReadUInt();
             Assert.Equal<uint>(1, capsDepressed);
             Assert.Equal<uint>(2, capsLocked);
 
             sent.Clear();
             await server.HandleKeyboardKeyAsync(42, false, 5);
-            WaylandOutgoingMessage shiftReleaseModifiers = Assert.Single(sent.Where(message =>
+            var shiftReleaseModifiers = Assert.Single(sent.Where(message =>
                 DecodeHeader(message).ObjectId == 5 && DecodeHeader(message).Opcode == 4));
-            var shiftReleaseReader = new WaylandWireReader(shiftReleaseModifiers.Buffer[WaylandMessageHeader.SizeInBytes..]);
+            var shiftReleaseReader =
+                new WaylandWireReader(shiftReleaseModifiers.Buffer[WaylandMessageHeader.SizeInBytes..]);
             _ = shiftReleaseReader.ReadUInt();
-            uint shiftReleaseDepressed = shiftReleaseReader.ReadUInt();
+            var shiftReleaseDepressed = shiftReleaseReader.ReadUInt();
             _ = shiftReleaseReader.ReadUInt();
-            uint shiftReleaseLocked = shiftReleaseReader.ReadUInt();
+            var shiftReleaseLocked = shiftReleaseReader.ReadUInt();
             Assert.Equal<uint>(0, shiftReleaseDepressed);
             Assert.Equal<uint>(2, shiftReleaseLocked);
         });
@@ -964,21 +968,21 @@ public sealed class WaylandRuntimeTests
         await env.InvokeOnSchedulerAsync(() =>
         {
             var server = new WaylandServer();
-            object keymap = server.GetType()
+            var keymap = server.GetType()
                 .GetProperty("KeyboardKeymap", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
                 .GetValue(server)!;
-            uint size = (uint)(keymap.GetType()
+            var size = (uint)(keymap.GetType()
                 .GetProperty("Size", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
                 .GetValue(keymap) ?? 0U);
-            LinuxFile file = (LinuxFile)keymap.GetType()
+            var file = (LinuxFile)keymap.GetType()
                 .GetMethod("OpenReadOnly", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
                 .Invoke(keymap, [])!;
 
-            byte[] bytes = new byte[size];
-            int read = file.OpenedInode!.ReadToHost(null, file, bytes, 0);
+            var bytes = new byte[size];
+            var read = file.OpenedInode!.ReadToHost(null, file, bytes, 0);
             Assert.Equal((int)size, read);
 
-            string text = Encoding.UTF8.GetString(bytes).TrimEnd('\0');
+            var text = Encoding.UTF8.GetString(bytes).TrimEnd('\0');
             Assert.Contains("xkb_keymap {", text);
             Assert.Contains("key <LFSH> { [ Shift_L ] };", text);
             Assert.Contains("modifier_map Shift { <LFSH>, <RTSH> };", text);
@@ -1003,8 +1007,8 @@ public sealed class WaylandRuntimeTests
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
             var globals = ParseGlobals(sent, 2);
-            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
-            uint xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
+            var compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            var xdgName = globals.Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
 
             sent.Clear();
             await SendRequestAsync(client, 2, 0, writer =>
@@ -1032,27 +1036,31 @@ public sealed class WaylandRuntimeTests
             await SendRequestAsync(client, 6, 1, writer => writer.WriteNewId(7));
 
             Assert.Equal(2, sent.Count);
-            uint firstSerial = new WaylandWireReader(sent[1].Buffer[WaylandMessageHeader.SizeInBytes..]).ReadUInt();
+            var firstSerial = new WaylandWireReader(sent[1].Buffer[WaylandMessageHeader.SizeInBytes..]).ReadUInt();
 
             object xdgSurface = client.Objects.Require(6);
-            object toplevel = xdgSurface.GetType().GetProperty("Toplevel", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            var toplevel = xdgSurface.GetType().GetProperty("Toplevel",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
                 .GetValue(xdgSurface)!;
-            var sendConfigureAsync = toplevel.GetType().GetMethod("SendConfigureAsync", [typeof(int), typeof(int), typeof(bool)])!;
+            var sendConfigureAsync = toplevel.GetType()
+                .GetMethod("SendConfigureAsync", [typeof(int), typeof(int), typeof(bool)])!;
 
             sent.Clear();
-            await ((ValueTask)sendConfigureAsync.Invoke(toplevel, [320, 240, true])!);
+            await (ValueTask)sendConfigureAsync.Invoke(toplevel, [320, 240, true])!;
 
             Assert.Equal(2, sent.Count);
             Assert.Equal<uint>(7, DecodeHeader(sent[0]).ObjectId);
             Assert.Equal<uint>(6, DecodeHeader(sent[1]).ObjectId);
-            uint secondSerial = new WaylandWireReader(sent[1].Buffer[WaylandMessageHeader.SizeInBytes..]).ReadUInt();
+            var secondSerial = new WaylandWireReader(sent[1].Buffer[WaylandMessageHeader.SizeInBytes..]).ReadUInt();
             Assert.NotEqual(firstSerial, secondSerial);
 
             await SendRequestAsync(client, 6, 4, writer => writer.WriteUInt(firstSerial));
 
-            uint ackedSerial = (uint)(xdgSurface.GetType().GetProperty("AckedConfigureSerial", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            var ackedSerial = (uint)(xdgSurface.GetType().GetProperty("AckedConfigureSerial",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
                 .GetValue(xdgSurface) ?? 0U);
-            uint pendingSerial = (uint)(xdgSurface.GetType().GetProperty("PendingConfigureSerial", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            var pendingSerial = (uint)(xdgSurface.GetType().GetProperty("PendingConfigureSerial",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
                 .GetValue(xdgSurface) ?? 0U);
 
             Assert.Equal(firstSerial, ackedSerial);
@@ -1076,8 +1084,8 @@ public sealed class WaylandRuntimeTests
 
             await SendRequestAsync(client, 1, 1, writer => writer.WriteNewId(2));
             var globals = ParseGlobals(sent, 2);
-            uint compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
-            uint seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
+            var compositorName = globals.Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            var seatName = globals.Single(x => x.Interface == WlSeatProtocol.InterfaceName).Name;
 
             sent.Clear();
             await SendRequestAsync(client, 2, 0, writer =>
@@ -1113,7 +1121,8 @@ public sealed class WaylandRuntimeTests
             });
 
             object surface = client.Objects.Require(6);
-            bool isCursorRole = (bool)(surface.GetType().GetProperty("IsCursorRole", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            var isCursorRole = (bool)(surface.GetType().GetProperty("IsCursorRole",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
                 .GetValue(surface) ?? false);
             Assert.True(isCursorRole);
         });
@@ -1131,7 +1140,7 @@ public sealed class WaylandVirtualDaemonTests
         await env.InvokeOnSchedulerAsync(async () =>
         {
             step = "spawn daemon";
-            using ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
+            using var loggerFactory = LoggerFactory.Create(builder =>
             {
                 builder.SetMinimumLevel(LogLevel.Trace);
                 builder.AddSimpleConsole(options => options.SingleLine = true);
@@ -1144,10 +1153,12 @@ public sealed class WaylandVirtualDaemonTests
 
             step = "get registry";
             await clientSocket.SendAsync(MakeRequest(1, 1, writer => writer.WriteNewId(2)).Buffer);
-            List<DecodedMessage> globals = await clientSocket.ReceiveMessagesAsync(11);
-            uint compositorName = globals.Select(ParseGlobal).Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
-            uint shmName = globals.Select(ParseGlobal).Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
-            uint wmBaseName = globals.Select(ParseGlobal).Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName).Name;
+            var globals = await clientSocket.ReceiveMessagesAsync(11);
+            var compositorName = globals.Select(ParseGlobal)
+                .Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
+            var shmName = globals.Select(ParseGlobal).Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
+            var wmBaseName = globals.Select(ParseGlobal).Single(x => x.Interface == XdgWmBaseProtocol.InterfaceName)
+                .Name;
 
             step = "bind globals";
             await clientSocket.SendAsync(MakeRequest(2, 0, writer =>
@@ -1172,7 +1183,7 @@ public sealed class WaylandVirtualDaemonTests
                 writer.WriteNewId(5);
             }).Buffer);
 
-            List<DecodedMessage> bindEvents = await clientSocket.ReceiveMessagesAsync(3);
+            var bindEvents = await clientSocket.ReceiveMessagesAsync(3);
             Assert.Equal<uint>(4, bindEvents[0].Header.ObjectId);
             Assert.Equal<uint>(4, bindEvents[1].Header.ObjectId);
             Assert.Equal<uint>(5, bindEvents[2].Header.ObjectId);
@@ -1185,13 +1196,13 @@ public sealed class WaylandVirtualDaemonTests
                 writer.WriteObjectId(6);
             }).Buffer);
             await clientSocket.SendAsync(MakeRequest(7, 1, writer => writer.WriteNewId(8)).Buffer);
-            List<DecodedMessage> configureMessages = await clientSocket.ReceiveMessagesAsync(2);
-            uint serial = new WaylandWireReader(configureMessages[1].Body).ReadUInt();
+            var configureMessages = await clientSocket.ReceiveMessagesAsync(2);
+            var serial = new WaylandWireReader(configureMessages[1].Body).ReadUInt();
             await clientSocket.SendAsync(MakeRequest(7, 4, writer => writer.WriteUInt(serial)).Buffer);
 
             step = "shm buffer";
-            LinuxFile fd = env.CreateMemfdLikeFile("virt-wayland-buffer", new string('b', 128));
-            WaylandOutgoingMessage createPool = MakeRequest(4, 0, writer =>
+            var fd = env.CreateMemfdLikeFile("virt-wayland-buffer", new string('b', 128));
+            var createPool = MakeRequest(4, 0, writer =>
             {
                 writer.WriteNewId(9);
                 writer.WriteFd(fd);
@@ -1243,7 +1254,8 @@ internal static class WaylandTestHelpers
     public static List<GlobalInfo> ParseGlobals(List<WaylandOutgoingMessage> sent, uint objectId)
     {
         return sent
-            .Select(message => new DecodedMessage(DecodeHeader(message), message.Buffer[WaylandMessageHeader.SizeInBytes..]))
+            .Select(message =>
+                new DecodedMessage(DecodeHeader(message), message.Buffer[WaylandMessageHeader.SizeInBytes..]))
             .Where(decoded => decoded.Header.ObjectId == objectId)
             .Select(ParseGlobal)
             .ToList();
@@ -1252,9 +1264,9 @@ internal static class WaylandTestHelpers
     public static GlobalInfo ParseGlobal(DecodedMessage message)
     {
         var reader = new WaylandWireReader(message.Body);
-        uint name = reader.ReadUInt();
-        string iface = reader.ReadString() ?? string.Empty;
-        uint version = reader.ReadUInt();
+        var name = reader.ReadUInt();
+        var iface = reader.ReadString() ?? string.Empty;
+        var version = reader.ReadUInt();
         reader.EnsureExhausted();
         return new GlobalInfo(name, iface, version);
     }
@@ -1267,8 +1279,8 @@ internal static class WaylandTestHelpers
     public static async Task SendRequestAsync(WaylandClient client, uint objectId, ushort opcode,
         Action<WaylandWireWriter> write)
     {
-        WaylandOutgoingMessage request = MakeRequest(objectId, opcode, write);
-        WaylandMessageHeader header = WaylandMessageHeader.Decode(request.Buffer);
+        var request = MakeRequest(objectId, opcode, write);
+        var header = WaylandMessageHeader.Decode(request.Buffer);
         await client.ProcessMessageAsync(new WaylandIncomingMessage(header,
             request.Buffer[WaylandMessageHeader.SizeInBytes..], request.Fds ?? Array.Empty<LinuxFile>()));
     }
@@ -1280,48 +1292,45 @@ internal sealed class RecordingFramePresenter : IWaylandFramePresenter, IWayland
     public WaylandCursorFrame? LastCursor { get; private set; }
     public WaylandSystemCursorShape? LastSystemCursor { get; private set; }
 
-    public ValueTask PresentSurfaceAsync(ulong sceneSurfaceId, WaylandShmFrame? frame, CancellationToken cancellationToken = default)
+    public ValueTask UpdateCursorAsync(ulong sceneSurfaceId, WaylandCursorFrame? cursor,
+        CancellationToken cancellationToken = default)
+    {
+        LastCursor = cursor;
+        if (cursor != null)
+            LastSystemCursor = null;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask UpdateSystemCursorAsync(WaylandSystemCursorShape? shape,
+        CancellationToken cancellationToken = default)
+    {
+        LastSystemCursor = shape;
+        if (shape != null)
+            LastCursor = null;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask PresentSurfaceAsync(ulong sceneSurfaceId, WaylandShmFrame? frame,
+        CancellationToken cancellationToken = default)
     {
         LastFrame = frame;
         return ValueTask.CompletedTask;
     }
-
-    public ValueTask UpdateCursorAsync(ulong sceneSurfaceId, WaylandCursorFrame? cursor, CancellationToken cancellationToken = default)
-    {
-        LastCursor = cursor;
-        if (cursor != null)
-            LastSystemCursor = null;
-        return ValueTask.CompletedTask;
-    }
-
-    public ValueTask UpdateSystemCursorAsync(WaylandSystemCursorShape? shape, CancellationToken cancellationToken = default)
-    {
-        LastSystemCursor = shape;
-        if (shape != null)
-            LastCursor = null;
-        return ValueTask.CompletedTask;
-    }
 }
 
-internal sealed class TestScenePresenter : IWaylandFramePresenter, IWaylandSceneView, IWaylandDesktopSceneController, IWaylandCursorPresenter
+internal sealed class TestScenePresenter : IWaylandFramePresenter, IWaylandSceneView, IWaylandDesktopSceneController,
+    IWaylandCursorPresenter
 {
-    private readonly WaylandUiTheme _theme = WaylandUiTheme.BreezeLight;
     private readonly Dictionary<ulong, WaylandSurfaceBounds> _bounds = [];
     private readonly Dictionary<ulong, WaylandDecorationSceneState> _decorations = [];
     private readonly HashSet<ulong> _hidden = [];
+    private readonly WaylandUiTheme _theme = WaylandUiTheme.BreezeLight;
 
     public WaylandCursorFrame? LastCursor { get; private set; }
     public WaylandSystemCursorShape? LastSystemCursor { get; private set; }
 
-    public ValueTask PresentSurfaceAsync(ulong sceneSurfaceId, WaylandShmFrame? frame, CancellationToken cancellationToken = default)
-    {
-        // Auto-register default bounds when a surface first appears so pointer hit-tests can find it
-        if (frame != null)
-            _bounds.TryAdd(sceneSurfaceId, new WaylandSurfaceBounds(0, 0, 1024, 768));
-        return ValueTask.CompletedTask;
-    }
-
-    public ValueTask UpdateCursorAsync(ulong sceneSurfaceId, WaylandCursorFrame? cursor, CancellationToken cancellationToken = default)
+    public ValueTask UpdateCursorAsync(ulong sceneSurfaceId, WaylandCursorFrame? cursor,
+        CancellationToken cancellationToken = default)
     {
         LastCursor = cursor;
         if (cursor != null)
@@ -1329,72 +1338,13 @@ internal sealed class TestScenePresenter : IWaylandFramePresenter, IWaylandScene
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask UpdateSystemCursorAsync(WaylandSystemCursorShape? shape, CancellationToken cancellationToken = default)
+    public ValueTask UpdateSystemCursorAsync(WaylandSystemCursorShape? shape,
+        CancellationToken cancellationToken = default)
     {
         LastSystemCursor = shape;
         if (shape != null)
             LastCursor = null;
         return ValueTask.CompletedTask;
-    }
-
-    public bool TryGetSurfaceAt(int desktopX, int desktopY, out WaylandSurfaceHit hit)
-    {
-        if (TryGetSceneHitAt(desktopX, desktopY, out WaylandSceneHit sceneHit))
-        {
-            hit = new WaylandSurfaceHit(sceneHit.SceneSurfaceId, sceneHit.SurfaceX, sceneHit.SurfaceY);
-            return true;
-        }
-
-        hit = default;
-        return false;
-    }
-
-    public bool TryGetSceneHitAt(int desktopX, int desktopY, out WaylandSceneHit hit)
-    {
-        foreach ((ulong sceneSurfaceId, WaylandSurfaceBounds bounds) in _bounds)
-        {
-            if (_hidden.Contains(sceneSurfaceId))
-                continue;
-
-            WaylandDecorationSceneState decoration = _decorations.TryGetValue(sceneSurfaceId, out WaylandDecorationSceneState state)
-                ? state
-                : default;
-            WaylandSurfaceBounds windowBounds = WaylandDecorationLayout.GetWindowBounds(bounds, decoration, _theme);
-            if (desktopX < windowBounds.X || desktopY < windowBounds.Y || desktopX >= windowBounds.X + windowBounds.Width || desktopY >= windowBounds.Y + windowBounds.Height)
-                continue;
-
-            if (desktopX >= bounds.X && desktopY >= bounds.Y && desktopX < bounds.X + bounds.Width && desktopY < bounds.Y + bounds.Height)
-            {
-                hit = new WaylandSceneHit(sceneSurfaceId, WaylandSceneHitKind.Surface, desktopX - bounds.X, desktopY - bounds.Y);
-                return true;
-            }
-
-            hit = new WaylandSceneHit(sceneSurfaceId, WaylandSceneHitKind.Titlebar, desktopX - bounds.X, desktopY - bounds.Y);
-            return true;
-        }
-
-        hit = default;
-        return false;
-    }
-
-    public bool TryGetSurfaceBounds(ulong sceneSurfaceId, out WaylandSurfaceBounds bounds)
-    {
-        return _bounds.TryGetValue(sceneSurfaceId, out bounds);
-    }
-
-    public bool TryGetWindowBounds(ulong sceneSurfaceId, out WaylandSurfaceBounds bounds)
-    {
-        if (_bounds.TryGetValue(sceneSurfaceId, out WaylandSurfaceBounds contentBounds))
-        {
-            WaylandDecorationSceneState decoration = _decorations.TryGetValue(sceneSurfaceId, out WaylandDecorationSceneState state)
-                ? state
-                : default;
-            bounds = WaylandDecorationLayout.GetWindowBounds(contentBounds, decoration, _theme);
-            return true;
-        }
-
-        bounds = default;
-        return false;
     }
 
     public void ResizeDesktop(int width, int height)
@@ -1412,7 +1362,7 @@ internal sealed class TestScenePresenter : IWaylandFramePresenter, IWaylandScene
 
     public void SetWindowBounds(ulong sceneSurfaceId, WaylandSurfaceBounds bounds)
     {
-        WaylandDecorationSceneState decoration = _decorations.TryGetValue(sceneSurfaceId, out WaylandDecorationSceneState state)
+        var decoration = _decorations.TryGetValue(sceneSurfaceId, out var state)
             ? state
             : default;
         _bounds[sceneSurfaceId] = WaylandDecorationLayout.GetContentBoundsFromWindowBounds(bounds, decoration, _theme);
@@ -1430,15 +1380,88 @@ internal sealed class TestScenePresenter : IWaylandFramePresenter, IWaylandScene
         else
             _hidden.Remove(sceneSurfaceId);
     }
+
+    public ValueTask PresentSurfaceAsync(ulong sceneSurfaceId, WaylandShmFrame? frame,
+        CancellationToken cancellationToken = default)
+    {
+        // Auto-register default bounds when a surface first appears so pointer hit-tests can find it
+        if (frame != null)
+            _bounds.TryAdd(sceneSurfaceId, new WaylandSurfaceBounds(0, 0, 1024, 768));
+        return ValueTask.CompletedTask;
+    }
+
+    public bool TryGetSurfaceAt(int desktopX, int desktopY, out WaylandSurfaceHit hit)
+    {
+        if (TryGetSceneHitAt(desktopX, desktopY, out var sceneHit))
+        {
+            hit = new WaylandSurfaceHit(sceneHit.SceneSurfaceId, sceneHit.SurfaceX, sceneHit.SurfaceY);
+            return true;
+        }
+
+        hit = default;
+        return false;
+    }
+
+    public bool TryGetSceneHitAt(int desktopX, int desktopY, out WaylandSceneHit hit)
+    {
+        foreach (var (sceneSurfaceId, bounds) in _bounds)
+        {
+            if (_hidden.Contains(sceneSurfaceId))
+                continue;
+
+            var decoration = _decorations.TryGetValue(sceneSurfaceId, out var state)
+                ? state
+                : default;
+            var windowBounds = WaylandDecorationLayout.GetWindowBounds(bounds, decoration, _theme);
+            if (desktopX < windowBounds.X || desktopY < windowBounds.Y ||
+                desktopX >= windowBounds.X + windowBounds.Width || desktopY >= windowBounds.Y + windowBounds.Height)
+                continue;
+
+            if (desktopX >= bounds.X && desktopY >= bounds.Y && desktopX < bounds.X + bounds.Width &&
+                desktopY < bounds.Y + bounds.Height)
+            {
+                hit = new WaylandSceneHit(sceneSurfaceId, WaylandSceneHitKind.Surface, desktopX - bounds.X,
+                    desktopY - bounds.Y);
+                return true;
+            }
+
+            hit = new WaylandSceneHit(sceneSurfaceId, WaylandSceneHitKind.Titlebar, desktopX - bounds.X,
+                desktopY - bounds.Y);
+            return true;
+        }
+
+        hit = default;
+        return false;
+    }
+
+    public bool TryGetSurfaceBounds(ulong sceneSurfaceId, out WaylandSurfaceBounds bounds)
+    {
+        return _bounds.TryGetValue(sceneSurfaceId, out bounds);
+    }
+
+    public bool TryGetWindowBounds(ulong sceneSurfaceId, out WaylandSurfaceBounds bounds)
+    {
+        if (_bounds.TryGetValue(sceneSurfaceId, out var contentBounds))
+        {
+            var decoration = _decorations.TryGetValue(sceneSurfaceId, out var state)
+                ? state
+                : default;
+            bounds = WaylandDecorationLayout.GetWindowBounds(contentBounds, decoration, _theme);
+            return true;
+        }
+
+        bounds = default;
+        return false;
+    }
 }
 
 internal sealed class WaylandSocketClient : IDisposable
 {
     private readonly LinuxFile _file;
+    private readonly List<byte> _pending = [];
+    private readonly byte[] _scratch = new byte[4096];
     private readonly UnixSocketInode _socket;
     private readonly FiberTask _task;
-    private readonly byte[] _scratch = new byte[4096];
-    private readonly List<byte> _pending = [];
 
     public WaylandSocketClient(UnixSocketInode socket, LinuxFile file, FiberTask task)
     {
@@ -1447,9 +1470,14 @@ internal sealed class WaylandSocketClient : IDisposable
         _task = task;
     }
 
+    public void Dispose()
+    {
+        _file.Close();
+    }
+
     public async Task SendAsync(byte[] buffer, IReadOnlyList<LinuxFile>? fds = null)
     {
-        int rc = await _socket.SendMsgAsync(_file, _task, buffer, fds?.ToList(), 0, null);
+        var rc = await _socket.SendMsgAsync(_file, _task, buffer, fds?.ToList(), 0, null);
         Assert.Equal(buffer.Length, rc);
     }
 
@@ -1458,16 +1486,16 @@ internal sealed class WaylandSocketClient : IDisposable
         var messages = new List<DecodedMessage>();
         while (messages.Count < count)
         {
-            int read = await _socket.RecvAsync(_file, _task, _scratch, 0, _scratch.Length);
+            var read = await _socket.RecvAsync(_file, _task, _scratch, 0, _scratch.Length);
             Assert.True(read > 0);
             _pending.AddRange(_scratch[..read]);
 
             while (_pending.Count >= WaylandMessageHeader.SizeInBytes)
             {
-                WaylandMessageHeader header = WaylandMessageHeader.Decode(CollectionsMarshal.AsSpan(_pending));
+                var header = WaylandMessageHeader.Decode(CollectionsMarshal.AsSpan(_pending));
                 if (_pending.Count < header.Size)
                     break;
-                byte[] packet = _pending[..header.Size].ToArray();
+                var packet = _pending[..header.Size].ToArray();
                 _pending.RemoveRange(0, header.Size);
                 messages.Add(new DecodedMessage(header, packet[WaylandMessageHeader.SizeInBytes..]));
                 if (messages.Count == count)
@@ -1476,11 +1504,6 @@ internal sealed class WaylandSocketClient : IDisposable
         }
 
         return messages;
-    }
-
-    public void Dispose()
-    {
-        _file.Close();
     }
 }
 
@@ -1491,8 +1514,8 @@ internal sealed class TestEnv : IDisposable
 
     private readonly ClientTaskHandle _anchor;
     private readonly List<ClientTaskHandle> _clients = [];
-    private Exception? _schedulerFailure;
     private readonly Thread _schedulerThread;
+    private Exception? _schedulerFailure;
 
     public TestEnv()
     {
@@ -1509,7 +1532,7 @@ internal sealed class TestEnv : IDisposable
         });
 
         Registry = new VirtualDaemonRegistry(Runtime.Syscalls, Scheduler);
-        _anchor = CreateClientTaskCore("scheduler-anchor", track: false);
+        _anchor = CreateClientTaskCore("scheduler-anchor", false);
         _anchor.Task.Status = FiberTaskStatus.Waiting;
         _schedulerThread = new Thread(() =>
         {
@@ -1606,7 +1629,8 @@ internal sealed class TestEnv : IDisposable
         var inode = Runtime.Syscalls.MemfdSuperBlock.AllocInode();
         inode.Type = InodeType.File;
         inode.Mode = 0x180;
-        var dentry = new Dentry($"memfd:{name}", inode, Runtime.Syscalls.MemfdSuperBlock.Root, Runtime.Syscalls.MemfdSuperBlock);
+        var dentry = new Dentry($"memfd:{name}", inode, Runtime.Syscalls.MemfdSuperBlock.Root,
+            Runtime.Syscalls.MemfdSuperBlock);
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, Runtime.Syscalls.AnonMount);
 
         var payload = Encoding.UTF8.GetBytes(content);
@@ -1618,18 +1642,18 @@ internal sealed class TestEnv : IDisposable
     public async Task<WaylandSocketClient> CreateUnixClientAsync(string path)
     {
         Scheduler.AssertSchedulerThread();
-        var handle = CreateClientTaskCore("wayland-client", track: true);
+        var handle = CreateClientTaskCore("wayland-client", true);
         var clientSocket = new UnixSocketInode(
             0,
             handle.Syscalls.MemfdSuperBlock,
-            System.Net.Sockets.SocketType.Stream,
+            SocketType.Stream,
             handle.Task.CommonKernel);
         var clientFile = new LinuxFile(
             new Dentry($"socket:[{clientSocket.Ino}]", clientSocket, null, handle.Syscalls.MemfdSuperBlock),
             FileFlags.O_RDWR,
             handle.Syscalls.AnonMount);
-        object endpoint = CreateUnixSockaddr(path);
-        int connectRc = await clientSocket.ConnectAsync(clientFile, handle.Task, endpoint);
+        var endpoint = CreateUnixSockaddr(path);
+        var connectRc = await clientSocket.ConnectAsync(clientFile, handle.Task, endpoint);
         Assert.Equal(0, connectRc);
         return new WaylandSocketClient(clientSocket, clientFile, handle.Task);
     }
@@ -1637,7 +1661,7 @@ internal sealed class TestEnv : IDisposable
     private ClientTaskHandle CreateClientTaskCore(string name, bool track)
     {
         var pid = Scheduler.AllocateTaskId();
-        var mem = new VMAManager(Runtime.Syscalls.Mem.Backings);
+        var mem = new VMAManager();
         var engine = new Engine();
         var syscalls = Runtime.Syscalls.Clone(mem, false, true);
         syscalls.CurrentSyscallEngine = engine;
@@ -1712,10 +1736,10 @@ internal sealed class TestEnv : IDisposable
 
     private static object CreateUnixSockaddr(string path)
     {
-        Type endpointType = typeof(SyscallManager).Assembly.GetType("Fiberish.Syscalls.UnixSockaddrInfo")
-                            ?? throw new InvalidOperationException("UnixSockaddrInfo type not found.");
-        object endpoint = Activator.CreateInstance(endpointType)
-                          ?? throw new InvalidOperationException("Failed to create UnixSockaddrInfo.");
+        var endpointType = typeof(SyscallManager).Assembly.GetType("Fiberish.Syscalls.UnixSockaddrInfo")
+                           ?? throw new InvalidOperationException("UnixSockaddrInfo type not found.");
+        var endpoint = Activator.CreateInstance(endpointType)
+                       ?? throw new InvalidOperationException("Failed to create UnixSockaddrInfo.");
         endpointType.GetProperty("IsAbstract", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
             .SetValue(endpoint, false);
         endpointType.GetProperty("Path", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
@@ -1728,7 +1752,7 @@ internal sealed class TestEnv : IDisposable
     private static void SetCurrentSyscallManager(Engine engine, SyscallManager syscalls)
     {
         typeof(Engine).GetProperty("CurrentSyscallManager",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
             .SetValue(engine, syscalls);
     }
 }
