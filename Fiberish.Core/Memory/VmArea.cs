@@ -46,35 +46,7 @@ public class VmArea
 
     public uint Length => End - Start;
 
-    public uint VmStart
-    {
-        get => Start;
-        set => Start = value;
-    }
-
-    public uint VmEnd
-    {
-        get => End;
-        set => End = value;
-    }
-
-    public MapFlags VmFlags
-    {
-        get => Flags;
-        set => Flags = value;
-    }
-
-    public Protection VmPageProt
-    {
-        get => Perms;
-        set => Perms = value;
-    }
-
-    public LinuxFile? VmFile => File;
-    public AddressSpace? VmAddressSpace => VmMapping;
-
     public bool IsFileBacked => File != null;
-    public bool IsPrivateMapping => (Flags & MapFlags.Private) != 0 && VmAnonVma != null;
 
     public uint GetPageIndex(uint guestPageStart)
     {

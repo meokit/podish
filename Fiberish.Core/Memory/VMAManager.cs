@@ -1347,11 +1347,6 @@ public class VMAManager
         return !vma.IsFileBacked && vma.VmMapping is { IsZeroBacking: true };
     }
 
-    private static bool HasReclaimableMapping(VmArea vma)
-    {
-        return vma.VmMapping is { IsRecoverableWithoutSwap: true };
-    }
-
     private static bool TryGetVmMapping(VmArea vma, out AddressSpace mapping)
     {
         mapping = vma.VmMapping!;

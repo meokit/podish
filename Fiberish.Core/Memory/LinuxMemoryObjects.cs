@@ -63,11 +63,6 @@ public sealed class AddressSpace
         return Pages.PeekVmPage(pageIndex);
     }
 
-    public IntPtr SetPageIfAbsent(uint pageIndex, IntPtr ptr, out bool inserted)
-    {
-        return Pages.InstallPageIfAbsent(pageIndex, ptr, _pageKind, out inserted);
-    }
-
     internal IntPtr InstallHostPageIfAbsent(uint pageIndex, HostPage hostPage, Action<VmPage>? onReleased,
         out bool inserted)
     {
