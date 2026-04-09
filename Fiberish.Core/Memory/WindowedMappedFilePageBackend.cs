@@ -1,27 +1,24 @@
 using System.IO.MemoryMappedFiles;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Fiberish.Native;
 
 namespace Fiberish.Memory;
 
-internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
+internal sealed class WindowedMappedFilePageBackend(string path, HostMemoryMapGeometry geometry) : IFilePageBackend
 {
-    private readonly HostMemoryMapGeometry _geometry;
+    private readonly Dictionary<long, long> _activeWindowIdsByStart = [];
     private readonly Dictionary<long, int> _guestPageRefs = [];
+    private readonly Dictionary<long, PageLease> _leases = [];
     private readonly Lock _lock = new();
-
-    private readonly Dictionary<long, Window> _windows = [];
-    private string _path;
-
-    public WindowedMappedFilePageBackend(string path, HostMemoryMapGeometry geometry)
-    {
-        _path = path;
-        _geometry = geometry;
-    }
+    private readonly Dictionary<long, Window> _windowsById = [];
+    private long _nextLeaseToken = 1;
+    private long _nextWindowId = 1;
+    private string _path = path;
 
     public void UpdatePath(string path)
     {
-        List<Window> disposeNow;
+        List<WindowMapping> disposeNow;
         lock (_lock)
         {
             if (string.Equals(_path, path, StringComparison.Ordinal))
@@ -30,65 +27,89 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
             disposeNow = ResetWindowsLocked();
         }
 
-        DisposeWindows(disposeNow);
+        DisposeMappings(disposeNow);
     }
 
-    public bool TryAcquirePageHandle(long filePageIndex, long fileSize, bool writable, out IPageHandle? handle)
+    public bool TryAcquirePageLease(long filePageIndex, long fileSize, bool writable, out IntPtr pointer,
+        out long releaseToken)
     {
-        handle = null;
+        pointer = IntPtr.Zero;
+        releaseToken = 0;
         if (filePageIndex < 0) return false;
         if (fileSize <= 0) return false;
 
         var pageStart = checked(filePageIndex * LinuxConstants.PageSize);
-        if (pageStart < 0 || pageStart >= fileSize) return false;
+        if (pageStart >= fileSize) return false;
 
         var isTailPage = checked(pageStart + LinuxConstants.PageSize) > fileSize;
-        if (isTailPage && !_geometry.SupportsDirectMappedTailPage)
+        if (isTailPage && !geometry.SupportsDirectMappedTailPage)
             return false;
 
-        var windowStart = AlignDown(pageStart, _geometry.AllocationGranularity);
+        var windowStart = AlignDown(pageStart, geometry.AllocationGranularity);
         var offsetInWindow = pageStart - windowStart;
         if (offsetInWindow < 0) return false;
         var requiredCoverage = checked(offsetInWindow + LinuxConstants.PageSize);
 
+        WindowMapping retiredMapping = default;
+        var success = false;
+        try
+        {
+            lock (_lock)
+            {
+                if (_activeWindowIdsByStart.TryGetValue(windowStart, out var activeWindowId))
+                {
+                    if (TryAcquireFromActiveWindowLocked(activeWindowId, filePageIndex, writable, requiredCoverage,
+                            offsetInWindow, out pointer, out releaseToken))
+                    {
+                        success = true;
+                        return true;
+                    }
+
+                    RetireActiveWindowLocked(windowStart, activeWindowId, ref retiredMapping);
+                }
+
+                var created = CreateWindowLocked(windowStart, fileSize, writable, requiredCoverage);
+                if (created == null)
+                    return false;
+
+                var window = created.Value;
+                window.RefCount = 1;
+                _activeWindowIdsByStart[windowStart] = window.Id;
+                _windowsById.Add(window.Id, window);
+                IncrementGuestPageRefLocked(filePageIndex);
+                pointer = window.Ptr + (nint)offsetInWindow;
+                releaseToken = CreateLeaseLocked(filePageIndex, window.Id);
+                success = true;
+                return true;
+            }
+        }
+        finally
+        {
+            Dispose(ref retiredMapping);
+            if (!success)
+            {
+                pointer = IntPtr.Zero;
+                releaseToken = 0;
+            }
+        }
+    }
+
+    public void ReleasePageLease(long releaseToken)
+    {
+        if (releaseToken == 0)
+            return;
+
+        WindowMapping disposeNow = default;
         lock (_lock)
         {
-            if (_windows.TryGetValue(windowStart, out var existing))
-            {
-                if (existing.Retired)
-                {
-                    _windows.Remove(windowStart);
-                }
-                else if (existing.Length < requiredCoverage)
-                {
-                    _windows.Remove(windowStart);
-                    existing.Retired = true;
-                }
-                else if (!writable || existing.AccessMode == WindowAccessMode.ReadWrite)
-                {
-                    existing.RefCount++;
-                    IncrementGuestPageRefLocked(filePageIndex);
-                    handle = new PageHandle(this, filePageIndex, existing,
-                        existing.Ptr + (nint)offsetInWindow);
-                    return true;
-                }
-                else
-                {
-                    _windows.Remove(windowStart);
-                    existing.Retired = true;
-                }
-            }
+            if (!_leases.Remove(releaseToken, out var lease))
+                return;
 
-            var created = CreateWindowLocked(windowStart, fileSize, writable, requiredCoverage);
-            if (created == null) return false;
-
-            created.RefCount = 1;
-            _windows[windowStart] = created;
-            IncrementGuestPageRefLocked(filePageIndex);
-            handle = new PageHandle(this, filePageIndex, created,
-                created.Ptr + (nint)offsetInWindow);
-            return true;
+            DecrementGuestPageRefLocked(lease.PageIndex);
+            ReleaseWindowLeaseLocked(lease.WindowId, ref disposeNow);
         }
+
+        Dispose(ref disposeNow);
     }
 
     public bool TryFlushPage(long filePageIndex)
@@ -96,44 +117,49 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
         if (filePageIndex < 0) return false;
 
         var pageStart = checked(filePageIndex * LinuxConstants.PageSize);
-        var windowStart = AlignDown(pageStart, _geometry.AllocationGranularity);
+        var windowStart = AlignDown(pageStart, geometry.AllocationGranularity);
         lock (_lock)
         {
-            if (!_windows.TryGetValue(windowStart, out var window) || window.Retired)
+            if (!_activeWindowIdsByStart.TryGetValue(windowStart, out var windowId))
+                return false;
+
+            ref var window = ref GetWindowRef(windowId);
+            if (Unsafe.IsNullRef(ref window) || window.Retired)
                 return false;
 
             if (window.AccessMode == WindowAccessMode.ReadOnly)
                 return true;
 
-            return window.Flush();
+            return Flush(in window.Mapping);
         }
     }
 
     public void Truncate(long size)
     {
         _ = size;
-        List<Window> disposeNow;
+        List<WindowMapping> disposeNow;
         lock (_lock)
         {
             disposeNow = ResetWindowsLocked();
         }
 
-        DisposeWindows(disposeNow);
+        DisposeMappings(disposeNow);
     }
 
     public long Trim(bool aggressive)
     {
-        List<Window> disposeNow;
+        List<WindowMapping> disposeNow;
         lock (_lock)
         {
             disposeNow = TrimWindowsLocked(aggressive);
         }
 
         long reclaimedBytes = 0;
-        foreach (var window in disposeNow)
+        foreach (var mapping in disposeNow)
         {
-            reclaimedBytes += window.Length;
-            window.Dispose();
+            reclaimedBytes += mapping.Length;
+            var detached = mapping;
+            Dispose(ref detached);
         }
 
         return reclaimedBytes;
@@ -144,51 +170,84 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
         lock (_lock)
         {
             long windowBytes = 0;
-            foreach (var window in _windows.Values)
-                if (!window.Retired)
-                    windowBytes += window.Length;
-            return new FilePageBackendDiagnostics(_windows.Count, windowBytes, _guestPageRefs.Count);
+            var windowCount = 0;
+            foreach (var windowId in _activeWindowIdsByStart.Values)
+            {
+                ref var window = ref GetWindowRef(windowId);
+                if (Unsafe.IsNullRef(ref window) || window.Retired)
+                    continue;
+
+                windowCount++;
+                windowBytes += window.Length;
+            }
+
+            return new FilePageBackendDiagnostics(windowCount, windowBytes, _guestPageRefs.Count);
         }
     }
 
     public void Dispose()
     {
-        List<Window> disposeNow;
+        List<WindowMapping> disposeNow;
         lock (_lock)
         {
             disposeNow = ResetWindowsLocked();
         }
 
-        DisposeWindows(disposeNow);
+        DisposeMappings(disposeNow);
+    }
+
+    private bool TryAcquireFromActiveWindowLocked(long windowId, long filePageIndex, bool writable,
+        long requiredCoverage,
+        long offsetInWindow, out IntPtr pointer, out long releaseToken)
+    {
+        pointer = IntPtr.Zero;
+        releaseToken = 0;
+
+        ref var window = ref GetWindowRef(windowId);
+        if (Unsafe.IsNullRef(ref window) || window.Retired)
+            return false;
+        if (window.Length < requiredCoverage)
+            return false;
+        if (writable && window.AccessMode != WindowAccessMode.ReadWrite)
+            return false;
+
+        window.RefCount++;
+        IncrementGuestPageRefLocked(filePageIndex);
+        pointer = window.Ptr + (nint)offsetInWindow;
+        releaseToken = CreateLeaseLocked(filePageIndex, window.Id);
+        return true;
     }
 
     private Window? CreateWindowLocked(long windowStart, long fileSize, bool writable, long requiredCoverage)
     {
         var remaining = fileSize - windowStart;
         if (remaining <= 0) return null;
-        var requiresTailExtension = requiredCoverage > remaining;
 
-        var cappedWindowLength = Math.Min(_geometry.AllocationGranularity, Math.Max(remaining, requiredCoverage));
+        var cappedWindowLength = Math.Min(geometry.AllocationGranularity, Math.Max(remaining, requiredCoverage));
         if (cappedWindowLength < requiredCoverage)
             return null;
 
-        var mapping = !OperatingSystem.IsWindows() && requiresTailExtension
-            ? CreateUnixMappedWindow(windowStart, cappedWindowLength, writable)
-            : CreateMemoryMappedWindow(windowStart, Math.Min(cappedWindowLength, remaining), writable);
+        var mapping = CreateMemoryMappedWindow(
+            windowStart,
+            Math.Min(cappedWindowLength, remaining),
+            cappedWindowLength,
+            writable);
         if (mapping == null)
             return null;
 
         return new Window
         {
+            Id = _nextWindowId++,
             Start = windowStart,
-            Mapping = mapping,
+            Mapping = mapping.Value,
             AccessMode = writable ? WindowAccessMode.ReadWrite : WindowAccessMode.ReadOnly,
             RefCount = 0,
             Retired = false
         };
     }
 
-    private IWindowMapping? CreateMemoryMappedWindow(long windowStart, long windowLength, bool writable)
+    private WindowMapping? CreateMemoryMappedWindow(long windowStart, long windowLength, long logicalLength,
+        bool writable)
     {
         try
         {
@@ -209,7 +268,16 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
 
                 var rawPtr = (nint)raw;
                 var ptr = rawPtr + (nint)view.PointerOffset;
-                return new MmfWindowMapping(mmf, view, rawPtr, ptr, windowLength);
+                var flushLength = AlignUp(view.PointerOffset + windowLength, geometry.HostPageSize);
+                return new WindowMapping
+                {
+                    Mmf = mmf,
+                    View = view,
+                    RawPtr = rawPtr,
+                    Ptr = ptr,
+                    Length = logicalLength,
+                    FlushLength = flushLength
+                };
             }
         }
         catch
@@ -218,63 +286,96 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
         }
     }
 
-    private IWindowMapping? CreateUnixMappedWindow(long windowStart, long windowLength, bool writable)
+    private void RetireActiveWindowLocked(long windowStart, long windowId, ref WindowMapping disposeNow)
     {
-        var alignedLength = AlignUp(windowLength, _geometry.HostPageSize);
-        if (alignedLength <= 0)
-            return null;
-        return UnixWindowMapping.TryCreate(_path, windowStart, alignedLength, writable);
+        _activeWindowIdsByStart.Remove(windowStart);
+        RetireWindowLocked(windowId, ref disposeNow);
     }
 
-    private void ReleaseHandle(long pageIndex, Window window)
+    private void RetireWindowLocked(long windowId, ref WindowMapping disposeNow)
     {
-        var shouldDispose = false;
-        lock (_lock)
+        var shouldRemove = false;
         {
-            DecrementGuestPageRefLocked(pageIndex);
-            if (window.RefCount > 0) window.RefCount--;
-            if (window.RefCount == 0 && window.Retired)
-                shouldDispose = true;
+            ref var window = ref GetWindowRef(windowId);
+            if (Unsafe.IsNullRef(ref window))
+                return;
+
+            window.Retired = true;
+            if (window.RefCount != 0)
+                return;
+
+            disposeNow = DetachWindowMapping(ref window);
+            shouldRemove = true;
         }
 
-        if (shouldDispose)
-            window.Dispose();
+        if (shouldRemove)
+            _windowsById.Remove(windowId);
     }
 
-    private List<Window> ResetWindowsLocked()
+    private void ReleaseWindowLeaseLocked(long windowId, ref WindowMapping disposeNow)
     {
-        var disposeNow = new List<Window>(_windows.Count);
-        foreach (var window in _windows.Values)
-            if (window.RefCount == 0)
-                disposeNow.Add(window);
-            else
-                window.Retired = true;
+        var shouldRemove = false;
+        {
+            ref var window = ref GetWindowRef(windowId);
+            if (Unsafe.IsNullRef(ref window))
+                return;
 
-        _windows.Clear();
+            if (window.RefCount > 0)
+                window.RefCount--;
+            if (window.RefCount != 0 || !window.Retired)
+                return;
+
+            disposeNow = DetachWindowMapping(ref window);
+            shouldRemove = true;
+        }
+
+        if (shouldRemove)
+            _windowsById.Remove(windowId);
+    }
+
+    private List<WindowMapping> ResetWindowsLocked()
+    {
+        var disposeNow = new List<WindowMapping>(_activeWindowIdsByStart.Count);
+        var activeWindows = new List<KeyValuePair<long, long>>(_activeWindowIdsByStart);
+        _activeWindowIdsByStart.Clear();
+        foreach (var (_, windowId) in activeWindows)
+        {
+            WindowMapping mapping = default;
+            RetireWindowLocked(windowId, ref mapping);
+            if (mapping.IsAllocated)
+                disposeNow.Add(mapping);
+        }
+
         return disposeNow;
     }
 
-    private List<Window> TrimWindowsLocked(bool aggressive)
+    private List<WindowMapping> TrimWindowsLocked(bool aggressive)
     {
-        var disposeNow = new List<Window>();
-        var startsToRemove = new List<long>();
-        foreach (var (start, window) in _windows)
+        var disposeNow = new List<WindowMapping>();
+        var startsToRetire = new List<KeyValuePair<long, long>>();
+        foreach (var pair in _activeWindowIdsByStart)
         {
-            if (window.Retired)
+            ref var window = ref GetWindowRef(pair.Value);
+            if (Unsafe.IsNullRef(ref window) || window.Retired)
+            {
+                startsToRetire.Add(pair);
                 continue;
+            }
 
             if (!aggressive && window.RefCount > 0)
                 continue;
 
-            startsToRemove.Add(start);
-            if (window.RefCount == 0)
-                disposeNow.Add(window);
-            else
-                window.Retired = true;
+            startsToRetire.Add(pair);
         }
 
-        foreach (var start in startsToRemove)
-            _windows.Remove(start);
+        foreach (var (start, windowId) in startsToRetire)
+        {
+            _activeWindowIdsByStart.Remove(start);
+            WindowMapping mapping = default;
+            RetireWindowLocked(windowId, ref mapping);
+            if (mapping.IsAllocated)
+                disposeNow.Add(mapping);
+        }
 
         return disposeNow;
     }
@@ -295,6 +396,71 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
             _guestPageRefs[filePageIndex] = count - 1;
     }
 
+    private ref Window GetWindowRef(long windowId)
+    {
+        return ref CollectionsMarshal.GetValueRefOrNullRef(_windowsById, windowId);
+    }
+
+    private static WindowMapping DetachWindowMapping(ref Window window)
+    {
+        var mapping = window.Mapping;
+        window.Mapping = default;
+        return mapping;
+    }
+
+    private static bool Flush(in WindowMapping mapping)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                mapping.View?.Flush();
+            }
+            else
+            {
+                if (msync(mapping.RawPtr, checked((nuint)mapping.FlushLength), GetMsSyncFlag()) != 0)
+                    return false;
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void Dispose(ref WindowMapping mapping)
+    {
+        var view = mapping.View;
+        var mmf = mapping.Mmf;
+        mapping = default;
+
+        if (view != null)
+        {
+            view.SafeMemoryMappedViewHandle.ReleasePointer();
+            view.Dispose();
+        }
+
+        mmf?.Dispose();
+    }
+
+    private static void DisposeMappings(IEnumerable<WindowMapping> mappings)
+    {
+        foreach (var mapping in mappings)
+        {
+            var detached = mapping;
+            Dispose(ref detached);
+        }
+    }
+
+    private long CreateLeaseLocked(long pageIndex, long windowId)
+    {
+        var releaseToken = _nextLeaseToken++;
+        _leases.Add(releaseToken, new PageLease(pageIndex, windowId));
+        return releaseToken;
+    }
+
     private static long AlignDown(long value, int alignment)
     {
         if (alignment <= 0) return value;
@@ -308,11 +474,16 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
         return (value + mask) & ~mask;
     }
 
-    private static void DisposeWindows(IEnumerable<Window> windows)
+    private static int GetMsSyncFlag()
     {
-        foreach (var window in windows)
-            window.Dispose();
+        if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsMacCatalyst() ||
+            OperatingSystem.IsTvOS() || OperatingSystem.IsWatchOS())
+            return 0x0010;
+        return 0x0004;
     }
+
+    [DllImport("libc", EntryPoint = "msync")]
+    private static extern int msync(nint addr, nuint length, int flags);
 
     private enum WindowAccessMode
     {
@@ -320,167 +491,30 @@ internal sealed class WindowedMappedFilePageBackend : IFilePageBackend
         ReadWrite
     }
 
-    private interface IWindowMapping : IDisposable
+    private struct WindowMapping
     {
-        nint RawPtr { get; }
-        nint Ptr { get; }
-        long Length { get; }
-        bool Flush();
+        public MemoryMappedFile? Mmf;
+        public MemoryMappedViewAccessor? View;
+        public nint RawPtr;
+        public nint Ptr;
+        public long Length;
+        public long FlushLength;
+
+        public readonly bool IsAllocated => Ptr != 0;
     }
 
-    private sealed class MmfWindowMapping : IWindowMapping
+    private struct Window
     {
-        private readonly MemoryMappedFile _mmf;
-        private readonly MemoryMappedViewAccessor _view;
+        public long Id;
+        public long Start;
+        public WindowMapping Mapping;
+        public WindowAccessMode AccessMode;
+        public int RefCount;
+        public bool Retired;
 
-        public MmfWindowMapping(MemoryMappedFile mmf, MemoryMappedViewAccessor view, nint rawPtr, nint ptr, long length)
-        {
-            _mmf = mmf;
-            _view = view;
-            RawPtr = rawPtr;
-            Ptr = ptr;
-            Length = length;
-        }
-
-        public nint RawPtr { get; }
-        public nint Ptr { get; }
-        public long Length { get; }
-
-        public bool Flush()
-        {
-            try
-            {
-                _view.Flush();
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        public void Dispose()
-        {
-            _view.SafeMemoryMappedViewHandle.ReleasePointer();
-
-            _view.Dispose();
-            _mmf.Dispose();
-        }
+        public readonly long Length => Mapping.Length;
+        public readonly nint Ptr => Mapping.Ptr;
     }
 
-    private sealed class UnixWindowMapping : IWindowMapping
-    {
-        private const int ProtRead = 0x1;
-        private const int ProtWrite = 0x2;
-        private const int MapShared = 0x01;
-
-        private UnixWindowMapping(nint addr, long length)
-        {
-            RawPtr = addr;
-            Length = length;
-        }
-
-        public nint RawPtr { get; }
-
-        public nint Ptr => RawPtr;
-        public long Length { get; }
-
-        public bool Flush()
-        {
-            return msync(RawPtr, checked((nuint)Length), GetMsSyncFlag()) == 0;
-        }
-
-        public void Dispose()
-        {
-            _ = munmap(RawPtr, checked((nuint)Length));
-        }
-
-        public static UnixWindowMapping? TryCreate(string path, long offset, long length, bool writable)
-        {
-            try
-            {
-                using var handle = File.OpenHandle(
-                    path,
-                    FileMode.Open,
-                    writable ? FileAccess.ReadWrite : FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete);
-                var fd = checked((int)handle.DangerousGetHandle());
-                var prot = writable ? ProtRead | ProtWrite : ProtRead;
-                var addr = mmap(0, checked((nuint)length), prot, MapShared, fd, (nint)offset);
-                if (addr == new nint(-1))
-                    return null;
-                return new UnixWindowMapping(addr, length);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static int GetMsSyncFlag()
-        {
-            if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsMacCatalyst() ||
-                OperatingSystem.IsTvOS() || OperatingSystem.IsWatchOS())
-                return 0x0010;
-            return 0x0004;
-        }
-
-        [DllImport("libc", EntryPoint = "mmap")]
-        private static extern nint mmap(nint addr, nuint length, int prot, int flags, int fd, nint offset);
-
-        [DllImport("libc", EntryPoint = "munmap")]
-        private static extern int munmap(nint addr, nuint length);
-
-        [DllImport("libc", EntryPoint = "msync")]
-        private static extern int msync(nint addr, nuint length, int flags);
-    }
-
-    private sealed class Window : IDisposable
-    {
-        public required long Start { get; init; }
-        public required IWindowMapping Mapping { get; init; }
-        public required WindowAccessMode AccessMode { get; init; }
-        public int RefCount { get; set; }
-        public bool Retired { get; set; }
-
-        public long Length => Mapping.Length;
-        public nint RawPtr => Mapping.RawPtr;
-        public nint Ptr => Mapping.Ptr;
-
-        public void Dispose()
-        {
-            Mapping.Dispose();
-        }
-
-        public bool Flush()
-        {
-            return Mapping.Flush();
-        }
-    }
-
-    private sealed class PageHandle : IPageHandle
-    {
-        private readonly WindowedMappedFilePageBackend _owner;
-        private readonly long _pageIndex;
-        private int _disposed;
-        private Window? _window;
-
-        public PageHandle(WindowedMappedFilePageBackend owner, long pageIndex, Window window, IntPtr pointer)
-        {
-            _owner = owner;
-            _pageIndex = pageIndex;
-            _window = window;
-            Pointer = pointer;
-        }
-
-        public IntPtr Pointer { get; }
-
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            var window = Interlocked.Exchange(ref _window, null);
-            if (window != null)
-                _owner.ReleaseHandle(_pageIndex, window);
-        }
-    }
+    private readonly record struct PageLease(long PageIndex, long WindowId);
 }

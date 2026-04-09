@@ -1071,9 +1071,9 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
     }
 
     public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
-        bool writable, out IPageHandle? pageHandle)
+        bool writable, out PageHandle pageHandle)
     {
-        pageHandle = null;
+        pageHandle = default;
         if (Type != InodeType.File && Type != InodeType.Symlink) return false;
         if (absoluteFileOffset < 0) return false;
         if ((absoluteFileOffset & LinuxConstants.PageOffsetMask) != 0) return false;
@@ -1084,11 +1084,24 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             _mappedPageCache ??= new MappedFilePageCache(
                 livePath,
                 SuperBlock.MemoryContext.HostMemoryMapGeometry);
-            return _mappedPageCache.TryAcquirePageHandle(
-                absoluteFileOffset / LinuxConstants.PageSize,
-                (long)Size,
-                writable,
-                out pageHandle);
+            if (!_mappedPageCache.TryAcquirePageLease(
+                    absoluteFileOffset / LinuxConstants.PageSize,
+                    (long)Size,
+                    writable,
+                    out var pointer,
+                    out var releaseToken))
+                return false;
+
+            pageHandle = PageHandle.CreateOwned(pointer, this, releaseToken);
+            return true;
+        }
+    }
+
+    protected internal override void ReleaseMappedPageHandle(long releaseToken)
+    {
+        lock (_mappedCacheLock)
+        {
+            _mappedPageCache?.ReleasePageLease(releaseToken);
         }
     }
 
@@ -1122,13 +1135,12 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     protected override void OnEvictCache()
     {
+        base.OnEvictCache();
         lock (_mappedCacheLock)
         {
             _mappedPageCache?.Dispose();
             _mappedPageCache = null;
         }
-
-        base.OnEvictCache();
     }
 
     protected override void OnFinalizeDelete()

@@ -530,7 +530,7 @@ public abstract class Inode : IAddressSpaceOperations
 
     /// <summary>
     ///     Optional per-inode page cache / address_space.
-    ///     Mapping-backed inode families manage its lifecycle via <see cref="MappingBackedInode"/>.
+    ///     Mapping-backed inode families manage its lifecycle via <see cref="MappingBackedInode" />.
     /// </summary>
     public AddressSpace? Mapping { get; protected set; }
 
@@ -1330,11 +1330,16 @@ public abstract class Inode : IAddressSpaceOperations
     ///     Return false to use regular in-memory page cache allocation + ReadPage fallback.
     /// </summary>
     public virtual bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
-        bool writable, out IPageHandle? pageHandle)
+        bool writable, out PageHandle pageHandle)
     {
         _ = writable;
-        pageHandle = null;
+        pageHandle = default;
         return false;
+    }
+
+    protected internal virtual void ReleaseMappedPageHandle(long releaseToken)
+    {
+        _ = releaseToken;
     }
 
     public virtual bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex)
@@ -1692,8 +1697,8 @@ public abstract class MappingBackedInode : Inode
     private InodePageRecord CreateAllocatedMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
         int prefillLength)
     {
-        if (!InodePageAllocator.TryAllocatePageStrict(out var pageHandle, AllocationClass.PageCache) ||
-            pageHandle == null)
+        if (!InodePageAllocator.TryAllocatePageStrict(out var pageHandle) ||
+            !pageHandle.IsValid)
             return null!;
 
         var ptr = pageHandle.Pointer;
@@ -1705,7 +1710,7 @@ public abstract class MappingBackedInode : Inode
                 var target = new Span<byte>((void*)ptr, LinuxConstants.PageSize);
                 if (!TryPopulateMappingPage(linuxFile, pageIndex, fileOffset, prefillLength, target))
                 {
-                    pageHandle.Dispose();
+                    PageHandle.Release(ref pageHandle);
                     return null!;
                 }
             }
@@ -1715,12 +1720,12 @@ public abstract class MappingBackedInode : Inode
                 PageIndex = pageIndex,
                 HostPage = hostPage,
                 BackingKind = FilePageBackingKind.AllocatedPageCache,
-                PageHandle = pageHandle
+                Handle = pageHandle
             };
         }
         catch
         {
-            pageHandle.Dispose();
+            PageHandle.Release(ref pageHandle);
             throw;
         }
     }
@@ -1729,12 +1734,12 @@ public abstract class MappingBackedInode : Inode
         bool writable)
     {
         if (!TryAcquireMappedPageHandle(linuxFile, pageIndex, fileOffset, writable, out var pageHandle) ||
-            pageHandle == null)
+            !pageHandle.IsValid)
             return null;
 
         if (pageHandle.Pointer == IntPtr.Zero)
         {
-            pageHandle.Dispose();
+            PageHandle.Release(ref pageHandle);
             return null;
         }
 
@@ -1744,7 +1749,7 @@ public abstract class MappingBackedInode : Inode
             PageIndex = pageIndex,
             HostPage = hostPage,
             BackingKind = FilePageBackingKind.HostMappedWindow,
-            PageHandle = pageHandle
+            Handle = pageHandle
         };
     }
 

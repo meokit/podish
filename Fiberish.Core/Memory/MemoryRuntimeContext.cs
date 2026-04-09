@@ -140,8 +140,8 @@ public sealed class MemoryRuntimeContext
 internal sealed class ZeroInode : MappingBackedInode
 {
     private readonly Lock _zeroPageGate = new();
-    private IPageHandle? _sharedZeroPageHandle;
     private HostPage? _sharedZeroHostPage;
+    private PageHandle _sharedZeroPageHandle;
 
     public ZeroInode()
     {
@@ -161,7 +161,7 @@ internal sealed class ZeroInode : MappingBackedInode
             if (_sharedZeroHostPage == null)
             {
                 var pageHandle = InodePageAllocator.AllocatePage(AllocationClass.KernelInternal);
-                if (pageHandle == null)
+                if (!pageHandle.IsValid)
                     return null;
 
                 _sharedZeroPageHandle = pageHandle;

@@ -407,31 +407,20 @@ public class EngineMmuTransferTests
         }
 
         public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
-            bool writable, out IPageHandle? pageHandle)
+            bool writable, out PageHandle pageHandle)
         {
-            pageHandle = new TrackingPageHandle(_ptr, () => DisposeCount++);
+            _ = linuxFile;
+            _ = pageIndex;
+            _ = absoluteFileOffset;
+            _ = writable;
+            pageHandle = PageHandle.CreateOwned(_ptr, this, 1);
             return true;
         }
-    }
 
-    private sealed class TrackingPageHandle : IPageHandle
-    {
-        private readonly Action _onDispose;
-        private int _disposed;
-
-        public TrackingPageHandle(IntPtr pointer, Action onDispose)
+        protected internal override void ReleaseMappedPageHandle(long releaseToken)
         {
-            Pointer = pointer;
-            _onDispose = onDispose;
-        }
-
-        public IntPtr Pointer { get; }
-
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
-                return;
-            _onDispose();
+            Assert.Equal(1, releaseToken);
+            DisposeCount++;
         }
     }
 

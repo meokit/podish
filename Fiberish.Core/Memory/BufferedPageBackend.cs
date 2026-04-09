@@ -9,10 +9,17 @@ internal sealed class BufferedPageBackend : IFilePageBackend
     {
     }
 
-    public bool TryAcquirePageHandle(long filePageIndex, long fileSize, bool writable, out IPageHandle? handle)
+    public bool TryAcquirePageLease(long filePageIndex, long fileSize, bool writable, out IntPtr pointer,
+        out long releaseToken)
     {
-        handle = null;
+        pointer = IntPtr.Zero;
+        releaseToken = 0;
         return false;
+    }
+
+    public void ReleasePageLease(long releaseToken)
+    {
+        _ = releaseToken;
     }
 
     public bool TryFlushPage(long filePageIndex)

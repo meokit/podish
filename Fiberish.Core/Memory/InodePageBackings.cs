@@ -27,7 +27,7 @@ internal static class GlobalMemoryAccounting
 
 internal static class InodePageAllocator
 {
-    public static IPageHandle? AllocatePage(
+    public static PageHandle AllocatePage(
         AllocationClass allocationClass = AllocationClass.PageCache,
         AllocationSource allocationSource = AllocationSource.Unknown)
     {
@@ -36,21 +36,21 @@ internal static class InodePageAllocator
 
         unsafe
         {
-            var ptr = (nint)NativeMemory.AlignedAlloc((nuint)LinuxConstants.PageSize, LinuxConstants.PageSize);
+            var ptr = (nint)NativeMemory.AlignedAlloc(LinuxConstants.PageSize, LinuxConstants.PageSize);
             if (ptr == 0)
-                return null;
+                return default;
 
             new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
-            return new OwnedNativePageHandle((IntPtr)ptr);
+            return PageHandle.CreateNative(ptr);
         }
     }
 
     public static bool TryAllocatePageStrict(
-        out IPageHandle? pageHandle,
+        out PageHandle pageHandle,
         AllocationClass allocationClass = AllocationClass.PageCache,
         AllocationSource allocationSource = AllocationSource.Unknown)
     {
-        pageHandle = null;
+        pageHandle = default;
         if (!GlobalMemoryAccounting.HasQuotaCapacity(LinuxConstants.PageSize))
         {
             _ = MemoryPressureCoordinator.TryReclaimForAllocation(
@@ -63,29 +63,6 @@ internal static class InodePageAllocator
         }
 
         pageHandle = AllocatePage(allocationClass, allocationSource);
-        return pageHandle != null;
-    }
-
-    private sealed class OwnedNativePageHandle : IPageHandle
-    {
-        private int _disposed;
-
-        public OwnedNativePageHandle(IntPtr pointer)
-        {
-            Pointer = pointer;
-        }
-
-        public IntPtr Pointer { get; }
-
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
-                return;
-
-            unsafe
-            {
-                NativeMemory.AlignedFree((void*)Pointer);
-            }
-        }
+        return pageHandle.IsValid;
     }
 }

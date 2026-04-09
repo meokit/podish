@@ -21,13 +21,14 @@ public class WindowedMappedFilePageBackendTests
         try
         {
             using var backend = new WindowedMappedFilePageBackend(path, Geometry16K);
-            var handles = new List<IPageHandle>();
+            var leases = new List<(IntPtr Pointer, long ReleaseToken)>();
             for (var i = 0; i < 4; i++)
             {
-                Assert.True(backend.TryAcquirePageHandle(i, new FileInfo(path).Length, false,
-                    out var handle));
-                Assert.NotNull(handle);
-                handles.Add(handle!);
+                Assert.True(backend.TryAcquirePageLease(i, new FileInfo(path).Length, false,
+                    out var pointer, out var releaseToken));
+                Assert.NotEqual(IntPtr.Zero, pointer);
+                Assert.NotEqual(0, releaseToken);
+                leases.Add((pointer, releaseToken));
             }
 
             var diagnostics = backend.GetDiagnostics();
@@ -35,17 +36,19 @@ public class WindowedMappedFilePageBackendTests
             Assert.Equal(16384, diagnostics.WindowBytes);
             Assert.Equal(4, diagnostics.GuestPageCount);
 
-            Assert.True(backend.TryAcquirePageHandle(4, new FileInfo(path).Length, false, out var extra));
-            Assert.NotNull(extra);
-            handles.Add(extra!);
+            Assert.True(backend.TryAcquirePageLease(4, new FileInfo(path).Length, false, out var extraPointer,
+                out var extraReleaseToken));
+            Assert.NotEqual(IntPtr.Zero, extraPointer);
+            Assert.NotEqual(0, extraReleaseToken);
+            leases.Add((extraPointer, extraReleaseToken));
 
             diagnostics = backend.GetDiagnostics();
             Assert.Equal(2, diagnostics.WindowCount);
             Assert.Equal(32768, diagnostics.WindowBytes);
             Assert.Equal(5, diagnostics.GuestPageCount);
 
-            foreach (var handle in handles)
-                handle.Dispose();
+            foreach (var lease in leases)
+                backend.ReleasePageLease(lease.ReleaseToken);
         }
         finally
         {
@@ -64,24 +67,60 @@ public class WindowedMappedFilePageBackendTests
         try
         {
             using var backend = new WindowedMappedFilePageBackend(pathA, Geometry16K);
-            Assert.True(backend.TryAcquirePageHandle(0, LinuxConstants.PageSize, false, out var oldHandle));
-            Assert.NotNull(oldHandle);
-            Assert.Equal("AAAA", ReadString(oldHandle!.Pointer, 4));
+            Assert.True(backend.TryAcquirePageLease(0, LinuxConstants.PageSize, false, out var oldPointer,
+                out var oldReleaseToken));
+            Assert.NotEqual(0, oldReleaseToken);
+            Assert.Equal("AAAA", ReadString(oldPointer, 4));
 
             backend.UpdatePath(pathB);
 
-            Assert.True(backend.TryAcquirePageHandle(0, LinuxConstants.PageSize, false, out var newHandle));
-            Assert.NotNull(newHandle);
-            Assert.Equal("BBBB", ReadString(newHandle!.Pointer, 4));
-            Assert.Equal("AAAA", ReadString(oldHandle.Pointer, 4));
+            Assert.True(backend.TryAcquirePageLease(0, LinuxConstants.PageSize, false, out var newPointer,
+                out var newReleaseToken));
+            Assert.NotEqual(0, newReleaseToken);
+            Assert.Equal("BBBB", ReadString(newPointer, 4));
+            Assert.Equal("AAAA", ReadString(oldPointer, 4));
 
-            oldHandle.Dispose();
-            newHandle.Dispose();
+            backend.ReleasePageLease(oldReleaseToken);
+            backend.ReleasePageLease(newReleaseToken);
         }
         finally
         {
             if (File.Exists(pathA)) File.Delete(pathA);
             if (File.Exists(pathB)) File.Delete(pathB);
+        }
+    }
+
+    [Fact]
+    public void ReleasingRetiredLease_DoesNotAffectReplacementWindow()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mapped-backend-replace-{Guid.NewGuid():N}.bin");
+        File.WriteAllBytes(path, BuildPage((byte)'x'));
+
+        try
+        {
+            using var backend = new WindowedMappedFilePageBackend(path, Geometry16K);
+            Assert.True(backend.TryAcquirePageLease(0, LinuxConstants.PageSize, false, out _, out var readonlyToken));
+            Assert.NotEqual(0, readonlyToken);
+
+            Assert.True(backend.TryAcquirePageLease(0, LinuxConstants.PageSize, true, out var writablePointer,
+                out var writableToken));
+            Assert.NotEqual(0, writableToken);
+
+            backend.ReleasePageLease(readonlyToken);
+
+            Marshal.Copy("AB"u8.ToArray(), 0, writablePointer, 2);
+            Assert.True(backend.TryFlushPage(0));
+            Assert.Equal("ABxx", File.ReadAllText(path)[..4]);
+
+            var diagnostics = backend.GetDiagnostics();
+            Assert.Equal(1, diagnostics.WindowCount);
+            Assert.Equal(LinuxConstants.PageSize, diagnostics.WindowBytes);
+
+            backend.ReleasePageLease(writableToken);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
         }
     }
 
@@ -94,19 +133,20 @@ public class WindowedMappedFilePageBackendTests
         try
         {
             using var backend = new WindowedMappedFilePageBackend(path, Geometry16K);
-            Assert.True(backend.TryAcquirePageHandle(0, LinuxConstants.PageSize, true, out var handle));
-            Assert.NotNull(handle);
+            Assert.True(backend.TryAcquirePageLease(0, LinuxConstants.PageSize, true, out var pointer,
+                out var releaseToken));
+            Assert.NotEqual(0, releaseToken);
 
-            Marshal.Copy("YZ"u8.ToArray(), 0, handle!.Pointer + 1, 2);
+            Marshal.Copy("YZ"u8.ToArray(), 0, pointer + 1, 2);
             Assert.True(backend.TryFlushPage(0));
             Assert.Equal("xYZx", File.ReadAllText(path)[..4]);
 
             backend.Truncate(0);
             var diagnostics = backend.GetDiagnostics();
             Assert.Equal(0, diagnostics.WindowCount);
-            Assert.False(backend.TryAcquirePageHandle(0, 0, false, out _));
+            Assert.False(backend.TryAcquirePageLease(0, 0, false, out _, out _));
 
-            handle.Dispose();
+            backend.ReleasePageLease(releaseToken);
         }
         finally
         {
@@ -128,20 +168,20 @@ public class WindowedMappedFilePageBackendTests
         {
             using var backend = new WindowedMappedFilePageBackend(path, Geometry16K);
 
-            Assert.True(backend.TryAcquirePageHandle(1, fileSize, true, out var handle));
-            Assert.NotNull(handle);
+            Assert.True(backend.TryAcquirePageLease(1, fileSize, true, out var pointer, out var releaseToken));
+            Assert.NotEqual(0, releaseToken);
 
             var tailBytes = new byte[24];
-            Marshal.Copy(handle!.Pointer + 123, tailBytes, 0, tailBytes.Length);
+            Marshal.Copy(pointer + 123, tailBytes, 0, tailBytes.Length);
             Assert.All(tailBytes, b => Assert.Equal((byte)0, b));
 
-            Marshal.Copy("TAIL!"u8.ToArray(), 0, handle.Pointer + 123 + 16, 5);
-            Assert.True(backend.TryAcquirePageHandle(1, fileSize, true, out var peerHandle));
-            Assert.NotNull(peerHandle);
-            Assert.Equal("TAIL!", ReadString(peerHandle!.Pointer + 123 + 16, 5));
+            Marshal.Copy("TAIL!"u8.ToArray(), 0, pointer + 123 + 16, 5);
+            Assert.True(backend.TryAcquirePageLease(1, fileSize, true, out var peerPointer, out var peerReleaseToken));
+            Assert.NotEqual(0, peerReleaseToken);
+            Assert.Equal("TAIL!", ReadString(peerPointer + 123 + 16, 5));
 
-            handle.Dispose();
-            peerHandle.Dispose();
+            backend.ReleasePageLease(releaseToken);
+            backend.ReleasePageLease(peerReleaseToken);
         }
         finally
         {

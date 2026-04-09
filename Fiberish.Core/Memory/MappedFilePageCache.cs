@@ -27,9 +27,15 @@ internal sealed class MappedFilePageCache : IDisposable
         _backend.UpdatePath(path);
     }
 
-    public bool TryAcquirePageHandle(long filePageIndex, long fileSize, bool writable, out IPageHandle? handle)
+    public bool TryAcquirePageLease(long filePageIndex, long fileSize, bool writable, out IntPtr pointer,
+        out long releaseToken)
     {
-        return _backend.TryAcquirePageHandle(filePageIndex, fileSize, writable, out handle);
+        return _backend.TryAcquirePageLease(filePageIndex, fileSize, writable, out pointer, out releaseToken);
+    }
+
+    public void ReleasePageLease(long releaseToken)
+    {
+        _backend.ReleasePageLease(releaseToken);
     }
 
     public bool TryFlushPage(long filePageIndex)

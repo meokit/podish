@@ -181,7 +181,7 @@ internal sealed class VmPageSlots
         }
 
         IntPtr ptr;
-        IPageHandle? pageHandle = null;
+        PageHandle pageHandle = default;
         var usePageManager = hostPageKind == HostPageKind.Anon;
         if (usePageManager)
         {
@@ -213,7 +213,7 @@ internal sealed class VmPageSlots
                 pageHandle = InodePageAllocator.AllocatePage(allocationClass, allocationSource);
             }
 
-            ptr = pageHandle?.Pointer ?? IntPtr.Zero;
+            ptr = pageHandle.Pointer;
         }
 
         if (ptr == IntPtr.Zero)
@@ -224,8 +224,8 @@ internal sealed class VmPageSlots
 
         if (onFirstCreate != null && !onFirstCreate(ptr))
         {
-            if (pageHandle != null)
-                pageHandle.Dispose();
+            if (pageHandle.IsValid)
+                PageHandle.Release(ref pageHandle);
             else
                 PageManager.ReleasePtr(ptr);
             isNew = false;
@@ -237,8 +237,8 @@ internal sealed class VmPageSlots
         {
             if (_pages.TryGetValue(pageIndex, out var raced))
             {
-                if (pageHandle != null)
-                    pageHandle.Dispose();
+                if (pageHandle.IsValid)
+                    PageHandle.Release(ref pageHandle);
                 else
                     PageManager.ReleasePtr(ptr);
                 isNew = false;
@@ -250,7 +250,7 @@ internal sealed class VmPageSlots
             _pages[pageIndex] = new VmPage
             {
                 HostPage = hostPage,
-                OnReleased = pageHandle != null ? _ => pageHandle.Dispose() : null
+                Handle = pageHandle
             };
             hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
             isNew = true;
@@ -383,6 +383,7 @@ internal sealed class VmPageSlots
         {
             if (!_pages.TryGetValue(pageIndex, out var entry)) return false;
             if (entry.Dirty) return false;
+            if (entry.MapCount > 0 || entry.PinCount > 0) return false;
             if (PageManager.GetRefCount(entry.Ptr) > 1) return false;
             page = entry;
             _pages.Remove(pageIndex);
@@ -454,7 +455,9 @@ internal sealed class VmPageSlots
         if (notify)
             _pageBindingChanged?.Invoke(pageIndex, page.HostPage, null);
         page.HostPage.RemoveOwnerRef(_ownerRefFactory(pageIndex));
-        if (page.OnReleased != null)
+        if (page.Handle.IsValid)
+            PageHandle.Release(ref page.Handle);
+        else if (page.OnReleased != null)
             page.OnReleased(page);
         else
             PageManager.ReleasePtr(page.Ptr);
@@ -463,6 +466,7 @@ internal sealed class VmPageSlots
 
 internal sealed class VmPage
 {
+    public PageHandle Handle;
     public required HostPage HostPage { get; set; }
     public Action<VmPage>? OnReleased { get; set; }
     public IntPtr Ptr => HostPage.Ptr;

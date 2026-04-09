@@ -19,16 +19,16 @@ internal readonly record struct PageSyncRequest(uint PageIndex, long FileOffset,
 
 internal sealed class InodePageRecord
 {
+    public PageHandle Handle;
     public required uint PageIndex { get; init; }
     public required HostPage HostPage { get; init; }
     public required FilePageBackingKind BackingKind { get; init; }
-    public IPageHandle? PageHandle { get; init; }
 
     public IntPtr Ptr => HostPage.Ptr;
 
     public void ReleaseOwnership()
     {
-        PageHandle?.Dispose();
+        PageHandle.Release(ref Handle);
         HostPageManager.TryRemoveIfUnused(HostPage);
     }
 }

@@ -1504,14 +1504,14 @@ public class OverlayInode : MappingBackedInode
     }
 
     public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
-        bool writable, out IPageHandle? pageHandle)
+        bool writable, out PageHandle pageHandle)
     {
         if (writable)
         {
             var copyRc = EnsureWritableBacking(linuxFile);
             if (copyRc < 0)
             {
-                pageHandle = null;
+                pageHandle = default;
                 return false;
             }
         }
@@ -1519,7 +1519,7 @@ public class OverlayInode : MappingBackedInode
         var source = ResolveSourceForFile(linuxFile);
         if (source == null)
         {
-            pageHandle = null;
+            pageHandle = default;
             return false;
         }
 

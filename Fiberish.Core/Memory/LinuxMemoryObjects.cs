@@ -108,16 +108,6 @@ public sealed class AddressSpace
         return Pages.SnapshotPageStates();
     }
 
-    public void VisitPageStates(Action<VmPageState> visitor)
-    {
-        Pages.VisitPageStates(visitor);
-    }
-
-    public long CountPagesInRange(uint startPageIndex, uint endPageIndex)
-    {
-        return Pages.CountPagesInRange(startPageIndex, endPageIndex);
-    }
-
     public bool TryEvictCleanPage(uint pageIndex)
     {
         return Pages.TryEvictCleanPage(pageIndex);
@@ -302,24 +292,9 @@ public sealed class AnonVma
         Pages.MarkDirty(pageIndex);
     }
 
-    public bool IsDirty(uint pageIndex)
-    {
-        return Pages.IsDirty(pageIndex);
-    }
-
-    public void ClearDirty(uint pageIndex)
-    {
-        Pages.ClearDirty(pageIndex);
-    }
-
     public IReadOnlyList<VmPageState> SnapshotPageStates()
     {
         return Pages.SnapshotPageStates();
-    }
-
-    public void VisitPageStates(Action<VmPageState> visitor)
-    {
-        Pages.VisitPageStates(visitor);
     }
 
     public long CountPagesInRange(uint startPageIndex, uint endPageIndex)

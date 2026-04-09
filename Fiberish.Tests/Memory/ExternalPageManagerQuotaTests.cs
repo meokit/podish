@@ -145,7 +145,7 @@ public class ExternalPageManagerQuotaTests
             var ok = PageManager.TryAllocateExternalContiguousStrict(
                 out basePtr,
                 2,
-                AllocationClass.PageCache);
+                AllocationClass.Anonymous);
             Assert.True(ok);
             Assert.NotEqual(IntPtr.Zero, basePtr);
             Assert.Equal(beforePages + 2, PageManager.GetAllocatedPageCount());
