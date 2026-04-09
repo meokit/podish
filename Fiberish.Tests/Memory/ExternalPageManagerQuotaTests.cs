@@ -136,7 +136,7 @@ public class ExternalPageManagerQuotaTests
         var oldQuota = PageManager.MemoryQuotaBytes;
         var oldBackend = PageManager.PreferredBackend;
         PageManager.MemoryQuotaBytes = long.MaxValue;
-        PageManager.PreferredBackend = ExternalPageBackend.MmapAnonymous;
+        PageManager.PreferredBackend = PageBackend.MmapAnonymous;
         var beforePages = PageManager.GetAllocatedPageCount();
 
         var basePtr = IntPtr.Zero;

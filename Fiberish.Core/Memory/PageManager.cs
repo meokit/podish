@@ -22,7 +22,7 @@ public enum AllocationSource
     CowReplacePrivate
 }
 
-public enum ExternalPageBackend
+public enum PageBackend
 {
     AlignedAlloc,
     MmapAnonymous
@@ -84,7 +84,7 @@ public sealed class PageManager
         set => CurrentState.MemoryQuotaBytes = value;
     }
 
-    public static ExternalPageBackend PreferredBackend
+    public static PageBackend PreferredBackend
     {
         get => CurrentState.PreferredBackend;
         set => CurrentState.PreferredBackend = value;
@@ -470,7 +470,7 @@ public sealed class PageManager
         MemoryMappedViewAccessor? viewAccessor = null;
         nint rawViewPointer = 0;
         var pointerAcquired = false;
-        if (state.PreferredBackend == ExternalPageBackend.MmapAnonymous)
+        if (state.PreferredBackend == PageBackend.MmapAnonymous)
         {
             try
             {
@@ -649,7 +649,7 @@ public sealed class PageManager
         public long LegacyAllocOverQuota;
         public long MemoryQuotaBytes = 2L * 1024 * 1024 * 1024;
         public long NextSegmentId;
-        public ExternalPageBackend PreferredBackend = ExternalPageBackend.AlignedAlloc;
+        public PageBackend PreferredBackend = PageBackend.AlignedAlloc;
         public long StrictAllocFail;
         public long StrictAllocReclaimSuccess;
         public long StrictAllocSuccess;
