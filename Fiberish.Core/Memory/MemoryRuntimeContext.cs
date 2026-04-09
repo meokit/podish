@@ -139,6 +139,10 @@ public sealed class MemoryRuntimeContext
 
 internal sealed class ZeroInode : MappingBackedInode
 {
+    private readonly Lock _zeroPageGate = new();
+    private IPageHandle? _sharedZeroPageHandle;
+    private HostPage? _sharedZeroHostPage;
+
     public ZeroInode()
     {
         Ino = 0;
@@ -149,4 +153,27 @@ internal sealed class ZeroInode : MappingBackedInode
 
     protected override AddressSpaceKind MappingKind => AddressSpaceKind.Zero;
     protected override AddressSpacePolicy.AddressSpaceCacheClass? MappingCacheClass => null;
+
+    internal override InodePageRecord? TryCreateIntrinsicMappingPage(uint pageIndex)
+    {
+        lock (_zeroPageGate)
+        {
+            if (_sharedZeroHostPage == null)
+            {
+                var pageHandle = InodePageAllocator.AllocatePage(AllocationClass.KernelInternal);
+                if (pageHandle == null)
+                    return null;
+
+                _sharedZeroPageHandle = pageHandle;
+                _sharedZeroHostPage = HostPageManager.GetOrCreate(pageHandle.Pointer, HostPageKind.Zero);
+            }
+
+            return new InodePageRecord
+            {
+                PageIndex = pageIndex,
+                HostPage = _sharedZeroHostPage,
+                BackingKind = FilePageBackingKind.ZeroSharedPage
+            };
+        }
+    }
 }

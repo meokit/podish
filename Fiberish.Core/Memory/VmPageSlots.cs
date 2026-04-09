@@ -181,17 +181,39 @@ internal sealed class VmPageSlots
         }
 
         IntPtr ptr;
-        if (strictQuota)
+        IPageHandle? pageHandle = null;
+        var usePageManager = hostPageKind == HostPageKind.Anon;
+        if (usePageManager)
         {
-            if (!PageManager.TryAllocateExternalPageStrict(out ptr, allocationClass, allocationSource))
+            if (strictQuota)
             {
-                isNew = false;
-                return IntPtr.Zero;
+                if (!PageManager.TryAllocateExternalPageStrict(out ptr, allocationClass, allocationSource))
+                {
+                    isNew = false;
+                    return IntPtr.Zero;
+                }
+            }
+            else
+            {
+                ptr = PageManager.AllocateExternalPage(allocationClass, allocationSource);
             }
         }
         else
         {
-            ptr = PageManager.AllocateExternalPage(allocationClass, allocationSource);
+            if (strictQuota)
+            {
+                if (!InodePageAllocator.TryAllocatePageStrict(out pageHandle, allocationClass, allocationSource))
+                {
+                    isNew = false;
+                    return IntPtr.Zero;
+                }
+            }
+            else
+            {
+                pageHandle = InodePageAllocator.AllocatePage(allocationClass, allocationSource);
+            }
+
+            ptr = pageHandle?.Pointer ?? IntPtr.Zero;
         }
 
         if (ptr == IntPtr.Zero)
@@ -202,7 +224,10 @@ internal sealed class VmPageSlots
 
         if (onFirstCreate != null && !onFirstCreate(ptr))
         {
-            PageManager.ReleasePtr(ptr);
+            if (pageHandle != null)
+                pageHandle.Dispose();
+            else
+                PageManager.ReleasePtr(ptr);
             isNew = false;
             return IntPtr.Zero;
         }
@@ -212,7 +237,10 @@ internal sealed class VmPageSlots
         {
             if (_pages.TryGetValue(pageIndex, out var raced))
             {
-                PageManager.ReleasePtr(ptr);
+                if (pageHandle != null)
+                    pageHandle.Dispose();
+                else
+                    PageManager.ReleasePtr(ptr);
                 isNew = false;
                 raced.HostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
                 return raced.Ptr;
@@ -221,7 +249,8 @@ internal sealed class VmPageSlots
             hostPage.AddOwnerRef(_ownerRefFactory(pageIndex));
             _pages[pageIndex] = new VmPage
             {
-                HostPage = hostPage
+                HostPage = hostPage,
+                OnReleased = pageHandle != null ? _ => pageHandle.Dispose() : null
             };
             hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
             isNew = true;

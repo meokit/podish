@@ -22,13 +22,13 @@ internal sealed class InodePageRecord
     public required uint PageIndex { get; init; }
     public required HostPage HostPage { get; init; }
     public required FilePageBackingKind BackingKind { get; init; }
-    public IDisposable? ExternalOwner { get; init; }
+    public IPageHandle? PageHandle { get; init; }
 
     public IntPtr Ptr => HostPage.Ptr;
 
     public void ReleaseOwnership()
     {
-        if (BackingKind != FilePageBackingKind.ZeroSharedPage)
-            PageManager.ReleasePtr(Ptr);
+        PageHandle?.Dispose();
+        HostPageManager.TryRemoveIfUnused(HostPage);
     }
 }

@@ -41,11 +41,12 @@ public readonly record struct MemoryStatsSnapshot(
 
     public static MemoryStatsSnapshot Capture(SyscallManager? sm = null)
     {
-        var allocated = PageManager.GetAllocatedBytes();
         var cache = AddressSpacePolicy.GetAddressSpaceStats();
         var cacheStates = AddressSpacePolicy.GetAddressSpacePageStatesSnapshot();
         var hostMapped = AggregateHostMappedCacheStats(sm);
         var cachedBytes = cache.TotalPages * LinuxConstants.PageSize;
+        var anonymousAllocated = PageManager.GetAllocatedBytes();
+        var allocated = anonymousAllocated + cachedBytes;
         var dirtyBytes = cache.DirtyPages * LinuxConstants.PageSize;
         var reclaimable = cache.CleanPages * LinuxConstants.PageSize;
         var nowTicks = DateTime.UtcNow.Ticks;
@@ -54,7 +55,7 @@ public readonly record struct MemoryStatsSnapshot(
         var anonymousZeroMappedBytes = processStats.AnonymousZeroMappedBytes;
         const long anonymousSharedMaterializedBytes = 0;
         var privateOverlayBytes = privateBreakdown.TotalAnon + privateBreakdown.TotalFilePrivate;
-        var anonBytes = Math.Max(0, allocated - cachedBytes) + anonymousSharedMaterializedBytes;
+        var anonBytes = anonymousAllocated + anonymousSharedMaterializedBytes;
         var shmemCacheBytes = cache.ShmemPages * LinuxConstants.PageSize;
         var writebackBytes = cache.WritebackPages * LinuxConstants.PageSize;
         var committedBytes = processStats.CommittedBytes;

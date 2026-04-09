@@ -127,7 +127,7 @@ public sealed class PageManager
         if (binding.Ptr == IntPtr.Zero) return false;
         if (_pages.TryGetValue(pageAddr, out var existing)) return existing.Ptr == binding.Ptr;
 
-        if (!ZeroPageProvider.IsZeroPage(binding.Ptr))
+        if (binding.HostPage.Kind != HostPageKind.Zero)
         {
             AddGlobalRef(binding.Ptr);
             addedRef = true;
@@ -145,7 +145,7 @@ public sealed class PageManager
         if (binding.HostPage.MapCount > 0)
             binding.HostPage.MapCount--;
 
-        if (!ZeroPageProvider.IsZeroPage(binding.Ptr))
+        if (binding.HostPage.Kind != HostPageKind.Zero)
             ReleaseGlobalRef(binding.Ptr);
 
         if (!preserveOwnerBinding &&
@@ -179,13 +179,11 @@ public sealed class PageManager
 
     public static void AddRef(IntPtr ptr)
     {
-        if (ZeroPageProvider.IsZeroPage(ptr)) return;
         AddGlobalRef(ptr);
     }
 
     public static int GetRefCount(IntPtr ptr)
     {
-        if (ZeroPageProvider.IsZeroPage(ptr)) return 0;
         var state = CurrentState;
         lock (state.GlobalLock)
         {
@@ -371,7 +369,7 @@ public sealed class PageManager
                 if (segment.LivePages <= 0)
                 {
                     state.Segments.Remove(entry.SegmentId);
-            segmentToFree = segment;
+                    segmentToFree = segment;
                 }
             }
         }
@@ -409,9 +407,10 @@ public sealed class PageManager
         AllocationClass allocationClass = AllocationClass.KernelInternal,
         AllocationSource allocationSource = AllocationSource.Unknown)
     {
+        ValidateManagedAllocationClass(allocationClass);
         var state = CurrentState;
         var overQuota = state.MemoryQuotaBytes > 0 &&
-                        GetAllocatedBytes() + LinuxConstants.PageSize > state.MemoryQuotaBytes;
+                        GlobalMemoryAccounting.GetTotalTrackedBytes() + LinuxConstants.PageSize > state.MemoryQuotaBytes;
         IntPtr ptr;
         unsafe
         {
@@ -443,6 +442,7 @@ public sealed class PageManager
         AllocationClass allocationClass,
         AllocationSource allocationSource = AllocationSource.Unknown)
     {
+        ValidateManagedAllocationClass(allocationClass);
         var state = CurrentState;
         basePtr = IntPtr.Zero;
         if (pageCount <= 0) return false;
@@ -450,13 +450,15 @@ public sealed class PageManager
         var bytesLong = (long)pageCount * LinuxConstants.PageSize;
         var reclaimed = false;
 
-        if (state.MemoryQuotaBytes > 0 && GetAllocatedBytes() + bytesLong > state.MemoryQuotaBytes)
+        if (state.MemoryQuotaBytes > 0 &&
+            GlobalMemoryAccounting.GetTotalTrackedBytes() + bytesLong > state.MemoryQuotaBytes)
         {
             reclaimed =
                 MemoryPressureCoordinator.TryReclaimForAllocation(bytesLong, allocationClass, allocationSource) >
                 0;
 
-            if (state.MemoryQuotaBytes > 0 && GetAllocatedBytes() + bytesLong > state.MemoryQuotaBytes)
+            if (state.MemoryQuotaBytes > 0 &&
+                GlobalMemoryAccounting.GetTotalTrackedBytes() + bytesLong > state.MemoryQuotaBytes)
             {
                 Interlocked.Increment(ref state.StrictAllocFail);
                 return false;
@@ -578,6 +580,7 @@ public sealed class PageManager
         AllocationClass allocationClass,
         AllocationSource allocationSource = AllocationSource.Unknown)
     {
+        ValidateManagedAllocationClass(allocationClass);
         var state = CurrentState;
         ptr = IntPtr.Zero;
         var reclaimed = false;
@@ -614,27 +617,27 @@ public sealed class PageManager
     {
         var state = CurrentState;
         if (state.MemoryQuotaBytes <= 0) return true;
-        var next = GetAllocatedBytes() + LinuxConstants.PageSize;
+        var next = GlobalMemoryAccounting.GetTotalTrackedBytes() + LinuxConstants.PageSize;
         return next <= state.MemoryQuotaBytes;
     }
 
     public static void AddRefPtr(IntPtr ptr, IDisposable? externalOwner = null)
     {
         if (ptr == IntPtr.Zero) return;
-        if (ZeroPageProvider.IsZeroPage(ptr))
-        {
-            externalOwner?.Dispose();
-            return;
-        }
-
         AddGlobalRef(ptr, externalOwner: externalOwner);
     }
 
     public static void ReleasePtr(IntPtr ptr)
     {
         if (ptr == IntPtr.Zero) return;
-        if (ZeroPageProvider.IsZeroPage(ptr)) return;
         ReleaseGlobalRef(ptr);
+    }
+
+    private static void ValidateManagedAllocationClass(AllocationClass allocationClass)
+    {
+        if (allocationClass is AllocationClass.PageCache or AllocationClass.Readahead)
+            throw new InvalidOperationException(
+                $"{allocationClass} pages must be allocated through inode-managed page backing.");
     }
 
     private sealed class State
