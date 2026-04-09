@@ -60,6 +60,25 @@ public sealed class ContainerRestartTests
         }
     }
 
+    [Fact]
+    public async Task NativeContainer_WaitUntilStartedOrExitedAsync_TreatsQuickExitAfterBindAsStarted()
+    {
+        var controller = new ContainerProcessController();
+        var exited = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var session = new PodishContainerSession("quick-exit", "image", exited.Task, null, controller);
+
+        var waitTask = NativeContainer.WaitUntilStartedOrExitedAsync(session, 100);
+
+        controller.BindInitProcess(123, static _ => { });
+        controller.Unbind();
+        exited.SetResult(0);
+
+        Assert.True(await waitTask);
+        Assert.True(session.HasStarted);
+        Assert.True(session.IsCompleted);
+        Assert.Null(session.InitPid);
+    }
+
     [Fact(Skip = "暂时跳过：test_futex guest 资产当前未纳入此测试流程，待单独补齐。")]
     public async Task NativeContainer_ImageBacked_StartStopStart_DoesNotLoseExecutable()
     {

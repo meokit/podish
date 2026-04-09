@@ -554,6 +554,13 @@ internal sealed class NativeContainer
                 throw new InvalidOperationException($"container failed to start (exit={rc})");
             }
 
+            if (session.IsCompleted)
+            {
+                var rc = await session.WaitAsync();
+                MarkExited(session, rc);
+                return;
+            }
+
             lock (_gate)
             {
                 if (!ReferenceEquals(_session, session))
@@ -818,13 +825,13 @@ internal sealed class NativeContainer
             NotifyContainerStateChanged();
     }
 
-    private static async Task<bool> WaitUntilStartedOrExitedAsync(PodishContainerSession session, int timeoutMs)
+    internal static async Task<bool> WaitUntilStartedOrExitedAsync(PodishContainerSession session, int timeoutMs)
     {
         var elapsed = 0;
         const int stepMs = 10;
         while (elapsed < timeoutMs)
         {
-            if (session.InitPid.HasValue)
+            if (session.HasStarted)
                 return true;
             if (session.IsCompleted)
                 return false;

@@ -84,6 +84,7 @@ public sealed class PodishContainerSession
     public bool HasTerminal => _terminalBridge != null;
     public bool IsCompleted => _runTask?.IsCompleted ?? false;
     public int? InitPid => _processController.InitPid;
+    public bool HasStarted => _processController.HasStarted;
 
     public void SetOutputHandler(Action<TtyEndpointKind, ReadOnlySpan<byte>>? handler)
     {
@@ -146,6 +147,7 @@ public sealed class ContainerProcessController
     private Action<int>? _signalInit;
 
     public int? InitPid { get; private set; }
+    public bool HasStarted { get; private set; }
 
     public void BindInitProcess(int pid, Action<int> signalInit)
     {
@@ -153,6 +155,7 @@ public sealed class ContainerProcessController
         lock (_lock)
         {
             InitPid = pid;
+            HasStarted = true;
             _signalInit = signalInit;
             if (_pendingSignals.Count > 0)
             {
