@@ -1535,7 +1535,7 @@ public abstract class MappingBackedInode : Inode
         }
     }
 
-    protected virtual AddressSpace CreateMapping()
+    protected AddressSpace CreateMapping()
     {
         var mapping = new AddressSpace(MappingKind);
         if (MappingCacheClass is { } cacheClass)
