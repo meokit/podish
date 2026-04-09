@@ -394,6 +394,77 @@ public class MmapSupportTests
     }
 
     [Fact]
+    public async Task Munmap_MultiVmaWindowReplacement_PreservesRemainingFragmentsInOrder()
+    {
+        using var env = new TestEnv();
+        const uint baseAddr = 0x54500000;
+
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, LinuxConstants.PageSize * 2,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+        Assert.Equal((int)(baseAddr + LinuxConstants.PageSize * 2), await env.Call("SysMmap2",
+            baseAddr + LinuxConstants.PageSize * 2, LinuxConstants.PageSize,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+        Assert.Equal((int)(baseAddr + LinuxConstants.PageSize * 3), await env.Call("SysMmap2",
+            baseAddr + LinuxConstants.PageSize * 3, LinuxConstants.PageSize * 2,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+
+        Assert.Equal(0, await env.Call("SysMunmap", baseAddr + LinuxConstants.PageSize, LinuxConstants.PageSize * 3));
+
+        var vmas = env.Vma.VMAs
+            .Where(v => v.Start >= baseAddr && v.End <= baseAddr + LinuxConstants.PageSize * 5)
+            .OrderBy(v => v.Start)
+            .ToArray();
+        Assert.Equal(2, vmas.Length);
+        Assert.Equal(baseAddr, vmas[0].Start);
+        Assert.Equal(baseAddr + LinuxConstants.PageSize, vmas[0].End);
+        Assert.Equal(baseAddr + LinuxConstants.PageSize * 4, vmas[1].Start);
+        Assert.Equal(baseAddr + LinuxConstants.PageSize * 5, vmas[1].End);
+    }
+
+    [Fact]
+    public async Task Mprotect_MultiVmaWindowReplacement_PreservesFragmentsInOrder()
+    {
+        using var env = new TestEnv();
+        const uint baseAddr = 0x54600000;
+
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, LinuxConstants.PageSize * 2,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+        Assert.Equal((int)(baseAddr + LinuxConstants.PageSize * 2), await env.Call("SysMmap2",
+            baseAddr + LinuxConstants.PageSize * 2, LinuxConstants.PageSize,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+        Assert.Equal((int)(baseAddr + LinuxConstants.PageSize * 3), await env.Call("SysMmap2",
+            baseAddr + LinuxConstants.PageSize * 3, LinuxConstants.PageSize * 2,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+
+        Assert.Equal(0, await env.Call("SysMprotect", baseAddr + LinuxConstants.PageSize, LinuxConstants.PageSize * 3,
+            (uint)Protection.Read));
+
+        var vmas = env.Vma.VMAs
+            .Where(v => v.Start >= baseAddr && v.End <= baseAddr + LinuxConstants.PageSize * 5)
+            .OrderBy(v => v.Start)
+            .ToArray();
+        Assert.Equal(5, vmas.Length);
+        Assert.Equal((baseAddr, baseAddr + LinuxConstants.PageSize, Protection.Read | Protection.Write),
+            (vmas[0].Start, vmas[0].End, vmas[0].Perms));
+        Assert.Equal((baseAddr + LinuxConstants.PageSize, baseAddr + LinuxConstants.PageSize * 2, Protection.Read),
+            (vmas[1].Start, vmas[1].End, vmas[1].Perms));
+        Assert.Equal((baseAddr + LinuxConstants.PageSize * 2, baseAddr + LinuxConstants.PageSize * 3, Protection.Read),
+            (vmas[2].Start, vmas[2].End, vmas[2].Perms));
+        Assert.Equal((baseAddr + LinuxConstants.PageSize * 3, baseAddr + LinuxConstants.PageSize * 4, Protection.Read),
+            (vmas[3].Start, vmas[3].End, vmas[3].Perms));
+        Assert.Equal(
+            (baseAddr + LinuxConstants.PageSize * 4, baseAddr + LinuxConstants.PageSize * 5,
+                Protection.Read | Protection.Write),
+            (vmas[4].Start, vmas[4].End, vmas[4].Perms));
+    }
+
+    [Fact]
     public async Task Open_PathFromUnfaultedFileMapping_FaultsStringPage()
     {
         using var env = new TestEnv();

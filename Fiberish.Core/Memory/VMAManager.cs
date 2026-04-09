@@ -526,6 +526,67 @@ public class VMAManager
             visitor(_vmas[i]);
     }
 
+    private bool TryGetVmAreaWindow(uint start, uint end, out int startIndex, out int endIndexExclusive)
+    {
+        startIndex = 0;
+        endIndexExclusive = 0;
+        if (start >= end || _vmas.Count == 0)
+            return false;
+
+        var left = 0;
+        var right = _vmas.Count - 1;
+        var firstMatch = _vmas.Count;
+
+        while (left <= right)
+        {
+            var mid = left + (right - left) / 2;
+            if (_vmas[mid].End > start)
+            {
+                firstMatch = mid;
+                right = mid - 1;
+            }
+            else
+            {
+                left = mid + 1;
+            }
+        }
+
+        if (firstMatch == _vmas.Count || _vmas[firstMatch].Start >= end)
+            return false;
+
+        var lastExclusive = firstMatch;
+        while (lastExclusive < _vmas.Count && _vmas[lastExclusive].Start < end)
+            lastExclusive++;
+
+        startIndex = firstMatch;
+        endIndexExclusive = lastExclusive;
+        return true;
+    }
+
+    private void ReplaceVmaWindow(int startIndex, int removeCount, IReadOnlyList<VmArea> replacements)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(startIndex);
+        ArgumentOutOfRangeException.ThrowIfNegative(removeCount);
+        ArgumentNullException.ThrowIfNull(replacements);
+
+        var commonCount = Math.Min(removeCount, replacements.Count);
+        for (var i = 0; i < commonCount; i++)
+            _vmas[startIndex + i] = replacements[i];
+
+        var removeTailCount = removeCount - commonCount;
+        if (removeTailCount > 0)
+            _vmas.RemoveRange(startIndex + commonCount, removeTailCount);
+
+        var insertTailCount = replacements.Count - commonCount;
+        if (insertTailCount > 0)
+        {
+            var tail = new List<VmArea>(insertTailCount);
+            for (var i = commonCount; i < replacements.Count; i++)
+                tail.Add(replacements[i]);
+            _vmas.InsertRange(startIndex + commonCount, tail);
+        }
+    }
+
     private static uint ComputeRangeEnd(uint addr, uint len)
     {
         var end = unchecked(addr + len);
@@ -945,98 +1006,124 @@ public class VMAManager
             return;
         }
 
-        for (var i = 0; i < _vmas.Count; i++)
+        if (TryGetVmAreaWindow(addr, end, out var startIndex, out var endIndexExclusive))
         {
-            var vma = _vmas[i];
+            var replacements = new List<VmArea>(endIndexExclusive - startIndex + 1);
+            List<VmArea>? removedVmas = null;
+            List<VmArea>? addedVmas = null;
+            List<VmArea>? registerAfter = null;
+            List<VmArea>? releaseAfter = null;
 
-            // No intersection
-            if (end <= vma.Start || addr >= vma.End)
-                continue;
-
-            // Full removal
-            if (addr <= vma.Start && end >= vma.End)
+            for (var i = startIndex; i < endIndexExclusive; i++)
             {
-                SyncVmArea(vma, engine, vma.Start, vma.End);
-                CollectHostPagesForVmaRange(vma, vma.Start, vma.End, unmappedHostPages);
-                ReleaseUnmappedObjectPages(vma, vma.Start, vma.End);
-                UnregisterVmAreaAttachments(vma);
-                if (ReferenceEquals(_lastFaultVma, vma)) _lastFaultVma = null;
-                vma.VmMapping?.Release();
-                vma.VmAnonVma?.Release();
-                vma.FileMapping?.Release();
-                TrackMappedInodeOnVmaRemoved(vma);
-                _vmas.RemoveAt(i--);
-                continue;
-            }
+                var vma = _vmas[i];
+                DebugAssert(end > vma.Start && addr < vma.End,
+                    $"TryGetVmAreaWindow returned non-overlapping VMA start=0x{vma.Start:X8} end=0x{vma.End:X8}.");
 
-            // Split (Middle removal)
-            if (addr > vma.Start && end < vma.End)
-            {
-                SyncVmArea(vma, engine, addr, end);
-                CollectHostPagesForVmaRange(vma, addr, end, unmappedHostPages);
-                ReleaseUnmappedObjectPages(vma, addr, end);
-                UnregisterVmAreaAttachments(vma);
-                var tailStart = end;
-                var tailEnd = vma.End;
-                long tailOffset = 0;
-                if (vma.File != null)
+                // Full removal
+                if (addr <= vma.Start && end >= vma.End)
                 {
-                    long diff = tailStart - vma.Start;
-                    tailOffset = vma.Offset + diff;
+                    SyncVmArea(vma, engine, vma.Start, vma.End);
+                    CollectHostPagesForVmaRange(vma, vma.Start, vma.End, unmappedHostPages);
+                    ReleaseUnmappedObjectPages(vma, vma.Start, vma.End);
+                    UnregisterVmAreaAttachments(vma);
+                    if (ReferenceEquals(_lastFaultVma, vma)) _lastFaultVma = null;
+                    (removedVmas ??= []).Add(vma);
+                    (releaseAfter ??= []).Add(vma);
+                    continue;
                 }
 
-                var tailVmArea = new VmArea
+                // Split (Middle removal)
+                if (addr > vma.Start && end < vma.End)
                 {
-                    Start = tailStart,
-                    End = tailEnd,
-                    Perms = vma.Perms,
-                    Flags = vma.Flags,
-                    FileMapping = vma.FileMapping?.AddRef(),
-                    Offset = tailOffset,
-                    Name = vma.Name,
-                    VmMapping = vma.VmMapping,
-                    VmAnonVma = ShareVmAnonVmaForSplit(vma),
-                    VmPgoff = vma.GetPageIndex(tailStart)
-                };
-                vma.VmMapping?.AddRef();
+                    SyncVmArea(vma, engine, addr, end);
+                    CollectHostPagesForVmaRange(vma, addr, end, unmappedHostPages);
+                    ReleaseUnmappedObjectPages(vma, addr, end);
+                    UnregisterVmAreaAttachments(vma);
+                    var tailStart = end;
+                    var tailEnd = vma.End;
+                    long tailOffset = 0;
+                    if (vma.File != null)
+                    {
+                        long diff = tailStart - vma.Start;
+                        tailOffset = vma.Offset + diff;
+                    }
 
-                _vmas.Insert(i + 1, tailVmArea);
-                TrackMappedInodeOnVmaAdded(tailVmArea);
+                    var tailVmArea = new VmArea
+                    {
+                        Start = tailStart,
+                        End = tailEnd,
+                        Perms = vma.Perms,
+                        Flags = vma.Flags,
+                        FileMapping = vma.FileMapping?.AddRef(),
+                        Offset = tailOffset,
+                        Name = vma.Name,
+                        VmMapping = vma.VmMapping,
+                        VmAnonVma = ShareVmAnonVmaForSplit(vma),
+                        VmPgoff = vma.GetPageIndex(tailStart)
+                    };
+                    vma.VmMapping?.AddRef();
 
-                vma.End = addr;
-                RegisterVmAreaAttachments(vma);
-                RegisterVmAreaAttachments(tailVmArea);
+                    vma.End = addr;
+                    replacements.Add(vma);
+                    replacements.Add(tailVmArea);
+                    (addedVmas ??= []).Add(tailVmArea);
+                    (registerAfter ??= []).Add(vma);
+                    registerAfter.Add(tailVmArea);
+                    continue;
+                }
 
-                continue;
+                // Head removal
+                if (addr <= vma.Start && end < vma.End)
+                {
+                    SyncVmArea(vma, engine, vma.Start, end);
+                    CollectHostPagesForVmaRange(vma, vma.Start, end, unmappedHostPages);
+                    ReleaseUnmappedObjectPages(vma, vma.Start, end);
+                    UnregisterVmAreaAttachments(vma);
+                    var diff = end - vma.Start;
+                    vma.Start = end;
+                    vma.VmPgoff = vma.GetPageIndex(end);
+                    if (vma.File != null)
+                        vma.Offset += diff;
+                    replacements.Add(vma);
+                    (registerAfter ??= []).Add(vma);
+                    continue;
+                }
+
+                // Tail removal
+                if (addr > vma.Start && end >= vma.End)
+                {
+                    SyncVmArea(vma, engine, addr, vma.End);
+                    CollectHostPagesForVmaRange(vma, addr, vma.End, unmappedHostPages);
+                    ReleaseUnmappedObjectPages(vma, addr, vma.End);
+                    UnregisterVmAreaAttachments(vma);
+                    vma.End = addr;
+                    replacements.Add(vma);
+                    (registerAfter ??= []).Add(vma);
+                }
             }
 
-            // Head removal
-            if (addr <= vma.Start && end < vma.End)
-            {
-                SyncVmArea(vma, engine, vma.Start, end);
-                CollectHostPagesForVmaRange(vma, vma.Start, end, unmappedHostPages);
-                ReleaseUnmappedObjectPages(vma, vma.Start, end);
-                UnregisterVmAreaAttachments(vma);
-                var diff = end - vma.Start;
-                vma.Start = end;
-                vma.VmPgoff = vma.GetPageIndex(end);
-                if (vma.File != null)
-                    vma.Offset += diff;
-                RegisterVmAreaAttachments(vma);
+            ReplaceVmaWindow(startIndex, endIndexExclusive - startIndex, replacements);
 
-                continue;
-            }
+            if (removedVmas != null)
+                foreach (var vma in removedVmas)
+                    TrackMappedInodeOnVmaRemoved(vma);
 
-            // Tail removal
-            if (addr > vma.Start && end >= vma.End)
-            {
-                SyncVmArea(vma, engine, addr, vma.End);
-                CollectHostPagesForVmaRange(vma, addr, vma.End, unmappedHostPages);
-                ReleaseUnmappedObjectPages(vma, addr, vma.End);
-                UnregisterVmAreaAttachments(vma);
-                vma.End = addr;
-                RegisterVmAreaAttachments(vma);
-            }
+            if (addedVmas != null)
+                foreach (var vma in addedVmas)
+                    TrackMappedInodeOnVmaAdded(vma);
+
+            if (registerAfter != null)
+                foreach (var vma in registerAfter)
+                    RegisterVmAreaAttachments(vma);
+
+            if (releaseAfter != null)
+                foreach (var vma in releaseAfter)
+                {
+                    vma.VmMapping?.Release();
+                    vma.VmAnonVma?.Release();
+                    vma.FileMapping?.Release();
+                }
         }
 
         TearDownNativeMappings(
@@ -1080,126 +1167,143 @@ public class VMAManager
 
         if (cursor < end) return -(int)Errno.ENOMEM;
 
-        for (var i = 0; i < _vmas.Count; i++)
+        if (TryGetVmAreaWindow(addr, end, out var startIndex, out var endIndexExclusive))
         {
-            var vma = _vmas[i];
-            var overlapStart = Math.Max(vma.Start, addr);
-            var overlapEnd = Math.Min(vma.End, end);
-            if (overlapStart >= overlapEnd) continue;
+            var replacements = new List<VmArea>(endIndexExclusive - startIndex + 2);
+            List<VmArea>? addedVmas = null;
+            List<VmArea>? registerAfter = null;
 
-            var oldStart = vma.Start;
-            var oldEnd = vma.End;
-            var oldPerms = vma.Perms;
-            var oldOffset = vma.Offset;
-            resetCodeCacheRange |= ((oldPerms ^ prot) & Protection.Exec) != 0;
-
-            // Fully covered: just flip perms.
-            if (overlapStart == oldStart && overlapEnd == oldEnd)
+            for (var i = startIndex; i < endIndexExclusive; i++)
             {
-                UpdateTbCohRolesForVmaRange(vma, overlapStart, overlapEnd, oldPerms, prot);
-                vma.Perms = prot;
-                continue;
-            }
+                var vma = _vmas[i];
+                var overlapStart = Math.Max(vma.Start, addr);
+                var overlapEnd = Math.Min(vma.End, end);
+                if (overlapStart >= overlapEnd)
+                    continue;
 
-            UnregisterVmAreaAttachments(vma);
+                var oldStart = vma.Start;
+                var oldEnd = vma.End;
+                var oldPerms = vma.Perms;
+                var oldOffset = vma.Offset;
+                resetCodeCacheRange |= ((oldPerms ^ prot) & Protection.Exec) != 0;
 
-            // Prepare middle (the protected slice).
-            var midDiff = (long)overlapStart - oldStart;
-            var originalFileMapping = vma.FileMapping;
-            var mid = new VmArea
-            {
-                Start = overlapStart,
-                End = overlapEnd,
-                Perms = prot,
-                Flags = vma.Flags,
-                FileMapping = null,
-                Offset = vma.File != null ? oldOffset + midDiff : 0,
-                Name = vma.Name,
-                VmMapping = vma.VmMapping,
-                VmAnonVma = ShareVmAnonVmaForSplit(vma),
-                VmPgoff = vma.GetPageIndex(overlapStart)
-            };
-            vma.VmMapping?.AddRef();
-
-            // Left tail stays in the existing VmArea.
-            var hasLeft = overlapStart > oldStart;
-            var hasRight = overlapEnd < oldEnd;
-            mid.FileMapping = hasLeft ? originalFileMapping?.AddRef() : originalFileMapping;
-
-            if (hasLeft)
-            {
-                vma.Start = oldStart;
-                vma.End = overlapStart;
-                vma.Perms = oldPerms;
-                RegisterVmAreaAttachments(vma);
-            }
-
-            // Right tail (if any) keeps old perms.
-            VmArea? right = null;
-            if (hasRight)
-            {
-                var rightDiff = (long)overlapEnd - oldStart;
-                right = new VmArea
+                // Fully covered: just flip perms.
+                if (overlapStart == oldStart && overlapEnd == oldEnd)
                 {
-                    Start = overlapEnd,
-                    End = oldEnd,
-                    Perms = oldPerms,
+                    UpdateTbCohRolesForVmaRange(vma, overlapStart, overlapEnd, oldPerms, prot);
+                    vma.Perms = prot;
+                    replacements.Add(vma);
+                    continue;
+                }
+
+                UnregisterVmAreaAttachments(vma);
+
+                // Prepare middle (the protected slice).
+                var midDiff = (long)overlapStart - oldStart;
+                var originalFileMapping = vma.FileMapping;
+                var mid = new VmArea
+                {
+                    Start = overlapStart,
+                    End = overlapEnd,
+                    Perms = prot,
                     Flags = vma.Flags,
-                    FileMapping = originalFileMapping?.AddRef(),
-                    Offset = vma.File != null ? oldOffset + rightDiff : 0,
+                    FileMapping = null,
+                    Offset = vma.File != null ? oldOffset + midDiff : 0,
                     Name = vma.Name,
                     VmMapping = vma.VmMapping,
                     VmAnonVma = ShareVmAnonVmaForSplit(vma),
-                    VmPgoff = vma.GetPageIndex(overlapEnd)
+                    VmPgoff = vma.GetPageIndex(overlapStart)
                 };
                 vma.VmMapping?.AddRef();
-            }
 
-            if (!hasLeft)
-            {
-                // Reuse current slot for middle when there is no left tail.
-                // Move VmAnonVma ownership to reused VmArea slot; otherwise mid.VmAnonVma is leaked.
-                var oldPrivate = vma.VmAnonVma;
-                vma.Start = mid.Start;
-                vma.End = mid.End;
-                vma.Perms = mid.Perms;
-                vma.FileMapping = mid.FileMapping;
-                vma.Offset = mid.Offset;
-                vma.Name = mid.Name;
-                vma.VmPgoff = mid.VmPgoff;
-                vma.VmMapping = mid.VmMapping;
-                vma.VmAnonVma = mid.VmAnonVma;
-                mid.VmAnonVma = null;
-                mid.FileMapping = null;
-                // Drop the temporary extra ref held by mid.
-                mid.VmMapping?.Release();
-                oldPrivate?.Release();
+                // Left tail stays in the existing VmArea.
+                var hasLeft = overlapStart > oldStart;
+                var hasRight = overlapEnd < oldEnd;
+                mid.FileMapping = hasLeft ? originalFileMapping?.AddRef() : originalFileMapping;
 
-                if (right != null)
+                if (hasLeft)
                 {
-                    _vmas.Insert(i + 1, right);
-                    TrackMappedInodeOnVmaAdded(right);
-                    RegisterVmAreaAttachments(right);
-                    i++;
+                    vma.Start = oldStart;
+                    vma.End = overlapStart;
+                    vma.Perms = oldPerms;
                 }
 
-                RegisterVmAreaAttachments(vma);
-            }
-            else
-            {
-                // Keep left in current slot; insert middle and optional right.
-                _vmas.Insert(i + 1, mid);
-                TrackMappedInodeOnVmaAdded(mid);
-                RegisterVmAreaAttachments(mid);
-                if (right != null)
+                // Right tail (if any) keeps old perms.
+                VmArea? right = null;
+                if (hasRight)
                 {
-                    _vmas.Insert(i + 2, right);
-                    TrackMappedInodeOnVmaAdded(right);
-                    RegisterVmAreaAttachments(right);
+                    var rightDiff = (long)overlapEnd - oldStart;
+                    right = new VmArea
+                    {
+                        Start = overlapEnd,
+                        End = oldEnd,
+                        Perms = oldPerms,
+                        Flags = vma.Flags,
+                        FileMapping = originalFileMapping?.AddRef(),
+                        Offset = vma.File != null ? oldOffset + rightDiff : 0,
+                        Name = vma.Name,
+                        VmMapping = vma.VmMapping,
+                        VmAnonVma = ShareVmAnonVmaForSplit(vma),
+                        VmPgoff = vma.GetPageIndex(overlapEnd)
+                    };
+                    vma.VmMapping?.AddRef();
                 }
 
-                i += right != null ? 2 : 1;
+                if (!hasLeft)
+                {
+                    // Reuse current slot for middle when there is no left tail.
+                    // Move VmAnonVma ownership to reused VmArea slot; otherwise mid.VmAnonVma is leaked.
+                    var oldPrivate = vma.VmAnonVma;
+                    vma.Start = mid.Start;
+                    vma.End = mid.End;
+                    vma.Perms = mid.Perms;
+                    vma.FileMapping = mid.FileMapping;
+                    vma.Offset = mid.Offset;
+                    vma.Name = mid.Name;
+                    vma.VmPgoff = mid.VmPgoff;
+                    vma.VmMapping = mid.VmMapping;
+                    vma.VmAnonVma = mid.VmAnonVma;
+                    mid.VmAnonVma = null;
+                    mid.FileMapping = null;
+                    // Drop the temporary extra ref held by mid.
+                    mid.VmMapping?.Release();
+                    oldPrivate?.Release();
+
+                    replacements.Add(vma);
+                    (registerAfter ??= []).Add(vma);
+                    if (right != null)
+                    {
+                        replacements.Add(right);
+                        (addedVmas ??= []).Add(right);
+                        registerAfter.Add(right);
+                    }
+                }
+                else
+                {
+                    // Keep left in current slot; insert middle and optional right.
+                    replacements.Add(vma);
+                    replacements.Add(mid);
+                    (addedVmas ??= []).Add(mid);
+                    (registerAfter ??= []).Add(vma);
+                    registerAfter.Add(mid);
+                    if (right != null)
+                    {
+                        replacements.Add(right);
+                        addedVmas.Add(right);
+                        registerAfter.Add(right);
+                    }
+                }
             }
+
+            ReplaceVmaWindow(startIndex, endIndexExclusive - startIndex, replacements);
+
+            if (addedVmas != null)
+                foreach (var vma in addedVmas)
+                    TrackMappedInodeOnVmaAdded(vma);
+
+            if (registerAfter != null)
+                foreach (var vma in registerAfter)
+                    RegisterVmAreaAttachments(vma);
         }
 
         if (prot == Protection.None)
