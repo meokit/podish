@@ -43,7 +43,7 @@ public class NewMountApiTests
         var mntfd = await env.Call("SysFsmount", (uint)fsfd);
         Assert.True(mntfd >= 0);
         var mountFile = Assert.IsType<MountFile>(env.SyscallManager.GetFD(mntfd)!);
-        Assert.False(mountFile.Mount.IsAttached);
+        Assert.False(mountFile.Mount is { IsAttached: true });
 
         // Ensure /mnt exists as mount target
         var root = env.SyscallManager.Root.Dentry!;
@@ -106,9 +106,9 @@ public class NewMountApiTests
         var mntfd = await env.Call("SysFsmount", (uint)fsfd);
         var mount = Assert.IsType<MountFile>(env.SyscallManager.GetFD(mntfd)!).Mount;
 
-        env.SyscallManager.PinContainerMount(mount);
+        env.SyscallManager.PinContainerMount(mount!);
         env.SyscallManager.FreeFD(mntfd);
-        Assert.Equal(1, mount.RefCount); // container pin owner
+        Assert.Equal(1, mount!.RefCount); // container pin owner
 
         env.SyscallManager.ReleaseContainerPins();
         Assert.Equal(0, mount.RefCount);

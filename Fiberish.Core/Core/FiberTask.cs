@@ -1366,7 +1366,7 @@ public class FiberTask
     //
     // RunSlice is always called with Status == Running (enforced by the scheduler).
     // When it returns, the task must be in one of: Waiting, Ready, or Terminated.
-    public void RunSlice(int instructionLimit = 1000000)
+    public void RunSlice(int instructionLimit = 10_000_000)
     {
         CommonKernel.CurrentTask = this;
         try

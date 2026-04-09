@@ -44,6 +44,357 @@ internal sealed class RmapAttachment
     }
 }
 
+internal readonly record struct TbCohMmPageKey(VMAManager Mm, uint GuestPageStart)
+{
+    public bool Equals(TbCohMmPageKey other)
+    {
+        return ReferenceEquals(Mm, other.Mm) &&
+               GuestPageStart == other.GuestPageStart;
+    }
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(RuntimeHelpers.GetHashCode(Mm));
+        hash.Add(GuestPageStart);
+        return hash.ToHashCode();
+    }
+}
+
+internal sealed class TbCohMmPageEntry
+{
+    public required VMAManager Mm { get; init; }
+    public required uint GuestPageStart { get; init; }
+    public int ExecRefCount { get; set; }
+    public int WriteRefCount { get; set; }
+}
+
+internal sealed class SmallPageSet
+{
+    private HashSet<uint>? _overflow;
+    private int _count;
+    private uint _item0;
+    private uint _item1;
+    private uint _item2;
+    private uint _item3;
+
+    public int Count => _overflow?.Count ?? _count;
+
+    public bool Add(uint value)
+    {
+        if (_overflow != null)
+            return _overflow.Add(value);
+
+        if (ContainsInline(value))
+            return false;
+
+        switch (_count)
+        {
+            case 0:
+                _item0 = value;
+                _count = 1;
+                return true;
+            case 1:
+                _item1 = value;
+                _count = 2;
+                return true;
+            case 2:
+                _item2 = value;
+                _count = 3;
+                return true;
+            case 3:
+                _item3 = value;
+                _count = 4;
+                return true;
+            default:
+                _overflow = new HashSet<uint>(5) { _item0, _item1, _item2, _item3, value };
+                _count = 0;
+                _item0 = 0;
+                _item1 = 0;
+                _item2 = 0;
+                _item3 = 0;
+                return true;
+        }
+    }
+
+    public bool Remove(uint value)
+    {
+        if (_overflow != null)
+            return _overflow.Remove(value);
+
+        var index = IndexOfInline(value);
+        if (index < 0)
+            return false;
+
+        var lastIndex = _count - 1;
+        if (index != lastIndex)
+            SetInline(index, GetInline(lastIndex));
+        SetInline(lastIndex, 0);
+        _count--;
+        return true;
+    }
+
+    public void Visit<TState>(ref TState state, SmallPageSetVisitor<TState> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        if (_overflow != null)
+        {
+            foreach (var value in _overflow)
+                visitor(value, ref state);
+            return;
+        }
+
+        for (var i = 0; i < _count; i++)
+            visitor(GetInline(i), ref state);
+    }
+
+    private bool ContainsInline(uint value)
+    {
+        return IndexOfInline(value) >= 0;
+    }
+
+    private int IndexOfInline(uint value)
+    {
+        for (var i = 0; i < _count; i++)
+            if (GetInline(i) == value)
+                return i;
+        return -1;
+    }
+
+    private uint GetInline(int index)
+    {
+        return index switch
+        {
+            0 => _item0,
+            1 => _item1,
+            2 => _item2,
+            3 => _item3,
+            _ => throw new ArgumentOutOfRangeException(nameof(index))
+        };
+    }
+
+    private void SetInline(int index, uint value)
+    {
+        switch (index)
+        {
+            case 0:
+                _item0 = value;
+                break;
+            case 1:
+                _item1 = value;
+                break;
+            case 2:
+                _item2 = value;
+                break;
+            case 3:
+                _item3 = value;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(index));
+        }
+    }
+}
+
+internal sealed class TbCohMmBucket
+{
+    public required VMAManager Mm { get; init; }
+    public SmallPageSet ExecPages { get; } = new();
+    public SmallPageSet WriterPages { get; } = new();
+
+    public bool IsEmpty => ExecPages.Count == 0 && WriterPages.Count == 0;
+}
+
+internal sealed class HostPageTbCohIndex
+{
+    private readonly Dictionary<TbCohMmPageKey, TbCohMmPageEntry> _byMmPage = [];
+    private readonly Dictionary<VMAManager, TbCohMmBucket> _byMm = [];
+    private readonly Dictionary<nuint, int> _execIdentityCounts = [];
+    private int _execIdentityCount;
+    private nuint _singleExecIdentity;
+
+    private static bool HasExecRole(Protection perms)
+    {
+        return (perms & Protection.Exec) != 0;
+    }
+
+    private static bool HasWriteRole(Protection perms)
+    {
+        return (perms & Protection.Write) != 0;
+    }
+
+    private static nuint GetCoherenceIdentity(VMAManager mm)
+    {
+        return mm.AddressSpaceIdentity;
+    }
+
+    private TbCohMmBucket GetOrAddBucket(VMAManager mm)
+    {
+        if (_byMm.TryGetValue(mm, out var existing))
+            return existing;
+
+        var created = new TbCohMmBucket { Mm = mm };
+        _byMm[mm] = created;
+        return created;
+    }
+
+    private void AddExecIdentity(nuint identity)
+    {
+        if (_execIdentityCounts.TryGetValue(identity, out var existing))
+        {
+            _execIdentityCounts[identity] = existing + 1;
+            return;
+        }
+
+        _execIdentityCounts[identity] = 1;
+        _execIdentityCount++;
+        _singleExecIdentity = _execIdentityCount == 1 ? identity : 0;
+    }
+
+    private void RemoveExecIdentity(nuint identity)
+    {
+        if (!_execIdentityCounts.TryGetValue(identity, out var existing))
+            return;
+
+        if (existing > 1)
+        {
+            _execIdentityCounts[identity] = existing - 1;
+            return;
+        }
+
+        _execIdentityCounts.Remove(identity);
+        _execIdentityCount--;
+        if (_execIdentityCount == 1)
+        {
+            foreach (var remainingIdentity in _execIdentityCounts.Keys)
+            {
+                _singleExecIdentity = remainingIdentity;
+                return;
+            }
+        }
+
+        _singleExecIdentity = 0;
+    }
+
+    public void AddRoles(VMAManager mm, uint guestPageStart, Protection perms)
+    {
+        var hasExec = HasExecRole(perms);
+        var hasWrite = HasWriteRole(perms);
+        if (!hasExec && !hasWrite)
+            return;
+
+        var key = new TbCohMmPageKey(mm, guestPageStart);
+        if (!_byMmPage.TryGetValue(key, out var entry))
+        {
+            entry = new TbCohMmPageEntry
+            {
+                Mm = mm,
+                GuestPageStart = guestPageStart
+            };
+            _byMmPage[key] = entry;
+        }
+
+        TbCohMmBucket? bucket = null;
+        if (hasExec)
+        {
+            if (entry.ExecRefCount == 0)
+            {
+                bucket = GetOrAddBucket(mm);
+                bucket.ExecPages.Add(guestPageStart);
+                AddExecIdentity(GetCoherenceIdentity(mm));
+            }
+
+            entry.ExecRefCount++;
+        }
+
+        if (hasWrite)
+        {
+            if (entry.WriteRefCount == 0)
+            {
+                bucket ??= GetOrAddBucket(mm);
+                bucket.WriterPages.Add(guestPageStart);
+            }
+
+            entry.WriteRefCount++;
+        }
+    }
+
+    public void RemoveRoles(VMAManager mm, uint guestPageStart, Protection perms)
+    {
+        var hasExec = HasExecRole(perms);
+        var hasWrite = HasWriteRole(perms);
+        if (!hasExec && !hasWrite)
+            return;
+
+        var key = new TbCohMmPageKey(mm, guestPageStart);
+        if (!_byMmPage.TryGetValue(key, out var entry))
+            return;
+
+        _byMm.TryGetValue(mm, out var bucket);
+        if (hasExec && entry.ExecRefCount > 0)
+        {
+            entry.ExecRefCount--;
+            if (entry.ExecRefCount == 0)
+            {
+                bucket?.ExecPages.Remove(guestPageStart);
+                RemoveExecIdentity(GetCoherenceIdentity(mm));
+            }
+        }
+
+        if (hasWrite && entry.WriteRefCount > 0)
+        {
+            entry.WriteRefCount--;
+            if (entry.WriteRefCount == 0)
+                bucket?.WriterPages.Remove(guestPageStart);
+        }
+
+        if (entry.ExecRefCount == 0 && entry.WriteRefCount == 0)
+            _byMmPage.Remove(key);
+
+        if (bucket is { IsEmpty: true })
+            _byMm.Remove(mm);
+    }
+
+    public void UpdateRoles(VMAManager mm, uint guestPageStart, Protection oldPerms, Protection newPerms)
+    {
+        if (HasExecRole(oldPerms) == HasExecRole(newPerms) && HasWriteRole(oldPerms) == HasWriteRole(newPerms))
+            return;
+
+        RemoveRoles(mm, guestPageStart, oldPerms);
+        AddRoles(mm, guestPageStart, newPerms);
+    }
+
+    public TbCohExecSummary GetExecSummary()
+    {
+        return new TbCohExecSummary(_execIdentityCount != 0, _execIdentityCount > 1, _singleExecIdentity);
+    }
+
+    public void VisitWriterPages<TState>(ref TState state, TbCohMmPageVisitor<TState> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        foreach (var bucket in _byMm.Values)
+        {
+            var mm = bucket.Mm;
+            bucket.WriterPages.Visit(ref state, (uint guestPageStart, ref TState innerState) =>
+            {
+                visitor(mm, guestPageStart, ref innerState);
+            });
+        }
+    }
+
+    public void VisitExecPages<TState>(ref TState state, TbCohMmPageVisitor<TState> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        foreach (var bucket in _byMm.Values)
+        {
+            var mm = bucket.Mm;
+            bucket.ExecPages.Visit(ref state, (uint guestPageStart, ref TState innerState) =>
+            {
+                visitor(mm, guestPageStart, ref innerState);
+            });
+        }
+    }
+}
+
 internal readonly record struct HostPageRmapKey(
     VMAManager Mm,
     VmArea Vma,
@@ -92,6 +443,10 @@ internal readonly record struct RmapHit(
     uint GuestPageStart);
 
 internal delegate void HostPageRmapVisitor<TState>(HostPage hostPage, in HostPageRmapRef rmapRef, ref TState state);
+internal delegate void TbCohMmPageVisitor<TState>(VMAManager mm, uint guestPageStart, ref TState state);
+internal delegate void SmallPageSetVisitor<TState>(uint pageStart, ref TState state);
+
+internal readonly record struct TbCohExecSummary(bool HasExecPeer, bool HasMultipleExecIdentities, nuint ExecIdentity);
 
 internal sealed class HostPage
 {
@@ -99,6 +454,7 @@ internal sealed class HostPage
     private readonly List<HostPageOwnerRef> _ownerRefs = [];
     private readonly List<HostPageRmapRef> _rmapRefs = [];
     private readonly Dictionary<HostPageRmapKey, int> _rmapRefIndices = [];
+    private readonly HostPageTbCohIndex _tbCohIndex = new();
 
     public HostPage(IntPtr ptr, HostPageKind kind)
     {
@@ -180,8 +536,10 @@ internal sealed class HostPage
                 if (existing.GuestPageStart == guestPageStart)
                     return;
 
+                _tbCohIndex.RemoveRoles(mm, existing.GuestPageStart, existing.Vma.Perms);
                 existing.GuestPageStart = guestPageStart;
                 _rmapRefs[existingIndex] = existing;
+                _tbCohIndex.AddRoles(mm, guestPageStart, vma.Perms);
                 return;
             }
 
@@ -194,6 +552,7 @@ internal sealed class HostPage
                 PageIndex = pageIndex,
                 GuestPageStart = guestPageStart
             });
+            _tbCohIndex.AddRoles(mm, guestPageStart, vma.Perms);
         }
     }
 
@@ -205,6 +564,8 @@ internal sealed class HostPage
             if (!_rmapRefIndices.Remove(key, out var index))
                 return;
 
+            var removed = _rmapRefs[index];
+            _tbCohIndex.RemoveRoles(mm, removed.GuestPageStart, removed.Vma.Perms);
             var lastIndex = _rmapRefs.Count - 1;
             if (index != lastIndex)
             {
@@ -215,6 +576,41 @@ internal sealed class HostPage
 
             _rmapRefs.RemoveAt(lastIndex);
         }
+    }
+
+    public void UpdateTbCohRolesForRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex,
+        uint guestPageStart, Protection oldPerms, Protection newPerms)
+    {
+        var key = new HostPageRmapKey(mm, vma, ownerKind, pageIndex);
+        lock (_gate)
+        {
+            if (!_rmapRefIndices.ContainsKey(key))
+                return;
+
+            _tbCohIndex.UpdateRoles(mm, guestPageStart, oldPerms, newPerms);
+        }
+    }
+
+    public TbCohExecSummary GetTbCohExecSummary()
+    {
+        lock (_gate)
+        {
+            return _tbCohIndex.GetExecSummary();
+        }
+    }
+
+    public void VisitTbCohWriterPages<TState>(ref TState state, TbCohMmPageVisitor<TState> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        lock (_gate)
+            _tbCohIndex.VisitWriterPages(ref state, visitor);
+    }
+
+    public void VisitTbCohExecPages<TState>(ref TState state, TbCohMmPageVisitor<TState> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        lock (_gate)
+            _tbCohIndex.VisitExecPages(ref state, visitor);
     }
 
     public void CollectRmapHits(List<RmapHit> output)

@@ -30,6 +30,10 @@ public sealed class SilkFileSystem : FileSystem
 
 public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDropper
 {
+    private readonly object _metadataSessionGate = new();
+    private SilkMetadataSession? _metadataSession;
+    private bool _metadataSessionDisposed;
+
     public SilkSuperBlock(FileSystemType type, SilkRepository repository, DeviceNumberManager devManager) : base(type,
         devManager)
     {
@@ -63,13 +67,20 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
                 .ToList();
         }
 
-        using (var session = Repository.OpenMetadataSession())
+        using (var lease = AcquireMetadataSession(out var session))
         {
             foreach (var inode in trackedInodes)
                 inode.FlushMetadataForShutdown(session);
         }
 
-        base.Shutdown();
+        try
+        {
+            base.Shutdown();
+        }
+        finally
+        {
+            DisposeMetadataSession();
+        }
     }
 
     internal static long ToUnixNanoseconds(DateTime value)
@@ -101,7 +112,7 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
             if (tracked != null) return tracked;
         }
 
-        using var session = Repository.OpenMetadataSession();
+        using var lease = AcquireMetadataSession(out var session);
         var rec = session.GetInode(ino);
         if (rec == null) return null;
 
@@ -137,7 +148,7 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
 
     public void LoadFromMetadata()
     {
-        using var session = Repository.OpenMetadataSession();
+        using var lease = AcquireMetadataSession(out var session);
         var orphanInodes = session.ListOrphanInodes();
         foreach (var orphanIno in orphanInodes)
         {
@@ -196,12 +207,56 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
 
         _nextIno = (ulong)Math.Max(maxIno + 1, 2);
     }
+
+    internal MetadataSessionLease AcquireMetadataSession(out SilkMetadataSession session)
+    {
+        Monitor.Enter(_metadataSessionGate);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_metadataSessionDisposed, this);
+            session = _metadataSession ??= Repository.OpenMetadataSession();
+            return new MetadataSessionLease(this);
+        }
+        catch
+        {
+            Monitor.Exit(_metadataSessionGate);
+            throw;
+        }
+    }
+
+    private void DisposeMetadataSession()
+    {
+        lock (_metadataSessionGate)
+        {
+            if (_metadataSessionDisposed)
+                return;
+
+            _metadataSession?.Dispose();
+            _metadataSession = null;
+            _metadataSessionDisposed = true;
+        }
+    }
+
+    internal readonly struct MetadataSessionLease : IDisposable
+    {
+        private readonly SilkSuperBlock? _owner;
+
+        public MetadataSessionLease(SilkSuperBlock owner)
+        {
+            _owner = owner;
+        }
+
+        public void Dispose()
+        {
+            if (_owner != null)
+                Monitor.Exit(_owner._metadataSessionGate);
+        }
+    }
 }
 
 public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 {
     private static readonly AsyncLocal<int> NamespaceMutationDepth = new();
-    private static readonly AsyncLocal<MetadataSessionScopeState?> MetadataSessionScope = new();
     private readonly HashSet<long> _dirtyPageIndexes = [];
     private readonly Lock _dirtyPageLock = new();
     private readonly Lock _mappedCacheLock = new();
@@ -273,20 +328,9 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         return new NamespaceMutationScope();
     }
 
-    private MetadataSessionLease EnterMetadataSessionScope(out SilkMetadataSession session)
+    private SilkSuperBlock.MetadataSessionLease EnterMetadataSessionScope(out SilkMetadataSession session)
     {
-        var current = MetadataSessionScope.Value;
-        if (current != null && ReferenceEquals(current.Repository, _repository))
-        {
-            current.Depth++;
-            session = current.Session;
-            return new MetadataSessionLease(current);
-        }
-
-        var created = new MetadataSessionScopeState(_repository, _repository.OpenMetadataSession());
-        MetadataSessionScope.Value = created;
-        session = created.Session;
-        return new MetadataSessionLease(created);
+        return ((SilkSuperBlock)IndexedSb).AcquireMetadataSession(out session);
     }
 
     public void LoadXAttrsFromMetadata(SilkMetadataSession session)
@@ -1172,44 +1216,6 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
     {
         if (Type == InodeType.File)
             FlushDirtyMetadataIfNeeded();
-    }
-
-    private sealed class MetadataSessionScopeState
-    {
-        public MetadataSessionScopeState(SilkRepository repository, SilkMetadataSession session)
-        {
-            Repository = repository;
-            Session = session;
-            Depth = 1;
-        }
-
-        public int Depth { get; set; }
-        public SilkRepository Repository { get; }
-        public SilkMetadataSession Session { get; }
-    }
-
-    private readonly struct MetadataSessionLease : IDisposable
-    {
-        private readonly MetadataSessionScopeState? _state;
-
-        public MetadataSessionLease(MetadataSessionScopeState state)
-        {
-            _state = state;
-        }
-
-        public void Dispose()
-        {
-            if (_state == null)
-                return;
-
-            _state.Depth--;
-            if (_state.Depth > 0)
-                return;
-
-            if (ReferenceEquals(MetadataSessionScope.Value, _state))
-                MetadataSessionScope.Value = null;
-            _state.Session.Dispose();
-        }
     }
 
     private sealed class NamespaceMutationScope : IDisposable

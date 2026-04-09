@@ -7,7 +7,7 @@ internal static class GlobalMemoryAccounting
 {
     public static long GetCachedBytes()
     {
-        return AddressSpacePolicy.GetAddressSpaceStats().TotalPages * LinuxConstants.PageSize;
+        return AddressSpacePolicy.GetTotalCachedPages() * LinuxConstants.PageSize;
     }
 
     public static long GetTotalTrackedBytes()

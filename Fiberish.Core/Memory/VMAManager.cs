@@ -350,6 +350,40 @@ public class VMAManager
         }
     }
 
+    private void UpdateTbCohRolesForVmaRange(VmArea vma, uint guestStart, uint guestEndExclusive, Protection oldPerms,
+        Protection newPerms)
+    {
+        if (guestStart >= guestEndExclusive)
+            return;
+        if (((oldPerms ^ newPerms) & (Protection.Exec | Protection.Write)) == 0)
+            return;
+
+        var startPage = guestStart & LinuxConstants.PageMask;
+        var endPageExclusive = (guestEndExclusive + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
+        for (var page = startPage; page < endPageExclusive; page += LinuxConstants.PageSize)
+        {
+            var pageIndex = vma.GetPageIndex(page);
+            HostPage? hostPage;
+            HostPageOwnerKind ownerKind;
+            if (vma.VmAnonVma?.PeekHostPage(pageIndex) is { } anonPage)
+            {
+                hostPage = anonPage;
+                ownerKind = HostPageOwnerKind.AnonVma;
+            }
+            else if (vma.VmMapping?.PeekHostPage(pageIndex) is { } sharedPage)
+            {
+                hostPage = sharedPage;
+                ownerKind = HostPageOwnerKind.AddressSpace;
+            }
+            else
+            {
+                continue;
+            }
+
+            hostPage.UpdateTbCohRolesForRmapRef(this, vma, ownerKind, pageIndex, page, oldPerms, newPerms);
+        }
+    }
+
     private MappedPageBinding CreateResolvedPageBinding(VmArea vma, uint pageIndex, IntPtr pagePtr)
     {
         if (vma.VmAnonVma?.PeekVmPage(pageIndex) is { } privatePage && privatePage.Ptr == pagePtr)
@@ -1062,6 +1096,7 @@ public class VMAManager
             // Fully covered: just flip perms.
             if (overlapStart == oldStart && overlapEnd == oldEnd)
             {
+                UpdateTbCohRolesForVmaRange(vma, overlapStart, overlapEnd, oldPerms, prot);
                 vma.Perms = prot;
                 continue;
             }
@@ -1838,9 +1873,10 @@ public class VMAManager
             return false;
 
         file = vma.File!;
-        inode = file.OpenedInode as MappingBackedInode;
-        if (inode == null)
+        var mappedInode = file.OpenedInode as MappingBackedInode;
+        if (mappedInode == null)
             return false;
+        inode = mappedInode;
 
         return TryGetVmMapping(vma, out mapping);
     }

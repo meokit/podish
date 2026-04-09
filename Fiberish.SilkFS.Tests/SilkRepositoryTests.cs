@@ -88,6 +88,41 @@ public class SilkRepositoryTests
     }
 
     [Fact]
+    public void MetadataStore_WriteCommands_CanBeReusedAcrossTransactions()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"silkfs-{Guid.NewGuid():N}");
+        try
+        {
+            var options = SilkFsOptions.FromSource(root);
+            var repo = new SilkRepository(options);
+            repo.Initialize();
+
+            using var session = repo.OpenMetadataSession();
+            var inode = session.CreateInode(SilkInodeKind.File, 0x1A4);
+            for (var i = 0; i < 8; i++)
+            {
+                session.UpsertInode(inode, SilkInodeKind.File, 0x1A4, i, i + 1, 1, 0, i * 10L);
+                session.UpsertDentry(SilkMetadataStore.RootInode, $"file-{i}", inode);
+                session.MarkWhiteout(SilkMetadataStore.RootInode, $"ghost-{i}");
+                session.ClearWhiteout(SilkMetadataStore.RootInode, $"ghost-{i}");
+            }
+
+            var record = session.GetInode(inode);
+            Assert.NotNull(record);
+            Assert.Equal(7, record.Value.Uid);
+            Assert.Equal(8, record.Value.Gid);
+            Assert.Equal(70, record.Value.Size);
+
+            for (var i = 0; i < 8; i++)
+                Assert.Equal(inode, session.LookupDentry(SilkMetadataStore.RootInode, $"file-{i}"));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void LiveStore_RoundTrip()
     {
         var root = Path.Combine(Path.GetTempPath(), $"silkfs-{Guid.NewGuid():N}");

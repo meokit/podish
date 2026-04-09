@@ -12,6 +12,7 @@ public sealed class AddressSpace
     private readonly HostPageKind _pageKind;
     private readonly List<RmapAttachment> _rmapAttachments = [];
     private readonly Lock _rmapLock = new();
+    private Action<int>? _trackedPageCountDelta;
     private int _refCount = 1;
 
     public AddressSpace(AddressSpaceKind kind)
@@ -22,7 +23,7 @@ public sealed class AddressSpace
             AddressSpaceKind.Zero => HostPageKind.Zero,
             _ => HostPageKind.PageCache
         };
-        Pages = new VmPageSlots(CreateOwnerRef, OnPageBindingChanged);
+        Pages = new VmPageSlots(CreateOwnerRef, OnPageBindingChanged, OnPageCountChanged);
     }
 
     public AddressSpaceKind Kind { get; }
@@ -30,6 +31,16 @@ public sealed class AddressSpace
     public bool IsRecoverableWithoutSwap => Kind == AddressSpaceKind.File;
     internal bool IsZeroBacking => Kind == AddressSpaceKind.Zero;
     public int PageCount => Pages.PageCount;
+
+    private void OnPageCountChanged(int delta)
+    {
+        _trackedPageCountDelta?.Invoke(delta);
+    }
+
+    internal void SetTrackedPageCountDeltaCallback(Action<int>? callback)
+    {
+        _trackedPageCountDelta = callback;
+    }
 
     public void AddRef()
     {
@@ -106,6 +117,11 @@ public sealed class AddressSpace
     public IReadOnlyList<VmPageState> SnapshotPageStates()
     {
         return Pages.SnapshotPageStates();
+    }
+
+    internal void GetPageStats(out int totalPages, out int dirtyPages)
+    {
+        Pages.GetPageStats(out totalPages, out dirtyPages);
     }
 
     public bool TryEvictCleanPage(uint pageIndex)

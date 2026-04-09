@@ -49,11 +49,35 @@ public static class AddressSpacePolicy
         AddressSpaceCacheClass cacheClass = AddressSpaceCacheClass.File)
     {
         var state = CurrentState;
+        var key = RuntimeHelpers.GetHashCode(mapping);
+        var initialPageCount = mapping.PageCount;
+        var entry = new TrackedEntry(new WeakReference<AddressSpace>(mapping), cacheClass, initialPageCount);
+        TrackedEntry? replaced = null;
         lock (state.Gate)
         {
-            state.TrackedCaches[RuntimeHelpers.GetHashCode(mapping)] =
-                new TrackedEntry(new WeakReference<AddressSpace>(mapping), cacheClass);
+            if (state.TrackedCaches.TryGetValue(key, out var existing) &&
+                existing.Cache.TryGetTarget(out var existingCache) &&
+                ReferenceEquals(existingCache, mapping))
+                return;
+
+            if (state.TrackedCaches.TryGetValue(key, out existing))
+                replaced = existing;
+            state.TrackedCaches[key] = entry;
         }
+
+        if (replaced != null)
+        {
+            var replacedPageCount = Interlocked.Read(ref replaced.PageCount);
+            Interlocked.Add(ref state.TotalTrackedPages, -replacedPageCount);
+            if (replaced.Class == AddressSpaceCacheClass.Shmem)
+                Interlocked.Add(ref state.ShmemTrackedPages, -replacedPageCount);
+        }
+
+        Interlocked.Add(ref state.TotalTrackedPages, initialPageCount);
+        if (cacheClass == AddressSpaceCacheClass.Shmem)
+            Interlocked.Add(ref state.ShmemTrackedPages, initialPageCount);
+
+        mapping.SetTrackedPageCountDeltaCallback(delta => OnTrackedPageCountDelta(state, entry, delta));
     }
 
     public static void MaybeRunMaintenance(VMAManager mm, Engine engine)
@@ -91,26 +115,40 @@ public static class AddressSpacePolicy
     public static AddressSpaceStats GetAddressSpaceStats()
     {
         var state = CurrentState;
-        var caches = GetLiveCaches(state);
-        long total = 0;
         long dirty = 0;
-        long shmem = 0;
-        foreach (var (cache, cacheClass) in caches)
+        lock (state.Gate)
         {
-            var states = cache.SnapshotPageStates();
-            total += states.Count;
-            if (cacheClass == AddressSpaceCacheClass.Shmem) shmem += states.Count;
-            foreach (var pageState in states)
-                if (pageState.Dirty)
-                    dirty++;
+            var deadKeys = state.DeadCacheKeysScratch;
+            deadKeys.Clear();
+            foreach (var (key, entry) in state.TrackedCaches)
+            {
+                if (!entry.Cache.TryGetTarget(out var cache))
+                {
+                    deadKeys.Add(key);
+                    continue;
+                }
+
+                cache.GetPageStats(out var totalPages, out var dirtyPages);
+                dirty += dirtyPages;
+            }
+
+            RemoveDeadCachesLocked(state, deadKeys);
         }
 
+        var total = Interlocked.Read(ref state.TotalTrackedPages);
+        var shmem = Interlocked.Read(ref state.ShmemTrackedPages);
         return new AddressSpaceStats(
             total,
             total - dirty,
             dirty,
             shmem,
             Interlocked.Read(ref state.WritebackPagesInFlight));
+    }
+
+    public static long GetTotalCachedPages()
+    {
+        var state = CurrentState;
+        return Interlocked.Read(ref state.TotalTrackedPages);
     }
 
     public static IReadOnlyList<AddressSpacePageState> GetAddressSpacePageStatesSnapshot()
@@ -159,8 +197,7 @@ public static class AddressSpacePolicy
 
         if (caches.Count == 0) return;
 
-        long totalBytes = 0;
-        foreach (var (cache, _) in caches) totalBytes += (long)cache.PageCount * LinuxConstants.PageSize;
+        var totalBytes = Interlocked.Read(ref state.TotalTrackedPages) * LinuxConstants.PageSize;
         if (totalBytes <= state.HighWatermarkBytes) return;
 
         var targetFree = totalBytes - state.LowWatermarkBytes;
@@ -173,16 +210,44 @@ public static class AddressSpacePolicy
         lock (state.Gate)
         {
             var caches = new List<(AddressSpace Cache, AddressSpaceCacheClass Class)>(state.TrackedCaches.Count);
-            var deadKeys = new List<int>();
+            var deadKeys = state.DeadCacheKeysScratch;
+            deadKeys.Clear();
             foreach (var (key, entry) in state.TrackedCaches)
                 if (entry.Cache.TryGetTarget(out var cache))
                     caches.Add((cache, entry.Class));
                 else
                     deadKeys.Add(key);
 
-            foreach (var dead in deadKeys) state.TrackedCaches.Remove(dead);
+            RemoveDeadCachesLocked(state, deadKeys);
             return caches;
         }
+    }
+
+    private static void RemoveDeadCachesLocked(State state, List<int> deadKeys)
+    {
+        if (deadKeys.Count == 0)
+            return;
+
+        foreach (var dead in deadKeys)
+            if (state.TrackedCaches.Remove(dead, out var entry))
+            {
+                var pageCount = Interlocked.Read(ref entry.PageCount);
+                Interlocked.Add(ref state.TotalTrackedPages, -pageCount);
+                if (entry.Class == AddressSpaceCacheClass.Shmem)
+                    Interlocked.Add(ref state.ShmemTrackedPages, -pageCount);
+            }
+        deadKeys.Clear();
+    }
+
+    private static void OnTrackedPageCountDelta(State state, TrackedEntry entry, int delta)
+    {
+        if (delta == 0)
+            return;
+
+        Interlocked.Add(ref entry.PageCount, delta);
+        Interlocked.Add(ref state.TotalTrackedPages, delta);
+        if (entry.Class == AddressSpaceCacheClass.Shmem)
+            Interlocked.Add(ref state.ShmemTrackedPages, delta);
     }
 
     private static long ReclaimFromCaches(List<(AddressSpace Cache, AddressSpaceCacheClass Class)> caches,
@@ -217,11 +282,14 @@ public static class AddressSpacePolicy
 
     private sealed class State
     {
+        public readonly List<int> DeadCacheKeysScratch = [];
         public readonly Lock Gate = new();
         public readonly Dictionary<int, TrackedEntry> TrackedCaches = [];
         public long HighWatermarkBytes = 256L * 1024 * 1024;
         public long LowWatermarkBytes = 192L * 1024 * 1024;
         public long NextMaintenanceTicks;
+        public long ShmemTrackedPages;
+        public long TotalTrackedPages;
         public TimeSpan WritebackInterval = TimeSpan.FromSeconds(5);
         public long WritebackPagesInFlight;
     }
@@ -241,7 +309,19 @@ public static class AddressSpacePolicy
         }
     }
 
-    private readonly record struct TrackedEntry(WeakReference<AddressSpace> Cache, AddressSpaceCacheClass Class);
+    private sealed class TrackedEntry
+    {
+        public TrackedEntry(WeakReference<AddressSpace> cache, AddressSpaceCacheClass @class, long pageCount)
+        {
+            Cache = cache;
+            Class = @class;
+            PageCount = pageCount;
+        }
+
+        public WeakReference<AddressSpace> Cache { get; }
+        public AddressSpaceCacheClass Class { get; }
+        public long PageCount;
+    }
 
     public readonly record struct AddressSpaceStats(
         long TotalPages,

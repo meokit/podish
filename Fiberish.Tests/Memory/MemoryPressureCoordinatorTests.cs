@@ -61,6 +61,44 @@ public class MemoryPressureCoordinatorTests
     }
 
     [Fact]
+    public void GetAddressSpaceStats_CountsPagesWithoutSnapshottingPageStates()
+    {
+        using var pageScope = PageManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
+        var fileCache = new AddressSpace(AddressSpaceKind.File);
+        var shmemCache = new AddressSpace(AddressSpaceKind.Shmem);
+        try
+        {
+            AddressSpacePolicy.TrackAddressSpace(fileCache);
+            AddressSpacePolicy.TrackAddressSpace(shmemCache, AddressSpacePolicy.AddressSpaceCacheClass.Shmem);
+
+            Assert.NotEqual(IntPtr.Zero,
+                fileCache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache));
+            Assert.NotEqual(IntPtr.Zero,
+                fileCache.GetOrCreatePage(1, _ => true, out _, true, AllocationClass.PageCache));
+            fileCache.MarkDirty(1);
+
+            Assert.NotEqual(IntPtr.Zero,
+                shmemCache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache));
+            shmemCache.MarkDirty(0);
+
+            var stats = AddressSpacePolicy.GetAddressSpaceStats();
+
+            Assert.Equal(3, stats.TotalPages);
+            Assert.Equal(1, stats.CleanPages);
+            Assert.Equal(2, stats.DirtyPages);
+            Assert.Equal(1, stats.ShmemPages);
+            Assert.Equal(0, stats.WritebackPages);
+            Assert.Equal(3L * LinuxConstants.PageSize, GlobalMemoryAccounting.GetCachedBytes());
+        }
+        finally
+        {
+            fileCache.Release();
+            shmemCache.Release();
+        }
+    }
+
+    [Fact]
     public void TryRelieveFault_Reclaims_ReadOnlyPrivateAnonymousSharedSource()
     {
         using var pageScope = PageManager.BeginIsolatedScope();

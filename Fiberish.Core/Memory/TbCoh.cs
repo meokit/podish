@@ -8,21 +8,12 @@ internal static class TbCoh
     private sealed class ScratchState
     {
         public readonly HashSet<HostPage> HostPages = [];
-        public readonly HashSet<(VMAManager Mm, uint PageStart)> SeenWriters = [];
         public readonly Dictionary<VMAManager, HashSet<uint>> InvalidationPagesByMm = [];
         public readonly List<HashSet<uint>> InvalidationPageSetPool = [];
     }
 
-    private struct ExecPeerScanState
-    {
-        public bool HasExecPeer;
-        public bool HasMultipleExecIdentities;
-        public nuint ExecIdentity;
-    }
-
     private struct WriterApplyState
     {
-        public required HashSet<(VMAManager Mm, uint PageStart)> SeenWriters;
         public bool HasExecPeer;
         public bool HasMultipleExecIdentities;
         public nuint ExecIdentity;
@@ -63,56 +54,30 @@ internal static class TbCoh
         return created;
     }
 
-    private static void CollectExecPeer(HostPage _, in HostPageRmapRef rmapRef, ref ExecPeerScanState state)
+    private static void ApplyWriterProtection(VMAManager mm, uint pageStart, ref WriterApplyState state)
     {
-        if ((rmapRef.Vma.Perms & Protection.Exec) == 0)
-            return;
-
-        var hitIdentity = GetCoherenceIdentity(rmapRef.Mm);
-        if (!state.HasExecPeer)
-        {
-            state.HasExecPeer = true;
-            state.ExecIdentity = hitIdentity;
-            return;
-        }
-
-        if (state.ExecIdentity != hitIdentity)
-            state.HasMultipleExecIdentities = true;
-    }
-
-    private static void ApplyWriterProtection(HostPage _, in HostPageRmapRef rmapRef, ref WriterApplyState state)
-    {
-        if ((rmapRef.Vma.Perms & Protection.Write) == 0)
-            return;
-
-        var pageStart = rmapRef.GuestPageStart;
-        if (!state.SeenWriters.Add((rmapRef.Mm, pageStart)))
-            return;
-
-        var writerIdentity = GetCoherenceIdentity(rmapRef.Mm);
+        var writerIdentity = GetCoherenceIdentity(mm);
         var shouldProtectWriter =
             state.HasMultipleExecIdentities || (state.HasExecPeer && state.ExecIdentity != writerIdentity);
         if (shouldProtectWriter)
-            rmapRef.Mm.MarkTbWp(pageStart);
+            mm.MarkTbWp(pageStart);
         else
-            rmapRef.Mm.UnmarkTbWp(pageStart);
+            mm.UnmarkTbWp(pageStart);
     }
 
-    private static void CollectInvalidations(HostPage _, in HostPageRmapRef rmapRef, ref InvalidationScanState state)
+    private static void CollectInvalidations(VMAManager mm, uint guestPageStart, ref InvalidationScanState state)
     {
-        if ((rmapRef.Vma.Perms & Protection.Exec) == 0)
-            return;
-        if (GetCoherenceIdentity(rmapRef.Mm) == state.WriterIdentity)
+        if (GetCoherenceIdentity(mm) == state.WriterIdentity)
             return;
 
         var invByMm = state.InvalidationPagesByMm;
-        if (!invByMm.TryGetValue(rmapRef.Mm, out var pages))
+        if (!invByMm.TryGetValue(mm, out var pages))
         {
             pages = RentInvalidationPageSet(state.Scratch, ref state.UsedSetCount);
-            invByMm[rmapRef.Mm] = pages;
+            invByMm[mm] = pages;
         }
 
-        pages.Add(rmapRef.GuestPageStart);
+        pages.Add(guestPageStart);
     }
 
     internal static void SyncWp(VMAManager mm, Engine engine)
@@ -154,22 +119,15 @@ internal static class TbCoh
     {
         ArgumentNullException.ThrowIfNull(hostPage);
 
-        var scratch = GetScratch();
-        var seenWriters = scratch.SeenWriters;
-        seenWriters.Clear();
-        var execState = new ExecPeerScanState();
-        if (!VmRmap.VisitHostPageHolders(hostPage.Ptr, ref execState, CollectExecPeer))
-            return;
+        var execState = hostPage.GetTbCohExecSummary();
 
         var writerState = new WriterApplyState
         {
-            SeenWriters = seenWriters,
             HasExecPeer = execState.HasExecPeer,
             HasMultipleExecIdentities = execState.HasMultipleExecIdentities,
             ExecIdentity = execState.ExecIdentity
         };
-        VmRmap.VisitHostPageHolders(hostPage.Ptr, ref writerState, ApplyWriterProtection);
-        seenWriters.Clear();
+        hostPage.VisitTbCohWriterPages(ref writerState, ApplyWriterProtection);
     }
 
     internal static void OnWriteFault(VMAManager writerMm, uint pageStart, HostPage hostPage)
@@ -189,8 +147,7 @@ internal static class TbCoh
             WriterIdentity = GetCoherenceIdentity(writerMm),
             UsedSetCount = 0
         };
-        if (!VmRmap.VisitHostPageHolders(hostPage.Ptr, ref invalidationState, CollectInvalidations))
-            return;
+        hostPage.VisitTbCohExecPages(ref invalidationState, CollectInvalidations);
 
         if (invByMm.Count == 0)
             return;

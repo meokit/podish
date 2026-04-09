@@ -1,4 +1,4 @@
-using System.IO.MemoryMappedFiles;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using Fiberish.Native;
 
@@ -17,15 +17,8 @@ public enum AllocationSource
 {
     Unknown,
     AnonFault,
-    AnonMapPreFault,
     CowFirstPrivate,
     CowReplacePrivate
-}
-
-public enum PageBackend
-{
-    AlignedAlloc,
-    MmapAnonymous
 }
 
 public enum MappedPageOwnerKind
@@ -71,6 +64,9 @@ internal sealed class MappedPageBinding
 
 public sealed class PageManager
 {
+    private const int PooledSegmentBytes = 4 * 1024 * 1024;
+    private const int PooledSegmentPageCount = PooledSegmentBytes / LinuxConstants.PageSize;
+    private const int PooledSegmentWordCount = PooledSegmentPageCount / 64;
     private static readonly AsyncLocal<State?> ScopedState = new();
     private static readonly State DefaultState = new();
 
@@ -84,17 +80,12 @@ public sealed class PageManager
         set => CurrentState.MemoryQuotaBytes = value;
     }
 
-    public static PageBackend PreferredBackend
-    {
-        get => CurrentState.PreferredBackend;
-        set => CurrentState.PreferredBackend = value;
-    }
-
     public static IDisposable BeginIsolatedScope()
     {
         var previous = ScopedState.Value;
-        ScopedState.Value = new State();
-        return new ScopeRestore(previous, HostPageManager.BeginIsolatedScope());
+        var isolated = new State();
+        ScopedState.Value = isolated;
+        return new ScopeRestore(previous, HostPageManager.BeginIsolatedScope(), isolated);
     }
 
     public bool TryGet(uint pageAddr, out IntPtr ptr)
@@ -166,11 +157,6 @@ public sealed class PageManager
         for (var p = start; p < end; p += LinuxConstants.PageSize) Release(p, preserveOwnerBinding);
     }
 
-    public void Clear()
-    {
-        foreach (var pageAddr in _pages.Keys.ToArray()) Release(pageAddr);
-    }
-
     public IReadOnlyList<uint> SnapshotMappedPages()
     {
         if (_pages.Count == 0) return Array.Empty<uint>();
@@ -194,10 +180,7 @@ public sealed class PageManager
     public static long GetAllocatedPageCount()
     {
         var state = CurrentState;
-        lock (state.GlobalLock)
-        {
-            return state.PageRefs.Count;
-        }
+        return Interlocked.Read(ref state.TotalAllocatedPages);
     }
 
     public static long GetAllocatedBytes()
@@ -293,11 +276,6 @@ public sealed class PageManager
                 // Unknown pointer source: do not assume ownership.
                 Owned = false,
                 BackingKind = SegmentBackingKind.ExternalUnknown,
-                AllocationBytes = LinuxConstants.PageSize,
-                MappedFile = null,
-                ViewAccessor = null,
-                RawViewPointer = 0,
-                PointerAcquired = false,
                 LivePages = 1,
                 ExternalOwner = externalOwner
             };
@@ -310,39 +288,10 @@ public sealed class PageManager
                 Source = source,
                 RefCount = 1
             };
+            Interlocked.Increment(ref state.TotalAllocatedPages);
             Interlocked.Increment(ref state.AllocPagesByClass[(int)cls]);
             Interlocked.Increment(ref state.AllocPagesBySource[(int)source]);
         }
-    }
-
-    private static void RegisterOwnedSinglePage(State state, nint ptr, AllocationClass allocationClass,
-        AllocationSource allocationSource)
-    {
-        var segmentId = Interlocked.Increment(ref state.NextSegmentId);
-        state.Segments[segmentId] = new SegmentEntry
-        {
-            BasePtr = ptr,
-            PageCount = 1,
-            Owned = true,
-            BackingKind = SegmentBackingKind.AlignedAlloc,
-            AllocationBytes = LinuxConstants.PageSize,
-            MappedFile = null,
-            ViewAccessor = null,
-            RawViewPointer = 0,
-            PointerAcquired = false,
-            LivePages = 1,
-            ExternalOwner = null
-        };
-
-        state.PageRefs[ptr] = new PageRefEntry
-        {
-            SegmentId = segmentId,
-            PageIndex = 0,
-            Ptr = ptr,
-            Class = allocationClass,
-            Source = allocationSource,
-            RefCount = 1
-        };
     }
 
     private static void ReleaseGlobalRef(IntPtr ptr)
@@ -362,11 +311,25 @@ public sealed class PageManager
             allocationClass = entry.Class;
             allocationSource = entry.Source;
             state.PageRefs.Remove(key);
+            Interlocked.Decrement(ref state.TotalAllocatedPages);
 
             if (state.Segments.TryGetValue(entry.SegmentId, out var segment))
             {
+                var wasFull = segment.BackingKind == SegmentBackingKind.PooledAlignedAlloc &&
+                              segment.LivePages >= segment.PageCount;
                 segment.LivePages--;
-                if (segment.LivePages <= 0)
+                if (segment.BackingKind == SegmentBackingKind.PooledAlignedAlloc)
+                {
+                    unsafe
+                    {
+                        new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
+                    }
+
+                    ClearPoolBit(segment, entry.PageIndex);
+                    if (wasFull)
+                        AddNonFullSegmentLocked(state, segment);
+                }
+                else if (segment.LivePages <= 0)
                 {
                     state.Segments.Remove(entry.SegmentId);
                     segmentToFree = segment;
@@ -381,20 +344,9 @@ public sealed class PageManager
 
         if (segmentToFree is { Owned: true })
         {
-            if (segmentToFree.BackingKind == SegmentBackingKind.MmapAnonymous)
+            unsafe
             {
-                if (segmentToFree.PointerAcquired && segmentToFree.ViewAccessor != null)
-                    segmentToFree.ViewAccessor.SafeMemoryMappedViewHandle.ReleasePointer();
-
-                segmentToFree.ViewAccessor?.Dispose();
-                segmentToFree.MappedFile?.Dispose();
-            }
-            else
-            {
-                unsafe
-                {
-                    NativeMemory.AlignedFree((void*)segmentToFree.BasePtr);
-                }
+                NativeMemory.AlignedFree((void*)segmentToFree.BasePtr);
             }
         }
         else
@@ -411,168 +363,11 @@ public sealed class PageManager
         var state = CurrentState;
         var overQuota = state.MemoryQuotaBytes > 0 &&
                         GlobalMemoryAccounting.GetTotalTrackedBytes() + LinuxConstants.PageSize > state.MemoryQuotaBytes;
-        IntPtr ptr;
-        unsafe
-        {
-            ptr = (IntPtr)NativeMemory.AlignedAlloc(LinuxConstants.PageSize, LinuxConstants.PageSize);
-        }
-
-        if (ptr == IntPtr.Zero) return IntPtr.Zero;
-
-        unsafe
-        {
-            new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
-        }
-
-        lock (state.GlobalLock)
-        {
-            RegisterOwnedSinglePage(state, ptr, allocationClass, allocationSource);
-        }
-
-        Interlocked.Increment(ref state.AllocPagesByClass[(int)allocationClass]);
-        Interlocked.Increment(ref state.AllocPagesBySource[(int)allocationSource]);
+        if (!TryAllocatePooledPage(state, allocationClass, allocationSource, out var ptr))
+            return IntPtr.Zero;
 
         if (overQuota) Interlocked.Increment(ref state.LegacyAllocOverQuota);
         return ptr;
-    }
-
-    public static bool TryAllocateExternalContiguousStrict(
-        out IntPtr basePtr,
-        int pageCount,
-        AllocationClass allocationClass,
-        AllocationSource allocationSource = AllocationSource.Unknown)
-    {
-        ValidateManagedAllocationClass(allocationClass);
-        var state = CurrentState;
-        basePtr = IntPtr.Zero;
-        if (pageCount <= 0) return false;
-
-        var bytesLong = (long)pageCount * LinuxConstants.PageSize;
-        var reclaimed = false;
-
-        if (state.MemoryQuotaBytes > 0 &&
-            GlobalMemoryAccounting.GetTotalTrackedBytes() + bytesLong > state.MemoryQuotaBytes)
-        {
-            reclaimed =
-                MemoryPressureCoordinator.TryReclaimForAllocation(bytesLong, allocationClass, allocationSource) >
-                0;
-
-            if (state.MemoryQuotaBytes > 0 &&
-                GlobalMemoryAccounting.GetTotalTrackedBytes() + bytesLong > state.MemoryQuotaBytes)
-            {
-                Interlocked.Increment(ref state.StrictAllocFail);
-                return false;
-            }
-        }
-
-        var bytes = (nuint)bytesLong;
-        nint ptr = 0;
-        var backingKind = SegmentBackingKind.AlignedAlloc;
-        MemoryMappedFile? mappedFile = null;
-        MemoryMappedViewAccessor? viewAccessor = null;
-        nint rawViewPointer = 0;
-        var pointerAcquired = false;
-        if (state.PreferredBackend == PageBackend.MmapAnonymous)
-        {
-            try
-            {
-                mappedFile = MemoryMappedFile.CreateNew(null, bytesLong, MemoryMappedFileAccess.ReadWrite);
-                viewAccessor = mappedFile.CreateViewAccessor(0, bytesLong, MemoryMappedFileAccess.ReadWrite);
-                unsafe
-                {
-                    byte* raw = null;
-                    viewAccessor.SafeMemoryMappedViewHandle.AcquirePointer(ref raw);
-                    if (raw != null)
-                    {
-                        pointerAcquired = true;
-                        rawViewPointer = (nint)raw;
-                        ptr = rawViewPointer + (nint)viewAccessor.PointerOffset;
-                        backingKind = SegmentBackingKind.MmapAnonymous;
-                    }
-                }
-            }
-            catch
-            {
-                ptr = 0;
-            }
-
-            if (ptr == 0)
-            {
-                if (pointerAcquired && viewAccessor != null) viewAccessor.SafeMemoryMappedViewHandle.ReleasePointer();
-
-                viewAccessor?.Dispose();
-                mappedFile?.Dispose();
-                viewAccessor = null;
-                mappedFile = null;
-                pointerAcquired = false;
-                rawViewPointer = 0;
-            }
-        }
-
-        if (ptr == 0)
-        {
-            unsafe
-            {
-                ptr = (nint)NativeMemory.AlignedAlloc(bytes, LinuxConstants.PageSize);
-            }
-
-            backingKind = SegmentBackingKind.AlignedAlloc;
-        }
-
-        if (ptr == 0)
-        {
-            Interlocked.Increment(ref state.StrictAllocFail);
-            return false;
-        }
-
-        unsafe
-        {
-            new Span<byte>((void*)ptr, (int)bytes).Clear();
-        }
-
-        lock (state.GlobalLock)
-        {
-            var segmentId = Interlocked.Increment(ref state.NextSegmentId);
-            state.Segments[segmentId] = new SegmentEntry
-            {
-                BasePtr = ptr,
-                PageCount = pageCount,
-                Owned = true,
-                BackingKind = backingKind,
-                AllocationBytes = bytes,
-                MappedFile = mappedFile,
-                ViewAccessor = viewAccessor,
-                RawViewPointer = rawViewPointer,
-                PointerAcquired = pointerAcquired,
-                LivePages = pageCount,
-                ExternalOwner = null
-            };
-
-            for (var i = 0; i < pageCount; i++)
-            {
-                var pagePtr = ptr + i * LinuxConstants.PageSize;
-                state.PageRefs[pagePtr] = new PageRefEntry
-                {
-                    SegmentId = segmentId,
-                    PageIndex = i,
-                    Ptr = pagePtr,
-                    Class = allocationClass,
-                    Source = allocationSource,
-                    RefCount = 1
-                };
-            }
-        }
-
-        Interlocked.Add(ref state.AllocPagesByClass[(int)allocationClass], pageCount);
-        Interlocked.Add(ref state.AllocPagesBySource[(int)allocationSource], pageCount);
-
-        if (reclaimed)
-            Interlocked.Increment(ref state.StrictAllocReclaimSuccess);
-        else
-            Interlocked.Increment(ref state.StrictAllocSuccess);
-
-        basePtr = ptr;
-        return true;
     }
 
     public static bool TryAllocateExternalPageStrict(
@@ -613,6 +408,181 @@ public sealed class PageManager
         return true;
     }
 
+    private static bool TryAllocatePooledPage(State state, AllocationClass allocationClass,
+        AllocationSource allocationSource, out IntPtr ptr)
+    {
+        lock (state.GlobalLock)
+        {
+            while (state.NonFullPooledSegments.Count > 0)
+            {
+                var segment = state.NonFullPooledSegments[^1];
+                if (TryAllocateFromPoolSegmentLocked(state, segment, allocationClass, allocationSource, out ptr))
+                    return true;
+
+                RemoveNonFullSegmentLocked(state, segment);
+            }
+
+            var created = CreatePooledSegmentLocked(state);
+            if (created != null &&
+                TryAllocateFromPoolSegmentLocked(state, created, allocationClass, allocationSource, out ptr))
+                return true;
+        }
+
+        ptr = IntPtr.Zero;
+        return false;
+    }
+
+    private static SegmentEntry? CreatePooledSegmentLocked(State state)
+    {
+        unsafe
+        {
+            var basePtr = (nint)NativeMemory.AlignedAlloc(PooledSegmentBytes, LinuxConstants.PageSize);
+            if (basePtr == 0)
+                return null;
+
+            new Span<byte>((void*)basePtr, PooledSegmentBytes).Clear();
+            var segment = new SegmentEntry
+            {
+                SegmentId = Interlocked.Increment(ref state.NextSegmentId),
+                BasePtr = basePtr,
+                PageCount = PooledSegmentPageCount,
+                Owned = true,
+                BackingKind = SegmentBackingKind.PooledAlignedAlloc,
+                LivePages = 0,
+                ExternalOwner = null,
+                PoolBitmap = new ulong[PooledSegmentWordCount]
+            };
+            state.Segments[segment.SegmentId] = segment;
+            state.PooledSegments.Add(segment);
+            AddNonFullSegmentLocked(state, segment);
+            return segment;
+        }
+    }
+
+    private static bool TryAllocateFromPoolSegmentLocked(State state, SegmentEntry segment, AllocationClass allocationClass,
+        AllocationSource allocationSource, out IntPtr ptr)
+    {
+        if (segment.PoolBitmap == null || segment.LivePages >= segment.PageCount)
+        {
+            ptr = IntPtr.Zero;
+            return false;
+        }
+
+        var pageIndex = FindFirstZeroUniversal(segment.PoolBitmap, segment.NextFreeWordHint);
+        if (pageIndex < 0 || pageIndex >= segment.PageCount)
+        {
+            ptr = IntPtr.Zero;
+            return false;
+        }
+
+        SetPoolBit(segment, pageIndex);
+        segment.LivePages++;
+        if (segment.LivePages >= segment.PageCount)
+            RemoveNonFullSegmentLocked(state, segment);
+
+        var pagePtr = segment.BasePtr + pageIndex * LinuxConstants.PageSize;
+        state.PageRefs[pagePtr] = new PageRefEntry
+        {
+            SegmentId = segment.SegmentId,
+            PageIndex = pageIndex,
+            Ptr = pagePtr,
+            Class = allocationClass,
+            Source = allocationSource,
+            RefCount = 1
+        };
+        Interlocked.Increment(ref state.TotalAllocatedPages);
+        Interlocked.Increment(ref state.AllocPagesByClass[(int)allocationClass]);
+        Interlocked.Increment(ref state.AllocPagesBySource[(int)allocationSource]);
+        ptr = pagePtr;
+        return true;
+    }
+
+    private static int FindFirstZeroUniversal(ReadOnlySpan<ulong> data, int startWordIndex = 0)
+    {
+        if (data.Length == 0)
+            return -1;
+
+        if ((uint)startWordIndex >= (uint)data.Length)
+            startWordIndex = 0;
+
+        if (startWordIndex > 0)
+        {
+            var tailResult = FindFirstZeroUniversalCore(data.Slice(startWordIndex));
+            if (tailResult >= 0)
+                return startWordIndex * 64 + tailResult;
+        }
+
+        if (startWordIndex == 0)
+            return FindFirstZeroUniversalCore(data);
+
+        return FindFirstZeroUniversalCore(data[..startWordIndex]);
+    }
+
+    private static int FindFirstZeroUniversalCore(ReadOnlySpan<ulong> data)
+    {
+        var vCount = Vector<ulong>.Count;
+        var i = 0;
+
+        for (; i <= data.Length - vCount; i += vCount)
+        {
+            var vector = new Vector<ulong>(data.Slice(i, vCount));
+            var inverted = Vector.OnesComplement(vector);
+
+            if (inverted != Vector<ulong>.Zero)
+                for (var j = 0; j < vCount; j++)
+                    if (inverted[j] != 0)
+                        return (i + j) * 64 + BitOperations.TrailingZeroCount(inverted[j]);
+        }
+
+        for (; i < data.Length; i++)
+            if (data[i] != ulong.MaxValue)
+                return i * 64 + BitOperations.TrailingZeroCount(~data[i]);
+
+        return -1;
+    }
+
+    private static void SetPoolBit(SegmentEntry segment, int pageIndex)
+    {
+        var wordIndex = pageIndex >> 6;
+        var bitIndex = pageIndex & 63;
+        var bitmap = segment.PoolBitmap!;
+        bitmap[wordIndex] |= 1UL << bitIndex;
+        segment.NextFreeWordHint = bitmap[wordIndex] == ulong.MaxValue
+            ? wordIndex + 1 < bitmap.Length ? wordIndex + 1 : 0
+            : wordIndex;
+    }
+
+    private static void ClearPoolBit(SegmentEntry segment, int pageIndex)
+    {
+        var wordIndex = pageIndex >> 6;
+        var bitIndex = pageIndex & 63;
+        segment.PoolBitmap![wordIndex] &= ~(1UL << bitIndex);
+        segment.NextFreeWordHint = wordIndex;
+    }
+
+    private static void AddNonFullSegmentLocked(State state, SegmentEntry segment)
+    {
+        if (segment.NonFullListIndex >= 0)
+            return;
+
+        segment.NonFullListIndex = state.NonFullPooledSegments.Count;
+        state.NonFullPooledSegments.Add(segment);
+    }
+
+    private static void RemoveNonFullSegmentLocked(State state, SegmentEntry segment)
+    {
+        var index = segment.NonFullListIndex;
+        if (index < 0)
+            return;
+
+        var lastIndex = state.NonFullPooledSegments.Count - 1;
+        var last = state.NonFullPooledSegments[lastIndex];
+        state.NonFullPooledSegments[index] = last;
+        last.NonFullListIndex = index;
+        state.NonFullPooledSegments.RemoveAt(lastIndex);
+        segment.NonFullListIndex = -1;
+    }
+
     private static bool HasQuotaCapacity()
     {
         var state = CurrentState;
@@ -647,30 +617,35 @@ public sealed class PageManager
         public readonly long[] FreedPagesByClass = new long[Enum.GetValues<AllocationClass>().Length];
         public readonly long[] FreedPagesBySource = new long[Enum.GetValues<AllocationSource>().Length];
         public readonly Lock GlobalLock = new();
+        public readonly List<SegmentEntry> NonFullPooledSegments = [];
         public readonly Dictionary<nint, PageRefEntry> PageRefs = new();
+        public readonly List<SegmentEntry> PooledSegments = [];
         public readonly Dictionary<long, SegmentEntry> Segments = new();
         public long LegacyAllocOverQuota;
         public long MemoryQuotaBytes = 2L * 1024 * 1024 * 1024;
         public long NextSegmentId;
-        public PageBackend PreferredBackend = PageBackend.AlignedAlloc;
         public long StrictAllocFail;
         public long StrictAllocReclaimSuccess;
         public long StrictAllocSuccess;
+        public long TotalAllocatedPages;
     }
 
     private sealed class ScopeRestore : IDisposable
     {
+        private readonly State _active;
         private readonly IDisposable _hostPageScope;
         private readonly State? _previous;
 
-        public ScopeRestore(State? previous, IDisposable hostPageScope)
+        public ScopeRestore(State? previous, IDisposable hostPageScope, State active)
         {
             _previous = previous;
             _hostPageScope = hostPageScope;
+            _active = active;
         }
 
         public void Dispose()
         {
+            DisposePooledSegments(_active);
             ScopedState.Value = _previous;
             _hostPageScope.Dispose();
         }
@@ -679,23 +654,21 @@ public sealed class PageManager
     private enum SegmentBackingKind
     {
         ExternalUnknown,
-        AlignedAlloc,
-        MmapAnonymous
+        PooledAlignedAlloc
     }
 
     private sealed class SegmentEntry
     {
-        public required nuint AllocationBytes;
         public required SegmentBackingKind BackingKind;
         public required nint BasePtr;
         public IDisposable? ExternalOwner;
         public int LivePages;
-        public MemoryMappedFile? MappedFile;
+        public int NextFreeWordHint;
+        public int NonFullListIndex = -1;
         public required bool Owned;
         public required int PageCount;
-        public bool PointerAcquired;
-        public nint RawViewPointer;
-        public MemoryMappedViewAccessor? ViewAccessor;
+        public ulong[]? PoolBitmap;
+        public long SegmentId;
     }
 
     private sealed class PageRefEntry
@@ -719,4 +692,19 @@ public sealed class PageManager
         long AllocatedPages,
         long FreedPages,
         long LivePages);
+
+    private static void DisposePooledSegments(State state)
+    {
+        lock (state.GlobalLock)
+        {
+            foreach (var segment in state.PooledSegments)
+                unsafe
+                {
+                    NativeMemory.AlignedFree((void*)segment.BasePtr);
+                }
+
+            state.PooledSegments.Clear();
+            state.NonFullPooledSegments.Clear();
+        }
+    }
 }

@@ -7,24 +7,34 @@ internal sealed class VmPageSlots
     private readonly Lock _lock = new();
     private readonly Func<uint, HostPageOwnerRef> _ownerRefFactory;
     private readonly Action<uint, HostPage?, HostPage?>? _pageBindingChanged;
+    private readonly Action<int>? _pageCountChanged;
     private readonly Dictionary<uint, VmPage> _pages = [];
+    private int _pageCount;
 
     internal VmPageSlots(Func<uint, HostPageOwnerRef> ownerRefFactory,
-        Action<uint, HostPage?, HostPage?>? pageBindingChanged = null)
+        Action<uint, HostPage?, HostPage?>? pageBindingChanged = null,
+        Action<int>? pageCountChanged = null)
     {
         _ownerRefFactory = ownerRefFactory;
         _pageBindingChanged = pageBindingChanged;
+        _pageCountChanged = pageCountChanged;
     }
 
     public int PageCount
     {
         get
         {
-            lock (_lock)
-            {
-                return _pages.Count;
-            }
+            return Volatile.Read(ref _pageCount);
         }
+    }
+
+    private void ApplyPageCountDelta(int delta)
+    {
+        if (delta == 0)
+            return;
+
+        Interlocked.Add(ref _pageCount, delta);
+        _pageCountChanged?.Invoke(delta);
     }
 
     public IntPtr GetPage(uint pageIndex)
@@ -74,6 +84,7 @@ internal sealed class VmPageSlots
     internal void InstallExistingHostPage(uint pageIndex, HostPage hostPage, Action<VmPage>? onReleased = null)
     {
         VmPage? oldPage = null;
+        var pageCountDelta = 0;
         lock (_lock)
         {
             if (_pages.TryGetValue(pageIndex, out var existing))
@@ -94,8 +105,11 @@ internal sealed class VmPageSlots
                 OnReleased = onReleased
             };
             hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+            if (oldPage == null)
+                pageCountDelta = 1;
         }
 
+        ApplyPageCountDelta(pageCountDelta);
         if (oldPage != null)
             ReleasePageOwnership(pageIndex, oldPage, false);
         _pageBindingChanged?.Invoke(pageIndex, oldPage?.HostPage, hostPage);
@@ -105,6 +119,7 @@ internal sealed class VmPageSlots
     {
         VmPage? oldPage = null;
         var hostPage = HostPageManager.GetOrCreate(ptr, hostPageKind);
+        var pageCountDelta = 0;
 
         lock (_lock)
         {
@@ -125,8 +140,11 @@ internal sealed class VmPageSlots
                 HostPage = hostPage
             };
             hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+            if (oldPage == null)
+                pageCountDelta = 1;
         }
 
+        ApplyPageCountDelta(pageCountDelta);
         if (oldPage != null)
             ReleasePageOwnership(pageIndex, oldPage, false);
         _pageBindingChanged?.Invoke(pageIndex, oldPage?.HostPage, hostPage);
@@ -142,6 +160,7 @@ internal sealed class VmPageSlots
         out bool inserted)
     {
         var ptr = hostPage.Ptr;
+        var pageCountDelta = 0;
 
         lock (_lock)
         {
@@ -160,8 +179,10 @@ internal sealed class VmPageSlots
             };
             hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
             inserted = true;
+            pageCountDelta = 1;
         }
 
+        ApplyPageCountDelta(pageCountDelta);
         _pageBindingChanged?.Invoke(pageIndex, null, hostPage);
         return ptr;
     }
@@ -233,6 +254,7 @@ internal sealed class VmPageSlots
         }
 
         var hostPage = HostPageManager.GetOrCreate(ptr, hostPageKind);
+        var pageCountDelta = 0;
         lock (_lock)
         {
             if (_pages.TryGetValue(pageIndex, out var raced))
@@ -254,8 +276,10 @@ internal sealed class VmPageSlots
             };
             hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
             isNew = true;
+            pageCountDelta = 1;
         }
 
+        ApplyPageCountDelta(pageCountDelta);
         _pageBindingChanged?.Invoke(pageIndex, null, hostPage);
         return ptr;
     }
@@ -293,6 +317,7 @@ internal sealed class VmPageSlots
     {
         if (size < 0) size = 0;
         List<(uint PageIndex, VmPage Page)>? toRelease = null;
+        var pageCountDelta = 0;
         lock (_lock)
         {
             var keepPageIndex = (uint)(size / LinuxConstants.PageSize);
@@ -320,17 +345,26 @@ internal sealed class VmPageSlots
             if (toRelease == null) return;
             foreach (var (pageIndex, _) in toRelease)
                 _pages.Remove(pageIndex);
+            pageCountDelta = -toRelease.Count;
         }
 
+        ApplyPageCountDelta(pageCountDelta);
         foreach (var (pageIndex, page) in toRelease)
             ReleasePageOwnership(pageIndex, page, true);
     }
 
     public IReadOnlyList<VmPageState> SnapshotPageStates()
     {
-        var states = new List<VmPageState>();
-        VisitPageStates(states.Add);
-        return states;
+        lock (_lock)
+        {
+            if (_pages.Count == 0)
+                return Array.Empty<VmPageState>();
+
+            var states = new List<VmPageState>(_pages.Count);
+            foreach (var (pageIndex, entry) in _pages)
+                states.Add(new VmPageState(pageIndex, entry.Ptr, entry.Dirty, entry.LastAccessTicks));
+            return states;
+        }
     }
 
     public void VisitPageStates(Action<VmPageState> visitor)
@@ -341,6 +375,21 @@ internal sealed class VmPageSlots
             if (_pages.Count == 0) return;
             foreach (var (pageIndex, entry) in _pages)
                 visitor(new VmPageState(pageIndex, entry.Ptr, entry.Dirty, entry.LastAccessTicks));
+        }
+    }
+
+    public void GetPageStats(out int totalPages, out int dirtyPages)
+    {
+        lock (_lock)
+        {
+            totalPages = _pages.Count;
+            dirtyPages = 0;
+            if (totalPages == 0)
+                return;
+
+            foreach (var entry in _pages.Values)
+                if (entry.Dirty)
+                    dirtyPages++;
         }
     }
 
@@ -379,6 +428,7 @@ internal sealed class VmPageSlots
     public bool TryEvictCleanPage(uint pageIndex)
     {
         VmPage? page = null;
+        var pageCountDelta = 0;
         lock (_lock)
         {
             if (!_pages.TryGetValue(pageIndex, out var entry)) return false;
@@ -387,8 +437,10 @@ internal sealed class VmPageSlots
             if (PageManager.GetRefCount(entry.Ptr) > 1) return false;
             page = entry;
             _pages.Remove(pageIndex);
+            pageCountDelta = -1;
         }
 
+        ApplyPageCountDelta(pageCountDelta);
         ReleasePageOwnership(pageIndex, page, true);
         return true;
     }
@@ -397,6 +449,7 @@ internal sealed class VmPageSlots
     {
         if (startPageIndex >= endPageIndex) return 0;
         List<(uint PageIndex, VmPage Page)>? toRelease = null;
+        var pageCountDelta = 0;
         lock (_lock)
         {
             if (_pages.Count == 0) return 0;
@@ -414,8 +467,10 @@ internal sealed class VmPageSlots
             if (toRelease == null) return 0;
             foreach (var (pageIndex, _) in toRelease)
                 _pages.Remove(pageIndex);
+            pageCountDelta = -toRelease.Count;
         }
 
+        ApplyPageCountDelta(pageCountDelta);
         foreach (var (pageIndex, page) in toRelease)
             ReleasePageOwnership(pageIndex, page, true);
         return toRelease.Count;
@@ -423,13 +478,16 @@ internal sealed class VmPageSlots
 
     public bool RemovePageIfMatches(uint pageIndex, VmPage page)
     {
+        var pageCountDelta = 0;
         lock (_lock)
         {
             if (!_pages.TryGetValue(pageIndex, out var existing)) return false;
             if (!ReferenceEquals(existing, page)) return false;
             _pages.Remove(pageIndex);
+            pageCountDelta = -1;
         }
 
+        ApplyPageCountDelta(pageCountDelta);
         ReleasePageOwnership(pageIndex, page, true);
         return true;
     }
@@ -437,6 +495,7 @@ internal sealed class VmPageSlots
     public void ReleaseAll()
     {
         List<(uint PageIndex, VmPage Page)>? toRelease = null;
+        var pageCountDelta = 0;
         lock (_lock)
         {
             if (_pages.Count == 0) return;
@@ -444,8 +503,10 @@ internal sealed class VmPageSlots
             foreach (var (pageIndex, page) in _pages)
                 toRelease.Add((pageIndex, page));
             _pages.Clear();
+            pageCountDelta = -toRelease.Count;
         }
 
+        ApplyPageCountDelta(pageCountDelta);
         foreach (var (pageIndex, page) in toRelease)
             ReleasePageOwnership(pageIndex, page, true);
     }

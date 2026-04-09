@@ -249,10 +249,10 @@ public class MknodAndXattrSyscallTests
     {
         var handle = new MountFile(env.SyscallManager.CreateDetachedTmpfsMount("podish-config"));
         env.SyscallManager.WriteFileInDetachedMount(
-            handle.Mount,
+            handle.Mount!,
             "resolv.conf",
             Encoding.UTF8.GetBytes("nameserver 1.1.1.1\n"));
-        env.SyscallManager.BindMountSubtree(handle.Mount, "resolv.conf", "/etc/resolv.conf");
+        env.SyscallManager.BindMountSubtree(handle.Mount!, "resolv.conf", "/etc/resolv.conf");
         return handle;
     }
 

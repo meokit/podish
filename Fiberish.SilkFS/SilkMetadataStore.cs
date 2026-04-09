@@ -170,19 +170,13 @@ public sealed class SilkMetadataStore
 
     public sealed class SilkMetadataTransaction : IDisposable
     {
-        private readonly SqliteConnection _conn;
+        private readonly SilkMetadataSession _session;
         private readonly SqliteTransaction _tx;
-        private SqliteCommand? _clearWhiteoutCmd;
-        private SqliteCommand? _markOpaqueCmd;
-        private SqliteCommand? _markWhiteoutCmd;
-        private SqliteCommand? _removeDentryCmd;
-        private SqliteCommand? _upsertDentryCmd;
-        private SqliteCommand? _upsertInodeCmd;
         private bool _disposed;
 
-        internal SilkMetadataTransaction(SqliteConnection conn, SqliteTransaction tx)
+        internal SilkMetadataTransaction(SilkMetadataSession session, SqliteTransaction tx)
         {
-            _conn = conn;
+            _session = session;
             _tx = tx;
         }
 
@@ -193,149 +187,80 @@ public sealed class SilkMetadataStore
             var effectiveAtime = atimeNs ?? now;
             var effectiveMtime = mtimeNs ?? now;
             var effectiveCtime = ctimeNs ?? now;
-            _upsertInodeCmd ??= PrepareCommand("""
-                                               INSERT INTO inodes(ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns)
-                                               VALUES (@ino, @kind, @mode, @uid, @gid, @nlink, @rdev, @size, @atime, @mtime, @ctime)
-                                               ON CONFLICT(ino) DO UPDATE SET
-                                                 kind = excluded.kind,
-                                                 mode = excluded.mode,
-                                                 uid = excluded.uid,
-                                                 gid = excluded.gid,
-                                                 nlink = excluded.nlink,
-                                                 rdev = excluded.rdev,
-                                                 size = excluded.size,
-                                                 atime_ns = excluded.atime_ns,
-                                                 mtime_ns = excluded.mtime_ns,
-                                                 ctime_ns = excluded.ctime_ns;
-                                               """,
-                cmd =>
-                {
-                    cmd.Parameters.Add("@ino", SqliteType.Integer);
-                    cmd.Parameters.Add("@kind", SqliteType.Integer);
-                    cmd.Parameters.Add("@mode", SqliteType.Integer);
-                    cmd.Parameters.Add("@uid", SqliteType.Integer);
-                    cmd.Parameters.Add("@gid", SqliteType.Integer);
-                    cmd.Parameters.Add("@nlink", SqliteType.Integer);
-                    cmd.Parameters.Add("@rdev", SqliteType.Integer);
-                    cmd.Parameters.Add("@size", SqliteType.Integer);
-                    cmd.Parameters.Add("@atime", SqliteType.Integer);
-                    cmd.Parameters.Add("@mtime", SqliteType.Integer);
-                    cmd.Parameters.Add("@ctime", SqliteType.Integer);
-                });
-            _upsertInodeCmd.Parameters["@ino"].Value = ino;
-            _upsertInodeCmd.Parameters["@kind"].Value = (int)kind;
-            _upsertInodeCmd.Parameters["@mode"].Value = mode;
-            _upsertInodeCmd.Parameters["@uid"].Value = uid;
-            _upsertInodeCmd.Parameters["@gid"].Value = gid;
-            _upsertInodeCmd.Parameters["@nlink"].Value = nlink;
-            _upsertInodeCmd.Parameters["@rdev"].Value = (long)rdev;
-            _upsertInodeCmd.Parameters["@size"].Value = size;
-            _upsertInodeCmd.Parameters["@atime"].Value = effectiveAtime;
-            _upsertInodeCmd.Parameters["@mtime"].Value = effectiveMtime;
-            _upsertInodeCmd.Parameters["@ctime"].Value = effectiveCtime;
-            _upsertInodeCmd.ExecuteNonQuery();
+            var cmd = _session.GetUpsertInodeCommand();
+            cmd.Parameters["@ino"].Value = ino;
+            cmd.Parameters["@kind"].Value = (int)kind;
+            cmd.Parameters["@mode"].Value = mode;
+            cmd.Parameters["@uid"].Value = uid;
+            cmd.Parameters["@gid"].Value = gid;
+            cmd.Parameters["@nlink"].Value = nlink;
+            cmd.Parameters["@rdev"].Value = (long)rdev;
+            cmd.Parameters["@size"].Value = size;
+            cmd.Parameters["@atime"].Value = effectiveAtime;
+            cmd.Parameters["@mtime"].Value = effectiveMtime;
+            cmd.Parameters["@ctime"].Value = effectiveCtime;
+            ExecuteNonQuery(cmd);
         }
 
         public void UpsertDentry(long parentIno, string name, long ino)
         {
-            _upsertDentryCmd ??= PrepareCommand(
-                "INSERT INTO dentries(parent_ino, name, ino) VALUES (@p, @n, @i) ON CONFLICT(parent_ino, name) DO UPDATE SET ino = excluded.ino;",
-                cmd =>
-                {
-                    cmd.Parameters.Add("@p", SqliteType.Integer);
-                    cmd.Parameters.Add("@n", SqliteType.Text);
-                    cmd.Parameters.Add("@i", SqliteType.Integer);
-                });
-            _upsertDentryCmd.Parameters["@p"].Value = parentIno;
-            _upsertDentryCmd.Parameters["@n"].Value = name;
-            _upsertDentryCmd.Parameters["@i"].Value = ino;
-            _upsertDentryCmd.ExecuteNonQuery();
+            var cmd = _session.GetUpsertDentryCommand();
+            cmd.Parameters["@p"].Value = parentIno;
+            cmd.Parameters["@n"].Value = name;
+            cmd.Parameters["@i"].Value = ino;
+            ExecuteNonQuery(cmd);
         }
 
         public void RemoveDentry(long parentIno, string name)
         {
-            _removeDentryCmd ??= PrepareCommand(
-                "DELETE FROM dentries WHERE parent_ino = @p AND name = @n;",
-                cmd =>
-                {
-                    cmd.Parameters.Add("@p", SqliteType.Integer);
-                    cmd.Parameters.Add("@n", SqliteType.Text);
-                });
-            _removeDentryCmd.Parameters["@p"].Value = parentIno;
-            _removeDentryCmd.Parameters["@n"].Value = name;
-            _removeDentryCmd.ExecuteNonQuery();
+            var cmd = _session.GetRemoveDentryCommand();
+            cmd.Parameters["@p"].Value = parentIno;
+            cmd.Parameters["@n"].Value = name;
+            ExecuteNonQuery(cmd);
         }
 
         public void MarkWhiteout(long parentIno, string name)
         {
-            _markWhiteoutCmd ??= PrepareCommand(
-                "INSERT INTO whiteouts(parent_ino, name, opaque) VALUES (@p, @n, 0) ON CONFLICT(parent_ino, name) DO UPDATE SET opaque = 0;",
-                cmd =>
-                {
-                    cmd.Parameters.Add("@p", SqliteType.Integer);
-                    cmd.Parameters.Add("@n", SqliteType.Text);
-                });
-            _markWhiteoutCmd.Parameters["@p"].Value = parentIno;
-            _markWhiteoutCmd.Parameters["@n"].Value = name;
-            _markWhiteoutCmd.ExecuteNonQuery();
+            var cmd = _session.GetMarkWhiteoutCommand();
+            cmd.Parameters["@p"].Value = parentIno;
+            cmd.Parameters["@n"].Value = name;
+            ExecuteNonQuery(cmd);
         }
 
         public void ClearWhiteout(long parentIno, string name)
         {
-            _clearWhiteoutCmd ??= PrepareCommand(
-                "DELETE FROM whiteouts WHERE parent_ino = @p AND name = @n;",
-                cmd =>
-                {
-                    cmd.Parameters.Add("@p", SqliteType.Integer);
-                    cmd.Parameters.Add("@n", SqliteType.Text);
-                });
-            _clearWhiteoutCmd.Parameters["@p"].Value = parentIno;
-            _clearWhiteoutCmd.Parameters["@n"].Value = name;
-            _clearWhiteoutCmd.ExecuteNonQuery();
+            var cmd = _session.GetClearWhiteoutCommand();
+            cmd.Parameters["@p"].Value = parentIno;
+            cmd.Parameters["@n"].Value = name;
+            ExecuteNonQuery(cmd);
         }
 
         public void MarkOpaque(long parentIno)
         {
-            _markOpaqueCmd ??= PrepareCommand(
-                "INSERT INTO whiteouts(parent_ino, name, opaque) VALUES (@p, @n, 1) ON CONFLICT(parent_ino, name) DO UPDATE SET opaque = 1;",
-                cmd =>
-                {
-                    cmd.Parameters.Add("@p", SqliteType.Integer);
-                    cmd.Parameters.Add("@n", SqliteType.Text);
-                });
-            _markOpaqueCmd.Parameters["@p"].Value = parentIno;
-            _markOpaqueCmd.Parameters["@n"].Value = OpaqueMarkerName;
-            _markOpaqueCmd.ExecuteNonQuery();
+            var cmd = _session.GetMarkOpaqueCommand();
+            cmd.Parameters["@p"].Value = parentIno;
+            cmd.Parameters["@n"].Value = OpaqueMarkerName;
+            ExecuteNonQuery(cmd);
         }
 
-        private SqliteCommand PrepareCommand(string sql, Action<SqliteCommand> configureParameters)
+        private void ExecuteNonQuery(SqliteCommand cmd)
         {
-            var cmd = _conn.CreateCommand();
             cmd.Transaction = _tx;
-            cmd.CommandText = sql;
-            configureParameters(cmd);
-            cmd.Prepare();
-            return cmd;
+            try
+            {
+                cmd.ExecuteNonQuery();
+            }
+            finally
+            {
+                cmd.Transaction = null;
+            }
         }
 
         public void Dispose()
         {
             if (_disposed)
                 return;
-
-            DisposeCommand(ref _clearWhiteoutCmd);
-            DisposeCommand(ref _markOpaqueCmd);
-            DisposeCommand(ref _markWhiteoutCmd);
-            DisposeCommand(ref _removeDentryCmd);
-            DisposeCommand(ref _upsertDentryCmd);
-            DisposeCommand(ref _upsertInodeCmd);
             _disposed = true;
-        }
-
-        private static void DisposeCommand(ref SqliteCommand? cmd)
-        {
-            cmd?.Dispose();
-            cmd = null;
         }
     }
 }
@@ -344,6 +269,7 @@ public sealed class SilkMetadataSession : IDisposable
 {
     private readonly SqliteConnection _conn;
     private SqliteCommand? _clearOpaqueCmd;
+    private SqliteCommand? _clearWhiteoutCmd;
     private SqliteCommand? _createInodeCmd;
     private SqliteCommand? _deleteInodeCmd;
     private SqliteCommand? _getInodeCmd;
@@ -357,8 +283,13 @@ public sealed class SilkMetadataSession : IDisposable
     private SqliteCommand? _listOrphanInodesCmd;
     private SqliteCommand? _listXAttrsCmd;
     private SqliteCommand? _lookupDentryCmd;
+    private SqliteCommand? _markOpaqueCmd;
+    private SqliteCommand? _markWhiteoutCmd;
     private SqliteCommand? _removeXAttrCmd;
+    private SqliteCommand? _removeDentryCmd;
     private SqliteCommand? _setXAttrCmd;
+    private SqliteCommand? _upsertDentryCmd;
+    private SqliteCommand? _upsertInodeCmd;
     private bool _disposed;
 
     internal SilkMetadataSession(SilkMetadataStore store, SqliteConnection connection)
@@ -396,7 +327,7 @@ public sealed class SilkMetadataSession : IDisposable
     {
         ArgumentNullException.ThrowIfNull(action);
         using var tx = _conn.BeginTransaction();
-        using var metadataTx = new SilkMetadataStore.SilkMetadataTransaction(_conn, tx);
+        using var metadataTx = new SilkMetadataStore.SilkMetadataTransaction(this, tx);
         action(metadataTx);
         tx.Commit();
     }
@@ -630,6 +561,7 @@ public sealed class SilkMetadataSession : IDisposable
             return;
 
         DisposeCommand(ref _clearOpaqueCmd);
+        DisposeCommand(ref _clearWhiteoutCmd);
         DisposeCommand(ref _createInodeCmd);
         DisposeCommand(ref _deleteInodeCmd);
         DisposeCommand(ref _getInodeCmd);
@@ -643,8 +575,13 @@ public sealed class SilkMetadataSession : IDisposable
         DisposeCommand(ref _listOrphanInodesCmd);
         DisposeCommand(ref _listXAttrsCmd);
         DisposeCommand(ref _lookupDentryCmd);
+        DisposeCommand(ref _markOpaqueCmd);
+        DisposeCommand(ref _markWhiteoutCmd);
         DisposeCommand(ref _removeXAttrCmd);
+        DisposeCommand(ref _removeDentryCmd);
         DisposeCommand(ref _setXAttrCmd);
+        DisposeCommand(ref _upsertDentryCmd);
+        DisposeCommand(ref _upsertInodeCmd);
         _conn.Dispose();
         _disposed = true;
     }
@@ -656,6 +593,95 @@ public sealed class SilkMetadataSession : IDisposable
         configureParameters(cmd);
         cmd.Prepare();
         return cmd;
+    }
+
+    internal SqliteCommand GetClearWhiteoutCommand()
+    {
+        return _clearWhiteoutCmd ??= PrepareCommand(
+            "DELETE FROM whiteouts WHERE parent_ino = @p AND name = @n;",
+            cmd =>
+            {
+                cmd.Parameters.Add("@p", SqliteType.Integer);
+                cmd.Parameters.Add("@n", SqliteType.Text);
+            });
+    }
+
+    internal SqliteCommand GetMarkOpaqueCommand()
+    {
+        return _markOpaqueCmd ??= PrepareCommand(
+            "INSERT INTO whiteouts(parent_ino, name, opaque) VALUES (@p, @n, 1) ON CONFLICT(parent_ino, name) DO UPDATE SET opaque = 1;",
+            cmd =>
+            {
+                cmd.Parameters.Add("@p", SqliteType.Integer);
+                cmd.Parameters.Add("@n", SqliteType.Text);
+            });
+    }
+
+    internal SqliteCommand GetMarkWhiteoutCommand()
+    {
+        return _markWhiteoutCmd ??= PrepareCommand(
+            "INSERT INTO whiteouts(parent_ino, name, opaque) VALUES (@p, @n, 0) ON CONFLICT(parent_ino, name) DO UPDATE SET opaque = 0;",
+            cmd =>
+            {
+                cmd.Parameters.Add("@p", SqliteType.Integer);
+                cmd.Parameters.Add("@n", SqliteType.Text);
+            });
+    }
+
+    internal SqliteCommand GetRemoveDentryCommand()
+    {
+        return _removeDentryCmd ??= PrepareCommand(
+            "DELETE FROM dentries WHERE parent_ino = @p AND name = @n;",
+            cmd =>
+            {
+                cmd.Parameters.Add("@p", SqliteType.Integer);
+                cmd.Parameters.Add("@n", SqliteType.Text);
+            });
+    }
+
+    internal SqliteCommand GetUpsertDentryCommand()
+    {
+        return _upsertDentryCmd ??= PrepareCommand(
+            "INSERT INTO dentries(parent_ino, name, ino) VALUES (@p, @n, @i) ON CONFLICT(parent_ino, name) DO UPDATE SET ino = excluded.ino;",
+            cmd =>
+            {
+                cmd.Parameters.Add("@p", SqliteType.Integer);
+                cmd.Parameters.Add("@n", SqliteType.Text);
+                cmd.Parameters.Add("@i", SqliteType.Integer);
+            });
+    }
+
+    internal SqliteCommand GetUpsertInodeCommand()
+    {
+        return _upsertInodeCmd ??= PrepareCommand("""
+                                                  INSERT INTO inodes(ino, kind, mode, uid, gid, nlink, rdev, size, atime_ns, mtime_ns, ctime_ns)
+                                                  VALUES (@ino, @kind, @mode, @uid, @gid, @nlink, @rdev, @size, @atime, @mtime, @ctime)
+                                                  ON CONFLICT(ino) DO UPDATE SET
+                                                    kind = excluded.kind,
+                                                    mode = excluded.mode,
+                                                    uid = excluded.uid,
+                                                    gid = excluded.gid,
+                                                    nlink = excluded.nlink,
+                                                    rdev = excluded.rdev,
+                                                    size = excluded.size,
+                                                    atime_ns = excluded.atime_ns,
+                                                    mtime_ns = excluded.mtime_ns,
+                                                    ctime_ns = excluded.ctime_ns;
+                                                  """,
+            cmd =>
+            {
+                cmd.Parameters.Add("@ino", SqliteType.Integer);
+                cmd.Parameters.Add("@kind", SqliteType.Integer);
+                cmd.Parameters.Add("@mode", SqliteType.Integer);
+                cmd.Parameters.Add("@uid", SqliteType.Integer);
+                cmd.Parameters.Add("@gid", SqliteType.Integer);
+                cmd.Parameters.Add("@nlink", SqliteType.Integer);
+                cmd.Parameters.Add("@rdev", SqliteType.Integer);
+                cmd.Parameters.Add("@size", SqliteType.Integer);
+                cmd.Parameters.Add("@atime", SqliteType.Integer);
+                cmd.Parameters.Add("@mtime", SqliteType.Integer);
+                cmd.Parameters.Add("@ctime", SqliteType.Integer);
+            });
     }
 
     private static void DisposeCommand(ref SqliteCommand? cmd)
