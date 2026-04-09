@@ -297,7 +297,7 @@ public sealed class LayerNode
     }
 }
 
-public class LayerInode : Inode
+public class LayerInode : MappingBackedInode
 {
     private readonly LayerIndexEntry _entry;
     private readonly string _path;

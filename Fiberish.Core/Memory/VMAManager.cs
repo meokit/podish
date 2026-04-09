@@ -225,9 +225,14 @@ public class VMAManager
         return file?.OpenedInode;
     }
 
+    private static MappingBackedInode? ResolveCurrentFileMappingBacking(LinuxFile? file)
+    {
+        return ResolveCurrentFileBacking(file) as MappingBackedInode;
+    }
+
     private bool SyncFileBackedVmaMapping(VmArea vma)
     {
-        var backingInode = ResolveCurrentFileBacking(vma.File);
+        var backingInode = ResolveCurrentFileMappingBacking(vma.File);
         if (backingInode == null)
             return false;
 
@@ -796,7 +801,7 @@ public class VMAManager
                     // Linux models MAP_SHARED|MAP_ANONYMOUS with an internal shmem/tmpfs backing object.
                     anonymousSharedFile = engine.MemoryContext.CreateSharedAnonymousMappingFile(len);
                     file = anonymousSharedFile;
-                    sharedObj = ResolveCurrentFileBacking(file)!.AcquireMappingRef();
+                    sharedObj = ResolveCurrentFileMappingBacking(file)!.AcquireMappingRef();
                     fileMapping = new VmaFileMapping(file);
                 }
                 else if (isPrivate)
@@ -807,14 +812,14 @@ public class VMAManager
             else if (isShared)
             {
                 // MAP_SHARED file: share the inode's global page cache
-                sharedObj = ResolveCurrentFileBacking(file)!.AcquireMappingRef();
+                sharedObj = ResolveCurrentFileMappingBacking(file)!.AcquireMappingRef();
                 vmPgoff = (ulong)(offset / LinuxConstants.PageSize);
                 fileMapping = new VmaFileMapping(file);
             }
             else
             {
                 // MAP_PRIVATE file: clean reads come from inode mapping, private COW pages are created lazily.
-                sharedObj = ResolveCurrentFileBacking(file)!.AcquireMappingRef();
+                sharedObj = ResolveCurrentFileMappingBacking(file)!.AcquireMappingRef();
                 vmPgoff = (ulong)(offset / LinuxConstants.PageSize);
                 fileMapping = new VmaFileMapping(file);
             }
@@ -1490,7 +1495,7 @@ public class VMAManager
                 return FaultResult.Segv;
         }
 
-        var inode = ResolveCurrentFileBacking(vma.File);
+        var inode = ResolveCurrentFileMappingBacking(vma.File);
         if (inode == null)
             return FaultResult.Segv;
 
@@ -1498,7 +1503,7 @@ public class VMAManager
             return FaultResult.Segv;
 
         var readLen = (int)Math.Min(LinuxConstants.PageSize, vma.GetFileBackingLength() - vmaRelativeOffset);
-        pagePtr = inode.AcquireOwnedMappingPage(vma.File, pageIndex, absoluteFileOffset,
+        pagePtr = inode.AcquireMappingPage(vma.File, pageIndex, absoluteFileOffset,
             preferWritableMappedPage ? PageCacheAccessMode.Write : PageCacheAccessMode.Read, readLen);
         return pagePtr != IntPtr.Zero ? FaultResult.Handled : FaultResult.Segv;
     }
@@ -1767,13 +1772,16 @@ public class VMAManager
         IReadOnlyList<Engine> engines)
     {
         var invalidatedRanges = new List<NativeRange>();
+        var replacementInode = newBackingInode as MappingBackedInode;
+        if (replacementInode == null)
+            return;
 
         foreach (var vma in _vmas)
         {
             if (!ReferenceEquals(vma.File?.OpenedInode, overlayInode))
                 continue;
 
-            var replacementMapping = newBackingInode.AcquireMappingRef();
+            var replacementMapping = replacementInode.AcquireMappingRef();
             if (ReferenceEquals(vma.VmMapping, replacementMapping))
             {
                 replacementMapping.Release();
@@ -1825,7 +1833,7 @@ public class VMAManager
         return (vma.Flags & MapFlags.Shared) != 0 && vma.File?.OpenedInode != null;
     }
 
-    private static bool TryGetSharedFileVmAreaState(VmArea vma, out LinuxFile file, out Inode inode,
+    private static bool TryGetSharedFileVmAreaState(VmArea vma, out LinuxFile file, out MappingBackedInode inode,
         out AddressSpace mapping)
     {
         file = null!;
@@ -1835,7 +1843,10 @@ public class VMAManager
             return false;
 
         file = vma.File!;
-        inode = file.OpenedInode!;
+        inode = file.OpenedInode as MappingBackedInode;
+        if (inode == null)
+            return false;
+
         return TryGetVmMapping(vma, out mapping);
     }
 

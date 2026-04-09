@@ -84,7 +84,7 @@ public sealed class MemoryRuntimeContext
         lock (_shmGate)
         {
             EnsureZeroInodeCreated();
-            return _zeroInode!.AcquireOwnedMappingPage(null, pageIndex, 0, PageCacheAccessMode.Read, 0, false);
+            return _zeroInode!.AcquireMappingPage(null, pageIndex, 0, PageCacheAccessMode.Read, 0, false);
         }
     }
 
@@ -137,7 +137,7 @@ public sealed class MemoryRuntimeContext
     }
 }
 
-internal sealed class ZeroInode : Inode
+internal sealed class ZeroInode : MappingBackedInode
 {
     public ZeroInode()
     {
@@ -147,7 +147,6 @@ internal sealed class ZeroInode : Inode
         Size = LinuxConstants.PageSize;
     }
 
-    protected override bool UsesInodeOwnedMappingPages => true;
     protected override AddressSpaceKind MappingKind => AddressSpaceKind.Zero;
     protected override GlobalAddressSpaceCacheManager.AddressSpaceCacheClass? MappingCacheClass => null;
 }

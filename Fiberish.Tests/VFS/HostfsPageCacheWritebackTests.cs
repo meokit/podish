@@ -461,7 +461,7 @@ public class HostfsPageCacheWritebackTests
             loc.Dentry!.Inode!.Open(file);
             var fd = sm.AllocFD(file);
 
-            var mappingRef = file.Dentry.Inode!.AcquireMappingRef();
+            var mappingRef = ((MappingBackedInode)file.Dentry.Inode!).AcquireMappingRef();
             try
             {
                 var writeRc = file.Dentry.Inode!.WriteFromHost(null, file, "XY"u8.ToArray(), 1);

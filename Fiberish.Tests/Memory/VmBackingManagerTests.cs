@@ -54,7 +54,7 @@ public class InodeMappingTests
         }
     }
 
-    private sealed class TestInode : Inode
+    private sealed class TestInode : MappingBackedInode
     {
         public TestInode(SuperBlock sb, ulong ino)
         {

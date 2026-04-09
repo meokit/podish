@@ -229,8 +229,8 @@ public class OverlayTests
             lowerInode.Ino = forcedIno;
             upperInode.Ino = forcedIno;
 
-            var lowerCache = lowerInode.AcquireMappingRef();
-            var upperCache = upperInode.AcquireMappingRef();
+            var lowerCache = ((MappingBackedInode)lowerInode).AcquireMappingRef();
+            var upperCache = ((MappingBackedInode)upperInode).AcquireMappingRef();
 
             try
             {

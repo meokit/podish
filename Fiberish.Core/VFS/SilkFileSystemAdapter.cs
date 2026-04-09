@@ -843,7 +843,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         return rc < 0 ? rc : 0;
     }
 
-    internal override void OnOwnedMappingPageReleased(uint pageIndex, InodePageRecord record)
+    internal override void OnMappingPageReleased(uint pageIndex, InodePageRecord record)
     {
         lock (_dirtyPageLock)
         {
@@ -851,7 +851,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         }
     }
 
-    internal override int SyncMappedOwnedPage(LinuxFile? linuxFile, AddressSpace mapping,
+    internal override int SyncMappedPage(LinuxFile? linuxFile, AddressSpace mapping,
         PageSyncRequest request, InodePageRecord record)
     {
         _ = linuxFile;

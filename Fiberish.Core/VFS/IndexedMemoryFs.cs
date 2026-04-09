@@ -45,7 +45,7 @@ public abstract class IndexedMemorySuperBlock : SuperBlock
 /// <summary>
 ///     Shared inode implementation for indexed in-memory filesystems.
 /// </summary>
-public abstract class IndexedMemoryInode : Inode
+public abstract class IndexedMemoryInode : MappingBackedInode
 {
     private readonly object _flockGate = new();
     private readonly HashSet<LinuxFile> _sharedHolders = [];
@@ -65,8 +65,6 @@ public abstract class IndexedMemoryInode : Inode
 
     protected virtual GlobalAddressSpaceCacheManager.AddressSpaceCacheClass CacheClass =>
         GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem;
-
-    protected override bool UsesInodeOwnedMappingPages => Type == InodeType.File;
 
     protected override AddressSpaceKind MappingKind =>
         CacheClass == GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem
@@ -635,7 +633,7 @@ public abstract class IndexedMemoryInode : Inode
                 if (!fullPageWrite && pageFileOffset < (long)Size)
                     pageReadLen = (int)Math.Min(LinuxConstants.PageSize, (long)Size - pageFileOffset);
 
-                var pagePtr = AcquireOwnedMappingPage(linuxFile, pageIndex, pageFileOffset, PageCacheAccessMode.Write,
+                var pagePtr = AcquireMappingPage(linuxFile, pageIndex, pageFileOffset, PageCacheAccessMode.Write,
                     pageReadLen, false);
                 if (pagePtr == IntPtr.Zero)
                     throw new OutOfMemoryException("Failed to allocate indexed page cache page");
@@ -854,8 +852,8 @@ public abstract class IndexedMemoryInode : Inode
 
     protected AddressSpace EnsurePageCacheLocked()
     {
-        return EnsureOwnedMapping() ??
-               throw new InvalidOperationException("Indexed file inode requires an owned mapping.");
+         return EnsureMapping() ??
+             throw new InvalidOperationException("Indexed file inode requires a mapping.");
     }
 
     protected static void ReadFromPageCacheLocked(AddressSpace pageCache, long offset, Span<byte> destination)

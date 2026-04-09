@@ -217,15 +217,21 @@ public class LayerFsTests
         Assert.NotNull(osRelease);
 
         var file = new LinuxFile(osRelease!, FileFlags.O_RDONLY, null!);
-        osRelease!.Inode!.Mapping = new AddressSpace(AddressSpaceKind.File);
+        var mappingRef = ((MappingBackedInode)osRelease!.Inode!).AcquireMappingRef();
+        try
+        {
+            var pageBuffer = new byte[LinuxConstants.PageSize];
+            var rc = osRelease.Inode.ReadPage(file, new PageIoRequest(0, 0, LinuxConstants.PageSize), pageBuffer);
 
-        var pageBuffer = new byte[LinuxConstants.PageSize];
-        var rc = osRelease.Inode.ReadPage(file, new PageIoRequest(0, 0, LinuxConstants.PageSize), pageBuffer);
-
-        Assert.Equal(0, rc);
-        Assert.NotNull(osRelease.Inode.Mapping);
-        Assert.Equal(32, osRelease.Inode.Mapping.PageCount);
-        Assert.Equal(payload.AsSpan(0, LinuxConstants.PageSize).ToArray(), pageBuffer);
+            Assert.Equal(0, rc);
+            Assert.NotNull(osRelease.Inode.Mapping);
+            Assert.Equal(32, osRelease.Inode.Mapping.PageCount);
+            Assert.Equal(payload.AsSpan(0, LinuxConstants.PageSize).ToArray(), pageBuffer);
+        }
+        finally
+        {
+            mappingRef.Release();
+        }
     }
 
     [Fact]

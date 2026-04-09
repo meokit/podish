@@ -458,7 +458,7 @@ public class PageCacheConsistencyTests
         {
             file = OpenHostFile(root, "data.bin");
             var inode = file.Dentry.Inode!;
-            cache = inode.AcquireMappingRef();
+            cache = ((MappingBackedInode)inode).AcquireMappingRef();
 
             var rc = inode.WriteFromHost(null, file, "XY"u8.ToArray(), 1);
             Assert.Equal(2, rc);
@@ -520,7 +520,7 @@ public class PageCacheConsistencyTests
         {
             file = OpenHostFile(root, "data.bin");
             var inode = file.Dentry.Inode!;
-            cache = inode.AcquireMappingRef();
+            cache = ((MappingBackedInode)inode).AcquireMappingRef();
 
             var warm = new byte[5];
             var warmN = inode.ReadToHost(null, file, warm, 0);

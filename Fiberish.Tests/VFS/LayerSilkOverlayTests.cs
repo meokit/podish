@@ -102,20 +102,26 @@ public class LayerSilkOverlayTests
             Assert.True(osRelease.IsValid);
             var overlayInode = Assert.IsType<OverlayInode>(osRelease.Dentry!.Inode);
             Assert.NotNull(overlayInode.LowerInode);
-            overlayInode.LowerInode!.Mapping = new AddressSpace(AddressSpaceKind.File);
+            var mappingRef = ((MappingBackedInode)overlayInode.LowerInode!).AcquireMappingRef();
+            try
+            {
+                var file = new LinuxFile(osRelease.Dentry!, FileFlags.O_RDONLY, osRelease.Mount!);
 
-            var file = new LinuxFile(osRelease.Dentry!, FileFlags.O_RDONLY, osRelease.Mount!);
+                var pageBuffer = new byte[LinuxConstants.PageSize];
+                var rc = osRelease.Dentry.Inode.ReadPage(file, new PageIoRequest(0, 0, LinuxConstants.PageSize),
+                    pageBuffer);
 
-            var pageBuffer = new byte[LinuxConstants.PageSize];
-            var rc = osRelease.Dentry.Inode.ReadPage(file, new PageIoRequest(0, 0, LinuxConstants.PageSize),
-                pageBuffer);
+                Assert.Equal(0, rc);
+                Assert.NotNull(overlayInode.LowerInode!.Mapping);
+                Assert.Equal(32, overlayInode.LowerInode.Mapping.PageCount);
+                Assert.Equal(payload.AsSpan(0, LinuxConstants.PageSize).ToArray(), pageBuffer);
 
-            Assert.Equal(0, rc);
-            Assert.NotNull(overlayInode.LowerInode!.Mapping);
-            Assert.Equal(32, overlayInode.LowerInode.Mapping.PageCount);
-            Assert.Equal(payload.AsSpan(0, LinuxConstants.PageSize).ToArray(), pageBuffer);
-
-            file.Close();
+                file.Close();
+            }
+            finally
+            {
+                mappingRef.Release();
+            }
             sm.Close();
         }
         finally

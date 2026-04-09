@@ -379,7 +379,7 @@ public sealed class OverlayNodeState
     }
 }
 
-public class OverlayInode : Inode
+public class OverlayInode : MappingBackedInode
 {
     private readonly Dictionary<LinuxFile, Inode> _openBackingByFile = [];
     private readonly OverlayNodeState _state;
@@ -1535,14 +1535,14 @@ public class OverlayInode : Inode
     internal override int SyncCachedPage(LinuxFile? linuxFile, AddressSpace mapping,
         PageSyncRequest request)
     {
-        var source = ResolveSourceForFile(linuxFile);
+        var source = ResolveSourceForFile(linuxFile) as MappingBackedInode;
         return source?.SyncCachedPage(linuxFile, mapping, request) ?? 0;
     }
 
     internal override int SyncCachedPages(LinuxFile? linuxFile, AddressSpace mapping,
         WritePagesRequest request)
     {
-        var source = ResolveSourceForFile(linuxFile);
+        var source = ResolveSourceForFile(linuxFile) as MappingBackedInode;
         return source?.SyncCachedPages(linuxFile, mapping, request) ?? 0;
     }
 

@@ -1266,7 +1266,7 @@ internal static partial class HostfsOwnershipMapper
     }
 }
 
-public partial class HostInode : Inode, IHostMappedCacheDropper
+public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 {
     private readonly HashSet<string> _aliasPaths = new(OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
@@ -2099,7 +2099,7 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         return rc < 0 ? rc : 0;
     }
 
-    internal override void OnOwnedMappingPageReleased(uint pageIndex, InodePageRecord record)
+    internal override void OnMappingPageReleased(uint pageIndex, InodePageRecord record)
     {
         lock (_dirtyPageLock)
         {
@@ -2107,7 +2107,7 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
         }
     }
 
-    internal override int SyncMappedOwnedPage(LinuxFile? linuxFile, AddressSpace mapping,
+    internal override int SyncMappedPage(LinuxFile? linuxFile, AddressSpace mapping,
         PageSyncRequest request, InodePageRecord record)
     {
         _ = linuxFile;
@@ -2139,7 +2139,7 @@ public partial class HostInode : Inode, IHostMappedCacheDropper
             if (Mapping.PeekPage((uint)pageIndex) != IntPtr.Zero) continue;
             var fileOffset = pageIndex * LinuxConstants.PageSize;
             var readLen = (int)Math.Min(LinuxConstants.PageSize, Math.Max(0, (long)Size - fileOffset));
-            var ptr = AcquireOwnedMappingPage(linuxFile, (uint)pageIndex, fileOffset, PageCacheAccessMode.Read,
+            var ptr = AcquireMappingPage(linuxFile, (uint)pageIndex, fileOffset, PageCacheAccessMode.Read,
                 readLen);
 
             if (ptr == IntPtr.Zero) return 0;

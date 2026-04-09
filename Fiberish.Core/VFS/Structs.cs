@@ -526,16 +526,14 @@ public abstract class Inode : IAddressSpaceOperations
     // All dentries pointing to this inode (hard links / aliases).
     // Exposed as read-only; callers must go through BindInode/UnbindInode.
     private readonly List<Dentry> _dentries = [];
-    private readonly Lock _mappingLock = new();
-    private readonly Lock _mappingPageLock = new();
-    private readonly Dictionary<uint, InodePageRecord> _mappingPages = [];
     private int _lookupFailureError = -(int)Errno.ENOENT;
     private VMAManager[] _mappedAddressSpaces = [];
 
     /// <summary>
-    ///     Per-inode page cache / address_space. Lazily created on first file mmap.
+    ///     Optional per-inode page cache / address_space.
+    ///     Mapping-backed inode families manage its lifecycle via <see cref="MappingBackedInode"/>.
     /// </summary>
-    public AddressSpace? Mapping { get; set; }
+    public AddressSpace? Mapping { get; protected set; }
 
     public virtual ulong Ino { get; set; }
     public virtual InodeType Type { get; set; }
@@ -581,17 +579,6 @@ public abstract class Inode : IAddressSpaceOperations
     /// </summary>
     public virtual bool SupportsMmap => false;
 
-    protected virtual bool UsesInodeOwnedMappingPages => Type == InodeType.File;
-
-    protected virtual AddressSpaceKind MappingKind => AddressSpaceKind.File;
-
-    protected virtual GlobalAddressSpaceCacheManager.AddressSpaceCacheClass? MappingCacheClass => MappingKind switch
-    {
-        AddressSpaceKind.File => GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.File,
-        AddressSpaceKind.Shmem => GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem,
-        _ => null
-    };
-
     public virtual int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
     {
         return AopsReadPage(linuxFile, request, pageBuffer);
@@ -604,19 +591,11 @@ public abstract class Inode : IAddressSpaceOperations
 
     public virtual int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer, bool sync)
     {
-        if (sync && Mapping is { } mapping &&
-            TryCreatePageSyncRequest(request, out var syncRequest) &&
-            mapping.IsDirty(syncRequest.PageIndex))
-            return SyncCachedPage(linuxFile, mapping, syncRequest);
-
         return AopsWritePage(linuxFile, request, pageBuffer, sync);
     }
 
     public virtual int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
     {
-        if (request.Sync && Mapping is { } mapping)
-            return SyncCachedPages(linuxFile, mapping, request);
-
         return AopsWritePages(linuxFile, request);
     }
 
@@ -647,19 +626,12 @@ public abstract class Inode : IAddressSpaceOperations
 
     public virtual int InvalidateFolio(long pageIndex)
     {
-        Mapping?.RemovePagesInRange((uint)pageIndex, (uint)pageIndex + 1);
         return 0;
     }
 
     public virtual int ReleaseFolio(long pageIndex)
     {
-        Mapping?.RemovePagesInRange((uint)pageIndex, (uint)pageIndex + 1, static page => !page.Dirty);
         return 0;
-    }
-
-    internal virtual bool PreferHostMappedMappingPage(PageCacheAccessMode accessMode)
-    {
-        return accessMode == PageCacheAccessMode.Read;
     }
 
     internal void RegisterActiveFileHolderCore(LinuxFile file, string attachReason)
@@ -698,333 +670,6 @@ public abstract class Inode : IAddressSpaceOperations
 #else
         return "<tracking-disabled>";
 #endif
-    }
-
-    internal AddressSpace AcquireMappingRef()
-    {
-        lock (_mappingLock)
-        {
-            var mapping = Mapping ?? CreateOwnedMapping();
-            mapping.AddRef();
-            return mapping;
-        }
-    }
-
-    protected virtual AddressSpace CreateOwnedMapping()
-    {
-        var mapping = new AddressSpace(MappingKind);
-        if (MappingCacheClass is { } cacheClass)
-            GlobalAddressSpaceCacheManager.TrackAddressSpace(mapping, cacheClass);
-
-        Mapping = mapping;
-        return mapping;
-    }
-
-    protected AddressSpace? EnsureOwnedMapping()
-    {
-        if (Mapping != null)
-            return Mapping;
-        if (!UsesInodeOwnedMappingPages)
-            return null;
-
-        var mapping = AcquireMappingRef();
-        mapping.Release();
-        return mapping;
-    }
-
-    private void ReleaseOwnedMappingOwnerRef()
-    {
-        AddressSpace? mapping;
-        lock (_mappingLock)
-        {
-            mapping = Mapping;
-            Mapping = null;
-        }
-
-        mapping?.Release();
-    }
-
-    internal virtual void OnOwnedMappingPageReleased(uint pageIndex, InodePageRecord record)
-    {
-    }
-
-    internal virtual int SyncCachedPage(LinuxFile? linuxFile, AddressSpace mapping,
-        PageSyncRequest request)
-    {
-        if (request.Length < 0)
-            return -(int)Errno.EINVAL;
-        if (!UsesInodeOwnedMappingPages)
-            return 0;
-        if (!mapping.IsDirty(request.PageIndex))
-            return 0;
-
-        var pagePtr = mapping.PeekPage(request.PageIndex);
-        if (pagePtr == IntPtr.Zero || request.Length == 0)
-        {
-            CompleteCachedPageSync(linuxFile, mapping, request.PageIndex, null);
-            return 0;
-        }
-
-        if (TryGetOwnedMappingPageRecord(request.PageIndex, out var record) &&
-            record.BackingKind == FilePageBackingKind.HostMappedWindow)
-        {
-            GlobalAddressSpaceCacheManager.BeginAddressSpaceWriteback();
-            try
-            {
-                var flushRc = SyncMappedOwnedPage(linuxFile, mapping, request, record);
-                if (flushRc < 0)
-                    return flushRc;
-            }
-            finally
-            {
-                GlobalAddressSpaceCacheManager.EndAddressSpaceWriteback();
-            }
-
-            CompleteCachedPageSync(linuxFile, mapping, request.PageIndex, record);
-            return 0;
-        }
-
-        unsafe
-        {
-            ReadOnlySpan<byte> pageBuffer = new((void*)pagePtr, LinuxConstants.PageSize);
-            var rc = AopsWritePage(linuxFile, new PageIoRequest(request.PageIndex, request.FileOffset, request.Length),
-                pageBuffer, true);
-            if (rc < 0)
-                return rc;
-        }
-
-        CompleteCachedPageSync(linuxFile, mapping, request.PageIndex, null);
-        return 0;
-    }
-
-    internal virtual int SyncCachedPages(LinuxFile? linuxFile, AddressSpace mapping,
-        WritePagesRequest request)
-    {
-        if (!request.Sync)
-            return 0;
-        if (!UsesInodeOwnedMappingPages)
-            return 0;
-
-        var pageStates = mapping.SnapshotPageStates()
-            .Where(state => state.Dirty && state.PageIndex >= request.StartPageIndex &&
-                            state.PageIndex <= request.EndPageIndex)
-            .OrderBy(state => state.PageIndex)
-            .ToList();
-
-        foreach (var state in pageStates)
-        {
-            var syncRequest = CreatePageSyncRequest(state.PageIndex);
-            var rc = SyncCachedPage(linuxFile, mapping, syncRequest);
-            if (rc < 0)
-                return rc;
-        }
-
-        return 0;
-    }
-
-    private void ReleaseOwnedMappingPage(uint pageIndex, InodePageRecord record)
-    {
-        lock (_mappingPageLock)
-        {
-            if (_mappingPages.TryGetValue(pageIndex, out var existing) && ReferenceEquals(existing, record))
-                _mappingPages.Remove(pageIndex);
-        }
-
-        OnOwnedMappingPageReleased(pageIndex, record);
-        record.ReleaseOwnership();
-    }
-
-    internal bool TryGetOwnedMappingPageRecord(uint pageIndex, out InodePageRecord record)
-    {
-        lock (_mappingPageLock)
-        {
-            return _mappingPages.TryGetValue(pageIndex, out record!);
-        }
-    }
-
-    private bool TryRegisterOwnedMappingPage(uint pageIndex, InodePageRecord record)
-    {
-        lock (_mappingPageLock)
-        {
-            if (_mappingPages.ContainsKey(pageIndex))
-                return false;
-
-            _mappingPages.Add(pageIndex, record);
-            return true;
-        }
-    }
-
-    protected virtual bool TryPopulateOwnedMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
-        int prefillLength, Span<byte> pageBuffer)
-    {
-        pageBuffer.Clear();
-        if (prefillLength <= 0 || MappingKind != AddressSpaceKind.File)
-            return true;
-
-        var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, fileOffset, prefillLength), pageBuffer);
-        return rc >= 0;
-    }
-
-    private InodePageRecord CreateAllocatedMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
-        int prefillLength)
-    {
-        if (!ExternalPageManager.TryAllocateExternalPageStrict(out var ptr, AllocationClass.PageCache))
-            return null!;
-
-        var hostPage = HostPageManager.GetOrCreate(ptr, HostPageKind.PageCache);
-        try
-        {
-            unsafe
-            {
-                var target = new Span<byte>((void*)ptr, LinuxConstants.PageSize);
-                if (!TryPopulateOwnedMappingPage(linuxFile, pageIndex, fileOffset, prefillLength, target))
-                {
-                    ExternalPageManager.ReleasePtr(ptr);
-                    return null!;
-                }
-            }
-
-            return new InodePageRecord
-            {
-                PageIndex = pageIndex,
-                HostPage = hostPage,
-                BackingKind = FilePageBackingKind.AllocatedPageCache
-            };
-        }
-        catch
-        {
-            ExternalPageManager.ReleasePtr(ptr);
-            throw;
-        }
-    }
-
-    private InodePageRecord? TryCreateHostMappedMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
-        bool writable)
-    {
-        if (!TryAcquireMappedPageHandle(linuxFile, pageIndex, fileOffset, writable, out var pageHandle) ||
-            pageHandle == null)
-            return null;
-
-        if (pageHandle.Pointer == IntPtr.Zero)
-        {
-            pageHandle.Dispose();
-            return null;
-        }
-
-        var hostPage = HostPageManager.GetOrCreate(pageHandle.Pointer, HostPageKind.PageCache);
-        ExternalPageManager.AddRefPtr(pageHandle.Pointer, pageHandle);
-        return new InodePageRecord
-        {
-            PageIndex = pageIndex,
-            HostPage = hostPage,
-            BackingKind = FilePageBackingKind.HostMappedWindow,
-            ExternalOwner = pageHandle
-        };
-    }
-
-    private InodePageRecord? CreateZeroSharedMappingPage(uint pageIndex)
-    {
-        var zeroPtr = ZeroPageProvider.GetPointer();
-        if (zeroPtr == IntPtr.Zero)
-            return null;
-
-        return new InodePageRecord
-        {
-            PageIndex = pageIndex,
-            HostPage = HostPageManager.GetOrCreate(zeroPtr, HostPageKind.Zero),
-            BackingKind = FilePageBackingKind.ZeroSharedPage
-        };
-    }
-
-    internal IntPtr AcquireOwnedMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
-        PageCacheAccessMode accessMode, int prefillLength, bool allowHostMapped = true)
-    {
-        var mapping = EnsureOwnedMapping();
-        if (mapping == null)
-            return IntPtr.Zero;
-
-        var pagePtr = mapping.GetPage(pageIndex);
-        if (pagePtr != IntPtr.Zero)
-            return pagePtr;
-
-        if (TryGetOwnedMappingPageRecord(pageIndex, out var resident))
-        {
-            var installed = mapping.InstallHostPageIfAbsent(pageIndex, resident.HostPage,
-                _ => ReleaseOwnedMappingPage(pageIndex, resident), out _);
-            return installed;
-        }
-
-        var writable = accessMode == PageCacheAccessMode.Write;
-        var record = mapping.Kind == AddressSpaceKind.Zero
-            ? CreateZeroSharedMappingPage(pageIndex)
-            : null;
-        if (record == null && allowHostMapped && mapping.Kind == AddressSpaceKind.File &&
-            PreferHostMappedMappingPage(accessMode))
-            record = TryCreateHostMappedMappingPage(linuxFile, pageIndex, fileOffset, writable);
-        record ??= CreateAllocatedMappingPage(linuxFile, pageIndex, fileOffset, prefillLength);
-        if (record == null)
-            return IntPtr.Zero;
-
-        if (!TryRegisterOwnedMappingPage(pageIndex, record))
-        {
-            record.ReleaseOwnership();
-            if (!TryGetOwnedMappingPageRecord(pageIndex, out resident))
-                return mapping.PeekPage(pageIndex);
-
-            return mapping.InstallHostPageIfAbsent(pageIndex, resident.HostPage,
-                _ => ReleaseOwnedMappingPage(pageIndex, resident), out _);
-        }
-
-        var finalPtr = mapping.InstallHostPageIfAbsent(pageIndex, record.HostPage,
-            _ => ReleaseOwnedMappingPage(pageIndex, record), out var inserted);
-        if (!inserted && finalPtr != record.Ptr)
-        {
-            lock (_mappingPageLock)
-            {
-                if (_mappingPages.TryGetValue(pageIndex, out var existing) && ReferenceEquals(existing, record))
-                    _mappingPages.Remove(pageIndex);
-            }
-
-            record.ReleaseOwnership();
-        }
-
-        return finalPtr;
-    }
-
-    internal virtual int SyncMappedOwnedPage(LinuxFile? linuxFile, AddressSpace mapping,
-        PageSyncRequest request, InodePageRecord record)
-    {
-        _ = mapping;
-        _ = record;
-        return TryFlushMappedPage(linuxFile, request.PageIndex) ? 0 : -(int)Errno.EOPNOTSUPP;
-    }
-
-    internal virtual void CompleteCachedPageSync(LinuxFile? linuxFile, AddressSpace mapping, uint pageIndex,
-        InodePageRecord? record)
-    {
-        _ = linuxFile;
-        _ = record;
-        mapping.ClearDirty(pageIndex);
-    }
-
-    private bool TryCreatePageSyncRequest(PageIoRequest request, out PageSyncRequest syncRequest)
-    {
-        if (!UsesInodeOwnedMappingPages || request.PageIndex < 0 || request.PageIndex > uint.MaxValue)
-        {
-            syncRequest = default;
-            return false;
-        }
-
-        syncRequest = new PageSyncRequest((uint)request.PageIndex, request.FileOffset, request.Length);
-        return true;
-    }
-
-    private PageSyncRequest CreatePageSyncRequest(uint pageIndex)
-    {
-        var fileOffset = (long)pageIndex * LinuxConstants.PageSize;
-        var remaining = Math.Max(0, (long)Size - fileOffset);
-        var length = (int)Math.Min(LinuxConstants.PageSize, remaining);
-        return new PageSyncRequest(pageIndex, fileOffset, length);
     }
 
     public virtual int UpdateTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
@@ -1329,8 +974,6 @@ public abstract class Inode : IAddressSpaceOperations
 
     protected virtual void OnEvictCache()
     {
-        // Release page-cache resources and remove inode from in-core tracking.
-        ReleaseOwnedMappingOwnerRef();
         SuperBlock?.RemoveInodeFromTracking(this);
     }
 
@@ -1642,218 +1285,14 @@ public abstract class Inode : IAddressSpaceOperations
         if (length == 0)
             return ReadableSegmentEnumerator.Empty;
 
+        if (this is not MappingBackedInode mappingBacked)
+            return ReadableSegmentEnumerator.Failed;
+
         var fileSize = (long)Size;
         if (offset > fileSize || length > fileSize - offset)
             return ReadableSegmentEnumerator.Failed;
 
-        return new ReadableSegmentEnumerator(this, linuxFile, Mapping, offset, length, fileSize);
-    }
-
-    protected int ReadWithPageCache(
-        LinuxFile? linuxFile,
-        Span<byte> buffer,
-        long offset,
-        ReadBackendDelegate backendRead)
-    {
-        if (buffer.Length == 0) return 0;
-        var pageCache = Mapping;
-        if (pageCache == null) return backendRead(linuxFile, buffer, offset);
-        if (offset < 0) return -(int)Errno.EINVAL;
-
-        var total = 0;
-        var cursor = offset;
-        var fileSize = (long)Size;
-        while (total < buffer.Length)
-        {
-            var fileRemaining = fileSize - cursor;
-            if (fileRemaining <= 0) break;
-
-            var pageIndex = (uint)(cursor / LinuxConstants.PageSize);
-            var pageOffset = (int)(cursor & LinuxConstants.PageOffsetMask);
-            var toCopy = (int)Math.Min(Math.Min(buffer.Length - total, LinuxConstants.PageSize - pageOffset),
-                fileRemaining);
-            if (toCopy <= 0) break;
-
-            var (pagePtr, tempFallback) = LoadPageIntoCacheWithFallback(pageCache, linuxFile, pageIndex, fileSize);
-            if (pagePtr == IntPtr.Zero && tempFallback == null)
-                return total > 0 ? total : -(int)Errno.EIO;
-
-            if (tempFallback != null)
-                // OOM fallback: serve directly from temp buffer without caching.
-                tempFallback.AsSpan(pageOffset, toCopy).CopyTo(buffer[total..]);
-            else
-                unsafe
-                {
-                    var src = (byte*)pagePtr + pageOffset;
-                    fixed (byte* dst = &buffer[total])
-                    {
-                        Buffer.MemoryCopy(src, dst, toCopy, toCopy);
-                    }
-                }
-
-            total += toCopy;
-            cursor += toCopy;
-        }
-
-        return total;
-    }
-
-    protected int WriteWithPageCache(
-        LinuxFile? linuxFile,
-        ReadOnlySpan<byte> buffer,
-        long offset,
-        WriteBackendDelegate backendWrite)
-    {
-        if (buffer.Length == 0) return 0;
-        // Buffered writes operate on the inode's AddressSpace; external mapped-page hooks are mmap-only.
-        var pageCache = EnsureOwnedMapping() ?? Mapping;
-        if (pageCache == null) return backendWrite(linuxFile, buffer, offset);
-        if (linuxFile == null) return backendWrite(linuxFile, buffer, offset);
-        if (offset < 0) return -(int)Errno.EINVAL;
-
-        var consumed = 0;
-        var cursor = offset;
-        while (consumed < buffer.Length)
-        {
-            var pageIndex = (uint)(cursor / LinuxConstants.PageSize);
-            var pageOffset = (int)(cursor & LinuxConstants.PageOffsetMask);
-            var chunk = Math.Min(buffer.Length - consumed, LinuxConstants.PageSize - pageOffset);
-
-            var pagePtr = EnsurePageInCacheForWrite(pageCache, linuxFile, pageIndex, pageOffset, chunk);
-            if (pagePtr == IntPtr.Zero) return consumed > 0 ? consumed : -(int)Errno.ENOMEM;
-
-            unsafe
-            {
-                fixed (byte* src = &buffer[consumed])
-                {
-                    Buffer.MemoryCopy(src, (byte*)pagePtr + pageOffset, chunk, chunk);
-                }
-            }
-
-            var dirtyRc = SetPageDirty(pageIndex);
-            if (dirtyRc < 0) return consumed > 0 ? consumed : dirtyRc;
-            pageCache.MarkDirty(pageIndex);
-
-            var writeRc = WritePage(linuxFile, new PageIoRequest(pageIndex, cursor, chunk),
-                buffer.Slice(consumed, chunk), false);
-            if (writeRc < 0) return consumed > 0 ? consumed : writeRc;
-
-            consumed += chunk;
-            cursor += chunk;
-        }
-
-        var end = offset + consumed;
-        if (end > (long)Size) Size = (ulong)end;
-        MTime = DateTime.Now;
-        CTime = MTime;
-        return consumed;
-    }
-
-
-    /// <summary>
-    ///     Loads <paramref name="pageIndex" /> into the page cache if not already present.
-    ///     Returns <c>(ptr, null)</c> on a cache hit or after a successful populate,
-    ///     <c>(Zero, tempPage)</c> when the page was read but could not be cached (OOM or no cache),
-    ///     or <c>(Zero, null)</c> on a hard read error or missing <paramref name="linuxFile" />.
-    /// </summary>
-    internal (IntPtr PagePtr, byte[]? TempFallback) LoadPageIntoCacheWithFallback(
-        AddressSpace? pageCache, LinuxFile? linuxFile, uint pageIndex, long fileSize)
-    {
-        pageCache ??= EnsureOwnedMapping();
-        if (pageCache != null)
-        {
-            var pagePtr = pageCache.GetPage(pageIndex);
-            if (pagePtr != IntPtr.Zero) return (pagePtr, null);
-        }
-
-        if (linuxFile == null) return (IntPtr.Zero, null);
-
-        var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
-        var pageReadLen = (int)Math.Min(LinuxConstants.PageSize, Math.Max(0, fileSize - pageFileOffset));
-
-        if (pageCache?.Kind == AddressSpaceKind.File)
-        {
-            var ownedPage = AcquireOwnedMappingPage(linuxFile, pageIndex, pageFileOffset, PageCacheAccessMode.Read,
-                pageReadLen);
-            if (ownedPage != IntPtr.Zero)
-                return (ownedPage, null);
-        }
-
-        var tempPage = new byte[LinuxConstants.PageSize];
-        tempPage.AsSpan().Clear();
-        if (pageReadLen > 0)
-        {
-            var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
-            if (rc < 0) return (IntPtr.Zero, null);
-        }
-
-        if (pageCache == null)
-            return (IntPtr.Zero, tempPage); // No cache: return temp buffer directly.
-
-        if (pageCache.Kind is AddressSpaceKind.File or AddressSpaceKind.Shmem or AddressSpaceKind.Zero)
-            return (IntPtr.Zero, tempPage);
-
-        var populatedPtr = pageCache.GetOrCreatePage(pageIndex, p =>
-        {
-            unsafe
-            {
-                var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
-                dst.Clear();
-                if (pageReadLen > 0) tempPage.AsSpan(0, pageReadLen).CopyTo(dst);
-            }
-
-            return true;
-        }, out _, true, AllocationClass.PageCache);
-
-        return populatedPtr != IntPtr.Zero ? (populatedPtr, null) : (IntPtr.Zero, tempPage);
-    }
-
-    /// <summary>
-    ///     Ensures the page at <paramref name="pageIndex" /> is present in the page cache and ready
-    ///     for a partial or full write. Performs a read-modify-write pre-fill when needed.
-    ///     Returns <see cref="IntPtr.Zero" /> on OOM or backend read failure.
-    /// </summary>
-    private IntPtr EnsurePageInCacheForWrite(
-        AddressSpace pageCache, LinuxFile linuxFile, uint pageIndex, int pageOffset, int chunk)
-    {
-        var pagePtr = pageCache.GetPage(pageIndex);
-        if (pagePtr != IntPtr.Zero) return pagePtr;
-
-        var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
-        var pageReadLen = 0;
-        byte[]? tempPage = null;
-
-        var fullPageWrite = pageOffset == 0 && chunk == LinuxConstants.PageSize;
-        if (!fullPageWrite && pageFileOffset < (long)Size)
-        {
-            tempPage = new byte[LinuxConstants.PageSize];
-            tempPage.AsSpan().Clear();
-            pageReadLen = (int)Math.Min(LinuxConstants.PageSize, (long)Size - pageFileOffset);
-            var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
-            if (rc < 0) return IntPtr.Zero;
-        }
-
-        if (pageCache.Kind is AddressSpaceKind.File or AddressSpaceKind.Shmem or AddressSpaceKind.Zero)
-        {
-            var writeEndOffset = pageFileOffset + pageOffset + chunk;
-            var allowHostMapped = writeEndOffset <= (long)Size;
-            return AcquireOwnedMappingPage(linuxFile, pageIndex, pageFileOffset, PageCacheAccessMode.Write, pageReadLen,
-                allowHostMapped);
-        }
-
-        var captured = tempPage;
-        var capturedReadLen = pageReadLen;
-        return pageCache.GetOrCreatePage(pageIndex, p =>
-        {
-            unsafe
-            {
-                var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
-                dst.Clear();
-                if (capturedReadLen > 0) captured!.AsSpan(0, capturedReadLen).CopyTo(dst);
-            }
-
-            return true;
-        }, out _, true, AllocationClass.PageCache);
+        return new ReadableSegmentEnumerator(mappingBacked, linuxFile, Mapping, offset, length, fileSize);
     }
 
     protected virtual int AopsReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
@@ -2035,6 +1474,574 @@ public abstract class Inode : IAddressSpaceOperations
 #endif
 }
 
+public abstract class MappingBackedInode : Inode
+{
+    private readonly Lock _mappingLock = new();
+    private readonly Lock _mappingPageLock = new();
+    private readonly Dictionary<uint, InodePageRecord> _mappingPages = [];
+
+    protected virtual AddressSpaceKind MappingKind => AddressSpaceKind.File;
+
+    protected virtual GlobalAddressSpaceCacheManager.AddressSpaceCacheClass? MappingCacheClass => MappingKind switch
+    {
+        AddressSpaceKind.File => GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.File,
+        AddressSpaceKind.Shmem => GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem,
+        _ => null
+    };
+
+    public override int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer,
+        bool sync)
+    {
+        if (sync && Mapping is { } mapping &&
+            TryCreatePageSyncRequest(request, out var syncRequest) &&
+            mapping.IsDirty(syncRequest.PageIndex))
+            return SyncCachedPage(linuxFile, mapping, syncRequest);
+
+        return base.WritePage(linuxFile, request, pageBuffer, sync);
+    }
+
+    public override int WritePages(LinuxFile? linuxFile, WritePagesRequest request)
+    {
+        if (request.Sync && Mapping is { } mapping)
+            return SyncCachedPages(linuxFile, mapping, request);
+
+        return base.WritePages(linuxFile, request);
+    }
+
+    public override int InvalidateFolio(long pageIndex)
+    {
+        Mapping?.RemovePagesInRange((uint)pageIndex, (uint)pageIndex + 1);
+        return 0;
+    }
+
+    public override int ReleaseFolio(long pageIndex)
+    {
+        Mapping?.RemovePagesInRange((uint)pageIndex, (uint)pageIndex + 1, static page => !page.Dirty);
+        return 0;
+    }
+
+    internal virtual bool PreferHostMappedMappingPage(PageCacheAccessMode accessMode)
+    {
+        return accessMode == PageCacheAccessMode.Read;
+    }
+
+    internal AddressSpace AcquireMappingRef()
+    {
+        lock (_mappingLock)
+        {
+            var mapping = Mapping ?? CreateMapping();
+            mapping.AddRef();
+            return mapping;
+        }
+    }
+
+    protected virtual AddressSpace CreateMapping()
+    {
+        var mapping = new AddressSpace(MappingKind);
+        if (MappingCacheClass is { } cacheClass)
+            GlobalAddressSpaceCacheManager.TrackAddressSpace(mapping, cacheClass);
+
+        Mapping = mapping;
+        return mapping;
+    }
+
+    protected AddressSpace EnsureMapping()
+    {
+        if (Mapping != null)
+            return Mapping;
+
+        var mapping = AcquireMappingRef();
+        mapping.Release();
+        return mapping;
+    }
+
+    private void ReleaseMappingOwnerRef()
+    {
+        AddressSpace? mapping;
+        lock (_mappingLock)
+        {
+            mapping = Mapping;
+            Mapping = null;
+        }
+
+        mapping?.Release();
+    }
+
+    internal virtual void OnMappingPageReleased(uint pageIndex, InodePageRecord record)
+    {
+    }
+
+    internal virtual int SyncCachedPage(LinuxFile? linuxFile, AddressSpace mapping,
+        PageSyncRequest request)
+    {
+        if (request.Length < 0)
+            return -(int)Errno.EINVAL;
+        if (!mapping.IsDirty(request.PageIndex))
+            return 0;
+
+        var pagePtr = mapping.PeekPage(request.PageIndex);
+        if (pagePtr == IntPtr.Zero || request.Length == 0)
+        {
+            CompleteCachedPageSync(linuxFile, mapping, request.PageIndex, null);
+            return 0;
+        }
+
+        if (TryGetMappingPageRecord(request.PageIndex, out var record) &&
+            record.BackingKind == FilePageBackingKind.HostMappedWindow)
+        {
+            GlobalAddressSpaceCacheManager.BeginAddressSpaceWriteback();
+            try
+            {
+                var flushRc = SyncMappedPage(linuxFile, mapping, request, record);
+                if (flushRc < 0)
+                    return flushRc;
+            }
+            finally
+            {
+                GlobalAddressSpaceCacheManager.EndAddressSpaceWriteback();
+            }
+
+            CompleteCachedPageSync(linuxFile, mapping, request.PageIndex, record);
+            return 0;
+        }
+
+        unsafe
+        {
+            ReadOnlySpan<byte> pageBuffer = new((void*)pagePtr, LinuxConstants.PageSize);
+            var rc = AopsWritePage(linuxFile, new PageIoRequest(request.PageIndex, request.FileOffset, request.Length),
+                pageBuffer, true);
+            if (rc < 0)
+                return rc;
+        }
+
+        CompleteCachedPageSync(linuxFile, mapping, request.PageIndex, null);
+        return 0;
+    }
+
+    internal virtual int SyncCachedPages(LinuxFile? linuxFile, AddressSpace mapping,
+        WritePagesRequest request)
+    {
+        if (!request.Sync)
+            return 0;
+
+        var pageStates = mapping.SnapshotPageStates()
+            .Where(state => state.Dirty && state.PageIndex >= request.StartPageIndex &&
+                            state.PageIndex <= request.EndPageIndex)
+            .OrderBy(state => state.PageIndex)
+            .ToList();
+
+        foreach (var state in pageStates)
+        {
+            var syncRequest = CreatePageSyncRequest(state.PageIndex);
+            var rc = SyncCachedPage(linuxFile, mapping, syncRequest);
+            if (rc < 0)
+                return rc;
+        }
+
+        return 0;
+    }
+
+    private void ReleaseMappingPage(uint pageIndex, InodePageRecord record)
+    {
+        lock (_mappingPageLock)
+        {
+            if (_mappingPages.TryGetValue(pageIndex, out var existing) && ReferenceEquals(existing, record))
+                _mappingPages.Remove(pageIndex);
+        }
+
+        OnMappingPageReleased(pageIndex, record);
+        record.ReleaseOwnership();
+    }
+
+    internal bool TryGetMappingPageRecord(uint pageIndex, out InodePageRecord record)
+    {
+        lock (_mappingPageLock)
+        {
+            return _mappingPages.TryGetValue(pageIndex, out record!);
+        }
+    }
+
+    private bool TryRegisterMappingPage(uint pageIndex, InodePageRecord record)
+    {
+        lock (_mappingPageLock)
+        {
+            if (_mappingPages.ContainsKey(pageIndex))
+                return false;
+
+            _mappingPages.Add(pageIndex, record);
+            return true;
+        }
+    }
+
+    protected virtual bool TryPopulateMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
+        int prefillLength, Span<byte> pageBuffer)
+    {
+        pageBuffer.Clear();
+        if (prefillLength <= 0 || MappingKind != AddressSpaceKind.File)
+            return true;
+
+        var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, fileOffset, prefillLength), pageBuffer);
+        return rc >= 0;
+    }
+
+    private InodePageRecord CreateAllocatedMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
+        int prefillLength)
+    {
+        if (!ExternalPageManager.TryAllocateExternalPageStrict(out var ptr, AllocationClass.PageCache))
+            return null!;
+
+        var hostPage = HostPageManager.GetOrCreate(ptr, HostPageKind.PageCache);
+        try
+        {
+            unsafe
+            {
+                var target = new Span<byte>((void*)ptr, LinuxConstants.PageSize);
+                if (!TryPopulateMappingPage(linuxFile, pageIndex, fileOffset, prefillLength, target))
+                {
+                    ExternalPageManager.ReleasePtr(ptr);
+                    return null!;
+                }
+            }
+
+            return new InodePageRecord
+            {
+                PageIndex = pageIndex,
+                HostPage = hostPage,
+                BackingKind = FilePageBackingKind.AllocatedPageCache
+            };
+        }
+        catch
+        {
+            ExternalPageManager.ReleasePtr(ptr);
+            throw;
+        }
+    }
+
+    private InodePageRecord? TryCreateHostMappedMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
+        bool writable)
+    {
+        if (!TryAcquireMappedPageHandle(linuxFile, pageIndex, fileOffset, writable, out var pageHandle) ||
+            pageHandle == null)
+            return null;
+
+        if (pageHandle.Pointer == IntPtr.Zero)
+        {
+            pageHandle.Dispose();
+            return null;
+        }
+
+        var hostPage = HostPageManager.GetOrCreate(pageHandle.Pointer, HostPageKind.PageCache);
+        ExternalPageManager.AddRefPtr(pageHandle.Pointer, pageHandle);
+        return new InodePageRecord
+        {
+            PageIndex = pageIndex,
+            HostPage = hostPage,
+            BackingKind = FilePageBackingKind.HostMappedWindow,
+            ExternalOwner = pageHandle
+        };
+    }
+
+    private InodePageRecord? CreateZeroSharedMappingPage(uint pageIndex)
+    {
+        var zeroPtr = ZeroPageProvider.GetPointer();
+        if (zeroPtr == IntPtr.Zero)
+            return null;
+
+        return new InodePageRecord
+        {
+            PageIndex = pageIndex,
+            HostPage = HostPageManager.GetOrCreate(zeroPtr, HostPageKind.Zero),
+            BackingKind = FilePageBackingKind.ZeroSharedPage
+        };
+    }
+
+    internal IntPtr AcquireMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
+        PageCacheAccessMode accessMode, int prefillLength, bool allowHostMapped = true)
+    {
+        var mapping = EnsureMapping();
+        var pagePtr = mapping.GetPage(pageIndex);
+        if (pagePtr != IntPtr.Zero)
+            return pagePtr;
+
+        if (TryGetMappingPageRecord(pageIndex, out var resident))
+        {
+            var installed = mapping.InstallHostPageIfAbsent(pageIndex, resident.HostPage,
+                _ => ReleaseMappingPage(pageIndex, resident), out _);
+            return installed;
+        }
+
+        var writable = accessMode == PageCacheAccessMode.Write;
+        var record = mapping.Kind == AddressSpaceKind.Zero
+            ? CreateZeroSharedMappingPage(pageIndex)
+            : null;
+        if (record == null && allowHostMapped && mapping.Kind == AddressSpaceKind.File &&
+            PreferHostMappedMappingPage(accessMode))
+            record = TryCreateHostMappedMappingPage(linuxFile, pageIndex, fileOffset, writable);
+        record ??= CreateAllocatedMappingPage(linuxFile, pageIndex, fileOffset, prefillLength);
+        if (record == null)
+            return IntPtr.Zero;
+
+        if (!TryRegisterMappingPage(pageIndex, record))
+        {
+            record.ReleaseOwnership();
+            if (!TryGetMappingPageRecord(pageIndex, out resident))
+                return mapping.PeekPage(pageIndex);
+
+            return mapping.InstallHostPageIfAbsent(pageIndex, resident.HostPage,
+                _ => ReleaseMappingPage(pageIndex, resident), out _);
+        }
+
+        var finalPtr = mapping.InstallHostPageIfAbsent(pageIndex, record.HostPage,
+            _ => ReleaseMappingPage(pageIndex, record), out var inserted);
+        if (!inserted && finalPtr != record.Ptr)
+        {
+            lock (_mappingPageLock)
+            {
+                if (_mappingPages.TryGetValue(pageIndex, out var existing) && ReferenceEquals(existing, record))
+                    _mappingPages.Remove(pageIndex);
+            }
+
+            record.ReleaseOwnership();
+        }
+
+        return finalPtr;
+    }
+
+    internal virtual int SyncMappedPage(LinuxFile? linuxFile, AddressSpace mapping,
+        PageSyncRequest request, InodePageRecord record)
+    {
+        _ = mapping;
+        _ = record;
+        return TryFlushMappedPage(linuxFile, request.PageIndex) ? 0 : -(int)Errno.EOPNOTSUPP;
+    }
+
+    internal virtual void CompleteCachedPageSync(LinuxFile? linuxFile, AddressSpace mapping, uint pageIndex,
+        InodePageRecord? record)
+    {
+        _ = linuxFile;
+        _ = record;
+        mapping.ClearDirty(pageIndex);
+    }
+
+    protected int ReadWithPageCache(
+        LinuxFile? linuxFile,
+        Span<byte> buffer,
+        long offset,
+        ReadBackendDelegate backendRead)
+    {
+        if (buffer.Length == 0) return 0;
+        var pageCache = Mapping;
+        if (pageCache == null) return backendRead(linuxFile, buffer, offset);
+        if (offset < 0) return -(int)Errno.EINVAL;
+
+        var total = 0;
+        var cursor = offset;
+        var fileSize = (long)Size;
+        while (total < buffer.Length)
+        {
+            var fileRemaining = fileSize - cursor;
+            if (fileRemaining <= 0) break;
+
+            var pageIndex = (uint)(cursor / LinuxConstants.PageSize);
+            var pageOffset = (int)(cursor & LinuxConstants.PageOffsetMask);
+            var toCopy = (int)Math.Min(Math.Min(buffer.Length - total, LinuxConstants.PageSize - pageOffset),
+                fileRemaining);
+            if (toCopy <= 0) break;
+
+            var (pagePtr, tempFallback) = LoadPageIntoCacheWithFallback(pageCache, linuxFile, pageIndex, fileSize);
+            if (pagePtr == IntPtr.Zero && tempFallback == null)
+                return total > 0 ? total : -(int)Errno.EIO;
+
+            if (tempFallback != null)
+                tempFallback.AsSpan(pageOffset, toCopy).CopyTo(buffer[total..]);
+            else
+                unsafe
+                {
+                    var src = (byte*)pagePtr + pageOffset;
+                    fixed (byte* dst = &buffer[total])
+                    {
+                        Buffer.MemoryCopy(src, dst, toCopy, toCopy);
+                    }
+                }
+
+            total += toCopy;
+            cursor += toCopy;
+        }
+
+        return total;
+    }
+
+    protected int WriteWithPageCache(
+        LinuxFile? linuxFile,
+        ReadOnlySpan<byte> buffer,
+        long offset,
+        WriteBackendDelegate backendWrite)
+    {
+        if (buffer.Length == 0) return 0;
+        var pageCache = EnsureMapping();
+        if (linuxFile == null) return backendWrite(linuxFile, buffer, offset);
+        if (offset < 0) return -(int)Errno.EINVAL;
+
+        var consumed = 0;
+        var cursor = offset;
+        while (consumed < buffer.Length)
+        {
+            var pageIndex = (uint)(cursor / LinuxConstants.PageSize);
+            var pageOffset = (int)(cursor & LinuxConstants.PageOffsetMask);
+            var chunk = Math.Min(buffer.Length - consumed, LinuxConstants.PageSize - pageOffset);
+
+            var pagePtr = EnsurePageInCacheForWrite(pageCache, linuxFile, pageIndex, pageOffset, chunk);
+            if (pagePtr == IntPtr.Zero) return consumed > 0 ? consumed : -(int)Errno.ENOMEM;
+
+            unsafe
+            {
+                fixed (byte* src = &buffer[consumed])
+                {
+                    Buffer.MemoryCopy(src, (byte*)pagePtr + pageOffset, chunk, chunk);
+                }
+            }
+
+            var dirtyRc = SetPageDirty(pageIndex);
+            if (dirtyRc < 0) return consumed > 0 ? consumed : dirtyRc;
+            pageCache.MarkDirty(pageIndex);
+
+            var writeRc = WritePage(linuxFile, new PageIoRequest(pageIndex, cursor, chunk),
+                buffer.Slice(consumed, chunk), false);
+            if (writeRc < 0) return consumed > 0 ? consumed : writeRc;
+
+            consumed += chunk;
+            cursor += chunk;
+        }
+
+        var end = offset + consumed;
+        if (end > (long)Size) Size = (ulong)end;
+        MTime = DateTime.Now;
+        CTime = MTime;
+        return consumed;
+    }
+
+    internal (IntPtr PagePtr, byte[]? TempFallback) LoadPageIntoCacheWithFallback(
+        AddressSpace? pageCache, LinuxFile? linuxFile, uint pageIndex, long fileSize)
+    {
+        pageCache ??= EnsureMapping();
+        if (pageCache != null)
+        {
+            var pagePtr = pageCache.GetPage(pageIndex);
+            if (pagePtr != IntPtr.Zero) return (pagePtr, null);
+        }
+
+        if (linuxFile == null) return (IntPtr.Zero, null);
+
+        var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
+        var pageReadLen = (int)Math.Min(LinuxConstants.PageSize, Math.Max(0, fileSize - pageFileOffset));
+
+        if (pageCache?.Kind == AddressSpaceKind.File)
+        {
+            var mappedPage = AcquireMappingPage(linuxFile, pageIndex, pageFileOffset, PageCacheAccessMode.Read,
+                pageReadLen);
+            if (mappedPage != IntPtr.Zero)
+                return (mappedPage, null);
+        }
+
+        var tempPage = new byte[LinuxConstants.PageSize];
+        tempPage.AsSpan().Clear();
+        if (pageReadLen > 0)
+        {
+            var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
+            if (rc < 0) return (IntPtr.Zero, null);
+        }
+
+        if (pageCache == null)
+            return (IntPtr.Zero, tempPage);
+
+        if (pageCache.Kind is AddressSpaceKind.File or AddressSpaceKind.Shmem or AddressSpaceKind.Zero)
+            return (IntPtr.Zero, tempPage);
+
+        var populatedPtr = pageCache.GetOrCreatePage(pageIndex, p =>
+        {
+            unsafe
+            {
+                var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
+                dst.Clear();
+                if (pageReadLen > 0) tempPage.AsSpan(0, pageReadLen).CopyTo(dst);
+            }
+
+            return true;
+        }, out _, true, AllocationClass.PageCache);
+
+        return populatedPtr != IntPtr.Zero ? (populatedPtr, null) : (IntPtr.Zero, tempPage);
+    }
+
+    protected override void OnEvictCache()
+    {
+        ReleaseMappingOwnerRef();
+        base.OnEvictCache();
+    }
+
+    private bool TryCreatePageSyncRequest(PageIoRequest request, out PageSyncRequest syncRequest)
+    {
+        if (request.PageIndex < 0 || request.PageIndex > uint.MaxValue)
+        {
+            syncRequest = default;
+            return false;
+        }
+
+        syncRequest = new PageSyncRequest((uint)request.PageIndex, request.FileOffset, request.Length);
+        return true;
+    }
+
+    private PageSyncRequest CreatePageSyncRequest(uint pageIndex)
+    {
+        var fileOffset = (long)pageIndex * LinuxConstants.PageSize;
+        var remaining = Math.Max(0, (long)Size - fileOffset);
+        var length = (int)Math.Min(LinuxConstants.PageSize, remaining);
+        return new PageSyncRequest(pageIndex, fileOffset, length);
+    }
+
+    private IntPtr EnsurePageInCacheForWrite(
+        AddressSpace pageCache, LinuxFile linuxFile, uint pageIndex, int pageOffset, int chunk)
+    {
+        var pagePtr = pageCache.GetPage(pageIndex);
+        if (pagePtr != IntPtr.Zero) return pagePtr;
+
+        var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
+        var pageReadLen = 0;
+        byte[]? tempPage = null;
+
+        var fullPageWrite = pageOffset == 0 && chunk == LinuxConstants.PageSize;
+        if (!fullPageWrite && pageFileOffset < (long)Size)
+        {
+            tempPage = new byte[LinuxConstants.PageSize];
+            tempPage.AsSpan().Clear();
+            pageReadLen = (int)Math.Min(LinuxConstants.PageSize, (long)Size - pageFileOffset);
+            var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
+            if (rc < 0) return IntPtr.Zero;
+        }
+
+        if (pageCache.Kind is AddressSpaceKind.File or AddressSpaceKind.Shmem or AddressSpaceKind.Zero)
+        {
+            var writeEndOffset = pageFileOffset + pageOffset + chunk;
+            var allowHostMapped = writeEndOffset <= (long)Size;
+            return AcquireMappingPage(linuxFile, pageIndex, pageFileOffset, PageCacheAccessMode.Write, pageReadLen,
+                allowHostMapped);
+        }
+
+        var captured = tempPage;
+        var capturedReadLen = pageReadLen;
+        return pageCache.GetOrCreatePage(pageIndex, p =>
+        {
+            unsafe
+            {
+                var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
+                dst.Clear();
+                if (capturedReadLen > 0) captured!.AsSpan(0, capturedReadLen).CopyTo(dst);
+            }
+
+            return true;
+        }, out _, true, AllocationClass.PageCache);
+    }
+}
+
 public struct DirectoryEntry
 {
     public string Name;
@@ -2090,7 +2097,7 @@ public ref struct ReadableSegmentEnumerator
     internal static ReadableSegmentEnumerator Empty => new() { _remaining = 0, Succeeded = true };
     internal static ReadableSegmentEnumerator Failed => new() { _remaining = 0, Succeeded = false };
 
-    private readonly Inode? _inode;
+    private readonly MappingBackedInode? _inode;
     private readonly LinuxFile? _linuxFile;
     private readonly AddressSpace? _pageCache;
     private readonly long _fileSize;
@@ -2099,7 +2106,7 @@ public ref struct ReadableSegmentEnumerator
     private int _remaining;
 
     internal ReadableSegmentEnumerator(
-        Inode inode, LinuxFile? linuxFile, AddressSpace? pageCache,
+        MappingBackedInode inode, LinuxFile? linuxFile, AddressSpace? pageCache,
         long offset, int length, long fileSize)
     {
         _inode = inode;
