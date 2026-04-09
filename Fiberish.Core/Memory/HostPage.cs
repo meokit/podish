@@ -470,7 +470,8 @@ internal sealed class HostPage
     public int MapCount { get; set; }
     public int PinCount { get; set; }
     public int RefCount { get; set; }
-    public long LastAccessTicks { get; set; } = DateTime.UtcNow.Ticks;
+    // Monotonic timestamp used for recency comparisons in reclaim and stats paths.
+    public long LastAccessTimestamp { get; set; } = MonotonicTime.GetTimestamp();
 
     public void UpgradeKind(HostPageKind preferredKind)
     {

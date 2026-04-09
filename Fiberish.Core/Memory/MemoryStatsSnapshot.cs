@@ -37,7 +37,8 @@ public readonly record struct MemoryStatsSnapshot(
     int HostMappedWindowCount,
     int HostMappedGuestPageCount)
 {
-    private static readonly long ActiveThresholdTicks = TimeSpan.FromSeconds(30).Ticks;
+    private static readonly long ActiveThresholdTimestampDelta =
+        MonotonicTime.ToTimestampDelta(TimeSpan.FromSeconds(30));
 
     public static MemoryStatsSnapshot Capture(SyscallManager? sm = null)
     {
@@ -49,8 +50,8 @@ public readonly record struct MemoryStatsSnapshot(
         var allocated = anonymousAllocated + cachedBytes;
         var dirtyBytes = cache.DirtyPages * LinuxConstants.PageSize;
         var reclaimable = cache.CleanPages * LinuxConstants.PageSize;
-        var nowTicks = DateTime.UtcNow.Ticks;
-        var processStats = AggregateProcessMemoryStats(sm, nowTicks);
+        var nowTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+        var processStats = AggregateProcessMemoryStats(sm, nowTimestamp);
         var privateBreakdown = processStats.PrivateBreakdown;
         var anonymousZeroMappedBytes = processStats.AnonymousZeroMappedBytes;
         const long anonymousSharedMaterializedBytes = 0;
@@ -61,7 +62,7 @@ public readonly record struct MemoryStatsSnapshot(
         var committedBytes = processStats.CommittedBytes;
         var sysvShmBytes = EstimateSysVShmBytes(sm);
         var shmemBytes = shmemCacheBytes + sysvShmBytes;
-        var (activeFile, inactiveFile, activeShmem, inactiveShmem) = SplitCacheByAge(cacheStates, nowTicks);
+        var (activeFile, inactiveFile, activeShmem, inactiveShmem) = SplitCacheByAge(cacheStates, nowTimestamp);
         var activeAnon = privateBreakdown.ActiveAnon + privateBreakdown.ActiveFilePrivate;
         var inactiveAnon = privateBreakdown.InactiveAnon + privateBreakdown.InactiveFilePrivate;
         var active = activeFile + activeShmem + activeAnon;
@@ -161,7 +162,7 @@ public readonly record struct MemoryStatsSnapshot(
     }
 
     private static (long ActiveFile, long InactiveFile, long ActiveShmem, long InactiveShmem) SplitCacheByAge(
-        IReadOnlyList<AddressSpacePolicy.AddressSpacePageState> cacheStates, long nowTicks)
+        IReadOnlyList<AddressSpacePolicy.AddressSpacePageState> cacheStates, long nowTimestamp)
     {
         long activeFile = 0;
         long inactiveFile = 0;
@@ -169,7 +170,7 @@ public readonly record struct MemoryStatsSnapshot(
         long inactiveShmem = 0;
         foreach (var state in cacheStates)
         {
-            var active = nowTicks - state.LastAccessTicks <= ActiveThresholdTicks;
+            var active = nowTimestamp - state.LastAccessTimestamp <= ActiveThresholdTimestampDelta;
             if (state.Class == AddressSpacePolicy.AddressSpaceCacheClass.Shmem)
             {
                 if (active) activeShmem += LinuxConstants.PageSize;
@@ -185,7 +186,7 @@ public readonly record struct MemoryStatsSnapshot(
         return (activeFile, inactiveFile, activeShmem, inactiveShmem);
     }
 
-    private static ProcessMemoryStats AggregateProcessMemoryStats(SyscallManager? sm, long nowTicks)
+    private static ProcessMemoryStats AggregateProcessMemoryStats(SyscallManager? sm, long nowTimestamp)
     {
         var processes = ResolveProcesses(sm);
         if (processes.Count == 0) return default;
@@ -219,7 +220,7 @@ public readonly record struct MemoryStatsSnapshot(
                     var key = state.Ptr;
                     if (!seenPtrs.Add(key)) continue;
                     totalAnon += LinuxConstants.PageSize;
-                    if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks)
+                    if (nowTimestamp - state.LastAccessTimestamp <= ActiveThresholdTimestampDelta)
                         activeAnon += LinuxConstants.PageSize;
                     else inactiveAnon += LinuxConstants.PageSize;
                 }
@@ -233,7 +234,7 @@ public readonly record struct MemoryStatsSnapshot(
                 var key = state.Ptr;
                 if (!seenPtrs.Add(key)) continue;
                 totalFilePrivate += LinuxConstants.PageSize;
-                if (nowTicks - state.LastAccessTicks <= ActiveThresholdTicks)
+                if (nowTimestamp - state.LastAccessTimestamp <= ActiveThresholdTimestampDelta)
                     activeFilePrivate += LinuxConstants.PageSize;
                 else
                     inactiveFilePrivate += LinuxConstants.PageSize;

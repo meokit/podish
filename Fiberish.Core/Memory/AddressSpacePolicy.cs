@@ -147,8 +147,15 @@ public static class AddressSpacePolicy
 
     public static long GetTotalCachedPages()
     {
+        return GetTrackedPageCounts().TotalPages;
+    }
+
+    public static AddressSpaceTrackedPageCounts GetTrackedPageCounts()
+    {
         var state = CurrentState;
-        return Interlocked.Read(ref state.TotalTrackedPages);
+        return new AddressSpaceTrackedPageCounts(
+            Interlocked.Read(ref state.TotalTrackedPages),
+            Interlocked.Read(ref state.ShmemTrackedPages));
     }
 
     public static IReadOnlyList<AddressSpacePageState> GetAddressSpacePageStatesSnapshot()
@@ -161,7 +168,7 @@ public static class AddressSpacePolicy
         {
             var cacheStates = cache.SnapshotPageStates();
             foreach (var state in cacheStates)
-                states.Add(new AddressSpacePageState(cacheClass, state.Dirty, state.LastAccessTicks));
+                states.Add(new AddressSpacePageState(cacheClass, state.Dirty, state.LastAccessTimestamp));
         }
 
         return states;
@@ -254,7 +261,7 @@ public static class AddressSpacePolicy
         long targetFreeBytes)
     {
         if (targetFreeBytes <= 0) return 0;
-        var candidates = new List<(AddressSpace Cache, uint PageIndex, long LastAccessTicks)>();
+        var candidates = new List<(AddressSpace Cache, uint PageIndex, long LastAccessTimestamp)>();
         foreach (var (cache, cacheClass) in caches)
         {
             if (cacheClass == AddressSpaceCacheClass.Shmem) continue;
@@ -262,12 +269,12 @@ public static class AddressSpacePolicy
             foreach (var state in states)
             {
                 if (state.Dirty) continue;
-                candidates.Add((cache, state.PageIndex, state.LastAccessTicks));
+                candidates.Add((cache, state.PageIndex, state.LastAccessTimestamp));
             }
         }
 
         if (candidates.Count == 0) return 0;
-        candidates.Sort(static (a, b) => a.LastAccessTicks.CompareTo(b.LastAccessTicks));
+        candidates.Sort(static (a, b) => a.LastAccessTimestamp.CompareTo(b.LastAccessTimestamp));
 
         long freed = 0;
         foreach (var candidate in candidates)
@@ -330,5 +337,8 @@ public static class AddressSpacePolicy
         long ShmemPages,
         long WritebackPages);
 
-    public readonly record struct AddressSpacePageState(AddressSpaceCacheClass Class, bool Dirty, long LastAccessTicks);
+    public readonly record struct AddressSpaceTrackedPageCounts(long TotalPages, long ShmemPages);
+
+    public readonly record struct AddressSpacePageState(AddressSpaceCacheClass Class, bool Dirty,
+        long LastAccessTimestamp);
 }

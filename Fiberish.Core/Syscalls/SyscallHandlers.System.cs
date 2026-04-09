@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using Fiberish.Auth.Cred;
@@ -18,6 +17,7 @@ public partial class SyscallManager
 {
     private const long VirtualCpuHz = 1_000_000_000L; // Assume a fixed 1 GHz virtual CPU.
     private const int UserHz = 100; // Linux i386 userspace clock ticks per second for times().
+    private const int SysInfo32Size = 64;
 
     private const int SupportedMembarrierCommands =
         LinuxConstants.MEMBARRIER_CMD_GLOBAL |
@@ -122,10 +122,14 @@ public partial class SyscallManager
         var t = engine.Owner as FiberTask;
         if (t == null) return -(int)Errno.EPERM;
 
-        var snapshot = MemoryStatsSnapshot.Capture(this);
-        var totalBytes = Math.Max(0, snapshot.MemTotalBytes);
-        var freeBytes = Math.Max(0, snapshot.FreeBytes);
-        var sharedBytes = Math.Max(0, snapshot.ShmemBytes);
+        var trackedPages = AddressSpacePolicy.GetTrackedPageCounts();
+        var totalCachedBytes = Math.Max(0, trackedPages.TotalPages) * LinuxConstants.PageSize;
+        var shmemBytes = Math.Max(0, trackedPages.ShmemPages) * LinuxConstants.PageSize;
+        var sharedBytes = Math.Max(0, shmemBytes + SysVShm.GetResidentBytesSnapshot());
+        var allocatedBytes = Math.Max(0, PageManager.GetAllocatedBytes() + totalCachedBytes);
+        var quotaBytes = PageManager.MemoryQuotaBytes;
+        var totalBytes = Math.Max(0, quotaBytes > 0 ? quotaBytes : Math.Max(allocatedBytes, 256L * 1024 * 1024));
+        var freeBytes = Math.Max(0, totalBytes - allocatedBytes);
         var bufferBytes = 0L; // /proc/meminfo currently reports Buffers: 0
         var totalSwapBytes = 0L;
         var freeSwapBytes = 0L;
@@ -152,42 +156,29 @@ public partial class SyscallManager
         }
 
         var scheduler = t.CommonKernel;
-        var processCount = scheduler?.GetProcessesSnapshot().Count ?? 1;
+        var processCount = scheduler?.ProcessCount ?? 1;
         if (processCount <= 0) processCount = 1;
         if (processCount > short.MaxValue) processCount = short.MaxValue;
 
-        var info = new SysInfo
-        {
-            Uptime = GetSysinfoUptimeSeconds(),
-            Loads = [65536, 65536, 65536],
-            TotalRam = ToSysValue(totalBytes),
-            FreeRam = ToSysValue(freeBytes),
-            SharedRam = ToSysValue(sharedBytes),
-            BufferRam = ToSysValue(bufferBytes),
-            TotalSwap = ToSysValue(totalSwapBytes),
-            FreeSwap = ToSysValue(freeSwapBytes),
-            Procs = (short)processCount,
-            TotalHigh = ToSysValue(totalHighBytes),
-            FreeHigh = ToSysValue(freeHighBytes),
-            MemUnit = memUnit,
-            Padding = new byte[8]
-        };
-
         if (sysinfoAddr != 0)
         {
-            var size = Marshal.SizeOf<SysInfo>();
-            var buffer = new byte[size];
-            var ptr = Marshal.AllocHGlobal(size);
-            try
-            {
-                Marshal.StructureToPtr(info, ptr, false);
-                Marshal.Copy(ptr, buffer, 0, size);
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(ptr);
-            }
-
+            Span<byte> buffer = stackalloc byte[SysInfo32Size];
+            buffer.Clear();
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(0, 4), GetSysinfoUptimeSeconds());
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(4, 4), 65536);
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(8, 4), 65536);
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(12, 4), 65536);
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(16, 4), ToSysValue(totalBytes));
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(20, 4), ToSysValue(freeBytes));
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(24, 4), ToSysValue(sharedBytes));
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(28, 4), ToSysValue(bufferBytes));
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(32, 4), ToSysValue(totalSwapBytes));
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(36, 4), ToSysValue(freeSwapBytes));
+            BinaryPrimitives.WriteInt16LittleEndian(buffer.Slice(40, 2), (short)processCount);
+            BinaryPrimitives.WriteInt16LittleEndian(buffer.Slice(42, 2), 0);
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(44, 4), ToSysValue(totalHighBytes));
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(48, 4), ToSysValue(freeHighBytes));
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(52, 4), memUnit);
             if (!engine.CopyToUser(sysinfoAddr, buffer)) return -(int)Errno.EFAULT;
         }
 

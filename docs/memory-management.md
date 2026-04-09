@@ -158,7 +158,7 @@ Each `VmPage` carries:
 - `Writeback`
 - `MapCount`
 - `PinCount`
-- `LastAccessTicks`
+- `LastAccessTimestamp`
 
 `VmPageSlots` provides storage operations only:
 

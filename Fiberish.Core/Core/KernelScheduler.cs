@@ -60,6 +60,14 @@ public class KernelScheduler
     public FiberTask? CurrentTask { get; internal set; }
     public int InitPid => Volatile.Read(ref _initPid);
     public bool EngineInitReaperEnabled => Volatile.Read(ref _engineInitReaperEnabled) != 0;
+    public int ProcessCount
+    {
+        get
+        {
+            AssertSchedulerThread();
+            return _processes.Count;
+        }
+    }
 
 
     public int OwnerThreadId => Volatile.Read(ref _ownerThreadId);

@@ -43,7 +43,7 @@ internal sealed class VmPageSlots
         {
             if (_pages.TryGetValue(pageIndex, out var entry))
             {
-                entry.HostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+                Touch(entry.HostPage);
                 return entry.Ptr;
             }
 
@@ -91,20 +91,17 @@ internal sealed class VmPageSlots
             {
                 if (ReferenceEquals(existing.HostPage, hostPage))
                 {
-                    existing.HostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+                    Touch(existing.HostPage);
                     return;
                 }
 
                 oldPage = existing;
             }
 
-            hostPage.AddOwnerRef(_ownerRefFactory(pageIndex));
-            _pages[pageIndex] = new VmPage
-            {
-                HostPage = hostPage,
-                OnReleased = onReleased
-            };
-            hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+            var ownerRef = _ownerRefFactory(pageIndex);
+            hostPage.AddOwnerRef(ownerRef);
+            _pages[pageIndex] = CreateVmPage(hostPage, ownerRef, onReleased);
+            Touch(hostPage);
             if (oldPage == null)
                 pageCountDelta = 1;
         }
@@ -127,19 +124,17 @@ internal sealed class VmPageSlots
             {
                 if (ReferenceEquals(existing.HostPage, hostPage))
                 {
-                    existing.HostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+                    Touch(existing.HostPage);
                     return;
                 }
 
                 oldPage = existing;
             }
 
-            hostPage.AddOwnerRef(_ownerRefFactory(pageIndex));
-            _pages[pageIndex] = new VmPage
-            {
-                HostPage = hostPage
-            };
-            hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+            var ownerRef = _ownerRefFactory(pageIndex);
+            hostPage.AddOwnerRef(ownerRef);
+            _pages[pageIndex] = CreateVmPage(hostPage, ownerRef);
+            Touch(hostPage);
             if (oldPage == null)
                 pageCountDelta = 1;
         }
@@ -167,17 +162,14 @@ internal sealed class VmPageSlots
             if (_pages.TryGetValue(pageIndex, out var existing))
             {
                 inserted = false;
-                existing.HostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+                Touch(existing.HostPage);
                 return existing.Ptr;
             }
 
-            hostPage.AddOwnerRef(_ownerRefFactory(pageIndex));
-            _pages[pageIndex] = new VmPage
-            {
-                HostPage = hostPage,
-                OnReleased = onReleased
-            };
-            hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+            var ownerRef = _ownerRefFactory(pageIndex);
+            hostPage.AddOwnerRef(ownerRef);
+            _pages[pageIndex] = CreateVmPage(hostPage, ownerRef, onReleased);
+            Touch(hostPage);
             inserted = true;
             pageCountDelta = 1;
         }
@@ -196,7 +188,7 @@ internal sealed class VmPageSlots
             if (_pages.TryGetValue(pageIndex, out var existing))
             {
                 isNew = false;
-                existing.HostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+                Touch(existing.HostPage);
                 return existing.Ptr;
             }
         }
@@ -264,17 +256,14 @@ internal sealed class VmPageSlots
                 else
                     PageManager.ReleasePtr(ptr);
                 isNew = false;
-                raced.HostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+                Touch(raced.HostPage);
                 return raced.Ptr;
             }
 
-            hostPage.AddOwnerRef(_ownerRefFactory(pageIndex));
-            _pages[pageIndex] = new VmPage
-            {
-                HostPage = hostPage,
-                Handle = pageHandle
-            };
-            hostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+            var ownerRef = _ownerRefFactory(pageIndex);
+            hostPage.AddOwnerRef(ownerRef);
+            _pages[pageIndex] = CreateVmPage(hostPage, ownerRef, null, pageHandle);
+            Touch(hostPage);
             isNew = true;
             pageCountDelta = 1;
         }
@@ -291,7 +280,7 @@ internal sealed class VmPageSlots
             if (_pages.TryGetValue(pageIndex, out var entry))
             {
                 entry.Dirty = true;
-                entry.HostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
+                Touch(entry.HostPage);
             }
         }
     }
@@ -362,7 +351,7 @@ internal sealed class VmPageSlots
 
             var states = new List<VmPageState>(_pages.Count);
             foreach (var (pageIndex, entry) in _pages)
-                states.Add(new VmPageState(pageIndex, entry.Ptr, entry.Dirty, entry.LastAccessTicks));
+                states.Add(new VmPageState(pageIndex, entry.Ptr, entry.Dirty, entry.LastAccessTimestamp));
             return states;
         }
     }
@@ -374,7 +363,7 @@ internal sealed class VmPageSlots
         {
             if (_pages.Count == 0) return;
             foreach (var (pageIndex, entry) in _pages)
-                visitor(new VmPageState(pageIndex, entry.Ptr, entry.Dirty, entry.LastAccessTicks));
+                visitor(new VmPageState(pageIndex, entry.Ptr, entry.Dirty, entry.LastAccessTimestamp));
         }
     }
 
@@ -402,6 +391,15 @@ internal sealed class VmPageSlots
 
         lock (_lock)
         {
+            var rangePageCount = (ulong)endPageIndexExclusive - startPageIndex;
+            if (rangePageCount < (ulong)_pages.Count)
+            {
+                for (var pageIndex = startPageIndex; pageIndex < endPageIndexExclusive; pageIndex++)
+                    if (_pages.TryGetValue(pageIndex, out var page))
+                        visitor(pageIndex, page);
+                return;
+            }
+
             foreach (var (pageIndex, page) in _pages)
                 if (pageIndex >= startPageIndex && pageIndex < endPageIndexExclusive)
                     visitor(pageIndex, page);
@@ -515,7 +513,7 @@ internal sealed class VmPageSlots
     {
         if (notify)
             _pageBindingChanged?.Invoke(pageIndex, page.HostPage, null);
-        page.HostPage.RemoveOwnerRef(_ownerRefFactory(pageIndex));
+        page.HostPage.RemoveOwnerRef(page.OwnerRef);
         if (page.Handle.IsValid)
             PageHandle.Release(ref page.Handle);
         else if (page.OnReleased != null)
@@ -523,12 +521,30 @@ internal sealed class VmPageSlots
         else
             PageManager.ReleasePtr(page.Ptr);
     }
+
+    private static VmPage CreateVmPage(HostPage hostPage, HostPageOwnerRef ownerRef, Action<VmPage>? onReleased = null,
+        PageHandle handle = default)
+    {
+        return new VmPage
+        {
+            HostPage = hostPage,
+            OwnerRef = ownerRef,
+            OnReleased = onReleased,
+            Handle = handle
+        };
+    }
+
+    private static void Touch(HostPage hostPage)
+    {
+        hostPage.LastAccessTimestamp = MonotonicTime.GetTimestamp();
+    }
 }
 
 internal sealed class VmPage
 {
     public PageHandle Handle;
     public required HostPage HostPage { get; set; }
+    public required HostPageOwnerRef OwnerRef { get; set; }
     public Action<VmPage>? OnReleased { get; set; }
     public IntPtr Ptr => HostPage.Ptr;
 
@@ -562,13 +578,13 @@ internal sealed class VmPage
         set => HostPage.PinCount = value;
     }
 
-    public long LastAccessTicks
+    public long LastAccessTimestamp
     {
-        get => HostPage.LastAccessTicks;
-        set => HostPage.LastAccessTicks = value;
+        get => HostPage.LastAccessTimestamp;
+        set => HostPage.LastAccessTimestamp = value;
     }
 }
 
-public readonly record struct VmPageState(uint PageIndex, IntPtr Ptr, bool Dirty, long LastAccessTicks)
+public readonly record struct VmPageState(uint PageIndex, IntPtr Ptr, bool Dirty, long LastAccessTimestamp)
 {
 }
