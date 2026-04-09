@@ -41,7 +41,7 @@ public sealed class ContainerMemoryLimitsTests
     [Fact]
     public async Task RunAsync_MemoryQuotaBelowMinimum_IsRejected()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         var root = Path.Combine(Path.GetTempPath(), "podish-memory-limit-" + Guid.NewGuid().ToString("N"));
@@ -118,7 +118,7 @@ public sealed class ContainerMemoryLimitsTests
     [Fact]
     public async Task RunAsync_HostModeWithoutPublishedPorts_DoesNotCreatePortForwardManager()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         var root = CreateRuntimeTestRoot();
@@ -146,7 +146,7 @@ public sealed class ContainerMemoryLimitsTests
     [Fact]
     public async Task RunAsync_PrivateModeWithoutPublishedPorts_DoesNotCreatePortForwardManager()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         var root = CreateRuntimeTestRoot();
@@ -174,7 +174,7 @@ public sealed class ContainerMemoryLimitsTests
     [Fact]
     public async Task RunAsync_PrivateModeWithPublishedPorts_CreatesAndDisposesPortForwardManager()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         var root = CreateRuntimeTestRoot();

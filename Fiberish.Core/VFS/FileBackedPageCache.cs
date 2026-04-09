@@ -29,6 +29,6 @@ internal sealed class InodePageRecord
     public void ReleaseOwnership()
     {
         if (BackingKind != FilePageBackingKind.ZeroSharedPage)
-            ExternalPageManager.ReleasePtr(Ptr);
+            PageManager.ReleasePtr(Ptr);
     }
 }

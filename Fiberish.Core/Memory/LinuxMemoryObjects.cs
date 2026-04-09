@@ -266,7 +266,7 @@ public sealed class AnonVma
         Pages.VisitPageStates(state =>
         {
             var page = Pages.PeekVmPage(state.PageIndex)!;
-            ExternalPageManager.AddRef(page.Ptr);
+            PageManager.AddRef(page.Ptr);
             clone.Pages.InstallExistingHostPage(state.PageIndex, page.HostPage);
             var clonedPage = clone.Pages.PeekVmPage(state.PageIndex)!;
             clonedPage.Dirty = page.Dirty;

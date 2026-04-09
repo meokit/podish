@@ -69,7 +69,7 @@ internal sealed class MappedPageBinding
     }
 }
 
-public sealed class ExternalPageManager
+public sealed class PageManager
 {
     private static readonly AsyncLocal<State?> ScopedState = new();
     private static readonly State DefaultState = new();

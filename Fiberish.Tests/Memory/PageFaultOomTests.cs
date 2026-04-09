@@ -12,12 +12,12 @@ public class PageFaultOomTests
     [Fact]
     public void AnonymousFault_WhenQuotaExhausted_ReturnsOom()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var engine = new Engine();
         var mm = new VMAManager();
-        var oldQuota = ExternalPageManager.MemoryQuotaBytes;
-        ExternalPageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
+        var oldQuota = PageManager.MemoryQuotaBytes;
+        PageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
         try
         {
             var mapped = mm.Mmap(0x72000000, LinuxConstants.PageSize, Protection.Read | Protection.Write,
@@ -28,16 +28,16 @@ public class PageFaultOomTests
         }
         finally
         {
-            ExternalPageManager.MemoryQuotaBytes = oldQuota;
+            PageManager.MemoryQuotaBytes = oldQuota;
         }
     }
 
     [Fact]
     public void TaskPageFault_WhenOom_KillsProcessWithSigkill()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        var oldQuota = ExternalPageManager.MemoryQuotaBytes;
+        var oldQuota = PageManager.MemoryQuotaBytes;
 
         using var engine = new Engine();
         var mm = new VMAManager();
@@ -55,7 +55,7 @@ public class PageFaultOomTests
             var mapped = mm.Mmap(0x73000000, LinuxConstants.PageSize, Protection.Read | Protection.Write,
                 MapFlags.Private | MapFlags.Anonymous, null, 0, "oom-task", engine);
             Assert.Equal((uint)0x73000000, mapped);
-            ExternalPageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
+            PageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
 
             var method = typeof(FiberTask).GetMethod("HandlePageFault", BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.NotNull(method);
@@ -68,7 +68,7 @@ public class PageFaultOomTests
         }
         finally
         {
-            ExternalPageManager.MemoryQuotaBytes = oldQuota;
+            PageManager.MemoryQuotaBytes = oldQuota;
             sm.Close();
         }
     }

@@ -183,7 +183,7 @@ internal sealed class VmPageSlots
         IntPtr ptr;
         if (strictQuota)
         {
-            if (!ExternalPageManager.TryAllocateExternalPageStrict(out ptr, allocationClass, allocationSource))
+            if (!PageManager.TryAllocateExternalPageStrict(out ptr, allocationClass, allocationSource))
             {
                 isNew = false;
                 return IntPtr.Zero;
@@ -191,7 +191,7 @@ internal sealed class VmPageSlots
         }
         else
         {
-            ptr = ExternalPageManager.AllocateExternalPage(allocationClass, allocationSource);
+            ptr = PageManager.AllocateExternalPage(allocationClass, allocationSource);
         }
 
         if (ptr == IntPtr.Zero)
@@ -202,7 +202,7 @@ internal sealed class VmPageSlots
 
         if (onFirstCreate != null && !onFirstCreate(ptr))
         {
-            ExternalPageManager.ReleasePtr(ptr);
+            PageManager.ReleasePtr(ptr);
             isNew = false;
             return IntPtr.Zero;
         }
@@ -212,7 +212,7 @@ internal sealed class VmPageSlots
         {
             if (_pages.TryGetValue(pageIndex, out var raced))
             {
-                ExternalPageManager.ReleasePtr(ptr);
+                PageManager.ReleasePtr(ptr);
                 isNew = false;
                 raced.HostPage.LastAccessTicks = DateTime.UtcNow.Ticks;
                 return raced.Ptr;
@@ -354,7 +354,7 @@ internal sealed class VmPageSlots
         {
             if (!_pages.TryGetValue(pageIndex, out var entry)) return false;
             if (entry.Dirty) return false;
-            if (ExternalPageManager.GetRefCount(entry.Ptr) > 1) return false;
+            if (PageManager.GetRefCount(entry.Ptr) > 1) return false;
             page = entry;
             _pages.Remove(pageIndex);
         }
@@ -428,7 +428,7 @@ internal sealed class VmPageSlots
         if (page.OnReleased != null)
             page.OnReleased(page);
         else
-            ExternalPageManager.ReleasePtr(page.Ptr);
+            PageManager.ReleasePtr(page.Ptr);
     }
 }
 

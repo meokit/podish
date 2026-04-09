@@ -34,12 +34,12 @@ public class FiberTaskCloneTests
         Assert.True(env.Engine.CopyToUser(addr, new byte[] { 0x5A }));
 
         var pageAddr = addr & LinuxConstants.PageMask;
-        Assert.True(env.Vma.ExternalPages.TryGet(pageAddr, out _));
+        Assert.True(env.Vma.Pages.TryGet(pageAddr, out _));
 
         var child = await env.Parent.Clone(0, 0, 0, 0, 0); // fork
         var childMm = child.Process.Mem;
         Assert.True(child.CPU.HasMappedPage(addr, LinuxConstants.PageSize));
-        Assert.True(childMm.ExternalPages.TryGet(pageAddr, out _));
+        Assert.True(childMm.Pages.TryGet(pageAddr, out _));
 
         var childRead = new byte[1];
         Assert.True(child.CPU.CopyFromUser(addr, childRead));
@@ -65,7 +65,7 @@ public class FiberTaskCloneTests
         var pageAddr = addr & LinuxConstants.PageMask;
 
         Assert.True(child.CPU.HasMappedPage(addr, LinuxConstants.PageSize));
-        Assert.True(childMm.ExternalPages.TryGet(pageAddr, out _));
+        Assert.True(childMm.Pages.TryGet(pageAddr, out _));
 
         var childRead = new byte[1];
         Assert.True(child.CPU.CopyFromUser(addr, childRead));
@@ -88,8 +88,8 @@ public class FiberTaskCloneTests
 
         Assert.True(env.Engine.HasMappedPage(addr, LinuxConstants.PageSize));
         Assert.True(child.CPU.HasMappedPage(addr, LinuxConstants.PageSize));
-        Assert.True(env.Vma.ExternalPages.TryGet(pageAddr, out _));
-        Assert.True(childMm.ExternalPages.TryGet(pageAddr, out _));
+        Assert.True(env.Vma.Pages.TryGet(pageAddr, out _));
+        Assert.True(childMm.Pages.TryGet(pageAddr, out _));
 
         var parentRead = new byte[1];
         var childRead = new byte[1];

@@ -1686,7 +1686,7 @@ public abstract class MappingBackedInode : Inode
     private InodePageRecord CreateAllocatedMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
         int prefillLength)
     {
-        if (!ExternalPageManager.TryAllocateExternalPageStrict(out var ptr, AllocationClass.PageCache))
+        if (!PageManager.TryAllocateExternalPageStrict(out var ptr, AllocationClass.PageCache))
             return null!;
 
         var hostPage = HostPageManager.GetOrCreate(ptr, HostPageKind.PageCache);
@@ -1697,7 +1697,7 @@ public abstract class MappingBackedInode : Inode
                 var target = new Span<byte>((void*)ptr, LinuxConstants.PageSize);
                 if (!TryPopulateMappingPage(linuxFile, pageIndex, fileOffset, prefillLength, target))
                 {
-                    ExternalPageManager.ReleasePtr(ptr);
+                    PageManager.ReleasePtr(ptr);
                     return null!;
                 }
             }
@@ -1711,7 +1711,7 @@ public abstract class MappingBackedInode : Inode
         }
         catch
         {
-            ExternalPageManager.ReleasePtr(ptr);
+            PageManager.ReleasePtr(ptr);
             throw;
         }
     }
@@ -1730,7 +1730,7 @@ public abstract class MappingBackedInode : Inode
         }
 
         var hostPage = HostPageManager.GetOrCreate(pageHandle.Pointer, HostPageKind.PageCache);
-        ExternalPageManager.AddRefPtr(pageHandle.Pointer, pageHandle);
+        PageManager.AddRefPtr(pageHandle.Pointer, pageHandle);
         return new InodePageRecord
         {
             PageIndex = pageIndex,

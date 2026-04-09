@@ -234,12 +234,12 @@ public class ProcFsTests
     [Fact]
     public void ProcMemInfo_ShouldUseLiveMemoryStats()
     {
-        var oldQuota = ExternalPageManager.MemoryQuotaBytes;
+        var oldQuota = PageManager.MemoryQuotaBytes;
         var allocated = IntPtr.Zero;
-        ExternalPageManager.MemoryQuotaBytes = 64L * 1024 * 1024;
+        PageManager.MemoryQuotaBytes = 64L * 1024 * 1024;
         try
         {
-            Assert.True(ExternalPageManager.TryAllocateExternalPageStrict(out allocated, AllocationClass.Anonymous));
+            Assert.True(PageManager.TryAllocateExternalPageStrict(out allocated, AllocationClass.Anonymous));
             var text = ProcFsManager.GenerateMemInfo(null);
 
             var total = ParseMemInfoKiB(text, "MemTotal");
@@ -274,8 +274,8 @@ public class ProcFsTests
         }
         finally
         {
-            if (allocated != IntPtr.Zero) ExternalPageManager.ReleasePtr(allocated);
-            ExternalPageManager.MemoryQuotaBytes = oldQuota;
+            if (allocated != IntPtr.Zero) PageManager.ReleasePtr(allocated);
+            PageManager.MemoryQuotaBytes = oldQuota;
         }
     }
 

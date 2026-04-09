@@ -41,7 +41,7 @@ public readonly record struct MemoryStatsSnapshot(
 
     public static MemoryStatsSnapshot Capture(SyscallManager? sm = null)
     {
-        var allocated = ExternalPageManager.GetAllocatedBytes();
+        var allocated = PageManager.GetAllocatedBytes();
         var cache = AddressSpacePolicy.GetAddressSpaceStats();
         var cacheStates = AddressSpacePolicy.GetAddressSpacePageStatesSnapshot();
         var hostMapped = AggregateHostMappedCacheStats(sm);
@@ -66,7 +66,7 @@ public readonly record struct MemoryStatsSnapshot(
         var active = activeFile + activeShmem + activeAnon;
         var inactive = inactiveFile + inactiveShmem + inactiveAnon;
 
-        var quota = ExternalPageManager.MemoryQuotaBytes;
+        var quota = PageManager.MemoryQuotaBytes;
         var total = quota > 0 ? quota : Math.Max(allocated, 256L * 1024 * 1024);
         var free = Math.Max(0, total - allocated);
         // Simplified MemAvailable heuristic: free + reclaimable cache - dirty/writeback pressure.

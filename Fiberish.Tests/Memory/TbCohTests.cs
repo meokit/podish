@@ -97,7 +97,7 @@ public class TbCohTests
     [Fact]
     public void SameMmu_SharedFileRwRxAliases_InvalidateLocalTbWithoutTbCoh()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var fixture = new TmpfsFileFixture(IncEaxTwice());
         using var engine = new Engine();
@@ -137,7 +137,7 @@ public class TbCohTests
     [Fact]
     public void MixedLocalAliasAndRemotePeer_InvalidatesLocalAndRemoteTbs()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var fixture = new TmpfsFileFixture(IncEaxTwice());
         var runtime = new MemoryRuntimeContext();
@@ -203,7 +203,7 @@ public class TbCohTests
     [Fact]
     public void UnfaultedRemoteExecPeer_MprotectUpdatesWriterWpState()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var fixture = new TmpfsFileFixture(IncEaxTwice());
         var runtime = new MemoryRuntimeContext();
@@ -255,7 +255,7 @@ public class TbCohTests
     [Fact]
     public void UnfaultedRemoteExecPeer_MunmapClearsWriterWpState()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var fixture = new TmpfsFileFixture(IncEaxTwice());
         var runtime = new MemoryRuntimeContext();
@@ -303,7 +303,7 @@ public class TbCohTests
     [Fact]
     public void UnfaultedRemoteSharedReadPeer_MmapDoesNotChangeWriterWpState()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var fixture = new TmpfsFileFixture(IncEaxTwice());
         var runtime = new MemoryRuntimeContext();
@@ -347,7 +347,7 @@ public class TbCohTests
     [Fact]
     public void UnfaultedRemotePrivateWritePeer_MmapAndMprotectDoNotChangeWriterWpState()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var fixture = new TmpfsFileFixture(IncEaxTwice());
         var runtime = new MemoryRuntimeContext();

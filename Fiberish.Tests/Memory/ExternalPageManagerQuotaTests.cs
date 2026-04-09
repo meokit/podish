@@ -10,72 +10,72 @@ public class ExternalPageManagerQuotaTests
     [Fact]
     public void StrictAllocation_Fails_WhenQuotaExceeded()
     {
-        var oldQuota = ExternalPageManager.MemoryQuotaBytes;
-        ExternalPageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
+        var oldQuota = PageManager.MemoryQuotaBytes;
+        PageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
         try
         {
-            var ok = ExternalPageManager.TryAllocateExternalPageStrict(out var ptr, AllocationClass.Anonymous);
+            var ok = PageManager.TryAllocateExternalPageStrict(out var ptr, AllocationClass.Anonymous);
             Assert.False(ok);
             Assert.Equal(IntPtr.Zero, ptr);
         }
         finally
         {
-            ExternalPageManager.MemoryQuotaBytes = oldQuota;
+            PageManager.MemoryQuotaBytes = oldQuota;
         }
     }
 
     [Fact]
     public void IsolatedScope_UsesTwoGiBDefaultQuota()
     {
-        using var scope = ExternalPageManager.BeginIsolatedScope();
-        Assert.Equal(2L * 1024 * 1024 * 1024, ExternalPageManager.MemoryQuotaBytes);
+        using var scope = PageManager.BeginIsolatedScope();
+        Assert.Equal(2L * 1024 * 1024 * 1024, PageManager.MemoryQuotaBytes);
     }
 
     [Fact]
     public void StrictAllocation_Succeeds_WhenQuotaAllows()
     {
-        var oldQuota = ExternalPageManager.MemoryQuotaBytes;
-        ExternalPageManager.MemoryQuotaBytes = long.MaxValue;
+        var oldQuota = PageManager.MemoryQuotaBytes;
+        PageManager.MemoryQuotaBytes = long.MaxValue;
         var ptr = IntPtr.Zero;
         try
         {
-            var ok = ExternalPageManager.TryAllocateExternalPageStrict(out ptr, AllocationClass.Anonymous);
+            var ok = PageManager.TryAllocateExternalPageStrict(out ptr, AllocationClass.Anonymous);
             Assert.True(ok);
             Assert.NotEqual(IntPtr.Zero, ptr);
         }
         finally
         {
-            if (ptr != IntPtr.Zero) ExternalPageManager.ReleasePtr(ptr);
-            ExternalPageManager.MemoryQuotaBytes = oldQuota;
+            if (ptr != IntPtr.Zero) PageManager.ReleasePtr(ptr);
+            PageManager.MemoryQuotaBytes = oldQuota;
         }
     }
 
     [Fact]
     public void LegacyAllocation_CanExceedQuota()
     {
-        var oldQuota = ExternalPageManager.MemoryQuotaBytes;
-        ExternalPageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
+        var oldQuota = PageManager.MemoryQuotaBytes;
+        PageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
         var ptr = IntPtr.Zero;
         try
         {
-            ptr = ExternalPageManager.AllocateExternalPage();
+            ptr = PageManager.AllocateExternalPage();
             Assert.NotEqual(IntPtr.Zero, ptr);
         }
         finally
         {
-            if (ptr != IntPtr.Zero) ExternalPageManager.ReleasePtr(ptr);
-            ExternalPageManager.MemoryQuotaBytes = oldQuota;
+            if (ptr != IntPtr.Zero) PageManager.ReleasePtr(ptr);
+            PageManager.MemoryQuotaBytes = oldQuota;
         }
     }
 
     [Fact]
     public void ContiguousStrictAllocation_Fails_WhenQuotaTooSmall()
     {
-        var oldQuota = ExternalPageManager.MemoryQuotaBytes;
-        ExternalPageManager.MemoryQuotaBytes = LinuxConstants.PageSize * 2L;
+        var oldQuota = PageManager.MemoryQuotaBytes;
+        PageManager.MemoryQuotaBytes = LinuxConstants.PageSize * 2L;
         try
         {
-            var ok = ExternalPageManager.TryAllocateExternalContiguousStrict(
+            var ok = PageManager.TryAllocateExternalContiguousStrict(
                 out var basePtr,
                 3,
                 AllocationClass.Anonymous);
@@ -84,80 +84,80 @@ public class ExternalPageManagerQuotaTests
         }
         finally
         {
-            ExternalPageManager.MemoryQuotaBytes = oldQuota;
+            PageManager.MemoryQuotaBytes = oldQuota;
         }
     }
 
     [Fact]
     public void ContiguousStrictAllocation_TracksPerPageRefCount_AndFreesOnLastRelease()
     {
-        var oldQuota = ExternalPageManager.MemoryQuotaBytes;
-        ExternalPageManager.MemoryQuotaBytes = long.MaxValue;
-        var beforePages = ExternalPageManager.GetAllocatedPageCount();
+        var oldQuota = PageManager.MemoryQuotaBytes;
+        PageManager.MemoryQuotaBytes = long.MaxValue;
+        var beforePages = PageManager.GetAllocatedPageCount();
 
         var basePtr = IntPtr.Zero;
         try
         {
-            var ok = ExternalPageManager.TryAllocateExternalContiguousStrict(
+            var ok = PageManager.TryAllocateExternalContiguousStrict(
                 out basePtr,
                 4,
                 AllocationClass.Cow);
             Assert.True(ok);
             Assert.NotEqual(IntPtr.Zero, basePtr);
-            Assert.Equal(beforePages + 4, ExternalPageManager.GetAllocatedPageCount());
+            Assert.Equal(beforePages + 4, PageManager.GetAllocatedPageCount());
 
             var p0 = basePtr;
             var p1 = basePtr + LinuxConstants.PageSize;
 
-            Assert.Equal(1, ExternalPageManager.GetRefCount(p0));
-            ExternalPageManager.AddRef(p0);
-            Assert.Equal(2, ExternalPageManager.GetRefCount(p0));
+            Assert.Equal(1, PageManager.GetRefCount(p0));
+            PageManager.AddRef(p0);
+            Assert.Equal(2, PageManager.GetRefCount(p0));
 
-            ExternalPageManager.ReleasePtr(p0);
-            Assert.Equal(1, ExternalPageManager.GetRefCount(p0));
+            PageManager.ReleasePtr(p0);
+            Assert.Equal(1, PageManager.GetRefCount(p0));
 
             // Release all pages from the segment.
-            ExternalPageManager.ReleasePtr(p0);
-            ExternalPageManager.ReleasePtr(p1);
-            ExternalPageManager.ReleasePtr(basePtr + 2 * LinuxConstants.PageSize);
-            ExternalPageManager.ReleasePtr(basePtr + 3 * LinuxConstants.PageSize);
+            PageManager.ReleasePtr(p0);
+            PageManager.ReleasePtr(p1);
+            PageManager.ReleasePtr(basePtr + 2 * LinuxConstants.PageSize);
+            PageManager.ReleasePtr(basePtr + 3 * LinuxConstants.PageSize);
 
-            Assert.Equal(beforePages, ExternalPageManager.GetAllocatedPageCount());
+            Assert.Equal(beforePages, PageManager.GetAllocatedPageCount());
         }
         finally
         {
-            ExternalPageManager.MemoryQuotaBytes = oldQuota;
+            PageManager.MemoryQuotaBytes = oldQuota;
         }
     }
 
     [Fact]
     public void ContiguousStrictAllocation_MmapBackend_WorksAndReleases()
     {
-        var oldQuota = ExternalPageManager.MemoryQuotaBytes;
-        var oldBackend = ExternalPageManager.PreferredBackend;
-        ExternalPageManager.MemoryQuotaBytes = long.MaxValue;
-        ExternalPageManager.PreferredBackend = ExternalPageBackend.MmapAnonymous;
-        var beforePages = ExternalPageManager.GetAllocatedPageCount();
+        var oldQuota = PageManager.MemoryQuotaBytes;
+        var oldBackend = PageManager.PreferredBackend;
+        PageManager.MemoryQuotaBytes = long.MaxValue;
+        PageManager.PreferredBackend = ExternalPageBackend.MmapAnonymous;
+        var beforePages = PageManager.GetAllocatedPageCount();
 
         var basePtr = IntPtr.Zero;
         try
         {
-            var ok = ExternalPageManager.TryAllocateExternalContiguousStrict(
+            var ok = PageManager.TryAllocateExternalContiguousStrict(
                 out basePtr,
                 2,
                 AllocationClass.PageCache);
             Assert.True(ok);
             Assert.NotEqual(IntPtr.Zero, basePtr);
-            Assert.Equal(beforePages + 2, ExternalPageManager.GetAllocatedPageCount());
+            Assert.Equal(beforePages + 2, PageManager.GetAllocatedPageCount());
 
-            ExternalPageManager.ReleasePtr(basePtr);
-            ExternalPageManager.ReleasePtr(basePtr + LinuxConstants.PageSize);
-            Assert.Equal(beforePages, ExternalPageManager.GetAllocatedPageCount());
+            PageManager.ReleasePtr(basePtr);
+            PageManager.ReleasePtr(basePtr + LinuxConstants.PageSize);
+            Assert.Equal(beforePages, PageManager.GetAllocatedPageCount());
         }
         finally
         {
-            ExternalPageManager.PreferredBackend = oldBackend;
-            ExternalPageManager.MemoryQuotaBytes = oldQuota;
+            PageManager.PreferredBackend = oldBackend;
+            PageManager.MemoryQuotaBytes = oldQuota;
         }
     }
 }

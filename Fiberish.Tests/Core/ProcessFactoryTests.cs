@@ -10,7 +10,7 @@ public sealed class ProcessFactoryTests
     [Fact]
     public void CreateInitProcess_WhenLoadHitsOom_RollsBackSchedulerState()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         var runtime = KernelRuntime.BootstrapBare(false);
@@ -23,7 +23,7 @@ public sealed class ProcessFactoryTests
             Assert.NotNull(loc.Dentry);
             Assert.NotNull(loc.Mount);
 
-            ExternalPageManager.MemoryQuotaBytes = 1;
+            PageManager.MemoryQuotaBytes = 1;
 
             Assert.Throws<OutOfMemoryException>(() => ProcessFactory.CreateInitProcess(
                 runtime,

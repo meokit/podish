@@ -146,14 +146,14 @@ public class KernelScheduler
         AssertSchedulerThread();
         if (process.MemoryReleased) return true;
 
-        var beforeBytes = ExternalPageManager.GetAllocatedBytes();
-        var beforeByClass = ExternalPageManager.GetAllocationClassStatsSummary();
+        var beforeBytes = PageManager.GetAllocatedBytes();
+        var beforeByClass = PageManager.GetAllocationClassStatsSummary();
         var (cowFirstBefore, cowReplaceBefore) = VMAManager.GetCowAllocationCounters();
         var refsBefore = process.Mem.GetSharedRefCount();
         var refsAfter = process.Mem.ReleaseSharedRef(engine);
         process.MemoryReleased = true;
-        var afterBytes = ExternalPageManager.GetAllocatedBytes();
-        var afterByClass = ExternalPageManager.GetAllocationClassStatsSummary();
+        var afterBytes = PageManager.GetAllocatedBytes();
+        var afterByClass = PageManager.GetAllocationClassStatsSummary();
         var (cowFirstAfter, cowReplaceAfter) = VMAManager.GetCowAllocationCounters();
         Logger.LogDebug(
             "[MemRelease] PID={Pid} released VM pages bytesBefore={BeforeBytes} bytesAfter={AfterBytes} " +

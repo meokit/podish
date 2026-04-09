@@ -11,7 +11,7 @@ public class RmapTests
     [Fact]
     public void SharedFilePage_RmapReturnsAllHoldingVmas()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var fixture = new TmpfsFileFixture(new byte[LinuxConstants.PageSize]);
         using var engineA = new Engine();
@@ -56,7 +56,7 @@ public class RmapTests
     [Fact]
     public void PrivateFilePage_CowMovesRmapFromFilePageToAnonPage()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var fixture = new TmpfsFileFixture("hello"u8.ToArray());
         using var engine = new Engine();
@@ -101,7 +101,7 @@ public class RmapTests
     [Fact]
     public void ForkSharedPrivatePage_RmapTracksParentAndChildUntilCow()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var parentEngine = new Engine();
         using var childEngine = new Engine();
@@ -142,7 +142,7 @@ public class RmapTests
     [Fact]
     public void MprotectSplit_UpdatesRmapToNewVmaFragment()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var fixture = new TmpfsFileFixture(new byte[LinuxConstants.PageSize * 2]);
         using var engine = new Engine();
@@ -179,7 +179,7 @@ public class RmapTests
     [Fact]
     public void MprotectSplit_RebuildsDirectRefsOnlyForResidentPages()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var engine = new Engine();
         var mm = new VMAManager();
 

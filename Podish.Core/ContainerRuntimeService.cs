@@ -84,7 +84,7 @@ public sealed class ContainerRuntimeService
     public async Task<int> RunAsync(ContainerRunRequest request)
     {
         await Task.CompletedTask;
-        using var _externalPageScope = ExternalPageManager.BeginIsolatedScope();
+        using var _externalPageScope = PageManager.BeginIsolatedScope();
         using var _globalPageCacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         var scheduler = new KernelScheduler();
@@ -216,7 +216,7 @@ public sealed class ContainerRuntimeService
             }
 
             if (request.MemoryQuotaBytes.HasValue)
-                ExternalPageManager.MemoryQuotaBytes = request.MemoryQuotaBytes.Value;
+                PageManager.MemoryQuotaBytes = request.MemoryQuotaBytes.Value;
 
             runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag);
             scheduler.Runtime = runtime;

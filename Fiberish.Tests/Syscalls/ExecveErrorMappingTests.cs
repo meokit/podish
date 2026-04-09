@@ -15,9 +15,9 @@ public class ExecveErrorMappingTests
     [Fact]
     public async Task SysExecve_WhenExecPathHitsOom_ReturnsEnomem()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        var oldQuota = ExternalPageManager.MemoryQuotaBytes;
+        var oldQuota = PageManager.MemoryQuotaBytes;
 
         using var engine = new Engine();
         var mm = new VMAManager();
@@ -40,22 +40,22 @@ public class ExecveErrorMappingTests
 
             // Keep one page pinned so exec's first strict allocation reliably trips the quota
             // even if the old address space releases pages before loading the new image.
-            var reservedPage = ExternalPageManager.AllocateExternalPage();
+            var reservedPage = PageManager.AllocateExternalPage();
             try
             {
-                ExternalPageManager.MemoryQuotaBytes = LinuxConstants.PageSize;
+                PageManager.MemoryQuotaBytes = LinuxConstants.PageSize;
 
                 var rc = await Call(sm, "SysExecve", filenameAddr);
                 Assert.Equal(-(int)Errno.ENOMEM, rc);
             }
             finally
             {
-                ExternalPageManager.ReleasePtr(reservedPage);
+                PageManager.ReleasePtr(reservedPage);
             }
         }
         finally
         {
-            ExternalPageManager.MemoryQuotaBytes = oldQuota;
+            PageManager.MemoryQuotaBytes = oldQuota;
             sm.Close();
         }
     }
@@ -63,7 +63,7 @@ public class ExecveErrorMappingTests
     [Fact]
     public async Task SysExecve_WhenProcSelfFdPointsToUnlinkedMemfdScript_UsesLiveFileForShebang()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         using var engine = new Engine();
@@ -110,7 +110,7 @@ public class ExecveErrorMappingTests
     [Fact]
     public async Task SysExecve_WhenOverlayUpperExecutableClearsAddressSpace_ReleasesTransientExecFileHolders()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         using var engine = new Engine();
@@ -173,7 +173,7 @@ public class ExecveErrorMappingTests
     [Fact]
     public async Task ProcFdReadlink_WhenMemfd_DoesNotAppendDeletedSuffix()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         using var engine = new Engine();
@@ -218,7 +218,7 @@ public class ExecveErrorMappingTests
     [Fact]
     public async Task ProcFdOpen_CreatesNewFileDescriptionWithIndependentOffset()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         using var engine = new Engine();
@@ -280,7 +280,7 @@ public class ExecveErrorMappingTests
     [Fact]
     public async Task ProcFdOpen_RechecksPermissionsInsteadOfReusingOriginalOpenFile()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         using var engine = new Engine();

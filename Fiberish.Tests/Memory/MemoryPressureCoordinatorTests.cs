@@ -11,7 +11,7 @@ public class MemoryPressureCoordinatorTests
     [Fact]
     public void TryReclaimForAllocation_ReclaimsCleanFilePageCache()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var cache = new AddressSpace(AddressSpaceKind.File);
         try
@@ -37,7 +37,7 @@ public class MemoryPressureCoordinatorTests
     [Fact]
     public void TryReclaimForAllocation_Readahead_DoesNotTriggerReclaim()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var cache = new AddressSpace(AddressSpaceKind.File);
         try
@@ -63,7 +63,7 @@ public class MemoryPressureCoordinatorTests
     [Fact]
     public void TryRelieveFault_Reclaims_ReadOnlyPrivateAnonymousSharedSource()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var engine = new Engine();
         var mm = new VMAManager();
@@ -80,12 +80,12 @@ public class MemoryPressureCoordinatorTests
         Assert.NotNull(vma.VmMapping);
         Assert.True(vma.VmMapping!.IsZeroBacking);
         Assert.Null(vma.VmAnonVma);
-        Assert.True(mm.ExternalPages.TryGet(addr, out _));
+        Assert.True(mm.Pages.TryGet(addr, out _));
 
         var result = MemoryPressureCoordinator.TryRelieveFault(mm, engine, LinuxConstants.PageSize, 1);
 
         Assert.True(result.MadeProgress);
-        Assert.False(mm.ExternalPages.TryGet(addr, out _));
+        Assert.False(mm.Pages.TryGet(addr, out _));
         Assert.NotNull(vma.VmMapping);
         Assert.True(vma.VmMapping!.IsZeroBacking);
         Assert.True(engine.CopyFromUser(addr, new byte[1]));
@@ -94,7 +94,7 @@ public class MemoryPressureCoordinatorTests
     [Fact]
     public void TryRelieveFault_DoesNotReclaim_PrivateAnonymousOverlayPage()
     {
-        using var pageScope = ExternalPageManager.BeginIsolatedScope();
+        using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var engine = new Engine();
         var mm = new VMAManager();
@@ -114,7 +114,7 @@ public class MemoryPressureCoordinatorTests
         var result = MemoryPressureCoordinator.TryRelieveFault(mm, engine, LinuxConstants.PageSize, 1);
 
         Assert.False(result.MadeProgress);
-        Assert.True(mm.ExternalPages.TryGet(addr, out _));
+        Assert.True(mm.Pages.TryGet(addr, out _));
         Assert.Equal(privatePage, vma.VmAnonVma.GetPage(pageIndex));
         var probe = new byte[1];
         Assert.True(engine.CopyFromUser(addr, probe));
