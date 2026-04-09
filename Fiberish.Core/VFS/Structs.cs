@@ -360,7 +360,6 @@ public abstract class SuperBlock
 
     public FileSystemType Type { get; set; } = null!;
     public Dentry Root { get; set; } = null!;
-    public int BlockSize { get; set; } = 4096;
     public List<Inode> Inodes { get; set; } = [];
     public Lock Lock { get; } = new();
     public MemoryRuntimeContext MemoryContext { get; internal set; }
@@ -1482,10 +1481,10 @@ public abstract class MappingBackedInode : Inode
 
     protected virtual AddressSpaceKind MappingKind => AddressSpaceKind.File;
 
-    protected virtual GlobalAddressSpaceCacheManager.AddressSpaceCacheClass? MappingCacheClass => MappingKind switch
+    protected virtual AddressSpacePolicy.AddressSpaceCacheClass? MappingCacheClass => MappingKind switch
     {
-        AddressSpaceKind.File => GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.File,
-        AddressSpaceKind.Shmem => GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem,
+        AddressSpaceKind.File => AddressSpacePolicy.AddressSpaceCacheClass.File,
+        AddressSpaceKind.Shmem => AddressSpacePolicy.AddressSpaceCacheClass.Shmem,
         _ => null
     };
 
@@ -1539,7 +1538,7 @@ public abstract class MappingBackedInode : Inode
     {
         var mapping = new AddressSpace(MappingKind);
         if (MappingCacheClass is { } cacheClass)
-            GlobalAddressSpaceCacheManager.TrackAddressSpace(mapping, cacheClass);
+            AddressSpacePolicy.TrackAddressSpace(mapping, cacheClass);
 
         Mapping = mapping;
         return mapping;
@@ -1589,7 +1588,7 @@ public abstract class MappingBackedInode : Inode
         if (TryGetMappingPageRecord(request.PageIndex, out var record) &&
             record.BackingKind == FilePageBackingKind.HostMappedWindow)
         {
-            GlobalAddressSpaceCacheManager.BeginAddressSpaceWriteback();
+            AddressSpacePolicy.BeginAddressSpaceWriteback();
             try
             {
                 var flushRc = SyncMappedPage(linuxFile, mapping, request, record);
@@ -1598,7 +1597,7 @@ public abstract class MappingBackedInode : Inode
             }
             finally
             {
-                GlobalAddressSpaceCacheManager.EndAddressSpaceWriteback();
+                AddressSpacePolicy.EndAddressSpaceWriteback();
             }
 
             CompleteCachedPageSync(linuxFile, mapping, request.PageIndex, record);

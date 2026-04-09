@@ -63,15 +63,15 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         MTime = ATime = CTime = DateTime.Now;
     }
 
-    protected virtual GlobalAddressSpaceCacheManager.AddressSpaceCacheClass CacheClass =>
-        GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem;
+    protected virtual AddressSpacePolicy.AddressSpaceCacheClass CacheClass =>
+        AddressSpacePolicy.AddressSpaceCacheClass.Shmem;
 
     protected override AddressSpaceKind MappingKind =>
-        CacheClass == GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem
+        CacheClass == AddressSpacePolicy.AddressSpaceCacheClass.Shmem
             ? AddressSpaceKind.Shmem
             : AddressSpaceKind.File;
 
-    protected override GlobalAddressSpaceCacheManager.AddressSpaceCacheClass? MappingCacheClass => CacheClass;
+    protected override AddressSpacePolicy.AddressSpaceCacheClass? MappingCacheClass => CacheClass;
 
     protected virtual bool PinNamespaceDentries => false;
 

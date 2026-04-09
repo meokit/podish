@@ -12,11 +12,11 @@ public class MemoryPressureCoordinatorTests
     public void TryReclaimForAllocation_ReclaimsCleanFilePageCache()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var cache = new AddressSpace(AddressSpaceKind.File);
         try
         {
-            GlobalAddressSpaceCacheManager.TrackAddressSpace(cache);
+            AddressSpacePolicy.TrackAddressSpace(cache);
             var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.Equal(1, cache.PageCount);
@@ -38,11 +38,11 @@ public class MemoryPressureCoordinatorTests
     public void TryReclaimForAllocation_Readahead_DoesNotTriggerReclaim()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var cache = new AddressSpace(AddressSpaceKind.File);
         try
         {
-            GlobalAddressSpaceCacheManager.TrackAddressSpace(cache);
+            AddressSpacePolicy.TrackAddressSpace(cache);
             var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.Equal(1, cache.PageCount);
@@ -64,7 +64,7 @@ public class MemoryPressureCoordinatorTests
     public void TryRelieveFault_Reclaims_ReadOnlyPrivateAnonymousSharedSource()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var engine = new Engine();
         var mm = new VMAManager();
         engine.PageFaultResolver =
@@ -95,7 +95,7 @@ public class MemoryPressureCoordinatorTests
     public void TryRelieveFault_DoesNotReclaim_PrivateAnonymousOverlayPage()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var engine = new Engine();
         var mm = new VMAManager();
         engine.PageFaultResolver =

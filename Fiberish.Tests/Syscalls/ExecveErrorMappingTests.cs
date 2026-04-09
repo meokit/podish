@@ -16,7 +16,7 @@ public class ExecveErrorMappingTests
     public async Task SysExecve_WhenExecPathHitsOom_ReturnsEnomem()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var oldQuota = ExternalPageManager.MemoryQuotaBytes;
 
         using var engine = new Engine();
@@ -64,7 +64,7 @@ public class ExecveErrorMappingTests
     public async Task SysExecve_WhenProcSelfFdPointsToUnlinkedMemfdScript_UsesLiveFileForShebang()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         using var engine = new Engine();
         var mm = new VMAManager();
@@ -111,7 +111,7 @@ public class ExecveErrorMappingTests
     public async Task SysExecve_WhenOverlayUpperExecutableClearsAddressSpace_ReleasesTransientExecFileHolders()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         using var engine = new Engine();
         var mm = new VMAManager();
@@ -174,7 +174,7 @@ public class ExecveErrorMappingTests
     public async Task ProcFdReadlink_WhenMemfd_DoesNotAppendDeletedSuffix()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         using var engine = new Engine();
         var mm = new VMAManager();
@@ -219,7 +219,7 @@ public class ExecveErrorMappingTests
     public async Task ProcFdOpen_CreatesNewFileDescriptionWithIndependentOffset()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         using var engine = new Engine();
         var mm = new VMAManager();
@@ -281,7 +281,7 @@ public class ExecveErrorMappingTests
     public async Task ProcFdOpen_RechecksPermissionsInsteadOfReusingOriginalOpenFile()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         using var engine = new Engine();
         var mm = new VMAManager();

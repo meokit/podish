@@ -43,7 +43,7 @@ public static class VfsShrinker
         long hostMappedCacheBytesTrimmed = 0;
         if ((mode & VfsShrinkMode.PageCache) != 0)
         {
-            guestPageCacheBytesReclaimed = GlobalAddressSpaceCacheManager.TryReclaimBytes(long.MaxValue);
+            guestPageCacheBytesReclaimed = AddressSpacePolicy.TryReclaimBytes(long.MaxValue);
             hostMappedCacheBytesTrimmed = TrimHostMappedCaches(superblocks, false);
         }
 

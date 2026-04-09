@@ -2157,14 +2157,14 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (!sync) return 0;
 
         int rc;
-        GlobalAddressSpaceCacheManager.BeginAddressSpaceWriteback();
+        AddressSpacePolicy.BeginAddressSpaceWriteback();
         try
         {
             rc = BackendWrite(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         }
         finally
         {
-            GlobalAddressSpaceCacheManager.EndAddressSpaceWriteback();
+            AddressSpacePolicy.EndAddressSpaceWriteback();
         }
 
         if (rc < 0) return rc;
@@ -2226,14 +2226,14 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             {
                 ReadOnlySpan<byte> pageData = new((void*)pagePtr, LinuxConstants.PageSize);
                 int rc;
-                GlobalAddressSpaceCacheManager.BeginAddressSpaceWriteback();
+                AddressSpacePolicy.BeginAddressSpaceWriteback();
                 try
                 {
                     rc = BackendWrite(linuxFile, pageData[..writeLen], fileOffset);
                 }
                 finally
                 {
-                    GlobalAddressSpaceCacheManager.EndAddressSpaceWriteback();
+                    AddressSpacePolicy.EndAddressSpaceWriteback();
                 }
 
                 if (rc < 0) return rc;

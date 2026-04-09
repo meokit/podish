@@ -85,7 +85,7 @@ public sealed class ContainerRuntimeService
     {
         await Task.CompletedTask;
         using var _externalPageScope = ExternalPageManager.BeginIsolatedScope();
-        using var _globalPageCacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var _globalPageCacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         var scheduler = new KernelScheduler();
         scheduler.LoggerFactory = _loggerFactory;

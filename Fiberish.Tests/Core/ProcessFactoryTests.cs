@@ -11,7 +11,7 @@ public sealed class ProcessFactoryTests
     public void CreateInitProcess_WhenLoadHitsOom_RollsBackSchedulerState()
     {
         using var pageScope = ExternalPageManager.BeginIsolatedScope();
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
         var runtime = KernelRuntime.BootstrapBare(false);
         try

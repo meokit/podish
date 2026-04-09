@@ -282,7 +282,7 @@ public class ProcFsTests
     [Fact]
     public void ProcSysVmDropCaches_WriteShouldReclaimPageCache()
     {
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(rootDir);
         AddressSpace? cache = null;
@@ -297,7 +297,7 @@ public class ProcFsTests
             Assert.Equal("0\n", ReadAll(task, loc));
 
             cache = new AddressSpace(AddressSpaceKind.File);
-            GlobalAddressSpaceCacheManager.TrackAddressSpace(cache);
+            AddressSpacePolicy.TrackAddressSpace(cache);
             var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.True(cache.PageCount > 0);
@@ -367,7 +367,7 @@ public class ProcFsTests
     [Fact]
     public void ProcSysVmDropCaches_Mode3_ShouldReclaimPagecacheAndVfsCaches()
     {
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(rootDir);
         AddressSpace? cache = null;
@@ -388,7 +388,7 @@ public class ProcFsTests
             Assert.True(procRootDentry.TryGetCachedChild("sys", out _));
 
             cache = new AddressSpace(AddressSpaceKind.File);
-            GlobalAddressSpaceCacheManager.TrackAddressSpace(cache);
+            AddressSpacePolicy.TrackAddressSpace(cache);
             var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.True(cache.PageCount > 0);
@@ -421,7 +421,7 @@ public class ProcFsTests
     [Fact]
     public void ProcSysVmDropCaches_Mode1_ShouldTrimHostfsMappedWindows_WhenInactive()
     {
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var hostRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(hostRoot);
         File.WriteAllBytes(Path.Combine(hostRoot, "data.bin"), new byte[LinuxConstants.PageSize * 2]);
@@ -469,7 +469,7 @@ public class ProcFsTests
     [Fact]
     public void ProcSysVmDropCaches_Mode1_ShouldPreserveHostfsMappedWindows_WhenActive()
     {
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var hostRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(hostRoot);
         File.WriteAllBytes(Path.Combine(hostRoot, "data.bin"), new byte[LinuxConstants.PageSize * 2]);
@@ -513,7 +513,7 @@ public class ProcFsTests
     [Fact]
     public void ProcSysVmDropCaches_Mode1_ShouldTrimSilkMappedWindows_WhenInactive()
     {
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-drop-{Guid.NewGuid():N}");
 
         try
@@ -566,7 +566,7 @@ public class ProcFsTests
     [Fact]
     public void ProcSysVmDropCaches_Mode1_ShouldPreserveSilkMappedWindows_WhenActive()
     {
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-drop-{Guid.NewGuid():N}");
 
         try
@@ -819,7 +819,7 @@ public class ProcFsTests
     [Fact]
     public async Task ProcSysVmDropCaches_OpenWithTrunc_ShouldSucceedAndKeepReadValueAtZero()
     {
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(rootDir);
         AddressSpace? cache = null;
@@ -838,7 +838,7 @@ public class ProcFsTests
             Assert.True(runtime.Engine.CopyToUser(writeAddr, Encoding.UTF8.GetBytes("1\n")));
 
             cache = new AddressSpace(AddressSpaceKind.File);
-            GlobalAddressSpaceCacheManager.TrackAddressSpace(cache);
+            AddressSpacePolicy.TrackAddressSpace(cache);
             _ = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.True(cache.PageCount > 0);
 

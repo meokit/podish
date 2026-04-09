@@ -1257,7 +1257,7 @@ public partial class SyscallManager
 
             // Update current engine context (GIL ensures safety)
             CurrentSyscallEngine = engine;
-            GlobalAddressSpaceCacheManager.MaybeRunMaintenance(Mem, engine);
+            AddressSpacePolicy.MaybeRunMaintenance(Mem, engine);
 
             // Get current FiberTask (New Model Only) via Engine.Owner
             var fiberTask = engine.Owner as FiberTask;

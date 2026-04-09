@@ -42,8 +42,8 @@ public readonly record struct MemoryStatsSnapshot(
     public static MemoryStatsSnapshot Capture(SyscallManager? sm = null)
     {
         var allocated = ExternalPageManager.GetAllocatedBytes();
-        var cache = GlobalAddressSpaceCacheManager.GetAddressSpaceStats();
-        var cacheStates = GlobalAddressSpaceCacheManager.GetAddressSpacePageStatesSnapshot();
+        var cache = AddressSpacePolicy.GetAddressSpaceStats();
+        var cacheStates = AddressSpacePolicy.GetAddressSpacePageStatesSnapshot();
         var hostMapped = AggregateHostMappedCacheStats(sm);
         var cachedBytes = cache.TotalPages * LinuxConstants.PageSize;
         var dirtyBytes = cache.DirtyPages * LinuxConstants.PageSize;
@@ -160,7 +160,7 @@ public readonly record struct MemoryStatsSnapshot(
     }
 
     private static (long ActiveFile, long InactiveFile, long ActiveShmem, long InactiveShmem) SplitCacheByAge(
-        IReadOnlyList<GlobalAddressSpaceCacheManager.AddressSpacePageState> cacheStates, long nowTicks)
+        IReadOnlyList<AddressSpacePolicy.AddressSpacePageState> cacheStates, long nowTicks)
     {
         long activeFile = 0;
         long inactiveFile = 0;
@@ -169,7 +169,7 @@ public readonly record struct MemoryStatsSnapshot(
         foreach (var state in cacheStates)
         {
             var active = nowTicks - state.LastAccessTicks <= ActiveThresholdTicks;
-            if (state.Class == GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.Shmem)
+            if (state.Class == AddressSpacePolicy.AddressSpaceCacheClass.Shmem)
             {
                 if (active) activeShmem += LinuxConstants.PageSize;
                 else inactiveShmem += LinuxConstants.PageSize;

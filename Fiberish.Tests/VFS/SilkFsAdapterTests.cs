@@ -857,7 +857,7 @@ public class SilkFsAdapterTests
     [Fact]
     public void Silkfs_PageCache_CanBeReclaimedUnderPressure_AndReadStillCorrect()
     {
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-reclaim-{Guid.NewGuid():N}");
 
         try
@@ -901,7 +901,7 @@ public class SilkFsAdapterTests
             var cache = Assert.IsType<AddressSpace>(silkInode.Mapping);
             Assert.True(cache.PageCount > 0);
 
-            var reclaimed = GlobalAddressSpaceCacheManager.TryReclaimBytes(LinuxConstants.PageSize);
+            var reclaimed = AddressSpacePolicy.TryReclaimBytes(LinuxConstants.PageSize);
             Assert.True(reclaimed >= LinuxConstants.PageSize);
             Assert.Equal(0, cache.PageCount);
 
@@ -922,15 +922,15 @@ public class SilkFsAdapterTests
     [Fact]
     public void Silkfs_PageCache_AutoReclaim_OnMaintenancePressure()
     {
-        using var cacheScope = GlobalAddressSpaceCacheManager.BeginIsolatedScope();
-        var originalHigh = GlobalAddressSpaceCacheManager.HighWatermarkBytes;
-        var originalLow = GlobalAddressSpaceCacheManager.LowWatermarkBytes;
-        var originalInterval = GlobalAddressSpaceCacheManager.WritebackInterval;
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
+        var originalHigh = AddressSpacePolicy.HighWatermarkBytes;
+        var originalLow = AddressSpacePolicy.LowWatermarkBytes;
+        var originalInterval = AddressSpacePolicy.WritebackInterval;
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-auto-reclaim-{Guid.NewGuid():N}");
 
-        GlobalAddressSpaceCacheManager.HighWatermarkBytes = 0;
-        GlobalAddressSpaceCacheManager.LowWatermarkBytes = 0;
-        GlobalAddressSpaceCacheManager.WritebackInterval = TimeSpan.Zero;
+        AddressSpacePolicy.HighWatermarkBytes = 0;
+        AddressSpacePolicy.LowWatermarkBytes = 0;
+        AddressSpacePolicy.WritebackInterval = TimeSpan.Zero;
 
         try
         {
@@ -973,7 +973,7 @@ public class SilkFsAdapterTests
             var cache = Assert.IsType<AddressSpace>(silkInode.Mapping);
             Assert.True(cache.PageCount > 0);
 
-            GlobalAddressSpaceCacheManager.MaybeRunMaintenance(mm, engine);
+            AddressSpacePolicy.MaybeRunMaintenance(mm, engine);
 
             Assert.Equal(0, cache.PageCount);
 
@@ -987,9 +987,9 @@ public class SilkFsAdapterTests
         }
         finally
         {
-            GlobalAddressSpaceCacheManager.HighWatermarkBytes = originalHigh;
-            GlobalAddressSpaceCacheManager.LowWatermarkBytes = originalLow;
-            GlobalAddressSpaceCacheManager.WritebackInterval = originalInterval;
+            AddressSpacePolicy.HighWatermarkBytes = originalHigh;
+            AddressSpacePolicy.LowWatermarkBytes = originalLow;
+            AddressSpacePolicy.WritebackInterval = originalInterval;
             if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
         }
     }

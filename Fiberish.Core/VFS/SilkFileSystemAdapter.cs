@@ -215,8 +215,8 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         _repository = repository;
     }
 
-    protected override GlobalAddressSpaceCacheManager.AddressSpaceCacheClass CacheClass =>
-        GlobalAddressSpaceCacheManager.AddressSpaceCacheClass.File;
+    protected override AddressSpacePolicy.AddressSpaceCacheClass CacheClass =>
+        AddressSpacePolicy.AddressSpaceCacheClass.File;
 
     private static bool IsNamespaceMutationSuppressed => NamespaceMutationDepth.Value > 0;
 
@@ -883,14 +883,14 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (!sync) return 0;
 
         int rc;
-        GlobalAddressSpaceCacheManager.BeginAddressSpaceWriteback();
+        AddressSpacePolicy.BeginAddressSpaceWriteback();
         try
         {
             rc = BackendWrite(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         }
         finally
         {
-            GlobalAddressSpaceCacheManager.EndAddressSpaceWriteback();
+            AddressSpacePolicy.EndAddressSpaceWriteback();
         }
 
         if (rc < 0) return rc;
@@ -952,14 +952,14 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             {
                 ReadOnlySpan<byte> pageData = new((void*)pagePtr, LinuxConstants.PageSize);
                 int rc;
-                GlobalAddressSpaceCacheManager.BeginAddressSpaceWriteback();
+                AddressSpacePolicy.BeginAddressSpaceWriteback();
                 try
                 {
                     rc = BackendWrite(linuxFile, pageData[..writeLen], fileOffset);
                 }
                 finally
                 {
-                    GlobalAddressSpaceCacheManager.EndAddressSpaceWriteback();
+                    AddressSpacePolicy.EndAddressSpaceWriteback();
                 }
 
                 if (rc < 0) return rc;

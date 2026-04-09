@@ -8,7 +8,7 @@ namespace Fiberish.Memory;
 ///     Global address_space cache policy manager.
 ///     Maintenance runs at syscall safe-points to avoid concurrent VM mutation.
 /// </summary>
-public static class GlobalAddressSpaceCacheManager
+public static class AddressSpacePolicy
 {
     public enum AddressSpaceCacheClass
     {

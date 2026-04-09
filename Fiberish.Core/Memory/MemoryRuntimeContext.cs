@@ -148,5 +148,5 @@ internal sealed class ZeroInode : MappingBackedInode
     }
 
     protected override AddressSpaceKind MappingKind => AddressSpaceKind.Zero;
-    protected override GlobalAddressSpaceCacheManager.AddressSpaceCacheClass? MappingCacheClass => null;
+    protected override AddressSpacePolicy.AddressSpaceCacheClass? MappingCacheClass => null;
 }
