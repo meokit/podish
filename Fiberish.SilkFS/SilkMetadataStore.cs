@@ -46,7 +46,8 @@ public sealed class SilkMetadataStore
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,
-            Mode = SqliteOpenMode.ReadWriteCreate
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            ForeignKeys = true
         }.ToString();
     }
 
@@ -141,9 +142,6 @@ public sealed class SilkMetadataStore
     {
         var conn = new SqliteConnection(_connectionString);
         conn.Open();
-        using var pragma = conn.CreateCommand();
-        pragma.CommandText = "PRAGMA foreign_keys=ON;";
-        pragma.ExecuteNonQuery();
         return conn;
     }
 
@@ -316,6 +314,7 @@ public sealed class SilkMetadataStore
             cmd.Transaction = _tx;
             cmd.CommandText = sql;
             configureParameters(cmd);
+            cmd.Prepare();
             return cmd;
         }
 
@@ -655,6 +654,7 @@ public sealed class SilkMetadataSession : IDisposable
         var cmd = _conn.CreateCommand();
         cmd.CommandText = sql;
         configureParameters(cmd);
+        cmd.Prepare();
         return cmd;
     }
 

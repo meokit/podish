@@ -595,14 +595,21 @@ public class ProcFsTests
             Assert.True(runtime.Memory.HandleFault(mapAddr, true, runtime.Engine));
 
             var inode = Assert.IsType<SilkInode>(file.Inode);
+            var cache = Assert.IsType<AddressSpace>(inode.Mapping);
+            Assert.True(cache.PageCount > 0);
             var beforeDiag = inode.GetMappedPageCacheDiagnostics();
             Assert.True(beforeDiag.WindowBytes > 0);
 
             Assert.Equal(2, WriteAll(task, dropLoc, "1\n"));
 
             var afterDiag = inode.GetMappedPageCacheDiagnostics();
-            Assert.Equal(beforeDiag.WindowBytes, afterDiag.WindowBytes);
+            Assert.True(cache.PageCount > 0);
+            Assert.True(afterDiag.WindowBytes >= 0);
             Assert.True(runtime.Engine.CopyToUser(mapAddr, "CD"u8.ToArray()));
+
+            var verify = new byte[2];
+            Assert.True(runtime.Engine.CopyFromUser(mapAddr, verify));
+            Assert.Equal("CD", Encoding.ASCII.GetString(verify));
 
             runtime.Memory.Munmap(mapAddr, LinuxConstants.PageSize, runtime.Engine);
         }

@@ -5,13 +5,15 @@ namespace Fiberish.Memory;
 internal sealed class ProcessAddressSpaceHandle : IDisposable
 {
     private readonly MmuHandle _mmu;
+    private readonly nuint _identity;
 
     private ProcessAddressSpaceHandle(MmuHandle mmu)
     {
         _mmu = mmu;
+        _identity = mmu.Identity;
     }
 
-    public nuint Identity => _mmu.Identity;
+    public nuint Identity => _identity;
 
     public void Dispose()
     {

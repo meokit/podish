@@ -2,6 +2,7 @@ using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
+using Fiberish.SilkFS;
 using Fiberish.VFS;
 using Xunit;
 
@@ -340,6 +341,55 @@ public class PageCacheConsistencyTests
         var mapped = new byte[5];
         Assert.True(engine.CopyFromUser(mapAddr, mapped));
         Assert.Equal("hello", Encoding.ASCII.GetString(mapped));
+    }
+
+    [Fact]
+    public void Silkfs_WriteBeforeMmap_UsesSamePageCacheObject_AndPreservesPartialWriteData()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), "silkfs-pagecache-consistency-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            using var engine = new Engine();
+            var mm = new VMAManager();
+            var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
+            repo.Initialize();
+
+            var sb = new SilkSuperBlock(new FileSystemType { Name = "silkfs" }, repo, new DeviceNumberManager());
+            sb.LoadFromMetadata();
+
+            var root = sb.Root;
+            var dentry = new Dentry("data.bin", null, root, sb);
+            Assert.Equal(0, root.Inode!.Create(dentry, 0x1B6, 0, 0));
+
+            using var file = new LinuxFile(dentry, FileFlags.O_RDWR, null!);
+            Assert.Equal(5, dentry.Inode!.WriteFromHost(null, file, "hello"u8.ToArray(), 0));
+
+            var silkInode = Assert.IsType<SilkInode>(dentry.Inode);
+            var beforeMapCache = silkInode.Mapping;
+            Assert.NotNull(beforeMapCache);
+
+            Assert.Equal(2, silkInode.WriteFromHost(null, file, "XY"u8.ToArray(), 1));
+            var direct = new byte[5];
+            Assert.Equal(5, silkInode.ReadToHost(null, file, direct, 0));
+            Assert.Equal("hXYlo", Encoding.ASCII.GetString(direct));
+
+            const uint mapAddr = 0x4B100000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write, MapFlags.Shared | MapFlags.Fixed,
+                file, 0, "MAP_SHARED", engine);
+            Assert.True(mm.HandleFault(mapAddr, false, engine));
+            Assert.Same(beforeMapCache, silkInode.Mapping);
+
+            var mapped = new byte[5];
+            Assert.True(engine.CopyFromUser(mapAddr, mapped));
+            Assert.Equal("hXYlo", Encoding.ASCII.GetString(mapped));
+
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot))
+                Directory.Delete(silkRoot, true);
+        }
     }
 
     [Fact]

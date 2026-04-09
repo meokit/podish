@@ -464,6 +464,38 @@ public class Engine : IDisposable
         return (IntPtr)(isWrite ? X86Native.ResolvePtrForWrite(State, vaddr) : X86Native.ResolvePtrForRead(State, vaddr));
     }
 
+    public unsafe bool TryGetWritableUserBuffer(uint vaddr, int maxLen, out Span<byte> buffer)
+    {
+        EnsureAddressSpaceSynchronized();
+
+        if (maxLen < 0)
+        {
+            buffer = default;
+            return false;
+        }
+
+        if (maxLen == 0)
+        {
+            buffer = Span<byte>.Empty;
+            return true;
+        }
+
+        var ptr = X86Native.ResolvePtrForWrite(State, vaddr);
+        if (ptr == null && TryResolveUserAccessFault(vaddr, true))
+            ptr = X86Native.ResolvePtrForWrite(State, vaddr);
+
+        if (ptr == null)
+        {
+            buffer = default;
+            return false;
+        }
+
+        var pageOffset = vaddr & 0xFFF;
+        var chunkLen = Math.Min(maxLen, 4096 - (int)pageOffset);
+        buffer = new Span<byte>((byte*)ptr, chunkLen);
+        return true;
+    }
+
     public unsafe bool CopyToUser(uint vaddr, ReadOnlySpan<byte> data)
     {
         EnsureAddressSpaceSynchronized();

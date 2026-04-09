@@ -1369,6 +1369,7 @@ public abstract class Inode : IAddressSpaceOperations
         WriteBackendDelegate backendWrite)
     {
         if (buffer.Length == 0) return 0;
+        // Buffered writes operate on the inode's AddressSpace; external mapped-page hooks are mmap-only.
         var pageCache = Mapping;
         if (pageCache == null) return backendWrite(linuxFile, buffer, offset);
         if (linuxFile == null) return backendWrite(linuxFile, buffer, offset);

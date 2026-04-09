@@ -8,11 +8,32 @@ internal static class TbCoh
     private sealed class ScratchState
     {
         public readonly HashSet<HostPage> HostPages = [];
-        public readonly List<RmapHit> Hits = [];
-        public readonly HashSet<nuint> ExecIdentities = [];
         public readonly HashSet<(VMAManager Mm, uint PageStart)> SeenWriters = [];
         public readonly Dictionary<VMAManager, HashSet<uint>> InvalidationPagesByMm = [];
         public readonly List<HashSet<uint>> InvalidationPageSetPool = [];
+    }
+
+    private struct ExecPeerScanState
+    {
+        public bool HasExecPeer;
+        public bool HasMultipleExecIdentities;
+        public nuint ExecIdentity;
+    }
+
+    private struct WriterApplyState
+    {
+        public required HashSet<(VMAManager Mm, uint PageStart)> SeenWriters;
+        public bool HasExecPeer;
+        public bool HasMultipleExecIdentities;
+        public nuint ExecIdentity;
+    }
+
+    private struct InvalidationScanState
+    {
+        public required Dictionary<VMAManager, HashSet<uint>> InvalidationPagesByMm;
+        public required ScratchState Scratch;
+        public nuint WriterIdentity;
+        public int UsedSetCount;
     }
 
     [ThreadStatic] private static ScratchState? _scratch;
@@ -25,14 +46,6 @@ internal static class TbCoh
     private static ScratchState GetScratch()
     {
         return _scratch ??= new ScratchState();
-    }
-
-    private static bool HasCrossMmuExecPeer(HashSet<nuint> execIdentities, nuint writerIdentity)
-    {
-        foreach (var execIdentity in execIdentities)
-            if (execIdentity != writerIdentity)
-                return true;
-        return false;
     }
 
     private static HashSet<uint> RentInvalidationPageSet(ScratchState scratch, ref int usedSetCount)
@@ -48,6 +61,58 @@ internal static class TbCoh
         scratch.InvalidationPageSetPool.Add(created);
         usedSetCount++;
         return created;
+    }
+
+    private static void CollectExecPeer(HostPage _, in HostPageRmapRef rmapRef, ref ExecPeerScanState state)
+    {
+        if ((rmapRef.Vma.Perms & Protection.Exec) == 0)
+            return;
+
+        var hitIdentity = GetCoherenceIdentity(rmapRef.Mm);
+        if (!state.HasExecPeer)
+        {
+            state.HasExecPeer = true;
+            state.ExecIdentity = hitIdentity;
+            return;
+        }
+
+        if (state.ExecIdentity != hitIdentity)
+            state.HasMultipleExecIdentities = true;
+    }
+
+    private static void ApplyWriterProtection(HostPage _, in HostPageRmapRef rmapRef, ref WriterApplyState state)
+    {
+        if ((rmapRef.Vma.Perms & Protection.Write) == 0)
+            return;
+
+        var pageStart = rmapRef.GuestPageStart;
+        if (!state.SeenWriters.Add((rmapRef.Mm, pageStart)))
+            return;
+
+        var writerIdentity = GetCoherenceIdentity(rmapRef.Mm);
+        var shouldProtectWriter =
+            state.HasMultipleExecIdentities || (state.HasExecPeer && state.ExecIdentity != writerIdentity);
+        if (shouldProtectWriter)
+            rmapRef.Mm.MarkTbWp(pageStart);
+        else
+            rmapRef.Mm.UnmarkTbWp(pageStart);
+    }
+
+    private static void CollectInvalidations(HostPage _, in HostPageRmapRef rmapRef, ref InvalidationScanState state)
+    {
+        if ((rmapRef.Vma.Perms & Protection.Exec) == 0)
+            return;
+        if (GetCoherenceIdentity(rmapRef.Mm) == state.WriterIdentity)
+            return;
+
+        var invByMm = state.InvalidationPagesByMm;
+        if (!invByMm.TryGetValue(rmapRef.Mm, out var pages))
+        {
+            pages = RentInvalidationPageSet(state.Scratch, ref state.UsedSetCount);
+            invByMm[rmapRef.Mm] = pages;
+        }
+
+        pages.Add(rmapRef.GuestPageStart);
     }
 
     internal static void SyncWp(VMAManager mm, Engine engine)
@@ -90,41 +155,20 @@ internal static class TbCoh
         ArgumentNullException.ThrowIfNull(hostPage);
 
         var scratch = GetScratch();
-        var hits = scratch.Hits;
-        var execIdentities = scratch.ExecIdentities;
         var seenWriters = scratch.SeenWriters;
-        execIdentities.Clear();
         seenWriters.Clear();
-        VmRmap.ResolveHostPageHolders(hostPage.Ptr, hits);
-        if (hits.Count == 0) return;
+        var execState = new ExecPeerScanState();
+        if (!VmRmap.VisitHostPageHolders(hostPage.Ptr, ref execState, CollectExecPeer))
+            return;
 
-
-        foreach (var hit in hits)
-            if ((hit.Vma.Perms & Protection.Exec) != 0)
-                execIdentities.Add(GetCoherenceIdentity(hit.Mm));
-
-        foreach (var hit in hits)
+        var writerState = new WriterApplyState
         {
-            if ((hit.Vma.Perms & Protection.Write) == 0)
-                continue;
-
-            var pageStart = hit.GuestPageStart;
-            if (!seenWriters.Add((hit.Mm, pageStart)))
-                continue;
-
-            var writerIdentity = GetCoherenceIdentity(hit.Mm);
-            if (HasCrossMmuExecPeer(execIdentities, writerIdentity))
-            {
-                hit.Mm.MarkTbWp(pageStart);
-            }
-            else
-            {
-                hit.Mm.UnmarkTbWp(pageStart);
-            }
-        }
-
-        hits.Clear();
-        execIdentities.Clear();
+            SeenWriters = seenWriters,
+            HasExecPeer = execState.HasExecPeer,
+            HasMultipleExecIdentities = execState.HasMultipleExecIdentities,
+            ExecIdentity = execState.ExecIdentity
+        };
+        VmRmap.VisitHostPageHolders(hostPage.Ptr, ref writerState, ApplyWriterProtection);
         seenWriters.Clear();
     }
 
@@ -134,41 +178,23 @@ internal static class TbCoh
         ArgumentNullException.ThrowIfNull(hostPage);
 
         var scratch = GetScratch();
-        var hits = scratch.Hits;
-        VmRmap.ResolveHostPageHolders(hostPage.Ptr, hits);
-        if (hits.Count == 0)
-            return;
-
-        var writerIdentity = GetCoherenceIdentity(writerMm);
         var invByMm = scratch.InvalidationPagesByMm;
         foreach (var pages in invByMm.Values)
             pages.Clear();
         invByMm.Clear();
-        var usedSetCount = 0;
-        foreach (var hit in hits)
+        var invalidationState = new InvalidationScanState
         {
-            // Same-MMU aliases are invalidated natively by host-page code-cache shootdown.
-            if (GetCoherenceIdentity(hit.Mm) == writerIdentity)
-                continue;
-            if ((hit.Vma.Perms & Protection.Exec) == 0)
-                continue;
-
-            if (!invByMm.TryGetValue(hit.Mm, out var pages))
-            {
-                pages = RentInvalidationPageSet(scratch, ref usedSetCount);
-                invByMm[hit.Mm] = pages;
-            }
-
-            pages.Add(hit.GuestPageStart);
-        }
+            InvalidationPagesByMm = invByMm,
+            Scratch = scratch,
+            WriterIdentity = GetCoherenceIdentity(writerMm),
+            UsedSetCount = 0
+        };
+        if (!VmRmap.VisitHostPageHolders(hostPage.Ptr, ref invalidationState, CollectInvalidations))
+            return;
 
         if (invByMm.Count == 0)
-        {
-            hits.Clear();
             return;
-        }
 
-        hits.Clear();
         ApplyWx(hostPage);
         writerMm.MarkTbWp(pageStart);
 

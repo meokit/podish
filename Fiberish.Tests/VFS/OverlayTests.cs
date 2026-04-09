@@ -909,6 +909,62 @@ public class OverlayTests
     }
 
     [Fact]
+    public void OverlayLowerOnly_RepeatedWrites_ReuseCopiedUpUpperBacking()
+    {
+        var lowerFs = new LayerFileSystem();
+        var lowerRoot = LayerNode.Directory("/")
+            .AddChild(LayerNode.File("shared.txt", Encoding.UTF8.GetBytes("lower")));
+        var lowerSb = lowerFs.ReadSuper(
+            new FileSystemType { Name = "layerfs" },
+            0,
+            "layer-lower",
+            new LayerMountOptions { Root = lowerRoot });
+
+        var upperType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var upperSb = upperType.CreateAnonymousFileSystem().ReadSuper(upperType, 0, "ovl-upper", null);
+
+        var overlayFs = new OverlayFileSystem();
+        var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
+            new FileSystemType { Name = "overlay" },
+            0,
+            "overlay",
+            new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+
+        var firstLookup = overlaySb.Root.Inode!.Lookup("shared.txt")!;
+        var secondLookup = overlaySb.Root.Inode!.Lookup("shared.txt")!;
+        var firstInode = Assert.IsType<OverlayInode>(firstLookup.Inode);
+        var secondInode = Assert.IsType<OverlayInode>(secondLookup.Inode);
+        Assert.Null(firstInode.UpperInode);
+        Assert.Null(secondInode.UpperInode);
+
+        using var firstFile = new LinuxFile(firstLookup, FileFlags.O_RDWR, null!);
+        Assert.Equal(1, firstInode.WriteFromHost(null, firstFile, "!"u8.ToArray(), 5));
+        var copiedUpBacking = Assert.IsAssignableFrom<Inode>(firstInode.UpperInode);
+        Assert.Same(copiedUpBacking, secondInode.UpperInode);
+
+        using var secondFile = new LinuxFile(secondLookup, FileFlags.O_RDWR, null!);
+        Assert.Equal(1, secondInode.WriteFromHost(null, secondFile, "?"u8.ToArray(), 6));
+        Assert.Same(copiedUpBacking, firstInode.UpperInode);
+        Assert.Same(copiedUpBacking, secondInode.UpperInode);
+
+        var buf = new byte[7];
+        Assert.Equal(7, secondInode.ReadToHost(null, secondFile, buf, 0));
+        Assert.Equal("lower!?", Encoding.UTF8.GetString(buf));
+
+        var lowerReader = new LinuxFile(lowerSb.Root.Inode!.Lookup("shared.txt")!, FileFlags.O_RDONLY, null!);
+        try
+        {
+            var lowerBuf = new byte[5];
+            Assert.Equal(5, lowerReader.Dentry.Inode!.ReadToHost(null, lowerReader, lowerBuf, 0));
+            Assert.Equal("lower", Encoding.UTF8.GetString(lowerBuf));
+        }
+        finally
+        {
+            lowerReader.Close();
+        }
+    }
+
+    [Fact]
     public void OverlayTruncate_LowerOnlyFile_ShrinksPrefixLikeUnionmountSuite()
     {
         const string initial = ":xxx:yyy:zzz";

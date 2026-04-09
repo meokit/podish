@@ -552,6 +552,13 @@ public class OverlayInode : Inode
         return ResolvePagingSource(linuxFile);
     }
 
+    private int EnsureWritableBacking(LinuxFile? linuxFile)
+    {
+        if (UpperInode == null && LowerInode != null)
+            return CopyUp(linuxFile);
+        return 0;
+    }
+
     private void BindFileBacking(LinuxFile linuxFile, Inode backing, string reason)
     {
         if (_openBackingByFile.TryGetValue(linuxFile, out var existing))
@@ -1422,7 +1429,15 @@ public class OverlayInode : Inode
 
     protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
-        return WriteWithPageCache(linuxFile, buffer, offset, BackendWrite);
+        if (linuxFile == null) return -(int)Errno.EBADF;
+        var copyRc = EnsureWritableBacking(linuxFile);
+        if (copyRc < 0)
+            return copyRc;
+
+        var source = ResolveSourceForFile(linuxFile);
+        if (source == null)
+            return -(int)Errno.EROFS;
+        return source.WriteFromHost(null, linuxFile, buffer, offset);
     }
 
     public override int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
@@ -1452,11 +1467,8 @@ public class OverlayInode : Inode
         if (request.Length == 0) return 0;
         if (linuxFile == null) return -(int)Errno.EBADF;
 
-        if (UpperInode == null && LowerInode != null)
-        {
-            var res = CopyUp(linuxFile);
-            if (res < 0) return res;
-        }
+        var copyRc = EnsureWritableBacking(linuxFile);
+        if (copyRc < 0) return copyRc;
 
         var source = ResolveSourceForFile(linuxFile);
         if (source == null) return -(int)Errno.EROFS;
@@ -1475,6 +1487,35 @@ public class OverlayInode : Inode
         var source = UpperInode ?? LowerInode ?? GetAnyOpenBackingInode();
         if (source != null) return source.SetPageDirty(pageIndex);
         return 0;
+    }
+
+    public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
+        bool writable, out IPageHandle? pageHandle)
+    {
+        if (writable)
+        {
+            var copyRc = EnsureWritableBacking(linuxFile);
+            if (copyRc < 0)
+            {
+                pageHandle = null;
+                return false;
+            }
+        }
+
+        var source = ResolveSourceForFile(linuxFile);
+        if (source == null)
+        {
+            pageHandle = null;
+            return false;
+        }
+
+        return source.TryAcquireMappedPageHandle(linuxFile, pageIndex, absoluteFileOffset, writable, out pageHandle);
+    }
+
+    public override bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex)
+    {
+        var source = ResolveSourceForFile(linuxFile);
+        return source?.TryFlushMappedPage(linuxFile, pageIndex) == true;
     }
 
     public override void Open(LinuxFile linuxFile)
@@ -1586,11 +1627,8 @@ public class OverlayInode : Inode
     private int BackendWrite(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (linuxFile == null) return -(int)Errno.EBADF;
-        if (UpperInode == null && LowerInode != null)
-        {
-            var res = CopyUp(linuxFile);
-            if (res < 0) return res;
-        }
+        var copyRc = EnsureWritableBacking(linuxFile);
+        if (copyRc < 0) return copyRc;
 
         var source = ResolveSourceForFile(linuxFile);
         if (source == null) return -(int)Errno.EROFS;

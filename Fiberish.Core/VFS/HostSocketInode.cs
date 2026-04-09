@@ -13,7 +13,8 @@ using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
 
-public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpointOps, ISocketDataOps, ISocketOptionOps
+public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpointOps, ISocketDataOps,
+    ISocketUserBufferOps, ISocketOptionOps
 {
     private static readonly ILogger Logger = Logging.CreateLogger<HostSocketInode>();
     [ThreadStatic] private static StringBuilder? CachedHexBuilder;
@@ -154,6 +155,135 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
             {
                 return new RecvMessageResult(-(int)Errno.EINVAL);
             }
+    }
+
+    public ValueTask<RecvMessageResult> RecvFromUserAsync(
+        LinuxFile file,
+        FiberTask task,
+        Engine engine,
+        uint userBufferPtr,
+        int flags,
+        int maxBytes = -1)
+    {
+        var recvLen = maxBytes > 0 ? maxBytes : 0;
+        if (recvLen <= 0) return ValueTask.FromResult(new RecvMessageResult(0));
+
+        var hostFlags = TranslateRecvFlags(flags);
+        var remoteEpTemplate = HostAddressFamily == AddressFamily.InterNetworkV6
+            ? (EndPoint)new IPEndPoint(IPAddress.IPv6Any, 0)
+            : new IPEndPoint(IPAddress.Any, 0);
+
+        while (true)
+        {
+            if (!engine.TryGetWritableUserBuffer(userBufferPtr, recvLen, out var userBuffer))
+                return ValueTask.FromResult(new RecvMessageResult(-(int)Errno.EFAULT));
+
+            var canReceiveDirectly = userBuffer.Length >= recvLen || LinuxSocketType == SocketType.Stream;
+            if (!canReceiveDirectly)
+                return RecvFromUserSlowAsync(file, task, engine, userBufferPtr, flags, recvLen, remoteEpTemplate);
+
+            try
+            {
+                var remoteEp = remoteEpTemplate;
+                var n = NativeSocket.ReceiveFrom(userBuffer, hostFlags, ref remoteEp);
+                if (n > 0)
+                    ClearReadyBits(PollEvents.POLLIN);
+                return ValueTask.FromResult(new RecvMessageResult(n, null, remoteEp));
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                             ex.SocketErrorCode == SocketError.IOPending)
+            {
+                ClearReadyBits(PollEvents.POLLIN);
+                if (IsNonBlocking(file, flags))
+                {
+                    Logger.LogDebug("Host socket recvfrom would block (ino={Ino}, flags={Flags:X})", Ino,
+                        (int)file.Flags);
+                    return ValueTask.FromResult(new RecvMessageResult(-(int)Errno.EAGAIN));
+                }
+
+                return WaitAndRetryAsync();
+            }
+            catch (SocketException ex)
+            {
+                return ValueTask.FromResult(new RecvMessageResult(MapSocketError(ex.SocketErrorCode)));
+            }
+            catch (ObjectDisposedException)
+            {
+                return ValueTask.FromResult(new RecvMessageResult(-(int)Errno.ENOTCONN));
+            }
+            catch (InvalidOperationException)
+            {
+                return ValueTask.FromResult(new RecvMessageResult(-(int)Errno.EINVAL));
+            }
+        }
+
+        async ValueTask<RecvMessageResult> WaitAndRetryAsync()
+        {
+            var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
+            if (!ready)
+                return new RecvMessageResult(_receiveTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS);
+
+            return await RecvFromUserAsync(file, task, engine, userBufferPtr, flags, recvLen);
+        }
+    }
+
+    private async ValueTask<RecvMessageResult> RecvFromUserSlowAsync(
+        LinuxFile file,
+        FiberTask task,
+        Engine engine,
+        uint userBufferPtr,
+        int flags,
+        int recvLen,
+        EndPoint remoteEpTemplate)
+    {
+        var rented = ArrayPool<byte>.Shared.Rent(recvLen);
+        try
+        {
+            while (true)
+            {
+                try
+                {
+                    var remoteEp = remoteEpTemplate;
+                    var n = NativeSocket.ReceiveFrom(rented, 0, recvLen, TranslateRecvFlags(flags), ref remoteEp);
+                    if (n > 0)
+                        ClearReadyBits(PollEvents.POLLIN);
+                    if (n > 0 && !engine.CopyToUser(userBufferPtr, rented.AsSpan(0, n)))
+                        return new RecvMessageResult(-(int)Errno.EFAULT);
+                    return new RecvMessageResult(n, null, remoteEp);
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock ||
+                                                 ex.SocketErrorCode == SocketError.IOPending)
+                {
+                    ClearReadyBits(PollEvents.POLLIN);
+                    if (IsNonBlocking(file, flags))
+                    {
+                        Logger.LogDebug("Host socket recvfrom would block (ino={Ino}, flags={Flags:X})", Ino,
+                            (int)file.Flags);
+                        return new RecvMessageResult(-(int)Errno.EAGAIN);
+                    }
+
+                    var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLIN);
+                    if (!ready)
+                        return new RecvMessageResult(_receiveTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS);
+                }
+                catch (SocketException ex)
+                {
+                    return new RecvMessageResult(MapSocketError(ex.SocketErrorCode));
+                }
+                catch (ObjectDisposedException)
+                {
+                    return new RecvMessageResult(-(int)Errno.ENOTCONN);
+                }
+                catch (InvalidOperationException)
+                {
+                    return new RecvMessageResult(-(int)Errno.EINVAL);
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     public async ValueTask<int> SendAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags)

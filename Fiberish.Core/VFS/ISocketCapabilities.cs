@@ -49,6 +49,17 @@ public interface ISocketDataOps
         int maxBytes = -1);
 }
 
+public interface ISocketUserBufferOps
+{
+    ValueTask<RecvMessageResult> RecvFromUserAsync(
+        LinuxFile file,
+        FiberTask task,
+        Engine engine,
+        uint userBufferPtr,
+        int flags,
+        int maxBytes = -1);
+}
+
 public interface ISocketOptionOps
 {
     int SetSocketOption(LinuxFile file, FiberTask task, int level, int optname, ReadOnlySpan<byte> optval);
@@ -86,6 +97,18 @@ public static class SocketCapabilityExtensions
         if (file.OpenedInode is ISocketOptionOps oOps)
         {
             ops = oOps;
+            return true;
+        }
+
+        ops = null!;
+        return false;
+    }
+
+    public static bool TryGetSocketUserBufferOps(this LinuxFile file, out ISocketUserBufferOps ops)
+    {
+        if (file.OpenedInode is ISocketUserBufferOps uOps)
+        {
+            ops = uOps;
             return true;
         }
 

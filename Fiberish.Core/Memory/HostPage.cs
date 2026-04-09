@@ -91,6 +91,8 @@ internal readonly record struct RmapHit(
     uint PageIndex,
     uint GuestPageStart);
 
+internal delegate void HostPageRmapVisitor<TState>(HostPage hostPage, in HostPageRmapRef rmapRef, ref TState state);
+
 internal sealed class HostPage
 {
     private readonly Lock _gate = new();
@@ -223,6 +225,14 @@ internal sealed class HostPage
                 output.Add(new RmapHit(this, rmapRef.Mm, rmapRef.Vma, rmapRef.OwnerKind, rmapRef.PageIndex,
                     rmapRef.GuestPageStart));
     }
+
+    public void VisitRmapRefs<TState>(ref TState state, HostPageRmapVisitor<TState> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        lock (_gate)
+            foreach (var rmapRef in _rmapRefs)
+                visitor(this, rmapRef, ref state);
+    }
 }
 
 internal static class HostPageManager
@@ -344,5 +354,15 @@ internal static class VmRmap
         if (!HostPageManager.TryLookup(ptr, out var hostPage))
             return;
         hostPage.CollectRmapHits(output);
+    }
+
+    internal static bool VisitHostPageHolders<TState>(IntPtr ptr, ref TState state, HostPageRmapVisitor<TState> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        if (!HostPageManager.TryLookup(ptr, out var hostPage))
+            return false;
+
+        hostPage.VisitRmapRefs(ref state, visitor);
+        return true;
     }
 }

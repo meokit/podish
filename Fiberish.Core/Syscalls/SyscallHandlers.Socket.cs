@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
@@ -405,44 +406,87 @@ public partial class SyscallManager
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        var buf = new byte[len];
 
         if (file.TryGetSocketDataOps(out var ops))
         {
-            var res = await ops.RecvFromAsync(file, task, buf, flags, len);
-            var bytes = res.BytesRead;
-            if (bytes < 0) return bytes;
+            if (file.TryGetSocketUserBufferOps(out var userOps))
+                return await FinalizeRecvFromResult(
+                    await userOps.RecvFromUserAsync(file, task, engine, bufPtr, flags, len),
+                    file,
+                    engine,
+                    srcAddrPtr,
+                    addrLenPtr);
 
-            if (bytes > 0)
-                if (!task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes)))
-                {
-                    if (res.Fds != null)
-                        foreach (var f in res.Fds)
-                            f.Close();
-                    return -(int)Errno.EFAULT;
-                }
-
-            if (srcAddrPtr != 0 && addrLenPtr != 0)
+            byte[]? rented = null;
+            try
             {
-                var addrRes = new SocketAddressResult(res.SourceEndPoint, res.SourceSunPathRaw);
-                WriteAnySockaddr(engine, file, srcAddrPtr, addrLenPtr, addrRes);
+                rented = ArrayPool<byte>.Shared.Rent(len);
+                var res = await ops.RecvFromAsync(file, task, rented, flags, len);
+                return await FinalizeRecvFromResult(res, file, engine, srcAddrPtr, addrLenPtr, rented, bufPtr);
             }
-
-            if (res.Fds != null)
-                foreach (var f in res.Fds)
-                    f.Close();
-            return bytes;
+            finally
+            {
+                if (rented != null)
+                    ArrayPool<byte>.Shared.Return(rented);
+            }
         }
 
         if (file.OpenedInode is NetlinkRouteSocketInode netlinkInode)
         {
-            var bytes = await netlinkInode.RecvAsync(file, task, buf, flags, len);
-            if (bytes < 0) return bytes;
-            if (bytes > 0 && !task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes))) return -(int)Errno.EFAULT;
-            return bytes;
+            var buf = ArrayPool<byte>.Shared.Rent(len);
+            try
+            {
+                var bytes = await netlinkInode.RecvAsync(file, task, buf, flags, len);
+                if (bytes < 0) return bytes;
+                if (bytes > 0 && !task.CPU.CopyToUser(bufPtr, buf.AsSpan(0, bytes))) return -(int)Errno.EFAULT;
+                return bytes;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buf);
+            }
         }
 
         return -(int)Errno.ENOTSOCK;
+
+        async ValueTask<int> FinalizeRecvFromResult(
+            RecvMessageResult res,
+            LinuxFile recvFile,
+            Engine recvEngine,
+            uint recvSrcAddrPtr,
+            uint recvAddrLenPtr,
+            byte[]? recvBuf = null,
+            uint recvBufPtr = 0)
+        {
+            var bytes = res.BytesRead;
+            if (bytes < 0)
+            {
+                CloseReceivedFiles(res.Fds);
+                return bytes;
+            }
+
+            if (recvBuf != null && bytes > 0 && !task.CPU.CopyToUser(recvBufPtr, recvBuf.AsSpan(0, bytes)))
+            {
+                CloseReceivedFiles(res.Fds);
+                return -(int)Errno.EFAULT;
+            }
+
+            if (recvSrcAddrPtr != 0 && recvAddrLenPtr != 0)
+            {
+                var addrRes = new SocketAddressResult(res.SourceEndPoint, res.SourceSunPathRaw);
+                WriteAnySockaddr(recvEngine, recvFile, recvSrcAddrPtr, recvAddrLenPtr, addrRes);
+            }
+
+            CloseReceivedFiles(res.Fds);
+            return bytes;
+        }
+
+        static void CloseReceivedFiles(List<LinuxFile>? fds)
+        {
+            if (fds == null) return;
+            foreach (var receivedFile in fds)
+                receivedFile.Close();
+        }
     }
 
     private async ValueTask<int> SysSendMsg(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

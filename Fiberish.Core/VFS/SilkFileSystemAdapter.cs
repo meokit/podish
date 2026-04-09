@@ -182,6 +182,9 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
 public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 {
     private static readonly AsyncLocal<int> NamespaceMutationDepth = new();
+    private static readonly AsyncLocal<MetadataSessionScopeState?> MetadataSessionScope = new();
+    private static readonly VmBackingManager BufferedWriteMappings = new();
+    private int _metadataDirty;
     private readonly HashSet<long> _dirtyPageIndexes = [];
     private readonly Lock _dirtyPageLock = new();
     private readonly Lock _mappedCacheLock = new();
@@ -247,6 +250,22 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         return new NamespaceMutationScope();
     }
 
+    private MetadataSessionLease EnterMetadataSessionScope(out SilkMetadataSession session)
+    {
+        var current = MetadataSessionScope.Value;
+        if (current != null && ReferenceEquals(current.Repository, _repository))
+        {
+            current.Depth++;
+            session = current.Session;
+            return new MetadataSessionLease(current);
+        }
+
+        var created = new MetadataSessionScopeState(_repository, _repository.OpenMetadataSession());
+        MetadataSessionScope.Value = created;
+        session = created.Session;
+        return new MetadataSessionLease(created);
+    }
+
     public void LoadXAttrsFromMetadata(SilkMetadataSession session)
     {
         foreach (var kv in session.ListXAttrs((long)Ino))
@@ -287,14 +306,48 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             SilkSuperBlock.ToUnixNanoseconds(CTime));
     }
 
+    private void MarkMetadataDirty()
+    {
+        Volatile.Write(ref _metadataDirty, 1);
+    }
+
+    private void FlushDirtyMetadataIfNeeded(SilkMetadataSession session)
+    {
+        if (Interlocked.Exchange(ref _metadataDirty, 0) == 0)
+            return;
+
+        try
+        {
+            SyncSelf(session);
+        }
+        catch
+        {
+            MarkMetadataDirty();
+            throw;
+        }
+    }
+
+    private void FlushDirtyMetadataIfNeeded()
+    {
+        using var metadataScope = EnterMetadataSessionScope(out var session);
+        FlushDirtyMetadataIfNeeded(session);
+    }
+
+    private void EnsureBufferedWriteMapping()
+    {
+        if (Type != InodeType.File || Mapping != null)
+            return;
+
+        var manager = MappingManager ?? BufferedWriteMappings;
+        var mapping = manager.GetOrCreateMapping(this);
+        mapping.Release();
+    }
+
     public override int UpdateTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
     {
         var rc = base.UpdateTimes(atime, mtime, ctime);
         if (rc == 0)
-        {
-            using var session = _repository.OpenMetadataSession();
-            SyncSelf(session);
-        }
+            MarkMetadataDirty();
 
         return rc;
     }
@@ -332,7 +385,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
     {
-        using var session = _repository.OpenMetadataSession();
+        using var metadataScope = EnterMetadataSessionScope(out var session);
         lock (Lock)
         {
             return TryHydrateChildDentry(parent, name, cached, session);
@@ -341,7 +394,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     public override Dentry? Lookup(string name)
     {
-        using var session = _repository.OpenMetadataSession();
+        using var metadataScope = EnterMetadataSessionScope(out var session);
         lock (Lock)
         {
             if (Type != InodeType.Directory) return null;
@@ -390,7 +443,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (Type != InodeType.Directory)
             return base.GetEntries();
 
-        using var session = _repository.OpenMetadataSession();
+        using var metadataScope = EnterMetadataSessionScope(out var session);
         lock (Lock)
         {
             if (_cachedEntries != null)
@@ -486,11 +539,11 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     public override int Create(Dentry dentry, int mode, int uid, int gid)
     {
+        using var metadataScope = EnterMetadataSessionScope(out var session);
         var rc = base.Create(dentry, mode, uid, gid);
         if (rc < 0)
             return rc;
 
-        using var session = _repository.OpenMetadataSession();
         session.ExecuteTransaction(tx =>
         {
             UpsertInodeMetadata(tx, dentry.Inode!);
@@ -511,11 +564,11 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     public override int Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
+        using var metadataScope = EnterMetadataSessionScope(out var session);
         var rc = base.Mkdir(dentry, mode, uid, gid);
         if (rc < 0)
             return rc;
 
-        using var session = _repository.OpenMetadataSession();
         session.ExecuteTransaction(tx =>
         {
             UpsertInodeMetadata(tx, this);
@@ -529,11 +582,11 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     public override int Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
     {
+        using var metadataScope = EnterMetadataSessionScope(out var session);
         var rc = base.Mknod(dentry, mode, uid, gid, type, rdev);
         if (rc < 0)
             return rc;
 
-        using var session = _repository.OpenMetadataSession();
         session.ExecuteTransaction(tx =>
         {
             UpsertInodeMetadata(tx, dentry.Inode!);
@@ -554,11 +607,11 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     public override int Symlink(Dentry dentry, string target, int uid, int gid)
     {
+        using var metadataScope = EnterMetadataSessionScope(out var session);
         var rc = base.Symlink(dentry, target, uid, gid);
         if (rc < 0)
             return rc;
 
-        using var session = _repository.OpenMetadataSession();
         session.ExecuteTransaction(tx =>
         {
             UpsertInodeMetadata(tx, dentry.Inode!);
@@ -573,11 +626,11 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     public override int Link(Dentry dentry, Inode oldInode)
     {
+        using var metadataScope = EnterMetadataSessionScope(out var session);
         var rc = base.Link(dentry, oldInode);
         if (rc < 0)
             return rc;
 
-        using var session = _repository.OpenMetadataSession();
         session.ExecuteTransaction(tx =>
         {
             UpsertInodeMetadata(tx, oldInode);
@@ -605,6 +658,8 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     public override void Release(LinuxFile linuxFile)
     {
+        FlushDirtyDataIfNeeded(linuxFile);
+        FlushDirtyMetadataIfNeeded();
         if (linuxFile.PrivateData is SafeFileHandle handle)
         {
             Flock(linuxFile, LinuxConstants.LOCK_UN);
@@ -617,12 +672,15 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     public override void Sync(LinuxFile linuxFile)
     {
+        FlushDirtyDataIfNeeded(linuxFile);
         if (linuxFile.PrivateData is SafeFileHandle handle)
             RandomAccess.FlushToDisk(handle);
+        FlushDirtyMetadataIfNeeded();
     }
 
     public override int Unlink(string name)
     {
+        using var metadataScope = EnterMetadataSessionScope(out var session);
         var victim = Lookup(name)?.Inode;
         var rc = base.Unlink(name);
         if (rc < 0)
@@ -630,7 +688,6 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (IsNamespaceMutationSuppressed)
             return 0;
 
-        using var session = _repository.OpenMetadataSession();
         session.ExecuteTransaction(tx =>
         {
             tx.RemoveDentry((long)Ino, name);
@@ -644,6 +701,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     public override int Rmdir(string name)
     {
+        using var metadataScope = EnterMetadataSessionScope(out var session);
         var victim = Lookup(name)?.Inode;
         var rc = base.Rmdir(name);
         if (rc < 0)
@@ -651,7 +709,6 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (IsNamespaceMutationSuppressed)
             return 0;
 
-        using var session = _repository.OpenMetadataSession();
         session.ExecuteTransaction(tx =>
         {
             UpsertInodeMetadataIfLive(tx, this);
@@ -666,6 +723,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     public override int Rename(string oldName, Inode newParent, string newName)
     {
+        using var metadataScope = EnterMetadataSessionScope(out var session);
         if (Lookup(oldName)?.Inode == null)
             return -(int)Errno.ENOENT;
 
@@ -678,7 +736,6 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         }
 
         var movedInode = newParent.Lookup(newName)?.Inode;
-        using var session = _repository.OpenMetadataSession();
         session.ExecuteTransaction(tx =>
         {
             tx.RemoveDentry((long)Ino, oldName);
@@ -722,6 +779,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             if ((ulong)fileSize > Size) Size = (ulong)fileSize;
             MTime = DateTime.Now;
             CTime = MTime;
+            MarkMetadataDirty();
             return buffer.Length;
         }
         finally
@@ -733,14 +791,29 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
     protected internal override int WriteSpan(LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
+        EnsureBufferedWriteMapping();
         var rc = WriteWithPageCache(linuxFile, buffer, offset, BackendWrite);
         if (rc > 0)
-        {
-            using var session = _repository.OpenMetadataSession();
-            SyncSelf(session);
-        }
+            MarkMetadataDirty();
 
         return rc;
+    }
+
+    private void FlushDirtyDataIfNeeded(LinuxFile? linuxFile)
+    {
+        if (Type != InodeType.File || Mapping == null)
+            return;
+
+        bool hasDirtyPages;
+        lock (_dirtyPageLock)
+        {
+            hasDirtyPages = _dirtyPageIndexes.Count > 0;
+        }
+
+        if (!hasDirtyPages)
+            return;
+
+        _ = WritePages(linuxFile, new WritePagesRequest(0, long.MaxValue, true));
     }
 
     protected override int AopsReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
@@ -872,7 +945,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         var rc = base.SetXAttr(name, value, flags);
         if (rc == 0)
         {
-            using var session = _repository.OpenMetadataSession();
+            using var metadataScope = EnterMetadataSessionScope(out var session);
             session.SetXAttr((long)Ino, name, value);
         }
 
@@ -884,7 +957,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         var rc = base.RemoveXAttr(name);
         if (rc == 0)
         {
-            using var session = _repository.OpenMetadataSession();
+            using var metadataScope = EnterMetadataSessionScope(out var session);
             session.RemoveXAttr((long)Ino, name);
         }
 
@@ -943,8 +1016,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
                 _mappedPageCache?.Truncate(size);
             }
 
-            using var session = _repository.OpenMetadataSession();
-            SyncSelf(session);
+            MarkMetadataDirty();
         }
 
         return rc;
@@ -1019,7 +1091,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         var ino = (long)Ino;
         if (ino != SilkMetadataStore.RootInode)
         {
-            using var session = _repository.OpenMetadataSession();
+            using var metadataScope = EnterMetadataSessionScope(out var session);
             session.DeleteInode(ino);
             _repository.DeleteLiveInodeData(ino);
         }
@@ -1042,9 +1114,44 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
     private void SyncRegularFileIfNeeded()
     {
         if (Type == InodeType.File)
+            FlushDirtyMetadataIfNeeded();
+    }
+
+    private sealed class MetadataSessionScopeState
+    {
+        public MetadataSessionScopeState(SilkRepository repository, SilkMetadataSession session)
         {
-            using var session = _repository.OpenMetadataSession();
-            SyncSelf(session);
+            Repository = repository;
+            Session = session;
+            Depth = 1;
+        }
+
+        public int Depth { get; set; }
+        public SilkRepository Repository { get; }
+        public SilkMetadataSession Session { get; }
+    }
+
+    private readonly struct MetadataSessionLease : IDisposable
+    {
+        private readonly MetadataSessionScopeState? _state;
+
+        public MetadataSessionLease(MetadataSessionScopeState state)
+        {
+            _state = state;
+        }
+
+        public void Dispose()
+        {
+            if (_state == null)
+                return;
+
+            _state.Depth--;
+            if (_state.Depth > 0)
+                return;
+
+            if (ReferenceEquals(MetadataSessionScope.Value, _state))
+                MetadataSessionScope.Value = null;
+            _state.Session.Dispose();
         }
     }
 
