@@ -17,7 +17,7 @@ public class RootMountApiTests
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
         var sb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
         var root = sb.Root;
-        var sub = new Dentry("sub", null, root, sb);
+        var sub = new Dentry(FsName.FromString("sub"), null, root, sb);
         root.Inode!.Mkdir(sub, 0x1FF, 0, 0);
 
         sm.MountRoot(sb, new SyscallManager.RootMountOptions

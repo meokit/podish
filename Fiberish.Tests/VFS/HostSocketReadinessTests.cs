@@ -35,7 +35,7 @@ public class HostSocketReadinessTests
         server.Blocking = false;
 
         var inode = new HostSocketInode(3001, env.SyscallManager.MemfdSuperBlock, server);
-        var file = new LinuxFile(new Dentry("readiness-readable", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("readiness-readable"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
@@ -69,7 +69,7 @@ public class HostSocketReadinessTests
 
         var inode = new HostSocketInode(3011, env.SyscallManager.MemfdSuperBlock, server);
         var file = new LinuxFile(
-            new Dentry("readiness-stalled-dispatcher", inode, null, env.SyscallManager.MemfdSuperBlock),
+            new Dentry(FsName.FromString("readiness-stalled-dispatcher"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
@@ -102,7 +102,7 @@ public class HostSocketReadinessTests
         server.Blocking = false;
 
         var inode = new HostSocketInode(3002, env.SyscallManager.MemfdSuperBlock, server);
-        var file = new LinuxFile(new Dentry("readiness-wait", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("readiness-wait"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
@@ -122,7 +122,7 @@ public class HostSocketReadinessTests
         inode.NativeSocket.Listen(16);
         var ep = (IPEndPoint)inode.NativeSocket.LocalEndPoint!;
 
-        var file = new LinuxFile(new Dentry("readiness-listen", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("readiness-listen"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
@@ -153,7 +153,7 @@ public class HostSocketReadinessTests
 
         var inode = new HostSocketInode(3004, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
             SocketType.Stream, ProtocolType.Tcp);
-        var file = new LinuxFile(new Dentry("readiness-connect", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("readiness-connect"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
@@ -182,7 +182,7 @@ public class HostSocketReadinessTests
         inode.NativeSocket.Listen(8);
         var ep = (IPEndPoint)inode.NativeSocket.LocalEndPoint!;
 
-        var file = new LinuxFile(new Dentry("readiness-dispose", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("readiness-dispose"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
@@ -210,7 +210,7 @@ public class HostSocketReadinessTests
         inode.NativeSocket.Listen(8);
         var ep = (IPEndPoint)inode.NativeSocket.LocalEndPoint!;
 
-        var file = new LinuxFile(new Dentry("readiness-double", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("readiness-double"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
@@ -244,7 +244,7 @@ public class HostSocketReadinessTests
         server.Blocking = false;
 
         var inode = new HostSocketInode(3007, env.SyscallManager.MemfdSuperBlock, server);
-        var file = new LinuxFile(new Dentry("readiness-no-spurious", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("readiness-no-spurious"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
@@ -278,7 +278,7 @@ public class HostSocketReadinessTests
         server.Blocking = false;
 
         var inode = new HostSocketInode(3011, env.SyscallManager.MemfdSuperBlock, server);
-        var file = new LinuxFile(new Dentry("readiness-data-arrival", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("readiness-data-arrival"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
@@ -305,7 +305,7 @@ public class HostSocketReadinessTests
 
         var inode = new HostSocketInode(3008, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
             SocketType.Stream, ProtocolType.Tcp);
-        var file = new LinuxFile(new Dentry("host-connect-refused", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("host-connect-refused"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
 
         var rc = await inode.ConnectAsync(file, env.Task, new IPEndPoint(IPAddress.Loopback, closedPort));
@@ -326,7 +326,7 @@ public class HostSocketReadinessTests
         var inode = new HostSocketInode(3012, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
             SocketType.Stream, ProtocolType.Tcp);
         var file = new LinuxFile(
-            new Dentry("readiness-connect-soerror", inode, null, env.SyscallManager.MemfdSuperBlock),
+            new Dentry(FsName.FromString("readiness-connect-soerror"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
@@ -356,7 +356,7 @@ public class HostSocketReadinessTests
 
         var inode = new HostSocketInode(3009, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
             SocketType.Stream, ProtocolType.Tcp);
-        var file = new LinuxFile(new Dentry("readiness-connect-arm", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("readiness-connect-arm"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());
@@ -393,7 +393,7 @@ public class HostSocketReadinessTests
         var inode = new HostSocketInode(3010, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
             SocketType.Stream, ProtocolType.Tcp);
         var file = new LinuxFile(
-            new Dentry("readiness-connect-callback", inode, null, env.SyscallManager.MemfdSuperBlock),
+            new Dentry(FsName.FromString("readiness-connect-callback"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
         using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
             Logging.CreateLogger<HostSocketReadinessTests>());

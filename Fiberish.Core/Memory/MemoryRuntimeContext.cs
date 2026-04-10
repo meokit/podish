@@ -103,7 +103,8 @@ public sealed class MemoryRuntimeContext
         {
             var superBlock = GetOrCreateShmSuperBlock();
             var root = superBlock.Root;
-            var dentry = new Dentry(name, null, root, superBlock);
+            var fsName = FsName.FromString(name);
+            var dentry = new Dentry(fsName, null, root, superBlock);
             var createRc = root.Inode!.Create(dentry, mode, uid, gid);
             if (createRc < 0)
                 throw new InvalidOperationException($"Failed to create shm_mnt backing inode '{name}': rc={createRc}.");
@@ -122,7 +123,7 @@ public sealed class MemoryRuntimeContext
                 }
 
                 var file = new LinuxFile(dentry, fileFlags, mount, referenceKind);
-                var unlinkRc = root.Inode.Unlink(name);
+                var unlinkRc = root.Inode.Unlink(fsName);
                 if (unlinkRc < 0)
                     file.IsTmpFile = true;
 
@@ -130,7 +131,7 @@ public sealed class MemoryRuntimeContext
             }
             catch
             {
-                _ = root.Inode.Unlink(name);
+                _ = root.Inode.Unlink(fsName);
                 throw;
             }
         }

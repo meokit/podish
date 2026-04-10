@@ -1425,7 +1425,7 @@ public class OpenTruncateSyscallTests
         var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "trunc-overlay-upper", null);
 
         var lowerRoot = lowerSb.Root;
-        var lowerFile = new Dentry(name, null, lowerRoot, lowerSb);
+        var lowerFile = new Dentry(FsName.FromString(name), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Create(lowerFile, 0x1A4, 0, 0);
         var lowerHandle = new LinuxFile(lowerFile, FileFlags.O_WRONLY, null!);
         try
@@ -1461,7 +1461,7 @@ public class OpenTruncateSyscallTests
         var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "sym-upper", null);
 
         var lowerRoot = lowerSb.Root;
-        var target = new Dentry(targetPath, null, lowerRoot, lowerSb);
+        var target = new Dentry(FsName.FromString(targetPath), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Create(target, 0x1A4, 0, 0);
         var writer = new LinuxFile(target, FileFlags.O_WRONLY, null!);
         try
@@ -1474,7 +1474,7 @@ public class OpenTruncateSyscallTests
             writer.Close();
         }
 
-        var symlink = new Dentry(symlinkName, null, lowerRoot, lowerSb);
+        var symlink = new Dentry(FsName.FromString(symlinkName), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Symlink(symlink, targetPath, 0, 0);
 
         var overlayFs = new OverlayFileSystem();
@@ -1501,7 +1501,7 @@ public class OpenTruncateSyscallTests
         var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "sym-upper", null);
 
         var lowerRoot = lowerSb.Root;
-        var symlink = new Dentry(symlinkName, null, lowerRoot, lowerSb);
+        var symlink = new Dentry(FsName.FromString(symlinkName), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Symlink(symlink, targetPath, 0, 0);
 
         var overlayFs = new OverlayFileSystem();
@@ -1528,10 +1528,10 @@ public class OpenTruncateSyscallTests
         var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "dir-upper", null);
 
         var lowerRoot = lowerSb.Root;
-        var dir = new Dentry("dir", null, lowerRoot, lowerSb);
+        var dir = new Dentry(FsName.FromString("dir"), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Mkdir(dir, 0x1ED, 0, 0);
 
-        var child = new Dentry("a", null, dir, lowerSb);
+        var child = new Dentry(FsName.FromString("a"), null, dir, lowerSb);
         dir.Inode!.Create(child, 0x1A4, 0, 0);
         var writer = new LinuxFile(child, FileFlags.O_WRONLY, null!);
         try
@@ -1543,9 +1543,9 @@ public class OpenTruncateSyscallTests
             writer.Close();
         }
 
-        var direct = new Dentry("dir-link", null, lowerRoot, lowerSb);
+        var direct = new Dentry(FsName.FromString("dir-link"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Symlink(direct, "dir"u8.ToArray(), 0, 0);
-        var indirect = new Dentry("dir-chain", null, lowerRoot, lowerSb);
+        var indirect = new Dentry(FsName.FromString("dir-chain"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Symlink(indirect, "dir-link"u8.ToArray(), 0, 0);
 
         var overlayFs = new OverlayFileSystem();
@@ -1591,7 +1591,7 @@ public class OpenTruncateSyscallTests
         var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "sym-upper", null);
 
         var lowerRoot = lowerSb.Root;
-        var lowerFile = new Dentry(path, null, lowerRoot, lowerSb);
+        var lowerFile = new Dentry(FsName.FromString(path), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Create(lowerFile, 0x1A4, 0, 0);
         var writer = new LinuxFile(lowerFile, FileFlags.O_WRONLY, null!);
         try
@@ -1604,9 +1604,9 @@ public class OpenTruncateSyscallTests
             writer.Close();
         }
 
-        var link = new Dentry("link", null, lowerRoot, lowerSb);
+        var link = new Dentry(FsName.FromString("link"), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Symlink(link, path, 0, 0);
-        var indirect = new Dentry("indirect", null, lowerRoot, lowerSb);
+        var indirect = new Dentry(FsName.FromString("indirect"), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Symlink(indirect, "link"u8.ToArray(), 0, 0);
 
         var overlayFs = new OverlayFileSystem();

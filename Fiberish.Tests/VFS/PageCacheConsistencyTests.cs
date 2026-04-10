@@ -149,7 +149,7 @@ public class PageCacheConsistencyTests
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
         var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
-        var dentry = new Dentry("data.bin", null, root, sb);
+        var dentry = new Dentry(FsName.FromString("data.bin"), null, root, sb);
         root.Inode!.Create(dentry, 0x1B6, 0, 0);
 
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, null!);
@@ -221,7 +221,7 @@ public class PageCacheConsistencyTests
             var hostType = new FileSystemType { Name = "hostfs" };
             var hostOpts = HostfsMountOptions.Parse("rw");
             var lowerSb = new HostSuperBlock(hostType, tempLower, hostOpts);
-            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
 
             var tmpType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
             var upperSb = tmpType.CreateAnonymousFileSystem().ReadSuper(tmpType, 0, "ovl-upper", null);
@@ -298,7 +298,7 @@ public class PageCacheConsistencyTests
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
         var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
-        var dentry = new Dentry("data.bin", null, root, sb);
+        var dentry = new Dentry(FsName.FromString("data.bin"), null, root, sb);
         root.Inode!.Create(dentry, 0x1B6, 0, 0);
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, null!);
         Assert.Equal(5, dentry.Inode!.WriteFromHost(null, file, "hello"u8.ToArray(), 0));
@@ -324,7 +324,7 @@ public class PageCacheConsistencyTests
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
         var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
-        var dentry = new Dentry("data.bin", null, root, sb);
+        var dentry = new Dentry(FsName.FromString("data.bin"), null, root, sb);
         root.Inode!.Create(dentry, 0x1B6, 0, 0);
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, null!);
 
@@ -359,7 +359,7 @@ public class PageCacheConsistencyTests
             sb.LoadFromMetadata();
 
             var root = sb.Root;
-            var dentry = new Dentry("data.bin", null, root, sb);
+            var dentry = new Dentry(FsName.FromString("data.bin"), null, root, sb);
             Assert.Equal(0, root.Inode!.Create(dentry, 0x1B6, 0, 0));
 
             using var file = new LinuxFile(dentry, FileFlags.O_RDWR, null!);
@@ -405,7 +405,7 @@ public class PageCacheConsistencyTests
             var hostType = new FileSystemType { Name = "hostfs" };
             var hostOpts = HostfsMountOptions.Parse("rw");
             var lowerSb = new HostSuperBlock(hostType, tempLower, hostOpts);
-            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
 
             var tmpType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
             var upperSb = tmpType.CreateAnonymousFileSystem().ReadSuper(tmpType, 0, "ovl-upper-reverse", null);
@@ -487,7 +487,7 @@ public class PageCacheConsistencyTests
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
         var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
-        var dentry = new Dentry("data.bin", null, root, sb);
+        var dentry = new Dentry(FsName.FromString("data.bin"), null, root, sb);
         root.Inode!.Create(dentry, 0x1B6, 0, 0);
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, null!);
 
@@ -550,7 +550,7 @@ public class PageCacheConsistencyTests
         var fsType = new FileSystemType { Name = "hostfs" };
         var opts = HostfsMountOptions.Parse("rw");
         var sb = new HostSuperBlock(fsType, rootDir, opts);
-        sb.Root = sb.GetDentry(rootDir, "/", null)!;
+        sb.Root = sb.GetDentry(rootDir, FsName.Empty, null)!;
         var dentry = sb.Root.Inode!.Lookup(relativePath);
         Assert.NotNull(dentry);
         var file = new LinuxFile(dentry!, FileFlags.O_RDWR, null!);

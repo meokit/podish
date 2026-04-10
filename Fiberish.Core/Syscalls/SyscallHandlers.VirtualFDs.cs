@@ -23,7 +23,7 @@ public partial class SyscallManager
         if ((flags & LinuxConstants.EFD_SEMAPHORE) != 0) eflags |= (FileFlags)LinuxConstants.EFD_SEMAPHORE;
 
         var inode = new EventFdInode(0, MemfdSuperBlock, initval, eflags);
-        var dentry = new Dentry("anon_inode:[eventfd]", inode, null, MemfdSuperBlock);
+        var dentry = new Dentry(FsName.FromString("anon_inode:[eventfd]"), inode, null, MemfdSuperBlock);
         var file = new LinuxFile(dentry, eflags, AnonMount);
 
         var fd = AllocFD(file);
@@ -43,7 +43,7 @@ public partial class SyscallManager
         if ((flags & LinuxConstants.TFD_CLOEXEC) != 0) eflags |= FileFlags.O_CLOEXEC;
 
         var inode = new TimerFdInode(0, MemfdSuperBlock);
-        var dentry = new Dentry("anon_inode:[timerfd]", inode, null, MemfdSuperBlock);
+        var dentry = new Dentry(FsName.FromString("anon_inode:[timerfd]"), inode, null, MemfdSuperBlock);
         var file = new LinuxFile(dentry, eflags, AnonMount);
 
         var fd = AllocFD(file);
@@ -130,7 +130,7 @@ public partial class SyscallManager
             if ((flags & LinuxConstants.SFD_CLOEXEC) != 0) eflags |= FileFlags.O_CLOEXEC;
 
             var inode = new SignalFdInode(0, MemfdSuperBlock, mask);
-            var dentry = new Dentry("anon_inode:[signalfd]", inode, null, MemfdSuperBlock);
+            var dentry = new Dentry(FsName.FromString("anon_inode:[signalfd]"), inode, null, MemfdSuperBlock);
             var file = new LinuxFile(dentry, eflags, AnonMount);
 
             var newFd = AllocFD(file);

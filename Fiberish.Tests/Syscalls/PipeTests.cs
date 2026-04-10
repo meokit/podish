@@ -11,6 +11,9 @@ namespace Fiberish.Tests.Syscalls;
 
 public class PipeTests
 {
+    private static readonly FieldInfo AsyncWaitQueuePoolField =
+        typeof(KernelScheduler).GetField("_asyncWaitQueuePool", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
     private static readonly FieldInfo ReadHandleField =
         typeof(PipeInode).GetField("_readHandle", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
@@ -191,6 +194,61 @@ public class PipeTests
 
         var rc = await CallSysLseek(env, (uint)rfd, 0, 0);
         Assert.Equal(-(int)Errno.ESPIPE, rc);
+    }
+
+    [Fact(Timeout = 1000)]
+    public async Task Pipe_LastClose_FinalizesInodeAndReturnsBuffer()
+    {
+        using var env = new TestEnv();
+        const uint fdsAddr = 0x151000;
+        env.MapUserPage(fdsAddr);
+
+        Assert.Equal(0, await CallSysPipe(env, fdsAddr));
+        var (rfd, wfd) = env.ReadPipeFds(fdsAddr);
+
+        var rFile = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(rfd));
+        var wFile = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(wfd));
+        var inode = Assert.IsType<PipeInode>(rFile.Dentry.Inode);
+        Assert.Same(inode, wFile.Dentry.Inode);
+
+        Assert.Equal(0, await CallSysClose(env, (uint)rfd));
+        Assert.False(inode.IsFinalized);
+
+        Assert.Equal(0, await CallSysClose(env, (uint)wfd));
+        Assert.True(inode.IsFinalized);
+        Assert.True(inode.IsCacheEvicted);
+        Assert.Equal(0, inode.RefCount);
+        Assert.Empty(inode.Dentries);
+        Assert.Null(rFile.Dentry.Inode);
+        Assert.Null(wFile.Dentry.Inode);
+        Assert.False(rFile.Dentry.IsTrackedBySuperBlock);
+        Assert.False(wFile.Dentry.IsTrackedBySuperBlock);
+
+        var buffer = (byte[])typeof(PipeInode).GetField("_buffer", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(inode)!;
+        Assert.Empty(buffer);
+    }
+
+    [Fact(Timeout = 1000)]
+    public async Task Pipe_LastClose_ReturnsWaitQueuesToSchedulerPool()
+    {
+        using var env = new TestEnv();
+        const uint fdsAddr = 0x152000;
+        env.MapUserPage(fdsAddr);
+
+        var pool = Assert.IsType<Stack<AsyncWaitQueue>>(AsyncWaitQueuePoolField.GetValue(env.Scheduler));
+        var before = pool.Count;
+
+        Assert.Equal(0, await CallSysPipe(env, fdsAddr));
+        var (rfd, wfd) = env.ReadPipeFds(fdsAddr);
+
+        Assert.Equal(before, pool.Count);
+
+        Assert.Equal(0, await CallSysClose(env, (uint)rfd));
+        Assert.Equal(before, pool.Count);
+
+        Assert.Equal(0, await CallSysClose(env, (uint)wfd));
+        Assert.Equal(before + 2, pool.Count);
     }
 
     [Fact(Timeout = 1000)]

@@ -221,22 +221,22 @@ public class PathWalkMknodSyscallTests
 
         var lowerRoot = lowerSb.Root;
 
-        var file = new Dentry("file", null, lowerRoot, lowerSb);
+        var file = new Dentry(FsName.FromString("file"), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Create(file, 0x1A4, 0, 0);
 
-        var empty = new Dentry("empty", null, lowerRoot, lowerSb);
+        var empty = new Dentry(FsName.FromString("empty"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Mkdir(empty, 0x1ED, 0, 0);
 
-        var nonEmpty = new Dentry("nonempty", null, lowerRoot, lowerSb);
+        var nonEmpty = new Dentry(FsName.FromString("nonempty"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Mkdir(nonEmpty, 0x1ED, 0, 0);
-        var child = new Dentry("a", null, nonEmpty, lowerSb);
+        var child = new Dentry(FsName.FromString("a"), null, nonEmpty, lowerSb);
         nonEmpty.Inode!.Create(child, 0x1A4, 0, 0);
 
-        lowerRoot.Inode.Symlink(new Dentry("link", null, lowerRoot, lowerSb), "file"u8.ToArray(), 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("indirect", null, lowerRoot, lowerSb), "link"u8.ToArray(), 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("broken", null, lowerRoot, lowerSb), "/missing-target"u8.ToArray(), 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("dir-link", null, lowerRoot, lowerSb), "nonempty"u8.ToArray(), 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("dir-chain", null, lowerRoot, lowerSb), "dir-link"u8.ToArray(), 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry(FsName.FromString("link"), null, lowerRoot, lowerSb), "file"u8.ToArray(), 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry(FsName.FromString("indirect"), null, lowerRoot, lowerSb), "link"u8.ToArray(), 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry(FsName.FromString("broken"), null, lowerRoot, lowerSb), "/missing-target"u8.ToArray(), 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry(FsName.FromString("dir-link"), null, lowerRoot, lowerSb), "nonempty"u8.ToArray(), 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry(FsName.FromString("dir-chain"), null, lowerRoot, lowerSb), "dir-link"u8.ToArray(), 0, 0);
 
         var overlayFs = new OverlayFileSystem();
         var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(

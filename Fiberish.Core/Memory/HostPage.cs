@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Fiberish.Memory;
 
@@ -61,12 +62,10 @@ internal readonly record struct TbCohMmPageKey(VMAManager Mm, uint GuestPageStar
     }
 }
 
-internal sealed class TbCohMmPageEntry
+internal struct TbCohMmPageEntry
 {
-    public required VMAManager Mm { get; init; }
-    public required uint GuestPageStart { get; init; }
-    public int ExecRefCount { get; set; }
-    public int WriteRefCount { get; set; }
+    public int ExecRefCount;
+    public int WriteRefCount;
 }
 
 internal sealed class SmallPageSet
@@ -335,15 +334,7 @@ internal sealed class HostPageTbCohIndex
             return false;
 
         var key = new TbCohMmPageKey(mm, guestPageStart);
-        if (!_byMmPage.TryGetValue(key, out var entry))
-        {
-            entry = new TbCohMmPageEntry
-            {
-                Mm = mm,
-                GuestPageStart = guestPageStart
-            };
-            _byMmPage[key] = entry;
-        }
+        ref var entry = ref CollectionsMarshal.GetValueRefOrAddDefault(_byMmPage, key, out _);
 
         TbCohMmBucket? bucket = null;
         var changed = false;
@@ -385,7 +376,8 @@ internal sealed class HostPageTbCohIndex
             return false;
 
         var key = new TbCohMmPageKey(mm, guestPageStart);
-        if (!_byMmPage.TryGetValue(key, out var entry))
+        ref var entry = ref CollectionsMarshal.GetValueRefOrNullRef(_byMmPage, key);
+        if (Unsafe.IsNullRef(ref entry))
             return false;
 
         _byMm.TryGetValue(mm, out var bucket);

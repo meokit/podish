@@ -334,7 +334,7 @@ public partial class SyscallManager
 
     public void MountStandardDev(TtyDiscipline? tty = null, bool ensureMountPoint = true)
     {
-        var devLoc = ensureMountPoint ? EnsureDirectory(Root, "dev") : PathWalk("/dev");
+        var devLoc = ensureMountPoint ? EnsureDirectory(Root, FsName.FromString("dev")) : PathWalk("/dev");
         var devFsType = FileSystemRegistry.Get("devtmpfs")!;
         var devSb = devFsType.CreateFileSystem(DeviceNumbers).ReadSuper(devFsType, 0, "dev", null);
         devSb.MemoryContext = CurrentSyscallEngine.MemoryContext;
@@ -358,7 +358,7 @@ public partial class SyscallManager
         var mountedDevLoc = PathWalk("/dev");
         if (mountedDevLoc.IsValid && mountedDevLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
-            var ptsLoc = EnsureDirectory(mountedDevLoc, "pts");
+            var ptsLoc = EnsureDirectory(mountedDevLoc, FsName.FromString("pts"));
             var devptsSb = _devptsFsType.CreateFileSystem(DeviceNumbers)
                 .ReadSuper(_devptsFsType, 0, "devpts", null);
             devptsSb.MemoryContext = CurrentSyscallEngine.MemoryContext;
@@ -384,7 +384,7 @@ public partial class SyscallManager
 
     public void MountStandardProc(bool ensureMountPoint = true)
     {
-        var procLoc = ensureMountPoint ? EnsureDirectory(Root, "proc") : PathWalk("/proc");
+        var procLoc = ensureMountPoint ? EnsureDirectory(Root, FsName.FromString("proc")) : PathWalk("/proc");
         if (procLoc.IsValid && procLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
             var procFsType = FileSystemRegistry.Get("proc")!;
@@ -411,7 +411,7 @@ public partial class SyscallManager
         var devLoc = PathWalk("/dev");
         if (devLoc.IsValid && devLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
-            var shmLoc = EnsureDirectory(devLoc, "shm");
+            var shmLoc = EnsureDirectory(devLoc, FsName.FromString("shm"));
             var shmMount = CreateDetachedMount(shmSb, "tmpfs", "tmpfs",
                 LinuxConstants.MS_NOSUID | LinuxConstants.MS_NODEV);
             var attachRc = AttachDetachedMount(shmMount, shmLoc);
@@ -428,7 +428,7 @@ public partial class SyscallManager
 
     public void CreateStandardTmp(bool ensureMountPoint = true)
     {
-        if (ensureMountPoint) EnsureDirectory(Root, "tmp");
+        if (ensureMountPoint) EnsureDirectory(Root, FsName.FromString("tmp"));
     }
 
     internal void SetupVDSO()
@@ -465,7 +465,7 @@ public partial class SyscallManager
             SigReturnAddr, RtSigReturnAddr);
     }
 
-    private static PathLocation EnsureDirectory(PathLocation parent, string name)
+    private static PathLocation EnsureDirectory(PathLocation parent, FsName name)
     {
         var parentDentry = parent.Dentry!;
 
@@ -478,20 +478,21 @@ public partial class SyscallManager
             var mkdirRc = parentDentry.Inode.Mkdir(dentry, 0x1FF, 0, 0); // 777
             if (mkdirRc < 0)
             {
-                Logger.LogWarning("Failed to create directory {Name}: rc={Rc}", name, mkdirRc);
-                throw new IOException($"Failed to create directory {name}: rc={mkdirRc}");
+                var nameText = name.ToDebugString();
+                Logger.LogWarning("Failed to create directory {Name}: rc={Rc}", nameText, mkdirRc);
+                throw new IOException($"Failed to create directory {nameText}: rc={mkdirRc}");
             }
         }
         else if (dentry.Inode?.Type != InodeType.Directory)
         {
-            throw new Exception($"Path /{name} exists but is not a directory");
+            throw new Exception($"Path /{name.ToDebugString()} exists but is not a directory");
         }
 
         parentDentry.CacheChild(dentry, "SyscallManager.EnsureDirectory");
         return new PathLocation(dentry, parent.Mount);
     }
 
-    private static Dentry EnsureFileMountPoint(PathLocation parent, string name)
+    private static Dentry EnsureFileMountPoint(PathLocation parent, FsName name)
     {
         var parentDentry = parent.Dentry!;
 
@@ -509,20 +510,20 @@ public partial class SyscallManager
             var createRc = parentDentry.Inode.Create(dentry, 0x1FF, 0, 0); // 777
             if (createRc < 0)
             {
-                Logger.LogWarning("Failed to create file mount point {Name}: rc={Rc}", name, createRc);
+                Logger.LogWarning("Failed to create file mount point {Name}: rc={Rc}", name.ToDebugString(), createRc);
                 dentry.Instantiate(new PlaceholderInode(parentDentry.SuperBlock));
             }
         }
         else if (dentry.Inode?.Type != InodeType.File)
         {
-            throw new Exception($"Path /{name} exists but is not a file");
+            throw new Exception($"Path /{name.ToDebugString()} exists but is not a file");
         }
 
         parentDentry.CacheChild(dentry, "SyscallManager.EnsureFileMountPoint");
         return dentry;
     }
 
-    private static Dentry EnsureRegularFile(PathLocation parent, string name, int mode)
+    private static Dentry EnsureRegularFile(PathLocation parent, FsName name, int mode)
     {
         var parentDentry = parent.Dentry!;
 
@@ -540,13 +541,14 @@ public partial class SyscallManager
             var createRc = parentDentry.Inode.Create(dentry, mode, 0, 0);
             if (createRc < 0)
             {
-                Logger.LogWarning("Failed to create file {Name}: rc={Rc}", name, createRc);
-                throw new IOException($"Failed to create file {name}: rc={createRc}");
+                var nameText = name.ToDebugString();
+                Logger.LogWarning("Failed to create file {Name}: rc={Rc}", nameText, createRc);
+                throw new IOException($"Failed to create file {nameText}: rc={createRc}");
             }
         }
         else if (dentry.Inode?.Type != InodeType.File)
         {
-            throw new Exception($"Path /{name} exists but is not a file");
+            throw new Exception($"Path /{name.ToDebugString()} exists but is not a file");
         }
 
         parentDentry.CacheChild(dentry, "SyscallManager.EnsureRegularFile");
@@ -559,9 +561,9 @@ public partial class SyscallManager
         if (parts.Length == 0) throw new ArgumentException("Cannot mount at root");
 
         var current = Root;
-        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, parts[i]);
+        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, FsName.FromString(parts[i]));
 
-        var name = parts[^1];
+        var name = FsName.FromString(parts[^1]);
         var isFile = File.Exists(hostPath);
         var isDir = Directory.Exists(hostPath);
 
@@ -590,7 +592,7 @@ public partial class SyscallManager
         try
         {
             if (!current.Dentry!.TryGetCachedChild(name, out var mountPoint))
-                throw new IOException($"Mount point not found after ensure: {name}");
+                throw new IOException($"Mount point not found after ensure: {name.ToDebugString()}");
             var targetLoc = new PathLocation(mountPoint, current.Mount);
             var attachRc = AttachDetachedMount(mountHandle.Mount!, targetLoc);
             if (attachRc != 0)
@@ -609,9 +611,9 @@ public partial class SyscallManager
         if (parts.Length == 0) throw new ArgumentException("Cannot mount at root");
 
         var current = Root;
-        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, parts[i]);
+        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, FsName.FromString(parts[i]));
 
-        var name = parts[^1];
+        var name = FsName.FromString(parts[^1]);
         EnsureFileMountPoint(current, name);
 
         var fsCtx = new FsContextFile(AnonMount.Root, AnonMount, "tmpfs");
@@ -626,7 +628,7 @@ public partial class SyscallManager
         if (resolveRc != 0 || sb == null || string.IsNullOrEmpty(mountSource) || string.IsNullOrEmpty(fsTypeName))
             throw new IOException($"Failed to resolve fs context: rc={resolveRc}");
 
-        var fileDentry = new Dentry(sourceName, null, sb.Root, sb);
+        var fileDentry = new Dentry(FsName.FromString(sourceName), null, sb.Root, sb);
         var createRc = sb.Root.Inode!.Create(fileDentry, 0x1A4, 0, 0); // 0644
         if (createRc < 0)
             throw new IOException($"Failed to create detached tmpfs file inode: rc={createRc}");
@@ -655,7 +657,7 @@ public partial class SyscallManager
         try
         {
             if (!current.Dentry!.TryGetCachedChild(name, out var mountPoint))
-                throw new IOException($"Mount point not found after ensure: {name}");
+                throw new IOException($"Mount point not found after ensure: {name.ToDebugString()}");
             var targetLoc = new PathLocation(mountPoint, current.Mount);
             var attachRc = AttachDetachedMount(mountHandle.Mount!, targetLoc);
             if (attachRc != 0) throw new IOException($"Failed to attach detached tmpfs mount: rc={attachRc}");
@@ -694,9 +696,9 @@ public partial class SyscallManager
         if (parts.Length == 0) throw new ArgumentException("Cannot write detached mount root", nameof(relativePath));
 
         var current = new PathLocation(sourceMount.Root, sourceMount);
-        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, parts[i]);
+        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, FsName.FromString(parts[i]));
 
-        var name = parts[^1];
+        var name = FsName.FromString(parts[^1]);
         EnsureRegularFile(current, name, mode);
 
         var loc = PathWalkWithFlags(relativePath, new PathLocation(sourceMount.Root, sourceMount),
@@ -739,9 +741,9 @@ public partial class SyscallManager
         if (parts.Length == 0) throw new ArgumentException("Cannot mount at root", nameof(guestPath));
 
         var current = Root;
-        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, parts[i]);
+        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, FsName.FromString(parts[i]));
 
-        var name = parts[^1];
+        var name = FsName.FromString(parts[^1]);
         if (srcLoc.Dentry.Inode.Type == InodeType.Directory)
             EnsureDirectory(current, name);
         else
@@ -759,7 +761,7 @@ public partial class SyscallManager
         bindMount.Options = BuildMountOptions(bindMount.Flags);
 
         if (!current.Dentry!.TryGetCachedChild(name, out var mountPoint))
-            throw new IOException($"Mount point not found after ensure: {name}");
+            throw new IOException($"Mount point not found after ensure: {name.ToDebugString()}");
 
         var targetLoc = new PathLocation(mountPoint, current.Mount);
         var attachRc = AttachDetachedMount(bindMount, targetLoc);
@@ -773,9 +775,9 @@ public partial class SyscallManager
         if (parts.Length == 0) throw new ArgumentException("Cannot write root");
 
         var current = Root;
-        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, parts[i]);
+        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, FsName.FromString(parts[i]));
 
-        var name = parts[^1];
+        var name = FsName.FromString(parts[^1]);
         EnsureRegularFile(current, name, mode);
 
         var loc = PathWalk(guestPath);
@@ -1138,15 +1140,15 @@ public partial class SyscallManager
         // 0: Stdin, 1: Stdout, 2: Stderr
         // Use AnonMount for console devices (they are not backed by a real filesystem)
         var stdinInode = new ConsoleInode(devSb, true, tty);
-        var stdinDentry = new Dentry("stdin", stdinInode, devSb.Root, devSb);
+        var stdinDentry = new Dentry(FsName.FromString("stdin"), stdinInode, devSb.Root, devSb);
         FDs[0] = new LinuxFile(stdinDentry, FileFlags.O_RDONLY, AnonMount);
 
         var stdoutInode = new ConsoleInode(devSb, false, tty);
-        var stdoutDentry = new Dentry("stdout", stdoutInode, devSb.Root, devSb);
+        var stdoutDentry = new Dentry(FsName.FromString("stdout"), stdoutInode, devSb.Root, devSb);
         FDs[1] = new LinuxFile(stdoutDentry, FileFlags.O_WRONLY, AnonMount);
 
         var stderrInode = new ConsoleInode(devSb, false, tty);
-        var stderrDentry = new Dentry("stderr", stderrInode, devSb.Root, devSb);
+        var stderrDentry = new Dentry(FsName.FromString("stderr"), stderrInode, devSb.Root, devSb);
         FDs[2] = new LinuxFile(stderrDentry, FileFlags.O_WRONLY, AnonMount);
 
         // Resolve the mounted /dev dentry (goes through OverlayFS -> mount -> devtmpfs root)
@@ -1165,29 +1167,29 @@ public partial class SyscallManager
         // Create /dev/null
         var nullInode = new NullInode(devSb);
         nullInode.Rdev = 0x0103; // Major 1, Minor 3
-        var nullDentry = new Dentry("null", nullInode, devRoot, devSb);
+        var nullDentry = new Dentry(FsName.FromString("null"), nullInode, devRoot, devSb);
         RegisterDev("null", nullDentry);
 
         // Create /dev/ptmx (PTY multiplexer)
         var signalBroadcaster = new SignalBroadcasterImpl();
         var ptmxInode = new PtmxInode(devSb, PtyManager, signalBroadcaster, Logger);
         ptmxInode.Rdev = PtyManager.GetPtmxRdev();
-        var ptmxDentry = new Dentry("ptmx", ptmxInode, devRoot, devSb);
+        var ptmxDentry = new Dentry(FsName.FromString("ptmx"), ptmxInode, devRoot, devSb);
         RegisterDev("ptmx", ptmxDentry);
 
         // Create /dev/tty (dynamic controlling terminal for the calling process)
         var ttyInode = new ControllingTtyInode(devSb);
         ttyInode.Rdev = 0x0500; // TTY major 5, minor 0
-        var ttyDentry = new Dentry("tty", ttyInode, devRoot, devSb);
+        var ttyDentry = new Dentry(FsName.FromString("tty"), ttyInode, devRoot, devSb);
         RegisterDev("tty", ttyDentry);
 
         // Create /dev/urandom and /dev/random
         var randomInode = new RandomInode(devSb);
         randomInode.Rdev = 0x0109; // Major 1, Minor 9 (urandom)
-        var urandomDentry = new Dentry("urandom", randomInode, devRoot, devSb);
+        var urandomDentry = new Dentry(FsName.FromString("urandom"), randomInode, devRoot, devSb);
         RegisterDev("urandom", urandomDentry);
 
-        var randomDentry = new Dentry("random", randomInode, devRoot, devSb); // Reuse inode
+        var randomDentry = new Dentry(FsName.FromString("random"), randomInode, devRoot, devSb); // Reuse inode
         RegisterDev("random", randomDentry);
     }
 

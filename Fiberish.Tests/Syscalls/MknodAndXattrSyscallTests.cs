@@ -308,7 +308,7 @@ public class MknodAndXattrSyscallTests
                 var hostType = new FileSystemType { Name = "hostfs" };
                 var hostOpts = HostfsMountOptions.Parse("rw");
                 var lowerSb = new HostSuperBlock(hostType, _tempLowerDir, hostOpts);
-                lowerSb.Root = lowerSb.GetDentry(_tempLowerDir, "/", null)!;
+                lowerSb.Root = lowerSb.GetDentry(_tempLowerDir, FsName.Empty, null)!;
 
                 var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
                 var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-overlay-upper", null);

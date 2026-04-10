@@ -140,7 +140,7 @@ public class PathWalker
     /// </summary>
     /// <param name="path">Path to resolve.</param>
     /// <returns>Tuple of (parent location, final name, error code).</returns>
-    public (PathLocation parent, string name, int error) PathWalkForCreate(string path)
+    public (PathLocation parent, FsName name, int error) PathWalkForCreate(string path)
     {
         return PathWalkForCreate(path, null);
     }
@@ -148,11 +148,10 @@ public class PathWalker
     /// <summary>
     ///     Lookup for create operations with explicit starting point.
     /// </summary>
-    public (PathLocation parent, string name, int error) PathWalkForCreate(string path, PathLocation? startAt)
+    public (PathLocation parent, FsName name, int error) PathWalkForCreate(string path, PathLocation? startAt)
     {
         var bytes = FsEncoding.EncodeUtf8(path);
-        var (parent, name, error) = PrepareCreate(bytes, bytes.Length, startAt);
-        return (parent, name.ToString(), error);
+        return PrepareCreate(bytes, bytes.Length, startAt);
     }
 
     /// <summary>

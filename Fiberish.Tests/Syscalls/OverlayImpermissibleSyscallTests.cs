@@ -186,7 +186,7 @@ public class OverlayImpermissibleSyscallTests
         var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "impermissible-upper", null);
 
         var lowerRoot = lowerSb.Root;
-        var rootfile = new Dentry("rootfile", null, lowerRoot, lowerSb);
+        var rootfile = new Dentry(FsName.FromString("rootfile"), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Create(rootfile, 0x1A4, 0, 0);
         rootfile.Inode!.Uid = 0;
         rootfile.Inode.Gid = 0;

@@ -272,7 +272,7 @@ public partial class SyscallManager
     /// <param name="path">Path where file will be created</param>
     /// <param name="startAt">Optional starting location</param>
     /// <returns>Tuple of (parent location, filename, error code)</returns>
-    public (PathLocation parent, string name, int error) PathWalkForCreate(string path, PathLocation? startAt = null)
+    public (PathLocation parent, FsName name, int error) PathWalkForCreate(string path, PathLocation? startAt = null)
     {
         return PathWalker.PathWalkForCreate(path, startAt);
     }
@@ -512,7 +512,11 @@ public partial class SyscallManager
         if (!loc.IsValid && hsb != null && File.Exists(hostPath))
             try
             {
-                var dentry = hsb.GetDentry(hostPath, Path.GetFileName(hostPath), null);
+                var fileName = Path.GetFileName(hostPath);
+                if (!HostSuperBlock.TryCreateFsNameFromHostName(fileName, out var dentryName))
+                    return (loc, guestPath);
+
+                var dentry = hsb.GetDentry(hostPath, dentryName, null);
                 // For hostfs bootstrap, we might not have a proper mount yet, but 
                 // typically this is used when Root is already set up.
                 loc = new PathLocation(dentry, Root.Mount);

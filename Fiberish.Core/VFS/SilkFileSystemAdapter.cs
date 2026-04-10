@@ -178,7 +178,7 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
             maxIno = Math.Max(maxIno, (long)rootInode.Ino);
         }
 
-        Root = new Dentry("/", rootInode, null, this);
+        Root = new Dentry(FsName.Empty, rootInode, null, this);
         Root.Parent = Root;
 
         var primaryDentryByInode = new Dictionary<long, Dentry> { [SilkMetadataStore.RootInode] = Root };

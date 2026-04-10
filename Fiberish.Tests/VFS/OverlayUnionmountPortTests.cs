@@ -18,7 +18,7 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        var created = new Dentry("empty-new", null, overlaySb.Root, overlaySb);
+        var created = new Dentry(FsName.FromString("empty-new"), null, overlaySb.Root, overlaySb);
         root.Mkdir(created, 0x1ED, 0, 0);
 
         root.Rename("empty-new", root, "empty");
@@ -45,11 +45,11 @@ public class OverlayUnionmountPortTests
         Assert.NotNull(empty);
         var emptyInode = Assert.IsType<OverlayInode>(empty!.Inode);
 
-        var newParent = new Dentry("newp", null, empty, overlaySb);
+        var newParent = new Dentry(FsName.FromString("newp"), null, empty, overlaySb);
         emptyInode.Mkdir(newParent, 0x1ED, 0, 0);
         var newParentInode = Assert.IsType<OverlayInode>(newParent.Inode);
 
-        var child = new Dentry("new", null, newParent, overlaySb);
+        var child = new Dentry(FsName.FromString("new"), null, newParent, overlaySb);
         newParentInode.Mkdir(child, 0x1ED, 0, 0);
 
         emptyInode.Rename("newp", root, "moved");
@@ -118,7 +118,7 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        var created = new Dentry("empty-new", null, overlaySb.Root, overlaySb);
+        var created = new Dentry(FsName.FromString("empty-new"), null, overlaySb.Root, overlaySb);
         root.Mkdir(created, 0x1ED, 0, 0);
 
         Assert.True(root.Rename("empty-new", root, "populated") < 0);
@@ -502,7 +502,7 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        var created = new Dentry("pop-new", null, overlaySb.Root, overlaySb);
+        var created = new Dentry(FsName.FromString("pop-new"), null, overlaySb.Root, overlaySb);
         Assert.Equal(0, root.Mkdir(created, 0x1ED, 0, 0));
         _ = Assert.IsType<OverlayInode>(created.Inode);
         CreateFile(created, overlaySb, "b", "aaaa");
@@ -530,11 +530,11 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
         var empty = Assert.IsType<OverlayInode>(root.Lookup("empty")!.Inode);
 
-        var sub = new Dentry("sub", null, root.Lookup("empty"), overlaySb);
+        var sub = new Dentry(FsName.FromString("sub"), null, root.Lookup("empty"), overlaySb);
         empty.Mkdir(sub, 0x1ED, 0, 0);
 
         Assert.NotNull(empty.Lookup("sub"));
-        Assert.True(empty.Mkdir(new Dentry("sub", null, root.Lookup("empty"), overlaySb), 0x1ED, 0, 0) < 0);
+        Assert.True(empty.Mkdir(new Dentry(FsName.FromString("sub"), null, root.Lookup("empty"), overlaySb), 0x1ED, 0, 0) < 0);
     }
 
     [Fact]
@@ -548,7 +548,7 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.True(root.Mkdir(new Dentry("file", null, overlaySb.Root, overlaySb), 0x1ED, 0, 0) < 0);
+        Assert.True(root.Mkdir(new Dentry(FsName.FromString("file"), null, overlaySb.Root, overlaySb), 0x1ED, 0, 0) < 0);
         Assert.Equal(":xxx:yyy:zzz", ReadAll(root.Lookup("file")!));
     }
 
@@ -601,7 +601,7 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
         var source = Assert.IsType<OverlayInode>(root.Lookup("file")!.Inode);
-        var link = new Dentry("file2", null, overlaySb.Root, overlaySb);
+        var link = new Dentry(FsName.FromString("file2"), null, overlaySb.Root, overlaySb);
         root.Link(link, source);
 
         Assert.Equal(":xxx:yyy:zzz", ReadAll(root.Lookup("file")!));
@@ -621,7 +621,7 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
         var source = Assert.IsType<OverlayInode>(root.Lookup("file")!.Inode);
-        Assert.True(root.Link(new Dentry("target", null, overlaySb.Root, overlaySb), source) < 0);
+        Assert.True(root.Link(new Dentry(FsName.FromString("target"), null, overlaySb.Root, overlaySb), source) < 0);
         Assert.Equal(":xxx:yyy:zzz", ReadAll(root.Lookup("file")!));
         Assert.Equal("", ReadAll(root.Lookup("target")!));
     }
@@ -720,7 +720,7 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
         var source = Assert.IsType<OverlayInode>(root.Lookup("file")!.Inode);
-        root.Link(new Dentry("file2", null, overlaySb.Root, overlaySb), source);
+        root.Link(new Dentry(FsName.FromString("file2"), null, overlaySb.Root, overlaySb), source);
         root.Rename("file2", root, "file3");
         root.Rename("file", root, "file4");
 
@@ -744,7 +744,7 @@ public class OverlayUnionmountPortTests
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
         var source = Assert.IsType<OverlayInode>(root.Lookup("link")!.Inode);
-        root.Link(new Dentry("link2", null, overlaySb.Root, overlaySb), source);
+        root.Link(new Dentry(FsName.FromString("link2"), null, overlaySb.Root, overlaySb), source);
 
         var link = root.Lookup("link");
         var link2 = root.Lookup("link2");
@@ -819,7 +819,7 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        var created = new Dentry("newdir", null, overlaySb.Root, overlaySb);
+        var created = new Dentry(FsName.FromString("newdir"), null, overlaySb.Root, overlaySb);
         Assert.Equal(0, root.Mkdir(created, 0x1ED, 0, 0));
         _ = Assert.IsType<OverlayInode>(created.Inode);
         CreateFile(created, overlaySb, "a", "A");
@@ -986,7 +986,7 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
         var tree = Assert.IsType<OverlayInode>(root.Lookup("tree")!.Inode);
-        var newSubDentry = new Dentry("newsub", null, root.Lookup("tree"), overlaySb);
+        var newSubDentry = new Dentry(FsName.FromString("newsub"), null, root.Lookup("tree"), overlaySb);
         Assert.Equal(0, tree.Mkdir(newSubDentry, 0x1ED, 0, 0));
         _ = Assert.IsType<OverlayInode>(newSubDentry.Inode);
         CreateFile(newSubDentry, overlaySb, "b", "B");
@@ -1166,13 +1166,13 @@ public class OverlayUnionmountPortTests
 
     private static void CreateDirectory(Dentry parent, SuperBlock sb, string name)
     {
-        var dentry = new Dentry(name, null, parent, sb);
+        var dentry = new Dentry(FsName.FromString(name), null, parent, sb);
         parent.Inode!.Mkdir(dentry, 0x1ED, 0, 0);
     }
 
     private static void CreateFile(Dentry parent, SuperBlock sb, string name, string content)
     {
-        var dentry = new Dentry(name, null, parent, sb);
+        var dentry = new Dentry(FsName.FromString(name), null, parent, sb);
         parent.Inode!.Create(dentry, 0x1A4, 0, 0);
         var file = new LinuxFile(dentry, FileFlags.O_WRONLY, null!);
         try
@@ -1188,7 +1188,7 @@ public class OverlayUnionmountPortTests
 
     private static void CreateSymlink(Dentry parent, SuperBlock sb, string name, string target)
     {
-        var dentry = new Dentry(name, null, parent, sb);
+        var dentry = new Dentry(FsName.FromString(name), null, parent, sb);
         parent.Inode!.Symlink(dentry, target, 0, 0);
     }
 

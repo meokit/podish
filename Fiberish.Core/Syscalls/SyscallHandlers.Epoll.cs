@@ -7,6 +7,8 @@ namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
+    private static readonly FsName Epoll = FsName.FromString("[epoll]");
+
 #pragma warning disable CS1998
     private static int ValidateAndNormalizeEpollCtlEvents(ref uint events)
     {
@@ -53,7 +55,7 @@ public partial class SyscallManager
         if (size <= 0) return -(int)Errno.EINVAL;
 
         var inode = new EpollInode(0, MemfdSuperBlock, task.CommonKernel);
-        var dentry = new Dentry("[epoll]", inode, null, MemfdSuperBlock);
+        var dentry = new Dentry(Epoll, inode, null, MemfdSuperBlock);
         var file = new LinuxFile(dentry, FileFlags.O_RDWR, AnonMount);
 
         return AllocFD(file);
@@ -71,7 +73,7 @@ public partial class SyscallManager
         var fileFlags = FileFlags.O_RDWR;
         if ((flags & (int)FileFlags.O_CLOEXEC) != 0) fileFlags |= FileFlags.O_CLOEXEC;
 
-        var dentry = new Dentry("[epoll]", inode, null, MemfdSuperBlock);
+        var dentry = new Dentry(Epoll, inode, null, MemfdSuperBlock);
         var file = new LinuxFile(dentry, fileFlags, AnonMount);
         return AllocFD(file);
     }

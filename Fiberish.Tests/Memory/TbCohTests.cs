@@ -477,7 +477,7 @@ public class TbCohTests
             var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
             _superBlock = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
             _root = _superBlock.Root;
-            Dentry = new Dentry("tbcoh.bin", null, _root, _superBlock);
+            Dentry = new Dentry(FsName.FromString("tbcoh.bin"), null, _root, _superBlock);
             _root.Inode!.Create(Dentry, 0x1B6, 0, 0);
 
             var file = Open();

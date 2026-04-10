@@ -23,7 +23,7 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var regular = new Dentry("file.txt", null, root, rig.SuperBlock);
+        var regular = new Dentry(FsName.FromString("file.txt"), null, root, rig.SuperBlock);
         rootInode.Create(regular, 0x1A4, 0, 0);
         Assert.NotNull(rootInode.Lookup(B("file.txt")));
 
@@ -31,7 +31,7 @@ public class FileSystemBehaviorTests
         Assert.Null(rootInode.Lookup(B("file.txt")));
         Assert.DoesNotContain(rootInode.GetEntries(), e => e.Name == "file.txt");
 
-        var symlink = new Dentry("link.txt", null, root, rig.SuperBlock);
+        var symlink = new Dentry(FsName.FromString("link.txt"), null, root, rig.SuperBlock);
         rootInode.Symlink(symlink, B("target.txt"), 0, 0);
         Assert.NotNull(rootInode.Lookup(B("link.txt")));
 
@@ -48,13 +48,13 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var dir = new Dentry("dir", null, root, rig.SuperBlock);
+        var dir = new Dentry(FsName.FromString("dir"), null, root, rig.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
         Assert.NotNull(rootInode.Lookup(B("dir")));
         Assert.Contains(rootInode.GetEntries(), e => e.Name == "dir");
 
         var dirInode = Assert.IsAssignableFrom<Inode>(dir.Inode);
-        var nested = new Dentry("nested", null, dir, rig.SuperBlock);
+        var nested = new Dentry(FsName.FromString("nested"), null, dir, rig.SuperBlock);
         dirInode.Mkdir(nested, 0x1ED, 0, 0);
         Assert.NotNull(dirInode.Lookup(B("nested")));
 
@@ -76,14 +76,14 @@ public class FileSystemBehaviorTests
         var rootInode = rig.RootInode;
         var rootStart = rootInode.GetLinkCountForStat();
 
-        var dir = new Dentry("dir", null, root, rig.SuperBlock);
+        var dir = new Dentry(FsName.FromString("dir"), null, root, rig.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
         var dirInode = Assert.IsAssignableFrom<Inode>(dir.Inode);
 
         Assert.Equal(rootStart + 1, rootInode.GetLinkCountForStat());
         Assert.Equal(2u, dirInode.GetLinkCountForStat());
 
-        var nested = new Dentry("nested", null, dir, rig.SuperBlock);
+        var nested = new Dentry(FsName.FromString("nested"), null, dir, rig.SuperBlock);
         dirInode.Mkdir(nested, 0x1ED, 0, 0);
         var nestedInode = Assert.IsAssignableFrom<Inode>(nested.Inode);
 
@@ -105,7 +105,7 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var file = new Dentry("old.txt", null, root, rig.SuperBlock);
+        var file = new Dentry(FsName.FromString("old.txt"), null, root, rig.SuperBlock);
         rootInode.Create(file, 0x1A4, 0, 0);
         var oldIno = file.Inode!.Ino;
 
@@ -127,12 +127,12 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var dir = new Dentry("olddir", null, root, rig.SuperBlock);
+        var dir = new Dentry(FsName.FromString("olddir"), null, root, rig.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
         var dirIno = dir.Inode!.Ino;
 
         var dirInode = Assert.IsAssignableFrom<Inode>(dir.Inode);
-        var child = new Dentry("child.txt", null, dir, rig.SuperBlock);
+        var child = new Dentry(FsName.FromString("child.txt"), null, dir, rig.SuperBlock);
         dirInode.Create(child, 0x1A4, 0, 0);
 
         rootInode.Rename(B("olddir"), rootInode, B("newdir"));
@@ -156,7 +156,7 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var dir = new Dentry("dir", null, root, rig.SuperBlock);
+        var dir = new Dentry(FsName.FromString("dir"), null, root, rig.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
 
         Assert.Equal(-(int)Errno.EISDIR, rootInode.Unlink(B("dir")));
@@ -172,10 +172,10 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var dir = new Dentry("dir", null, root, rig.SuperBlock);
+        var dir = new Dentry(FsName.FromString("dir"), null, root, rig.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
         var dirInode = Assert.IsAssignableFrom<Inode>(dir.Inode);
-        var child = new Dentry("child.txt", null, dir, rig.SuperBlock);
+        var child = new Dentry(FsName.FromString("child.txt"), null, dir, rig.SuperBlock);
         dirInode.Create(child, 0x1A4, 0, 0);
 
         Assert.Equal(-(int)Errno.ENOTEMPTY, rootInode.Rmdir(B("dir")));
@@ -191,11 +191,11 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var source = new Dentry("source.txt", null, root, rig.SuperBlock);
+        var source = new Dentry(FsName.FromString("source.txt"), null, root, rig.SuperBlock);
         rootInode.Create(source, 0x1A4, 0, 0);
         var sourceIno = source.Inode!.Ino;
 
-        var target = new Dentry("target.txt", null, root, rig.SuperBlock);
+        var target = new Dentry(FsName.FromString("target.txt"), null, root, rig.SuperBlock);
         rootInode.Create(target, 0x1A4, 0, 0);
         Assert.NotEqual(sourceIno, target.Inode!.Ino);
 
@@ -215,7 +215,7 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var file = new Dentry("alpha.txt", null, root, rig.SuperBlock);
+        var file = new Dentry(FsName.FromString("alpha.txt"), null, root, rig.SuperBlock);
         rootInode.Create(file, 0x1A4, 0, 0);
         Assert.Contains(rootInode.GetEntries(), e => e.Name == "alpha.txt");
 
@@ -235,10 +235,10 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var file = new Dentry("target.txt", null, root, rig.SuperBlock);
+        var file = new Dentry(FsName.FromString("target.txt"), null, root, rig.SuperBlock);
         rootInode.Create(file, 0x1A4, 0, 0);
 
-        var link = new Dentry("link.txt", null, root, rig.SuperBlock);
+        var link = new Dentry(FsName.FromString("link.txt"), null, root, rig.SuperBlock);
         rootInode.Symlink(link, B("target.txt"), 0, 0);
 
         var looked = rootInode.Lookup(B("link.txt"));
@@ -257,10 +257,10 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var file = new Dentry("target.txt", null, root, rig.SuperBlock);
+        var file = new Dentry(FsName.FromString("target.txt"), null, root, rig.SuperBlock);
         rootInode.Create(file, 0x1A4, 0, 0);
 
-        var link = new Dentry("link.txt", null, root, rig.SuperBlock);
+        var link = new Dentry(FsName.FromString("link.txt"), null, root, rig.SuperBlock);
         rootInode.Symlink(link, B("target.txt"), 0, 0);
         var linkIno = link.Inode!.Ino;
 
@@ -283,11 +283,11 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var parent = new Dentry("parent", null, root, rig.SuperBlock);
+        var parent = new Dentry(FsName.FromString("parent"), null, root, rig.SuperBlock);
         rootInode.Mkdir(parent, 0x1ED, 0, 0);
         var parentInode = Assert.IsAssignableFrom<Inode>(parent.Inode);
 
-        var child = new Dentry("child", null, parent, rig.SuperBlock);
+        var child = new Dentry(FsName.FromString("child"), null, parent, rig.SuperBlock);
         parentInode.Mkdir(child, 0x1ED, 0, 0);
         var parentIno = parent.Inode!.Ino;
 
@@ -308,14 +308,14 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var source = new Dentry("source", null, root, rig.SuperBlock);
+        var source = new Dentry(FsName.FromString("source"), null, root, rig.SuperBlock);
         rootInode.Mkdir(source, 0x1ED, 0, 0);
         var sourceInode = Assert.IsAssignableFrom<Inode>(source.Inode);
-        var sourceChild = new Dentry("child.txt", null, source, rig.SuperBlock);
+        var sourceChild = new Dentry(FsName.FromString("child.txt"), null, source, rig.SuperBlock);
         sourceInode.Create(sourceChild, 0x1A4, 0, 0);
         var sourceIno = source.Inode!.Ino;
 
-        var target = new Dentry("target", null, root, rig.SuperBlock);
+        var target = new Dentry(FsName.FromString("target"), null, root, rig.SuperBlock);
         rootInode.Mkdir(target, 0x1ED, 0, 0);
         Assert.NotNull(rootInode.Lookup(B("target")));
 
@@ -336,17 +336,17 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var source = new Dentry("source", null, root, rig.SuperBlock);
+        var source = new Dentry(FsName.FromString("source"), null, root, rig.SuperBlock);
         rootInode.Mkdir(source, 0x1ED, 0, 0);
         var sourceInode = Assert.IsAssignableFrom<Inode>(source.Inode);
-        var sourceChild = new Dentry("source-child.txt", null, source, rig.SuperBlock);
+        var sourceChild = new Dentry(FsName.FromString("source-child.txt"), null, source, rig.SuperBlock);
         sourceInode.Create(sourceChild, 0x1A4, 0, 0);
         var sourceIno = source.Inode!.Ino;
 
-        var target = new Dentry("target", null, root, rig.SuperBlock);
+        var target = new Dentry(FsName.FromString("target"), null, root, rig.SuperBlock);
         rootInode.Mkdir(target, 0x1ED, 0, 0);
         var targetInode = Assert.IsAssignableFrom<Inode>(target.Inode);
-        var targetChild = new Dentry("target-child.txt", null, target, rig.SuperBlock);
+        var targetChild = new Dentry(FsName.FromString("target-child.txt"), null, target, rig.SuperBlock);
         targetInode.Create(targetChild, 0x1A4, 0, 0);
 
         Assert.Equal(-(int)Errno.ENOTEMPTY, rootInode.Rename(B("source"), rootInode, B("target")));
@@ -368,11 +368,11 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var source = new Dentry("source.txt", null, root, rig.SuperBlock);
+        var source = new Dentry(FsName.FromString("source.txt"), null, root, rig.SuperBlock);
         rootInode.Create(source, 0x1A4, 0, 0);
         var sourceIno = source.Inode!.Ino;
 
-        var linked = new Dentry("linked.txt", null, root, rig.SuperBlock);
+        var linked = new Dentry(FsName.FromString("linked.txt"), null, root, rig.SuperBlock);
         rootInode.Link(linked, source.Inode);
 
         var sourceLookup = rootInode.Lookup(B("source.txt"));
@@ -398,15 +398,15 @@ public class FileSystemBehaviorTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var fromDir = new Dentry("from", null, root, rig.SuperBlock);
+        var fromDir = new Dentry(FsName.FromString("from"), null, root, rig.SuperBlock);
         rootInode.Mkdir(fromDir, 0x1ED, 0, 0);
-        var toDir = new Dentry("to", null, root, rig.SuperBlock);
+        var toDir = new Dentry(FsName.FromString("to"), null, root, rig.SuperBlock);
         rootInode.Mkdir(toDir, 0x1ED, 0, 0);
 
         var fromInode = Assert.IsAssignableFrom<Inode>(fromDir.Inode);
         var toInode = Assert.IsAssignableFrom<Inode>(toDir.Inode);
 
-        var file = new Dentry("payload.txt", null, fromDir, rig.SuperBlock);
+        var file = new Dentry(FsName.FromString("payload.txt"), null, fromDir, rig.SuperBlock);
         fromInode.Create(file, 0x1A4, 0, 0);
         var fileIno = file.Inode!.Ino;
 

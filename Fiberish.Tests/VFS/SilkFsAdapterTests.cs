@@ -13,6 +13,32 @@ public class SilkFsAdapterTests
 {
     private static byte[] Utf8(string value) => Encoding.UTF8.GetBytes(value);
 
+    private static readonly FsName Mnt = FsName.FromString("mnt");
+    private static readonly FsName HelloTxt = FsName.FromString("hello.txt");
+    private static readonly FsName WhGhostTxt = FsName.FromString(".wh.ghost.txt");
+    private static readonly FsName KeepTxt = FsName.FromString("keep.txt");
+    private static readonly FsName WhGoneTxt = FsName.FromString(".wh.gone.txt");
+    private static readonly FsName StampTxt = FsName.FromString("stamp.txt");
+    private static readonly FsName From = FsName.FromString("from");
+    private static readonly FsName To = FsName.FromString("to");
+    private static readonly FsName Child = FsName.FromString("child");
+    private static readonly FsName ObjTxt = FsName.FromString("obj.txt");
+    private static readonly FsName GoneTxt = FsName.FromString("gone.txt");
+    private static readonly FsName ATxt = FsName.FromString("a.txt");
+    private static readonly FsName BTxt = FsName.FromString("b.txt");
+    private static readonly FsName HeldTxt = FsName.FromString("held.txt");
+    private static readonly FsName MapHeldTxt = FsName.FromString("mapheld.txt");
+    private static readonly FsName MapTxt = FsName.FromString("map.txt");
+    private static readonly FsName WriteFlushTxt = FsName.FromString("write_flush.txt");
+    private static readonly FsName ReclaimTxt = FsName.FromString("reclaim.txt");
+    private static readonly FsName AutoReclaimTxt = FsName.FromString("auto_reclaim.txt");
+    private static readonly FsName Sub = FsName.FromString("sub");
+    private static readonly FsName DataTxt = FsName.FromString("data.txt");
+    private static readonly FsName BigBin = FsName.FromString("big.bin");
+    private static readonly FsName ResizeBin = FsName.FromString("resize.bin");
+    private static readonly FsName MappedTxt = FsName.FromString("mapped.txt");
+    private static readonly FsName Reclaim = FsName.FromString("reclaim");
+
     [Fact]
     public void Silkfs_IsRegistered_AndCanAttachMount()
     {
@@ -38,7 +64,7 @@ public class SilkFsAdapterTests
             var root = sm.Root.Dentry!;
             if (root.Inode!.Lookup("mnt") == null)
             {
-                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                 root.CacheChild(mntDentry, "test");
             }
@@ -59,7 +85,7 @@ public class SilkFsAdapterTests
             Assert.True(Directory.Exists(Path.Combine(silkRoot, "live")));
             Assert.True(File.Exists(Path.Combine(silkRoot, "metadata.sqlite3")));
 
-            var file = new Dentry("hello.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var file = new Dentry(HelloTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var setRc = file.Inode!.SetXAttr("user.mime_type", "text/plain"u8.ToArray(), 0);
             Assert.Equal(0, setRc);
@@ -72,7 +98,7 @@ public class SilkFsAdapterTests
             var x = session.GetXAttr(childIno!.Value, Utf8("user.mime_type"));
             Assert.NotNull(x);
 
-            var wh = new Dentry(".wh.ghost.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var wh = new Dentry(WhGhostTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Mknod(wh, 0x180, 0, 0, InodeType.CharDev, 0);
             Assert.True(session.HasWhiteout(SilkMetadataStore.RootInode, Utf8("ghost.txt")));
         }
@@ -107,7 +133,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }
@@ -118,7 +144,7 @@ public class SilkFsAdapterTests
                 Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
                 var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
 
-                var file = new Dentry("keep.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+                var file = new Dentry(KeepTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
                 loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
                 var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
                 var payload = Encoding.UTF8.GetBytes("hello-silk");
@@ -126,7 +152,7 @@ public class SilkFsAdapterTests
                 Assert.Equal(payload.Length, wrote);
                 wf.Close();
                 Assert.Equal(0, file.Inode!.SetXAttr("user.test", "value"u8.ToArray(), 0));
-                var wh = new Dentry(".wh.gone.txt", null, loc.Dentry, loc.Dentry.SuperBlock);
+                var wh = new Dentry(WhGoneTxt, null, loc.Dentry, loc.Dentry.SuperBlock);
                 loc.Dentry.Inode.Mknod(wh, 0x180, 0, 0, InodeType.CharDev, 0);
                 sm.Close();
             }
@@ -148,7 +174,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }
@@ -213,7 +239,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }
@@ -224,7 +250,7 @@ public class SilkFsAdapterTests
                 Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
                 var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
 
-                var file = new Dentry("stamp.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+                var file = new Dentry(StampTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
                 loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
                 var inode = file.Inode!;
                 var atime = DateTimeOffset.FromUnixTimeSeconds(1_700_000_000).UtcDateTime;
@@ -251,7 +277,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }
@@ -293,7 +319,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }
@@ -306,15 +332,15 @@ public class SilkFsAdapterTests
                 var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
                 var mntInode = loc.Dentry!.Inode!;
 
-                var from = new Dentry("from", null, loc.Dentry, loc.Dentry.SuperBlock);
+                var from = new Dentry(From, null, loc.Dentry, loc.Dentry.SuperBlock);
                 mntInode.Mkdir(from, 0x1ED, 0, 0);
                 var fromInode = Assert.IsAssignableFrom<Inode>(from.Inode);
 
-                var to = new Dentry("to", null, loc.Dentry, loc.Dentry.SuperBlock);
+                var to = new Dentry(To, null, loc.Dentry, loc.Dentry.SuperBlock);
                 mntInode.Mkdir(to, 0x1ED, 0, 0);
                 var toInode = Assert.IsAssignableFrom<Inode>(to.Inode);
 
-                var child = new Dentry("child", null, from, from.SuperBlock);
+                var child = new Dentry(Child, null, from, from.SuperBlock);
                 fromInode.Mkdir(child, 0x1ED, 0, 0);
                 Assert.Equal(3, fromInode.LinkCount);
                 Assert.Equal(2, toInode.LinkCount);
@@ -338,7 +364,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }
@@ -396,7 +422,7 @@ public class SilkFsAdapterTests
             var root = sm.Root.Dentry!;
             if (root.Inode!.Lookup("mnt") == null)
             {
-                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                 root.CacheChild(mntDentry, "test");
             }
@@ -407,7 +433,7 @@ public class SilkFsAdapterTests
             Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
             var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
 
-            var file = new Dentry("obj.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var file = new Dentry(ObjTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
 
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
@@ -458,7 +484,7 @@ public class SilkFsAdapterTests
             var root = sm.Root.Dentry!;
             if (root.Inode!.Lookup("mnt") == null)
             {
-                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                 root.CacheChild(mntDentry, "test");
             }
@@ -469,7 +495,7 @@ public class SilkFsAdapterTests
             Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
             var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
 
-            var file = new Dentry("gone.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var file = new Dentry(GoneTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
             Assert.Equal(4, file.Inode!.WriteFromHost(null, wf, "data"u8.ToArray(), 0));
@@ -511,7 +537,7 @@ public class SilkFsAdapterTests
             var root = sm.Root.Dentry!;
             if (root.Inode!.Lookup("mnt") == null)
             {
-                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                 root.CacheChild(mntDentry, "test");
             }
@@ -522,8 +548,8 @@ public class SilkFsAdapterTests
             Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
             var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
 
-            var a = new Dentry("a.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
-            var b = new Dentry("b.txt", null, loc.Dentry, loc.Dentry.SuperBlock);
+            var a = new Dentry(ATxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var b = new Dentry(BTxt, null, loc.Dentry, loc.Dentry.SuperBlock);
             loc.Dentry.Inode!.Create(a, 0x1A4, 0, 0);
             loc.Dentry.Inode.Create(b, 0x1A4, 0, 0);
 
@@ -572,7 +598,7 @@ public class SilkFsAdapterTests
             var root = sm.Root.Dentry!;
             if (root.Inode!.Lookup("mnt") == null)
             {
-                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                 root.CacheChild(mntDentry, "test");
             }
@@ -583,7 +609,7 @@ public class SilkFsAdapterTests
             Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
             var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
 
-            var file = new Dentry("held.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var file = new Dentry(HeldTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
             Assert.Equal(5, file.Inode!.WriteFromHost(null, wf, "hello"u8.ToArray(), 0));
@@ -634,7 +660,7 @@ public class SilkFsAdapterTests
             var root = sm.Root.Dentry!;
             if (root.Inode!.Lookup("mnt") == null)
             {
-                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                 root.CacheChild(mntDentry, "test");
             }
@@ -645,7 +671,7 @@ public class SilkFsAdapterTests
             Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
             var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
 
-            var file = new Dentry("mapheld.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var file = new Dentry(MapHeldTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
             Assert.Equal(5, file.Inode!.WriteFromHost(null, wf, "hello"u8.ToArray(), 0));
@@ -697,7 +723,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }
@@ -708,7 +734,7 @@ public class SilkFsAdapterTests
                 Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
                 var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
 
-                var file = new Dentry("map.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+                var file = new Dentry(MapTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
                 loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
                 var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
                 var payload = "hello"u8.ToArray();
@@ -742,7 +768,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }
@@ -788,7 +814,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }
@@ -799,7 +825,7 @@ public class SilkFsAdapterTests
                 Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
                 var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
 
-                var file = new Dentry("write_flush.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+                var file = new Dentry(WriteFlushTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
                 loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
                 var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
                 Assert.Equal(5, file.Inode!.WriteFromHost(null, wf, "hello"u8.ToArray(), 0));
@@ -829,7 +855,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }
@@ -875,7 +901,7 @@ public class SilkFsAdapterTests
             var root = sm.Root.Dentry!;
             if (root.Inode!.Lookup("mnt") == null)
             {
-                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                 root.CacheChild(mntDentry, "test");
             }
@@ -886,7 +912,7 @@ public class SilkFsAdapterTests
             Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
             var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
 
-            var file = new Dentry("reclaim.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var file = new Dentry(ReclaimTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
             Assert.Equal(5, file.Inode!.WriteFromHost(null, wf, "hello"u8.ToArray(), 0));
@@ -947,7 +973,7 @@ public class SilkFsAdapterTests
             var root = sm.Root.Dentry!;
             if (root.Inode!.Lookup("mnt") == null)
             {
-                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                 root.CacheChild(mntDentry, "test");
             }
@@ -958,7 +984,7 @@ public class SilkFsAdapterTests
             Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
             var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
 
-            var file = new Dentry("auto_reclaim.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var file = new Dentry(AutoReclaimTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
             Assert.Equal(5, file.Inode!.WriteFromHost(null, wf, "hello"u8.ToArray(), 0));
@@ -1013,7 +1039,7 @@ public class SilkFsAdapterTests
             var root = sm.Root.Dentry!;
             if (root.Inode!.Lookup("mnt") == null)
             {
-                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                 root.CacheChild(mntDentry, "test");
             }
@@ -1024,9 +1050,9 @@ public class SilkFsAdapterTests
             Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
 
             var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
-            var dir = new Dentry("sub", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var dir = new Dentry(Sub, null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Mkdir(dir, 0x1ED, 0, 0);
-            var file = new Dentry("data.txt", null, dir, dir.SuperBlock);
+            var file = new Dentry(DataTxt, null, dir, dir.SuperBlock);
             dir.Inode!.Create(file, 0x1A4, 0, 0);
 
             var payload = "hello-iget";
@@ -1080,7 +1106,7 @@ public class SilkFsAdapterTests
             var root = sm.Root.Dentry!;
             if (root.Inode!.Lookup("mnt") == null)
             {
-                var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                 root.CacheChild(mntDentry, "test");
             }
@@ -1091,7 +1117,7 @@ public class SilkFsAdapterTests
             Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
 
             var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
-            var file = new Dentry("held.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var file = new Dentry(HeldTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var payload = "keep-open";
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
@@ -1138,7 +1164,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }
@@ -1149,7 +1175,7 @@ public class SilkFsAdapterTests
                 Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
                 var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
 
-                var file = new Dentry("big.bin", null, loc.Dentry, loc.Dentry!.SuperBlock);
+                var file = new Dentry(BigBin, null, loc.Dentry, loc.Dentry!.SuperBlock);
                 loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
                 var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
                 Assert.Equal(payload.Length, file.Inode!.WriteFromHost(null, wf, payload, 0));
@@ -1169,7 +1195,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }
@@ -1217,7 +1243,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }
@@ -1228,7 +1254,7 @@ public class SilkFsAdapterTests
                 Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
                 var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
 
-                var file = new Dentry("resize.bin", null, loc.Dentry, loc.Dentry!.SuperBlock);
+                var file = new Dentry(ResizeBin, null, loc.Dentry, loc.Dentry!.SuperBlock);
                 loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
                 var wf = new LinuxFile(file, FileFlags.O_RDWR, loc.Mount!);
                 Assert.Equal(10, file.Inode!.WriteFromHost(null, wf, "abcdefghij"u8.ToArray(), 0));
@@ -1251,7 +1277,7 @@ public class SilkFsAdapterTests
                 var root = sm.Root.Dentry!;
                 if (root.Inode!.Lookup("mnt") == null)
                 {
-                    var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
                     root.CacheChild(mntDentry, "test");
                 }

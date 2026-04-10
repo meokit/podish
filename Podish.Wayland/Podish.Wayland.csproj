@@ -2,6 +2,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Fiberish.Core\Fiberish.Core.csproj" />
+    <ProjectReference Include="..\Fiberish.FsName.Generator\Fiberish.FsName.Generator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <PropertyGroup>

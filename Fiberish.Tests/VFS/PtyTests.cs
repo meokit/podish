@@ -255,7 +255,7 @@ public class PtyTests
         var broadcaster = new MockSignalBroadcaster();
         var superBlock = new TmpfsSuperBlock(new FileSystemType { Name = "tmpfs" }, new DeviceNumberManager());
         var ptmxInode = new PtmxInode(superBlock, ctx.Manager, broadcaster, _logger);
-        var linuxFile = new LinuxFile(new Dentry("ptmx", ptmxInode, null, ptmxInode.SuperBlock), FileFlags.O_RDWR, null!);
+        var linuxFile = new LinuxFile(new Dentry(FsName.FromString("ptmx"), ptmxInode, null, ptmxInode.SuperBlock), FileFlags.O_RDWR, null!);
         ptmxInode.Open(linuxFile);
 
         var pair = Assert.IsType<PtyPair>(linuxFile.PrivateData);

@@ -291,7 +291,7 @@ public class RawPathnameSyscallTests
             Assert.True(parent.IsValid);
             if (parent.Dentry!.TryGetCachedChild(name, out _))
                 return;
-            var dentry = new Dentry(name, null, parent.Dentry, parent.Dentry.SuperBlock);
+            var dentry = new Dentry(FsName.FromString(name), null, parent.Dentry, parent.Dentry.SuperBlock);
             Assert.Equal(0, parent.Dentry.Inode!.Mkdir(dentry, 0x1FF, 0, 0));
             parent.Dentry.CacheChild(dentry, "test");
         }

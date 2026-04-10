@@ -408,7 +408,7 @@ public class CrossMountBehaviorTests
             SyscallManager.InitializeRoot(rootSb.Root, rootMount);
 
             var root = SyscallManager.Root.Dentry!;
-            var mountPoint = new Dentry("mnt", null, root, root.SuperBlock);
+            var mountPoint = new Dentry(FsName.FromString("mnt"), null, root, root.SuperBlock);
             root.Inode!.Mkdir(mountPoint, 0x1FF, 0, 0);
             root.CacheChild(mountPoint, "test");
 

@@ -279,7 +279,7 @@ internal static class RootfsArchiveLoader
                 continue;
             }
 
-            var created = new Dentry(segment, null, current, current.SuperBlock);
+            var created = new Dentry(FsName.FromString(segment), null, current, current.SuperBlock);
             current.Inode.Mkdir(created, mode, 0, 0);
             current = created;
         }
@@ -298,7 +298,7 @@ internal static class RootfsArchiveLoader
             parent.Inode.Unlink(name);
         }
 
-        var fileDentry = new Dentry(name, null, parent, parent.SuperBlock);
+        var fileDentry = new Dentry(FsName.FromString(name), null, parent, parent.SuperBlock);
         parent.Inode.Create(fileDentry, mode, 0, 0);
 
         if (data.Length == 0)
@@ -328,7 +328,7 @@ internal static class RootfsArchiveLoader
             parent.Inode.Unlink(name);
         }
 
-        var symlinkDentry = new Dentry(name, null, parent, parent.SuperBlock);
+        var symlinkDentry = new Dentry(FsName.FromString(name), null, parent, parent.SuperBlock);
         parent.Inode.Symlink(symlinkDentry, target, 0, 0);
     }
 
@@ -351,7 +351,7 @@ internal static class RootfsArchiveLoader
             parent.Inode.Unlink(name);
         }
 
-        var linkDentry = new Dentry(name, null, parent, parent.SuperBlock);
+        var linkDentry = new Dentry(FsName.FromString(name), null, parent, parent.SuperBlock);
         parent.Inode.Link(linkDentry, target.Inode);
     }
 

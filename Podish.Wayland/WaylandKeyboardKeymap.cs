@@ -1,4 +1,5 @@
 using System.Text;
+using Fiberish.VFS;
 
 namespace Podish.Wayland;
 
@@ -24,7 +25,7 @@ internal sealed class WaylandKeyboardKeymap
         var sb = fs.ReadSuper(fsType, 0, "wayland-keymap", null);
         _mount = new Mount(sb, sb.Root);
 
-        _fileDentry = new Dentry("keymap.xkb", null, sb.Root, sb);
+        _fileDentry = new Dentry(FsName.FromString("keymap.xkb"), null, sb.Root, sb);
         sb.Root.Inode!.Create(_fileDentry, 0x1A4, 0, 0);
 
         var writer = new LinuxFile(_fileDentry, FileFlags.O_RDWR, _mount);

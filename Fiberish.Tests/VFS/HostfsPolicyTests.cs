@@ -21,7 +21,7 @@ public class HostfsPolicyTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = new HostfsMountOptions { SpecialNodePolicy = new DirectoriesOnlySpecialNodePolicy() };
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var root = Assert.IsType<HostInode>(sb.Root.Inode);
 
             Assert.Null(root.Lookup("a.txt"));
@@ -47,7 +47,7 @@ public class HostfsPolicyTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = new HostfsMountOptions { MountBoundaryPolicy = new RootOnlyMountBoundaryPolicy() };
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var root = Assert.IsType<HostInode>(sb.Root.Inode);
 
             Assert.Null(root.Lookup("a.txt"));
@@ -77,7 +77,7 @@ public class HostfsPolicyTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = new HostfsMountOptions { MountBoundaryPolicy = new RootOnlyMountBoundaryPolicy() };
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             sb.Root.Parent = sb.Root;
             var mount = new Mount(sb, sb.Root) { Source = tempRoot, FsType = "hostfs", Options = "rw" };
             sm.InitializeRoot(sb.Root, mount);

@@ -16,7 +16,7 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new EventFdInode(0, env.MemfdSuperBlock, 5, FileFlags.O_RDWR);
-        var efd = new LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+        var efd = new LinuxFile(new Dentry(FsName.FromString("eventfd"), inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 
         // Read initial value 5
@@ -46,7 +46,7 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new EventFdInode(0, env.MemfdSuperBlock, 5, (FileFlags)LinuxConstants.EFD_SEMAPHORE);
-        var efd = new LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock),
+        var efd = new LinuxFile(new Dentry(FsName.FromString("eventfd"), inode, null, env.MemfdSuperBlock),
             (FileFlags)LinuxConstants.EFD_SEMAPHORE, null!);
 
         var buf = new byte[8];
@@ -77,7 +77,7 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new TimerFdInode(0, env.MemfdSuperBlock);
-        var tfd = new LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+        var tfd = new LinuxFile(new Dentry(FsName.FromString("timerfd"), inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 
         inode.SetTime(env.Task, 2000, 5000, false);
@@ -92,7 +92,7 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new TimerFdInode(0, env.MemfdSuperBlock);
-        var tfd = new LinuxFile(new Dentry("timerfd", inode, null, env.MemfdSuperBlock),
+        var tfd = new LinuxFile(new Dentry(FsName.FromString("timerfd"), inode, null, env.MemfdSuperBlock),
             FileFlags.O_NONBLOCK, null!);
 
         // Manually invoke the callback to simulate expiration
@@ -118,7 +118,7 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new SignalFdInode(0, env.MemfdSuperBlock, 1UL << ((int)Signal.SIGUSR1 - 1));
-        var sfd = new LinuxFile(new Dentry("signalfd", inode, null, env.MemfdSuperBlock),
+        var sfd = new LinuxFile(new Dentry(FsName.FromString("signalfd"), inode, null, env.MemfdSuperBlock),
             FileFlags.O_NONBLOCK, null!);
 
         // Queue a signal
@@ -152,7 +152,7 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new EventFdInode(0, env.MemfdSuperBlock, 1, FileFlags.O_RDWR);
-        var efd = new LinuxFile(new Dentry("eventfd", inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+        var efd = new LinuxFile(new Dentry(FsName.FromString("eventfd"), inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 
         var fired = 0;
@@ -166,7 +166,7 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new SignalFdInode(0, env.MemfdSuperBlock, 1UL << ((int)Signal.SIGUSR1 - 1));
-        var sfd = new LinuxFile(new Dentry("signalfd", inode, null, env.MemfdSuperBlock),
+        var sfd = new LinuxFile(new Dentry(FsName.FromString("signalfd"), inode, null, env.MemfdSuperBlock),
             FileFlags.O_NONBLOCK, null!);
 
         var fired = 0;
@@ -215,7 +215,7 @@ public class VirtualFDsTests
     {
         using var env = new TestEnv();
         var inode = new SignalFdInode(0, env.MemfdSuperBlock, 1UL << ((int)Signal.SIGUSR1 - 1));
-        var sfd = new LinuxFile(new Dentry("signalfd", inode, null, env.MemfdSuperBlock),
+        var sfd = new LinuxFile(new Dentry(FsName.FromString("signalfd"), inode, null, env.MemfdSuperBlock),
             FileFlags.O_NONBLOCK, null!);
         env.Task.SignalMask |= 1UL << ((int)Signal.SIGUSR2 - 1);
 
@@ -240,7 +240,7 @@ public class VirtualFDsTests
         env.MapUserPage(bufPtr);
 
         var inode = new SignalFdInode(0, env.MemfdSuperBlock, 1UL << ((int)Signal.SIGUSR1 - 1));
-        var file = new LinuxFile(new Dentry("signalfd", inode, null, env.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("signalfd"), inode, null, env.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
         env.Task.SignalMask |= 1UL << ((int)Signal.SIGUSR2 - 1);

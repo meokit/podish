@@ -436,13 +436,13 @@ public class OverlayRenameMassTests
 
     private static void CreateDirectory(Dentry parent, SuperBlock sb, string name)
     {
-        var dentry = new Dentry(name, null, parent, sb);
+        var dentry = new Dentry(FsName.FromString(name), null, parent, sb);
         parent.Inode!.Mkdir(dentry, 0x1ED, 0, 0);
     }
 
     private static void CreateFile(Dentry parent, SuperBlock sb, string name, string content)
     {
-        var dentry = new Dentry(name, null, parent, sb);
+        var dentry = new Dentry(FsName.FromString(name), null, parent, sb);
         parent.Inode!.Create(dentry, 0x1A4, 0, 0);
         var file = new LinuxFile(dentry, FileFlags.O_WRONLY, null!);
         try
@@ -458,7 +458,7 @@ public class OverlayRenameMassTests
 
     private static void CreateSymlink(Dentry parent, SuperBlock sb, string name, string target)
     {
-        var dentry = new Dentry(name, null, parent, sb);
+        var dentry = new Dentry(FsName.FromString(name), null, parent, sb);
         parent.Inode!.Symlink(dentry, target, 0, 0);
     }
 

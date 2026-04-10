@@ -25,7 +25,7 @@ public sealed class TmpfsSizeLimitTests
         var root = sb.Root;
         var mount = new Mount(sb, root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw,size=4k" };
 
-        var fileDentry = new Dentry("file", null, root, sb);
+        var fileDentry = new Dentry(FsName.FromString("file"), null, root, sb);
         root.Inode!.Create(fileDentry, 0x1A4, 0, 0);
         var file = new LinuxFile(fileDentry, FileFlags.O_RDWR, mount);
 

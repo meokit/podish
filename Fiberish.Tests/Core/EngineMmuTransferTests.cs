@@ -357,11 +357,11 @@ public class EngineMmuTransferTests
         {
             _sb = new TestSuperBlock();
             var rootInode = new TestInode(_sb);
-            _root = new Dentry("/", rootInode, null, _sb);
+            _root = new Dentry(FsName.Empty, rootInode, null, _sb);
             _sb.Root = _root;
 
             Inode = new TrackingMappedPageInode(_sb);
-            _fileDentry = new Dentry("mapped", Inode, _root, _sb);
+            _fileDentry = new Dentry(FsName.FromBytes("mapped"u8), Inode, _root, _sb);
             _mount = new Mount(_sb, _root);
             File = new LinuxFile(_fileDentry, FileFlags.O_RDONLY, _mount);
             Vma = new VmArea

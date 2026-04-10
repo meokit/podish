@@ -384,14 +384,14 @@ public class DevPtsSuperBlock : SuperBlock
         // Create root directory
         Type = new FileSystemType { Name = "devpts" };
         var rootInode = new DevPtsDirectoryInode(this, ptyManager, logger);
-        Root = new Dentry("", rootInode, null, this);
+        Root = new Dentry(FsName.Empty, rootInode, null, this);
     }
 
     private void OnPtyCreated(int index, PtyPair pair)
     {
         // Create a dentry for the slave device
         var slaveInode = new PtySlaveInode(this, pair, _logger);
-        var dentry = new Dentry(index.ToString(), slaveInode, Root, this);
+        var dentry = new Dentry(FsName.FromString(index.ToString()), slaveInode, Root, this);
         Root.CacheChild(dentry, "DevPtsSuperBlock.OnPtyCreated");
         _slaveDentries[index] = dentry;
         _logger.LogInformation("[DevPts] Created slave dentry for PTY index={Index}", index);

@@ -20,7 +20,7 @@ public class Hostfs : FileSystem
     {
         var opts = HostfsMountOptions.Parse(data as string);
         var sb = new HostSuperBlock(fsType, devName, opts, DevManager); // devName is the root path on host
-        var rootDentry = sb.GetDentry(devName, "/", null) ??
+        var rootDentry = sb.GetDentry(devName, FsName.Empty, null) ??
                          throw new FileNotFoundException("Root path not found", devName);
         sb.Root = rootDentry;
         sb.Root.Parent = sb.Root;
@@ -101,12 +101,12 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         return dropped;
     }
 
-    public Dentry? GetDentry(string hostPath, string name, Dentry? parent)
+    public Dentry? GetDentry(string hostPath, FsName name, Dentry? parent)
     {
         return TryGetDentry(hostPath, name, parent, out var dentry, out _) ? dentry : null;
     }
 
-    internal bool TryGetDentry(string hostPath, string name, Dentry? parent, out Dentry? dentry, out int error)
+    internal bool TryGetDentry(string hostPath, FsName name, Dentry? parent, out Dentry? dentry, out int error)
     {
         var normalizedPath = NormalizeHostPath(hostPath);
         dentry = null;
@@ -167,6 +167,28 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 
         error = 0;
         return true;
+    }
+
+    internal static bool TryCreateFsNameFromHostName(string hostName, out FsName name)
+    {
+        ArgumentNullException.ThrowIfNull(hostName);
+
+        if (hostName.Length == 0 || hostName == "/")
+        {
+            name = FsName.Empty;
+            return true;
+        }
+
+        try
+        {
+            name = FsName.FromOwnedBytes(FsEncoding.EncodeUtf8(hostName));
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            name = default;
+            return false;
+        }
     }
 
     public override void WriteInode(Inode inode)
@@ -726,21 +748,21 @@ internal sealed class HostfsMetadataStore
         }
     }
 
-    public Dictionary<string, byte[]> LoadXAttrs(HostInode inode, string hostPath)
+    public FsNameMap<byte[]> LoadXAttrs(HostInode inode, string hostPath)
     {
-        if (!IsEnabled) return new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        if (!IsEnabled) return new FsNameMap<byte[]>();
         var normalizedPath = NormalizeHostPath(hostPath);
         lock (_lock)
         {
             var objectId = EnsureObjectIdForInodeNoLock(inode, normalizedPath);
             if (!TryLoadObjectNoLock(objectId, out var meta) || meta.XAttrs == null)
-                return new Dictionary<string, byte[]>(StringComparer.Ordinal);
+                return new FsNameMap<byte[]>();
 
-            var dict = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            var dict = new FsNameMap<byte[]>();
             foreach (var kv in meta.XAttrs)
                 try
                 {
-                    dict[kv.Key] = Convert.FromBase64String(kv.Value);
+                    dict.Set(FsName.FromString(kv.Key), Convert.FromBase64String(kv.Value));
                 }
                 catch
                 {
@@ -750,7 +772,7 @@ internal sealed class HostfsMetadataStore
         }
     }
 
-    public void SaveXAttrs(HostInode inode, string hostPath, Dictionary<string, byte[]> xattrs)
+    public void SaveXAttrs(HostInode inode, string hostPath, FsNameMap<byte[]> xattrs)
     {
         if (!IsEnabled) return;
         var normalizedPath = NormalizeHostPath(hostPath);
@@ -759,7 +781,7 @@ internal sealed class HostfsMetadataStore
             var objectId = EnsureObjectIdForInodeNoLock(inode, normalizedPath);
             var encoded = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var kv in xattrs)
-                encoded[kv.Key] = Convert.ToBase64String(kv.Value);
+                encoded[kv.Key.ToString()] = Convert.ToBase64String(kv.Value);
             var baseRecord = TryLoadObjectNoLock(objectId, out var existing)
                 ? existing
                 : new HostfsObjectRecord(objectId);
@@ -1282,7 +1304,7 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     private DateTime? _projectedCTime;
     private DateTime? _projectedMTime;
 
-    private Dictionary<string, byte[]>? _xattrs;
+    private FsNameMap<byte[]>? _xattrs;
 
     public HostInode(ulong ino, SuperBlock sb, string hostPath, InodeType type, int? initialLinkCount = null)
     {
@@ -1539,13 +1561,21 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         return HostfsOwnershipMapper.SetGuestMode(this, mode);
     }
 
-    public override Dentry? Lookup(string name)
+    public override Dentry? Lookup(ReadOnlySpan<byte> name)
     {
         if (Type != InodeType.Directory) return null;
-        if (name == HostfsMetadataStore.MetaDirName) return null;
-        var subPath = Path.Combine(ResolveHostPath(), name);
+        if (!TryDecodeHostComponent(name, out var componentName, out var component))
+        {
+            SetLookupFailureError(-(int)Errno.ENOENT);
+            return null;
+        }
+
+        if (component == HostfsMetadataStore.MetaDirName) return null;
+
+        var subPath = Path.Combine(ResolveHostPath(), component);
         if (Dentries.Count == 0) return null;
-        if (((HostSuperBlock)SuperBlock).TryGetDentry(subPath, name, Dentries[0], out var dentry, out var error))
+        if (((HostSuperBlock)SuperBlock).TryGetDentry(subPath, componentName, Dentries[0], out var dentry,
+                out var error))
         {
             SetLookupFailureError(-(int)Errno.ENOENT);
             return dentry;
@@ -1555,15 +1585,10 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         return null;
     }
 
-    public override Dentry? Lookup(ReadOnlySpan<byte> name)
+    public override Dentry? Lookup(string name)
     {
-        if (!FsEncoding.TryDecodeUtf8(name, out var decoded))
-        {
-            SetLookupFailureError(-(int)Errno.ENOENT);
-            return null;
-        }
-
-        return Lookup(decoded);
+        ArgumentNullException.ThrowIfNull(name);
+        return Lookup(FsEncoding.EncodeUtf8(name));
     }
 
     public override int Create(Dentry dentry, int mode, int uid, int gid)
@@ -1691,9 +1716,12 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         return 0;
     }
 
-    public override int Unlink(string name)
+    public override int Unlink(ReadOnlySpan<byte> name)
     {
-        var subPath = Path.Combine(ResolveHostPath(), name);
+        if (!TryDecodeHostComponent(name, out var componentName, out var component))
+            return -(int)Errno.EINVAL;
+
+        var subPath = Path.Combine(ResolveHostPath(), component);
         var sb = (HostSuperBlock)SuperBlock;
         if (!sb.TryGetRawNodeType(subPath, out var targetType))
             return -(int)Errno.ENOENT;
@@ -1701,7 +1729,7 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             return -(int)Errno.EISDIR;
 
         // unlink(2) deletes the directory entry itself and must not follow symlinks.
-        var dentry = sb.GetDentry(subPath, name, null);
+        var dentry = sb.GetDentry(subPath, componentName, null);
         try
         {
             File.Delete(subPath);
@@ -1716,21 +1744,30 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (dentry?.Inode != null && !dentry.Inode.HasActiveRuntimeRefs)
             dentry.UnbindInode("HostInode.Unlink");
         if (Dentries.Count > 0)
-            _ = Dentries[0].TryUncacheChild(name, "HostInode.Unlink", out _);
+            _ = Dentries[0].TryUncacheChild(componentName, "HostInode.Unlink", out _);
         sb.RemoveDentry(subPath);
         return 0;
     }
 
-    public override int Rmdir(string name)
+    public override int Unlink(string name)
     {
-        var subPath = Path.Combine(ResolveHostPath(), name);
+        ArgumentNullException.ThrowIfNull(name);
+        return Unlink(FsEncoding.EncodeUtf8(name));
+    }
+
+    public override int Rmdir(ReadOnlySpan<byte> name)
+    {
+        if (!TryDecodeHostComponent(name, out var componentName, out var component))
+            return -(int)Errno.EINVAL;
+
+        var subPath = Path.Combine(ResolveHostPath(), component);
         var sb = (HostSuperBlock)SuperBlock;
         if (!sb.TryGetRawNodeType(subPath, out var targetType))
             return -(int)Errno.ENOENT;
         if (targetType != InodeType.Directory)
             return -(int)Errno.ENOTDIR;
 
-        var dentry = sb.GetDentry(subPath, name, null);
+        var dentry = sb.GetDentry(subPath, componentName, null);
         try
         {
             Directory.Delete(subPath, false);
@@ -1752,25 +1789,34 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         }
 
         if (Dentries.Count > 0)
-            _ = Dentries[0].TryUncacheChild(name, "HostInode.Rmdir", out _);
+            _ = Dentries[0].TryUncacheChild(componentName, "HostInode.Rmdir", out _);
         sb.RemoveDentry(subPath);
         return 0;
     }
 
-    public override int Rename(string oldName, Inode newParent, string newName)
+    public override int Rmdir(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return Rmdir(FsEncoding.EncodeUtf8(name));
+    }
+
+    public override int Rename(ReadOnlySpan<byte> oldName, Inode newParent, ReadOnlySpan<byte> newName)
     {
         if (Type != InodeType.Directory || newParent.Type != InodeType.Directory)
             return -(int)Errno.ENOTDIR;
+        if (!TryDecodeHostComponent(oldName, out var oldComponentName, out var oldComponent) ||
+            !TryDecodeHostComponent(newName, out var newComponentName, out var newComponent))
+            return -(int)Errno.EINVAL;
 
         if (newParent is not HostInode targetParent)
             return -(int)Errno.EXDEV;
-        var oldFullPath = Path.Combine(ResolveHostPath(), oldName);
-        var newFullPath = Path.Combine(targetParent.ResolveHostPath(), newName);
+        var oldFullPath = Path.Combine(ResolveHostPath(), oldComponent);
+        var newFullPath = Path.Combine(targetParent.ResolveHostPath(), newComponent);
         if (IsDescendantPath(oldFullPath, newFullPath))
             return -(int)Errno.EINVAL;
 
         var sb = (HostSuperBlock)SuperBlock;
-        var dentry = sb.GetDentry(oldFullPath, oldName, null);
+        var dentry = sb.GetDentry(oldFullPath, oldComponentName, null);
         if (dentry == null)
             return -(int)Errno.ENOENT;
         var sourceIsDirectory = dentry.Inode!.Type == InodeType.Directory;
@@ -1779,7 +1825,7 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         // Handle overwrite
         if (sb.TryGetRawNodeType(newFullPath, out var targetType))
         {
-            var targetDentry = sb.GetDentry(newFullPath, newName, null);
+            var targetDentry = sb.GetDentry(newFullPath, newComponentName, null);
             if (targetDentry != null && ReferenceEquals(targetDentry.Inode, dentry.Inode))
                 return 0;
 
@@ -1829,7 +1875,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
             targetDentry?.UnbindInode("HostInode.Rename.overwrite-target");
             if (targetParent.Dentries.Count > 0)
-                _ = targetParent.Dentries[0].TryUncacheChild(newName, "HostInode.Rename.overwrite-target", out _);
+                _ = targetParent.Dentries[0].TryUncacheChild(newComponentName,
+                    "HostInode.Rename.overwrite-target", out _);
             sb.MetadataStore.RemovePath(newFullPath);
             sb.RemoveDentry(newFullPath);
         }
@@ -1857,8 +1904,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         }
 
         if (Dentries.Count > 0)
-            _ = Dentries[0].TryUncacheChild(oldName, "HostInode.Rename.old-parent", out _);
-        dentry.Name = newName;
+            _ = Dentries[0].TryUncacheChild(oldComponentName, "HostInode.Rename.old-parent", out _);
+        dentry.Name = newComponentName;
         if (targetParent.Dentries.Count > 0)
         {
             dentry.Parent = targetParent.Dentries[0];
@@ -1869,6 +1916,13 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             NamespaceOps.OnDirectoryMovedAcrossParents(this, targetParent, "HostInode.Rename");
 
         return 0;
+    }
+
+    public override int Rename(string oldName, Inode newParent, string newName)
+    {
+        ArgumentNullException.ThrowIfNull(oldName);
+        ArgumentNullException.ThrowIfNull(newName);
+        return Rename(FsEncoding.EncodeUtf8(oldName), newParent, FsEncoding.EncodeUtf8(newName));
     }
 
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
@@ -2419,13 +2473,13 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         {
             var name = Path.GetFileName(entryPath);
             if (name == HostfsMetadataStore.MetaDirName) continue;
-            if (!FsEncoding.TryEncodeUtf8(name, out var encodedName))
+            if (!HostSuperBlock.TryCreateFsNameFromHostName(name, out var encodedName))
                 continue;
-            var dentry = sb.GetDentry(entryPath, name, Dentries.Count > 0 ? Dentries[0] : null);
+            var dentry = sb.GetDentry(entryPath, encodedName, Dentries.Count > 0 ? Dentries[0] : null);
             if (dentry != null)
                 list.Add(new DirectoryEntry
                 {
-                    Name = FsName.FromOwnedBytes(encodedName),
+                    Name = encodedName,
                     Ino = dentry.Inode!.Ino,
                     Type = dentry.Inode.Type
                 });
@@ -2434,28 +2488,38 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         return list;
     }
 
-    public override int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)
+    public override int SetXAttr(ReadOnlySpan<byte> name, ReadOnlySpan<byte> value, int flags)
     {
         const int XATTR_CREATE = 1;
         const int XATTR_REPLACE = 2;
+        if (!TryCreateFsName(name, out var attrName))
+            return -(int)Errno.EINVAL;
         lock (_xattrLock)
         {
             EnsureXAttrsLoaded();
-            var exists = _xattrs!.ContainsKey(name);
+            var exists = _xattrs!.TryGetValue(attrName, out _);
             if ((flags & XATTR_CREATE) != 0 && exists) return -(int)Errno.EEXIST;
             if ((flags & XATTR_REPLACE) != 0 && !exists) return -(int)Errno.ENODATA;
-            _xattrs[name] = value.ToArray();
+            _xattrs!.Set(attrName, value.ToArray());
             PersistXAttrs();
             return 0;
         }
     }
 
-    public override int GetXAttr(string name, Span<byte> value)
+    public override int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)
     {
+        ArgumentNullException.ThrowIfNull(name);
+        return SetXAttr(FsEncoding.EncodeUtf8(name), value, flags);
+    }
+
+    public override int GetXAttr(ReadOnlySpan<byte> name, Span<byte> value)
+    {
+        if (!TryCreateFsName(name, out var attrName))
+            return -(int)Errno.EINVAL;
         lock (_xattrLock)
         {
             EnsureXAttrsLoaded();
-            if (!_xattrs!.TryGetValue(name, out var data)) return -(int)Errno.ENODATA;
+            if (!_xattrs!.TryGetValue(attrName, out var data)) return -(int)Errno.ENODATA;
             if (value.Length == 0) return data.Length;
             if (value.Length < data.Length) return -(int)Errno.ERANGE;
             data.CopyTo(value);
@@ -2463,29 +2527,29 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         }
     }
 
+    public override int GetXAttr(string name, Span<byte> value)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return GetXAttr(FsEncoding.EncodeUtf8(name), value);
+    }
+
     public override int ListXAttr(Span<byte> list)
     {
         lock (_xattrLock)
         {
             EnsureXAttrsLoaded();
-            var names = _xattrs!.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray();
+            var names = _xattrs!.Select(static kv => kv.Key).OrderBy(static k => k, FsName.BytewiseComparer).ToArray();
             var required = 0;
             foreach (var n in names)
-            {
-                if (!FsEncoding.TryEncodeUtf8(n, out var encodedName))
-                    return -(int)Errno.EIO;
-                required += encodedName.Length + 1;
-            }
+                required += n.Length + 1;
             if (list.Length == 0) return required;
             if (list.Length < required) return -(int)Errno.ERANGE;
 
             var off = 0;
             foreach (var n in names)
             {
-                if (!FsEncoding.TryEncodeUtf8(n, out var encodedName))
-                    return -(int)Errno.EIO;
-                encodedName.CopyTo(list[off..]);
-                off += encodedName.Length;
+                n.Bytes.CopyTo(list[off..]);
+                off += n.Length;
                 list[off++] = 0;
             }
 
@@ -2493,15 +2557,23 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         }
     }
 
-    public override int RemoveXAttr(string name)
+    public override int RemoveXAttr(ReadOnlySpan<byte> name)
     {
+        if (!TryCreateFsName(name, out var attrName))
+            return -(int)Errno.EINVAL;
         lock (_xattrLock)
         {
             EnsureXAttrsLoaded();
-            if (!_xattrs!.Remove(name)) return -(int)Errno.ENODATA;
+            if (!_xattrs!.Remove(attrName)) return -(int)Errno.ENODATA;
             PersistXAttrs();
             return 0;
         }
+    }
+
+    public override int RemoveXAttr(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return RemoveXAttr(FsEncoding.EncodeUtf8(name));
     }
 
     private void EnsureXAttrsLoaded()
@@ -2511,9 +2583,40 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         _xattrs = sb.MetadataStore.LoadXAttrs(this, ResolveHostPath());
     }
 
+    private static bool TryDecodeHostComponent(ReadOnlySpan<byte> name, out FsName componentName, out string decoded)
+    {
+        if (!FsEncoding.TryDecodeUtf8(name, out decoded))
+        {
+            componentName = default;
+            return false;
+        }
+
+        return TryCreateFsName(name, out componentName);
+    }
+
     private static bool TryDecodeHostComponent(FsName name, out string decoded)
     {
         return FsEncoding.TryDecodeUtf8(name.Bytes, out decoded);
+    }
+
+    private static bool TryCreateFsName(ReadOnlySpan<byte> name, out FsName fsName)
+    {
+        if (!FsEncoding.TryDecodeUtf8(name, out _))
+        {
+            fsName = default;
+            return false;
+        }
+
+        try
+        {
+            fsName = FsName.FromBytes(name);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            fsName = default;
+            return false;
+        }
     }
 
     private int ComputeInitialLinkCount()

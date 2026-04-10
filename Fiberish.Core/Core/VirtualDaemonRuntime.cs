@@ -89,10 +89,10 @@ public sealed class VirtualDaemonRuntime
 
         var current = Syscalls.Root;
         foreach (var part in parts)
-            current = EnsureDirectory(current, part);
+            current = EnsureDirectory(current, FsName.FromString(part));
     }
 
-    private static PathLocation EnsureDirectory(PathLocation parent, string name)
+    private static PathLocation EnsureDirectory(PathLocation parent, FsName name)
     {
         var parentDentry = parent.Dentry ?? throw new InvalidOperationException("Parent dentry is missing");
 
@@ -107,7 +107,8 @@ public sealed class VirtualDaemonRuntime
         }
         else if (dentry.Inode?.Type != InodeType.Directory)
         {
-            throw new InvalidOperationException($"Path component '{name}' exists but is not a directory");
+            throw new InvalidOperationException(
+                $"Path component '{name.ToDebugString()}' exists but is not a directory");
         }
 
         parentDentry.CacheChild(dentry, "VirtualDaemonRuntime.EnsureDirectory");

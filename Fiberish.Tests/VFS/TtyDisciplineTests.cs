@@ -354,7 +354,7 @@ public class TtyDisciplineTests
 
         var sb = new TestSuperBlock();
         var inode = new ConsoleInode(sb, true, _tty);
-        var file = new LinuxFile(new Dentry("stdin", inode, null, sb), FileFlags.O_RDONLY, null!);
+        var file = new LinuxFile(new Dentry(FsName.FromString("stdin"), inode, null, sb), FileFlags.O_RDONLY, null!);
 
         try
         {
@@ -384,7 +384,7 @@ public class TtyDisciplineTests
 
         var sb = new TestSuperBlock();
         var inode = new ConsoleInode(sb, true, _tty);
-        var file = new LinuxFile(new Dentry("stdin", inode, null, sb), FileFlags.O_RDONLY, null!);
+        var file = new LinuxFile(new Dentry(FsName.FromString("stdin"), inode, null, sb), FileFlags.O_RDONLY, null!);
 
         try
         {
@@ -413,7 +413,7 @@ public class TtyDisciplineTests
 
         var sb = new TestSuperBlock();
         var inode = new ConsoleInode(sb, true, _tty);
-        var file = new LinuxFile(new Dentry("stdin", inode, null, sb), FileFlags.O_RDONLY, null!);
+        var file = new LinuxFile(new Dentry(FsName.FromString("stdin"), inode, null, sb), FileFlags.O_RDONLY, null!);
 
         try
         {
@@ -440,7 +440,7 @@ public class TtyDisciplineTests
 
         var sb = new TestSuperBlock();
         var inode = new ConsoleInode(sb, true, _tty);
-        var file = new LinuxFile(new Dentry("stdin", inode, null, sb), FileFlags.O_RDONLY, null!);
+        var file = new LinuxFile(new Dentry(FsName.FromString("stdin"), inode, null, sb), FileFlags.O_RDONLY, null!);
 
         try
         {
@@ -565,7 +565,7 @@ public class TtyDisciplineTests
         var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance, taskContext.Scheduler);
         var sb = new TestSuperBlock();
         var inode = new ConsoleInode(sb, true, tty);
-        var file = new LinuxFile(new Dentry("stdin", inode, null, sb), FileFlags.O_RDONLY, null!);
+        var file = new LinuxFile(new Dentry(FsName.FromString("stdin"), inode, null, sb), FileFlags.O_RDONLY, null!);
 
         try
         {
@@ -593,7 +593,7 @@ public class TtyDisciplineTests
         var tty = new TtyDiscipline(driver, broadcaster, NullLogger.Instance, taskContext.Scheduler);
         var sb = new TestSuperBlock();
         var inode = new ConsoleInode(sb, false, tty);
-        var file = new LinuxFile(new Dentry("stdout", inode, null, sb), FileFlags.O_WRONLY, null!);
+        var file = new LinuxFile(new Dentry(FsName.FromString("stdout"), inode, null, sb), FileFlags.O_WRONLY, null!);
 
         try
         {
@@ -1322,7 +1322,7 @@ public class TtyDisciplineTests
     public void ControllingTtyInode_Poll_without_controlling_tty_reports_hup_and_err()
     {
         var inode = new ControllingTtyInode(_taskContext.SyscallManager.MemfdSuperBlock);
-        var file = new LinuxFile(new Dentry("tty", inode, null, _taskContext.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("tty"), inode, null, _taskContext.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, _taskContext.SyscallManager.AnonMount);
 
         var revents = ((ITaskPollSource)inode).Poll(file, _task, LinuxConstants.POLLIN | LinuxConstants.POLLOUT);
@@ -1337,7 +1337,7 @@ public class TtyDisciplineTests
         _task.Process.ControllingTty = _tty;
 
         var inode = new ControllingTtyInode(_taskContext.SyscallManager.MemfdSuperBlock);
-        var file = new LinuxFile(new Dentry("tty", inode, null, _taskContext.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("tty"), inode, null, _taskContext.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, _taskContext.SyscallManager.AnonMount);
 
         Assert.False(_tty.HasDataAvailable);

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Native;
@@ -12,13 +13,16 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 {
     private const int BufferSize = 65536; // 64KB pipe buffer
     public const int PipeBuf = 4096;
-    private readonly byte[] _buffer;
+    private byte[] _buffer;
 
     // Notification handles
     private readonly WaitHandle _readHandle;
+    private readonly KernelScheduler _scheduler;
     private readonly WaitHandle _writeHandle;
     private int _count;
     private int _head; // Write position
+    private bool _handlesReturned;
+    private bool _lifecycleClosed;
     private int _readerCount;
     private bool _readersClosed;
     private int _tail; // Read position
@@ -27,11 +31,13 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
     public PipeInode(KernelScheduler scheduler)
     {
-        _readHandle = new WaitHandle(scheduler);
-        _writeHandle = new WaitHandle(scheduler);
+        _scheduler = scheduler;
+        _readHandle = scheduler.RentAsyncWaitQueue();
+        _writeHandle = scheduler.RentAsyncWaitQueue();
         Type = InodeType.Fifo;
         Mode = 0x1000 | 0x1FF; // FIFO + 777
-        _buffer = new byte[BufferSize];
+        SetInitialLinkCount(1, "PipeInode.ctor");
+        _buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
         // Initially writable (empty)
         _writeHandle.Set();
     }
@@ -47,6 +53,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
         using (EnterStateScope())
         {
+            if (_lifecycleClosed)
+                return false;
+
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
@@ -72,6 +81,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLOUT = 0x0004;
         using (EnterStateScope())
         {
+            if (_lifecycleClosed)
+                return null;
+
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
@@ -90,6 +102,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
         using (EnterStateScope())
         {
+            if (_lifecycleClosed)
+                return false;
+
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
@@ -112,6 +127,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         const short POLLOUT = 0x0004;
         using (EnterStateScope())
         {
+            if (_lifecycleClosed)
+                return null;
+
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
@@ -156,6 +174,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
                 _readersClosed = true;
                 _writeHandle.Set(); // Wake up writers (EPIPE)
             }
+
+            if (_readerCount <= 0 && _writerCount <= 0)
+                CloseLifecycleOnce();
         }
     }
 
@@ -169,6 +190,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
                 _writersClosed = true;
                 _readHandle.Set(); // Wake up readers (EOF)
             }
+
+            if (_readerCount <= 0 && _writerCount <= 0)
+                CloseLifecycleOnce();
         }
     }
 
@@ -195,6 +219,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
     {
         using (EnterStateScope())
         {
+            if (_lifecycleClosed)
+                return 0;
+
             if (_count > 0)
             {
                 // Read data
@@ -230,6 +257,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
     {
         using (EnterStateScope())
         {
+            if (_lifecycleClosed)
+                return 0;
+
             if (_count > 0)
             {
                 var available = Math.Min(buffer.Length, _count);
@@ -257,6 +287,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
     {
         using (EnterStateScope())
         {
+            if (_lifecycleClosed)
+                return -(int)Errno.EPIPE;
+
             if (_readersClosed)
                 // Broken pipe
                 // Send SIGPIPE to current task?
@@ -304,6 +337,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
     {
         using (EnterStateScope())
         {
+            if (_lifecycleClosed)
+                return AwaitResult.Completed;
+
             if (_count > 0 || _writersClosed)
                 return AwaitResult.Completed;
 
@@ -324,6 +360,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         {
             using (EnterStateScope())
             {
+                if (_lifecycleClosed)
+                    return AwaitResult.Completed;
+
                 var space = BufferSize - _count;
                 if (_readersClosed || space >= minWritableBytes)
                     return AwaitResult.Completed;
@@ -357,6 +396,16 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
             var mode = (int)linuxFile.Flags & O_ACCMODE;
             var canRead = mode == (int)FileFlags.O_RDONLY || mode == (int)FileFlags.O_RDWR;
             var canWrite = mode == (int)FileFlags.O_WRONLY || mode == (int)FileFlags.O_RDWR;
+
+            if (_lifecycleClosed)
+            {
+                if (canRead)
+                    revents |= POLLHUP;
+                if (canWrite)
+                    revents |= POLLERR;
+                return revents;
+            }
+
             var readWatch = canRead
                 ? new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle, _readHandle.Reset)
                 : default;
@@ -405,6 +454,70 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         {
             RemoveWriter();
         }
+    }
+
+    protected override void OnEvictCache()
+    {
+        ReturnHandlesToPool();
+        ReturnBufferToPool();
+        base.OnEvictCache();
+    }
+
+    private void CloseLifecycleOnce()
+    {
+        if (_lifecycleClosed)
+            return;
+
+        _lifecycleClosed = true;
+
+        var aliasCount = Dentries.Count;
+        var aliases = new Dentry[aliasCount];
+        for (var i = 0; i < aliasCount; i++)
+            aliases[i] = Dentries[i];
+
+        _count = 0;
+        _head = 0;
+        _tail = 0;
+        _readerCount = 0;
+        _writerCount = 0;
+        _readersClosed = true;
+        _writersClosed = true;
+        _readHandle.Reset();
+        _writeHandle.Reset();
+        ReturnHandlesToPool();
+
+        foreach (var alias in aliases)
+        {
+            if (!alias.UnbindInode("PipeInode.CloseLifecycleOnce"))
+                continue;
+
+            if (alias.DentryRefCount == 0 && alias.IsTrackedBySuperBlock)
+                alias.UntrackFromSuperBlock("PipeInode.CloseLifecycleOnce");
+        }
+
+        if (LinkCount > 0)
+            DecLink("PipeInode.CloseLifecycleOnce");
+
+        ReturnBufferToPool();
+    }
+
+    private void ReturnBufferToPool()
+    {
+        if (_buffer.Length == 0)
+            return;
+
+        ArrayPool<byte>.Shared.Return(_buffer, clearArray: false);
+        _buffer = Array.Empty<byte>();
+    }
+
+    private void ReturnHandlesToPool()
+    {
+        if (_handlesReturned)
+            return;
+
+        _scheduler.ReturnAsyncWaitQueue(_readHandle);
+        _scheduler.ReturnAsyncWaitQueue(_writeHandle);
+        _handlesReturned = true;
     }
 
     private readonly struct StateScope : IDisposable

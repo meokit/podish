@@ -28,7 +28,7 @@ public class OverlayTests
             var hold = root.Inode!.Lookup("hold");
             if (hold == null)
             {
-                var holdDentry = new Dentry("hold", null, root, root.SuperBlock);
+                var holdDentry = new Dentry(FsName.FromString("hold"), null, root, root.SuperBlock);
                 Assert.Equal(0, root.Inode.Mkdir(holdDentry, 0x1FF, 0, 0));
                 root.CacheChild(holdDentry, "OverlayTests.setup-hold");
                 hold = holdDentry;
@@ -37,7 +37,7 @@ public class OverlayTests
             var mnt = hold.Inode!.Lookup("mnt");
             if (mnt == null)
             {
-                var mntDentry = new Dentry("mnt", null, hold, hold.SuperBlock);
+                var mntDentry = new Dentry(FsName.FromString("mnt"), null, hold, hold.SuperBlock);
                 Assert.Equal(0, hold.Inode.Mkdir(mntDentry, 0x1FF, 0, 0));
                 hold.CacheChild(mntDentry, "OverlayTests.setup-mnt");
             }
@@ -134,10 +134,10 @@ public class OverlayTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw");
             var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
-            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
 
             var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
-            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+            upperSb.Root = upperSb.GetDentry(tempUpper, FsName.Empty, null)!;
 
             var overlayFs = new OverlayFileSystem();
             var options = new OverlayMountOptions { Lower = lowerSb, Upper = upperSb };
@@ -198,10 +198,10 @@ public class OverlayTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw");
             var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
-            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
 
             var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
-            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+            upperSb.Root = upperSb.GetDentry(tempUpper, FsName.Empty, null)!;
 
             var overlayFs = new OverlayFileSystem();
             var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -288,10 +288,10 @@ public class OverlayTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw");
             var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
-            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
 
             var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
-            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+            upperSb.Root = upperSb.GetDentry(tempUpper, FsName.Empty, null)!;
 
             var overlayFs = new OverlayFileSystem();
             var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -305,7 +305,7 @@ public class OverlayTests
             var libInode = Assert.IsType<OverlayInode>(libOv.Inode);
             Assert.Null(libInode.UpperDentry);
 
-            var linkDentry = new Dentry("libbz2.so.1", null, libOv, overlaySb);
+            var linkDentry = new Dentry(FsName.FromString("libbz2.so.1"), null, libOv, overlaySb);
             Assert.Equal(0, libInode.Symlink(linkDentry, "libbz2.so.1.0.8", 0, 0));
 
             var created = libOv.Inode!.Lookup("libbz2.so.1");
@@ -337,7 +337,7 @@ public class OverlayTests
             var hostType = new FileSystemType { Name = "hostfs" };
             var hostOpts = HostfsMountOptions.Parse("rw");
             var lowerSb = new HostSuperBlock(hostType, tempLower, hostOpts);
-            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
 
             var tmpType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
             var upperSb = tmpType.CreateAnonymousFileSystem().ReadSuper(tmpType, 0, "ovl-upper-mknod", null);
@@ -354,7 +354,7 @@ public class OverlayTests
             var tmpInode = Assert.IsType<OverlayInode>(tmpOv!.Inode);
             Assert.Null(tmpInode.UpperDentry);
 
-            var node = new Dentry("devnode", null, tmpOv, overlaySb);
+            var node = new Dentry(FsName.FromString("devnode"), null, tmpOv, overlaySb);
             Assert.Equal(0, tmpInode.Mknod(node, 0x180, 0, 0, InodeType.CharDev, (1u << 8) | 3u));
 
             var created = tmpOv.Inode!.Lookup("devnode");
@@ -388,11 +388,11 @@ public class OverlayTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw");
             var lowerTopSb = new HostSuperBlock(fsType, tempLowerTop, opts);
-            lowerTopSb.Root = lowerTopSb.GetDentry(tempLowerTop, "/", null)!;
+            lowerTopSb.Root = lowerTopSb.GetDentry(tempLowerTop, FsName.Empty, null)!;
             var lowerBottomSb = new HostSuperBlock(fsType, tempLowerBottom, opts);
-            lowerBottomSb.Root = lowerBottomSb.GetDentry(tempLowerBottom, "/", null)!;
+            lowerBottomSb.Root = lowerBottomSb.GetDentry(tempLowerBottom, FsName.Empty, null)!;
             var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
-            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+            upperSb.Root = upperSb.GetDentry(tempUpper, FsName.Empty, null)!;
 
             var overlayFs = new OverlayFileSystem();
             var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -442,11 +442,11 @@ public class OverlayTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw");
             var lowerTopSb = new HostSuperBlock(fsType, tempLowerTop, opts);
-            lowerTopSb.Root = lowerTopSb.GetDentry(tempLowerTop, "/", null)!;
+            lowerTopSb.Root = lowerTopSb.GetDentry(tempLowerTop, FsName.Empty, null)!;
             var lowerBottomSb = new HostSuperBlock(fsType, tempLowerBottom, opts);
-            lowerBottomSb.Root = lowerBottomSb.GetDentry(tempLowerBottom, "/", null)!;
+            lowerBottomSb.Root = lowerBottomSb.GetDentry(tempLowerBottom, FsName.Empty, null)!;
             var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
-            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+            upperSb.Root = upperSb.GetDentry(tempUpper, FsName.Empty, null)!;
 
             var overlayFs = new OverlayFileSystem();
             var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -487,9 +487,9 @@ public class OverlayTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw");
             var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
-            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
             var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
-            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+            upperSb.Root = upperSb.GetDentry(tempUpper, FsName.Empty, null)!;
 
             var overlayFs = new OverlayFileSystem();
             var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -531,9 +531,9 @@ public class OverlayTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw");
             var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
-            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
             var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
-            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+            upperSb.Root = upperSb.GetDentry(tempUpper, FsName.Empty, null)!;
 
             var overlayFs = new OverlayFileSystem();
             var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -571,7 +571,7 @@ public class OverlayTests
             var hostType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw");
             var lowerSb = new HostSuperBlock(hostType, tempLower, opts);
-            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
 
             var tmpType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
             var upperSb = new Tmpfs().ReadSuper(tmpType, 0, "upper", null);
@@ -614,9 +614,9 @@ public class OverlayTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw");
             var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
-            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
             var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
-            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+            upperSb.Root = upperSb.GetDentry(tempUpper, FsName.Empty, null)!;
 
             var overlayFs = new OverlayFileSystem();
             var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -658,9 +658,9 @@ public class OverlayTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw");
             var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
-            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
             var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
-            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+            upperSb.Root = upperSb.GetDentry(tempUpper, FsName.Empty, null)!;
 
             var overlayFs = new OverlayFileSystem();
             var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -705,9 +705,9 @@ public class OverlayTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw");
             var lowerSb = new HostSuperBlock(fsType, tempLower, opts);
-            lowerSb.Root = lowerSb.GetDentry(tempLower, "/", null)!;
+            lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
             var upperSb = new HostSuperBlock(fsType, tempUpper, opts);
-            upperSb.Root = upperSb.GetDentry(tempUpper, "/", null)!;
+            upperSb.Root = upperSb.GetDentry(tempUpper, FsName.Empty, null)!;
 
             var overlayFs = new OverlayFileSystem();
             var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -727,7 +727,7 @@ public class OverlayTests
             var rootBefore = rootInode.GetLinkCountForStat();
             var usrBefore = usrInode.GetLinkCountForStat();
 
-            var link = new Dentry("libfoo.so.1", null, lib, overlaySb);
+            var link = new Dentry(FsName.FromString("libfoo.so.1"), null, lib, overlaySb);
             Assert.Equal(0, libInode.Symlink(link, "libfoo.so.1.0.0", 0, 0));
 
             Assert.Equal(rootBefore, rootInode.GetLinkCountForStat());
@@ -756,7 +756,7 @@ public class OverlayTests
             new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
 
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
-        var fileDentry = new Dentry("open-unlink-truncate", null, overlaySb.Root, overlaySb);
+        var fileDentry = new Dentry(FsName.FromString("open-unlink-truncate"), null, overlaySb.Root, overlaySb);
         Assert.Equal(0, root.Create(fileDentry, 0x1A4, 0, 0));
         overlaySb.Root.CacheChild(fileDentry, "OverlayTests.open-unlink-truncate");
 
@@ -798,7 +798,7 @@ public class OverlayTests
 
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        var first = new Dentry("config.lock", null, overlaySb.Root, overlaySb);
+        var first = new Dentry(FsName.FromString("config.lock"), null, overlaySb.Root, overlaySb);
         Assert.Equal(0, root.Create(first, 0x1A4, 0, 0));
         overlaySb.Root.CacheChild(first, "OverlayTests.recreate-same-name.first");
         Assert.NotNull(first.Inode);
@@ -816,7 +816,7 @@ public class OverlayTests
         Assert.Equal(0, root.Unlink("config.lock"));
         Assert.Null(root.Lookup("config.lock"));
 
-        var second = new Dentry("config.lock", null, overlaySb.Root, overlaySb);
+        var second = new Dentry(FsName.FromString("config.lock"), null, overlaySb.Root, overlaySb);
         Assert.Equal(0, root.Create(second, 0x1A4, 0, 0));
         overlaySb.Root.CacheChild(second, "OverlayTests.recreate-same-name.second");
         Assert.NotNull(second.Inode);

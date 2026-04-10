@@ -17,7 +17,7 @@ public class PathPinSyscallTests
         using var env = new TestEnv();
         var root = env.SyscallManager.Root.Dentry!;
         var rootInode = root.Inode!;
-        var work = new Dentry("work", null, root, root.SuperBlock);
+        var work = new Dentry(FsName.FromString("work"), null, root, root.SuperBlock);
         rootInode.Mkdir(work, 0x1ED, 0, 0);
         var workInode = work.Inode!;
 
@@ -48,7 +48,7 @@ public class PathPinSyscallTests
         using var env = new TestEnv();
         var root = env.SyscallManager.Root.Dentry!;
         var rootInode = root.Inode!;
-        var dir = new Dentry("fdcwd", null, root, root.SuperBlock);
+        var dir = new Dentry(FsName.FromString("fdcwd"), null, root, root.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
         var dirInode = dir.Inode!;
 
@@ -79,7 +79,7 @@ public class PathPinSyscallTests
         using var env = new TestEnv();
         var root = env.SyscallManager.Root.Dentry!;
         var rootInode = root.Inode!;
-        var jail = new Dentry("jail", null, root, root.SuperBlock);
+        var jail = new Dentry(FsName.FromString("jail"), null, root, root.SuperBlock);
         rootInode.Mkdir(jail, 0x1ED, 0, 0);
         var jailInode = jail.Inode!;
 
@@ -99,7 +99,7 @@ public class PathPinSyscallTests
         using var env = new TestEnv();
         var root = env.SyscallManager.Root.Dentry!;
         var rootInode = root.Inode!;
-        var dir = new Dentry("isolated", null, root, root.SuperBlock);
+        var dir = new Dentry(FsName.FromString("isolated"), null, root, root.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
 
         var child = env.SyscallManager.Clone(new VMAManager(), false, false);
@@ -121,7 +121,7 @@ public class PathPinSyscallTests
         using var env = new TestEnv();
         var root = env.SyscallManager.Root.Dentry!;
         var rootInode = root.Inode!;
-        var dir = new Dentry("shared", null, root, root.SuperBlock);
+        var dir = new Dentry(FsName.FromString("shared"), null, root, root.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
 
         var child = env.SyscallManager.Clone(new VMAManager(), false, true);

@@ -47,7 +47,7 @@ public class OverlayFileSystem : FileSystem
         var lowerRoots = options.LowerRoots?.Where(r => r != null).ToList() ??
                          lowers.Select(l => l.Root).Where(r => r != null).ToList();
         var upperRoot = options.UpperRoot ?? upper.Root;
-        sb.Root = new Dentry("/", new OverlayInode(sb, lowerRoots!, upperRoot), null, sb);
+        sb.Root = new Dentry(FsName.Empty, new OverlayInode(sb, lowerRoots!, upperRoot), null, sb);
         sb.Root.Parent = sb.Root;
 
         return sb;

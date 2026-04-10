@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -7,6 +8,8 @@ public readonly struct FsName : IEquatable<FsName>, IComparable<FsName>
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private static readonly Encoding Utf8 = Encoding.UTF8;
+    private static readonly ConcurrentDictionary<string, FsName> GeneratedLiteralByString = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<int, FsName[]> GeneratedLiteralByHash = new();
 
     private readonly byte[]? _bytes;
     private readonly int _hashCode;
@@ -40,6 +43,8 @@ public readonly struct FsName : IEquatable<FsName>, IComparable<FsName>
 
     public static FsName FromBytes(ReadOnlySpan<byte> value, bool allowEmpty = false)
     {
+        if (TryGetGeneratedLiteral(value, out var generated))
+            return generated;
         ValidateComponentBytes(value, allowEmpty);
         if (value.IsEmpty)
             return Empty;
@@ -49,7 +54,9 @@ public readonly struct FsName : IEquatable<FsName>, IComparable<FsName>
     public static FsName FromString(string value, bool allowEmpty = false)
     {
         ArgumentNullException.ThrowIfNull(value);
-        return FromBytes(Utf8.GetBytes(value), allowEmpty);
+        if (TryGetGeneratedLiteral(value, out var generated))
+            return generated;
+        return FromOwnedBytes(Utf8.GetBytes(value), allowEmpty);
     }
 
     public static FsName FromConstructorString(string value)
@@ -144,6 +151,76 @@ public readonly struct FsName : IEquatable<FsName>, IComparable<FsName>
         }
 
         return left.Length.CompareTo(right.Length);
+    }
+
+    public static void RegisterGeneratedLiteral(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        if (value.Length == 0)
+            return;
+
+        var ownedBytes = Utf8.GetBytes(value);
+        ValidateComponentBytes(ownedBytes, false);
+
+        var literal = new FsName(ownedBytes, ComputeHash(ownedBytes));
+        if (!GeneratedLiteralByString.TryAdd(value, literal))
+            return;
+
+        GeneratedLiteralByHash.AddOrUpdate(
+            literal._hashCode,
+            new FsName[] { literal },
+            (_, existing) =>
+            {
+                foreach (var candidate in existing)
+                {
+                    if (candidate.Equals(literal))
+                        return existing;
+                }
+
+                var next = new FsName[existing.Length + 1];
+                Array.Copy(existing, next, existing.Length);
+                next[^1] = literal;
+                return next;
+            });
+    }
+
+    private static bool TryGetGeneratedLiteral(string value, out FsName literal)
+    {
+        if (value.Length == 0)
+        {
+            literal = default;
+            return false;
+        }
+
+        return GeneratedLiteralByString.TryGetValue(value, out literal);
+    }
+
+    private static bool TryGetGeneratedLiteral(ReadOnlySpan<byte> value, out FsName literal)
+    {
+        if (value.IsEmpty)
+        {
+            literal = default;
+            return false;
+        }
+
+        if (!GeneratedLiteralByHash.TryGetValue(ComputeHash(value), out var candidates))
+        {
+            literal = default;
+            return false;
+        }
+
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Equals(value))
+            {
+                literal = candidate;
+                return true;
+            }
+        }
+
+        literal = default;
+        return false;
     }
 
     private static void ValidateComponentBytes(ReadOnlySpan<byte> value, bool allowEmpty)

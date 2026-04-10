@@ -49,7 +49,7 @@ public class NewMountApiTests
         var root = env.SyscallManager.Root.Dentry!;
         if (root.Inode!.Lookup("mnt") == null)
         {
-            var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+            var mntDentry = new Dentry(FsName.FromString("mnt"), null, root, root.SuperBlock);
             root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
             root.CacheChild(mntDentry, "test");
         }
@@ -131,7 +131,7 @@ public class NewMountApiTests
         var root = env.SyscallManager.Root.Dentry!;
         if (root.Inode!.Lookup("mnt") == null)
         {
-            var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+            var mntDentry = new Dentry(FsName.FromString("mnt"), null, root, root.SuperBlock);
             root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
             root.CacheChild(mntDentry, "test");
         }
@@ -157,14 +157,14 @@ public class NewMountApiTests
         var root = env.SyscallManager.Root.Dentry!;
         if (root.Inode!.Lookup("src") == null)
         {
-            var srcDentry = new Dentry("src", null, root, root.SuperBlock);
+            var srcDentry = new Dentry(FsName.FromString("src"), null, root, root.SuperBlock);
             root.Inode.Mkdir(srcDentry, 0x1FF, 0, 0);
             root.CacheChild(srcDentry, "test");
         }
 
         if (root.Inode.Lookup("dst") == null)
         {
-            var dstDentry = new Dentry("dst", null, root, root.SuperBlock);
+            var dstDentry = new Dentry(FsName.FromString("dst"), null, root, root.SuperBlock);
             root.Inode.Mkdir(dstDentry, 0x1FF, 0, 0);
             root.CacheChild(dstDentry, "test");
         }
@@ -194,7 +194,7 @@ public class NewMountApiTests
         foreach (var name in new[] { "lower", "upper", "work", "merged" })
         {
             if (root.Inode!.Lookup(name) != null) continue;
-            var dir = new Dentry(name, null, root, root.SuperBlock);
+            var dir = new Dentry(FsName.FromString(name), null, root, root.SuperBlock);
             root.Inode.Mkdir(dir, 0x1FF, 0, 0);
             root.CacheChild(dir, "test");
         }
@@ -224,7 +224,7 @@ public class NewMountApiTests
         var root = env.SyscallManager.Root.Dentry!;
         if (root.Inode!.Lookup("mnt") == null)
         {
-            var mnt = new Dentry("mnt", null, root, root.SuperBlock);
+            var mnt = new Dentry(FsName.FromString("mnt"), null, root, root.SuperBlock);
             root.Inode.Mkdir(mnt, 0x1FF, 0, 0);
             root.CacheChild(mnt, "test");
         }
@@ -261,7 +261,7 @@ public class NewMountApiTests
         var root = env.SyscallManager.Root.Dentry!;
         if (root.Inode!.Lookup("mnt") == null)
         {
-            var mnt = new Dentry("mnt", null, root, root.SuperBlock);
+            var mnt = new Dentry(FsName.FromString("mnt"), null, root, root.SuperBlock);
             root.Inode.Mkdir(mnt, 0x1FF, 0, 0);
             root.CacheChild(mnt, "test");
         }
@@ -309,7 +309,7 @@ public class NewMountApiTests
             var root = env.SyscallManager.Root.Dentry!;
             if (root.Inode!.Lookup("mnt") == null)
             {
-                var mnt = new Dentry("mnt", null, root, root.SuperBlock);
+                var mnt = new Dentry(FsName.FromString("mnt"), null, root, root.SuperBlock);
                 root.Inode.Mkdir(mnt, 0x1FF, 0, 0);
                 root.CacheChild(mnt, "test");
             }

@@ -155,7 +155,7 @@ public class PathWalkTruncateSyscallTests
         var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "truncate-upper", null);
 
         var lowerRoot = lowerSb.Root;
-        var file = new Dentry("file", null, lowerRoot, lowerSb);
+        var file = new Dentry(FsName.FromString("file"), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Create(file, 0x1A4, 0, 0);
         var fileWriter = new LinuxFile(file, FileFlags.O_WRONLY, null!);
         try
@@ -167,9 +167,9 @@ public class PathWalkTruncateSyscallTests
             fileWriter.Close();
         }
 
-        lowerRoot.Inode.Symlink(new Dentry("link", null, lowerRoot, lowerSb), "file"u8.ToArray(), 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("indirect", null, lowerRoot, lowerSb), "link"u8.ToArray(), 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("broken", null, lowerRoot, lowerSb), "/missing-target"u8.ToArray(), 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry(FsName.FromString("link"), null, lowerRoot, lowerSb), "file"u8.ToArray(), 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry(FsName.FromString("indirect"), null, lowerRoot, lowerSb), "link"u8.ToArray(), 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry(FsName.FromString("broken"), null, lowerRoot, lowerSb), "/missing-target"u8.ToArray(), 0, 0);
 
         var overlayFs = new OverlayFileSystem();
         var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(

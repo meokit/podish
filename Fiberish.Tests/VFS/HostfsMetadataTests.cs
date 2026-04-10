@@ -23,10 +23,10 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
 
-            var nodeDentry = new Dentry("wh", null, sb.Root, sb);
+            var nodeDentry = new Dentry(FsName.FromString("wh"), null, sb.Root, sb);
             rootInode.Mknod(nodeDentry, 0x1B6, 0, 0, InodeType.CharDev, 0);
 
             var looked = rootInode.Lookup("wh");
@@ -57,14 +57,14 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var inode = sb.Root.Inode!.Lookup("f")!.Inode!;
 
-            var setRc = inode.SetXAttr("user.test", Encoding.UTF8.GetBytes("abc"), 0);
+            var setRc = inode.SetXAttr("user.test"u8, Encoding.UTF8.GetBytes("abc"), 0);
             Assert.Equal(0, setRc);
 
             var readBuf = new byte[8];
-            var getRc = inode.GetXAttr("user.test", readBuf);
+            var getRc = inode.GetXAttr("user.test"u8, readBuf);
             Assert.Equal(3, getRc);
             Assert.Equal("abc", Encoding.UTF8.GetString(readBuf, 0, getRc));
 
@@ -75,15 +75,15 @@ public class HostfsMetadataTests
             Assert.Contains("user.test", listed);
 
             var sb2 = new HostSuperBlock(fsType, tempRoot, opts);
-            sb2.Root = sb2.GetDentry(tempRoot, "/", null)!;
+            sb2.Root = sb2.GetDentry(tempRoot, FsName.Empty, null)!;
             var inode2 = sb2.Root.Inode!.Lookup("f")!.Inode!;
-            var getRc2 = inode2.GetXAttr("user.test", readBuf);
+            var getRc2 = inode2.GetXAttr("user.test"u8, readBuf);
             Assert.Equal(3, getRc2);
             Assert.Equal("abc", Encoding.UTF8.GetString(readBuf, 0, getRc2));
 
-            var rmRc = inode2.RemoveXAttr("user.test");
+            var rmRc = inode2.RemoveXAttr("user.test"u8);
             Assert.Equal(0, rmRc);
-            Assert.Equal(-(int)Errno.ENODATA, inode2.GetXAttr("user.test", readBuf));
+            Assert.Equal(-(int)Errno.ENODATA, inode2.GetXAttr("user.test"u8, readBuf));
         }
         finally
         {
@@ -104,7 +104,7 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var inode = Assert.IsType<HostInode>(sb.Root.Inode!.Lookup("f")!.Inode!);
 
             var atime = DateTimeOffset.FromUnixTimeSeconds(1_700_000_000).UtcDateTime;
@@ -114,7 +114,7 @@ public class HostfsMetadataTests
             Assert.Equal(0, inode.UpdateTimes(atime, mtime, ctime));
 
             var sb2 = new HostSuperBlock(fsType, tempRoot, opts);
-            sb2.Root = sb2.GetDentry(tempRoot, "/", null)!;
+            sb2.Root = sb2.GetDentry(tempRoot, FsName.Empty, null)!;
             var inode2 = Assert.IsType<HostInode>(sb2.Root.Inode!.Lookup("f")!.Inode!);
 
             Assert.Equal(1_700_000_000L, new DateTimeOffset(inode2.ATime).ToUnixTimeSeconds());
@@ -143,7 +143,7 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var root = Assert.IsType<HostInode>(sb.Root.Inode);
 
             Assert.Null(root.Lookup([0xFF]));
@@ -156,7 +156,7 @@ public class HostfsMetadataTests
                 root.Mknod(new Dentry(invalidName, null, sb.Root, sb), 0x1A4, 0, 0, InodeType.File, 0));
             Assert.Equal(-(int)Errno.EINVAL, root.Link(new Dentry(invalidName, null, sb.Root, sb), sb.Root.Inode!));
 
-            var goodLink = new Dentry("link", null, sb.Root, sb);
+            var goodLink = new Dentry(FsName.FromString("link"), null, sb.Root, sb);
             Assert.Equal(-(int)Errno.EINVAL, root.Symlink(goodLink, [0xFF], 0, 0));
             Assert.Equal(-(int)Errno.EINVAL, root.SetXAttr([0xFF], "x"u8, 0));
             Assert.Equal(-(int)Errno.EINVAL, root.RemoveXAttr([0xFF]));
@@ -186,7 +186,7 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=0");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var inode = Assert.IsType<HostInode>(sb.Root.Inode!.Lookup("f")!.Inode!);
 
             var atime = DateTimeOffset.FromUnixTimeSeconds(1_700_001_000).UtcDateTime;
@@ -199,10 +199,41 @@ public class HostfsMetadataTests
             Assert.False(Directory.Exists(Path.Combine(tempRoot, ".fiberish_meta")));
 
             var sb2 = new HostSuperBlock(fsType, tempRoot, opts);
-            sb2.Root = sb2.GetDentry(tempRoot, "/", null)!;
+            sb2.Root = sb2.GetDentry(tempRoot, FsName.Empty, null)!;
             var inode2 = Assert.IsType<HostInode>(sb2.Root.Inode!.Lookup("f")!.Inode!);
             Assert.Equal(1_700_001_000L, new DateTimeOffset(inode2.ATime).ToUnixTimeSeconds());
             Assert.Equal(1_700_001_100L, new DateTimeOffset(inode2.MTime).ToUnixTimeSeconds());
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Hostfs_ByteNameOps_SupportUtf8Components()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempRoot);
+        File.WriteAllText(Path.Combine(tempRoot, "你好.txt"), "utf8");
+
+        try
+        {
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw,metadata=1");
+            var sb = new HostSuperBlock(fsType, tempRoot, opts);
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
+            var root = Assert.IsType<HostInode>(sb.Root.Inode);
+
+            var first = root.Lookup("你好.txt"u8);
+            Assert.NotNull(first);
+
+            Assert.Equal(0, root.Rename("你好.txt"u8, root, "再见.txt"u8));
+            Assert.Null(root.Lookup("你好.txt"u8));
+            Assert.NotNull(root.Lookup("再见.txt"u8));
+
+            Assert.Equal(0, root.Unlink("再见.txt"u8));
+            Assert.Null(root.Lookup("再见.txt"u8));
         }
         finally
         {
@@ -220,7 +251,7 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var rootInode = sb.Root.Inode!;
 
             var names = rootInode.GetEntries().Select(e => e.Name).ToHashSet();
@@ -245,7 +276,7 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("ro");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
 
             var inode = sb.Root.Inode!.Lookup("f")!.Inode!;
             var buf = new byte[8];
@@ -350,15 +381,15 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
 
-            var first = rootInode.Lookup("ghost.txt");
+            var first = rootInode.Lookup("ghost.txt"u8);
             Assert.NotNull(first);
 
             File.Delete(hostFile);
 
-            var second = rootInode.Lookup("ghost.txt");
+            var second = rootInode.Lookup("ghost.txt"u8);
             Assert.Null(second);
         }
         finally
@@ -381,19 +412,19 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
 
-            var dir = rootInode.Lookup("dir");
+            var dir = rootInode.Lookup("dir"u8);
             Assert.NotNull(dir);
-            var sub = Assert.IsType<HostInode>(dir!.Inode).Lookup("sub");
+            var sub = Assert.IsType<HostInode>(dir!.Inode).Lookup("sub"u8);
             Assert.NotNull(sub);
-            var file = Assert.IsType<HostInode>(sub!.Inode).Lookup("file.txt");
+            var file = Assert.IsType<HostInode>(sub!.Inode).Lookup("file.txt"u8);
             Assert.NotNull(file);
 
-            rootInode.Rename("dir", rootInode, "dir2");
+            rootInode.Rename("dir"u8, rootInode, "dir2"u8);
 
-            var renamedDir = rootInode.Lookup("dir2");
+            var renamedDir = rootInode.Lookup("dir2"u8);
             Assert.NotNull(renamedDir);
             Assert.Equal(Path.Combine(tempRoot, "dir2"), Assert.IsType<HostInode>(renamedDir!.Inode).HostPath);
             Assert.Equal(Path.Combine(tempRoot, "dir2", "sub"), Assert.IsType<HostInode>(sub.Inode).HostPath);
@@ -418,7 +449,7 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
 
             var source = rootInode.Lookup("a.txt");
@@ -426,11 +457,11 @@ public class HostfsMetadataTests
             var sourceInode = source!.Inode!;
             Assert.Equal(1u, sourceInode.GetLinkCountForStat());
 
-            var alias = new Dentry("b.txt", null, sb.Root, sb);
+            var alias = new Dentry(FsName.FromString("b.txt"), null, sb.Root, sb);
             rootInode.Link(alias, sourceInode);
             Assert.Equal(2u, sourceInode.GetLinkCountForStat());
 
-            rootInode.Unlink("a.txt");
+            rootInode.Unlink("a.txt"u8);
             Assert.Equal(1u, sourceInode.GetLinkCountForStat());
         }
         finally
@@ -451,14 +482,14 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
 
             var source = rootInode.Lookup("a.txt");
             Assert.NotNull(source);
             var sourceInode = source!.Inode!;
 
-            var alias = new Dentry("b.txt", null, sb.Root, sb);
+            var alias = new Dentry(FsName.FromString("b.txt"), null, sb.Root, sb);
             rootInode.Link(alias, sourceInode);
             Assert.Equal(2u, sourceInode.GetLinkCountForStat());
 
@@ -489,7 +520,7 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
 
             var source = rootInode.Lookup("a.txt");
@@ -497,7 +528,7 @@ public class HostfsMetadataTests
             var sourceInode = source!.Inode!;
             Assert.Equal(0, sourceInode.SetXAttr("user.tag", Encoding.UTF8.GetBytes("alpha"), 0));
 
-            var alias = new Dentry("b.txt", null, sb.Root, sb);
+            var alias = new Dentry(FsName.FromString("b.txt"), null, sb.Root, sb);
             rootInode.Link(alias, sourceInode);
 
             _ = sb.DropDentryCache();
@@ -508,7 +539,7 @@ public class HostfsMetadataTests
             Assert.Equal(5, rc1);
             Assert.Equal("alpha", Encoding.UTF8.GetString(buf, 0, rc1));
 
-            rootInode.Unlink("a.txt");
+            rootInode.Unlink("a.txt"u8);
             _ = sb.DropDentryCache();
             var b2 = rootInode.Lookup("b.txt");
             Assert.NotNull(b2);
@@ -517,7 +548,7 @@ public class HostfsMetadataTests
             Assert.Equal("alpha", Encoding.UTF8.GetString(buf, 0, rc2));
 
             var sb2 = new HostSuperBlock(fsType, tempRoot, opts);
-            sb2.Root = sb2.GetDentry(tempRoot, "/", null)!;
+            sb2.Root = sb2.GetDentry(tempRoot, FsName.Empty, null)!;
             var b3 = sb2.Root.Inode!.Lookup("b.txt");
             Assert.NotNull(b3);
             var rc3 = b3!.Inode!.GetXAttr("user.tag", buf);
@@ -543,7 +574,7 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
             var dentry = rootInode.Lookup("active.txt");
             Assert.NotNull(dentry);
@@ -592,7 +623,7 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var inode = sb.Root.Inode!.Lookup("f")!.Inode!;
             Assert.Equal(0, inode.SetXAttr("user.reset", Encoding.UTF8.GetBytes("ok"), 0));
 
@@ -622,31 +653,31 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
 
             Assert.Equal(2u, rootInode.GetLinkCountForStat());
 
-            var dir = new Dentry("dir", null, sb.Root, sb);
+            var dir = new Dentry(FsName.FromString("dir"), null, sb.Root, sb);
             rootInode.Mkdir(dir, 0x1ED, 0, 0);
             var dirInode = Assert.IsType<HostInode>(dir.Inode);
 
             Assert.Equal(3u, rootInode.GetLinkCountForStat());
             Assert.Equal(2u, dirInode.GetLinkCountForStat());
 
-            var nested = new Dentry("nested", null, dir, sb);
+            var nested = new Dentry(FsName.FromString("nested"), null, dir, sb);
             dirInode.Mkdir(nested, 0x1ED, 0, 0);
             var nestedInode = Assert.IsType<HostInode>(nested.Inode);
 
             Assert.Equal(3u, dirInode.GetLinkCountForStat());
             Assert.Equal(2u, nestedInode.GetLinkCountForStat());
 
-            dirInode.Rmdir("nested");
+            dirInode.Rmdir("nested"u8);
             Assert.Equal(2u, dirInode.GetLinkCountForStat());
             Assert.Equal(0u, nestedInode.GetLinkCountForStat());
             Assert.True(nestedInode.IsFinalized);
 
-            rootInode.Rmdir("dir");
+            rootInode.Rmdir("dir"u8);
             Assert.Equal(2u, rootInode.GetLinkCountForStat());
             Assert.Equal(0u, dirInode.GetLinkCountForStat());
             Assert.True(dirInode.IsFinalized);
@@ -668,18 +699,18 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
 
-            var from = new Dentry("from", null, sb.Root, sb);
+            var from = new Dentry(FsName.FromString("from"), null, sb.Root, sb);
             rootInode.Mkdir(from, 0x1ED, 0, 0);
             var fromInode = Assert.IsType<HostInode>(from.Inode);
 
-            var to = new Dentry("to", null, sb.Root, sb);
+            var to = new Dentry(FsName.FromString("to"), null, sb.Root, sb);
             rootInode.Mkdir(to, 0x1ED, 0, 0);
             var toInode = Assert.IsType<HostInode>(to.Inode);
 
-            var child = new Dentry("child", null, from, sb);
+            var child = new Dentry(FsName.FromString("child"), null, from, sb);
             fromInode.Mkdir(child, 0x1ED, 0, 0);
             var childInode = Assert.IsType<HostInode>(child.Inode);
 
@@ -714,7 +745,7 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
 
             var src = rootInode.Lookup("src");
@@ -754,7 +785,7 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
 
             var source = rootInode.Lookup("a.txt");
@@ -792,13 +823,13 @@ public class HostfsMetadataTests
             var fsType = new FileSystemType { Name = "hostfs" };
             var opts = HostfsMountOptions.Parse("rw,metadata=1");
             var sb = new HostSuperBlock(fsType, tempRoot, opts);
-            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            sb.Root = sb.GetDentry(tempRoot, FsName.Empty, null)!;
             var rootInode = Assert.IsType<HostInode>(sb.Root.Inode);
 
             var src = rootInode.Lookup("src.txt");
             Assert.NotNull(src);
             var inode = src!.Inode!;
-            var alias = new Dentry("alias.txt", null, sb.Root, sb);
+            var alias = new Dentry(FsName.FromString("alias.txt"), null, sb.Root, sb);
             rootInode.Link(alias, inode);
             Assert.Equal(2u, inode.GetLinkCountForStat());
 

@@ -23,7 +23,7 @@ public class UtimensSyscallTests
         env.MapUserPage(timesPtr);
 
         var root = env.SyscallManager.Root.Dentry!;
-        var file = new Dentry("stamp.txt", null, root, root.SuperBlock);
+        var file = new Dentry(FsName.FromString("stamp.txt"), null, root, root.SuperBlock);
         root.Inode!.Create(file, 0x1A4, 0, 0);
 
         var times = new byte[16];
@@ -52,7 +52,7 @@ public class UtimensSyscallTests
         env.Write(emptyPathPtr, [0]);
 
         var root = env.SyscallManager.Root.Dentry!;
-        var file = new Dentry("fd-stamp.txt", null, root, root.SuperBlock);
+        var file = new Dentry(FsName.FromString("fd-stamp.txt"), null, root, root.SuperBlock);
         root.Inode!.Create(file, 0x1A4, 0, 0);
         var fd = env.SyscallManager.AllocFD(new LinuxFile(file, FileFlags.O_RDONLY, env.RootMount));
 
@@ -79,7 +79,7 @@ public class UtimensSyscallTests
         env.SetCreds(uid: 1234, gid: 1234);
 
         var root = env.SyscallManager.Root.Dentry!;
-        var file = new Dentry("now.txt", null, root, root.SuperBlock);
+        var file = new Dentry(FsName.FromString("now.txt"), null, root, root.SuperBlock);
         root.Inode!.Create(file, 0x1B6, 0, 0);
 
         var times = new byte[16];
@@ -103,7 +103,7 @@ public class UtimensSyscallTests
         env.SetCreds(uid: 1234, gid: 1234);
 
         var root = env.SyscallManager.Root.Dentry!;
-        var file = new Dentry("explicit.txt", null, root, root.SuperBlock);
+        var file = new Dentry(FsName.FromString("explicit.txt"), null, root, root.SuperBlock);
         root.Inode!.Create(file, 0x1B6, 0, 0);
 
         var times = new byte[16];

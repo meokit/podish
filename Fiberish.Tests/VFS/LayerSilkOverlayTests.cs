@@ -44,7 +44,7 @@ public class LayerSilkOverlayTests
 
             var etc = sm.PathWalkWithFlags("/etc", LookupFlags.FollowSymlink);
             Assert.True(etc.IsValid);
-            var fiber = new Dentry("fiber.txt", null, etc.Dentry, etc.Dentry!.SuperBlock);
+            var fiber = new Dentry(FsName.FromString("fiber.txt"), null, etc.Dentry, etc.Dentry!.SuperBlock);
             etc.Dentry.Inode!.Create(fiber, 0x1A4, 0, 0);
             var wf = new LinuxFile(fiber, FileFlags.O_WRONLY, etc.Mount!);
             var wrote = fiber.Inode!.WriteFromHost(null, wf, "hello"u8.ToArray(), 0);
@@ -413,7 +413,7 @@ public class LayerSilkOverlayTests
 
                 var devLoc = sm.PathWalkWithFlags("/dev", LookupFlags.FollowSymlink);
                 Assert.True(devLoc.IsValid);
-                var nullNode = new Dentry("null", null, devLoc.Dentry, devLoc.Dentry!.SuperBlock);
+                var nullNode = new Dentry(FsName.FromString("null"), null, devLoc.Dentry, devLoc.Dentry!.SuperBlock);
                 devLoc.Dentry.Inode!.Mknod(nullNode, 0x1B6, 0, 0, InodeType.CharDev, rdev);
 
                 var created = devLoc.Dentry.Inode.Lookup("null");
@@ -471,7 +471,7 @@ public class LayerSilkOverlayTests
 
                 var runLoc = sm.PathWalkWithFlags("/run", LookupFlags.FollowSymlink);
                 Assert.True(runLoc.IsValid);
-                var fifoNode = new Dentry("apk.pipe", null, runLoc.Dentry, runLoc.Dentry!.SuperBlock);
+                var fifoNode = new Dentry(FsName.FromString("apk.pipe"), null, runLoc.Dentry, runLoc.Dentry!.SuperBlock);
                 runLoc.Dentry.Inode!.Mknod(fifoNode, 0x1B6, 0, 0, InodeType.Fifo, 0);
 
                 var created = runLoc.Dentry.Inode.Lookup("apk.pipe");
@@ -533,7 +533,7 @@ public class LayerSilkOverlayTests
 
                 var binLoc = sm.PathWalkWithFlags("/bin", LookupFlags.FollowSymlink);
                 Assert.True(binLoc.IsValid);
-                var shNode = new Dentry("sh", null, binLoc.Dentry, binLoc.Dentry!.SuperBlock);
+                var shNode = new Dentry(FsName.FromString("sh"), null, binLoc.Dentry, binLoc.Dentry!.SuperBlock);
                 binLoc.Dentry.Inode!.Symlink(shNode, "/bin/busybox", 0, 0);
 
                 var created = binLoc.Dentry.Inode.Lookup("sh");
@@ -607,7 +607,7 @@ public class LayerSilkOverlayTests
                 var apkLoc = sm.PathWalkWithFlags("/etc/apk", LookupFlags.FollowSymlink);
                 Assert.True(apkLoc.IsValid);
 
-                var opaque = new Dentry(".wh..wh..opq", null, apkLoc.Dentry, apkLoc.Dentry!.SuperBlock);
+                var opaque = new Dentry(FsName.FromString(".wh..wh..opq"), null, apkLoc.Dentry, apkLoc.Dentry!.SuperBlock);
                 apkLoc.Dentry.Inode!.Mknod(opaque, 0x1B6, 0, 0, InodeType.CharDev, 0);
 
                 Assert.Null(apkLoc.Dentry.Inode.Lookup("world"));

@@ -41,12 +41,12 @@ public class InodeInvariantTests
             VfsDebugTrace.Enabled = false;
 
             var sb = new TestSuperBlock();
-            var parent = new Dentry("/", null, null, sb);
+            var parent = new Dentry(FsName.Empty, null, null, sb);
             parent.Parent = parent;
             sb.Root = parent;
 
             var inode = new TestInode(101, sb);
-            var dentry = new Dentry("file", inode, parent, sb);
+            var dentry = new Dentry(FsName.FromString("file"), inode, parent, sb);
 
             Assert.Contains(dentry, inode.Dentries);
             Assert.True(inode.DetachAliasDentry(dentry, "InodeInvariantTests"));
@@ -130,12 +130,12 @@ public class InodeInvariantTests
             VfsDebugTrace.Enabled = false;
 
             var sb = new TestSuperBlock();
-            var parent = new Dentry("/", null, null, sb);
+            var parent = new Dentry(FsName.Empty, null, null, sb);
             parent.Parent = parent;
             sb.Root = parent;
 
             var inode = new TestInode(104, sb);
-            var dentry = new Dentry("file", inode, parent, sb);
+            var dentry = new Dentry(FsName.FromString("file"), inode, parent, sb);
             Assert.Equal(1, inode.RefCount);
             Assert.Equal(1, inode.KernelInternalRefCount);
             Assert.Contains(dentry, inode.Dentries);
@@ -178,10 +178,10 @@ public class InodeInvariantTests
     {
         var sb = new TestSuperBlock();
         var inode = new TestInode(108, sb);
-        var root = new Dentry("/", null, null, sb);
+        var root = new Dentry(FsName.Empty, null, null, sb);
         root.Parent = root;
         sb.Root = root;
-        var alias = new Dentry("leaf", inode, root, sb);
+        var alias = new Dentry(FsName.FromString("leaf"), inode, root, sb);
         Assert.True(alias.UnbindInode("test-setup"));
 
         inode.SetInitialLinkCount(1, "test");
@@ -225,10 +225,10 @@ public class InodeInvariantTests
             VfsDebugTrace.Enabled = false;
 
             var sb = new TestSuperBlock();
-            var parent = new Dentry("/", null, null, sb);
+            var parent = new Dentry(FsName.Empty, null, null, sb);
             parent.Parent = parent;
             sb.Root = parent;
-            var dentry = new Dentry("leaf", null, parent, sb);
+            var dentry = new Dentry(FsName.FromString("leaf"), null, parent, sb);
 
             var ex = Assert.Throws<InvalidOperationException>(() => dentry.Put("test"));
             Assert.Contains("underflow", ex.Message, StringComparison.OrdinalIgnoreCase);
@@ -244,11 +244,11 @@ public class InodeInvariantTests
     public void DentryGetPut_TransitionsSuperblockLruMembership()
     {
         var sb = new TestSuperBlock();
-        var root = new Dentry("/", null, null, sb);
+        var root = new Dentry(FsName.Empty, null, null, sb);
         root.Parent = root;
         sb.Root = root;
 
-        var dentry = new Dentry("leaf", null, root, sb);
+        var dentry = new Dentry(FsName.FromString("leaf"), null, root, sb);
         root.CacheChild(dentry, "test");
 
         Assert.True(dentry.IsTrackedBySuperBlock);
@@ -273,13 +273,13 @@ public class InodeInvariantTests
     public void DropDentryCache_ReclaimsLeafAndUntracksDentry()
     {
         var sb = new TestSuperBlock();
-        var root = new Dentry("/", null, null, sb);
+        var root = new Dentry(FsName.Empty, null, null, sb);
         root.Parent = root;
         sb.Root = root;
         root.Get("test-root-pin");
 
         var inode = new TestInode(107, sb);
-        var leaf = new Dentry("leaf", inode, root, sb);
+        var leaf = new Dentry(FsName.FromString("leaf"), inode, root, sb);
         root.CacheChild(leaf, "test");
         Assert.True(leaf.IsHashed);
         Assert.False(leaf.IsNegative);
@@ -306,11 +306,11 @@ public class InodeInvariantTests
             VfsDebugTrace.Enabled = false;
 
             var sb = new TestSuperBlock();
-            var root = new Dentry("/", null, null, sb);
+            var root = new Dentry(FsName.Empty, null, null, sb);
             root.Parent = root;
             sb.Root = root;
 
-            var leaf = new Dentry("leaf", null, root, sb);
+            var leaf = new Dentry(FsName.FromString("leaf"), null, root, sb);
             root.CacheChild(leaf, "test");
             leaf.IsMounted = true;
 

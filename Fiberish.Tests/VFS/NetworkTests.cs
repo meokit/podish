@@ -23,7 +23,7 @@ public class NetworkTests
 
         // Dummy eventfd as the target
         var eventFd = new EventFdInode(2, env.MemfdSuperBlock, 0, FileFlags.O_RDWR);
-        var fileDentry = new Dentry("eventfd", eventFd, null, env.MemfdSuperBlock);
+        var fileDentry = new Dentry(FsName.FromString("eventfd"), eventFd, null, env.MemfdSuperBlock);
         var file = new LinuxFile(fileDentry, FileFlags.O_RDWR | FileFlags.O_NONBLOCK, null!);
 
         // Register file into epoll via EPOLL_CTL_ADD
@@ -58,14 +58,14 @@ public class NetworkTests
         sock1.ConnectPair(sock2);
         sock2.ConnectPair(sock1);
 
-        var file1 = new LinuxFile(new Dentry("s1", sock1, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+        var file1 = new LinuxFile(new Dentry(FsName.FromString("s1"), sock1, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
-        var file2 = new LinuxFile(new Dentry("s2", sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+        var file2 = new LinuxFile(new Dentry(FsName.FromString("s2"), sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 
         // Dummy FD to pass
         var dummyFdNode = new EventFdInode(3, env.MemfdSuperBlock, 0, FileFlags.O_RDWR);
-        var dummyFile = new LinuxFile(new Dentry("d", dummyFdNode, null, env.MemfdSuperBlock),
+        var dummyFile = new LinuxFile(new Dentry(FsName.FromString("d"), dummyFdNode, null, env.MemfdSuperBlock),
             FileFlags.O_RDWR, null!);
 
         var fdsToPass = new List<LinuxFile> { dummyFile };
@@ -92,9 +92,9 @@ public class NetworkTests
         sock1.ConnectPair(sock2);
         sock2.ConnectPair(sock1);
 
-        var file1 = new LinuxFile(new Dentry("s1", sock1, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+        var file1 = new LinuxFile(new Dentry(FsName.FromString("s1"), sock1, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
-        var file2 = new LinuxFile(new Dentry("s2", sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+        var file2 = new LinuxFile(new Dentry(FsName.FromString("s2"), sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 
         var readWaitField =
@@ -122,7 +122,7 @@ public class NetworkTests
         sock1.ConnectPair(sock2);
         sock2.ConnectPair(sock1);
 
-        var file2 = new LinuxFile(new Dentry("s2", sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
+        var file2 = new LinuxFile(new Dentry(FsName.FromString("s2"), sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
 
         var readWaitField =
             typeof(UnixSocketInode).GetField("_readWaitQueue", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -150,7 +150,7 @@ public class NetworkTests
         sock1.ConnectPair(sock2);
         sock2.ConnectPair(sock1);
 
-        var file2 = new LinuxFile(new Dentry("s2", sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
+        var file2 = new LinuxFile(new Dentry(FsName.FromString("s2"), sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
 
         var pending = env.StartOnScheduler(() => sock2.RecvMessageAsync(file2, env.Task, new byte[8], 0));
         await env.WaitForBackgroundSchedulerAsync();
@@ -174,7 +174,7 @@ public class NetworkTests
         sock1.ConnectPair(sock2);
         sock2.ConnectPair(sock1);
 
-        var file2 = new LinuxFile(new Dentry("s2", sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
+        var file2 = new LinuxFile(new Dentry(FsName.FromString("s2"), sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
 
         var pending = env.StartOnScheduler(() => sock2.RecvMessageAsync(file2, env.Task, new byte[8], 0));
         await env.WaitForBackgroundSchedulerAsync();
@@ -195,8 +195,8 @@ public class NetworkTests
         sock1.ConnectPair(sock2);
         sock2.ConnectPair(sock1);
 
-        var file1 = new LinuxFile(new Dentry("s1", sock1, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
-        var file2 = new LinuxFile(new Dentry("s2", sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
+        var file1 = new LinuxFile(new Dentry(FsName.FromString("s1"), sock1, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
+        var file2 = new LinuxFile(new Dentry(FsName.FromString("s2"), sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null!);
 
         var epoll = new EpollInode(3, env.MemfdSuperBlock, env.Scheduler);
         const ulong data = 0x55667788UL;
@@ -261,7 +261,7 @@ public class NetworkTests
     {
         using var env = new TestEnv();
         var sock = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Stream, env.Scheduler);
-        var file = new LinuxFile(new Dentry("s", sock, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+        var file = new LinuxFile(new Dentry(FsName.FromString("s"), sock, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 
         var revents = sock.Poll(file, PollEvents.POLLIN | PollEvents.POLLOUT | PollEvents.POLLHUP);
@@ -277,9 +277,9 @@ public class NetworkTests
         sock1.ConnectPair(sock2);
         sock2.ConnectPair(sock1);
 
-        var file1 = new LinuxFile(new Dentry("s1", sock1, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+        var file1 = new LinuxFile(new Dentry(FsName.FromString("s1"), sock1, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
-        var file2 = new LinuxFile(new Dentry("s2", sock2, null, env.MemfdSuperBlock),
+        var file2 = new LinuxFile(new Dentry(FsName.FromString("s2"), sock2, null, env.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, null!);
 
         static async ValueTask ReadExactAsync(

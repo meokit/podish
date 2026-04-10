@@ -132,7 +132,7 @@ public class TtyIoContextRegressionTests
             Process.ControllingTty = Tty;
 
             var stdinInode = new ConsoleInode(SyscallManager.MemfdSuperBlock, true, Tty);
-            var stdinDentry = new Dentry("stdin", stdinInode, null, SyscallManager.MemfdSuperBlock);
+            var stdinDentry = new Dentry(FsName.FromString("stdin"), stdinInode, null, SyscallManager.MemfdSuperBlock);
             var stdinFile = new LinuxFile(stdinDentry, FileFlags.O_RDONLY, SyscallManager.AnonMount);
             SyscallManager.FDs[0] = stdinFile;
 
@@ -140,8 +140,8 @@ public class TtyIoContextRegressionTests
             {
                 SuperBlock = SyscallManager.MemfdSuperBlock
             };
-            var pipeReadDentry = new Dentry("pipe:[read]", pipe, null, SyscallManager.MemfdSuperBlock);
-            var pipeWriteDentry = new Dentry("pipe:[write]", pipe, null, SyscallManager.MemfdSuperBlock);
+            var pipeReadDentry = new Dentry(FsName.FromString("pipe:[read]"), pipe, null, SyscallManager.MemfdSuperBlock);
+            var pipeWriteDentry = new Dentry(FsName.FromString("pipe:[write]"), pipe, null, SyscallManager.MemfdSuperBlock);
             PipeReadFile = new LinuxFile(pipeReadDentry, FileFlags.O_RDONLY, SyscallManager.AnonMount);
             var pipeWriteFile = new LinuxFile(pipeWriteDentry, FileFlags.O_WRONLY, SyscallManager.AnonMount);
             SyscallManager.FDs[1] = pipeWriteFile;

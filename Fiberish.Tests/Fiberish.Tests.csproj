@@ -23,6 +23,9 @@
 
     <ItemGroup>
         <ProjectReference Include="..\Fiberish.Core\Fiberish.Core.csproj"/>
+        <ProjectReference Include="..\Fiberish.FsName.Generator\Fiberish.FsName.Generator.csproj"
+                          OutputItemType="Analyzer"
+                          ReferenceOutputAssembly="false"/>
         <ProjectReference Include="..\Podish.Core\Podish.Core.csproj"/>
         <ProjectReference Include="..\Podish.Core.Native\Podish.Core.Native.csproj"/>
     </ItemGroup>

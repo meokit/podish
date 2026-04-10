@@ -169,7 +169,7 @@ public class PathWalkRmdirSyscallTests
         var (parent, name, error) = env.SyscallManager.PathWalkForCreate(path);
         Assert.True(parent.IsValid);
         Assert.Equal(env.SyscallManager.Root.Dentry, parent.Dentry);
-        Assert.Equal(path.Trim('/'), name);
+        Assert.Equal(path.Trim('/'), name.ToString());
         Assert.Equal(0, error);
     }
 
@@ -302,7 +302,7 @@ public class PathWalkRmdirSyscallTests
 
         var lowerRoot = lowerSb.Root;
 
-        var file = new Dentry("file", null, lowerRoot, lowerSb);
+        var file = new Dentry(FsName.FromString("file"), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Create(file, 0x1A4, 0, 0);
         var fileWriter = new LinuxFile(file, FileFlags.O_WRONLY, null!);
         try
@@ -314,12 +314,12 @@ public class PathWalkRmdirSyscallTests
             fileWriter.Close();
         }
 
-        var empty = new Dentry("empty", null, lowerRoot, lowerSb);
+        var empty = new Dentry(FsName.FromString("empty"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Mkdir(empty, 0x1ED, 0, 0);
 
-        var nonEmpty = new Dentry("nonempty", null, lowerRoot, lowerSb);
+        var nonEmpty = new Dentry(FsName.FromString("nonempty"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Mkdir(nonEmpty, 0x1ED, 0, 0);
-        var child = new Dentry("a", null, nonEmpty, lowerSb);
+        var child = new Dentry(FsName.FromString("a"), null, nonEmpty, lowerSb);
         nonEmpty.Inode!.Create(child, 0x1A4, 0, 0);
         var childWriter = new LinuxFile(child, FileFlags.O_WRONLY, null!);
         try
@@ -331,9 +331,9 @@ public class PathWalkRmdirSyscallTests
             childWriter.Close();
         }
 
-        var pop = new Dentry("pop", null, nonEmpty, lowerSb);
+        var pop = new Dentry(FsName.FromString("pop"), null, nonEmpty, lowerSb);
         nonEmpty.Inode.Mkdir(pop, 0x1ED, 0, 0);
-        var popChild = new Dentry("b", null, pop, lowerSb);
+        var popChild = new Dentry(FsName.FromString("b"), null, pop, lowerSb);
         pop.Inode!.Create(popChild, 0x1A4, 0, 0);
         var popWriter = new LinuxFile(popChild, FileFlags.O_WRONLY, null!);
         try
@@ -345,15 +345,15 @@ public class PathWalkRmdirSyscallTests
             popWriter.Close();
         }
 
-        var link = new Dentry("link", null, lowerRoot, lowerSb);
+        var link = new Dentry(FsName.FromString("link"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Symlink(link, "file"u8.ToArray(), 0, 0);
-        var indirect = new Dentry("indirect", null, lowerRoot, lowerSb);
+        var indirect = new Dentry(FsName.FromString("indirect"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Symlink(indirect, "link"u8.ToArray(), 0, 0);
-        var broken = new Dentry("broken", null, lowerRoot, lowerSb);
+        var broken = new Dentry(FsName.FromString("broken"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Symlink(broken, "/missing-target"u8.ToArray(), 0, 0);
-        var dirLink = new Dentry("dir-link", null, lowerRoot, lowerSb);
+        var dirLink = new Dentry(FsName.FromString("dir-link"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Symlink(dirLink, "nonempty"u8.ToArray(), 0, 0);
-        var dirChain = new Dentry("dir-chain", null, lowerRoot, lowerSb);
+        var dirChain = new Dentry(FsName.FromString("dir-chain"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Symlink(dirChain, "dir-link"u8.ToArray(), 0, 0);
 
         var overlayFs = new OverlayFileSystem();

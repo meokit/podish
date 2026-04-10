@@ -26,7 +26,7 @@ public class LayerFileSystem : FileSystem
 
         var contentProvider = options.ContentProvider ?? new InMemoryLayerContentProvider();
         var sb = new LayerSuperBlock(fsType, index, contentProvider, DevManager, options.MinimumReadAheadBytes);
-        sb.Root = new Dentry("/", sb.GetOrCreateInode("/"), null, sb);
+        sb.Root = new Dentry(FsName.Empty, sb.GetOrCreateInode("/"), null, sb);
         sb.Root.Parent = sb.Root;
         return sb;
     }
@@ -348,7 +348,7 @@ public class LayerInode : MappingBackedInode
         if (!sb.Index.TryGetChildPath(_path, name, out var childPath)) return null;
 
         var parentDentry = Dentries.Count > 0 ? Dentries[0] : null;
-        return new Dentry(name, sb.GetOrCreateInode(childPath), parentDentry, SuperBlock);
+        return new Dentry(FsName.FromString(name), sb.GetOrCreateInode(childPath), parentDentry, SuperBlock);
     }
 
     public override Dentry? Lookup(ReadOnlySpan<byte> name)

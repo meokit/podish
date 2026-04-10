@@ -115,7 +115,7 @@ public class HostMappedPageCacheGeometryTests
                 var sm = CreateTmpfsRoot(engine, mm);
                 var mountLoc = MountSilkfs(sm, silkRoot);
 
-                var file = new Dentry("mapped.bin", null, mountLoc.Dentry, mountLoc.Dentry!.SuperBlock);
+                var file = new Dentry(FsName.FromString("mapped.bin"), null, mountLoc.Dentry, mountLoc.Dentry!.SuperBlock);
                 mountLoc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
                 var initial = new byte[LinuxConstants.PageSize * 4];
                 Array.Fill(initial, (byte)'s');
@@ -245,7 +245,7 @@ public class HostMappedPageCacheGeometryTests
         var root = sm.Root.Dentry!;
         if (root.Inode!.Lookup("mnt") == null)
         {
-            var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
+            var mntDentry = new Dentry(FsName.FromString("mnt"), null, root, root.SuperBlock);
             root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
             root.CacheChild(mntDentry, "test");
         }

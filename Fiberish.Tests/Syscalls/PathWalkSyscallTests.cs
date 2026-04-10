@@ -181,7 +181,7 @@ public class PathWalkSyscallTests
 
         var (parent, name, error) = env.SyscallManager.PathWalkForCreate(path);
         Assert.False(parent.IsValid);
-        Assert.Equal("new", name);
+        Assert.Equal("new", name.ToString());
         Assert.Equal(-(int)Errno.ENOTDIR, error);
     }
 
@@ -353,7 +353,7 @@ public class PathWalkSyscallTests
         var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "file-upper", null);
 
         var lowerRoot = lowerSb.Root;
-        var file = new Dentry("file", null, lowerRoot, lowerSb);
+        var file = new Dentry(FsName.FromString("file"), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Create(file, 0x1A4, 0, 0);
         var writer = new LinuxFile(file, FileFlags.O_WRONLY, null!);
         try
@@ -365,11 +365,11 @@ public class PathWalkSyscallTests
             writer.Close();
         }
 
-        var direct = new Dentry("link", null, lowerRoot, lowerSb);
+        var direct = new Dentry(FsName.FromString("link"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Symlink(direct, "file"u8.ToArray(), 0, 0);
-        var indirect = new Dentry("indirect", null, lowerRoot, lowerSb);
+        var indirect = new Dentry(FsName.FromString("indirect"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Symlink(indirect, "link"u8.ToArray(), 0, 0);
-        var broken = new Dentry("broken", null, lowerRoot, lowerSb);
+        var broken = new Dentry(FsName.FromString("broken"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Symlink(broken, "/missing-target"u8.ToArray(), 0, 0);
 
         var overlayFs = new OverlayFileSystem();
@@ -396,10 +396,10 @@ public class PathWalkSyscallTests
         var upperSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "dir-upper", null);
 
         var lowerRoot = lowerSb.Root;
-        var dir = new Dentry("dir", null, lowerRoot, lowerSb);
+        var dir = new Dentry(FsName.FromString("dir"), null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Mkdir(dir, 0x1ED, 0, 0);
 
-        var child = new Dentry("a", null, dir, lowerSb);
+        var child = new Dentry(FsName.FromString("a"), null, dir, lowerSb);
         dir.Inode!.Create(child, 0x1A4, 0, 0);
         var writer = new LinuxFile(child, FileFlags.O_WRONLY, null!);
         try
@@ -411,9 +411,9 @@ public class PathWalkSyscallTests
             writer.Close();
         }
 
-        var direct = new Dentry("dir-link", null, lowerRoot, lowerSb);
+        var direct = new Dentry(FsName.FromString("dir-link"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Symlink(direct, "dir"u8.ToArray(), 0, 0);
-        var indirect = new Dentry("dir-chain", null, lowerRoot, lowerSb);
+        var indirect = new Dentry(FsName.FromString("dir-chain"), null, lowerRoot, lowerSb);
         lowerRoot.Inode.Symlink(indirect, "dir-link"u8.ToArray(), 0, 0);
 
         var overlayFs = new OverlayFileSystem();

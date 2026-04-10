@@ -18,7 +18,7 @@ public class Tmpfs : FileSystem
         rootInode.Mode = 0x1FF;
         rootInode.SetInitialLinkCount(2, "Tmpfs.ReadSuper.root");
 
-        sb.Root = new Dentry("/", rootInode, null, sb);
+        sb.Root = new Dentry(FsName.Empty, rootInode, null, sb);
         sb.Root.Parent = sb.Root;
 
         return sb;

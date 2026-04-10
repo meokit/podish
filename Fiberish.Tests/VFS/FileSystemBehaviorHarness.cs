@@ -36,7 +36,7 @@ internal sealed class HostfsTestRig : IFileSystemTestRig
         var fsType = new FileSystemType { Name = "hostfs" };
         var opts = HostfsMountOptions.Parse("rw");
         SuperBlock = new HostSuperBlock(fsType, _rootPath, opts);
-        SuperBlock.Root = ((HostSuperBlock)SuperBlock).GetDentry(_rootPath, "/", null)!;
+        SuperBlock.Root = ((HostSuperBlock)SuperBlock).GetDentry(_rootPath, FsName.Empty, null)!;
         Root = SuperBlock.Root;
         RootInode = Root.Inode!;
     }

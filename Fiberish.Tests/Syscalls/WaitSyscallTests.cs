@@ -76,7 +76,7 @@ public class WaitSyscallTests
         env.MapUserPage(bufPtr);
 
         var eventFd = new EventFdInode(20, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
-        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -101,7 +101,7 @@ public class WaitSyscallTests
         env.MapUserPage(writeBufPtr);
 
         var eventFd = new EventFdInode(21, env.SyscallManager.MemfdSuperBlock, ulong.MaxValue - 1, FileFlags.O_RDWR);
-        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -189,7 +189,7 @@ public class WaitSyscallTests
         env.MapUserPage(bufPtr);
 
         var timerFd = new TimerFdInode(22, env.SyscallManager.MemfdSuperBlock);
-        var file = new LinuxFile(new Dentry("timerfd", timerFd, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("timerfd"), timerFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -485,7 +485,7 @@ public class WaitSyscallTests
         env.MapUserPage(tsPtr);
 
         var eventFd = new EventFdInode(10, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
-        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -524,7 +524,7 @@ public class WaitSyscallTests
         env.MapUserPage(pollfdPtr);
 
         var inode = new ControllingTtyInode(env.SyscallManager.MemfdSuperBlock);
-        var file = new LinuxFile(new Dentry("tty", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("tty"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -550,7 +550,7 @@ public class WaitSyscallTests
         Assert.True(epfd >= 0);
 
         var eventFd = new EventFdInode(11, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
-        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -588,7 +588,7 @@ public class WaitSyscallTests
         Assert.True(epfd >= 0);
 
         var eventFd = new EventFdInode(111, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
-        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -622,7 +622,7 @@ public class WaitSyscallTests
         Assert.True(epfd >= 0);
 
         var eventFd = new EventFdInode(112, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
-        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -664,7 +664,7 @@ public class WaitSyscallTests
         env.MapUserPage(tsPtr);
 
         var eventFd = new EventFdInode(12, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
-        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -696,7 +696,7 @@ public class WaitSyscallTests
         env.MapUserPage(tsPtr);
 
         var eventFd = new EventFdInode(13, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
-        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -728,7 +728,7 @@ public class WaitSyscallTests
         Assert.True(epfd >= 0);
 
         var eventFd = new EventFdInode(14, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
-        var file = new LinuxFile(new Dentry("eventfd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -775,7 +775,7 @@ public class WaitSyscallTests
         inode.NativeSocket.Listen(16);
         var listenEp = (IPEndPoint)inode.NativeSocket.LocalEndPoint!;
 
-        var file = new LinuxFile(new Dentry("host-listen", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("host-listen"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -814,7 +814,7 @@ public class WaitSyscallTests
         server.Blocking = false;
 
         var inode = new HostSocketInode(201, env.SyscallManager.MemfdSuperBlock, server);
-        var file = new LinuxFile(new Dentry("host-connected", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("host-connected"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -849,7 +849,7 @@ public class WaitSyscallTests
 
         var inode = new HostSocketInode(202, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
             SocketType.Stream, ProtocolType.Tcp);
-        var file = new LinuxFile(new Dentry("host-connect", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("host-connect"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -1044,7 +1044,7 @@ public class WaitSyscallTests
         tty.SetAttr(0, termios);
 
         var inode = new ConsoleInode(env.SyscallManager.MemfdSuperBlock, true, tty);
-        var file = new LinuxFile(new Dentry("tty-stdin", inode, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("tty-stdin"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDONLY, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
         return (fd, tty);

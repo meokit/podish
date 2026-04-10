@@ -184,13 +184,13 @@ public partial class SyscallManager
             pipe.SuperBlock = MemfdSuperBlock;
 
             // Reader
-            var rDentry = new Dentry("pipe:[read]", pipe, null, MemfdSuperBlock);
+            var rDentry = new Dentry(FsName.FromString("pipe:[read]"), pipe, null, MemfdSuperBlock);
             var rFile = new LinuxFile(rDentry, FileFlags.O_RDONLY, AnonMount);
             rFd = AllocFD(rFile);
             // pipe.AddReader(); // Handled by File ctor -> Inode.Open
 
             // Writer
-            var wDentry = new Dentry("pipe:[write]", pipe, null, MemfdSuperBlock);
+            var wDentry = new Dentry(FsName.FromString("pipe:[write]"), pipe, null, MemfdSuperBlock);
             var wFile = new LinuxFile(wDentry, FileFlags.O_WRONLY, AnonMount);
             wFd = AllocFD(wFile);
             // pipe.AddWriter(); // Handled by File ctor -> Inode.Open
@@ -246,13 +246,13 @@ public partial class SyscallManager
 
             // Reader
             var rFlags = FileFlags.O_RDONLY | baseFlags;
-            var rDentry = new Dentry("pipe:[read]", pipe, null, MemfdSuperBlock);
+            var rDentry = new Dentry(FsName.FromString("pipe:[read]"), pipe, null, MemfdSuperBlock);
             var rFile = new LinuxFile(rDentry, rFlags, AnonMount);
             rFd = AllocFD(rFile);
 
             // Writer
             var wFlags = FileFlags.O_WRONLY | baseFlags;
-            var wDentry = new Dentry("pipe:[write]", pipe, null, MemfdSuperBlock);
+            var wDentry = new Dentry(FsName.FromString("pipe:[write]"), pipe, null, MemfdSuperBlock);
             var wFile = new LinuxFile(wDentry, wFlags, AnonMount);
             wFd = AllocFD(wFile);
 
@@ -392,7 +392,7 @@ public partial class SyscallManager
             var gid = t?.Process.EGID ?? 0;
 
             var tmpName = $".tmpfile.{Guid.NewGuid():N}";
-            var anonDentry = new Dentry(tmpName, null, dentry, dentry.SuperBlock);
+            var anonDentry = new Dentry(FsName.FromString(tmpName), null, dentry, dentry.SuperBlock);
             var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
             var createRc = dentry.Inode.Create(anonDentry, finalMode, uid, gid);
             if (createRc < 0)

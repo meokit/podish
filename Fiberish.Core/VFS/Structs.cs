@@ -1001,6 +1001,11 @@ public abstract class Inode : IAddressSpaceOperations
         return Lookup(decoded);
     }
 
+    public virtual Dentry? Lookup(FsName name)
+    {
+        return Lookup(name.Bytes);
+    }
+
     public virtual Dentry? Lookup(string name)
     {
         return null;
@@ -1015,6 +1020,11 @@ public abstract class Inode : IAddressSpaceOperations
         if (!FsEncoding.TryDecodeUtf8(name, out var decoded))
             return false;
         return RevalidateCachedChild(parent, decoded, cached);
+    }
+
+    public virtual bool RevalidateCachedChild(Dentry parent, FsName name, Dentry cached)
+    {
+        return RevalidateCachedChild(parent, name.Bytes, cached);
     }
 
     public virtual bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
@@ -1044,6 +1054,11 @@ public abstract class Inode : IAddressSpaceOperations
         return Unlink(decoded);
     }
 
+    public virtual int Unlink(FsName name)
+    {
+        return Unlink(name.Bytes);
+    }
+
     public virtual int Unlink(string name)
     {
         return -(int)Errno.EOPNOTSUPP;
@@ -1054,6 +1069,11 @@ public abstract class Inode : IAddressSpaceOperations
         if (!FsEncoding.TryDecodeUtf8(name, out var decoded))
             return -(int)Errno.EINVAL;
         return Rmdir(decoded);
+    }
+
+    public virtual int Rmdir(FsName name)
+    {
+        return Rmdir(name.Bytes);
     }
 
     public virtual int Rmdir(string name)
@@ -1072,6 +1092,11 @@ public abstract class Inode : IAddressSpaceOperations
             !FsEncoding.TryDecodeUtf8(newName, out var decodedNew))
             return -(int)Errno.EINVAL;
         return Rename(decodedOld, newParent, decodedNew);
+    }
+
+    public virtual int Rename(FsName oldName, Inode newParent, FsName newName)
+    {
+        return Rename(oldName.Bytes, newParent, newName.Bytes);
     }
 
     public virtual int Rename(string oldName, Inode newParent, string newName)
@@ -2257,11 +2282,6 @@ public class Dentry
         if (inode != null) BindInode(inode, "Dentry.ctor");
     }
 
-    public Dentry(string name, Inode? inode, Dentry? parent, SuperBlock sb)
-        : this(FsName.FromConstructorString(name), inode, parent, sb)
-    {
-    }
-
     public long Id { get; } = Interlocked.Increment(ref _nextId);
 
     public FsName Name { get; set; }
@@ -2352,7 +2372,7 @@ public class Dentry
 
     public void CacheChild(Dentry child, string reason)
     {
-        child.EnsureTrackedBySuperBlock($"{reason}.child-track");
+        child.EnsureTrackedBySuperBlock(reason, "child-track");
         child.Parent = this;
         if (Children.TryGetValue(child.Name, out var replaced) && !ReferenceEquals(replaced, child))
         {
@@ -2368,7 +2388,7 @@ public class Dentry
 
         Children.Set(child.Name, child);
         child.SetHashedState(true);
-        child.AssertMountedCacheInvariant($"{reason}.cache-child");
+        child.AssertMountedCacheInvariant(reason, "cache-child");
         VfsDebugTrace.RecordDentryCacheUpdate(this, child, "cache-add", reason);
     }
 
@@ -2475,12 +2495,14 @@ public class Dentry
         return detached;
     }
 
-    internal void EnsureTrackedBySuperBlock(string reason)
+    internal void EnsureTrackedBySuperBlock(string reason, string? phase = null)
     {
         if (IsTrackedBySuperBlock) return;
         SuperBlock.RegisterDentry(this);
         if (!IsTrackedBySuperBlock)
-            VfsDebugTrace.FailInvariant($"Dentry track failed dentry={Name.ToDebugString()} dentryId={Id} reason={reason}");
+            VfsDebugTrace.FailInvariant(phase == null
+                ? $"Dentry track failed dentry={Name.ToDebugString()} dentryId={Id} reason={reason}"
+                : $"Dentry track failed dentry={Name.ToDebugString()} dentryId={Id} reason={reason} phase={phase}");
     }
 
     internal void UntrackFromSuperBlock(string reason)
@@ -2535,13 +2557,15 @@ public class Dentry
             AssertMountedCacheInvariant("Dentry.SetHashedState");
     }
 
-    private void AssertMountedCacheInvariant(string source)
+    private void AssertMountedCacheInvariant(string source, string? phase = null)
     {
         if (!IsMounted) return;
         if (!IsHashed)
         {
             VfsDebugTrace.FailInvariant(
-                $"Dentry mount invariant unhashed source={source} dentry={Name.ToDebugString()} dentryId={Id}");
+                phase == null
+                    ? $"Dentry mount invariant unhashed source={source} dentry={Name.ToDebugString()} dentryId={Id}"
+                    : $"Dentry mount invariant unhashed source={source}/{phase} dentry={Name.ToDebugString()} dentryId={Id}");
             return;
         }
 
@@ -2551,13 +2575,17 @@ public class Dentry
             if (Name.IsEmpty)
                 return;
             VfsDebugTrace.FailInvariant(
-                $"Dentry mount invariant missing-parent source={source} dentry={Name.ToDebugString()} dentryId={Id}");
+                phase == null
+                    ? $"Dentry mount invariant missing-parent source={source} dentry={Name.ToDebugString()} dentryId={Id}"
+                    : $"Dentry mount invariant missing-parent source={source}/{phase} dentry={Name.ToDebugString()} dentryId={Id}");
             return;
         }
 
         if (!parent.TryGetCachedChild(Name, out var cached) || !ReferenceEquals(cached, this))
             VfsDebugTrace.FailInvariant(
-                $"Dentry mount invariant parent-cache-miss source={source} parent={parent.Name.ToDebugString()} child={Name.ToDebugString()} dentryId={Id}");
+                phase == null
+                    ? $"Dentry mount invariant parent-cache-miss source={source} parent={parent.Name.ToDebugString()} child={Name.ToDebugString()} dentryId={Id}"
+                    : $"Dentry mount invariant parent-cache-miss source={source}/{phase} parent={parent.Name.ToDebugString()} child={Name.ToDebugString()} dentryId={Id}");
     }
 }
 
@@ -2818,8 +2846,7 @@ public class LinuxFile : IDisposable
         OpenedInode?.ReleaseRef(refKind, "LinuxFile.Close");
         VfsFileHolderTracking.Unregister(OpenedInode, this);
         dentry?.Put("LinuxFile.Close");
-        if (dentry != null && dentry.DentryRefCount == 0 && !dentry.IsHashed && dentry.Inode == null &&
-            dentry.Parent != null && dentry.IsTrackedBySuperBlock)
+        if (dentry != null && dentry.DentryRefCount == 0 && dentry.Inode == null && dentry.IsTrackedBySuperBlock)
             dentry.UntrackFromSuperBlock("LinuxFile.Close.unlinked-dentry");
         // Note: Mount reference is not released here as it's typically
         // managed by the filesystem/superblock lifecycle

@@ -443,7 +443,7 @@ public class LayerFsTests
         var mountPoint = root.Inode!.Lookup("mnt");
         if (mountPoint == null)
         {
-            mountPoint = new Dentry("mnt", null, root, root.SuperBlock);
+            mountPoint = new Dentry(FsName.FromString("mnt"), null, root, root.SuperBlock);
             root.Inode.Mkdir(mountPoint, 0x1ED, 0, 0);
             root.CacheChild(mountPoint, "LayerFsTests.EndToEnd.mountpoint");
         }

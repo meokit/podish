@@ -189,7 +189,7 @@ public class CloneThreadLifecycleTests
         var peer = await env.Task.Clone((int)(LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD), 0, 0, 0, 0);
 
         var eventFd = new EventFdInode(77, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
-        var file = new LinuxFile(new Dentry("leader-exit-fd", eventFd, null, env.SyscallManager.MemfdSuperBlock),
+        var file = new LinuxFile(new Dentry(FsName.FromString("leader-exit-fd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
 
@@ -760,7 +760,7 @@ public class CloneThreadLifecycleTests
 
         public LinuxFile CreateTmpfsFile(string name)
         {
-            var dentry = new Dentry(name, null, TmpfsSuper.Root, TmpfsSuper);
+            var dentry = new Dentry(FsName.FromString(name), null, TmpfsSuper.Root, TmpfsSuper);
             TmpfsSuper.Root.Inode!.Create(dentry, 0x1B6, 0, 0);
             return new LinuxFile(dentry, FileFlags.O_RDWR, null!);
         }

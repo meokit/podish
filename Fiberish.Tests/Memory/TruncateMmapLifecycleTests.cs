@@ -171,7 +171,7 @@ public class TruncateMmapLifecycleTests
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
         var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "truncate-mm-shared", null);
         var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
-        var dentry = new Dentry("data.bin", null, sb.Root, sb);
+        var dentry = new Dentry(FsName.FromString("data.bin"), null, sb.Root, sb);
         sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
         var inode = dentry.Inode!;
 
@@ -275,7 +275,7 @@ public class TruncateMmapLifecycleTests
             var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
             var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "truncate-mm", null);
             var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
-            var dentry = new Dentry("data.bin", null, sb.Root, sb);
+            var dentry = new Dentry(FsName.FromString("data.bin"), null, sb.Root, sb);
             sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
             var file = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
             File = (file, dentry.Inode!);
@@ -319,7 +319,7 @@ public class TruncateMmapLifecycleTests
             var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
             var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "truncate-mm-multi", null);
             var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
-            var dentry = new Dentry("data.bin", null, sb.Root, sb);
+            var dentry = new Dentry(FsName.FromString("data.bin"), null, sb.Root, sb);
             sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
             Inode = dentry.Inode!;
 
@@ -391,7 +391,7 @@ public class TruncateMmapLifecycleTests
             var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
             var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "mixed-mm", null);
             var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
-            var dentry = new Dentry("data.bin", null, sb.Root, sb);
+            var dentry = new Dentry(FsName.FromString("data.bin"), null, sb.Root, sb);
             sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
             Inode = dentry.Inode!;
 

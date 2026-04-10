@@ -541,7 +541,7 @@ public class HostfsPageCacheWritebackTests
         var fsType = new FileSystemType { Name = "hostfs" };
         var opts = HostfsMountOptions.Parse("rw");
         var sb = new HostSuperBlock(fsType, rootDir, opts);
-        sb.Root = sb.GetDentry(rootDir, "/", null)!;
+        sb.Root = sb.GetDentry(rootDir, FsName.Empty, null)!;
         var dentry = sb.Root.Inode!.Lookup(relativePath);
         Assert.NotNull(dentry);
         var file = new LinuxFile(dentry!, FileFlags.O_RDWR, null!);

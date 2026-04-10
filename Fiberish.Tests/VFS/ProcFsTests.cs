@@ -349,7 +349,7 @@ public class ProcFsTests
 
             Assert.True(shmLoc.IsValid);
             var shmDir = shmLoc.Dentry!;
-            var tmp = new Dentry("drop_inode.tmp", null, shmDir, shmDir.SuperBlock);
+            var tmp = new Dentry(FsName.FromString("drop_inode.tmp"), null, shmDir, shmDir.SuperBlock);
             shmDir.Inode!.Create(tmp, 0x1A4, 0, 0);
             shmDir.Inode.Unlink("drop_inode.tmp");
 
@@ -405,7 +405,7 @@ public class ProcFsTests
 
             Assert.True(shmLoc.IsValid);
             var shmDir = shmLoc.Dentry!;
-            var tmp = new Dentry("drop_mode3.tmp", null, shmDir, shmDir.SuperBlock);
+            var tmp = new Dentry(FsName.FromString("drop_mode3.tmp"), null, shmDir, shmDir.SuperBlock);
             shmDir.Inode!.Create(tmp, 0x1A4, 0, 0);
             shmDir.Inode.Unlink("drop_mode3.tmp");
 
@@ -530,7 +530,7 @@ public class ProcFsTests
             var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
             Assert.True(loc.IsValid);
 
-            var file = new Dentry("data.bin", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var file = new Dentry(FsName.FromString("data.bin"), null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
             Assert.Equal(LinuxConstants.PageSize * 2,
@@ -583,7 +583,7 @@ public class ProcFsTests
             var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
             Assert.True(loc.IsValid);
 
-            var file = new Dentry("active.bin", null, loc.Dentry, loc.Dentry!.SuperBlock);
+            var file = new Dentry(FsName.FromString("active.bin"), null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
             var wf = new LinuxFile(file, FileFlags.O_WRONLY, loc.Mount!);
             Assert.Equal(LinuxConstants.PageSize * 2,
@@ -646,7 +646,7 @@ public class ProcFsTests
 
             Assert.True(shmLoc.IsValid);
             var shmDir = shmLoc.Dentry!;
-            var fileDentry = new Dentry("stable.tmp", null, shmDir, shmDir.SuperBlock);
+            var fileDentry = new Dentry(FsName.FromString("stable.tmp"), null, shmDir, shmDir.SuperBlock);
             shmDir.Inode!.Create(fileDentry, 0x1A4, 0, 0);
 
             var file = new LinuxFile(fileDentry, FileFlags.O_RDWR, shmLoc.Mount!);
@@ -686,7 +686,7 @@ public class ProcFsTests
             var hold = Lookup(task, root, "hold");
             if (hold == null)
             {
-                var holdDentry = new Dentry("hold", null, root, root.SuperBlock);
+                var holdDentry = new Dentry(FsName.FromString("hold"), null, root, root.SuperBlock);
                 root.Inode!.Mkdir(holdDentry, 0x1FF, 0, 0);
                 root.CacheChild(holdDentry, "test");
                 hold = holdDentry;
@@ -695,7 +695,7 @@ public class ProcFsTests
             var mnt = Lookup(task, hold, "mnt");
             if (mnt == null)
             {
-                var mntDentry = new Dentry("mnt", null, hold, hold.SuperBlock);
+                var mntDentry = new Dentry(FsName.FromString("mnt"), null, hold, hold.SuperBlock);
                 hold.Inode!.Mkdir(mntDentry, 0x1FF, 0, 0);
                 hold.CacheChild(mntDentry, "test");
             }
@@ -740,7 +740,7 @@ public class ProcFsTests
             var hold = Lookup(task, root, "hold");
             if (hold == null)
             {
-                var holdDentry = new Dentry("hold", null, root, root.SuperBlock);
+                var holdDentry = new Dentry(FsName.FromString("hold"), null, root, root.SuperBlock);
                 root.Inode!.Mkdir(holdDentry, 0x1FF, 0, 0);
                 root.CacheChild(holdDentry, "test");
                 hold = holdDentry;
@@ -749,7 +749,7 @@ public class ProcFsTests
             var mnt = Lookup(task, hold, "mnt");
             if (mnt == null)
             {
-                var mntDentry = new Dentry("mnt", null, hold, hold.SuperBlock);
+                var mntDentry = new Dentry(FsName.FromString("mnt"), null, hold, hold.SuperBlock);
                 hold.Inode!.Mkdir(mntDentry, 0x1FF, 0, 0);
                 hold.CacheChild(mntDentry, "test");
             }
@@ -994,7 +994,7 @@ public class ProcFsTests
         var name = Path.GetFileName(guestPath);
         var parent = sm.PathWalkWithFlags(parentPath, LookupFlags.FollowSymlink);
         Assert.True(parent.IsValid);
-        var dentry = new Dentry(name, null, parent.Dentry, parent.Dentry!.SuperBlock);
+        var dentry = new Dentry(FsName.FromString(name), null, parent.Dentry, parent.Dentry!.SuperBlock);
         parent.Dentry.Inode!.Mkdir(dentry, 0x1FF, 0, 0);
         parent.Dentry.CacheChild(dentry, "test");
     }

@@ -14,7 +14,7 @@ public class InodeRefLinkCountTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var original = new Dentry("original.txt", null, root, rig.SuperBlock);
+        var original = new Dentry(FsName.FromString("original.txt"), null, root, rig.SuperBlock);
         rootInode.Create(original, 0x1A4, 0, 0);
         var inode = original.Inode!;
 
@@ -24,7 +24,7 @@ public class InodeRefLinkCountTests
         Assert.False(rig.SuperBlock.HasActiveInodes());
         var refAfterCreate = inode.RefCount;
 
-        var linked = new Dentry("linked.txt", null, root, rig.SuperBlock);
+        var linked = new Dentry(FsName.FromString("linked.txt"), null, root, rig.SuperBlock);
         rootInode.Link(linked, inode);
         Assert.Equal(2, inode.LinkCount);
         Assert.Equal(refAfterCreate + 1, inode.RefCount);
@@ -67,7 +67,7 @@ public class InodeRefLinkCountTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var mapped = new Dentry("mapped.txt", null, root, rig.SuperBlock);
+        var mapped = new Dentry(FsName.FromString("mapped.txt"), null, root, rig.SuperBlock);
         rootInode.Create(mapped, 0x1A4, 0, 0);
         var inode = mapped.Inode!;
         var mount = new Mount(rig.SuperBlock, rig.Root);
@@ -91,11 +91,11 @@ public class InodeRefLinkCountTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var src = new Dentry("src.txt", null, root, rig.SuperBlock);
+        var src = new Dentry(FsName.FromString("src.txt"), null, root, rig.SuperBlock);
         rootInode.Create(src, 0x1A4, 0, 0);
         var srcInode = src.Inode!;
 
-        var dst = new Dentry("dst.txt", null, root, rig.SuperBlock);
+        var dst = new Dentry(FsName.FromString("dst.txt"), null, root, rig.SuperBlock);
         rootInode.Create(dst, 0x1A4, 0, 0);
         var dstInode = dst.Inode!;
 
@@ -119,11 +119,11 @@ public class InodeRefLinkCountTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var src = new Dentry("src.txt", null, root, rig.SuperBlock);
+        var src = new Dentry(FsName.FromString("src.txt"), null, root, rig.SuperBlock);
         rootInode.Create(src, 0x1A4, 0, 0);
         var inode = src.Inode!;
 
-        var alias = new Dentry("alias.txt", null, root, rig.SuperBlock);
+        var alias = new Dentry(FsName.FromString("alias.txt"), null, root, rig.SuperBlock);
         rootInode.Link(alias, inode);
         Assert.Equal(2, inode.LinkCount);
 
@@ -147,14 +147,14 @@ public class InodeRefLinkCountTests
 
         Assert.Equal(2, rootInode.LinkCount);
 
-        var dir = new Dentry("dir", null, root, rig.SuperBlock);
+        var dir = new Dentry(FsName.FromString("dir"), null, root, rig.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
         var dirInode = Assert.IsAssignableFrom<Inode>(dir.Inode);
 
         Assert.Equal(3, rootInode.LinkCount);
         Assert.Equal(2, dirInode.LinkCount);
 
-        var nested = new Dentry("nested", null, dir, rig.SuperBlock);
+        var nested = new Dentry(FsName.FromString("nested"), null, dir, rig.SuperBlock);
         dirInode.Mkdir(nested, 0x1ED, 0, 0);
         var nestedInode = Assert.IsAssignableFrom<Inode>(nested.Inode);
 
@@ -179,15 +179,15 @@ public class InodeRefLinkCountTests
         var root = rig.Root;
         var rootInode = rig.RootInode;
 
-        var from = new Dentry("from", null, root, rig.SuperBlock);
+        var from = new Dentry(FsName.FromString("from"), null, root, rig.SuperBlock);
         rootInode.Mkdir(from, 0x1ED, 0, 0);
         var fromInode = Assert.IsAssignableFrom<Inode>(from.Inode);
 
-        var to = new Dentry("to", null, root, rig.SuperBlock);
+        var to = new Dentry(FsName.FromString("to"), null, root, rig.SuperBlock);
         rootInode.Mkdir(to, 0x1ED, 0, 0);
         var toInode = Assert.IsAssignableFrom<Inode>(to.Inode);
 
-        var child = new Dentry("child", null, from, rig.SuperBlock);
+        var child = new Dentry(FsName.FromString("child"), null, from, rig.SuperBlock);
         fromInode.Mkdir(child, 0x1ED, 0, 0);
         var childInode = Assert.IsAssignableFrom<Inode>(child.Inode);
 
