@@ -75,7 +75,8 @@ public class WaitSyscallTests
         const uint bufPtr = 0x37000;
         env.MapUserPage(bufPtr);
 
-        var eventFd = new EventFdInode(20, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var eventFd = new EventFdInode(20, env.SyscallManager.MemfdSuperBlock, env.Task.CommonKernel, 0,
+            FileFlags.O_RDWR);
         var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
@@ -100,7 +101,8 @@ public class WaitSyscallTests
         const uint writeBufPtr = 0x38000;
         env.MapUserPage(writeBufPtr);
 
-        var eventFd = new EventFdInode(21, env.SyscallManager.MemfdSuperBlock, ulong.MaxValue - 1, FileFlags.O_RDWR);
+        var eventFd = new EventFdInode(21, env.SyscallManager.MemfdSuperBlock, env.Task.CommonKernel,
+            ulong.MaxValue - 1, FileFlags.O_RDWR);
         var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
@@ -484,7 +486,8 @@ public class WaitSyscallTests
         env.MapUserPage(pollfdPtr);
         env.MapUserPage(tsPtr);
 
-        var eventFd = new EventFdInode(10, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var eventFd = new EventFdInode(10, env.SyscallManager.MemfdSuperBlock, env.Task.CommonKernel, 0,
+            FileFlags.O_RDWR);
         var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
@@ -549,7 +552,8 @@ public class WaitSyscallTests
         var epfd = await Invoke(env, "SysEpollCreate1", 0, 0, 0, 0, 0, 0);
         Assert.True(epfd >= 0);
 
-        var eventFd = new EventFdInode(11, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var eventFd = new EventFdInode(11, env.SyscallManager.MemfdSuperBlock, env.Task.CommonKernel, 0,
+            FileFlags.O_RDWR);
         var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
@@ -587,7 +591,8 @@ public class WaitSyscallTests
         var epfd = await Invoke(env, "SysEpollCreate1", 0, 0, 0, 0, 0, 0);
         Assert.True(epfd >= 0);
 
-        var eventFd = new EventFdInode(111, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var eventFd = new EventFdInode(111, env.SyscallManager.MemfdSuperBlock, env.Task.CommonKernel, 0,
+            FileFlags.O_RDWR);
         var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
@@ -621,7 +626,8 @@ public class WaitSyscallTests
         var epfd = await Invoke(env, "SysEpollCreate1", 0, 0, 0, 0, 0, 0);
         Assert.True(epfd >= 0);
 
-        var eventFd = new EventFdInode(112, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var eventFd = new EventFdInode(112, env.SyscallManager.MemfdSuperBlock, env.Task.CommonKernel, 0,
+            FileFlags.O_RDWR);
         var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
@@ -663,7 +669,8 @@ public class WaitSyscallTests
         env.MapUserPage(pollfdPtr);
         env.MapUserPage(tsPtr);
 
-        var eventFd = new EventFdInode(12, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var eventFd = new EventFdInode(12, env.SyscallManager.MemfdSuperBlock, env.Task.CommonKernel, 0,
+            FileFlags.O_RDWR);
         var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
@@ -695,7 +702,8 @@ public class WaitSyscallTests
         env.MapUserPage(pollfdPtr);
         env.MapUserPage(tsPtr);
 
-        var eventFd = new EventFdInode(13, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var eventFd = new EventFdInode(13, env.SyscallManager.MemfdSuperBlock, env.Task.CommonKernel, 0,
+            FileFlags.O_RDWR);
         var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);
@@ -727,7 +735,8 @@ public class WaitSyscallTests
         var epfd = await Invoke(env, "SysEpollCreate1", 0, 0, 0, 0, 0, 0);
         Assert.True(epfd >= 0);
 
-        var eventFd = new EventFdInode(14, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var eventFd = new EventFdInode(14, env.SyscallManager.MemfdSuperBlock, env.Task.CommonKernel, 0,
+            FileFlags.O_RDWR);
         var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);

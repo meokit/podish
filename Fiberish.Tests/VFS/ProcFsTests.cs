@@ -12,6 +12,51 @@ namespace Fiberish.Tests.VFS;
 [Collection("ExternalPageManagerSerial")]
 public class ProcFsTests
 {
+    private sealed class NoOpInode : Inode
+    {
+    }
+
+    [Fact]
+    public void DefaultByteRevalidate_ShouldNotAllocate()
+    {
+        var inode = new NoOpInode();
+        var name = "child"u8;
+
+        _ = inode.RevalidateCachedChild(null!, name, null!);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 256; i++)
+            _ = inode.RevalidateCachedChild(null!, name, null!);
+        var after = GC.GetAllocatedBytesForCurrentThread();
+
+        Assert.Equal(0, after - before);
+    }
+
+    [Fact]
+    public void ProcRootLookup_CachedStaticEntry_ShouldNotAllocate()
+    {
+        using var ctx = new ProcTestContext();
+
+        var fs = new ProcFileSystem();
+        var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", ctx.SyscallManager);
+        var contextual = Assert.IsAssignableFrom<IContextualDirectoryInode>(sb.Root.Inode);
+
+        var first = contextual.Lookup(ctx.Task, "mounts"u8);
+        Assert.NotNull(first);
+
+        _ = contextual.Lookup(ctx.Task, "mounts"u8);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 256; i++)
+        {
+            var hit = contextual.Lookup(ctx.Task, "mounts"u8);
+            Assert.Same(first, hit);
+        }
+
+        var after = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Equal(0, after - before);
+    }
+
     [Fact]
     public void ProcMounts_ShouldReflectNewMountsDynamically()
     {

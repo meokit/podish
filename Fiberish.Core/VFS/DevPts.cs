@@ -427,8 +427,13 @@ public class DevPtsDirectoryInode : Inode
 
     public override Dentry? Lookup(string name)
     {
+        return FsEncoding.TryEncodeUtf8(name, out var encoded) ? Lookup(encoded) : null;
+    }
+
+    public override Dentry? Lookup(ReadOnlySpan<byte> name)
+    {
         // Check if the name is a number (PTY index)
-        if (!int.TryParse(name, out var index))
+        if (!FsEncoding.TryParseAsciiInt32(name, out var index))
             return null;
 
         // Check if the PTY exists

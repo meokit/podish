@@ -115,33 +115,39 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
 
     public Dentry? Lookup(FiberTask task, ReadOnlySpan<byte> name)
     {
-        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
-            return null;
         if (Dentries.Count == 0) return null;
         var root = Dentries[0];
 
         if (root.TryGetCachedChild(name, out var cached))
         {
-            if (int.TryParse(decodedName, out var cachedPid) && task.CommonKernel.GetProcess(cachedPid) == null)
+            if (FsEncoding.TryParseAsciiInt32(name, out var cachedPid) && task.CommonKernel.GetProcess(cachedPid) == null)
                 _ = root.TryUncacheChild(name, "ProcRootInode.Lookup.stale-pid", out _);
             else
                 return cached;
         }
 
-        var created = decodedName switch
-        {
-            "mounts" => CreateFile(root, decodedName, 0x124, ctx => ProcFsManager.GenerateMounts(ctx.SyscallManager)),
-            "mountinfo" => CreateFile(root, decodedName, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager)),
-            "cpuinfo" => CreateFile(root, decodedName, 0x124, _ => ProcFsManager.GenerateCpuInfo()),
-            "meminfo" => CreateFile(root, decodedName, 0x124, ctx => ProcFsManager.GenerateMemInfo(ctx.SyscallManager)),
-            "version" => CreateFile(root, decodedName, 0x124, _ => ProcFsManager.GenerateVersion()),
-            "stat" => CreateFile(root, decodedName, 0x124, ctx => ProcFsManager.GenerateSystemStat(ctx.Scheduler)),
-            "uptime" => CreateFile(root, decodedName, 0x124, ctx => ProcFsManager.GenerateUptime(ctx.Scheduler)),
-            "loadavg" => CreateFile(root, decodedName, 0x124, ctx => ProcFsManager.GenerateLoadAvg(ctx.Scheduler)),
-            "sys" => CreateSysDirectory(root, decodedName),
-            "self" => CreateSelfSymlink(root, decodedName),
-            _ => null
-        };
+        var childName = FsName.FromBytes(name);
+        Dentry? created = null;
+        if (name.SequenceEqual("mounts"u8))
+            created = CreateFile(root, childName, 0x124, ctx => ProcFsManager.GenerateMounts(ctx.SyscallManager));
+        else if (name.SequenceEqual("mountinfo"u8))
+            created = CreateFile(root, childName, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager));
+        else if (name.SequenceEqual("cpuinfo"u8))
+            created = CreateFile(root, childName, 0x124, _ => ProcFsManager.GenerateCpuInfo());
+        else if (name.SequenceEqual("meminfo"u8))
+            created = CreateFile(root, childName, 0x124, ctx => ProcFsManager.GenerateMemInfo(ctx.SyscallManager));
+        else if (name.SequenceEqual("version"u8))
+            created = CreateFile(root, childName, 0x124, _ => ProcFsManager.GenerateVersion());
+        else if (name.SequenceEqual("stat"u8))
+            created = CreateFile(root, childName, 0x124, ctx => ProcFsManager.GenerateSystemStat(ctx.Scheduler));
+        else if (name.SequenceEqual("uptime"u8))
+            created = CreateFile(root, childName, 0x124, ctx => ProcFsManager.GenerateUptime(ctx.Scheduler));
+        else if (name.SequenceEqual("loadavg"u8))
+            created = CreateFile(root, childName, 0x124, ctx => ProcFsManager.GenerateLoadAvg(ctx.Scheduler));
+        else if (name.SequenceEqual("sys"u8))
+            created = CreateSysDirectory(root, childName);
+        else if (name.SequenceEqual("self"u8))
+            created = CreateSelfSymlink(root, childName);
 
         if (created != null)
         {
@@ -149,7 +155,7 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
             return created;
         }
 
-        if (!int.TryParse(decodedName, out var pid)) return null;
+        if (!FsEncoding.TryParseAsciiInt32(name, out var pid)) return null;
         if (task.CommonKernel.GetProcess(pid) == null) return null;
 
         created = CreatePidDirectory(root, pid);
@@ -159,13 +165,13 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
 
     public bool RevalidateCachedChild(FiberTask task, Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
-        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
+        if (!FsEncoding.IsValidUtf8(name))
             return false;
         // /proc/self must always reflect current task.
-        if (decodedName == "self") return false;
+        if (name.SequenceEqual("self"u8)) return false;
 
         // /proc/<pid> must track live task table.
-        if (int.TryParse(decodedName, out var pid))
+        if (FsEncoding.TryParseAsciiInt32(name, out var pid))
             return task.CommonKernel.GetProcess(pid) != null;
 
         return true;
@@ -202,7 +208,7 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
         return null;
     }
 
-    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    public override bool RevalidateCachedChild(Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
         return false;
     }
@@ -232,19 +238,19 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
         return new Dentry(pid.ToString(), inode, parent, _sb);
     }
 
-    private Dentry CreateSelfSymlink(Dentry parent, string name)
+    private Dentry CreateSelfSymlink(Dentry parent, FsName name)
     {
         var inode = new ProcSelfSymlinkInode(_sb);
         return new Dentry(name, inode, parent, _sb);
     }
 
-    private Dentry CreateSysDirectory(Dentry parent, string name)
+    private Dentry CreateSysDirectory(Dentry parent, FsName name)
     {
         var inode = new ProcSysRootInode(_sb);
         return new Dentry(name, inode, parent, _sb);
     }
 
-    private Dentry CreateFile(Dentry parent, string name, int mode, Func<ProcOpenContext, string> contentFactory)
+    private Dentry CreateFile(Dentry parent, FsName name, int mode, Func<ProcOpenContext, string> contentFactory)
     {
         var inode = new ProcDynamicFileInode(_sb, mode, contentFactory);
         return new Dentry(name, inode, parent, _sb);
@@ -270,8 +276,6 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
 
     public Dentry? Lookup(FiberTask task, ReadOnlySpan<byte> name)
     {
-        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
-            return null;
         if (Dentries.Count == 0) return null;
         if (task.CommonKernel.GetProcess(_pid) == null) return null;
 
@@ -279,39 +283,46 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         if (dir.TryGetCachedChild(name, out var cached))
             return cached;
 
-        var created = decodedName switch
-        {
-            "status" => CreateFile(dir, decodedName, 0x124, _ =>
+        var childName = FsName.FromBytes(name);
+        Dentry? created = null;
+        if (name.SequenceEqual("status"u8))
+            created = CreateFile(dir, childName, 0x124, _ =>
             {
                 var p = task.CommonKernel.GetProcess(_pid);
                 return p == null ? string.Empty : ProcFsManager.GenerateStatus(p);
-            }),
-            "cmdline" => CreateFile(dir, decodedName, 0x124, _ =>
+            });
+        else if (name.SequenceEqual("cmdline"u8))
+            created = CreateFile(dir, childName, 0x124, _ =>
             {
                 var p = task.CommonKernel.GetProcess(_pid);
                 return p == null ? string.Empty : ProcFsManager.GenerateCmdline(p);
-            }),
-            "stat" => CreateFile(dir, decodedName, 0x124, _ =>
+            });
+        else if (name.SequenceEqual("stat"u8))
+            created = CreateFile(dir, childName, 0x124, _ =>
             {
                 var p = task.CommonKernel.GetProcess(_pid);
                 return p == null ? string.Empty : ProcFsManager.GenerateStat(p);
-            }),
-            "mountinfo" => CreateFile(dir, decodedName, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager)),
-            "fd" => CreateFdDir(dir, decodedName),
-            "fdinfo" => CreateFdInfoDir(dir, decodedName),
-            "exe" => CreateSymlink(dir, decodedName, p => FsEncoding.EncodeUtf8(p.ExecutablePath)),
-            "cwd" => CreateSymlink(dir, decodedName, p =>
+            });
+        else if (name.SequenceEqual("mountinfo"u8))
+            created = CreateFile(dir, childName, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager));
+        else if (name.SequenceEqual("fd"u8))
+            created = CreateFdDir(dir, childName);
+        else if (name.SequenceEqual("fdinfo"u8))
+            created = CreateFdInfoDir(dir, childName);
+        else if (name.SequenceEqual("exe"u8))
+            created = CreateSymlink(dir, childName, p => FsEncoding.EncodeUtf8(p.ExecutablePath));
+        else if (name.SequenceEqual("cwd"u8))
+            created = CreateSymlink(dir, childName, p =>
             {
                 var proc = p.Syscalls;
                 return proc.GetAbsolutePathBytes(proc.CurrentWorkingDirectory);
-            }),
-            "root" => CreateSymlink(dir, decodedName, p =>
+            });
+        else if (name.SequenceEqual("root"u8))
+            created = CreateSymlink(dir, childName, p =>
             {
                 var proc = p.Syscalls;
                 return proc.GetAbsolutePathBytes(proc.ProcessRoot);
-            }),
-            _ => null
-        };
+            });
 
         if (created != null)
             dir.CacheChild(created, "ProcPidDirectoryInode.Lookup");
@@ -321,13 +332,12 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
 
     public bool RevalidateCachedChild(FiberTask task, Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
-        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
-            return false;
         // Whole /proc/<pid> subtree becomes invalid once process is gone.
         if (task.CommonKernel.GetProcess(_pid) == null) return false;
 
         // Keep fd/fdinfo hot paths fresh because child fd tables are highly dynamic.
-        if (decodedName is "fd" or "fdinfo") return false;
+        if (!FsEncoding.IsValidUtf8(name)) return false;
+        if (name.SequenceEqual("fd"u8) || name.SequenceEqual("fdinfo"u8)) return false;
 
         return true;
     }
@@ -360,7 +370,7 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         return null;
     }
 
-    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    public override bool RevalidateCachedChild(Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
         return false;
     }
@@ -374,25 +384,25 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         ];
     }
 
-    private Dentry CreateFile(Dentry parent, string name, int mode, Func<ProcOpenContext, string> contentFactory)
+    private Dentry CreateFile(Dentry parent, FsName name, int mode, Func<ProcOpenContext, string> contentFactory)
     {
         var inode = new ProcDynamicFileInode(_sb, mode, contentFactory);
         return new Dentry(name, inode, parent, _sb);
     }
 
-    private Dentry CreateFdDir(Dentry parent, string name)
+    private Dentry CreateFdDir(Dentry parent, FsName name)
     {
         var inode = new ProcPidFdDirectoryInode(_sb, _pid);
         return new Dentry(name, inode, parent, _sb);
     }
 
-    private Dentry CreateFdInfoDir(Dentry parent, string name)
+    private Dentry CreateFdInfoDir(Dentry parent, FsName name)
     {
         var inode = new ProcPidFdInfoDirectoryInode(_sb, _pid);
         return new Dentry(name, inode, parent, _sb);
     }
 
-    private Dentry CreateSymlink(Dentry parent, string name, Func<Process, byte[]> resolver)
+    private Dentry CreateSymlink(Dentry parent, FsName name, Func<Process, byte[]> resolver)
     {
         var inode = new ProcPidSymlinkInode(_sb, _pid, resolver);
         return new Dentry(name, inode, parent, _sb);
@@ -455,12 +465,10 @@ file sealed class ProcPidFdDirectoryInode : Inode, IContextualDirectoryInode
 
     public Dentry? Lookup(FiberTask task, ReadOnlySpan<byte> name)
     {
-        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
-            return null;
         if (Dentries.Count == 0) return null;
         var process = task.CommonKernel.GetProcess(_pid);
         if (process == null) return null;
-        if (!int.TryParse(decodedName, out var fd)) return null;
+        if (!FsEncoding.TryParseAsciiInt32(name, out var fd)) return null;
         if (!process.Syscalls.FDs.ContainsKey(fd))
             return null;
 
@@ -469,18 +477,16 @@ file sealed class ProcPidFdDirectoryInode : Inode, IContextualDirectoryInode
             return cached;
 
         var inode = new ProcPidFdSymlinkInode(_sb, _pid, fd);
-        var dentry = new Dentry(decodedName, inode, dir, _sb);
+        var dentry = new Dentry(FsName.FromBytes(name), inode, dir, _sb);
         dir.CacheChild(dentry, "ProcPidFdDirectoryInode.Lookup");
         return dentry;
     }
 
     public bool RevalidateCachedChild(FiberTask task, Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
-        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
-            return false;
         var process = task.CommonKernel.GetProcess(_pid);
         if (process == null) return false;
-        if (!int.TryParse(decodedName, out var fd)) return false;
+        if (!FsEncoding.TryParseAsciiInt32(name, out var fd)) return false;
         return process.Syscalls.FDs.ContainsKey(fd);
     }
 
@@ -505,7 +511,7 @@ file sealed class ProcPidFdDirectoryInode : Inode, IContextualDirectoryInode
         return null;
     }
 
-    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    public override bool RevalidateCachedChild(Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
         return false;
     }
@@ -539,12 +545,10 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode, IContextualDirectoryInode
 
     public Dentry? Lookup(FiberTask task, ReadOnlySpan<byte> name)
     {
-        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
-            return null;
         if (Dentries.Count == 0) return null;
         var process = task.CommonKernel.GetProcess(_pid);
         if (process == null) return null;
-        if (!int.TryParse(decodedName, out var fd)) return null;
+        if (!FsEncoding.TryParseAsciiInt32(name, out var fd)) return null;
         if (!process.Syscalls.FDs.ContainsKey(fd)) return null;
 
         var dir = Dentries[0];
@@ -552,18 +556,16 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode, IContextualDirectoryInode
             return cached;
 
         var inode = new ProcPidFdInfoFileInode(_sb, _pid, fd);
-        var dentry = new Dentry(decodedName, inode, dir, _sb);
+        var dentry = new Dentry(FsName.FromBytes(name), inode, dir, _sb);
         dir.CacheChild(dentry, "ProcPidFdInfoDirectoryInode.Lookup");
         return dentry;
     }
 
     public bool RevalidateCachedChild(FiberTask task, Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
-        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
-            return false;
         var process = task.CommonKernel.GetProcess(_pid);
         if (process == null) return false;
-        if (!int.TryParse(decodedName, out var fd)) return false;
+        if (!FsEncoding.TryParseAsciiInt32(name, out var fd)) return false;
         return process.Syscalls.FDs.ContainsKey(fd);
     }
 
@@ -588,7 +590,7 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode, IContextualDirectoryInode
         return null;
     }
 
-    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    public override bool RevalidateCachedChild(Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
         return false;
     }
@@ -775,33 +777,38 @@ file sealed class ProcSysRootInode : Inode
 
     public override Dentry? Lookup(string name)
     {
+        return FsEncoding.TryEncodeUtf8(name, out var encoded) ? Lookup(encoded) : null;
+    }
+
+    public override Dentry? Lookup(ReadOnlySpan<byte> name)
+    {
         if (Dentries.Count == 0) return null;
         var dir = Dentries[0];
 
         if (dir.TryGetCachedChild(name, out var cached))
             return cached;
 
-        var created = (_kind, name) switch
-        {
-            (ProcSysKind.Root, "kernel") => CreateDir(dir, name, ProcSysKind.Kernel),
-            (ProcSysKind.Root, "vm") => CreateDir(dir, name, ProcSysKind.Vm),
-
-            (ProcSysKind.Kernel, "hostname") => CreateFile(dir, name,
-                ctx => ProcFsManager.GenerateSysKernelHostname(ctx.Process)),
-            (ProcSysKind.Kernel, "osrelease") => CreateFile(dir, name,
-                ctx => ProcFsManager.GenerateSysKernelOsRelease(ctx.Process)),
-            (ProcSysKind.Kernel, "ostype") => CreateFile(dir, name,
-                ctx => ProcFsManager.GenerateSysKernelOstype(ctx.Process)),
-            (ProcSysKind.Kernel, "version") => CreateFile(dir, name,
-                ctx => ProcFsManager.GenerateSysKernelVersion(ctx.Process)),
-
-            (ProcSysKind.Vm, "overcommit_memory") => CreateFile(dir, name,
-                _ => ProcFsManager.GenerateSysVmOvercommitMemory()),
-            (ProcSysKind.Vm, "swappiness") => CreateFile(dir, name, _ => ProcFsManager.GenerateSysVmSwappiness()),
-            (ProcSysKind.Vm, "drop_caches") => CreateFile(dir, name,
-                _ => ProcFsManager.GenerateSysVmDropCaches(), 0x1A4, HandleDropCachesWrite),
-            _ => null
-        };
+        var childName = FsName.FromBytes(name);
+        Dentry? created = null;
+        if (_kind == ProcSysKind.Root && name.SequenceEqual("kernel"u8))
+            created = CreateDir(dir, childName, ProcSysKind.Kernel);
+        else if (_kind == ProcSysKind.Root && name.SequenceEqual("vm"u8))
+            created = CreateDir(dir, childName, ProcSysKind.Vm);
+        else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("hostname"u8))
+            created = CreateFile(dir, childName, ctx => ProcFsManager.GenerateSysKernelHostname(ctx.Process));
+        else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("osrelease"u8))
+            created = CreateFile(dir, childName, ctx => ProcFsManager.GenerateSysKernelOsRelease(ctx.Process));
+        else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("ostype"u8))
+            created = CreateFile(dir, childName, ctx => ProcFsManager.GenerateSysKernelOstype(ctx.Process));
+        else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("version"u8))
+            created = CreateFile(dir, childName, ctx => ProcFsManager.GenerateSysKernelVersion(ctx.Process));
+        else if (_kind == ProcSysKind.Vm && name.SequenceEqual("overcommit_memory"u8))
+            created = CreateFile(dir, childName, _ => ProcFsManager.GenerateSysVmOvercommitMemory());
+        else if (_kind == ProcSysKind.Vm && name.SequenceEqual("swappiness"u8))
+            created = CreateFile(dir, childName, _ => ProcFsManager.GenerateSysVmSwappiness());
+        else if (_kind == ProcSysKind.Vm && name.SequenceEqual("drop_caches"u8))
+            created = CreateFile(dir, childName, _ => ProcFsManager.GenerateSysVmDropCaches(), 0x1A4,
+                HandleDropCachesWrite);
 
         if (created != null)
             dir.CacheChild(created, "ProcSysRootInode.Lookup");
@@ -839,13 +846,13 @@ file sealed class ProcSysRootInode : Inode
         return entries;
     }
 
-    private Dentry CreateDir(Dentry parent, string name, ProcSysKind kind)
+    private Dentry CreateDir(Dentry parent, FsName name, ProcSysKind kind)
     {
         var inode = new ProcSysRootInode(_sb, kind);
         return new Dentry(name, inode, parent, _sb);
     }
 
-    private Dentry CreateFile(Dentry parent, string name, Func<ProcOpenContext, string> contentFactory,
+    private Dentry CreateFile(Dentry parent, FsName name, Func<ProcOpenContext, string> contentFactory,
         int mode = 0x124,
         ProcWriteHandler? writeHandler = null)
     {

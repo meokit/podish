@@ -188,7 +188,8 @@ public class CloneThreadLifecycleTests
         using var env = new TestEnv(240, 240);
         var peer = await env.Task.Clone((int)(LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD), 0, 0, 0, 0);
 
-        var eventFd = new EventFdInode(77, env.SyscallManager.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var eventFd = new EventFdInode(77, env.SyscallManager.MemfdSuperBlock, env.Task.CommonKernel, 0,
+            FileFlags.O_RDWR);
         var file = new LinuxFile(new Dentry(FsName.FromString("leader-exit-fd"), eventFd, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR, env.SyscallManager.AnonMount);
         var fd = env.SyscallManager.AllocFD(file);

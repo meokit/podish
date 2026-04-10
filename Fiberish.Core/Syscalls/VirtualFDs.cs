@@ -4,26 +4,64 @@ using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Timer = Fiberish.Core.Timer;
+using WaitHandle = Fiberish.Core.AsyncWaitQueue;
 
 namespace Fiberish.Syscalls;
 
-public class EventFdInode : TmpfsInode
+public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource
 {
     private const ulong MaxCounter = ulong.MaxValue - 1;
     private readonly bool _isSemaphore;
-    private readonly List<Action> _readWaiters = [];
-    private readonly List<Action> _writeWaiters = [];
     private ulong _counter;
+    private bool _lifecycleClosed;
+    private WaitHandle? _readHandle;
+    private PooledReadWriteWaitQueues? _waitQueues;
+    private WaitHandle? _writeHandle;
 
-    public EventFdInode(ulong ino, SuperBlock superBlock, ulong initval, FileFlags flags) : base(ino, superBlock)
+    public EventFdInode(ulong ino, SuperBlock superBlock, KernelScheduler? scheduler, ulong initval, FileFlags flags) :
+        base(ino, superBlock)
     {
+        if (scheduler != null)
+            EnsureWaitQueues(scheduler);
         _counter = initval;
         _isSemaphore = (flags & (FileFlags)LinuxConstants.EFD_SEMAPHORE) != 0;
+        AnonymousInodeLifecycle.Initialize(this, "EventFdInode.ctor");
+        _writeHandle?.Set();
     }
 
     private StateScope EnterStateScope([CallerMemberName] string? caller = null)
     {
         return default;
+    }
+
+    bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
+        short events)
+    {
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException("Eventfd readiness wait requires an explicit scheduler.");
+        EnsureWaitQueues(scheduler);
+        return RegisterWaitCore(callback, scheduler, null, events);
+    }
+
+    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher,
+        Action callback, short events)
+    {
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException("Eventfd readiness wait requires an explicit scheduler.");
+        EnsureWaitQueues(scheduler);
+        return RegisterWaitHandleCore(callback, scheduler, null, events);
+    }
+
+    bool ITaskWaitSource.RegisterWait(LinuxFile linuxFile, FiberTask task, Action callback, short events)
+    {
+        EnsureWaitQueues(task.CommonKernel);
+        return RegisterWaitCore(callback, null, task, events);
+    }
+
+    IDisposable? ITaskWaitSource.RegisterWaitHandle(LinuxFile linuxFile, FiberTask task, Action callback, short events)
+    {
+        EnsureWaitQueues(task.CommonKernel);
+        return RegisterWaitHandleCore(callback, null, task, events);
     }
 
     protected internal override int ReadSpan(LinuxFile file, Span<byte> buffer, long offset)
@@ -32,6 +70,9 @@ public class EventFdInode : TmpfsInode
 
         using (EnterStateScope())
         {
+            if (_lifecycleClosed)
+                return 0;
+
             if (_counter == 0)
                 // Linux eventfd(2): reads on a zero counter block unless O_NONBLOCK is set.
                 // We surface EAGAIN here so the generic VFS read path can call WaitForRead().
@@ -53,8 +94,10 @@ public class EventFdInode : TmpfsInode
 
             BinaryPrimitives.WriteUInt64LittleEndian(buffer[..8], val);
 
+            if (_counter == 0)
+                _readHandle?.Reset();
             if (wasFull)
-                NotifyWriteWaiters();
+                _writeHandle?.Set();
 
             return 8;
         }
@@ -69,6 +112,9 @@ public class EventFdInode : TmpfsInode
 
         using (EnterStateScope())
         {
+            if (_lifecycleClosed)
+                return -(int)Errno.EPIPE;
+
             if (MaxCounter - _counter < add)
                 // Linux eventfd(2): writes that would overflow block unless O_NONBLOCK is set.
                 // Return EAGAIN so the generic VFS write path can wait for POLLOUT.
@@ -77,7 +123,9 @@ public class EventFdInode : TmpfsInode
             var wasEmpty = _counter == 0;
             _counter += add;
             if (wasEmpty)
-                NotifyReadWaiters();
+                _readHandle?.Set();
+            if (_counter == MaxCounter)
+                _writeHandle?.Reset();
             return 8;
         }
     }
@@ -87,6 +135,9 @@ public class EventFdInode : TmpfsInode
         short revents = 0;
         using (EnterStateScope())
         {
+            if (_lifecycleClosed)
+                return 0;
+
             if ((events & LinuxConstants.POLLIN) != 0 && _counter > 0)
                 revents |= LinuxConstants.POLLIN;
             // Linux eventfd(2): POLLOUT is reported if writing a value of at least 1 would not block.
@@ -105,118 +156,169 @@ public class EventFdInode : TmpfsInode
 
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
     {
-        if (IsReadyForEvents(events))
-        {
-            callback();
-            return NoopWaitRegistration.Instance;
-        }
-
         using (EnterStateScope())
         {
-            if ((events & LinuxConstants.POLLIN) != 0)
-                _readWaiters.Add(callback);
-            if ((events & LinuxConstants.POLLOUT) != 0)
-                _writeWaiters.Add(callback);
-        }
+            if (_lifecycleClosed)
+                return null;
 
-        return new CallbackRegistration(this, callback, events);
+            if (((events & LinuxConstants.POLLIN) != 0 && _counter > 0) ||
+                ((events & LinuxConstants.POLLOUT) != 0 && _counter < MaxCounter))
+            {
+                callback();
+                return NoopWaitRegistration.Instance;
+            }
+
+            if (_waitQueues == null || _readHandle == null || _writeHandle == null)
+                return null;
+
+            var readWatch = new QueueReadinessWatch(LinuxConstants.POLLIN, () => _counter > 0, _readHandle,
+                _readHandle.Reset);
+            var writeWatch = new QueueReadinessWatch(LinuxConstants.POLLOUT, () => _counter < MaxCounter, _writeHandle,
+                _writeHandle.Reset);
+            return QueueReadinessRegistration.RegisterHandle(callback, _waitQueues.Scheduler, events, readWatch,
+                writeWatch);
+        }
     }
 
     public override async ValueTask<AwaitResult> WaitForRead(LinuxFile file, FiberTask task)
     {
+        EnsureWaitQueues(task.CommonKernel);
+        WaitHandle? readHandle;
         using (EnterStateScope())
         {
+            if (_lifecycleClosed)
+                return AwaitResult.Completed;
+
             if (_counter > 0)
                 return AwaitResult.Completed;
+
+            readHandle = _readHandle;
+            if (readHandle == null)
+                return AwaitResult.Completed;
+
+            if (readHandle.IsSignaled)
+                readHandle.Reset();
         }
 
-        // Linux eventfd(2): blocking reads sleep until the counter becomes nonzero.
-        return await new CallbackWaitAwaitable(task,
-            callback => RegisterWaitHandle(file, callback, LinuxConstants.POLLIN));
+        return await readHandle.WaitInterruptiblyAsync(task);
     }
 
     public override async ValueTask<AwaitResult> WaitForWrite(LinuxFile file, FiberTask task,
         int minWritableBytes = 1)
     {
         _ = minWritableBytes;
+        EnsureWaitQueues(task.CommonKernel);
+        WaitHandle? writeHandle;
         using (EnterStateScope())
         {
+            if (_lifecycleClosed)
+                return AwaitResult.Completed;
+
             if (_counter < MaxCounter)
                 return AwaitResult.Completed;
+
+            writeHandle = _writeHandle;
+            if (writeHandle == null)
+                return AwaitResult.Completed;
+
+            if (writeHandle.IsSignaled)
+                writeHandle.Reset();
         }
 
-        // Linux eventfd(2): POLLOUT means a write of at least 1 is possible without blocking.
-        return await new CallbackWaitAwaitable(task,
-            callback => RegisterWaitHandle(file, callback, LinuxConstants.POLLOUT));
+        return await writeHandle.WaitInterruptiblyAsync(task);
     }
 
-    private void NotifyReadWaiters()
+    public override void Release(LinuxFile linuxFile)
     {
-        Action[] toWake;
-        using (EnterStateScope())
-        {
-            toWake = [.._readWaiters];
-            _readWaiters.Clear();
-        }
-
-        foreach (var action in toWake) action();
+        CloseLifecycleOnce();
+        base.Release(linuxFile);
     }
 
-    private void NotifyWriteWaiters()
+    protected override void OnEvictCache()
     {
-        Action[] toWake;
-        using (EnterStateScope())
-        {
-            toWake = [.._writeWaiters];
-            _writeWaiters.Clear();
-        }
-
-        foreach (var action in toWake) action();
+        CloseLifecycleOnce();
+        base.OnEvictCache();
     }
 
-    private bool IsReadyForEvents(short events)
+    private bool RegisterWaitCore(Action callback, KernelScheduler? scheduler, FiberTask? task, short events)
     {
         using (EnterStateScope())
         {
-            if ((events & LinuxConstants.POLLIN) != 0 && _counter > 0)
-                return true;
-            if ((events & LinuxConstants.POLLOUT) != 0 && _counter < MaxCounter)
-                return true;
-            return false;
+            if (_lifecycleClosed)
+                return false;
+
+            if (_waitQueues == null || _readHandle == null || _writeHandle == null)
+                return false;
+
+            var readWatch = new QueueReadinessWatch(LinuxConstants.POLLIN, () => _counter > 0, _readHandle,
+                _readHandle.Reset);
+            var writeWatch = new QueueReadinessWatch(LinuxConstants.POLLOUT, () => _counter < MaxCounter, _writeHandle,
+                _writeHandle.Reset);
+
+            if (task != null)
+                return QueueReadinessRegistration.Register(callback, task, events, readWatch, writeWatch);
+
+            return QueueReadinessRegistration.Register(callback, scheduler!, events, readWatch, writeWatch);
         }
+    }
+
+    private IDisposable? RegisterWaitHandleCore(Action callback, KernelScheduler? scheduler, FiberTask? task,
+        short events)
+    {
+        using (EnterStateScope())
+        {
+            if (_lifecycleClosed)
+                return null;
+
+            if (_waitQueues == null || _readHandle == null || _writeHandle == null)
+                return null;
+
+            var readWatch = new QueueReadinessWatch(LinuxConstants.POLLIN, () => _counter > 0, _readHandle,
+                _readHandle.Reset);
+            var writeWatch = new QueueReadinessWatch(LinuxConstants.POLLOUT, () => _counter < MaxCounter, _writeHandle,
+                _writeHandle.Reset);
+
+            if (task != null)
+                return QueueReadinessRegistration.RegisterHandle(callback, task, events, readWatch, writeWatch);
+
+            return QueueReadinessRegistration.RegisterHandle(callback, scheduler!, events, readWatch, writeWatch);
+        }
+    }
+
+    private void CloseLifecycleOnce()
+    {
+        if (_lifecycleClosed)
+            return;
+
+        _lifecycleClosed = true;
+        _counter = 0;
+        _readHandle?.Reset();
+        _writeHandle?.Reset();
+        _waitQueues?.ReturnToPool();
+        _readHandle = null;
+        _writeHandle = null;
+        AnonymousInodeLifecycle.CloseAliasesAndFinalize(this, "EventFdInode.CloseLifecycleOnce");
+    }
+
+    private void EnsureWaitQueues(KernelScheduler scheduler)
+    {
+        if (_waitQueues != null)
+            return;
+
+        _waitQueues = new PooledReadWriteWaitQueues(scheduler);
+        _readHandle = _waitQueues.ReadQueue;
+        _writeHandle = _waitQueues.WriteQueue;
+        _writeHandle.Set();
+        if (_counter > 0)
+            _readHandle.Set();
+        if (_counter == MaxCounter)
+            _writeHandle.Reset();
     }
 
     private readonly struct StateScope : IDisposable
     {
         public void Dispose()
         {
-        }
-    }
-
-    private sealed class CallbackRegistration : IDisposable
-    {
-        private readonly Action _callback;
-        private readonly short _events;
-        private readonly EventFdInode _owner;
-        private int _disposed;
-
-        public CallbackRegistration(EventFdInode owner, Action callback, short events)
-        {
-            _owner = owner;
-            _callback = callback;
-            _events = events;
-        }
-
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            using (_owner.EnterStateScope())
-            {
-                if ((_events & LinuxConstants.POLLIN) != 0)
-                    _owner._readWaiters.Remove(_callback);
-                if ((_events & LinuxConstants.POLLOUT) != 0)
-                    _owner._writeWaiters.Remove(_callback);
-            }
         }
     }
 }

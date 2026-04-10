@@ -90,6 +90,26 @@ public class LayerFsTests
     }
 
     [Fact]
+    public void LayerIndex_ByteLookup_ShouldNotAllocate()
+    {
+        var index = new LayerIndex();
+        index.AddEntry(new LayerIndexEntry("/ok", InodeType.File, 0x1A4));
+
+        Assert.True(index.TryGetChildPath("/", "ok"u8, out var childPath));
+        Assert.Equal("/ok", childPath);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 256; i++)
+        {
+            Assert.True(index.TryGetChildPath("/", "ok"u8, out childPath));
+            Assert.Equal("/ok", childPath);
+        }
+
+        var after = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Equal(0, after - before);
+    }
+
+    [Fact]
     public void LayerNode_RejectsNonUtf8RepresentableNamesAndTargets()
     {
         Assert.Throws<ArgumentException>(() => LayerNode.File("\uD800", []));

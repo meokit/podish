@@ -1017,9 +1017,7 @@ public abstract class Inode : IAddressSpaceOperations
     /// </summary>
     public virtual bool RevalidateCachedChild(Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
-        if (!FsEncoding.TryDecodeUtf8(name, out var decoded))
-            return false;
-        return RevalidateCachedChild(parent, decoded, cached);
+        return true;
     }
 
     public virtual bool RevalidateCachedChild(Dentry parent, FsName name, Dentry cached)

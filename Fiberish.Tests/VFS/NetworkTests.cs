@@ -22,7 +22,7 @@ public class NetworkTests
         var epoll = new EpollInode(1, env.MemfdSuperBlock, env.Scheduler);
 
         // Dummy eventfd as the target
-        var eventFd = new EventFdInode(2, env.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var eventFd = new EventFdInode(2, env.MemfdSuperBlock, env.Scheduler, 0, FileFlags.O_RDWR);
         var fileDentry = new Dentry(FsName.FromString("eventfd"), eventFd, null, env.MemfdSuperBlock);
         var file = new LinuxFile(fileDentry, FileFlags.O_RDWR | FileFlags.O_NONBLOCK, null!);
 
@@ -64,7 +64,7 @@ public class NetworkTests
             null!);
 
         // Dummy FD to pass
-        var dummyFdNode = new EventFdInode(3, env.MemfdSuperBlock, 0, FileFlags.O_RDWR);
+        var dummyFdNode = new EventFdInode(3, env.MemfdSuperBlock, env.Scheduler, 0, FileFlags.O_RDWR);
         var dummyFile = new LinuxFile(new Dentry(FsName.FromString("d"), dummyFdNode, null, env.MemfdSuperBlock),
             FileFlags.O_RDWR, null!);
 

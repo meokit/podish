@@ -21,8 +21,8 @@ public partial class SyscallManager
         if ((flags & LinuxConstants.EFD_NONBLOCK) != 0) eflags |= FileFlags.O_NONBLOCK;
         if ((flags & LinuxConstants.EFD_CLOEXEC) != 0) eflags |= FileFlags.O_CLOEXEC;
         if ((flags & LinuxConstants.EFD_SEMAPHORE) != 0) eflags |= (FileFlags)LinuxConstants.EFD_SEMAPHORE;
-
-        var inode = new EventFdInode(0, MemfdSuperBlock, initval, eflags);
+        var task = engine.Owner as FiberTask;
+        var inode = new EventFdInode(0, MemfdSuperBlock, task?.CommonKernel, initval, eflags);
         var dentry = new Dentry(FsName.FromString("anon_inode:[eventfd]"), inode, null, MemfdSuperBlock);
         var file = new LinuxFile(dentry, eflags, AnonMount);
 

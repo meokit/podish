@@ -1,3 +1,5 @@
+using System.Buffers;
+
 using Fiberish.Memory;
 using Fiberish.Native;
 
@@ -65,6 +67,7 @@ public sealed class InMemoryLayerContentProvider : ILayerContentProvider
 public sealed class LayerIndex
 {
     private readonly Dictionary<string, Dictionary<string, string>> _children = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, FsNameMap<string>> _childrenByBytes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, LayerIndexEntry> _entries = new(StringComparer.Ordinal);
 
     public LayerIndex()
@@ -84,13 +87,18 @@ public sealed class LayerIndex
         _entries[normalizedPath] = normalizedEntry;
 
         if (normalizedEntry.Type == InodeType.Directory)
+        {
             _children.TryAdd(normalizedPath, new Dictionary<string, string>(StringComparer.Ordinal));
+            _childrenByBytes.TryAdd(normalizedPath, new FsNameMap<string>());
+        }
 
         if (normalizedPath == "/") return;
 
         var parentPath = GetParentPath(normalizedPath);
         EnsureDirectory(parentPath);
-        _children[parentPath][GetBaseName(normalizedPath)] = normalizedPath;
+        var childName = GetBaseName(normalizedPath);
+        _children[parentPath][childName] = normalizedPath;
+        _childrenByBytes[parentPath].Set(FsName.FromString(childName), normalizedPath);
     }
 
     public bool TryGetEntry(string path, out LayerIndexEntry entry)
@@ -103,6 +111,14 @@ public sealed class LayerIndex
         childPath = string.Empty;
         var p = NormalizePath(parentPath);
         if (!_children.TryGetValue(p, out var map)) return false;
+        return map.TryGetValue(name, out childPath!);
+    }
+
+    public bool TryGetChildPath(string parentPath, ReadOnlySpan<byte> name, out string childPath)
+    {
+        childPath = string.Empty;
+        var p = NormalizePath(parentPath);
+        if (!_childrenByBytes.TryGetValue(p, out var map)) return false;
         return map.TryGetValue(name, out childPath!);
     }
 
@@ -149,6 +165,7 @@ public sealed class LayerIndex
             if (existing.Type != InodeType.Directory)
                 throw new InvalidOperationException($"Path '{p}' already exists and is not a directory");
             _children.TryAdd(p, new Dictionary<string, string>(StringComparer.Ordinal));
+            _childrenByBytes.TryAdd(p, new FsNameMap<string>());
             return;
         }
 
@@ -353,13 +370,17 @@ public class LayerInode : MappingBackedInode
 
     public override Dentry? Lookup(ReadOnlySpan<byte> name)
     {
-        if (!FsEncoding.TryDecodeUtf8(name, out var decoded))
+        if (_entry.Type != InodeType.Directory) return null;
+
+        var sb = (LayerSuperBlock)SuperBlock;
+        if (!sb.Index.TryGetChildPath(_path, name, out var childPath))
         {
             SetLookupFailureError(-(int)Errno.ENOENT);
             return null;
         }
 
-        return Lookup(decoded);
+        var parentDentry = Dentries.Count > 0 ? Dentries[0] : null;
+        return new Dentry(FsName.FromBytes(name), sb.GetOrCreateInode(childPath), parentDentry, SuperBlock);
     }
 
     private static int ComputeInitialLinkCount(LayerSuperBlock sb, string path, LayerIndexEntry entry)
@@ -477,29 +498,36 @@ public class LayerInode : MappingBackedInode
             return;
 
         var sb = (LayerSuperBlock)SuperBlock;
-        var page = new byte[LinuxConstants.PageSize];
-        var endPageIndex = Math.Min(startPageIndex + pageCount, maxPageCount);
-        for (var pageIndex = startPageIndex; pageIndex < endPageIndex; pageIndex++)
+        var page = ArrayPool<byte>.Shared.Rent(LinuxConstants.PageSize);
+        try
         {
-            if (Mapping.PeekPage((uint)pageIndex) != IntPtr.Zero) continue;
-
-            var ptr = Mapping.GetOrCreatePage((uint)pageIndex, p =>
+            var endPageIndex = Math.Min(startPageIndex + pageCount, maxPageCount);
+            for (var pageIndex = startPageIndex; pageIndex < endPageIndex; pageIndex++)
             {
-                page.AsSpan().Clear();
-                var fileOffset = pageIndex * LinuxConstants.PageSize;
-                if (!sb.ContentProvider.TryRead(_entry, fileOffset, page, out var readLen)) return false;
-                unsafe
+                if (Mapping.PeekPage((uint)pageIndex) != IntPtr.Zero) continue;
+
+                var ptr = Mapping.GetOrCreatePage((uint)pageIndex, p =>
                 {
-                    var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
-                    dst.Clear();
-                    if (readLen > 0) page.AsSpan(0, readLen).CopyTo(dst);
-                }
+                    page.AsSpan().Clear();
+                    var fileOffset = pageIndex * LinuxConstants.PageSize;
+                    if (!sb.ContentProvider.TryRead(_entry, fileOffset, page, out var readLen)) return false;
+                    unsafe
+                    {
+                        var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
+                        dst.Clear();
+                        if (readLen > 0) page.AsSpan(0, readLen).CopyTo(dst);
+                    }
 
-                return true;
-            }, out _, true, AllocationClass.Readahead);
+                    return true;
+                }, out _, true, AllocationClass.Readahead);
 
-            if (ptr == IntPtr.Zero)
-                return;
+                if (ptr == IntPtr.Zero)
+                    return;
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(page, clearArray: true);
         }
     }
 

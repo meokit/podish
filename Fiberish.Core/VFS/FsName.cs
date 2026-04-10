@@ -344,6 +344,50 @@ public static class FsEncoding
         }
     }
 
+    public static bool IsValidUtf8(ReadOnlySpan<byte> value)
+    {
+        try
+        {
+            _ = StrictUtf8.GetCharCount(value);
+            return true;
+        }
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
+    }
+
+    public static bool TryParseAsciiInt32(ReadOnlySpan<byte> value, out int parsed)
+    {
+        if (value.IsEmpty)
+        {
+            parsed = 0;
+            return false;
+        }
+
+        var acc = 0;
+        foreach (var b in value)
+        {
+            var digit = b - (byte)'0';
+            if (digit > 9)
+            {
+                parsed = 0;
+                return false;
+            }
+
+            if (acc > (int.MaxValue - digit) / 10)
+            {
+                parsed = 0;
+                return false;
+            }
+
+            acc = (acc * 10) + digit;
+        }
+
+        parsed = acc;
+        return true;
+    }
+
     public static string DecodeUtf8Strict(ReadOnlySpan<byte> value)
     {
         return StrictUtf8.GetString(value);

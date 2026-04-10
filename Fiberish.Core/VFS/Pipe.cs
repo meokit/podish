@@ -17,11 +17,10 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
     // Notification handles
     private readonly WaitHandle _readHandle;
-    private readonly KernelScheduler _scheduler;
+    private readonly PooledReadWriteWaitQueues _waitQueues;
     private readonly WaitHandle _writeHandle;
     private int _count;
     private int _head; // Write position
-    private bool _handlesReturned;
     private bool _lifecycleClosed;
     private int _readerCount;
     private bool _readersClosed;
@@ -31,12 +30,12 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
     public PipeInode(KernelScheduler scheduler)
     {
-        _scheduler = scheduler;
-        _readHandle = scheduler.RentAsyncWaitQueue();
-        _writeHandle = scheduler.RentAsyncWaitQueue();
+        _waitQueues = new PooledReadWriteWaitQueues(scheduler);
+        _readHandle = _waitQueues.ReadQueue;
+        _writeHandle = _waitQueues.WriteQueue;
         Type = InodeType.Fifo;
         Mode = 0x1000 | 0x1FF; // FIFO + 777
-        SetInitialLinkCount(1, "PipeInode.ctor");
+        AnonymousInodeLifecycle.Initialize(this, "PipeInode.ctor");
         _buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
         // Initially writable (empty)
         _writeHandle.Set();
@@ -470,11 +469,6 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
         _lifecycleClosed = true;
 
-        var aliasCount = Dentries.Count;
-        var aliases = new Dentry[aliasCount];
-        for (var i = 0; i < aliasCount; i++)
-            aliases[i] = Dentries[i];
-
         _count = 0;
         _head = 0;
         _tail = 0;
@@ -485,18 +479,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         _readHandle.Reset();
         _writeHandle.Reset();
         ReturnHandlesToPool();
-
-        foreach (var alias in aliases)
-        {
-            if (!alias.UnbindInode("PipeInode.CloseLifecycleOnce"))
-                continue;
-
-            if (alias.DentryRefCount == 0 && alias.IsTrackedBySuperBlock)
-                alias.UntrackFromSuperBlock("PipeInode.CloseLifecycleOnce");
-        }
-
-        if (LinkCount > 0)
-            DecLink("PipeInode.CloseLifecycleOnce");
+        AnonymousInodeLifecycle.CloseAliasesAndFinalize(this, "PipeInode.CloseLifecycleOnce");
 
         ReturnBufferToPool();
     }
@@ -512,12 +495,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 
     private void ReturnHandlesToPool()
     {
-        if (_handlesReturned)
-            return;
-
-        _scheduler.ReturnAsyncWaitQueue(_readHandle);
-        _scheduler.ReturnAsyncWaitQueue(_writeHandle);
-        _handlesReturned = true;
+        _waitQueues.ReturnToPool();
     }
 
     private readonly struct StateScope : IDisposable

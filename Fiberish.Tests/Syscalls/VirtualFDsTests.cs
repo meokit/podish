@@ -15,7 +15,7 @@ public class VirtualFDsTests
     public void EventFd_Counter_ReadWrite()
     {
         using var env = new TestEnv();
-        var inode = new EventFdInode(0, env.MemfdSuperBlock, 5, FileFlags.O_RDWR);
+        var inode = new EventFdInode(0, env.MemfdSuperBlock, env.Task.CommonKernel, 5, FileFlags.O_RDWR);
         var efd = new LinuxFile(new Dentry(FsName.FromString("eventfd"), inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 
@@ -45,7 +45,8 @@ public class VirtualFDsTests
     public void EventFd_Semaphore_Semantics()
     {
         using var env = new TestEnv();
-        var inode = new EventFdInode(0, env.MemfdSuperBlock, 5, (FileFlags)LinuxConstants.EFD_SEMAPHORE);
+        var inode = new EventFdInode(0, env.MemfdSuperBlock, env.Task.CommonKernel, 5,
+            (FileFlags)LinuxConstants.EFD_SEMAPHORE);
         var efd = new LinuxFile(new Dentry(FsName.FromString("eventfd"), inode, null, env.MemfdSuperBlock),
             (FileFlags)LinuxConstants.EFD_SEMAPHORE, null!);
 
@@ -151,7 +152,7 @@ public class VirtualFDsTests
     public void EventFd_RegisterWaitHandle_AlreadyReadable_ShouldInvokeImmediately()
     {
         using var env = new TestEnv();
-        var inode = new EventFdInode(0, env.MemfdSuperBlock, 1, FileFlags.O_RDWR);
+        var inode = new EventFdInode(0, env.MemfdSuperBlock, env.Task.CommonKernel, 1, FileFlags.O_RDWR);
         var efd = new LinuxFile(new Dentry(FsName.FromString("eventfd"), inode, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
             null!);
 
@@ -159,6 +160,29 @@ public class VirtualFDsTests
         using var reg = inode.RegisterWaitHandle(efd, () => Interlocked.Increment(ref fired), LinuxConstants.POLLIN);
 
         Assert.Equal(1, Volatile.Read(ref fired));
+    }
+
+    [Fact]
+    public void EventFd_Close_FinalizesInodeAndReturnsWaitQueues()
+    {
+        using var env = new TestEnv();
+        var poolField = typeof(KernelScheduler).GetField("_asyncWaitQueuePool",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var pool = Assert.IsType<Stack<AsyncWaitQueue>>(poolField.GetValue(env.Task.CommonKernel));
+        var before = pool.Count;
+
+        var inode = new EventFdInode(0, env.MemfdSuperBlock, env.Task.CommonKernel, 1, FileFlags.O_RDWR);
+        var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), inode, null, env.MemfdSuperBlock),
+            FileFlags.O_RDWR, null!);
+
+        Assert.Equal(before, pool.Count);
+
+        file.Close();
+
+        Assert.True(inode.IsFinalized);
+        Assert.True(inode.IsCacheEvicted);
+        Assert.Equal(before + 2, pool.Count);
+        Assert.Empty(inode.Dentries);
     }
 
     [Fact]
