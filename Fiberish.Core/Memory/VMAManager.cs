@@ -276,34 +276,34 @@ public class VMAManager
         return (startPageIndex, startPageIndex + vma.Length / LinuxConstants.PageSize);
     }
 
-    private void RegisterVmAreaMappingAttachment(VmArea vma)
+    private void RegisterVmAreaMappingAttachment(VmArea vma, TbCohWorkSet? tbCohWorkSet = null)
     {
         if (vma.VmMapping == null || vma.Length == 0)
             return;
 
         var (startPageIndex, endPageIndexExclusive) = GetVmAreaPageRange(vma);
-        vma.VmMapping.AddRmapAttachment(this, vma, startPageIndex, endPageIndexExclusive);
+        vma.VmMapping.AddRmapAttachment(this, vma, startPageIndex, endPageIndexExclusive, tbCohWorkSet);
     }
 
-    private void RegisterVmAreaAnonAttachment(VmArea vma)
+    private void RegisterVmAreaAnonAttachment(VmArea vma, TbCohWorkSet? tbCohWorkSet = null)
     {
         if (vma.VmAnonVma == null || vma.Length == 0)
             return;
 
         var (startPageIndex, endPageIndexExclusive) = GetVmAreaPageRange(vma);
-        vma.VmAnonVma.AddRmapAttachment(this, vma, startPageIndex, endPageIndexExclusive);
+        vma.VmAnonVma.AddRmapAttachment(this, vma, startPageIndex, endPageIndexExclusive, tbCohWorkSet);
     }
 
-    private void RegisterVmAreaAttachments(VmArea vma)
+    private void RegisterVmAreaAttachments(VmArea vma, TbCohWorkSet? tbCohWorkSet = null)
     {
-        RegisterVmAreaMappingAttachment(vma);
-        RegisterVmAreaAnonAttachment(vma);
+        RegisterVmAreaMappingAttachment(vma, tbCohWorkSet);
+        RegisterVmAreaAnonAttachment(vma, tbCohWorkSet);
     }
 
-    private static void UnregisterVmAreaAttachments(VmArea vma)
+    private static void UnregisterVmAreaAttachments(VmArea vma, TbCohWorkSet? tbCohWorkSet = null)
     {
-        vma.VmMapping?.RemoveRmapAttachments(vma);
-        vma.VmAnonVma?.RemoveRmapAttachments(vma);
+        vma.VmMapping?.RemoveRmapAttachments(vma, tbCohWorkSet);
+        vma.VmAnonVma?.RemoveRmapAttachments(vma, tbCohWorkSet);
     }
 
     private static void ReleaseUnmappedObjectPages(VmArea vma, uint guestStart, uint guestEndExclusive)
@@ -351,7 +351,7 @@ public class VMAManager
     }
 
     private void UpdateTbCohRolesForVmaRange(VmArea vma, uint guestStart, uint guestEndExclusive, Protection oldPerms,
-        Protection newPerms)
+        Protection newPerms, TbCohWorkSet? tbCohWorkSet = null)
     {
         if (guestStart >= guestEndExclusive)
             return;
@@ -380,8 +380,50 @@ public class VMAManager
                 continue;
             }
 
-            hostPage.UpdateTbCohRolesForRmapRef(this, vma, ownerKind, pageIndex, page, oldPerms, newPerms);
+            var changed =
+                hostPage.UpdateTbCohRolesForRmapRef(this, vma, ownerKind, pageIndex, page, oldPerms, newPerms);
+            tbCohWorkSet?.AddIfChanged(hostPage, changed);
         }
+    }
+
+    private void RebindRmapRefsForVmaRange(VmArea sourceVma, VmArea targetVma, uint guestStart, uint guestEndExclusive,
+        Protection oldPerms, Protection newPerms, TbCohWorkSet? tbCohWorkSet = null)
+    {
+        if (guestStart >= guestEndExclusive)
+            return;
+
+        var startPage = guestStart & LinuxConstants.PageMask;
+        var endPageExclusive = (guestEndExclusive + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
+        for (var page = startPage; page < endPageExclusive; page += LinuxConstants.PageSize)
+        {
+            var pageIndex = sourceVma.GetPageIndex(page);
+            HostPage? hostPage;
+            HostPageOwnerKind ownerKind;
+            if (sourceVma.VmAnonVma?.PeekHostPage(pageIndex) is { } anonPage)
+            {
+                hostPage = anonPage;
+                ownerKind = HostPageOwnerKind.AnonVma;
+            }
+            else if (sourceVma.VmMapping?.PeekHostPage(pageIndex) is { } sharedPage)
+            {
+                hostPage = sharedPage;
+                ownerKind = HostPageOwnerKind.AddressSpace;
+            }
+            else
+            {
+                continue;
+            }
+
+            var changed = hostPage.RebindRmapRef(this, sourceVma, targetVma, ownerKind, pageIndex, page, oldPerms,
+                newPerms);
+            tbCohWorkSet?.AddIfChanged(hostPage, changed);
+        }
+    }
+
+    private void ResetVmAreaAttachmentsForSplit(VmArea retainedVma, VmArea? extraVma0 = null, VmArea? extraVma1 = null)
+    {
+        retainedVma.VmMapping?.ResetRmapAttachmentsForSplit(this, retainedVma, extraVma0, extraVma1);
+        retainedVma.VmAnonVma?.ResetRmapAttachmentsForSplit(this, retainedVma, extraVma0, extraVma1);
     }
 
     private MappedPageBinding CreateResolvedPageBinding(VmArea vma, uint pageIndex, IntPtr pagePtr)
@@ -833,6 +875,12 @@ public class VMAManager
     public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, LinuxFile? file, long offset,
         string name, Engine engine)
     {
+        return Mmap(addr, len, perms, flags, file, offset, name, engine, null);
+    }
+
+    internal uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, LinuxFile? file, long offset,
+        string name, Engine engine, TbCohWorkSet? tbCohWorkSet)
+    {
         // Align to 4k
         if ((addr & LinuxConstants.PageOffsetMask) != 0)
             throw new ArgumentException("Address not aligned");
@@ -934,7 +982,7 @@ public class VMAManager
             };
 
             InsertVmaSorted(vma);
-            RegisterVmAreaAttachments(vma);
+            RegisterVmAreaAttachments(vma, tbCohWorkSet);
             anonymousSharedFile = null;
             return addr;
         }
@@ -1140,6 +1188,12 @@ public class VMAManager
 
     public int Mprotect(uint addr, uint len, Protection prot, Engine engine, out bool resetCodeCacheRange)
     {
+        return Mprotect(addr, len, prot, engine, out resetCodeCacheRange, null);
+    }
+
+    internal int Mprotect(uint addr, uint len, Protection prot, Engine engine, out bool resetCodeCacheRange,
+        TbCohWorkSet? tbCohWorkSet)
+    {
         resetCodeCacheRange = false;
         if (len == 0) return 0;
 
@@ -1171,7 +1225,6 @@ public class VMAManager
         {
             var replacements = new List<VmArea>(endIndexExclusive - startIndex + 2);
             List<VmArea>? addedVmas = null;
-            List<VmArea>? registerAfter = null;
 
             for (var i = startIndex; i < endIndexExclusive; i++)
             {
@@ -1190,13 +1243,11 @@ public class VMAManager
                 // Fully covered: just flip perms.
                 if (overlapStart == oldStart && overlapEnd == oldEnd)
                 {
-                    UpdateTbCohRolesForVmaRange(vma, overlapStart, overlapEnd, oldPerms, prot);
+                    UpdateTbCohRolesForVmaRange(vma, overlapStart, overlapEnd, oldPerms, prot, tbCohWorkSet);
                     vma.Perms = prot;
                     replacements.Add(vma);
                     continue;
                 }
-
-                UnregisterVmAreaAttachments(vma);
 
                 // Prepare middle (the protected slice).
                 var midDiff = (long)overlapStart - oldStart;
@@ -1270,12 +1321,10 @@ public class VMAManager
                     oldPrivate?.Release();
 
                     replacements.Add(vma);
-                    (registerAfter ??= []).Add(vma);
                     if (right != null)
                     {
                         replacements.Add(right);
                         (addedVmas ??= []).Add(right);
-                        registerAfter.Add(right);
                     }
                 }
                 else
@@ -1284,15 +1333,22 @@ public class VMAManager
                     replacements.Add(vma);
                     replacements.Add(mid);
                     (addedVmas ??= []).Add(mid);
-                    (registerAfter ??= []).Add(vma);
-                    registerAfter.Add(mid);
                     if (right != null)
                     {
                         replacements.Add(right);
                         addedVmas.Add(right);
-                        registerAfter.Add(right);
                     }
                 }
+
+                if (hasLeft)
+                    RebindRmapRefsForVmaRange(vma, mid, overlapStart, overlapEnd, oldPerms, prot, tbCohWorkSet);
+                else
+                    UpdateTbCohRolesForVmaRange(vma, overlapStart, overlapEnd, oldPerms, prot, tbCohWorkSet);
+
+                if (right != null)
+                    RebindRmapRefsForVmaRange(vma, right, overlapEnd, oldEnd, oldPerms, oldPerms, tbCohWorkSet);
+
+                ResetVmAreaAttachmentsForSplit(vma, hasLeft ? mid : right, hasLeft ? right : null);
             }
 
             ReplaceVmaWindow(startIndex, endIndexExclusive - startIndex, replacements);
@@ -1300,10 +1356,6 @@ public class VMAManager
             if (addedVmas != null)
                 foreach (var vma in addedVmas)
                     TrackMappedInodeOnVmaAdded(vma);
-
-            if (registerAfter != null)
-                foreach (var vma in registerAfter)
-                    RegisterVmAreaAttachments(vma);
         }
 
         if (prot == Protection.None)
@@ -1837,10 +1889,9 @@ public class VMAManager
         var existingPrivate = privateObject?.GetPage(pageIndex) ?? IntPtr.Zero;
         if (!isWrite)
         {
-            if (existingPrivate != IntPtr.Zero)
+            if (existingPrivate != IntPtr.Zero && privateObject?.PeekVmPage(pageIndex) is { } privatePage)
             {
-                var binding =
-                    MappedPageBinding.FromAnonVmaPage(privateObject!, pageIndex, privateObject!.PeekVmPage(pageIndex)!);
+                var binding = MappedPageBinding.FromAnonVmaPage(privateObject, pageIndex, privatePage);
                 var result = EnsureExternalMapping(pageStart, binding, readPerms, engine);
                 if (result == FaultResult.Handled && (vma.Perms & Protection.Exec) != 0)
                     TbCoh.ApplyWx(binding.HostPage);

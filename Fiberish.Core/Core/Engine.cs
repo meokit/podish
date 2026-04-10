@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -597,38 +598,52 @@ public class Engine : IDisposable
     public unsafe string? ReadStringSafe(uint addr, int limit = 4096)
     {
         EnsureAddressSpaceSynchronized();
-        if (addr == 0) return "";
+        if (addr == 0)
+            return "";
+        if (limit <= 0)
+            return string.Empty;
 
-        var sb = new StringBuilder();
+        var rented = ArrayPool<byte>.Shared.Rent(limit);
         var current = addr;
+        var length = 0;
 
-        while (sb.Length < limit)
+        try
         {
-            var ptr = X86Native.ResolvePtrForRead(State, current);
-            if (ptr == null)
-                if (TryResolveUserAccessFault(current, false))
-                    ptr = X86Native.ResolvePtrForRead(State, current);
-
-            if (ptr == null) return null; // Fault
-
-            // NOTE: X86_ResolvePtrForRead/resolve_safe_for_read returns a pointer with the guest-page offset already applied
-            // So ptr is the exact byte pointer for 'current' address
-            var pageOffset = current & 0xFFF;
-            var p = (byte*)ptr; // Already includes offset
-            var remainingInPage = 4096 - (int)pageOffset;
-
-            for (var i = 0; i < remainingInPage; i++)
+            while (length < limit)
             {
-                var b = p[i];
-                if (b == 0) return sb.ToString();
-                sb.Append((char)b);
-                if (sb.Length >= limit) break;
+                var ptr = X86Native.ResolvePtrForRead(State, current);
+                if (ptr == null)
+                    if (TryResolveUserAccessFault(current, false))
+                        ptr = X86Native.ResolvePtrForRead(State, current);
+
+                if (ptr == null)
+                    return null;
+
+                // NOTE: X86_ResolvePtrForRead/resolve_safe_for_read returns a pointer with the guest-page offset already applied.
+                var pageOffset = current & 0xFFF;
+                var remainingInPage = 4096 - (int)pageOffset;
+                var chunkLength = Math.Min(limit - length, remainingInPage);
+                var source = new ReadOnlySpan<byte>((byte*)ptr, remainingInPage);
+                var chunk = source[..chunkLength];
+                var nulIndex = chunk.IndexOf((byte)0);
+                if (nulIndex >= 0)
+                {
+                    chunk[..nulIndex].CopyTo(rented.AsSpan(length));
+                    length += nulIndex;
+                    return Encoding.UTF8.GetString(rented.AsSpan(0, length));
+                }
+
+                chunk.CopyTo(rented.AsSpan(length));
+                length += chunkLength;
+                current += (uint)chunkLength;
             }
 
-            current += (uint)remainingInPage;
+            return Encoding.UTF8.GetString(rented.AsSpan(0, length));
         }
-
-        return sb.ToString();
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented, clearArray: false);
+        }
     }
 
     public virtual uint RegRead(Reg reg)

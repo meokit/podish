@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
@@ -51,43 +52,47 @@ public partial class SyscallManager
 
     public string ReadString(uint addr)
     {
-        if (addr == 0) return "";
+        if (addr == 0)
+            return "";
 
-        var sb = new StringBuilder();
-        var current = addr;
-        var buf = new byte[1];
-        while (true)
+        const int maxLength = 4096;
+        var rented = ArrayPool<byte>.Shared.Rent(maxLength);
+        try
         {
-            if (!CurrentSyscallEngine.CopyFromUser(current++, buf)) break;
-            if (buf[0] == 0) break;
-            sb.Append((char)buf[0]);
-            if (sb.Length > 4096) break; // Safety limit
+            ReadNullTerminatedUserBytes(addr, rented.AsSpan(0, maxLength), out var length, out _);
+            return Encoding.UTF8.GetString(rented.AsSpan(0, length));
         }
-
-        return sb.ToString();
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented, clearArray: false);
+        }
     }
 
     public UserStringReadResult ReadUserString(uint addr, int maxLength = LinuxConstants.PathMax)
     {
-        if (addr == 0) return new UserStringReadResult("", -(int)Errno.EFAULT);
+        if (addr == 0)
+            return new UserStringReadResult("", -(int)Errno.EFAULT);
+        if (maxLength <= 0)
+            return new UserStringReadResult("", -(int)Errno.ENAMETOOLONG);
 
-        var sb = new StringBuilder();
-        var current = addr;
-        var buf = new byte[1];
-        while (true)
+        var rented = ArrayPool<byte>.Shared.Rent(maxLength);
+        try
         {
             // Syscall argument reads should fault in guest pages when the address is valid
             // but currently unmapped into the host MMU, e.g. string literals in file-backed
-            // mappings. Using the no-fault helper here makes behavior depend on whether some
-            // earlier diagnostic read happened to prefault the page.
-            if (!CurrentSyscallEngine.CopyFromUser(current++, buf))
+            // mappings. Using CopyFromUser here preserves the existing prefault behavior.
+            var success = ReadNullTerminatedUserBytes(addr, rented.AsSpan(0, maxLength), out var length,
+                out var terminated);
+            if (!success)
                 return new UserStringReadResult("", -(int)Errno.EFAULT);
-            if (buf[0] == 0)
-                return new UserStringReadResult(sb.ToString(), 0);
-
-            sb.Append((char)buf[0]);
-            if (sb.Length >= maxLength)
+            if (!terminated)
                 return new UserStringReadResult("", -(int)Errno.ENAMETOOLONG);
+
+            return new UserStringReadResult(Encoding.UTF8.GetString(rented.AsSpan(0, length)), 0);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented, clearArray: false);
         }
     }
 
@@ -124,6 +129,35 @@ public partial class SyscallManager
     public PathLocation PathWalkWithFlags(string path, LookupFlags flags)
     {
         return PathWalker.PathWalk(path, flags);
+    }
+
+    private bool ReadNullTerminatedUserBytes(uint addr, Span<byte> destination, out int length, out bool terminated)
+    {
+        length = 0;
+        terminated = false;
+        var current = addr;
+
+        while (length < destination.Length)
+        {
+            var chunkLength = Math.Min(destination.Length - length,
+                LinuxConstants.PageSize - (int)(current & (LinuxConstants.PageSize - 1)));
+            var chunk = destination.Slice(length, chunkLength);
+            if (!CurrentSyscallEngine.CopyFromUser(current, chunk))
+                return false;
+
+            var nulIndex = chunk.IndexOf((byte)0);
+            if (nulIndex >= 0)
+            {
+                length += nulIndex;
+                terminated = true;
+                return true;
+            }
+
+            length += chunkLength;
+            current += (uint)chunkLength;
+        }
+
+        return true;
     }
 
     /// <summary>

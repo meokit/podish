@@ -116,6 +116,39 @@ public class MknodAndXattrSyscallTests
     }
 
     [Fact]
+    public async Task List_Xattr_Preserves_Utf8_Names()
+    {
+        using var env = new TestEnv();
+
+        env.MapUserPage(0x18000);
+        env.MapUserPage(0x19000);
+        env.MapUserPage(0x1A000);
+        env.MapUserPage(0x1B000);
+        env.MapUserPage(0x1C000);
+
+        var utf8Value = "值-😀"u8.ToArray();
+        env.WriteCString(0x18000, "/文件-😀");
+        env.WriteCString(0x19000, "user.标签😀");
+        env.WriteBytes(0x1A000, utf8Value);
+
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x18000, 0x8000 | 0x180));
+        Assert.Equal(0, await env.Call("SysSetXAttr", 0x18000, 0x19000, 0x1A000, (uint)utf8Value.Length));
+
+        var needed = await env.Call("SysListXAttr", 0x18000);
+        Assert.True(needed > 0);
+
+        var listRc = await env.Call("SysListXAttr", 0x18000, 0x1B000, (uint)needed);
+        Assert.Equal(needed, listRc);
+        var names = Encoding.UTF8.GetString(env.ReadBytes(0x1B000, listRc))
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Contains("user.标签😀", names);
+
+        var getRc = await env.Call("SysGetXAttr", 0x18000, 0x19000, 0x1C000, 32);
+        Assert.Equal(utf8Value.Length, getRc);
+        Assert.Equal("值-😀", Encoding.UTF8.GetString(env.ReadBytes(0x1C000, getRc)));
+    }
+
+    [Fact]
     public async Task Mknodat_On_OverlayRoot_Creates_Node()
     {
         using var env = new TestEnv(true);

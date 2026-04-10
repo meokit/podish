@@ -398,6 +398,41 @@ public class TbCohTests
         }
     }
 
+#if DEBUG
+    [Fact]
+    public void PartialMprotect_SplitVma_OnlyAppliesWxToTouchedPage()
+    {
+        using var pageScope = PageManager.BeginIsolatedScope();
+        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
+        using var diagnostics = TbCohDiagnosticsScope.Begin();
+        using var engine = new Engine();
+        var mm = new VMAManager();
+        mm.BindOrAssertAddressSpaceHandle(engine);
+        engine.PageFaultResolver =
+            (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+
+        const uint mapAddr = 0x48E00000;
+        const uint pageCount = 4;
+        Assert.Equal(mapAddr,
+            mm.Mmap(mapAddr, LinuxConstants.PageSize * pageCount, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "tbcoh-split-mprotect", engine));
+
+        for (uint i = 0; i < pageCount; i++)
+            Assert.True(engine.CopyToUser(mapAddr + i * LinuxConstants.PageSize, new byte[] { (byte)i }));
+
+        Assert.Equal(0,
+            ProcessAddressSpaceSync.Mprotect(mm, engine, mapAddr + LinuxConstants.PageSize, LinuxConstants.PageSize,
+                Protection.Read | Protection.Exec));
+
+        var snapshot = diagnostics.Snapshot;
+        Assert.True(diagnostics.IsEnabled);
+        Assert.Equal(1, snapshot.ApplyWxCalls);
+        Assert.Equal(1, snapshot.ApplyWxFastNoWriters);
+        Assert.Equal(0, snapshot.ApplyWxSlowScans);
+        Assert.Equal(0, snapshot.ApplyWxVisitedWriterPages);
+    }
+#endif
+
     private static byte[] IncEaxTwice()
     {
         return [0x40, 0x40];

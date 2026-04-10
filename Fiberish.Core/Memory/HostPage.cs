@@ -204,6 +204,54 @@ internal sealed class TbCohMmBucket
     public bool IsEmpty => ExecPages.Count == 0 && WriterPages.Count == 0;
 }
 
+internal enum TbCohWriterPolicyKind
+{
+    Uninitialized = 0,
+    NoWriters,
+    AllowAllWriters,
+    ProtectAllWriters,
+    ProtectAllExceptSingleExecIdentity
+}
+
+internal readonly record struct TbCohWriterPolicy(TbCohWriterPolicyKind Kind, nuint ExecIdentity = 0);
+
+internal enum TbCohApplyKind
+{
+    FastNoWriters,
+    FastSamePolicy,
+    SlowScan
+}
+
+internal readonly record struct TbCohApplyResult(TbCohApplyKind Kind, int VisitedWriterPages);
+
+internal sealed class TbCohWorkSet
+{
+    private readonly HashSet<HostPage> _hostPages = [];
+
+    public int Count => _hostPages.Count;
+
+    public void Add(HostPage hostPage)
+    {
+        ArgumentNullException.ThrowIfNull(hostPage);
+        _hostPages.Add(hostPage);
+    }
+
+    public void AddIfChanged(HostPage hostPage, bool changed)
+    {
+        if (!changed)
+            return;
+
+        Add(hostPage);
+    }
+
+    public void Visit(Action<HostPage> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        foreach (var hostPage in _hostPages)
+            visitor(hostPage);
+    }
+}
+
 internal sealed class HostPageTbCohIndex
 {
     private readonly Dictionary<TbCohMmPageKey, TbCohMmPageEntry> _byMmPage = [];
@@ -211,6 +259,10 @@ internal sealed class HostPageTbCohIndex
     private readonly Dictionary<nuint, int> _execIdentityCounts = [];
     private int _execIdentityCount;
     private nuint _singleExecIdentity;
+    private TbCohWriterPolicy _lastAppliedWriterPolicy;
+    private int _lastAppliedWriterEpoch = -1;
+    private int _writerPageCount;
+    private int _writerEpoch;
 
     private static bool HasExecRole(Protection perms)
     {
@@ -275,12 +327,12 @@ internal sealed class HostPageTbCohIndex
         _singleExecIdentity = 0;
     }
 
-    public void AddRoles(VMAManager mm, uint guestPageStart, Protection perms)
+    public bool AddRoles(VMAManager mm, uint guestPageStart, Protection perms)
     {
         var hasExec = HasExecRole(perms);
         var hasWrite = HasWriteRole(perms);
         if (!hasExec && !hasWrite)
-            return;
+            return false;
 
         var key = new TbCohMmPageKey(mm, guestPageStart);
         if (!_byMmPage.TryGetValue(key, out var entry))
@@ -294,6 +346,7 @@ internal sealed class HostPageTbCohIndex
         }
 
         TbCohMmBucket? bucket = null;
+        var changed = false;
         if (hasExec)
         {
             if (entry.ExecRefCount == 0)
@@ -301,6 +354,7 @@ internal sealed class HostPageTbCohIndex
                 bucket = GetOrAddBucket(mm);
                 bucket.ExecPages.Add(guestPageStart);
                 AddExecIdentity(GetCoherenceIdentity(mm));
+                changed = true;
             }
 
             entry.ExecRefCount++;
@@ -312,24 +366,30 @@ internal sealed class HostPageTbCohIndex
             {
                 bucket ??= GetOrAddBucket(mm);
                 bucket.WriterPages.Add(guestPageStart);
+                _writerPageCount++;
+                _writerEpoch++;
+                changed = true;
             }
 
             entry.WriteRefCount++;
         }
+
+        return changed;
     }
 
-    public void RemoveRoles(VMAManager mm, uint guestPageStart, Protection perms)
+    public bool RemoveRoles(VMAManager mm, uint guestPageStart, Protection perms)
     {
         var hasExec = HasExecRole(perms);
         var hasWrite = HasWriteRole(perms);
         if (!hasExec && !hasWrite)
-            return;
+            return false;
 
         var key = new TbCohMmPageKey(mm, guestPageStart);
         if (!_byMmPage.TryGetValue(key, out var entry))
-            return;
+            return false;
 
         _byMm.TryGetValue(mm, out var bucket);
+        var changed = false;
         if (hasExec && entry.ExecRefCount > 0)
         {
             entry.ExecRefCount--;
@@ -337,6 +397,7 @@ internal sealed class HostPageTbCohIndex
             {
                 bucket?.ExecPages.Remove(guestPageStart);
                 RemoveExecIdentity(GetCoherenceIdentity(mm));
+                changed = true;
             }
         }
 
@@ -344,7 +405,12 @@ internal sealed class HostPageTbCohIndex
         {
             entry.WriteRefCount--;
             if (entry.WriteRefCount == 0)
+            {
                 bucket?.WriterPages.Remove(guestPageStart);
+                _writerPageCount--;
+                _writerEpoch++;
+                changed = true;
+            }
         }
 
         if (entry.ExecRefCount == 0 && entry.WriteRefCount == 0)
@@ -352,20 +418,48 @@ internal sealed class HostPageTbCohIndex
 
         if (bucket is { IsEmpty: true })
             _byMm.Remove(mm);
+
+        return changed;
     }
 
-    public void UpdateRoles(VMAManager mm, uint guestPageStart, Protection oldPerms, Protection newPerms)
+    public bool UpdateRoles(VMAManager mm, uint guestPageStart, Protection oldPerms, Protection newPerms)
     {
         if (HasExecRole(oldPerms) == HasExecRole(newPerms) && HasWriteRole(oldPerms) == HasWriteRole(newPerms))
-            return;
+            return false;
 
-        RemoveRoles(mm, guestPageStart, oldPerms);
-        AddRoles(mm, guestPageStart, newPerms);
+        var removed = RemoveRoles(mm, guestPageStart, oldPerms);
+        var added = AddRoles(mm, guestPageStart, newPerms);
+        return removed || added;
     }
 
     public TbCohExecSummary GetExecSummary()
     {
         return new TbCohExecSummary(_execIdentityCount != 0, _execIdentityCount > 1, _singleExecIdentity);
+    }
+
+    public TbCohWriterPolicy GetDesiredWriterPolicy()
+    {
+        if (_writerPageCount == 0)
+            return new TbCohWriterPolicy(TbCohWriterPolicyKind.NoWriters);
+
+        if (_execIdentityCount == 0)
+            return new TbCohWriterPolicy(TbCohWriterPolicyKind.AllowAllWriters);
+
+        if (_execIdentityCount == 1)
+            return new TbCohWriterPolicy(TbCohWriterPolicyKind.ProtectAllExceptSingleExecIdentity, _singleExecIdentity);
+
+        return new TbCohWriterPolicy(TbCohWriterPolicyKind.ProtectAllWriters);
+    }
+
+    public bool IsWriterPolicyApplied(TbCohWriterPolicy desired)
+    {
+        return _lastAppliedWriterEpoch == _writerEpoch && _lastAppliedWriterPolicy == desired;
+    }
+
+    public void CommitAppliedWriterPolicy(TbCohWriterPolicy desired)
+    {
+        _lastAppliedWriterPolicy = desired;
+        _lastAppliedWriterEpoch = _writerEpoch;
     }
 
     public void VisitWriterPages<TState>(ref TState state, TbCohMmPageVisitor<TState> visitor)
@@ -450,6 +544,12 @@ internal readonly record struct TbCohExecSummary(bool HasExecPeer, bool HasMulti
 
 internal sealed class HostPage
 {
+    private struct WriterPolicyApplyState
+    {
+        public TbCohWriterPolicy Policy;
+        public int VisitedWriterPages;
+    }
+
     private readonly Lock _gate = new();
     private readonly List<HostPageOwnerRef> _ownerRefs = [];
     private readonly List<HostPageRmapRef> _rmapRefs = [];
@@ -525,7 +625,51 @@ internal sealed class HostPage
         }
     }
 
-    public void AddOrUpdateRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex,
+    private static void ApplyWriterPolicy(VMAManager mm, uint pageStart, ref WriterPolicyApplyState state)
+    {
+        state.VisitedWriterPages++;
+        switch (state.Policy.Kind)
+        {
+            case TbCohWriterPolicyKind.AllowAllWriters:
+            case TbCohWriterPolicyKind.NoWriters:
+                mm.UnmarkTbWp(pageStart);
+                return;
+            case TbCohWriterPolicyKind.ProtectAllWriters:
+                mm.MarkTbWp(pageStart);
+                return;
+            case TbCohWriterPolicyKind.ProtectAllExceptSingleExecIdentity:
+                if (mm.AddressSpaceIdentity == state.Policy.ExecIdentity)
+                    mm.UnmarkTbWp(pageStart);
+                else
+                    mm.MarkTbWp(pageStart);
+                return;
+            default:
+                throw new InvalidOperationException($"Unsupported TbCoh writer policy: {state.Policy.Kind}.");
+        }
+    }
+
+    public TbCohApplyResult ApplyTbCohPolicyIfChanged()
+    {
+        lock (_gate)
+        {
+            var desired = _tbCohIndex.GetDesiredWriterPolicy();
+            if (desired.Kind == TbCohWriterPolicyKind.NoWriters)
+            {
+                _tbCohIndex.CommitAppliedWriterPolicy(desired);
+                return new TbCohApplyResult(TbCohApplyKind.FastNoWriters, 0);
+            }
+
+            if (_tbCohIndex.IsWriterPolicyApplied(desired))
+                return new TbCohApplyResult(TbCohApplyKind.FastSamePolicy, 0);
+
+            var state = new WriterPolicyApplyState { Policy = desired };
+            _tbCohIndex.VisitWriterPages(ref state, ApplyWriterPolicy);
+            _tbCohIndex.CommitAppliedWriterPolicy(desired);
+            return new TbCohApplyResult(TbCohApplyKind.SlowScan, state.VisitedWriterPages);
+        }
+    }
+
+    public bool AddOrUpdateRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex,
         uint guestPageStart)
     {
         var key = new HostPageRmapKey(mm, vma, ownerKind, pageIndex);
@@ -535,13 +679,13 @@ internal sealed class HostPage
             {
                 var existing = _rmapRefs[existingIndex];
                 if (existing.GuestPageStart == guestPageStart)
-                    return;
+                    return false;
 
-                _tbCohIndex.RemoveRoles(mm, existing.GuestPageStart, existing.Vma.Perms);
+                var removed = _tbCohIndex.RemoveRoles(mm, existing.GuestPageStart, existing.Vma.Perms);
                 existing.GuestPageStart = guestPageStart;
                 _rmapRefs[existingIndex] = existing;
-                _tbCohIndex.AddRoles(mm, guestPageStart, vma.Perms);
-                return;
+                var added = _tbCohIndex.AddRoles(mm, guestPageStart, vma.Perms);
+                return removed || added;
             }
 
             _rmapRefIndices.Add(key, _rmapRefs.Count);
@@ -553,20 +697,21 @@ internal sealed class HostPage
                 PageIndex = pageIndex,
                 GuestPageStart = guestPageStart
             });
-            _tbCohIndex.AddRoles(mm, guestPageStart, vma.Perms);
+            return _tbCohIndex.AddRoles(mm, guestPageStart, vma.Perms);
         }
     }
 
-    public void RemoveRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex)
+    public bool RemoveRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex)
     {
         var key = new HostPageRmapKey(mm, vma, ownerKind, pageIndex);
+        var changed = false;
         lock (_gate)
         {
             if (!_rmapRefIndices.Remove(key, out var index))
-                return;
+                return false;
 
             var removed = _rmapRefs[index];
-            _tbCohIndex.RemoveRoles(mm, removed.GuestPageStart, removed.Vma.Perms);
+            changed = _tbCohIndex.RemoveRoles(mm, removed.GuestPageStart, removed.Vma.Perms);
             var lastIndex = _rmapRefs.Count - 1;
             if (index != lastIndex)
             {
@@ -577,18 +722,64 @@ internal sealed class HostPage
 
             _rmapRefs.RemoveAt(lastIndex);
         }
+
+        return changed;
     }
 
-    public void UpdateTbCohRolesForRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex,
+    public bool UpdateTbCohRolesForRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex,
         uint guestPageStart, Protection oldPerms, Protection newPerms)
     {
         var key = new HostPageRmapKey(mm, vma, ownerKind, pageIndex);
         lock (_gate)
         {
             if (!_rmapRefIndices.ContainsKey(key))
-                return;
+                return false;
 
-            _tbCohIndex.UpdateRoles(mm, guestPageStart, oldPerms, newPerms);
+            return _tbCohIndex.UpdateRoles(mm, guestPageStart, oldPerms, newPerms);
+        }
+    }
+
+    public bool RebindRmapRef(VMAManager mm, VmArea oldVma, VmArea newVma, HostPageOwnerKind ownerKind, uint pageIndex,
+        uint guestPageStart, Protection oldPerms, Protection newPerms)
+    {
+        ArgumentNullException.ThrowIfNull(mm);
+        ArgumentNullException.ThrowIfNull(oldVma);
+        ArgumentNullException.ThrowIfNull(newVma);
+
+        var oldKey = new HostPageRmapKey(mm, oldVma, ownerKind, pageIndex);
+        var newKey = new HostPageRmapKey(mm, newVma, ownerKind, pageIndex);
+        lock (_gate)
+        {
+            if (!_rmapRefIndices.TryGetValue(oldKey, out var index))
+                return false;
+
+            var existing = _rmapRefs[index];
+            if (!oldKey.Equals(newKey))
+            {
+                _rmapRefIndices.Remove(oldKey);
+                _rmapRefIndices[newKey] = index;
+            }
+
+            if (!ReferenceEquals(existing.Vma, newVma) || existing.GuestPageStart != guestPageStart)
+            {
+                _rmapRefs[index] = new HostPageRmapRef
+                {
+                    Mm = existing.Mm,
+                    Vma = newVma,
+                    OwnerKind = existing.OwnerKind,
+                    PageIndex = existing.PageIndex,
+                    GuestPageStart = guestPageStart
+                };
+            }
+
+            if (existing.GuestPageStart != guestPageStart)
+            {
+                var removed = _tbCohIndex.RemoveRoles(mm, existing.GuestPageStart, oldPerms);
+                var added = _tbCohIndex.AddRoles(mm, guestPageStart, newPerms);
+                return removed || added;
+            }
+
+            return _tbCohIndex.UpdateRoles(mm, guestPageStart, oldPerms, newPerms);
         }
     }
 

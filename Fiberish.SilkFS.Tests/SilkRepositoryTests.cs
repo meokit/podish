@@ -123,6 +123,34 @@ public class SilkRepositoryTests
     }
 
     [Fact]
+    public void MetadataStore_Utf8NamesAndXAttrs_RoundTrip()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"silkfs-{Guid.NewGuid():N}");
+        try
+        {
+            var options = SilkFsOptions.FromSource(root);
+            var repo = new SilkRepository(options);
+            repo.Initialize();
+
+            using var session = repo.OpenMetadataSession();
+            var inode = session.CreateInode(SilkInodeKind.File, 0x1A4);
+            session.UpsertDentry(SilkMetadataStore.RootInode, "你好-😀.txt", inode);
+            session.SetXAttr(inode, "user.标签", "值-😀"u8.ToArray());
+
+            Assert.Equal(inode, session.LookupDentry(SilkMetadataStore.RootInode, "你好-😀.txt"));
+            Assert.Contains(session.ListDentriesByParent(SilkMetadataStore.RootInode), x => x.Name == "你好-😀.txt");
+
+            var value = session.GetXAttr(inode, "user.标签");
+            Assert.NotNull(value);
+            Assert.Equal("值-😀", Encoding.UTF8.GetString(value!));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void LiveStore_RoundTrip()
     {
         var root = Path.Combine(Path.GetTempPath(), $"silkfs-{Guid.NewGuid():N}");

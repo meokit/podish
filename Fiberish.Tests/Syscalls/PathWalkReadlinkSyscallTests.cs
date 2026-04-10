@@ -114,6 +114,24 @@ public class PathWalkReadlinkSyscallTests
         Assert.Equal(0, await env.Call("SysClose", (uint)dirfd));
     }
 
+    [Fact]
+    public async Task Symlink_And_Readlink_Preserve_Utf8_Targets()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x1E000u);
+        env.MapUserPage(0x1F000u);
+        env.MapUserPage(0x20000u);
+
+        env.WriteCString(0x1E000u, "目录/你好-😀");
+        env.WriteCString(0x1F000u, "/链接-😀");
+
+        Assert.Equal(0, await env.Call("SysSymlink", 0x1E000u, 0x1F000u));
+
+        var rc = await env.Call("SysReadlink", 0x1F000u, 0x20000u, 64);
+        Assert.Equal("目录/你好-😀"u8.ToArray().Length, rc);
+        Assert.Equal("目录/你好-😀", Encoding.UTF8.GetString(env.ReadBytes(0x20000u, rc)));
+    }
+
     [Theory]
     [InlineData("/link", "file")]
     [InlineData("/indirect", "link")]

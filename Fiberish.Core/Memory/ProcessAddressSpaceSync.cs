@@ -263,16 +263,15 @@ internal static class ProcessAddressSpaceSync
     {
         if (len == 0) return 0;
         using var scope = EnterAddressSpaceScope(engine, process);
-        var alignedLen = AlignLengthToPage(len);
         var shouldApplyWx = WouldMprotectAffectTbCoh(vmaManager, addr, len, prot);
+        var tbCohWorkSet = shouldApplyWx ? new TbCohWorkSet() : null;
         using var snapshot = RentEngineSnapshot();
         FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
         SyncSharedMappingsForEngines(vmaManager, snapshot.Engines, addr, len);
-        var rc = vmaManager.Mprotect(addr, len, prot, engine, out var resetCodeCacheRange);
+        var rc = vmaManager.Mprotect(addr, len, prot, engine, out var resetCodeCacheRange, tbCohWorkSet);
         if (rc == 0)
         {
-            if (shouldApplyWx)
-                TbCoh.ApplyWxRange(vmaManager, addr, alignedLen);
+            tbCohWorkSet?.Visit(TbCoh.ApplyWx);
             PublishInvalidation(vmaManager, engine, addr, len, resetCodeCacheRange);
         }
         return rc;
@@ -307,13 +306,14 @@ internal static class ProcessAddressSpaceSync
     {
         using var scope = EnterAddressSpaceScope(engine, process);
         var alignedLen = AlignLengthToPage(len);
+        var shouldApplyWx = alignedLen != 0 && ShouldApplyWxForMapping(flags, perms);
+        var tbCohWorkSet = shouldApplyWx ? new TbCohWorkSet() : null;
         var fixedReplace = (flags & MapFlags.Fixed) != 0 && (flags & MapFlags.FixedNoReplace) == 0;
         if (fixedReplace && addr != 0 && alignedLen != 0)
             MunmapCore(vmaManager, engine, addr, alignedLen);
 
-        var mapped = vmaManager.Mmap(addr, len, perms, flags, file, offset, name, engine);
-        if (alignedLen != 0 && ShouldApplyWxForMapping(flags, perms))
-            TbCoh.ApplyWxRange(vmaManager, mapped, alignedLen);
+        var mapped = vmaManager.Mmap(addr, len, perms, flags, file, offset, name, engine, tbCohWorkSet);
+        tbCohWorkSet?.Visit(TbCoh.ApplyWx);
         PublishInvalidation(vmaManager, engine, mapped, alignedLen, true);
         return mapped;
     }

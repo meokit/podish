@@ -12,13 +12,6 @@ internal static class TbCoh
         public readonly List<HashSet<uint>> InvalidationPageSetPool = [];
     }
 
-    private struct WriterApplyState
-    {
-        public bool HasExecPeer;
-        public bool HasMultipleExecIdentities;
-        public nuint ExecIdentity;
-    }
-
     private struct InvalidationScanState
     {
         public required Dictionary<VMAManager, HashSet<uint>> InvalidationPagesByMm;
@@ -52,17 +45,6 @@ internal static class TbCoh
         scratch.InvalidationPageSetPool.Add(created);
         usedSetCount++;
         return created;
-    }
-
-    private static void ApplyWriterProtection(VMAManager mm, uint pageStart, ref WriterApplyState state)
-    {
-        var writerIdentity = GetCoherenceIdentity(mm);
-        var shouldProtectWriter =
-            state.HasMultipleExecIdentities || (state.HasExecPeer && state.ExecIdentity != writerIdentity);
-        if (shouldProtectWriter)
-            mm.MarkTbWp(pageStart);
-        else
-            mm.UnmarkTbWp(pageStart);
     }
 
     private static void CollectInvalidations(VMAManager mm, uint guestPageStart, ref InvalidationScanState state)
@@ -119,15 +101,8 @@ internal static class TbCoh
     {
         ArgumentNullException.ThrowIfNull(hostPage);
 
-        var execState = hostPage.GetTbCohExecSummary();
-
-        var writerState = new WriterApplyState
-        {
-            HasExecPeer = execState.HasExecPeer,
-            HasMultipleExecIdentities = execState.HasMultipleExecIdentities,
-            ExecIdentity = execState.ExecIdentity
-        };
-        hostPage.VisitTbCohWriterPages(ref writerState, ApplyWriterProtection);
+        var result = hostPage.ApplyTbCohPolicyIfChanged();
+        TbCohDiagnosticsScope.Record(result);
     }
 
     internal static void OnWriteFault(VMAManager writerMm, uint pageStart, HostPage hostPage)
