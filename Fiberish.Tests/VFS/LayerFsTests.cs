@@ -67,8 +67,38 @@ public class LayerFsTests
 
         var d = sb.Root.Inode!.Lookup("sh");
         Assert.NotNull(d);
-        Assert.Equal(0, d!.Inode!.Readlink(out var target));
-        Assert.Equal("/bin/busybox", target);
+        Assert.Equal(0, d!.Inode!.Readlink(out byte[]? target));
+        Assert.Equal("/bin/busybox"u8.ToArray(), target);
+    }
+
+    [Fact]
+    public void Lookup_InvalidUtf8Name_IsTreatedAsMissing()
+    {
+        var rootNode = LayerNode.Directory("/")
+            .AddChild(LayerNode.File("ok", "hello"u8.ToArray()));
+        var fs = new LayerFileSystem();
+        var sb = fs.ReadSuper(
+            new FileSystemType { Name = "layerfs" },
+            0,
+            "layer",
+            new LayerMountOptions { Root = rootNode });
+
+        var miss = sb.Root.Inode!.Lookup([0xFF]);
+
+        Assert.Null(miss);
+        Assert.Equal(-(int)Errno.ENOENT, sb.Root.Inode.ConsumeLookupFailureError("invalid"));
+    }
+
+    [Fact]
+    public void LayerNode_RejectsNonUtf8RepresentableNamesAndTargets()
+    {
+        Assert.Throws<ArgumentException>(() => LayerNode.File("\uD800", []));
+        Assert.Throws<ArgumentException>(() => LayerNode.Symlink("ok", "\uD800"));
+        Assert.Throws<ArgumentException>(() =>
+        {
+            var index = new LayerIndex();
+            index.AddEntry(new LayerIndexEntry("/\uD800", InodeType.File, 0x1A4));
+        });
     }
 
     [Fact]

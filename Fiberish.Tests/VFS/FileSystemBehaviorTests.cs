@@ -6,6 +6,8 @@ namespace Fiberish.Tests.VFS;
 
 public class FileSystemBehaviorTests
 {
+    private static byte[] B(string value) => FsEncoding.EncodeUtf8(value);
+
     public static TheoryData<string> MutableFileSystems => new()
     {
         "hostfs",
@@ -23,18 +25,18 @@ public class FileSystemBehaviorTests
 
         var regular = new Dentry("file.txt", null, root, rig.SuperBlock);
         rootInode.Create(regular, 0x1A4, 0, 0);
-        Assert.NotNull(rootInode.Lookup("file.txt"));
+        Assert.NotNull(rootInode.Lookup(B("file.txt")));
 
-        rootInode.Unlink("file.txt");
-        Assert.Null(rootInode.Lookup("file.txt"));
+        rootInode.Unlink(B("file.txt"));
+        Assert.Null(rootInode.Lookup(B("file.txt")));
         Assert.DoesNotContain(rootInode.GetEntries(), e => e.Name == "file.txt");
 
         var symlink = new Dentry("link.txt", null, root, rig.SuperBlock);
-        rootInode.Symlink(symlink, "target.txt", 0, 0);
-        Assert.NotNull(rootInode.Lookup("link.txt"));
+        rootInode.Symlink(symlink, B("target.txt"), 0, 0);
+        Assert.NotNull(rootInode.Lookup(B("link.txt")));
 
-        rootInode.Unlink("link.txt");
-        Assert.Null(rootInode.Lookup("link.txt"));
+        rootInode.Unlink(B("link.txt"));
+        Assert.Null(rootInode.Lookup(B("link.txt")));
         Assert.DoesNotContain(rootInode.GetEntries(), e => e.Name == "link.txt");
     }
 
@@ -48,20 +50,20 @@ public class FileSystemBehaviorTests
 
         var dir = new Dentry("dir", null, root, rig.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
-        Assert.NotNull(rootInode.Lookup("dir"));
+        Assert.NotNull(rootInode.Lookup(B("dir")));
         Assert.Contains(rootInode.GetEntries(), e => e.Name == "dir");
 
         var dirInode = Assert.IsAssignableFrom<Inode>(dir.Inode);
         var nested = new Dentry("nested", null, dir, rig.SuperBlock);
         dirInode.Mkdir(nested, 0x1ED, 0, 0);
-        Assert.NotNull(dirInode.Lookup("nested"));
+        Assert.NotNull(dirInode.Lookup(B("nested")));
 
-        dirInode.Rmdir("nested");
-        Assert.Null(dirInode.Lookup("nested"));
+        dirInode.Rmdir(B("nested"));
+        Assert.Null(dirInode.Lookup(B("nested")));
         Assert.DoesNotContain(dirInode.GetEntries(), e => e.Name == "nested");
 
-        rootInode.Rmdir("dir");
-        Assert.Null(rootInode.Lookup("dir"));
+        rootInode.Rmdir(B("dir"));
+        Assert.Null(rootInode.Lookup(B("dir")));
         Assert.DoesNotContain(rootInode.GetEntries(), e => e.Name == "dir");
     }
 
@@ -88,10 +90,10 @@ public class FileSystemBehaviorTests
         Assert.Equal(3u, dirInode.GetLinkCountForStat());
         Assert.Equal(2u, nestedInode.GetLinkCountForStat());
 
-        dirInode.Rmdir("nested");
+        dirInode.Rmdir(B("nested"));
         Assert.Equal(2u, dirInode.GetLinkCountForStat());
 
-        rootInode.Rmdir("dir");
+        rootInode.Rmdir(B("dir"));
         Assert.Equal(rootStart, rootInode.GetLinkCountForStat());
     }
 
@@ -107,10 +109,10 @@ public class FileSystemBehaviorTests
         rootInode.Create(file, 0x1A4, 0, 0);
         var oldIno = file.Inode!.Ino;
 
-        rootInode.Rename("old.txt", rootInode, "new.txt");
+        rootInode.Rename(B("old.txt"), rootInode, B("new.txt"));
 
-        Assert.Null(rootInode.Lookup("old.txt"));
-        var renamed = rootInode.Lookup("new.txt");
+        Assert.Null(rootInode.Lookup(B("old.txt")));
+        var renamed = rootInode.Lookup(B("new.txt"));
         Assert.NotNull(renamed);
         Assert.Equal(oldIno, renamed!.Inode!.Ino);
         Assert.DoesNotContain(rootInode.GetEntries(), e => e.Name == "old.txt");
@@ -133,15 +135,15 @@ public class FileSystemBehaviorTests
         var child = new Dentry("child.txt", null, dir, rig.SuperBlock);
         dirInode.Create(child, 0x1A4, 0, 0);
 
-        rootInode.Rename("olddir", rootInode, "newdir");
+        rootInode.Rename(B("olddir"), rootInode, B("newdir"));
 
-        Assert.Null(rootInode.Lookup("olddir"));
-        var renamedDir = rootInode.Lookup("newdir");
+        Assert.Null(rootInode.Lookup(B("olddir")));
+        var renamedDir = rootInode.Lookup(B("newdir"));
         Assert.NotNull(renamedDir);
         Assert.Equal(dirIno, renamedDir!.Inode!.Ino);
 
         var renamedDirInode = Assert.IsAssignableFrom<Inode>(renamedDir.Inode);
-        Assert.NotNull(renamedDirInode.Lookup("child.txt"));
+        Assert.NotNull(renamedDirInode.Lookup(B("child.txt")));
         Assert.DoesNotContain(rootInode.GetEntries(), e => e.Name == "olddir");
         Assert.Contains(rootInode.GetEntries(), e => e.Name == "newdir");
     }
@@ -157,8 +159,8 @@ public class FileSystemBehaviorTests
         var dir = new Dentry("dir", null, root, rig.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
 
-        Assert.Equal(-(int)Errno.EISDIR, rootInode.Unlink("dir"));
-        Assert.NotNull(rootInode.Lookup("dir"));
+        Assert.Equal(-(int)Errno.EISDIR, rootInode.Unlink(B("dir")));
+        Assert.NotNull(rootInode.Lookup(B("dir")));
         Assert.Contains(rootInode.GetEntries(), e => e.Name == "dir");
     }
 
@@ -176,9 +178,9 @@ public class FileSystemBehaviorTests
         var child = new Dentry("child.txt", null, dir, rig.SuperBlock);
         dirInode.Create(child, 0x1A4, 0, 0);
 
-        Assert.Equal(-(int)Errno.ENOTEMPTY, rootInode.Rmdir("dir"));
-        Assert.NotNull(rootInode.Lookup("dir"));
-        Assert.NotNull(dirInode.Lookup("child.txt"));
+        Assert.Equal(-(int)Errno.ENOTEMPTY, rootInode.Rmdir(B("dir")));
+        Assert.NotNull(rootInode.Lookup(B("dir")));
+        Assert.NotNull(dirInode.Lookup(B("child.txt")));
     }
 
     [Theory]
@@ -197,10 +199,10 @@ public class FileSystemBehaviorTests
         rootInode.Create(target, 0x1A4, 0, 0);
         Assert.NotEqual(sourceIno, target.Inode!.Ino);
 
-        rootInode.Rename("source.txt", rootInode, "target.txt");
+        rootInode.Rename(B("source.txt"), rootInode, B("target.txt"));
 
-        Assert.Null(rootInode.Lookup("source.txt"));
-        var renamed = rootInode.Lookup("target.txt");
+        Assert.Null(rootInode.Lookup(B("source.txt")));
+        var renamed = rootInode.Lookup(B("target.txt"));
         Assert.NotNull(renamed);
         Assert.Equal(sourceIno, renamed!.Inode!.Ino);
     }
@@ -217,11 +219,11 @@ public class FileSystemBehaviorTests
         rootInode.Create(file, 0x1A4, 0, 0);
         Assert.Contains(rootInode.GetEntries(), e => e.Name == "alpha.txt");
 
-        rootInode.Rename("alpha.txt", rootInode, "beta.txt");
+        rootInode.Rename(B("alpha.txt"), rootInode, B("beta.txt"));
         Assert.DoesNotContain(rootInode.GetEntries(), e => e.Name == "alpha.txt");
         Assert.Contains(rootInode.GetEntries(), e => e.Name == "beta.txt");
 
-        rootInode.Unlink("beta.txt");
+        rootInode.Unlink(B("beta.txt"));
         Assert.DoesNotContain(rootInode.GetEntries(), e => e.Name == "beta.txt");
     }
 
@@ -237,13 +239,13 @@ public class FileSystemBehaviorTests
         rootInode.Create(file, 0x1A4, 0, 0);
 
         var link = new Dentry("link.txt", null, root, rig.SuperBlock);
-        rootInode.Symlink(link, "target.txt", 0, 0);
+        rootInode.Symlink(link, B("target.txt"), 0, 0);
 
-        var looked = rootInode.Lookup("link.txt");
+        var looked = rootInode.Lookup(B("link.txt"));
         Assert.NotNull(looked);
         Assert.Equal(InodeType.Symlink, looked!.Inode!.Type);
-        Assert.Equal(0, looked.Inode.Readlink(out var linkTarget));
-        Assert.Equal("target.txt", linkTarget);
+        Assert.Equal(0, looked.Inode.Readlink(out byte[]? linkTarget));
+        Assert.Equal("target.txt"u8.ToArray(), linkTarget);
         Assert.Contains(rootInode.GetEntries(), e => e.Name == "link.txt");
     }
 
@@ -259,18 +261,18 @@ public class FileSystemBehaviorTests
         rootInode.Create(file, 0x1A4, 0, 0);
 
         var link = new Dentry("link.txt", null, root, rig.SuperBlock);
-        rootInode.Symlink(link, "target.txt", 0, 0);
+        rootInode.Symlink(link, B("target.txt"), 0, 0);
         var linkIno = link.Inode!.Ino;
 
-        rootInode.Rename("link.txt", rootInode, "renamed-link.txt");
+        rootInode.Rename(B("link.txt"), rootInode, B("renamed-link.txt"));
 
-        Assert.Null(rootInode.Lookup("link.txt"));
-        var renamed = rootInode.Lookup("renamed-link.txt");
+        Assert.Null(rootInode.Lookup(B("link.txt")));
+        var renamed = rootInode.Lookup(B("renamed-link.txt"));
         Assert.NotNull(renamed);
         Assert.Equal(InodeType.Symlink, renamed!.Inode!.Type);
         Assert.Equal(linkIno, renamed.Inode.Ino);
-        Assert.Equal(0, renamed.Inode.Readlink(out var renamedTarget));
-        Assert.Equal("target.txt", renamedTarget);
+        Assert.Equal(0, renamed.Inode.Readlink(out byte[]? renamedTarget));
+        Assert.Equal("target.txt"u8.ToArray(), renamedTarget);
     }
 
     [Theory]
@@ -289,13 +291,13 @@ public class FileSystemBehaviorTests
         parentInode.Mkdir(child, 0x1ED, 0, 0);
         var parentIno = parent.Inode!.Ino;
 
-        Assert.Equal(-(int)Errno.EINVAL, rootInode.Rename("parent", parentInode, "moved"));
+        Assert.Equal(-(int)Errno.EINVAL, rootInode.Rename(B("parent"), parentInode, B("moved")));
 
-        var parentAfter = rootInode.Lookup("parent");
+        var parentAfter = rootInode.Lookup(B("parent"));
         Assert.NotNull(parentAfter);
         Assert.Equal(parentIno, parentAfter!.Inode!.Ino);
-        Assert.NotNull(parentAfter.Inode.Lookup("child"));
-        Assert.Null(rootInode.Lookup("moved"));
+        Assert.NotNull(parentAfter.Inode.Lookup(B("child")));
+        Assert.Null(rootInode.Lookup(B("moved")));
     }
 
     [Theory]
@@ -315,15 +317,15 @@ public class FileSystemBehaviorTests
 
         var target = new Dentry("target", null, root, rig.SuperBlock);
         rootInode.Mkdir(target, 0x1ED, 0, 0);
-        Assert.NotNull(rootInode.Lookup("target"));
+        Assert.NotNull(rootInode.Lookup(B("target")));
 
-        rootInode.Rename("source", rootInode, "target");
+        rootInode.Rename(B("source"), rootInode, B("target"));
 
-        Assert.Null(rootInode.Lookup("source"));
-        var replaced = rootInode.Lookup("target");
+        Assert.Null(rootInode.Lookup(B("source")));
+        var replaced = rootInode.Lookup(B("target"));
         Assert.NotNull(replaced);
         Assert.Equal(sourceIno, replaced!.Inode!.Ino);
-        Assert.NotNull(replaced.Inode.Lookup("child.txt"));
+        Assert.NotNull(replaced.Inode.Lookup(B("child.txt")));
     }
 
     [Theory]
@@ -347,15 +349,15 @@ public class FileSystemBehaviorTests
         var targetChild = new Dentry("target-child.txt", null, target, rig.SuperBlock);
         targetInode.Create(targetChild, 0x1A4, 0, 0);
 
-        Assert.Equal(-(int)Errno.ENOTEMPTY, rootInode.Rename("source", rootInode, "target"));
+        Assert.Equal(-(int)Errno.ENOTEMPTY, rootInode.Rename(B("source"), rootInode, B("target")));
 
-        var sourceAfter = rootInode.Lookup("source");
-        var targetAfter = rootInode.Lookup("target");
+        var sourceAfter = rootInode.Lookup(B("source"));
+        var targetAfter = rootInode.Lookup(B("target"));
         Assert.NotNull(sourceAfter);
         Assert.NotNull(targetAfter);
         Assert.Equal(sourceIno, sourceAfter!.Inode!.Ino);
-        Assert.NotNull(sourceAfter.Inode.Lookup("source-child.txt"));
-        Assert.NotNull(targetAfter!.Inode!.Lookup("target-child.txt"));
+        Assert.NotNull(sourceAfter.Inode.Lookup(B("source-child.txt")));
+        Assert.NotNull(targetAfter!.Inode!.Lookup(B("target-child.txt")));
     }
 
     [Theory]
@@ -373,17 +375,17 @@ public class FileSystemBehaviorTests
         var linked = new Dentry("linked.txt", null, root, rig.SuperBlock);
         rootInode.Link(linked, source.Inode);
 
-        var sourceLookup = rootInode.Lookup("source.txt");
-        var linkedLookup = rootInode.Lookup("linked.txt");
+        var sourceLookup = rootInode.Lookup(B("source.txt"));
+        var linkedLookup = rootInode.Lookup(B("linked.txt"));
         Assert.NotNull(sourceLookup);
         Assert.NotNull(linkedLookup);
         Assert.Equal(sourceIno, sourceLookup!.Inode!.Ino);
         Assert.Equal(sourceIno, linkedLookup!.Inode!.Ino);
 
-        rootInode.Unlink("source.txt");
+        rootInode.Unlink(B("source.txt"));
 
-        Assert.Null(rootInode.Lookup("source.txt"));
-        var linkedAfter = rootInode.Lookup("linked.txt");
+        Assert.Null(rootInode.Lookup(B("source.txt")));
+        var linkedAfter = rootInode.Lookup(B("linked.txt"));
         Assert.NotNull(linkedAfter);
         Assert.Equal(sourceIno, linkedAfter!.Inode!.Ino);
     }
@@ -408,10 +410,10 @@ public class FileSystemBehaviorTests
         fromInode.Create(file, 0x1A4, 0, 0);
         var fileIno = file.Inode!.Ino;
 
-        fromInode.Rename("payload.txt", toInode, "moved.txt");
+        fromInode.Rename(B("payload.txt"), toInode, B("moved.txt"));
 
-        Assert.Null(fromInode.Lookup("payload.txt"));
-        var moved = toInode.Lookup("moved.txt");
+        Assert.Null(fromInode.Lookup(B("payload.txt")));
+        var moved = toInode.Lookup(B("moved.txt"));
         Assert.NotNull(moved);
         Assert.Equal(fileIno, moved!.Inode!.Ino);
         Assert.DoesNotContain(fromInode.GetEntries(), e => e.Name == "payload.txt");

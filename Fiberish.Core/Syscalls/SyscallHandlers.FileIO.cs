@@ -334,9 +334,23 @@ public partial class SyscallManager
         }
     }
 
+    private static int ImplOpen(SyscallManager sm, RentedUserBytes path, uint flags, uint mode,
+        PathLocation startLoc = default)
+    {
+        return ImplOpen(sm, path.UnsafeBuffer, path.Length, flags, mode, startLoc);
+    }
+
     private static int ImplOpen(SyscallManager sm, string path, uint flags, uint mode, PathLocation startLoc = default)
     {
-        Logger.LogInformation($"[Open] Path='{path}' Flags={flags} Mode={mode}");
+        var pathBytes = FsEncoding.EncodeUtf8(path);
+        return ImplOpen(sm, pathBytes, pathBytes.Length, flags, mode, startLoc);
+    }
+
+    private static int ImplOpen(SyscallManager sm, byte[] pathBytes, int pathLength, uint flags, uint mode,
+        PathLocation startLoc = default)
+    {
+        Logger.LogInformation("[Open] Path='{Path}' Flags={Flags} Mode={Mode}",
+            FsEncoding.DecodeUtf8Lossy(pathBytes.AsSpan(0, pathLength)), flags, mode);
         const uint O_TMPFILE_MASK = 0x400000;
         var createdHere = false;
         var accessMode = flags & 3u;
@@ -348,7 +362,8 @@ public partial class SyscallManager
         var task = sm.CurrentTask;
 
         var lookupFlags = noFollow ? LookupFlags.None : LookupFlags.FollowSymlink;
-        var lookupData = sm.PathWalker.PathWalkWithData(path, startLoc.IsValid ? startLoc : null, lookupFlags);
+        var lookupData =
+            sm.PathWalker.PathWalkWithData(pathBytes, pathLength, startLoc.IsValid ? startLoc : null, lookupFlags);
         if (lookupData.HasError && lookupData.ErrorCode != -(int)Errno.ENOENT)
             return lookupData.ErrorCode;
 
@@ -399,7 +414,8 @@ public partial class SyscallManager
             if (wantCreate)
             {
                 var noFollowData =
-                    sm.PathWalker.PathWalkWithData(path, startLoc.IsValid ? startLoc : null, LookupFlags.None);
+                    sm.PathWalker.PathWalkWithData(pathBytes, pathLength, startLoc.IsValid ? startLoc : null,
+                        LookupFlags.None);
                 if (noFollowData.HasError && noFollowData.ErrorCode != -(int)Errno.ENOENT)
                     return noFollowData.ErrorCode;
 
@@ -408,29 +424,47 @@ public partial class SyscallManager
                     if (wantExcl)
                         return -(int)Errno.EEXIST;
 
-                    if (noFollowData.Path.Dentry.Inode.Readlink(out var target) == 0 && !string.IsNullOrEmpty(target))
+                    byte[]? targetBytes;
+                    if (noFollowData.Path.Dentry.Inode.Readlink(out targetBytes) == 0 && targetBytes is { Length: > 0 })
                     {
-                        string createPath;
-                        if (target[0] == '/')
+                        byte[] createPath;
+                        if (targetBytes[0] == (byte)'/')
                         {
-                            createPath = target;
+                            createPath = targetBytes;
                         }
                         else
                         {
-                            var symlinkLastSlash = path.LastIndexOf('/');
-                            var symlinkParentPath = symlinkLastSlash == -1 ? "" :
-                                symlinkLastSlash == 0 ? "/" : path[..symlinkLastSlash];
-                            createPath = string.IsNullOrEmpty(symlinkParentPath) || symlinkParentPath == "."
-                                ? target
-                                : $"{symlinkParentPath.TrimEnd('/')}/{target}";
+                            var symlinkLastSlash = Array.LastIndexOf(pathBytes, (byte)'/', pathLength - 1, pathLength);
+                            var symlinkParentLength = symlinkLastSlash switch
+                            {
+                                < 0 => 0,
+                                0 => 1,
+                                _ => symlinkLastSlash
+                            };
+                            if (symlinkParentLength == 0)
+                            {
+                                createPath = targetBytes;
+                            }
+                            else
+                            {
+                                var trimmedParentLength = symlinkParentLength;
+                                while (trimmedParentLength > 1 &&
+                                       pathBytes[trimmedParentLength - 1] == (byte)'/')
+                                    trimmedParentLength--;
+                                createPath = new byte[trimmedParentLength + 1 + targetBytes.Length];
+                                Array.Copy(pathBytes, 0, createPath, 0, trimmedParentLength);
+                                createPath[trimmedParentLength] = (byte)'/';
+                                Array.Copy(targetBytes, 0, createPath, trimmedParentLength + 1, targetBytes.Length);
+                            }
                         }
 
-                        if (!string.Equals(createPath, path, StringComparison.Ordinal))
-                            return ImplOpen(sm, createPath, flags, mode, startLoc);
+                        if (!pathBytes.AsSpan(0, pathLength).SequenceEqual(createPath))
+                            return ImplOpen(sm, createPath, createPath.Length, flags, mode, startLoc);
                     }
                 }
 
-                var (parentLoc, name, createErr) = sm.PathWalkForCreate(path, startLoc.IsValid ? startLoc : null);
+                var (parentLoc, name, createErr) =
+                    sm.PathWalker.PathWalkForCreate(pathBytes, pathLength, startLoc.IsValid ? startLoc : null);
                 if (createErr != 0)
                     return createErr;
 
@@ -528,16 +562,17 @@ public partial class SyscallManager
         }
         catch (Exception ex)
         {
-            Logger.LogInformation(ex, "[Open] final open failed path='{Path}' flags={Flags} mode={Mode}", path, flags,
-                mode);
+            Logger.LogInformation(ex, "[Open] final open failed path='{Path}' flags={Flags} mode={Mode}",
+                FsEncoding.DecodeUtf8Lossy(pathBytes.AsSpan(0, pathLength)), flags, mode);
             return MapSyscallExceptionToErrno(ex);
         }
     }
 
     private async ValueTask<int> SysOpen(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var pathErr = ReadPathArgument(a1, out var path);
+        var pathErr = ReadPathArgumentBytes(a1, out var path);
         if (pathErr != 0) return pathErr;
+        using var _ = path;
 
         return ImplOpen(this, path, a2, a3);
     }
@@ -545,8 +580,9 @@ public partial class SyscallManager
     private async ValueTask<int> SysOpenAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dfd = (int)a1;
-        var pathErr = ReadPathArgument(a2, out var path);
+        var pathErr = ReadPathArgumentBytes(a2, out var path);
         if (pathErr != 0) return pathErr;
+        using var _ = path;
 
         var startLoc = PathLocation.None;
         if (dfd == -100) // AT_FDCWD
@@ -566,8 +602,9 @@ public partial class SyscallManager
     private async ValueTask<int> SysOpenAt2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
-        var pathErr = ReadPathArgument(a2, out var path);
+        var pathErr = ReadPathArgumentBytes(a2, out var path);
         if (pathErr != 0) return pathErr;
+        using var _ = path;
 
         var howPtr = a3;
         var howSize = a4;
@@ -581,7 +618,7 @@ public partial class SyscallManager
         var mode = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.AsSpan(8, 8));
 
         PathLocation startAt = default;
-        if (dirfd != -100 && !path.StartsWith("/"))
+        if (dirfd != -100 && !path.IsAbsolute)
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;

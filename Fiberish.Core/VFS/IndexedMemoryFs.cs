@@ -10,14 +10,12 @@ namespace Fiberish.VFS;
 public abstract class IndexedMemorySuperBlock : SuperBlock
 {
     protected ulong _nextIno = 1;
+    private readonly Dictionary<ulong, FsNameMap<Dentry>> _dentriesByParent = [];
 
     protected IndexedMemorySuperBlock(FileSystemType type, DeviceNumberManager devManager) : base(devManager)
     {
         Type = type;
     }
-
-    // (parent inode, name) -> child dentry
-    public Dictionary<DCacheKey, Dentry> Dentries { get; } = [];
 
     protected abstract IndexedMemoryInode CreateIndexedInode(ulong ino);
 
@@ -38,7 +36,57 @@ public abstract class IndexedMemorySuperBlock : SuperBlock
     protected override void Shutdown()
     {
         base.Shutdown();
-        Dentries.Clear();
+        _dentriesByParent.Clear();
+    }
+
+    public bool ContainsDentry(ulong parentIno, ReadOnlySpan<byte> name)
+    {
+        lock (Lock)
+        {
+            return _dentriesByParent.TryGetValue(parentIno, out var names) && names.TryGetValue(name, out _);
+        }
+    }
+
+    public bool TryGetDentry(ulong parentIno, ReadOnlySpan<byte> name, out Dentry dentry)
+    {
+        lock (Lock)
+        {
+            if (_dentriesByParent.TryGetValue(parentIno, out var names) && names.TryGetValue(name, out dentry))
+                return true;
+        }
+
+        dentry = null!;
+        return false;
+    }
+
+    public void SetDentry(ulong parentIno, Dentry dentry)
+    {
+        lock (Lock)
+        {
+            if (!_dentriesByParent.TryGetValue(parentIno, out var names))
+            {
+                names = new FsNameMap<Dentry>();
+                _dentriesByParent[parentIno] = names;
+            }
+
+            names.Set(dentry.Name, dentry);
+        }
+    }
+
+    public bool RemoveDentry(ulong parentIno, ReadOnlySpan<byte> name, out Dentry? removed)
+    {
+        lock (Lock)
+        {
+            if (_dentriesByParent.TryGetValue(parentIno, out var names) && names.Remove(name, out removed))
+            {
+                if (names.Count == 0)
+                    _dentriesByParent.Remove(parentIno);
+                return true;
+            }
+        }
+
+        removed = null;
+        return false;
     }
 }
 
@@ -47,11 +95,13 @@ public abstract class IndexedMemorySuperBlock : SuperBlock
 /// </summary>
 public abstract class IndexedMemoryInode : MappingBackedInode
 {
+    private static readonly FsName DotName = FsName.FromString(".");
+    private static readonly FsName DotDotName = FsName.FromString("..");
     private readonly object _flockGate = new();
     private readonly HashSet<LinuxFile> _sharedHolders = [];
-    protected readonly HashSet<string> ChildNames = [];
+    protected readonly FsNameSet ChildNames = new();
     protected readonly HashSet<long> DirtyPageIndexes = [];
-    protected readonly Dictionary<string, byte[]> XAttrs = new(StringComparer.Ordinal);
+    protected readonly FsNameMap<byte[]> XAttrs = new();
     private LinuxFile? _exclusiveHolder;
     private int _lockType; // 0: None, 1: Shared, 2: Exclusive
     protected byte[]? SymlinkData;
@@ -96,7 +146,7 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         childDentry.Get($"{reason}.namespace-pin");
     }
 
-    private bool DetachNamespaceChild(Dentry parentDentry, string name, string reason, out Dentry? removed)
+    private bool DetachNamespaceChild(Dentry parentDentry, ReadOnlySpan<byte> name, string reason, out Dentry? removed)
     {
         if (!parentDentry.TryUncacheChild(name, reason, out removed))
             return false;
@@ -108,30 +158,24 @@ public abstract class IndexedMemoryInode : MappingBackedInode
     /// <summary>
     ///     Register an externally-created dentry as a child of this directory inode.
     /// </summary>
-    public void RegisterChild(Dentry parentDentry, string name, Dentry childDentry)
+    public void RegisterChild(Dentry parentDentry, FsName name, Dentry childDentry)
     {
         lock (Lock)
         {
-            var key = new DCacheKey(Ino, name);
-            lock (IndexedSb.Lock)
-            {
-                IndexedSb.Dentries[key] = childDentry;
-            }
-
+            IndexedSb.SetDentry(Ino, childDentry);
             AttachNamespaceChild(parentDentry, childDentry, "IndexedMemoryInode.RegisterChild");
             ChildNames.Add(name);
         }
     }
 
-    public override Dentry? Lookup(string name)
+    public override Dentry? Lookup(ReadOnlySpan<byte> name)
     {
         lock (Lock)
         {
             if (Dentries.Count == 0) return null;
             var primaryDentry = Dentries[0];
 
-            var key = new DCacheKey(Ino, name);
-            if (IndexedSb.Dentries.TryGetValue(key, out var dentry))
+            if (IndexedSb.TryGetDentry(Ino, name, out var dentry))
             {
                 AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Lookup");
                 return dentry;
@@ -141,6 +185,12 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         }
     }
 
+    public override Dentry? Lookup(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return Lookup(FsEncoding.EncodeUtf8(name));
+    }
+
     public override int Create(Dentry dentry, int mode, int uid, int gid)
     {
         lock (Lock)
@@ -148,8 +198,7 @@ public abstract class IndexedMemoryInode : MappingBackedInode
             if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
             var primaryDentry = Dentries[0];
-            var key = new DCacheKey(Ino, dentry.Name);
-            if (IndexedSb.Dentries.ContainsKey(key)) return -(int)Errno.EEXIST;
+            if (IndexedSb.ContainsDentry(Ino, dentry.Name.Bytes)) return -(int)Errno.EEXIST;
 
             var inode = (IndexedMemoryInode)IndexedSb.AllocInode();
             inode.Type = InodeType.File;
@@ -160,11 +209,7 @@ public abstract class IndexedMemoryInode : MappingBackedInode
 
             dentry.Instantiate(inode);
 
-            lock (IndexedSb.Lock)
-            {
-                IndexedSb.Dentries[key] = dentry;
-            }
-
+            IndexedSb.SetDentry(Ino, dentry);
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Create");
             ChildNames.Add(dentry.Name);
             TouchDirectoryMutationTimestamps();
@@ -180,8 +225,7 @@ public abstract class IndexedMemoryInode : MappingBackedInode
             if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
             var primaryDentry = Dentries[0];
-            var key = new DCacheKey(Ino, dentry.Name);
-            if (IndexedSb.Dentries.ContainsKey(key)) return -(int)Errno.EEXIST;
+            if (IndexedSb.ContainsDentry(Ino, dentry.Name.Bytes)) return -(int)Errno.EEXIST;
 
             var inode = (IndexedMemoryInode)IndexedSb.AllocInode();
             inode.Type = InodeType.Directory;
@@ -192,11 +236,7 @@ public abstract class IndexedMemoryInode : MappingBackedInode
 
             dentry.Instantiate(inode);
 
-            lock (IndexedSb.Lock)
-            {
-                IndexedSb.Dentries[key] = dentry;
-            }
-
+            IndexedSb.SetDentry(Ino, dentry);
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Mkdir");
             ChildNames.Add(dentry.Name);
             TouchDirectoryMutationTimestamps();
@@ -205,24 +245,19 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         }
     }
 
-    public override int Unlink(string name)
+    public override int Unlink(ReadOnlySpan<byte> name)
     {
         lock (Lock)
         {
             if (Dentries.Count == 0) return 0;
             var primaryDentry = Dentries[0];
-            var key = new DCacheKey(Ino, name);
-            if (!IndexedSb.Dentries.TryGetValue(key, out var dentry))
+            if (!IndexedSb.TryGetDentry(Ino, name, out var dentry))
                 return -(int)Errno.ENOENT;
 
             if (dentry.Inode?.Type == InodeType.Directory)
                 return -(int)Errno.EISDIR;
 
-            lock (IndexedSb.Lock)
-            {
-                IndexedSb.Dentries.Remove(key);
-            }
-
+            _ = IndexedSb.RemoveDentry(Ino, name, out _);
             _ = DetachNamespaceChild(primaryDentry, name, "IndexedMemoryInode.Unlink", out _);
             var unlinkedInode = dentry.Inode;
             if (unlinkedInode != null)
@@ -238,14 +273,19 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         }
     }
 
-    public override int Rmdir(string name)
+    public override int Unlink(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return Unlink(FsEncoding.EncodeUtf8(name));
+    }
+
+    public override int Rmdir(ReadOnlySpan<byte> name)
     {
         lock (Lock)
         {
             if (Dentries.Count == 0) return 0;
             var primaryDentry = Dentries[0];
-            var key = new DCacheKey(Ino, name);
-            if (!IndexedSb.Dentries.TryGetValue(key, out var dentry))
+            if (!IndexedSb.TryGetDentry(Ino, name, out var dentry))
                 return -(int)Errno.ENOENT;
 
             if (dentry.Inode?.Type != InodeType.Directory)
@@ -254,11 +294,7 @@ public abstract class IndexedMemoryInode : MappingBackedInode
             if (dentry.Children.Count > 0)
                 return -(int)Errno.ENOTEMPTY;
 
-            lock (IndexedSb.Lock)
-            {
-                IndexedSb.Dentries.Remove(key);
-            }
-
+            _ = IndexedSb.RemoveDentry(Ino, name, out _);
             _ = DetachNamespaceChild(primaryDentry, name, "IndexedMemoryInode.Rmdir", out _);
             var removedInode = dentry.Inode;
             if (removedInode != null)
@@ -273,7 +309,13 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         }
     }
 
-    public override int Rename(string oldName, Inode newParent, string newName)
+    public override int Rmdir(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return Rmdir(FsEncoding.EncodeUtf8(name));
+    }
+
+    public override int Rename(ReadOnlySpan<byte> oldName, Inode newParent, ReadOnlySpan<byte> newName)
     {
         var targetParent = (IndexedMemoryInode)newParent;
         Inode first = this;
@@ -296,7 +338,14 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         }
     }
 
-    private int DoRename(string oldName, IndexedMemoryInode targetParent, string newName)
+    public override int Rename(string oldName, Inode newParent, string newName)
+    {
+        ArgumentNullException.ThrowIfNull(oldName);
+        ArgumentNullException.ThrowIfNull(newName);
+        return Rename(FsEncoding.EncodeUtf8(oldName), newParent, FsEncoding.EncodeUtf8(newName));
+    }
+
+    private int DoRename(ReadOnlySpan<byte> oldName, IndexedMemoryInode targetParent, ReadOnlySpan<byte> newName)
     {
         if (Dentries.Count == 0) return -(int)Errno.ENOENT;
         var oldPrimary = Dentries[0];
@@ -304,10 +353,7 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         if (targetParent.Dentries.Count == 0) return -(int)Errno.ENOENT;
         var newPrimary = targetParent.Dentries[0];
 
-        var oldKey = new DCacheKey(Ino, oldName);
-        var newKey = new DCacheKey(targetParent.Ino, newName);
-
-        lock (IndexedSb.Lock)
+        lock (Lock)
         {
             if (!oldPrimary.Children.TryGetValue(oldName, out var dentry))
             {
@@ -315,13 +361,8 @@ public abstract class IndexedMemoryInode : MappingBackedInode
                     if (parentDentry.Children.TryGetValue(oldName, out dentry))
                         break;
 
-                if (dentry == null)
-                {
-                    if (IndexedSb.Dentries.TryGetValue(oldKey, out var cacheMatch))
-                        dentry = cacheMatch;
-                    else
-                        return -(int)Errno.ENOENT;
-                }
+                if (dentry == null && !IndexedSb.TryGetDentry(Ino, oldName, out dentry))
+                    return -(int)Errno.ENOENT;
             }
 
             if (dentry.Inode!.Type == InodeType.Directory)
@@ -336,7 +377,7 @@ public abstract class IndexedMemoryInode : MappingBackedInode
                 }
             }
 
-            if (IndexedSb.Dentries.TryGetValue(newKey, out var existingDentry))
+            if (IndexedSb.TryGetDentry(targetParent.Ino, newName, out var existingDentry))
             {
                 if (ReferenceEquals(existingDentry.Inode, dentry.Inode))
                     return 0;
@@ -360,17 +401,17 @@ public abstract class IndexedMemoryInode : MappingBackedInode
             var sourceIsDirectory = dentry.Inode.Type == InodeType.Directory;
             var movedAcrossParents = sourceIsDirectory && !ReferenceEquals(this, targetParent);
 
-            IndexedSb.Dentries.Remove(oldKey);
-            IndexedSb.Dentries[newKey] = dentry;
+            _ = IndexedSb.RemoveDentry(Ino, oldName, out _);
 
             _ = DetachNamespaceChild(oldPrimary, oldName, "IndexedMemoryInode.Rename.old-parent", out _);
             ChildNames.Remove(oldName);
 
             dentry.Parent = newPrimary;
-            dentry.Name = newName;
+            dentry.Name = FsName.FromBytes(newName);
+            IndexedSb.SetDentry(targetParent.Ino, dentry);
 
             AttachNamespaceChild(newPrimary, dentry, "IndexedMemoryInode.Rename.new-parent");
-            targetParent.ChildNames.Add(newName);
+            targetParent.ChildNames.Add(dentry.Name);
             TouchDirectoryMutationTimestamps();
             targetParent.TouchDirectoryMutationTimestamps();
 
@@ -388,17 +429,12 @@ public abstract class IndexedMemoryInode : MappingBackedInode
             if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
             var primaryDentry = Dentries[0];
-            var key = new DCacheKey(Ino, dentry.Name);
-            if (IndexedSb.Dentries.ContainsKey(key)) return -(int)Errno.EEXIST;
+            if (IndexedSb.ContainsDentry(Ino, dentry.Name.Bytes)) return -(int)Errno.EEXIST;
 
             dentry.Instantiate(oldInode);
             NamespaceOps.OnLinkAdded(oldInode, "IndexedMemoryInode.Link");
 
-            lock (IndexedSb.Lock)
-            {
-                IndexedSb.Dentries[key] = dentry;
-            }
-
+            IndexedSb.SetDentry(Ino, dentry);
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Link");
             ChildNames.Add(dentry.Name);
             TouchDirectoryMutationTimestamps();
@@ -406,38 +442,39 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         }
     }
 
-    public override int Symlink(Dentry dentry, string target, int uid, int gid)
+    public override int Symlink(Dentry dentry, byte[] target, int uid, int gid)
     {
         lock (Lock)
         {
             if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
             var primaryDentry = Dentries[0];
-            var key = new DCacheKey(Ino, dentry.Name);
-            if (IndexedSb.Dentries.ContainsKey(key)) return -(int)Errno.EEXIST;
+            if (IndexedSb.ContainsDentry(Ino, dentry.Name.Bytes)) return -(int)Errno.EEXIST;
 
             var inode = (IndexedMemoryInode)IndexedSb.AllocInode();
             inode.Type = InodeType.Symlink;
             inode.Mode = 0x1FF;
             inode.Uid = uid;
             inode.Gid = gid;
-            inode.SymlinkData = Encoding.UTF8.GetBytes(target);
+            inode.SymlinkData = target.ToArray();
             inode.Size = (ulong)inode.SymlinkData.Length;
             inode.SetInitialLinkCount(1, "IndexedMemoryInode.Symlink");
 
             dentry.Instantiate(inode);
 
-            lock (IndexedSb.Lock)
-            {
-                IndexedSb.Dentries[key] = dentry;
-            }
-
+            IndexedSb.SetDentry(Ino, dentry);
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Symlink");
             ChildNames.Add(dentry.Name);
             TouchDirectoryMutationTimestamps();
 
             return 0;
         }
+    }
+
+    public override int Symlink(Dentry dentry, string target, int uid, int gid)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return Symlink(dentry, FsEncoding.EncodeUtf8(target), uid, gid);
     }
 
     public override int Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
@@ -450,8 +487,7 @@ public abstract class IndexedMemoryInode : MappingBackedInode
                 return -(int)Errno.EINVAL;
 
             var primaryDentry = Dentries[0];
-            var key = new DCacheKey(Ino, dentry.Name);
-            if (IndexedSb.Dentries.ContainsKey(key)) return -(int)Errno.EEXIST;
+            if (IndexedSb.ContainsDentry(Ino, dentry.Name.Bytes)) return -(int)Errno.EEXIST;
 
             var inode = (IndexedMemoryInode)IndexedSb.AllocInode();
             inode.Type = type;
@@ -463,11 +499,7 @@ public abstract class IndexedMemoryInode : MappingBackedInode
 
             dentry.Instantiate(inode);
 
-            lock (IndexedSb.Lock)
-            {
-                IndexedSb.Dentries[key] = dentry;
-            }
-
+            IndexedSb.SetDentry(Ino, dentry);
             AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Mknod");
             ChildNames.Add(dentry.Name);
             TouchDirectoryMutationTimestamps();
@@ -475,7 +507,7 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         }
     }
 
-    public override int Readlink(out string? target)
+    public override int Readlink(out byte[]? target)
     {
         lock (Lock)
         {
@@ -485,7 +517,7 @@ public abstract class IndexedMemoryInode : MappingBackedInode
                 return -(int)Errno.EINVAL;
             }
 
-            target = Encoding.UTF8.GetString(SymlinkData);
+            target = SymlinkData;
             return 0;
         }
     }
@@ -762,22 +794,28 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         return 0;
     }
 
-    public override int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)
+    public override int SetXAttr(ReadOnlySpan<byte> name, ReadOnlySpan<byte> value, int flags)
     {
         const int XATTR_CREATE = 1;
         const int XATTR_REPLACE = 2;
 
         lock (Lock)
         {
-            var exists = XAttrs.ContainsKey(name);
+            var exists = XAttrs.TryGetValue(name, out _);
             if ((flags & XATTR_CREATE) != 0 && exists) return -(int)Errno.EEXIST;
             if ((flags & XATTR_REPLACE) != 0 && !exists) return -(int)Errno.ENODATA;
-            XAttrs[name] = value.ToArray();
+            XAttrs.Set(FsName.FromBytes(name), value.ToArray());
             return 0;
         }
     }
 
-    public override int GetXAttr(string name, Span<byte> value)
+    public override int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return SetXAttr(FsEncoding.EncodeUtf8(name), value, flags);
+    }
+
+    public override int GetXAttr(ReadOnlySpan<byte> name, Span<byte> value)
     {
         lock (Lock)
         {
@@ -789,21 +827,27 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         }
     }
 
+    public override int GetXAttr(string name, Span<byte> value)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return GetXAttr(FsEncoding.EncodeUtf8(name), value);
+    }
+
     public override int ListXAttr(Span<byte> list)
     {
         lock (Lock)
         {
-            var names = XAttrs.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray();
+            var names = XAttrs.Select(static kv => kv.Key).OrderBy(static k => k, FsName.BytewiseComparer).ToArray();
             var required = 0;
-            foreach (var n in names) required += Encoding.UTF8.GetByteCount(n) + 1;
+            foreach (var n in names) required += n.Length + 1;
             if (list.Length == 0) return required;
             if (list.Length < required) return -(int)Errno.ERANGE;
 
             var off = 0;
             foreach (var n in names)
             {
-                var nlen = Encoding.UTF8.GetBytes(n, list[off..]);
-                off += nlen;
+                n.Bytes.CopyTo(list[off..]);
+                off += n.Length;
                 list[off++] = 0;
             }
 
@@ -811,7 +855,7 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         }
     }
 
-    public override int RemoveXAttr(string name)
+    public override int RemoveXAttr(ReadOnlySpan<byte> name)
     {
         lock (Lock)
         {
@@ -820,17 +864,23 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         }
     }
 
+    public override int RemoveXAttr(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return RemoveXAttr(FsEncoding.EncodeUtf8(name));
+    }
+
     public override List<DirectoryEntry> GetEntries()
     {
         var list = new List<DirectoryEntry>();
         if (Type != InodeType.Directory) return list;
         if (Dentries.Count == 0) return list;
 
-        list.Add(new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory });
-        list.Add(new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory });
+        list.Add(new DirectoryEntry { Name = DotName, Ino = Ino, Type = InodeType.Directory });
+        list.Add(new DirectoryEntry { Name = DotDotName, Ino = Ino, Type = InodeType.Directory });
 
         foreach (var name in ChildNames)
-            if (IndexedSb.Dentries.TryGetValue(new DCacheKey(Ino, name), out var dentry))
+            if (IndexedSb.TryGetDentry(Ino, name.Bytes, out var dentry))
                 list.Add(new DirectoryEntry { Name = name, Ino = dentry.Inode!.Ino, Type = dentry.Inode.Type });
 
         return list;

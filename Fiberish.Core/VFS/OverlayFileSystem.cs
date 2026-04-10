@@ -71,7 +71,7 @@ public class OverlaySuperBlock : SuperBlock
     private readonly object _flockSync = new();
     private readonly Dictionary<OverlayNodeStateKey, OverlayNodeState> _nodeStates = new();
     private readonly HashSet<InodeKey> _opaqueDirs = new();
-    private readonly Dictionary<InodeKey, HashSet<string>> _whiteouts = new();
+    private readonly Dictionary<InodeKey, FsNameSet> _whiteouts = new();
 
     public OverlaySuperBlock(FileSystemType type, IReadOnlyList<SuperBlock> lowers, SuperBlock upper,
         DeviceNumberManager? devManager = null) : base(devManager)
@@ -110,21 +110,21 @@ public class OverlaySuperBlock : SuperBlock
         }
     }
 
-    public void AddWhiteout(InodeKey dirKey, string name)
+    public void AddWhiteout(InodeKey dirKey, ReadOnlySpan<byte> name)
     {
         lock (Lock)
         {
             if (!_whiteouts.TryGetValue(dirKey, out var names))
             {
-                names = new HashSet<string>(StringComparer.Ordinal);
+                names = new FsNameSet();
                 _whiteouts[dirKey] = names;
             }
 
-            names.Add(name);
+            names.Add(FsName.FromBytes(name));
         }
     }
 
-    public void RemoveWhiteout(InodeKey dirKey, string name)
+    public void RemoveWhiteout(InodeKey dirKey, ReadOnlySpan<byte> name)
     {
         lock (Lock)
         {
@@ -133,7 +133,7 @@ public class OverlaySuperBlock : SuperBlock
         }
     }
 
-    public bool HasWhiteout(InodeKey dirKey, string name)
+    public bool HasWhiteout(InodeKey dirKey, ReadOnlySpan<byte> name)
     {
         lock (Lock)
         {
@@ -141,12 +141,12 @@ public class OverlaySuperBlock : SuperBlock
         }
     }
 
-    public IReadOnlyCollection<string> GetWhiteouts(InodeKey dirKey)
+    public IReadOnlyCollection<FsName> GetWhiteouts(InodeKey dirKey)
     {
         lock (Lock)
         {
-            if (!_whiteouts.TryGetValue(dirKey, out var names)) return Array.Empty<string>();
-            return names.ToArray();
+            if (!_whiteouts.TryGetValue(dirKey, out var names)) return Array.Empty<FsName>();
+            return [.. names];
         }
     }
 
@@ -274,7 +274,7 @@ public readonly record struct OverlayNodeStateKey(int Identity)
 public sealed class OverlayNodeState
 {
     private readonly HashSet<OverlayInode> _aliases = [];
-    private readonly Dictionary<string, OverlayNodeState> _children = new(StringComparer.Ordinal);
+    private readonly FsNameMap<OverlayNodeState> _children = new();
     private List<Dentry> _lowerDentries;
 
     public OverlayNodeState(IReadOnlyList<Dentry>? lowers, Dentry? upper)
@@ -338,14 +338,14 @@ public sealed class OverlayNodeState
         }
     }
 
-    public OverlayNodeState GetOrCreateChildState(string name, IReadOnlyList<Dentry>? lowers, Dentry? upper)
+    public OverlayNodeState GetOrCreateChildState(FsName name, IReadOnlyList<Dentry>? lowers, Dentry? upper)
     {
         lock (SyncRoot)
         {
             if (!_children.TryGetValue(name, out var state))
             {
                 state = new OverlayNodeState(lowers, upper);
-                _children[name] = state;
+                _children.Set(name, state);
                 return state;
             }
 
@@ -354,7 +354,7 @@ public sealed class OverlayNodeState
         }
     }
 
-    public bool TryRemoveChildState(string name, OverlayNodeState expected)
+    public bool TryRemoveChildState(FsName name, OverlayNodeState expected)
     {
         lock (SyncRoot)
         {
@@ -364,12 +364,12 @@ public sealed class OverlayNodeState
         }
     }
 
-    public void AttachChildState(string name, OverlayNodeState state, IReadOnlyList<Dentry>? lowers, Dentry? upper)
+    public void AttachChildState(FsName name, OverlayNodeState state, IReadOnlyList<Dentry>? lowers, Dentry? upper)
     {
         lock (SyncRoot)
         {
             state.UpdateBackings(lowers, upper);
-            _children[name] = state;
+            _children.Set(name, state);
         }
     }
 
@@ -628,7 +628,7 @@ public class OverlayInode : MappingBackedInode
         return 0;
     }
 
-    private int CopyUpToCurrentParent(string currentName, OverlayInode currentParent, LinuxFile? linuxFile)
+    private int CopyUpToCurrentParent(FsName currentName, OverlayInode currentParent, LinuxFile? linuxFile)
     {
         lock (_state.SyncRoot)
         {
@@ -648,14 +648,14 @@ public class OverlayInode : MappingBackedInode
         }
     }
 
-    private int CopyUpToUpper(Dentry upperParent, string upperName, LinuxFile? linuxFile)
+    private int CopyUpToUpper(Dentry upperParent, FsName upperName, LinuxFile? linuxFile)
     {
         var osb = (OverlaySuperBlock)SuperBlock;
         var upperDentry = new Dentry(upperName, null, upperParent, osb.UpperSB);
 
         if (Type == InodeType.Directory)
         {
-            var existing = upperParent.Inode!.Lookup(upperName);
+            var existing = upperParent.Inode!.Lookup(upperName.Bytes);
             if (existing != null)
             {
                 _state.SetUpperDentry(existing);
@@ -678,7 +678,8 @@ public class OverlayInode : MappingBackedInode
             case InodeType.Symlink:
                 if (lowerInode == null)
                     return -(int)Errno.ENOENT;
-                var readlinkRc = lowerInode.Readlink(out var linkTarget);
+                byte[]? linkTarget;
+                var readlinkRc = lowerInode.Readlink(out linkTarget);
                 if (readlinkRc < 0)
                     return readlinkRc;
                 copyPayloadRc = upperParent.Inode!.Symlink(upperDentry, linkTarget!, Uid, Gid);
@@ -693,7 +694,7 @@ public class OverlayInode : MappingBackedInode
 
             default:
             {
-                var existing = upperParent.Inode!.Lookup(upperName);
+                var existing = upperParent.Inode!.Lookup(upperName.Bytes);
                 if (existing != null)
                 {
                     _state.SetUpperDentry(existing);
@@ -750,9 +751,9 @@ public class OverlayInode : MappingBackedInode
 
         if (copyPayloadRc < 0)
         {
-            _ = upperParent.Inode!.Unlink(upperName);
+            _ = upperParent.Inode!.Unlink(upperName.Bytes);
             Logging.CreateLogger<OverlayInode>()
-                .LogWarning("CopyUp failed for {Name}: rc={Result}", upperName, copyPayloadRc);
+                .LogWarning("CopyUp failed for {Name}: rc={Result}", upperName.ToDebugString(), copyPayloadRc);
             return copyPayloadRc;
         }
 
@@ -779,7 +780,10 @@ public class OverlayInode : MappingBackedInode
         var osb = (OverlaySuperBlock)SuperBlock;
         var parentLower = lowerDentry.Parent;
 
-        if (parentLower == null || parentLower == lowerDentry || parentLower.Name == "/")
+        if (parentLower == null ||
+            parentLower == lowerDentry ||
+            parentLower.Name.IsEmpty ||
+            parentLower.Name == "/")
         {
             upperParent = osb.UpperSB.Root;
             return 0;
@@ -815,15 +819,17 @@ public class OverlayInode : MappingBackedInode
         return 0;
     }
 
-    public override Dentry? Lookup(string name)
+    public override Dentry? Lookup(ReadOnlySpan<byte> name)
     {
-        if (name == "..") return null; // Handled by VFS
-        if (name == ".") return null; // Handled by VFS
+        if (name.SequenceEqual(".."u8)) return null; // Handled by VFS
+        if (name.SequenceEqual("."u8)) return null; // Handled by VFS
         var osb = (OverlaySuperBlock)SuperBlock;
+        var childName = FsName.FromBytes(name);
         if (osb.WhiteoutCodec.IsInternalMarkerName(name)) return null;
 
         var dirKey = new InodeKey(Dev, Ino);
-        if (osb.HasWhiteout(dirKey, name) || osb.WhiteoutCodec.HasEncodedWhiteout(UpperInode, name)) return null;
+        if (osb.HasWhiteout(dirKey, name) || osb.WhiteoutCodec.HasEncodedWhiteout(UpperInode, name))
+            return null;
 
         // 1. Lookup in Upper
         var upperDentry = UpperInode?.Lookup(name);
@@ -848,11 +854,16 @@ public class OverlayInode : MappingBackedInode
         if (upperDentry == null && lowerDentry == null) return null;
 
         // Create Overlay Inode
-        var state = _state.GetOrCreateChildState(name, lowerDentry != null ? [lowerDentry] : null, upperDentry);
+        var state = _state.GetOrCreateChildState(childName, lowerDentry != null ? [lowerDentry] : null, upperDentry);
         var inode = new OverlayInode(SuperBlock, lowerDentry != null ? [lowerDentry] : null, upperDentry, state);
 
         var parentDentry = Dentries.Count > 0 ? Dentries[0] : null;
-        return new Dentry(name, inode, parentDentry, SuperBlock);
+        return new Dentry(childName, inode, parentDentry, SuperBlock);
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        return FsEncoding.TryEncodeUtf8(name, out var encoded) ? Lookup(encoded) : null;
     }
 
     public override int Create(Dentry dentry, int mode, int uid, int gid)
@@ -869,10 +880,10 @@ public class OverlayInode : MappingBackedInode
         }
 
         var osb = (OverlaySuperBlock)SuperBlock;
-        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name))
+        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name.Bytes))
         {
-            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
-            osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name);
+            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name.Bytes);
+            osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name.Bytes);
         }
 
         // Delegate to Upper
@@ -902,10 +913,10 @@ public class OverlayInode : MappingBackedInode
         }
 
         var osb = (OverlaySuperBlock)SuperBlock;
-        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name))
+        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name.Bytes))
         {
-            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
-            osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name);
+            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name.Bytes);
+            osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name.Bytes);
         }
 
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
@@ -990,7 +1001,7 @@ public class OverlayInode : MappingBackedInode
         return -(int)Errno.ENOSYS;
     }
 
-    public override int Readlink(out string? target)
+    public override int Readlink(out byte[]? target)
     {
         if (UpperInode != null && UpperInode.Type == InodeType.Symlink)
             return UpperInode.Readlink(out target);
@@ -1000,7 +1011,20 @@ public class OverlayInode : MappingBackedInode
         return -(int)Errno.EINVAL;
     }
 
-    public override int Unlink(string name)
+    public override int Readlink(out string? target)
+    {
+        var rc = Readlink(out byte[]? rawTarget);
+        if (rc < 0 || rawTarget == null)
+        {
+            target = null;
+            return rc;
+        }
+
+        target = FsEncoding.DecodeUtf8Lossy(rawTarget);
+        return 0;
+    }
+
+    public override int Unlink(ReadOnlySpan<byte> name)
     {
         var overlayEntry = Lookup(name);
         if (overlayEntry == null)
@@ -1035,20 +1059,28 @@ public class OverlayInode : MappingBackedInode
         if (overlayEntry.Inode is OverlayInode overlayChild)
         {
             overlayChild.RefreshOverlayLinkCountFromSource("OverlayInode.Unlink.child-refresh");
-            DetachRemovedChildState(name, overlayEntry);
+            DetachRemovedChildState(FsName.FromBytes(name), overlayEntry);
         }
+
+        foreach (var alias in Dentries)
+            alias.TryUncacheChild(name, "OverlayInode.Unlink.parent-drop-stale", out _);
 
         return 0;
     }
 
-    public override int Rmdir(string name)
+    public override int Unlink(string name)
+    {
+        return Unlink(FsEncoding.EncodeUtf8(name));
+    }
+
+    public override int Rmdir(ReadOnlySpan<byte> name)
     {
         var overlayEntry = Lookup(name);
         if (overlayEntry == null)
             return -(int)Errno.ENOENT;
         if (overlayEntry.Inode?.Type != InodeType.Directory)
             return -(int)Errno.ENOTDIR;
-        if (overlayEntry.Inode.GetEntries().Any(e => e.Name is not "." and not ".."))
+        if (overlayEntry.Inode.GetEntries().Any(e => e.Name != "." && e.Name != ".."))
             return -(int)Errno.ENOTEMPTY;
 
         var inUpper = UpperInode?.Lookup(name) != null;
@@ -1061,7 +1093,7 @@ public class OverlayInode : MappingBackedInode
                 var cleanupRc = RemoveUpperOverlayInternalEntries(upperDir);
                 if (cleanupRc < 0)
                     return cleanupRc;
-                if (upperDirInode.GetEntries().Any(e => e.Name is not "." and not ".."))
+                if (upperDirInode.GetEntries().Any(e => e.Name != "." && e.Name != ".."))
                     return -(int)Errno.ENOTEMPTY;
             }
 
@@ -1080,18 +1112,25 @@ public class OverlayInode : MappingBackedInode
             }
 
             if (UpperInode?.Lookup(name) is { } upperDir &&
-                upperDir.Inode?.GetEntries().Any(e => e.Name is not "." and not "..") == true)
+                upperDir.Inode?.GetEntries().Any(e => e.Name != "." && e.Name != "..") == true)
                 return -(int)Errno.ENOTEMPTY;
             osb.AddWhiteout(new InodeKey(Dev, Ino), name);
             osb.WhiteoutCodec.TryCreateEncodedWhiteout(this, name);
         }
 
         RefreshOverlayLinkCountFromSource("OverlayInode.Rmdir.parent-refresh");
-        DetachRemovedChildState(name, overlayEntry);
+        DetachRemovedChildState(FsName.FromBytes(name), overlayEntry);
+        foreach (var alias in Dentries)
+            alias.TryUncacheChild(name, "OverlayInode.Rmdir.parent-drop-stale", out _);
         return 0;
     }
 
-    private bool DetachRemovedChildState(string name, Dentry overlayEntry)
+    public override int Rmdir(string name)
+    {
+        return Rmdir(FsEncoding.EncodeUtf8(name));
+    }
+
+    private bool DetachRemovedChildState(FsName name, Dentry overlayEntry)
     {
         if (overlayEntry.Inode is not OverlayInode overlayChild)
             return false;
@@ -1107,7 +1146,7 @@ public class OverlayInode : MappingBackedInode
         if (upperDirInode == null) return 0;
 
         var osb = (OverlaySuperBlock)SuperBlock;
-        foreach (var entry in upperDirInode.GetEntries().Where(e => e.Name is not "." and not "..").ToList())
+        foreach (var entry in upperDirInode.GetEntries().Where(e => e.Name != "." && e.Name != "..").ToList())
         {
             var child = upperDirInode.Lookup(entry.Name);
             if (!osb.WhiteoutCodec.IsEncodedOpaqueEntry(entry) &&
@@ -1122,16 +1161,16 @@ public class OverlayInode : MappingBackedInode
         return 0;
     }
 
-    public override int Rename(string oldName, Inode newParent, string newName)
+    public override int Rename(ReadOnlySpan<byte> oldName, Inode newParent, ReadOnlySpan<byte> newName)
     {
         if (newParent is not OverlayInode targetParent)
             return -(int)Errno.EXDEV;
-        if (string.Equals(oldName, ".", StringComparison.Ordinal) ||
-            string.Equals(oldName, "..", StringComparison.Ordinal) ||
-            string.Equals(newName, ".", StringComparison.Ordinal) ||
-            string.Equals(newName, "..", StringComparison.Ordinal))
+        if (oldName.SequenceEqual("."u8) ||
+            oldName.SequenceEqual(".."u8) ||
+            newName.SequenceEqual("."u8) ||
+            newName.SequenceEqual(".."u8))
             return -(int)Errno.EINVAL;
-        if (ReferenceEquals(this, targetParent) && string.Equals(oldName, newName, StringComparison.Ordinal))
+        if (ReferenceEquals(this, targetParent) && oldName.SequenceEqual(newName))
             return 0;
 
         var sourceEntry = Lookup(oldName);
@@ -1144,6 +1183,9 @@ public class OverlayInode : MappingBackedInode
         if (targetEntry != null && ReferenceEquals(targetEntry.Inode, sourceEntry.Inode))
             return 0;
 
+        var oldNameFs = FsName.FromBytes(oldName);
+        var newNameFs = FsName.FromBytes(newName);
+
         if (targetEntry != null && targetEntry.Inode?.Type != InodeType.Directory &&
             sourceOverlay.Type == InodeType.Directory)
             return -(int)Errno.ENOTDIR;
@@ -1152,7 +1194,7 @@ public class OverlayInode : MappingBackedInode
         {
             if (sourceOverlay.Type != InodeType.Directory)
                 return -(int)Errno.EISDIR;
-            if (targetEntry.Inode.GetEntries().Any(e => e.Name is not "." and not ".."))
+            if (targetEntry.Inode.GetEntries().Any(e => e.Name != "." && e.Name != ".."))
                 return -(int)Errno.ENOTEMPTY;
 
             // If target directory is logically empty but exists in upper (e.g. contains whiteouts),
@@ -1161,10 +1203,10 @@ public class OverlayInode : MappingBackedInode
                 targetOverlay.UpperInode != null)
             {
                 // Clear all physical entries (whiteouts) in upper to allow rmdir
-                foreach (var e in targetOverlay.UpperInode.GetEntries().Where(e => e.Name is not "." and not "..")
+                foreach (var e in targetOverlay.UpperInode.GetEntries().Where(e => e.Name != "." && e.Name != "..")
                              .ToList())
                 {
-                    var unlinkRc = targetOverlay.UpperInode.Unlink(e.Name);
+                    var unlinkRc = targetOverlay.UpperInode.Unlink(e.Name.Bytes);
                     if (unlinkRc < 0)
                         return unlinkRc;
                 }
@@ -1197,7 +1239,7 @@ public class OverlayInode : MappingBackedInode
 
         if (sourceLowerOnly)
         {
-            var copyRc = sourceOverlay.CopyUpToCurrentParent(oldName, this, null);
+            var copyRc = sourceOverlay.CopyUpToCurrentParent(FsName.FromBytes(oldName), this, null);
             if (copyRc < 0)
                 return copyRc;
         }
@@ -1224,10 +1266,10 @@ public class OverlayInode : MappingBackedInode
         if (sourceOverlay.Type == InodeType.Directory && targetHasLowerDirectoryBacking && !sourceHasLowerBacking)
             osb.MarkOpaque(new InodeKey(sourceOverlay.Dev, sourceOverlay.Ino));
 
-        if (!ReferenceEquals(_state, targetParent._state) || !string.Equals(oldName, newName, StringComparison.Ordinal))
+        if (!ReferenceEquals(_state, targetParent._state) || !oldName.SequenceEqual(newName))
         {
-            _state.TryRemoveChildState(oldName, sourceOverlay._state);
-            targetParent._state.AttachChildState(newName, sourceOverlay._state, sourceOverlay.LowerDentries,
+            _state.TryRemoveChildState(oldNameFs, sourceOverlay._state);
+            targetParent._state.AttachChildState(newNameFs, sourceOverlay._state, sourceOverlay.LowerDentries,
                 sourceOverlay.UpperDentry);
         }
 
@@ -1250,6 +1292,11 @@ public class OverlayInode : MappingBackedInode
         }
 
         return 0;
+    }
+
+    public override int Rename(string oldName, Inode newParent, string newName)
+    {
+        return Rename(FsEncoding.EncodeUtf8(oldName), newParent, FsEncoding.EncodeUtf8(newName));
     }
 
     public override int Link(Dentry dentry, Inode oldInode)
@@ -1282,17 +1329,17 @@ public class OverlayInode : MappingBackedInode
 
         var osb = (OverlaySuperBlock)SuperBlock;
         // A hidden lower entry may leave an upper whiteout occupying the target name.
-        osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
-        osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name);
+        osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name.Bytes);
+        osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name.Bytes);
 
         var upperDentry = new Dentry(dentry.Name, null, UpperDentry, ((OverlaySuperBlock)SuperBlock).UpperSB);
         var linkRc = UpperInode.Link(upperDentry, oldOverlay.UpperInode);
         if (linkRc < 0)
             return linkRc;
-        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name))
+        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name.Bytes))
         {
-            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
-            osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name);
+            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name.Bytes);
+            osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name.Bytes);
         }
 
         var newOverlayInode = oldOverlay;
@@ -1326,10 +1373,10 @@ public class OverlayInode : MappingBackedInode
         if (symlinkRc < 0)
             return symlinkRc;
         var osb = (OverlaySuperBlock)SuperBlock;
-        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name))
+        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name.Bytes))
         {
-            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
-            osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name);
+            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name.Bytes);
+            osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name.Bytes);
         }
 
         var childState = _state.GetOrCreateChildState(dentry.Name, null, upperDentry);
@@ -1360,10 +1407,10 @@ public class OverlayInode : MappingBackedInode
             return mknodRc;
 
         var osb = (OverlaySuperBlock)SuperBlock;
-        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name))
+        if (!osb.WhiteoutCodec.IsInternalMarkerName(dentry.Name.Bytes))
         {
-            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name);
-            osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name);
+            osb.WhiteoutCodec.ClearEncodedWhiteout(this, dentry.Name.Bytes);
+            osb.RemoveWhiteout(new InodeKey(Dev, Ino), dentry.Name.Bytes);
         }
 
         var childState = _state.GetOrCreateChildState(dentry.Name, null, upperDentry);
@@ -1393,7 +1440,7 @@ public class OverlayInode : MappingBackedInode
         var subdirCount = 0;
         foreach (var entry in entries)
         {
-            if (entry.Name is "." or "..") continue;
+            if (entry.Name == "." || entry.Name == "..") continue;
             if (entry.Type == InodeType.Directory) subdirCount++;
         }
 
@@ -1589,7 +1636,7 @@ public class OverlayInode : MappingBackedInode
     {
         var osb = (OverlaySuperBlock)SuperBlock;
         var dirKey = new InodeKey(Dev, Ino);
-        var entries = new Dictionary<string, DirectoryEntry>();
+        var entries = new FsNameMap<DirectoryEntry>();
         var dirOpaque = osb.IsOpaque(dirKey) || osb.WhiteoutCodec.IsEncodedOpaque(UpperInode);
 
         // Merge lower layers from bottom to top so higher lower layers override.
@@ -1599,15 +1646,15 @@ public class OverlayInode : MappingBackedInode
                 var inode = LowerDentries[i].Inode;
                 if (inode == null) continue;
                 foreach (var e in inode.GetEntries())
-                    entries[e.Name] = e;
+                    entries.Set(e.Name, e);
             }
 
         if (UpperInode != null)
             foreach (var e in UpperInode.GetEntries())
             {
-                if (e.Name is "." or "..")
+                if (e.Name == "." || e.Name == "..")
                 {
-                    entries[e.Name] = e;
+                    entries.Set(e.Name, e);
                     continue;
                 }
 
@@ -1620,12 +1667,12 @@ public class OverlayInode : MappingBackedInode
 
                 if (osb.WhiteoutCodec.TryDecodeEncodedWhiteout(e, child?.Inode, out var targetName))
                 {
-                    osb.AddWhiteout(dirKey, targetName);
+                    osb.AddWhiteout(dirKey, targetName.Bytes);
                     entries.Remove(targetName);
                     continue;
                 }
 
-                entries[e.Name] = e;
+                entries.Set(e.Name, e);
             }
 
         foreach (var whiteout in osb.GetWhiteouts(dirKey))
@@ -1634,7 +1681,7 @@ public class OverlayInode : MappingBackedInode
         return [.. entries.Values];
     }
 
-    private Dentry? LookupInAnyLower(string name)
+    private Dentry? LookupInAnyLower(ReadOnlySpan<byte> name)
     {
         foreach (var lower in LowerDentries)
         {
@@ -1643,6 +1690,11 @@ public class OverlayInode : MappingBackedInode
         }
 
         return null;
+    }
+
+    private Dentry? LookupInAnyLower(string name)
+    {
+        return LookupInAnyLower(FsEncoding.EncodeUtf8(name));
     }
 
     private int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
@@ -1666,24 +1718,24 @@ public class OverlayInode : MappingBackedInode
 
 public interface IOverlayWhiteoutCodec
 {
-    bool IsInternalMarkerName(string name);
-    bool HasEncodedWhiteout(Inode? upperDir, string name);
+    bool IsInternalMarkerName(ReadOnlySpan<byte> name);
+    bool HasEncodedWhiteout(Inode? upperDir, ReadOnlySpan<byte> name);
     bool IsEncodedOpaque(Inode? upperDir);
     bool IsEncodedOpaqueEntry(DirectoryEntry entry);
-    bool TryDecodeEncodedWhiteout(DirectoryEntry entry, Inode? inode, out string targetName);
+    bool TryDecodeEncodedWhiteout(DirectoryEntry entry, Inode? inode, out FsName targetName);
     bool IsWhiteoutInode(Inode? inode);
-    bool TryCreateEncodedWhiteout(OverlayInode dir, string name);
-    void ClearEncodedWhiteout(OverlayInode dir, string name);
+    bool TryCreateEncodedWhiteout(OverlayInode dir, ReadOnlySpan<byte> name);
+    void ClearEncodedWhiteout(OverlayInode dir, ReadOnlySpan<byte> name);
 }
 
 public sealed class LogicalWhiteoutCodec : IOverlayWhiteoutCodec
 {
-    public bool IsInternalMarkerName(string name)
+    public bool IsInternalMarkerName(ReadOnlySpan<byte> name)
     {
         return false;
     }
 
-    public bool HasEncodedWhiteout(Inode? upperDir, string name)
+    public bool HasEncodedWhiteout(Inode? upperDir, ReadOnlySpan<byte> name)
     {
         return false;
     }
@@ -1698,9 +1750,9 @@ public sealed class LogicalWhiteoutCodec : IOverlayWhiteoutCodec
         return false;
     }
 
-    public bool TryDecodeEncodedWhiteout(DirectoryEntry entry, Inode? inode, out string targetName)
+    public bool TryDecodeEncodedWhiteout(DirectoryEntry entry, Inode? inode, out FsName targetName)
     {
-        targetName = string.Empty;
+        targetName = FsName.Empty;
         return false;
     }
 
@@ -1709,29 +1761,30 @@ public sealed class LogicalWhiteoutCodec : IOverlayWhiteoutCodec
         return false;
     }
 
-    public bool TryCreateEncodedWhiteout(OverlayInode dir, string name)
+    public bool TryCreateEncodedWhiteout(OverlayInode dir, ReadOnlySpan<byte> name)
     {
         return false;
     }
 
-    public void ClearEncodedWhiteout(OverlayInode dir, string name)
+    public void ClearEncodedWhiteout(OverlayInode dir, ReadOnlySpan<byte> name)
     {
     }
 }
 
 public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
 {
-    private const string OpaqueMarker = ".wh..wh..opq";
+    private static readonly byte[] OpaqueMarkerBytes = ".wh..wh..opq"u8.ToArray();
+    private static readonly byte[] WhiteoutPrefixBytes = ".wh."u8.ToArray();
 
-    public bool IsInternalMarkerName(string name)
+    public bool IsInternalMarkerName(ReadOnlySpan<byte> name)
     {
-        return name == OpaqueMarker || name.StartsWith(".wh.", StringComparison.Ordinal);
+        return name.SequenceEqual(OpaqueMarkerBytes) || name.StartsWith(WhiteoutPrefixBytes);
     }
 
-    public bool HasEncodedWhiteout(Inode? upperDir, string name)
+    public bool HasEncodedWhiteout(Inode? upperDir, ReadOnlySpan<byte> name)
     {
         if (upperDir == null) return false;
-        if (upperDir.Lookup($".wh.{name}") != null) return true;
+        if (upperDir.Lookup(BuildEncodedWhiteoutName(name)) != null) return true;
         var sameName = upperDir.Lookup(name);
         return IsWhiteoutInode(sameName?.Inode);
     }
@@ -1739,20 +1792,27 @@ public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
     public bool IsEncodedOpaque(Inode? upperDir)
     {
         if (upperDir == null) return false;
-        return upperDir.Lookup(OpaqueMarker) != null;
+        return upperDir.Lookup(OpaqueMarkerBytes) != null;
     }
 
     public bool IsEncodedOpaqueEntry(DirectoryEntry entry)
     {
-        return entry.Name == OpaqueMarker;
+        return entry.Name.Bytes.SequenceEqual(OpaqueMarkerBytes);
     }
 
-    public bool TryDecodeEncodedWhiteout(DirectoryEntry entry, Inode? inode, out string targetName)
+    public bool TryDecodeEncodedWhiteout(DirectoryEntry entry, Inode? inode, out FsName targetName)
     {
-        if (entry.Name.StartsWith(".wh.", StringComparison.Ordinal) && entry.Name != OpaqueMarker)
+        if (entry.Name.Bytes.StartsWith(WhiteoutPrefixBytes) && !entry.Name.Bytes.SequenceEqual(OpaqueMarkerBytes))
         {
-            targetName = entry.Name[4..];
-            return !string.IsNullOrEmpty(targetName);
+            var suffix = entry.Name.Bytes[WhiteoutPrefixBytes.Length..];
+            if (suffix.IsEmpty)
+            {
+                targetName = FsName.Empty;
+                return false;
+            }
+
+            targetName = FsName.FromBytes(suffix);
+            return true;
         }
 
         if (IsWhiteoutInode(inode))
@@ -1761,7 +1821,7 @@ public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
             return true;
         }
 
-        targetName = string.Empty;
+        targetName = FsName.Empty;
         return false;
     }
 
@@ -1770,7 +1830,7 @@ public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
         return inode != null && inode.Type == InodeType.CharDev && inode.Rdev == 0;
     }
 
-    public bool TryCreateEncodedWhiteout(OverlayInode dir, string name)
+    public bool TryCreateEncodedWhiteout(OverlayInode dir, ReadOnlySpan<byte> name)
     {
         if (dir.UpperInode == null || dir.UpperDentry == null) return false;
         if (dir.UpperInode is not TmpfsInode && dir.UpperInode is not HostInode && dir.UpperInode is not SilkInode)
@@ -1778,8 +1838,10 @@ public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
         if (dir.UpperDentry == null) return false;
         if (dir.UpperInode.Lookup(name) != null) return false;
 
-        var encodedName = dir.UpperInode is SilkInode ? $".wh.{name}" : name;
-        if (dir.UpperInode.Lookup(encodedName) != null) return false;
+        var encodedName = dir.UpperInode is SilkInode
+            ? FsName.FromOwnedBytes(BuildEncodedWhiteoutName(name))
+            : FsName.FromBytes(name);
+        if (dir.UpperInode.Lookup(encodedName.Bytes) != null) return false;
 
         var dentry = new Dentry(encodedName, null, dir.UpperDentry, dir.UpperDentry.SuperBlock);
         dir.UpperInode.Mknod(dentry, 0x1B6, 0, 0, InodeType.CharDev, 0); // char 0/0
@@ -1787,7 +1849,7 @@ public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
         return true;
     }
 
-    public void ClearEncodedWhiteout(OverlayInode dir, string name)
+    public void ClearEncodedWhiteout(OverlayInode dir, ReadOnlySpan<byte> name)
     {
         if (dir.UpperInode == null) return;
         var existing = dir.UpperInode.Lookup(name);
@@ -1797,8 +1859,17 @@ public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
             return;
         }
 
-        var encoded = dir.UpperInode.Lookup($".wh.{name}");
+        var encodedName = BuildEncodedWhiteoutName(name);
+        var encoded = dir.UpperInode.Lookup(encodedName);
         if (encoded != null)
-            dir.UpperInode.Unlink($".wh.{name}");
+            dir.UpperInode.Unlink(encodedName);
+    }
+
+    private static byte[] BuildEncodedWhiteoutName(ReadOnlySpan<byte> name)
+    {
+        var encoded = new byte[WhiteoutPrefixBytes.Length + name.Length];
+        WhiteoutPrefixBytes.CopyTo(encoded, 0);
+        name.CopyTo(encoded.AsSpan(WhiteoutPrefixBytes.Length));
+        return encoded;
     }
 }

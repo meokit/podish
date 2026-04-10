@@ -146,8 +146,8 @@ public class PathWalkReadlinkSyscallTests
         var nd = env.SyscallManager.PathWalker.PathWalkWithData(path, null, LookupFlags.NoFollow);
         Assert.False(nd.HasError);
         Assert.NotNull(nd.Path.Dentry);
-        Assert.Equal(0, nd.Path.Dentry!.Inode!.Readlink(out var target));
-        Assert.Equal(expectedName, target);
+        Assert.Equal(0, nd.Path.Dentry!.Inode!.Readlink(out byte[]? target));
+        Assert.Equal(Encoding.UTF8.GetBytes(expectedName), target);
     }
 
     [Theory]
@@ -201,11 +201,11 @@ public class PathWalkReadlinkSyscallTests
             childWriter.Close();
         }
 
-        lowerRoot.Inode.Symlink(new Dentry("link", null, lowerRoot, lowerSb), "file", 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("indirect", null, lowerRoot, lowerSb), "link", 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("broken", null, lowerRoot, lowerSb), "/missing-target", 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("dir-link", null, lowerRoot, lowerSb), "dir", 0, 0);
-        lowerRoot.Inode.Symlink(new Dentry("dir-chain", null, lowerRoot, lowerSb), "dir-link", 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry("link", null, lowerRoot, lowerSb), "file"u8.ToArray(), 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry("indirect", null, lowerRoot, lowerSb), "link"u8.ToArray(), 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry("broken", null, lowerRoot, lowerSb), "/missing-target"u8.ToArray(), 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry("dir-link", null, lowerRoot, lowerSb), "dir"u8.ToArray(), 0, 0);
+        lowerRoot.Inode.Symlink(new Dentry("dir-chain", null, lowerRoot, lowerSb), "dir-link"u8.ToArray(), 0, 0);
 
         var overlayFs = new OverlayFileSystem();
         var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(

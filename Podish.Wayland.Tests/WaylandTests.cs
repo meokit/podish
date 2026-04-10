@@ -1740,10 +1740,13 @@ internal sealed class TestEnv : IDisposable
                            ?? throw new InvalidOperationException("UnixSockaddrInfo type not found.");
         var endpoint = Activator.CreateInstance(endpointType)
                        ?? throw new InvalidOperationException("Failed to create UnixSockaddrInfo.");
+        var pathBytes = Encoding.UTF8.GetBytes(path);
         endpointType.GetProperty("IsAbstract", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
             .SetValue(endpoint, false);
-        endpointType.GetProperty("Path", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
-            .SetValue(endpoint, path);
+        endpointType.GetProperty("PathBytes", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            .SetValue(endpoint, pathBytes);
+        endpointType.GetProperty("AbstractKey", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+            .SetValue(endpoint, string.Empty);
         endpointType.GetProperty("SunPathRaw", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
             .SetValue(endpoint, Encoding.UTF8.GetBytes($"{path}\0"));
         return endpoint;

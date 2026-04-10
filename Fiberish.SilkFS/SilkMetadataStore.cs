@@ -1,4 +1,5 @@
 using SQLitePCL;
+using System.Text;
 
 namespace Fiberish.SilkFS;
 
@@ -28,14 +29,20 @@ public readonly record struct SilkInodeRecord(
 
 public readonly record struct SilkDentryRecord(
     long ParentIno,
-    string Name,
+    byte[] Name,
     long Ino);
+
+public readonly record struct SilkXAttrRecord(
+    byte[] Key,
+    byte[] Value);
 
 public sealed class SilkMetadataStore
 {
     public const long RootInode = 1;
-    public const string OpaqueMarkerName = ".wh..wh..opq";
+    public const int CurrentSchemaVersion = 3;
+    public static ReadOnlySpan<byte> OpaqueMarkerNameBytes => ".wh..wh..opq"u8;
 
+    private static readonly byte[] SchemaVersionUtf8 = "3"u8.ToArray();
     private static int _sqliteInit;
     private readonly string _dbPath;
 
@@ -57,13 +64,23 @@ public sealed class SilkMetadataStore
         using var tx = conn.BeginTransaction();
 
         conn.ExecuteNonQuery(SilkMetadataSql.CreateMetaTable);
+        var schemaVersion = TryReadSchemaVersion(conn);
+        if (schemaVersion != null && schemaVersion != CurrentSchemaVersion)
+            throw new InvalidOperationException(
+                $"SilkFS metadata schema v{schemaVersion} is unsupported; expected v{CurrentSchemaVersion}. Rebuild or migrate the repo.");
+
         conn.ExecuteNonQuery(SilkMetadataSql.CreateInodesTable);
         conn.ExecuteNonQuery(SilkMetadataSql.CreateDentriesTable);
         conn.ExecuteNonQuery(SilkMetadataSql.CreateXAttrsTable);
         conn.ExecuteNonQuery(SilkMetadataSql.CreateWhiteoutsTable);
         conn.ExecuteNonQuery(SilkMetadataSql.DropInodeObjectsTable);
         conn.ExecuteNonQuery(SilkMetadataSql.DropObjectsTable);
-        conn.ExecuteNonQuery(SilkMetadataSql.UpsertSchemaVersion);
+        if (schemaVersion == null)
+        {
+            using var setSchema = conn.Prepare(SilkMetadataSql.UpsertSchemaVersion, persistent: false);
+            setSchema.BindBlob(1, SchemaVersionUtf8);
+            setSchema.ExecuteNonQuery();
+        }
 
         var rootExists = conn.ExecuteScalarInt64(SilkMetadataSql.CountRootInode);
         if (rootExists == 0)
@@ -82,11 +99,49 @@ public sealed class SilkMetadataStore
         return new SilkSqliteConnection(_dbPath);
     }
 
+    private static int? TryReadSchemaVersion(SilkSqliteConnection conn)
+    {
+        if (!conn.TableExists("meta"))
+            return null;
+
+        using var stmt = conn.Prepare(SilkMetadataSql.GetSchemaVersion, persistent: false);
+        if (!stmt.Step())
+            return null;
+
+        var rawVersion = stmt.ColumnBlobToArray(0);
+        stmt.Reset();
+        if (rawVersion.Length == 0)
+            return null;
+        if (!int.TryParse(System.Text.Encoding.ASCII.GetString(rawVersion), out var schemaVersion))
+            throw new InvalidOperationException("SilkFS metadata schema version is invalid.");
+
+        return schemaVersion;
+    }
+
     private static void EnsureSqliteProviderInitialized()
     {
-        if (Interlocked.Exchange(ref _sqliteInit, 1) != 0)
+        if (Volatile.Read(ref _sqliteInit) == 2)
             return;
-        raw.SetProvider(new SQLite3Provider_sqlite3());
+
+        if (Interlocked.CompareExchange(ref _sqliteInit, 1, 0) == 0)
+        {
+            try
+            {
+                raw.SetProvider(new SQLite3Provider_sqlite3());
+                Volatile.Write(ref _sqliteInit, 2);
+            }
+            catch
+            {
+                Volatile.Write(ref _sqliteInit, 0);
+                throw;
+            }
+
+            return;
+        }
+
+        var spinner = new SpinWait();
+        while (Volatile.Read(ref _sqliteInit) != 2)
+            spinner.SpinOnce();
     }
 
     internal static long GetUnixTimeNanoseconds()
@@ -126,36 +181,36 @@ public sealed class SilkMetadataStore
             ExecuteNonQuery(cmd);
         }
 
-        public void UpsertDentry(long parentIno, string name, long ino)
+        public void UpsertDentry(long parentIno, ReadOnlySpan<byte> name, long ino)
         {
             var cmd = _session.GetUpsertDentryCommand();
             cmd.BindInt64(1, parentIno);
-            cmd.BindText(2, name);
+            cmd.BindBlob(2, name);
             cmd.BindInt64(3, ino);
             ExecuteNonQuery(cmd);
         }
 
-        public void RemoveDentry(long parentIno, string name)
+        public void RemoveDentry(long parentIno, ReadOnlySpan<byte> name)
         {
             var cmd = _session.GetRemoveDentryCommand();
             cmd.BindInt64(1, parentIno);
-            cmd.BindText(2, name);
+            cmd.BindBlob(2, name);
             ExecuteNonQuery(cmd);
         }
 
-        public void MarkWhiteout(long parentIno, string name)
+        public void MarkWhiteout(long parentIno, ReadOnlySpan<byte> name)
         {
             var cmd = _session.GetMarkWhiteoutCommand();
             cmd.BindInt64(1, parentIno);
-            cmd.BindText(2, name);
+            cmd.BindBlob(2, name);
             ExecuteNonQuery(cmd);
         }
 
-        public void ClearWhiteout(long parentIno, string name)
+        public void ClearWhiteout(long parentIno, ReadOnlySpan<byte> name)
         {
             var cmd = _session.GetClearWhiteoutCommand();
             cmd.BindInt64(1, parentIno);
-            cmd.BindText(2, name);
+            cmd.BindBlob(2, name);
             ExecuteNonQuery(cmd);
         }
 
@@ -299,16 +354,17 @@ public sealed class SilkMetadataSession : IDisposable
         ExecuteTransaction(tx => tx.UpsertInode(ino, kind, mode, uid, gid, nlink, rdev, size, atimeNs, mtimeNs, ctimeNs));
     }
 
-    public void UpsertDentry(long parentIno, string name, long ino)
+    public void UpsertDentry(long parentIno, ReadOnlySpan<byte> name, long ino)
     {
-        ExecuteTransaction(tx => tx.UpsertDentry(parentIno, name, ino));
+        var ownedName = name.ToArray();
+        ExecuteTransaction(tx => tx.UpsertDentry(parentIno, ownedName, ino));
     }
 
-    public long? LookupDentry(long parentIno, string name)
+    public long? LookupDentry(long parentIno, ReadOnlySpan<byte> name)
     {
         _lookupDentryCmd ??= PrepareCommand(SilkMetadataSql.LookupDentry);
         _lookupDentryCmd.BindInt64(1, parentIno);
-        _lookupDentryCmd.BindText(2, name);
+        _lookupDentryCmd.BindBlob(2, name);
         try
         {
             return _lookupDentryCmd.Step() ? _lookupDentryCmd.ColumnInt64(0) : null;
@@ -332,9 +388,10 @@ public sealed class SilkMetadataSession : IDisposable
         return ReadDentries(_listDentriesByParentCmd);
     }
 
-    public void RemoveDentry(long parentIno, string name)
+    public void RemoveDentry(long parentIno, ReadOnlySpan<byte> name)
     {
-        ExecuteTransaction(tx => tx.RemoveDentry(parentIno, name));
+        var ownedName = name.ToArray();
+        ExecuteTransaction(tx => tx.RemoveDentry(parentIno, ownedName));
     }
 
     public void DeleteInode(long ino)
@@ -347,20 +404,20 @@ public sealed class SilkMetadataSession : IDisposable
         _deleteInodeCmd.ExecuteNonQuery();
     }
 
-    public void SetXAttr(long ino, string key, ReadOnlySpan<byte> value)
+    public void SetXAttr(long ino, ReadOnlySpan<byte> key, ReadOnlySpan<byte> value)
     {
         _setXAttrCmd ??= PrepareCommand(SilkMetadataSql.SetXAttr);
         _setXAttrCmd.BindInt64(1, ino);
-        _setXAttrCmd.BindText(2, key);
+        _setXAttrCmd.BindBlob(2, key);
         _setXAttrCmd.BindBlob(3, value);
         _setXAttrCmd.ExecuteNonQuery();
     }
 
-    public byte[]? GetXAttr(long ino, string key)
+    public byte[]? GetXAttr(long ino, ReadOnlySpan<byte> key)
     {
         _getXAttrCmd ??= PrepareCommand(SilkMetadataSql.GetXAttr);
         _getXAttrCmd.BindInt64(1, ino);
-        _getXAttrCmd.BindText(2, key);
+        _getXAttrCmd.BindBlob(2, key);
         try
         {
             return _getXAttrCmd.Step() ? _getXAttrCmd.ColumnBlobToArray(0) : null;
@@ -371,15 +428,15 @@ public sealed class SilkMetadataSession : IDisposable
         }
     }
 
-    public Dictionary<string, byte[]> ListXAttrs(long ino)
+    public List<SilkXAttrRecord> ListXAttrs(long ino)
     {
         _listXAttrsCmd ??= PrepareCommand(SilkMetadataSql.ListXAttrs);
         _listXAttrsCmd.BindInt64(1, ino);
         try
         {
-            var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            var result = new List<SilkXAttrRecord>();
             while (_listXAttrsCmd.Step())
-                result[_listXAttrsCmd.ColumnString(0)] = _listXAttrsCmd.ColumnBlobToArray(1);
+                result.Add(new SilkXAttrRecord(_listXAttrsCmd.ColumnBlobToArray(0), _listXAttrsCmd.ColumnBlobToArray(1)));
             return result;
         }
         finally
@@ -388,32 +445,34 @@ public sealed class SilkMetadataSession : IDisposable
         }
     }
 
-    public void RemoveXAttr(long ino, string key)
+    public void RemoveXAttr(long ino, ReadOnlySpan<byte> key)
     {
         _removeXAttrCmd ??= PrepareCommand(SilkMetadataSql.RemoveXAttr);
         _removeXAttrCmd.BindInt64(1, ino);
-        _removeXAttrCmd.BindText(2, key);
+        _removeXAttrCmd.BindBlob(2, key);
         _removeXAttrCmd.ExecuteNonQuery();
     }
 
-    public void MarkWhiteout(long parentIno, string name)
+    public void MarkWhiteout(long parentIno, ReadOnlySpan<byte> name)
     {
-        if (string.IsNullOrWhiteSpace(name))
+        if (name.IsEmpty)
             throw new ArgumentException("Whiteout name cannot be empty.", nameof(name));
-        ExecuteTransaction(tx => tx.MarkWhiteout(parentIno, name));
+        var ownedName = name.ToArray();
+        ExecuteTransaction(tx => tx.MarkWhiteout(parentIno, ownedName));
     }
 
-    public bool HasWhiteout(long parentIno, string name)
+    public bool HasWhiteout(long parentIno, ReadOnlySpan<byte> name)
     {
         _hasWhiteoutCmd ??= PrepareCommand(SilkMetadataSql.HasWhiteout);
         _hasWhiteoutCmd.BindInt64(1, parentIno);
-        _hasWhiteoutCmd.BindText(2, name);
+        _hasWhiteoutCmd.BindBlob(2, name);
         return _hasWhiteoutCmd.ExecuteScalarInt64() > 0;
     }
 
-    public void ClearWhiteout(long parentIno, string name)
+    public void ClearWhiteout(long parentIno, ReadOnlySpan<byte> name)
     {
-        ExecuteTransaction(tx => tx.ClearWhiteout(parentIno, name));
+        var ownedName = name.ToArray();
+        ExecuteTransaction(tx => tx.ClearWhiteout(parentIno, ownedName));
     }
 
     public void MarkOpaque(long parentIno)
@@ -529,7 +588,7 @@ public sealed class SilkMetadataSession : IDisposable
         {
             var result = new List<SilkDentryRecord>();
             while (stmt.Step())
-                result.Add(new SilkDentryRecord(stmt.ColumnInt64(0), stmt.ColumnString(1), stmt.ColumnInt64(2)));
+                result.Add(new SilkDentryRecord(stmt.ColumnInt64(0), stmt.ColumnBlobToArray(1), stmt.ColumnInt64(2)));
             return result;
         }
         finally
@@ -569,7 +628,7 @@ internal static class SilkMetadataSql
     internal static ReadOnlySpan<byte> CreateDentriesTable => """
                                                                CREATE TABLE IF NOT EXISTS dentries (
                                                                  parent_ino INTEGER NOT NULL,
-                                                                 name TEXT NOT NULL,
+                                                                 name BLOB NOT NULL,
                                                                  ino INTEGER NOT NULL,
                                                                  PRIMARY KEY (parent_ino, name),
                                                                  FOREIGN KEY (ino) REFERENCES inodes(ino) ON DELETE CASCADE
@@ -579,7 +638,7 @@ internal static class SilkMetadataSql
     internal static ReadOnlySpan<byte> CreateXAttrsTable => """
                                                              CREATE TABLE IF NOT EXISTS xattrs (
                                                                ino INTEGER NOT NULL,
-                                                               key TEXT NOT NULL,
+                                                               key BLOB NOT NULL,
                                                                value BLOB NOT NULL,
                                                                PRIMARY KEY (ino, key),
                                                                FOREIGN KEY (ino) REFERENCES inodes(ino) ON DELETE CASCADE
@@ -589,7 +648,7 @@ internal static class SilkMetadataSql
     internal static ReadOnlySpan<byte> CreateWhiteoutsTable => """
                                                                 CREATE TABLE IF NOT EXISTS whiteouts (
                                                                   parent_ino INTEGER NOT NULL,
-                                                                  name TEXT NOT NULL,
+                                                                  name BLOB NOT NULL,
                                                                   opaque INTEGER NOT NULL DEFAULT 0,
                                                                   PRIMARY KEY (parent_ino, name)
                                                                 )
@@ -598,8 +657,10 @@ internal static class SilkMetadataSql
     internal static ReadOnlySpan<byte> DropInodeObjectsTable => "DROP TABLE IF EXISTS inode_objects"u8;
     internal static ReadOnlySpan<byte> DropObjectsTable => "DROP TABLE IF EXISTS objects"u8;
 
+    internal static ReadOnlySpan<byte> GetSchemaVersion => "SELECT CAST(v AS BLOB) FROM meta WHERE k = 'schema_version'"u8;
+
     internal static ReadOnlySpan<byte> UpsertSchemaVersion => """
-                                                               INSERT INTO meta(k, v) VALUES ('schema_version', '2')
+                                                               INSERT INTO meta(k, v) VALUES ('schema_version', CAST(?1 AS TEXT))
                                                                ON CONFLICT(k) DO UPDATE SET v = excluded.v
                                                                """u8;
 
@@ -652,14 +713,14 @@ internal static class SilkMetadataSql
 
     internal static ReadOnlySpan<byte> HasWhiteout => "SELECT COUNT(1) FROM whiteouts WHERE parent_ino = ?1 AND name = ?2 AND opaque = 0"u8;
 
-    internal static ReadOnlySpan<byte> IsOpaque => "SELECT COUNT(1) FROM whiteouts WHERE parent_ino = ?1 AND name = '.wh..wh..opq' AND opaque = 1"u8;
+    internal static ReadOnlySpan<byte> IsOpaque => "SELECT COUNT(1) FROM whiteouts WHERE parent_ino = ?1 AND name = X'2E77682E2E77682E2E6F7071' AND opaque = 1"u8;
 
-    internal static ReadOnlySpan<byte> ClearOpaque => "DELETE FROM whiteouts WHERE parent_ino = ?1 AND name = '.wh..wh..opq' AND opaque = 1"u8;
+    internal static ReadOnlySpan<byte> ClearOpaque => "DELETE FROM whiteouts WHERE parent_ino = ?1 AND name = X'2E77682E2E77682E2E6F7071' AND opaque = 1"u8;
 
     internal static ReadOnlySpan<byte> ClearWhiteout => "DELETE FROM whiteouts WHERE parent_ino = ?1 AND name = ?2"u8;
 
     internal static ReadOnlySpan<byte> MarkOpaque => """
-                                                      INSERT INTO whiteouts(parent_ino, name, opaque) VALUES (?1, '.wh..wh..opq', 1)
+                                                      INSERT INTO whiteouts(parent_ino, name, opaque) VALUES (?1, X'2E77682E2E77682E2E6F7071', 1)
                                                       ON CONFLICT(parent_ino, name) DO UPDATE SET opaque = 1
                                                       """u8;
 

@@ -496,8 +496,9 @@ public sealed class ImageArchiveService
             }
             else if (inode.Type == InodeType.Symlink)
             {
-                if (inode.Readlink(out var linkTarget) < 0 || string.IsNullOrEmpty(linkTarget))
+                if (inode.Readlink(out byte[]? linkTargetBytes) < 0 || linkTargetBytes is not { Length: > 0 })
                     return;
+                var linkTarget = FsEncoding.DecodeUtf8Strict(linkTargetBytes);
                 var link = new PaxTarEntry(TarEntryType.SymbolicLink, relPath)
                 {
                     LinkName = linkTarget
@@ -526,14 +527,15 @@ public sealed class ImageArchiveService
 
         var children = inode.GetEntries()
             .Where(e => e.Name != "." && e.Name != "..")
-            .OrderBy(e => e.Name, StringComparer.Ordinal)
+            .OrderBy(e => e.Name, FsName.BytewiseComparer)
             .ToList();
         foreach (var child in children)
         {
             var dentry = inode.Lookup(child.Name);
             if (dentry == null || dentry.Inode == null)
                 continue;
-            var childRel = string.IsNullOrEmpty(relPath) ? child.Name : relPath + "/" + child.Name;
+            var childName = child.Name.ToString();
+            var childRel = string.IsNullOrEmpty(relPath) ? childName : relPath + "/" + childName;
             WriteDentryTreeToTar(writer, dentry, mount, childRel);
         }
     }

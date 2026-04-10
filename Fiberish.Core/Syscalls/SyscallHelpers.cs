@@ -34,6 +34,44 @@ public readonly record struct UserStringReadResult(string Value, int ErrorCode)
     public bool Success => ErrorCode == 0;
 }
 
+public struct RentedUserBytes : IDisposable
+{
+    private byte[]? _buffer;
+
+    public RentedUserBytes(byte[] rentedBuffer, int length)
+    {
+        _buffer = rentedBuffer;
+        Length = length;
+    }
+
+    public int Length { get; private set; }
+
+    public bool IsEmpty => Length == 0;
+
+    public bool IsAbsolute => Length > 0 && _buffer![0] == (byte)'/';
+
+    public byte this[int index] => _buffer![index];
+
+    public ReadOnlySpan<byte> Span => _buffer == null ? [] : _buffer.AsSpan(0, Length);
+
+    public byte[] UnsafeBuffer => _buffer ?? Array.Empty<byte>();
+
+    public byte[] ToArray()
+    {
+        return Span.ToArray();
+    }
+
+    public void Dispose()
+    {
+        if (_buffer == null)
+            return;
+
+        ArrayPool<byte>.Shared.Return(_buffer, clearArray: false);
+        _buffer = null;
+        Length = 0;
+    }
+}
+
 public partial class SyscallManager
 {
     // Lazy-initialized PathWalker instance
@@ -96,12 +134,56 @@ public partial class SyscallManager
         }
     }
 
+    public int ReadUserBytes(uint addr, out RentedUserBytes value, int maxLength = LinuxConstants.PathMax)
+    {
+        value = default;
+        if (addr == 0)
+            return -(int)Errno.EFAULT;
+        if (maxLength <= 0)
+            return -(int)Errno.ENAMETOOLONG;
+
+        var rented = ArrayPool<byte>.Shared.Rent(maxLength);
+        var success = false;
+        var handedOff = false;
+        try
+        {
+            success = ReadNullTerminatedUserBytes(addr, rented.AsSpan(0, maxLength), out var length, out var terminated);
+            if (!success)
+                return -(int)Errno.EFAULT;
+            if (!terminated)
+                return -(int)Errno.ENAMETOOLONG;
+
+            value = new RentedUserBytes(rented, length);
+            handedOff = true;
+            return 0;
+        }
+        finally
+        {
+            if (!handedOff)
+                ArrayPool<byte>.Shared.Return(rented, clearArray: false);
+        }
+    }
+
     public int ReadPathArgument(uint addr, out string path, bool allowEmpty = false)
     {
         var result = ReadUserString(addr);
         path = result.Success ? result.Value : "";
         if (!result.Success) return result.ErrorCode;
         if (!allowEmpty && path.Length == 0) return -(int)Errno.ENOENT;
+        return 0;
+    }
+
+    public int ReadPathArgumentBytes(uint addr, out RentedUserBytes path, bool allowEmpty = false)
+    {
+        var rc = ReadUserBytes(addr, out path);
+        if (rc != 0)
+            return rc;
+        if (!allowEmpty && path.IsEmpty)
+        {
+            path.Dispose();
+            return -(int)Errno.ENOENT;
+        }
+
         return 0;
     }
 
@@ -351,6 +433,26 @@ public partial class SyscallManager
                 }
             }
         }
+    }
+
+    public (PathLocation loc, string guestPath) ResolvePath(byte[] pathBytes, int pathLength, bool isHostRelativeDefault = false)
+    {
+        string guestPath;
+        PathLocation loc;
+
+        if (pathBytes[0] == '/' || !isHostRelativeDefault)
+        {
+            // Absolute guest path OR relative guest path (not defaulting to host)
+            loc = PathWalker.PathWalk(pathBytes, pathLength);
+            if (loc.IsValid || !isHostRelativeDefault)
+            {
+                guestPath = FsEncoding.DecodeUtf8Lossy(pathBytes.AsSpan(0, pathLength));
+                return (loc, guestPath);
+            }
+        }
+        
+        // Fall back to string implementation for host path resolution
+        return ResolvePath(FsEncoding.DecodeUtf8Lossy(pathBytes.AsSpan(0, pathLength)), isHostRelativeDefault);
     }
 
     public (PathLocation loc, string guestPath) ResolvePath(string path, bool isHostRelativeDefault = false)

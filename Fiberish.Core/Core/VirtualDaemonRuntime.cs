@@ -52,7 +52,7 @@ public sealed class VirtualDaemonRuntime
         var bindRc = inode.Bind(file, Task, new UnixSockaddrInfo
         {
             IsAbstract = false,
-            Path = Daemon.UnixPath,
+            PathBytes = Encoding.UTF8.GetBytes(Daemon.UnixPath),
             SunPathRaw = Encoding.UTF8.GetBytes(Daemon.UnixPath + "\0")
         });
         if (bindRc != 0)

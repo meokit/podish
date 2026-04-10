@@ -1555,10 +1555,23 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         return null;
     }
 
+    public override Dentry? Lookup(ReadOnlySpan<byte> name)
+    {
+        if (!FsEncoding.TryDecodeUtf8(name, out var decoded))
+        {
+            SetLookupFailureError(-(int)Errno.ENOENT);
+            return null;
+        }
+
+        return Lookup(decoded);
+    }
+
     public override int Create(Dentry dentry, int mode, int uid, int gid)
     {
         if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
-        var subPath = Path.Combine(ResolveHostPath(), dentry.Name);
+        if (!TryDecodeHostComponent(dentry.Name, out var component))
+            return -(int)Errno.EINVAL;
+        var subPath = Path.Combine(ResolveHostPath(), component);
         var sb = (HostSuperBlock)SuperBlock;
         if (sb.PathExistsOnHostRaw(subPath)) return -(int)Errno.EEXIST;
 
@@ -1594,7 +1607,9 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     public override int Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
         if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
-        var subPath = Path.Combine(ResolveHostPath(), dentry.Name);
+        if (!TryDecodeHostComponent(dentry.Name, out var component))
+            return -(int)Errno.EINVAL;
+        var subPath = Path.Combine(ResolveHostPath(), component);
         var sb = (HostSuperBlock)SuperBlock;
         if (sb.PathExistsOnHostRaw(subPath)) return -(int)Errno.EEXIST;
 
@@ -1630,7 +1645,9 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     public override int Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
     {
         if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
-        var subPath = Path.Combine(ResolveHostPath(), dentry.Name);
+        if (!TryDecodeHostComponent(dentry.Name, out var component))
+            return -(int)Errno.EINVAL;
+        var subPath = Path.Combine(ResolveHostPath(), component);
         var sb = (HostSuperBlock)SuperBlock;
         if (sb.PathExistsOnHostRaw(subPath)) return -(int)Errno.EEXIST;
 
@@ -1877,8 +1894,10 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     {
         if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
         if (oldInode is not HostInode hi) return -(int)Errno.EXDEV;
+        if (!TryDecodeHostComponent(dentry.Name, out var component))
+            return -(int)Errno.EINVAL;
 
-        var newPath = Path.Combine(ResolveHostPath(), dentry.Name);
+        var newPath = Path.Combine(ResolveHostPath(), component);
         var sourcePath = hi.ResolveHostPath();
         if (link(sourcePath, newPath) != 0)
             return NegErrnoFromPInvoke();
@@ -1897,7 +1916,9 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     public override int Symlink(Dentry dentry, string target, int uid, int gid)
     {
         if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
-        var newPath = Path.Combine(ResolveHostPath(), dentry.Name);
+        if (!TryDecodeHostComponent(dentry.Name, out var component))
+            return -(int)Errno.EINVAL;
+        var newPath = Path.Combine(ResolveHostPath(), component);
         var sb = (HostSuperBlock)SuperBlock;
         if (sb.PathExistsOnHostRaw(newPath))
             return -(int)Errno.EEXIST;
@@ -1924,6 +1945,24 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             }
 
             return instantiateRc;
+        }
+
+        return 0;
+    }
+
+    public override int Readlink(out byte[]? target)
+    {
+        var rc = Readlink(out string? decodedTarget);
+        if (rc < 0 || decodedTarget == null)
+        {
+            target = null;
+            return rc;
+        }
+
+        if (!FsEncoding.TryEncodeUtf8(decodedTarget, out target))
+        {
+            target = null;
+            return -(int)Errno.EIO;
         }
 
         return 0;
@@ -2371,8 +2410,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         var list = new List<DirectoryEntry>();
         if (Type != InodeType.Directory) return list;
 
-        list.Add(new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory });
-        list.Add(new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory });
+        list.Add(new DirectoryEntry { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory });
+        list.Add(new DirectoryEntry { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory });
 
         var entries = Directory.GetFileSystemEntries(ResolveHostPath());
         var sb = (HostSuperBlock)SuperBlock;
@@ -2380,9 +2419,16 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         {
             var name = Path.GetFileName(entryPath);
             if (name == HostfsMetadataStore.MetaDirName) continue;
+            if (!FsEncoding.TryEncodeUtf8(name, out var encodedName))
+                continue;
             var dentry = sb.GetDentry(entryPath, name, Dentries.Count > 0 ? Dentries[0] : null);
             if (dentry != null)
-                list.Add(new DirectoryEntry { Name = name, Ino = dentry.Inode!.Ino, Type = dentry.Inode.Type });
+                list.Add(new DirectoryEntry
+                {
+                    Name = FsName.FromOwnedBytes(encodedName),
+                    Ino = dentry.Inode!.Ino,
+                    Type = dentry.Inode.Type
+                });
         }
 
         return list;
@@ -2424,15 +2470,22 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             EnsureXAttrsLoaded();
             var names = _xattrs!.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray();
             var required = 0;
-            foreach (var n in names) required += Encoding.UTF8.GetByteCount(n) + 1;
+            foreach (var n in names)
+            {
+                if (!FsEncoding.TryEncodeUtf8(n, out var encodedName))
+                    return -(int)Errno.EIO;
+                required += encodedName.Length + 1;
+            }
             if (list.Length == 0) return required;
             if (list.Length < required) return -(int)Errno.ERANGE;
 
             var off = 0;
             foreach (var n in names)
             {
-                var nlen = Encoding.UTF8.GetBytes(n, list[off..]);
-                off += nlen;
+                if (!FsEncoding.TryEncodeUtf8(n, out var encodedName))
+                    return -(int)Errno.EIO;
+                encodedName.CopyTo(list[off..]);
+                off += encodedName.Length;
                 list[off++] = 0;
             }
 
@@ -2456,6 +2509,11 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (_xattrs != null) return;
         var sb = (HostSuperBlock)SuperBlock;
         _xattrs = sb.MetadataStore.LoadXAttrs(this, ResolveHostPath());
+    }
+
+    private static bool TryDecodeHostComponent(FsName name, out string decoded)
+    {
+        return FsEncoding.TryDecodeUtf8(name.Bytes, out decoded);
     }
 
     private int ComputeInitialLinkCount()

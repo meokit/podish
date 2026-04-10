@@ -14,12 +14,12 @@ public class SymlinkStackEntry
     public PathLocation LinkPath { get; set; }
 
     /// <summary>
-    ///     The target path the symlink points to.
+    ///     The raw target path the symlink points to.
     /// </summary>
-    public string TargetPath { get; set; } = "";
+    public byte[] TargetPath { get; set; } = Array.Empty<byte>();
 
     /// <summary>
-    ///     Current position in the target path string.
+    ///     Current position in the target path buffer.
     /// </summary>
     public int Position { get; set; }
 

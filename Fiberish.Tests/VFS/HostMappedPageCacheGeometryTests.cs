@@ -247,7 +247,7 @@ public class HostMappedPageCacheGeometryTests
         {
             var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
             root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-            root.Children["mnt"] = mntDentry;
+            root.CacheChild(mntDentry, "test");
         }
 
         return sm;

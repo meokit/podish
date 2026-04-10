@@ -311,11 +311,11 @@ public class OverlayTests
             var created = libOv.Inode!.Lookup("libbz2.so.1");
             Assert.NotNull(created);
             Assert.Equal(InodeType.Symlink, created!.Inode!.Type);
-            Assert.Equal(0, created.Inode.Readlink(out var createdTarget));
-            Assert.Equal("libbz2.so.1.0.8", createdTarget);
+            Assert.Equal(0, created.Inode.Readlink(out byte[]? createdTarget));
+            Assert.Equal("libbz2.so.1.0.8"u8.ToArray(), createdTarget);
             Assert.NotNull(libInode.UpperDentry);
-            Assert.Equal(0, libInode.UpperInode!.Lookup("libbz2.so.1")!.Inode!.Readlink(out var upperTarget));
-            Assert.Equal("libbz2.so.1.0.8", upperTarget);
+            Assert.Equal(0, libInode.UpperInode!.Lookup("libbz2.so.1")!.Inode!.Readlink(out byte[]? upperTarget));
+            Assert.Equal("libbz2.so.1.0.8"u8.ToArray(), upperTarget);
         }
         finally
         {
@@ -1041,8 +1041,8 @@ public class OverlayTests
             new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
 
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
-        Assert.Equal(0, root.Lookup("link.txt")!.Inode!.Readlink(out var linkTarget));
-        Assert.Equal("target.txt", linkTarget);
+        Assert.Equal(0, root.Lookup("link.txt")!.Inode!.Readlink(out byte[]? linkTarget));
+        Assert.Equal("target.txt"u8.ToArray(), linkTarget);
 
         Assert.Equal(0, root.Unlink("link.txt"));
         Assert.Null(root.Lookup("link.txt"));

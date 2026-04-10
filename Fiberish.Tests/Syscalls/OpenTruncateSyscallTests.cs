@@ -1544,9 +1544,9 @@ public class OpenTruncateSyscallTests
         }
 
         var direct = new Dentry("dir-link", null, lowerRoot, lowerSb);
-        lowerRoot.Inode.Symlink(direct, "dir", 0, 0);
+        lowerRoot.Inode.Symlink(direct, "dir"u8.ToArray(), 0, 0);
         var indirect = new Dentry("dir-chain", null, lowerRoot, lowerSb);
-        lowerRoot.Inode.Symlink(indirect, "dir-link", 0, 0);
+        lowerRoot.Inode.Symlink(indirect, "dir-link"u8.ToArray(), 0, 0);
 
         var overlayFs = new OverlayFileSystem();
         var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -1607,7 +1607,7 @@ public class OpenTruncateSyscallTests
         var link = new Dentry("link", null, lowerRoot, lowerSb);
         lowerRoot.Inode!.Symlink(link, path, 0, 0);
         var indirect = new Dentry("indirect", null, lowerRoot, lowerSb);
-        lowerRoot.Inode!.Symlink(indirect, "link", 0, 0);
+        lowerRoot.Inode!.Symlink(indirect, "link"u8.ToArray(), 0, 0);
 
         var overlayFs = new OverlayFileSystem();
         var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(

@@ -11,6 +11,8 @@ namespace Fiberish.Tests.VFS;
 
 public class SilkFsAdapterTests
 {
+    private static byte[] Utf8(string value) => Encoding.UTF8.GetBytes(value);
+
     [Fact]
     public void Silkfs_IsRegistered_AndCanAttachMount()
     {
@@ -38,7 +40,7 @@ public class SilkFsAdapterTests
             {
                 var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                root.Children["mnt"] = mntDentry;
+                root.CacheChild(mntDentry, "test");
             }
 
             var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -65,14 +67,14 @@ public class SilkFsAdapterTests
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
             using var session = repo.OpenMetadataSession();
-            var childIno = session.LookupDentry(SilkMetadataStore.RootInode, "hello.txt");
+            var childIno = session.LookupDentry(SilkMetadataStore.RootInode, Utf8("hello.txt"));
             Assert.NotNull(childIno);
-            var x = session.GetXAttr(childIno!.Value, "user.mime_type");
+            var x = session.GetXAttr(childIno!.Value, Utf8("user.mime_type"));
             Assert.NotNull(x);
 
             var wh = new Dentry(".wh.ghost.txt", null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Mknod(wh, 0x180, 0, 0, InodeType.CharDev, 0);
-            Assert.True(session.HasWhiteout(SilkMetadataStore.RootInode, "ghost.txt"));
+            Assert.True(session.HasWhiteout(SilkMetadataStore.RootInode, Utf8("ghost.txt")));
         }
         finally
         {
@@ -107,7 +109,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -148,7 +150,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -177,7 +179,7 @@ public class SilkFsAdapterTests
                 var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
                 repo.Initialize();
                 using var session = repo.OpenMetadataSession();
-                Assert.True(session.HasWhiteout(SilkMetadataStore.RootInode, "gone.txt"));
+                Assert.True(session.HasWhiteout(SilkMetadataStore.RootInode, Utf8("gone.txt")));
                 sm.Close();
             }
         }
@@ -213,7 +215,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -251,7 +253,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -293,7 +295,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -338,7 +340,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -356,8 +358,8 @@ public class SilkFsAdapterTests
                 var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
                 repo.Initialize();
                 using var session = repo.OpenMetadataSession();
-                var fromIno = session.LookupDentry(SilkMetadataStore.RootInode, "from");
-                var toIno = session.LookupDentry(SilkMetadataStore.RootInode, "to");
+                var fromIno = session.LookupDentry(SilkMetadataStore.RootInode, Utf8("from"));
+                var toIno = session.LookupDentry(SilkMetadataStore.RootInode, Utf8("to"));
                 Assert.NotNull(fromIno);
                 Assert.NotNull(toIno);
 
@@ -396,7 +398,7 @@ public class SilkFsAdapterTests
             {
                 var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                root.Children["mnt"] = mntDentry;
+                root.CacheChild(mntDentry, "test");
             }
 
             var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -415,7 +417,7 @@ public class SilkFsAdapterTests
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
             using var session = repo.OpenMetadataSession();
-            var ino = session.LookupDentry(SilkMetadataStore.RootInode, "obj.txt");
+            var ino = session.LookupDentry(SilkMetadataStore.RootInode, Utf8("obj.txt"));
             Assert.NotNull(ino);
             var livePath = repo.GetLiveInodePath(ino!.Value);
             Assert.True(File.Exists(livePath));
@@ -458,7 +460,7 @@ public class SilkFsAdapterTests
             {
                 var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                root.Children["mnt"] = mntDentry;
+                root.CacheChild(mntDentry, "test");
             }
 
             var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -476,12 +478,12 @@ public class SilkFsAdapterTests
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
             using var session = repo.OpenMetadataSession();
-            var ino = session.LookupDentry(SilkMetadataStore.RootInode, "gone.txt");
+            var ino = session.LookupDentry(SilkMetadataStore.RootInode, Utf8("gone.txt"));
             Assert.NotNull(ino);
 
             loc.Dentry.Inode.Unlink("gone.txt");
 
-            Assert.Null(session.LookupDentry(SilkMetadataStore.RootInode, "gone.txt"));
+            Assert.Null(session.LookupDentry(SilkMetadataStore.RootInode, Utf8("gone.txt")));
             Assert.Null(session.GetInode(ino!.Value));
             Assert.False(File.Exists(repo.GetLiveInodePath(ino.Value)));
             sm.Close();
@@ -511,7 +513,7 @@ public class SilkFsAdapterTests
             {
                 var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                root.Children["mnt"] = mntDentry;
+                root.CacheChild(mntDentry, "test");
             }
 
             var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -535,13 +537,13 @@ public class SilkFsAdapterTests
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
             using var session = repo.OpenMetadataSession();
-            var bIno = session.LookupDentry(SilkMetadataStore.RootInode, "b.txt");
+            var bIno = session.LookupDentry(SilkMetadataStore.RootInode, Utf8("b.txt"));
             Assert.NotNull(bIno);
 
             loc.Dentry.Inode.Rename("a.txt", loc.Dentry.Inode, "b.txt");
 
-            Assert.Null(session.LookupDentry(SilkMetadataStore.RootInode, "a.txt"));
-            var newBIno = session.LookupDentry(SilkMetadataStore.RootInode, "b.txt");
+            Assert.Null(session.LookupDentry(SilkMetadataStore.RootInode, Utf8("a.txt")));
+            var newBIno = session.LookupDentry(SilkMetadataStore.RootInode, Utf8("b.txt"));
             Assert.NotNull(newBIno);
             Assert.NotEqual(bIno, newBIno);
             Assert.Null(session.GetInode(bIno!.Value));
@@ -572,7 +574,7 @@ public class SilkFsAdapterTests
             {
                 var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                root.Children["mnt"] = mntDentry;
+                root.CacheChild(mntDentry, "test");
             }
 
             var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -590,7 +592,7 @@ public class SilkFsAdapterTests
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
             using var session = repo.OpenMetadataSession();
-            var ino = session.LookupDentry(SilkMetadataStore.RootInode, "held.txt");
+            var ino = session.LookupDentry(SilkMetadataStore.RootInode, Utf8("held.txt"));
             Assert.NotNull(ino);
             var livePath = repo.GetLiveInodePath(ino!.Value);
             Assert.True(File.Exists(livePath));
@@ -634,7 +636,7 @@ public class SilkFsAdapterTests
             {
                 var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                root.Children["mnt"] = mntDentry;
+                root.CacheChild(mntDentry, "test");
             }
 
             var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -652,7 +654,7 @@ public class SilkFsAdapterTests
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
             using var session = repo.OpenMetadataSession();
-            var ino = session.LookupDentry(SilkMetadataStore.RootInode, "mapheld.txt");
+            var ino = session.LookupDentry(SilkMetadataStore.RootInode, Utf8("mapheld.txt"));
             Assert.NotNull(ino);
             var livePath = repo.GetLiveInodePath(ino!.Value);
             Assert.True(File.Exists(livePath));
@@ -697,7 +699,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -742,7 +744,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -788,7 +790,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -829,7 +831,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -875,7 +877,7 @@ public class SilkFsAdapterTests
             {
                 var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                root.Children["mnt"] = mntDentry;
+                root.CacheChild(mntDentry, "test");
             }
 
             var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -947,7 +949,7 @@ public class SilkFsAdapterTests
             {
                 var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                root.Children["mnt"] = mntDentry;
+                root.CacheChild(mntDentry, "test");
             }
 
             var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -1013,7 +1015,7 @@ public class SilkFsAdapterTests
             {
                 var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                root.Children["mnt"] = mntDentry;
+                root.CacheChild(mntDentry, "test");
             }
 
             var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -1080,7 +1082,7 @@ public class SilkFsAdapterTests
             {
                 var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                 root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                root.Children["mnt"] = mntDentry;
+                root.CacheChild(mntDentry, "test");
             }
 
             var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -1138,7 +1140,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -1169,7 +1171,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -1217,7 +1219,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
@@ -1251,7 +1253,7 @@ public class SilkFsAdapterTests
                 {
                     var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
                     root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-                    root.Children["mnt"] = mntDentry;
+                    root.CacheChild(mntDentry, "test");
                 }
 
                 var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);

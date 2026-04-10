@@ -27,7 +27,7 @@ public class OverlayUnionmountPortTests
         var replaced = root.Lookup("empty");
         Assert.NotNull(replaced);
         Assert.Equal(InodeType.Directory, replaced!.Inode!.Type);
-        Assert.Empty(replaced.Inode.GetEntries().Where(e => e.Name is not "." and not ".."));
+        Assert.Empty(replaced.Inode.GetEntries().Where(e => e.Name != "." && e.Name != ".."));
     }
 
     [Fact]
@@ -752,10 +752,10 @@ public class OverlayUnionmountPortTests
         Assert.NotNull(link2);
         Assert.Equal(InodeType.Symlink, link!.Inode!.Type);
         Assert.Equal(InodeType.Symlink, link2!.Inode!.Type);
-        Assert.Equal(0, link.Inode.Readlink(out var linkTarget));
-        Assert.Equal("target", linkTarget);
-        Assert.Equal(0, link2.Inode.Readlink(out var link2Target));
-        Assert.Equal("target", link2Target);
+        Assert.Equal(0, link.Inode.Readlink(out byte[]? linkTarget));
+        Assert.Equal("target"u8.ToArray(), linkTarget);
+        Assert.Equal(0, link2.Inode.Readlink(out byte[]? link2Target));
+        Assert.Equal("target"u8.ToArray(), link2Target);
     }
 
     [Fact]
@@ -848,7 +848,7 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.Equal(-(int)Errno.EINVAL, root.Lookup("file")!.Inode!.Readlink(out _));
+        Assert.Equal(-(int)Errno.EINVAL, root.Lookup("file")!.Inode!.Readlink(out byte[]? _));
     }
 
     [Fact]
@@ -863,8 +863,8 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.Equal(0, root.Lookup("dangling")!.Inode!.Readlink(out var danglingTarget));
-        Assert.Equal("missing-target", danglingTarget);
+        Assert.Equal(0, root.Lookup("dangling")!.Inode!.Readlink(out byte[]? danglingTarget));
+        Assert.Equal("missing-target"u8.ToArray(), danglingTarget);
     }
 
     [Fact]
@@ -880,8 +880,8 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.Equal(0, root.Lookup("dir-link")!.Inode!.Readlink(out var dirLinkTarget));
-        Assert.Equal("dir", dirLinkTarget);
+        Assert.Equal(0, root.Lookup("dir-link")!.Inode!.Readlink(out byte[]? dirLinkTarget));
+        Assert.Equal("dir"u8.ToArray(), dirLinkTarget);
     }
 
     [Fact]
@@ -897,8 +897,8 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.Equal(0, root.Lookup("link")!.Inode!.Readlink(out var directLinkTarget));
-        Assert.Equal("target", directLinkTarget);
+        Assert.Equal(0, root.Lookup("link")!.Inode!.Readlink(out byte[]? directLinkTarget));
+        Assert.Equal("target"u8.ToArray(), directLinkTarget);
     }
 
     [Fact]
@@ -915,8 +915,8 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.Equal(0, root.Lookup("chain")!.Inode!.Readlink(out var chainTarget));
-        Assert.Equal("link", chainTarget);
+        Assert.Equal(0, root.Lookup("chain")!.Inode!.Readlink(out byte[]? chainTarget));
+        Assert.Equal("link"u8.ToArray(), chainTarget);
     }
 
     [Fact]
@@ -933,8 +933,8 @@ public class OverlayUnionmountPortTests
         var overlaySb = CreateOverlay(lowerSb, upperSb);
         var root = Assert.IsType<OverlayInode>(overlaySb.Root.Inode);
 
-        Assert.Equal(0, root.Lookup("dir-chain")!.Inode!.Readlink(out var dirChainTarget));
-        Assert.Equal("dir-link", dirChainTarget);
+        Assert.Equal(0, root.Lookup("dir-chain")!.Inode!.Readlink(out byte[]? dirChainTarget));
+        Assert.Equal("dir-link"u8.ToArray(), dirChainTarget);
     }
 
     [Fact]
@@ -1202,7 +1202,7 @@ public class OverlayUnionmountPortTests
         }
 
         var dir = Assert.IsType<OverlayInode>(entry.Inode);
-        foreach (var child in dir.GetEntries().Where(e => e.Name is not "." and not "..").ToList())
+        foreach (var child in dir.GetEntries().Where(e => e.Name != "." && e.Name != "..").ToList())
             RemoveTree(dir, child.Name);
 
         parent.Rmdir(name);

@@ -18,8 +18,8 @@ public class NameData
     /// <summary>
     ///     Creates a new NameData with the specified starting location.
     /// </summary>
-    /// <param name="start">Starting path location</param>
-    /// <param name="flags">Lookup flags</param>
+    /// <param name="start">Starting path location.</param>
+    /// <param name="flags">Lookup flags.</param>
     public NameData(PathLocation start, LookupFlags flags = LookupFlags.FollowSymlink)
     {
         Path = start;
@@ -35,9 +35,9 @@ public class NameData
 
     /// <summary>
     ///     The last component name encountered during path resolution.
-    ///     Used for create operations to get the filename.
+    ///     Used for create operations to expose the raw filename component.
     /// </summary>
-    public string? LastName { get; set; }
+    public FsName? LastName { get; set; }
 
     /// <summary>
     ///     Type of the last path component.
@@ -60,12 +60,17 @@ public class NameData
     public int TotalLinkCount { get; set; }
 
     /// <summary>
-    ///     The original path string being resolved.
+    ///     Raw path bytes currently being resolved.
     /// </summary>
-    public string PathString { get; set; } = "";
+    public byte[] PathBytes { get; set; } = Array.Empty<byte>();
 
     /// <summary>
-    ///     Current position in the path string.
+    ///     Effective length within <see cref="PathBytes"/> to consider during lookup.
+    /// </summary>
+    public int PathLength { get; set; }
+
+    /// <summary>
+    ///     Current byte position in the active path buffer.
     /// </summary>
     public int PathPosition { get; set; }
 
@@ -100,9 +105,9 @@ public class NameData
     public bool IsValid => Path.IsValid;
 
     /// <summary>
-    ///     Whether we're at the final component of the path.
+    ///     Whether resolution has reached the end of the active path buffer.
     /// </summary>
-    public bool IsAtEnd => PathPosition >= PathString.Length;
+    public bool IsAtEnd => PathPosition >= PathLength;
 
     /// <summary>
     ///     Creates a NameData for create operations.
@@ -121,7 +126,7 @@ public class NameData
     }
 
     /// <summary>
-    ///     Creates a NameData that doesn't follow symlinks on final component.
+    ///     Creates a NameData that doesn't follow symlinks on the final component.
     /// </summary>
     public static NameData ForNoFollow(PathLocation start)
     {
@@ -146,7 +151,8 @@ public class NameData
         LastType = LastType.None;
         Depth = 0;
         TotalLinkCount = 0;
-        PathString = "";
+        PathBytes = Array.Empty<byte>();
+        PathLength = 0;
         PathPosition = 0;
         ErrorCode = 0;
         SymlinkStack.Clear();

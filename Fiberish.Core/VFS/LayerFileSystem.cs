@@ -77,6 +77,9 @@ public sealed class LayerIndex
     public void AddEntry(LayerIndexEntry entry)
     {
         var normalizedPath = NormalizePath(entry.Path);
+        ValidateUtf8Representable(normalizedPath, nameof(entry.Path));
+        if (entry.Type == InodeType.Symlink)
+            ValidateUtf8Representable(entry.SymlinkTarget, nameof(entry.SymlinkTarget));
         var normalizedEntry = entry with { Path = normalizedPath };
         _entries[normalizedPath] = normalizedEntry;
 
@@ -175,6 +178,12 @@ public sealed class LayerIndex
         if (path == "/") return "/";
         var lastSlash = path.LastIndexOf('/');
         return lastSlash < 0 ? path : path[(lastSlash + 1)..];
+    }
+
+    private static void ValidateUtf8Representable(string value, string paramName)
+    {
+        if (!FsEncoding.TryEncodeUtf8(value, out _))
+            throw new ArgumentException("Layerfs adapter only accepts UTF-8 representable strings.", paramName);
     }
 }
 
@@ -276,16 +285,20 @@ public sealed class LayerNode
 
     public static LayerNode Directory(string name, int mode = 0x1ED)
     {
+        ValidateUtf8Representable(name, nameof(name));
         return new LayerNode(name, InodeType.Directory, mode);
     }
 
     public static LayerNode File(string name, byte[] content, int mode = 0x1A4)
     {
+        ValidateUtf8Representable(name, nameof(name));
         return new LayerNode(name, InodeType.File, mode) { Content = content };
     }
 
     public static LayerNode Symlink(string name, string target, int mode = 0x1FF)
     {
+        ValidateUtf8Representable(name, nameof(name));
+        ValidateUtf8Representable(target, nameof(target));
         return new LayerNode(name, InodeType.Symlink, mode) { SymlinkTarget = target };
     }
 
@@ -294,6 +307,12 @@ public sealed class LayerNode
         if (Children == null) throw new InvalidOperationException("Only directories can have children");
         Children[child.Name] = child;
         return this;
+    }
+
+    private static void ValidateUtf8Representable(string value, string paramName)
+    {
+        if (!FsEncoding.TryEncodeUtf8(value, out _))
+            throw new ArgumentException("Layerfs adapter only accepts UTF-8 representable strings.", paramName);
     }
 }
 
@@ -332,6 +351,17 @@ public class LayerInode : MappingBackedInode
         return new Dentry(name, sb.GetOrCreateInode(childPath), parentDentry, SuperBlock);
     }
 
+    public override Dentry? Lookup(ReadOnlySpan<byte> name)
+    {
+        if (!FsEncoding.TryDecodeUtf8(name, out var decoded))
+        {
+            SetLookupFailureError(-(int)Errno.ENOENT);
+            return null;
+        }
+
+        return Lookup(decoded);
+    }
+
     private static int ComputeInitialLinkCount(LayerSuperBlock sb, string path, LayerIndexEntry entry)
     {
         if (entry.Type != InodeType.Directory)
@@ -365,6 +395,23 @@ public class LayerInode : MappingBackedInode
         }
 
         target = _entry.SymlinkTarget;
+        return 0;
+    }
+
+    public override int Readlink(out byte[]? target)
+    {
+        if (_entry.Type != InodeType.Symlink)
+        {
+            target = null;
+            return -(int)Errno.EINVAL;
+        }
+
+        if (!FsEncoding.TryEncodeUtf8(_entry.SymlinkTarget, out target))
+        {
+            target = null;
+            return -(int)Errno.EIO;
+        }
+
         return 0;
     }
 
@@ -488,9 +535,11 @@ public class LayerInode : MappingBackedInode
         {
             if (!sb.Index.TryGetChildPath(_path, name, out var childPath)) continue;
             if (!sb.Index.TryGetEntry(childPath, out var childEntry)) continue;
+            if (!FsEncoding.TryEncodeUtf8(name, out var encodedName))
+                continue;
             entries.Add(new DirectoryEntry
             {
-                Name = name,
+                Name = FsName.FromOwnedBytes(encodedName),
                 Ino = sb.GetStableIno(childPath),
                 Type = childEntry.Type
             });

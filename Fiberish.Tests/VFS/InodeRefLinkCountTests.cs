@@ -5,6 +5,8 @@ namespace Fiberish.Tests.VFS;
 
 public class InodeRefLinkCountTests
 {
+    private static byte[] B(string value) => FsEncoding.EncodeUtf8(value);
+
     [Fact]
     public void Tmpfs_CreateLinkUnlink_OpenClose_TracksRefAndLinkCount()
     {
@@ -27,11 +29,11 @@ public class InodeRefLinkCountTests
         Assert.Equal(2, inode.LinkCount);
         Assert.Equal(refAfterCreate + 1, inode.RefCount);
 
-        rootInode.Unlink("original.txt");
+        rootInode.Unlink(B("original.txt"));
         Assert.Equal(1, inode.LinkCount);
         Assert.Equal(refAfterCreate, inode.RefCount);
         Assert.Same(inode, linked.Inode);
-        Assert.NotNull(rootInode.Lookup("linked.txt"));
+        Assert.NotNull(rootInode.Lookup(B("linked.txt")));
 
         var mount = new Mount(rig.SuperBlock, rig.Root);
         var refBeforeOpen = inode.RefCount;
@@ -52,7 +54,7 @@ public class InodeRefLinkCountTests
         Assert.False(inode.HasActiveRuntimeRefs);
         Assert.False(rig.SuperBlock.HasActiveInodes());
 
-        rootInode.Unlink("linked.txt");
+        rootInode.Unlink(B("linked.txt"));
         Assert.Equal(0, inode.LinkCount);
         Assert.Equal(0, inode.RefCount);
         Assert.True(inode.IsFinalized);
@@ -100,9 +102,9 @@ public class InodeRefLinkCountTests
         Assert.Equal(1, srcInode.LinkCount);
         Assert.Equal(1, dstInode.LinkCount);
 
-        rootInode.Rename("src.txt", rootInode, "dst.txt");
+        rootInode.Rename(B("src.txt"), rootInode, B("dst.txt"));
 
-        var renamed = rootInode.Lookup("dst.txt");
+        var renamed = rootInode.Lookup(B("dst.txt"));
         Assert.NotNull(renamed);
         Assert.Same(srcInode, renamed!.Inode);
         Assert.Equal(1, srcInode.LinkCount);
@@ -125,10 +127,10 @@ public class InodeRefLinkCountTests
         rootInode.Link(alias, inode);
         Assert.Equal(2, inode.LinkCount);
 
-        rootInode.Rename("src.txt", rootInode, "alias.txt");
+        rootInode.Rename(B("src.txt"), rootInode, B("alias.txt"));
 
-        var srcAfter = rootInode.Lookup("src.txt");
-        var aliasAfter = rootInode.Lookup("alias.txt");
+        var srcAfter = rootInode.Lookup(B("src.txt"));
+        var aliasAfter = rootInode.Lookup(B("alias.txt"));
         Assert.NotNull(srcAfter);
         Assert.NotNull(aliasAfter);
         Assert.Same(inode, srcAfter!.Inode);
@@ -159,12 +161,12 @@ public class InodeRefLinkCountTests
         Assert.Equal(3, dirInode.LinkCount);
         Assert.Equal(2, nestedInode.LinkCount);
 
-        dirInode.Rmdir("nested");
+        dirInode.Rmdir(B("nested"));
         Assert.Equal(2, dirInode.LinkCount);
         Assert.Equal(0, nestedInode.LinkCount);
         Assert.True(nestedInode.IsFinalized);
 
-        rootInode.Rmdir("dir");
+        rootInode.Rmdir(B("dir"));
         Assert.Equal(2, rootInode.LinkCount);
         Assert.Equal(0, dirInode.LinkCount);
         Assert.True(dirInode.IsFinalized);
@@ -194,14 +196,14 @@ public class InodeRefLinkCountTests
         Assert.Equal(2, toInode.LinkCount);
         Assert.Equal(2, childInode.LinkCount);
 
-        fromInode.Rename("child", toInode, "moved");
+        fromInode.Rename(B("child"), toInode, B("moved"));
 
         Assert.Equal(4, rootInode.LinkCount);
         Assert.Equal(2, fromInode.LinkCount);
         Assert.Equal(3, toInode.LinkCount);
         Assert.Equal(2, childInode.LinkCount);
 
-        var moved = toInode.Lookup("moved");
+        var moved = toInode.Lookup(B("moved"));
         Assert.NotNull(moved);
         Assert.Same(childInode, moved!.Inode);
     }

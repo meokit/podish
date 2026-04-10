@@ -51,7 +51,7 @@ public class NewMountApiTests
         {
             var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
             root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-            root.Children["mnt"] = mntDentry;
+            root.CacheChild(mntDentry, "test");
         }
 
         Assert.Equal(0, await env.Call("SysMoveMount", (uint)mntfd, 0, LinuxConstants.AT_FDCWD, 0x13000));
@@ -133,7 +133,7 @@ public class NewMountApiTests
         {
             var mntDentry = new Dentry("mnt", null, root, root.SuperBlock);
             root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
-            root.Children["mnt"] = mntDentry;
+            root.CacheChild(mntDentry, "test");
         }
 
         var rc = await env.Call("SysMount", 0x40000, 0x41000, 0x42000, 0, 0x43000);
@@ -159,14 +159,14 @@ public class NewMountApiTests
         {
             var srcDentry = new Dentry("src", null, root, root.SuperBlock);
             root.Inode.Mkdir(srcDentry, 0x1FF, 0, 0);
-            root.Children["src"] = srcDentry;
+            root.CacheChild(srcDentry, "test");
         }
 
         if (root.Inode.Lookup("dst") == null)
         {
             var dstDentry = new Dentry("dst", null, root, root.SuperBlock);
             root.Inode.Mkdir(dstDentry, 0x1FF, 0, 0);
-            root.Children["dst"] = dstDentry;
+            root.CacheChild(dstDentry, "test");
         }
 
         env.WriteCString(0x44000, "/src");
@@ -196,7 +196,7 @@ public class NewMountApiTests
             if (root.Inode!.Lookup(name) != null) continue;
             var dir = new Dentry(name, null, root, root.SuperBlock);
             root.Inode.Mkdir(dir, 0x1FF, 0, 0);
-            root.Children[name] = dir;
+            root.CacheChild(dir, "test");
         }
 
         env.WriteCString(0x46000, "overlay");
@@ -226,7 +226,7 @@ public class NewMountApiTests
         {
             var mnt = new Dentry("mnt", null, root, root.SuperBlock);
             root.Inode.Mkdir(mnt, 0x1FF, 0, 0);
-            root.Children["mnt"] = mnt;
+            root.CacheChild(mnt, "test");
         }
 
         env.WriteCString(0x4a000, "tmpfs-src");
@@ -263,7 +263,7 @@ public class NewMountApiTests
         {
             var mnt = new Dentry("mnt", null, root, root.SuperBlock);
             root.Inode.Mkdir(mnt, 0x1FF, 0, 0);
-            root.Children["mnt"] = mnt;
+            root.CacheChild(mnt, "test");
         }
 
         env.WriteCString(0x4e000, "tmpfs-src");
@@ -311,7 +311,7 @@ public class NewMountApiTests
             {
                 var mnt = new Dentry("mnt", null, root, root.SuperBlock);
                 root.Inode.Mkdir(mnt, 0x1FF, 0, 0);
-                root.Children["mnt"] = mnt;
+                root.CacheChild(mnt, "test");
             }
 
             env.WriteCString(0x60000, hostDir);

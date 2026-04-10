@@ -349,8 +349,8 @@ public class OverlayRenameMassTests
             {
                 var entry = root.Lookup(path)!;
                 var target = $"target{100 + n}";
-                Assert.Equal(0, entry.Inode!.Readlink(out var linkTarget));
-                Assert.Equal(target, linkTarget);
+                Assert.Equal(0, entry.Inode!.Readlink(out byte[]? linkTarget));
+                Assert.Equal(Encoding.UTF8.GetBytes(target), linkTarget);
                 Assert.Equal(":xxx:yyy:zzz", ReadAll(root.Lookup(target)!));
                 n = (n + 1) % (RenameMassRingSize - 1);
             }
@@ -407,8 +407,8 @@ public class OverlayRenameMassTests
             {
                 var entry = root.Lookup(path)!;
                 var target = $"dirtarget{100 + n}";
-                Assert.Equal(0, entry.Inode!.Readlink(out var dirLinkTarget));
-                Assert.Equal(target, dirLinkTarget);
+                Assert.Equal(0, entry.Inode!.Readlink(out byte[]? dirLinkTarget));
+                Assert.Equal(Encoding.UTF8.GetBytes(target), dirLinkTarget);
                 Assert.Equal(InodeType.Directory, root.Lookup(target)!.Inode!.Type);
                 n = (n + 1) % (RenameMassRingSize - 1);
             }

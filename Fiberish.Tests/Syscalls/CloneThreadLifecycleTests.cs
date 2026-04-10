@@ -662,6 +662,7 @@ public class CloneThreadLifecycleTests
             env.Vma, env.Engine, env.Process);
         Assert.Equal(addr, attachRc);
 
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(env.Vma, peer.CPU, env.Process);
         Assert.True(peer.CPU.CopyFromUser(addr, valueBuf));
         Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(valueBuf));
 

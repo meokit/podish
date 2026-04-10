@@ -133,6 +133,46 @@ public class HostfsMetadataTests
     }
 
     [Fact]
+    public void Hostfs_Adapter_InvalidUtf8LookupIsMissing_AndMutationsAreEinval()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var fsType = new FileSystemType { Name = "hostfs" };
+            var opts = HostfsMountOptions.Parse("rw,metadata=1");
+            var sb = new HostSuperBlock(fsType, tempRoot, opts);
+            sb.Root = sb.GetDentry(tempRoot, "/", null)!;
+            var root = Assert.IsType<HostInode>(sb.Root.Inode);
+
+            Assert.Null(root.Lookup([0xFF]));
+            Assert.Equal(-(int)Errno.ENOENT, root.ConsumeLookupFailureError("invalid"));
+
+            var invalidName = FsName.FromBytes([0xFF]);
+            Assert.Equal(-(int)Errno.EINVAL, root.Create(new Dentry(invalidName, null, sb.Root, sb), 0x1A4, 0, 0));
+            Assert.Equal(-(int)Errno.EINVAL, root.Mkdir(new Dentry(invalidName, null, sb.Root, sb), 0x1ED, 0, 0));
+            Assert.Equal(-(int)Errno.EINVAL,
+                root.Mknod(new Dentry(invalidName, null, sb.Root, sb), 0x1A4, 0, 0, InodeType.File, 0));
+            Assert.Equal(-(int)Errno.EINVAL, root.Link(new Dentry(invalidName, null, sb.Root, sb), sb.Root.Inode!));
+
+            var goodLink = new Dentry("link", null, sb.Root, sb);
+            Assert.Equal(-(int)Errno.EINVAL, root.Symlink(goodLink, [0xFF], 0, 0));
+            Assert.Equal(-(int)Errno.EINVAL, root.SetXAttr([0xFF], "x"u8, 0));
+            Assert.Equal(-(int)Errno.EINVAL, root.RemoveXAttr([0xFF]));
+            Assert.Equal(-(int)Errno.EINVAL, root.GetXAttr([0xFF], new byte[8]));
+            Assert.Equal(-(int)Errno.EINVAL, root.Unlink([0xFF]));
+            Assert.Equal(-(int)Errno.EINVAL, root.Rmdir([0xFF]));
+            Assert.Equal(-(int)Errno.EINVAL, root.Rename([0xFF], root, "dst"u8));
+            Assert.Equal(-(int)Errno.EINVAL, root.Rename("src"u8, root, [0xFF]));
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+        }
+    }
+
+    [Fact]
     public void Hostfs_MetadataLess_TimestampsUpdateHostFileWithoutSidecar()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());

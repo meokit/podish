@@ -1021,7 +1021,7 @@ public partial class SyscallManager
         {
             SunPathRaw = canonicalRaw,
             IsAbstract = false,
-            Path = Encoding.UTF8.GetString(pathBytes)
+            PathBytes = pathBytes
         }, 0);
     }
 

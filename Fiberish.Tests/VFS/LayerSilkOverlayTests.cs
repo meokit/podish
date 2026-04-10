@@ -11,6 +11,8 @@ namespace Fiberish.Tests.VFS;
 
 public class LayerSilkOverlayTests
 {
+    private static byte[] Utf8(string value) => Encoding.UTF8.GetBytes(value);
+
     [Fact]
     public void Overlay_LayerfsLower_And_SilkfsUpper_Works()
     {
@@ -52,9 +54,9 @@ public class LayerSilkOverlayTests
             var upperRepo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             upperRepo.Initialize();
             using var session = upperRepo.OpenMetadataSession();
-            var etcIno = session.LookupDentry(SilkMetadataStore.RootInode, "etc");
+            var etcIno = session.LookupDentry(SilkMetadataStore.RootInode, Utf8("etc"));
             Assert.NotNull(etcIno);
-            var fiberIno = session.LookupDentry(etcIno!.Value, "fiber.txt");
+            var fiberIno = session.LookupDentry(etcIno!.Value, Utf8("fiber.txt"));
             Assert.NotNull(fiberIno);
             var livePath = upperRepo.GetLiveInodePath(fiberIno!.Value);
             Assert.True(File.Exists(livePath));
@@ -165,15 +167,15 @@ public class LayerSilkOverlayTests
                 Assert.NotNull(ash);
 
                 var ashOverlay = Assert.IsType<OverlayInode>(ash!.Inode);
-                Assert.Equal(0, ashOverlay.Readlink(out var ashTarget));
-                Assert.Equal("/bin/busybox", ashTarget);
+                Assert.Equal(0, ashOverlay.Readlink(out byte[]? ashTarget));
+                Assert.Equal("/bin/busybox"u8.ToArray(), ashTarget);
 
                 var copyRc = ashOverlay.CopyUp(null);
                 Assert.Equal(0, copyRc);
 
                 Assert.Equal(InodeType.Symlink, ashOverlay.Type);
-                Assert.Equal(0, ashOverlay.Readlink(out var copiedAshTarget));
-                Assert.Equal("/bin/busybox", copiedAshTarget);
+                Assert.Equal(0, ashOverlay.Readlink(out byte[]? copiedAshTarget));
+                Assert.Equal("/bin/busybox"u8.ToArray(), copiedAshTarget);
 
                 sm.Close();
             }
@@ -192,8 +194,8 @@ public class LayerSilkOverlayTests
                 var ashLoc = sm.PathWalkWithFlags("/bin/ash", LookupFlags.None);
                 Assert.True(ashLoc.IsValid);
                 Assert.Equal(InodeType.Symlink, ashLoc.Dentry!.Inode!.Type);
-                Assert.Equal(0, ashLoc.Dentry.Inode.Readlink(out var ashLocTarget));
-                Assert.Equal("/bin/busybox", ashLocTarget);
+                Assert.Equal(0, ashLoc.Dentry.Inode.Readlink(out byte[]? ashLocTarget));
+                Assert.Equal("/bin/busybox"u8.ToArray(), ashLocTarget);
 
                 sm.Close();
             }
@@ -537,8 +539,8 @@ public class LayerSilkOverlayTests
                 var created = binLoc.Dentry.Inode.Lookup("sh");
                 Assert.NotNull(created);
                 Assert.Equal(InodeType.Symlink, created!.Inode!.Type);
-                Assert.Equal(0, created.Inode.Readlink(out var createdShTarget));
-                Assert.Equal("/bin/busybox", createdShTarget);
+                Assert.Equal(0, created.Inode.Readlink(out byte[]? createdShTarget));
+                Assert.Equal("/bin/busybox"u8.ToArray(), createdShTarget);
 
                 sm.Close();
             }
@@ -557,8 +559,8 @@ public class LayerSilkOverlayTests
                 var shLoc = sm.PathWalkWithFlags("/bin/sh", LookupFlags.None);
                 Assert.True(shLoc.IsValid);
                 Assert.Equal(InodeType.Symlink, shLoc.Dentry!.Inode!.Type);
-                Assert.Equal(0, shLoc.Dentry.Inode.Readlink(out var shTarget));
-                Assert.Equal("/bin/busybox", shTarget);
+                Assert.Equal(0, shLoc.Dentry.Inode.Readlink(out byte[]? shTarget));
+                Assert.Equal("/bin/busybox"u8.ToArray(), shTarget);
 
                 sm.Close();
             }

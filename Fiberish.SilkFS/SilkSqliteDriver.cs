@@ -66,6 +66,15 @@ internal sealed class SilkSqliteConnection : IDisposable
         return new SilkSqliteTransaction(this);
     }
 
+    public bool TableExists(string tableName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tableName);
+        using var stmt = Prepare("SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?1"u8,
+            persistent: false);
+        stmt.BindText(1, tableName);
+        return stmt.ExecuteScalarInt64() > 0;
+    }
+
     internal void ThrowIfError(int rc, sqlite3_stmt? stmt = null)
     {
         if (rc == raw.SQLITE_OK || rc == raw.SQLITE_ROW || rc == raw.SQLITE_DONE)

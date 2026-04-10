@@ -28,11 +28,14 @@ public class ProcFsTests
 
             var mountsBefore = ReadAll(task, sm.PathWalk("/proc/mounts"));
             Assert.DoesNotContain(" /tests hostfs ", mountsBefore);
+            Assert.DoesNotContain(" //tests hostfs ", mountsBefore);
 
             sm.MountHostfs(hostMountDir, "/tests");
 
             var mountsAfter = ReadAll(task, sm.PathWalk("/proc/mounts"));
-            Assert.Contains(" /tests hostfs ", mountsAfter);
+            Assert.True(
+                mountsAfter.Contains(" /tests hostfs ", StringComparison.Ordinal) ||
+                mountsAfter.Contains(" //tests hostfs ", StringComparison.Ordinal));
             Assert.Contains(hostMountDir, mountsAfter);
         }
         finally
@@ -333,7 +336,7 @@ public class ProcFsTests
             Assert.True(procRoot.IsValid);
             var procRootDentry = procRoot.Dentry!;
             Assert.NotNull(Lookup(task, procRootDentry, "sys"));
-            Assert.True(procRootDentry.Children.ContainsKey("sys"));
+            Assert.True(procRootDentry.Children.TryGetValue("sys"u8, out _));
             var procSb = procRoot.Mount!.SB;
             var procTrackedBefore = procSb.Inodes.Count;
 
@@ -352,7 +355,7 @@ public class ProcFsTests
 
             Assert.Equal(2, WriteAll(task, dropLoc, "2\n"));
 
-            Assert.False(procRootDentry.Children.ContainsKey("sys"));
+            Assert.False(procRootDentry.Children.TryGetValue("sys"u8, out _));
             Assert.True(procSb.Inodes.Count <= procTrackedBefore);
 
             var rematerialized = sm.PathWalk("/proc/sys/vm");
@@ -685,7 +688,7 @@ public class ProcFsTests
             {
                 var holdDentry = new Dentry("hold", null, root, root.SuperBlock);
                 root.Inode!.Mkdir(holdDentry, 0x1FF, 0, 0);
-                root.Children["hold"] = holdDentry;
+                root.CacheChild(holdDentry, "test");
                 hold = holdDentry;
             }
 
@@ -694,7 +697,7 @@ public class ProcFsTests
             {
                 var mntDentry = new Dentry("mnt", null, hold, hold.SuperBlock);
                 hold.Inode!.Mkdir(mntDentry, 0x1FF, 0, 0);
-                hold.Children["mnt"] = mntDentry;
+                hold.CacheChild(mntDentry, "test");
             }
 
             sm.MountHostfs(mountSource, "/hold/mnt");
@@ -739,7 +742,7 @@ public class ProcFsTests
             {
                 var holdDentry = new Dentry("hold", null, root, root.SuperBlock);
                 root.Inode!.Mkdir(holdDentry, 0x1FF, 0, 0);
-                root.Children["hold"] = holdDentry;
+                root.CacheChild(holdDentry, "test");
                 hold = holdDentry;
             }
 
@@ -748,7 +751,7 @@ public class ProcFsTests
             {
                 var mntDentry = new Dentry("mnt", null, hold, hold.SuperBlock);
                 hold.Inode!.Mkdir(mntDentry, 0x1FF, 0, 0);
-                hold.Children["mnt"] = mntDentry;
+                hold.CacheChild(mntDentry, "test");
             }
 
             sm.MountHostfs(mountSource, "/hold/mnt");
@@ -993,7 +996,7 @@ public class ProcFsTests
         Assert.True(parent.IsValid);
         var dentry = new Dentry(name, null, parent.Dentry, parent.Dentry!.SuperBlock);
         parent.Dentry.Inode!.Mkdir(dentry, 0x1FF, 0, 0);
-        parent.Dentry.Children[name] = dentry;
+        parent.Dentry.CacheChild(dentry, "test");
     }
 
     private static void MountHostfsAt(SyscallManager sm, string hostPath, string guestPath)
@@ -1049,14 +1052,14 @@ public class ProcFsTests
     private static Dentry? Lookup(FiberTask task, Dentry parent, string name)
     {
         return parent.Inode is IContextualDirectoryInode contextual
-            ? contextual.Lookup(task, name)
+            ? contextual.Lookup(task, Encoding.UTF8.GetBytes(name))
             : parent.Inode?.Lookup(name);
     }
 
     private static string Readlink(FiberTask task, Dentry dentry)
     {
         if (dentry.Inode is IContextualSymlinkInode contextual)
-            return contextual.Readlink(task);
+            return Encoding.UTF8.GetString(contextual.Readlink(task));
 
         string? target = null;
         var rc = dentry.Inode?.Readlink(out target) ?? -(int)Errno.ENOENT;

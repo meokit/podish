@@ -521,11 +521,12 @@ public partial class SyscallManager
             "[SysExecve] engine==task.CPU? {Same}, engine.State=0x{EngState:x}, task.CPU.State=0x{CpuState:x}",
             ReferenceEquals(engine, task.CPU), engine.State, task.CPU.State);
 
-        var filename = ReadString(a1);
-        if (string.IsNullOrEmpty(filename)) return -(int)Errno.EFAULT;
+        var pathErr = ReadPathArgumentBytes(a1, out var filename);
+        if (pathErr != 0) return pathErr;
+        using var _ = filename;
 
         // Resolve path via VFS/Host
-        var (loc, guestPath) = ResolvePath(filename);
+        var (loc, guestPath) = ResolvePath(filename.UnsafeBuffer, filename.Length);
 
         if (!loc.IsValid)
         {

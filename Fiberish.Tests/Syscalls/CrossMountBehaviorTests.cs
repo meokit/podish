@@ -196,8 +196,8 @@ public class CrossMountBehaviorTests
         Assert.True(fileLoc.IsValid);
         Assert.True(linkLoc.IsValid);
         Assert.Equal(InodeType.Symlink, fileLoc.Dentry!.Inode!.Type);
-        Assert.Equal(0, fileLoc.Dentry.Inode.Readlink(out var fileLinkTarget));
-        Assert.Equal("file.txt", fileLinkTarget);
+        Assert.Equal(0, fileLoc.Dentry.Inode.Readlink(out byte[]? fileLinkTarget));
+        Assert.Equal("file.txt"u8.ToArray(), fileLinkTarget);
         Assert.Equal(InodeType.File, linkLoc.Dentry!.Inode!.Type);
         Assert.Equal("F", env.ReadFile("/mnt/link.txt"));
     }
@@ -224,8 +224,8 @@ public class CrossMountBehaviorTests
         Assert.True(dirLoc.IsValid);
         Assert.True(linkLoc.IsValid);
         Assert.Equal(InodeType.Symlink, dirLoc.Dentry!.Inode!.Type);
-        Assert.Equal(0, dirLoc.Dentry.Inode.Readlink(out var dirLinkTarget));
-        Assert.Equal("dir", dirLinkTarget);
+        Assert.Equal(0, dirLoc.Dentry.Inode.Readlink(out byte[]? dirLinkTarget));
+        Assert.Equal("dir"u8.ToArray(), dirLinkTarget);
         Assert.Equal(InodeType.Directory, linkLoc.Dentry!.Inode!.Type);
         Assert.True(env.SyscallManager.PathWalkWithFlags("/mnt/link.txt/child.txt", LookupFlags.FollowSymlink).IsValid);
         Assert.Equal("D", env.ReadFile("/mnt/link.txt/child.txt"));
@@ -410,7 +410,7 @@ public class CrossMountBehaviorTests
             var root = SyscallManager.Root.Dentry!;
             var mountPoint = new Dentry("mnt", null, root, root.SuperBlock);
             root.Inode!.Mkdir(mountPoint, 0x1FF, 0, 0);
-            root.Children["mnt"] = mountPoint;
+            root.CacheChild(mountPoint, "test");
 
             var mountedSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "cross-mount-mounted", null);
             var mountedMount = new Mount(mountedSb, mountedSb.Root)
@@ -481,7 +481,7 @@ public class CrossMountBehaviorTests
             var (parentLoc, name, err) = SyscallManager.PathWalkForCreate(path);
             Assert.Equal(0, err);
             var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
-            Assert.Equal(0, parentLoc.Dentry.Inode!.Symlink(dentry, target, 0, 0));
+            Assert.Equal(0, parentLoc.Dentry.Inode!.Symlink(dentry, Encoding.UTF8.GetBytes(target), 0, 0));
         }
 
         public string ReadFile(string path)

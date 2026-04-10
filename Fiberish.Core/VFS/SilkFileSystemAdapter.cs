@@ -189,11 +189,26 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
             for (var i = pending.Count - 1; i >= 0; i--)
             {
                 var rec = pending[i];
+                if (rec.Name.Length == 0)
+                {
+                    if (rec.Ino == SilkMetadataStore.RootInode)
+                    {
+                        primaryDentryByInode.TryAdd(rec.Ino, Root);
+                        pending.RemoveAt(i);
+                        progressed = true;
+                        continue;
+                    }
+
+                    throw new InvalidDataException(
+                        $"Silk metadata contains an empty dentry name for parent={rec.ParentIno} ino={rec.Ino}.");
+                }
+
                 if (!primaryDentryByInode.TryGetValue(rec.ParentIno, out var parent)) continue;
 
-                var child = new Dentry(rec.Name, null, parent, this);
+                var childName = FsName.FromOwnedBytes(rec.Name);
+                var child = new Dentry(childName, null, parent, this);
                 if (parent.Inode is IndexedMemoryInode dirInode)
-                    dirInode.RegisterChild(parent, rec.Name, child);
+                    dirInode.RegisterChild(parent, childName, child);
                 else
                     parent.CacheChild(child, "SilkSuperBlock.LoadFromMetadata");
 
@@ -436,7 +451,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         return RandomAccess.Read(tempHandle, buffer, offset);
     }
 
-    public override int Readlink(out string? target)
+    public override int Readlink(out byte[]? target)
     {
         lock (Lock)
         {
@@ -445,7 +460,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         }
     }
 
-    public override bool RevalidateCachedChild(Dentry parent, string name, Dentry cached)
+    public override bool RevalidateCachedChild(Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
         using var metadataScope = EnterMetadataSessionScope(out var session);
         lock (Lock)
@@ -454,7 +469,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         }
     }
 
-    public override Dentry? Lookup(string name)
+    public override Dentry? Lookup(ReadOnlySpan<byte> name)
     {
         using var metadataScope = EnterMetadataSessionScope(out var session);
         lock (Lock)
@@ -462,23 +477,18 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             if (Type != InodeType.Directory) return null;
             if (Dentries.Count == 0) return null;
             var primaryDentry = Dentries[0];
-            var key = new DCacheKey(Ino, name);
-            if (IndexedSb.Dentries.TryGetValue(key, out var cached))
+            if (IndexedSb.TryGetDentry(Ino, name, out var cached))
             {
                 if (!TryHydrateChildDentry(primaryDentry, name, cached, session))
                 {
-                    lock (IndexedSb.Lock)
-                    {
-                        IndexedSb.Dentries.Remove(key);
-                    }
-
+                    _ = IndexedSb.RemoveDentry(Ino, name, out _);
                     _ = primaryDentry.TryUncacheChild(name, "SilkInode.Lookup.refresh-missing", out _);
                     ChildNames.Remove(name);
                     return null;
                 }
 
                 primaryDentry.CacheChild(cached, "SilkInode.Lookup.refresh-hit");
-                ChildNames.Add(name);
+                ChildNames.Add(FsName.FromBytes(name));
                 return cached;
             }
 
@@ -488,14 +498,11 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             var childInode = ((SilkSuperBlock)IndexedSb).GetOrLoadInode(childIno.Value);
             if (childInode == null) return null;
 
-            var created = new Dentry(name, childInode, primaryDentry, SuperBlock);
-            lock (IndexedSb.Lock)
-            {
-                IndexedSb.Dentries[key] = created;
-            }
+            var created = new Dentry(FsName.FromBytes(name), childInode, primaryDentry, SuperBlock);
+            IndexedSb.SetDentry(Ino, created);
 
             primaryDentry.CacheChild(created, "SilkInode.Lookup.refresh-create");
-            ChildNames.Add(name);
+            ChildNames.Add(FsName.FromBytes(name));
             return created;
         }
     }
@@ -513,15 +520,14 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
             var entries = new List<DirectoryEntry>
             {
-                new() { Name = ".", Ino = Ino, Type = InodeType.Directory },
-                new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
+                new() { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+                new() { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory }
             };
 
             foreach (var rec in session.ListDentriesByParent((long)Ino))
             {
                 InodeType childType;
-                var key = new DCacheKey(Ino, rec.Name);
-                if (IndexedSb.Dentries.TryGetValue(key, out var cached) && cached.Inode != null)
+                if (IndexedSb.TryGetDentry(Ino, rec.Name, out var cached) && cached.Inode != null)
                 {
                     childType = cached.Inode.Type;
                 }
@@ -534,7 +540,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
                 entries.Add(new DirectoryEntry
                 {
-                    Name = rec.Name,
+                    Name = FsName.FromOwnedBytes(rec.Name),
                     Ino = (ulong)rec.Ino,
                     Type = childType
                 });
@@ -545,7 +551,8 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         }
     }
 
-    private bool TryHydrateChildDentry(Dentry parent, string name, Dentry childDentry, SilkMetadataSession session)
+    private bool TryHydrateChildDentry(Dentry parent, ReadOnlySpan<byte> name, Dentry childDentry,
+        SilkMetadataSession session)
     {
         if (childDentry.Inode != null)
             return true;
@@ -561,8 +568,8 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (childDentry.Inode == null)
             childDentry.Instantiate(childInode);
         childDentry.Parent ??= parent;
-        childDentry.Name = name;
-        ChildNames.Add(name);
+        childDentry.Name = FsName.FromBytes(name);
+        ChildNames.Add(FsName.FromBytes(name));
         return true;
     }
 
@@ -609,8 +616,8 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         session.ExecuteTransaction(tx =>
         {
             UpsertInodeMetadata(tx, dentry.Inode!);
-            tx.UpsertDentry((long)Ino, dentry.Name, (long)dentry.Inode!.Ino);
-            tx.ClearWhiteout((long)Ino, dentry.Name);
+            tx.UpsertDentry((long)Ino, dentry.Name.Bytes, (long)dentry.Inode!.Ino);
+            tx.ClearWhiteout((long)Ino, dentry.Name.Bytes);
         });
         if (dentry.Inode is SilkInode child)
         {
@@ -635,8 +642,8 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         {
             UpsertInodeMetadata(tx, this);
             UpsertInodeMetadata(tx, dentry.Inode!);
-            tx.UpsertDentry((long)Ino, dentry.Name, (long)dentry.Inode!.Ino);
-            tx.ClearWhiteout((long)Ino, dentry.Name);
+            tx.UpsertDentry((long)Ino, dentry.Name.Bytes, (long)dentry.Inode!.Ino);
+            tx.ClearWhiteout((long)Ino, dentry.Name.Bytes);
         });
         InvalidateEntriesCache();
         return 0;
@@ -652,22 +659,22 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         session.ExecuteTransaction(tx =>
         {
             UpsertInodeMetadata(tx, dentry.Inode!);
-            tx.UpsertDentry((long)Ino, dentry.Name, (long)dentry.Inode!.Ino);
-            tx.ClearWhiteout((long)Ino, dentry.Name);
+            tx.UpsertDentry((long)Ino, dentry.Name.Bytes, (long)dentry.Inode!.Ino);
+            tx.ClearWhiteout((long)Ino, dentry.Name.Bytes);
             if (type == InodeType.CharDev && rdev == 0)
             {
                 var parentIno = (long)Ino;
-                if (string.Equals(dentry.Name, SilkMetadataStore.OpaqueMarkerName, StringComparison.Ordinal))
+                if (dentry.Name.Bytes.SequenceEqual(SilkMetadataStore.OpaqueMarkerNameBytes))
                     tx.MarkOpaque(parentIno);
-                else if (dentry.Name.StartsWith(".wh.", StringComparison.Ordinal) && dentry.Name.Length > 4)
-                    tx.MarkWhiteout(parentIno, dentry.Name[4..]);
+                else if (dentry.Name.Bytes.StartsWith(".wh."u8) && dentry.Name.Length > 4)
+                    tx.MarkWhiteout(parentIno, dentry.Name.Bytes[4..]);
             }
         });
         InvalidateEntriesCache();
         return 0;
     }
 
-    public override int Symlink(Dentry dentry, string target, int uid, int gid)
+    public override int Symlink(Dentry dentry, byte[] target, int uid, int gid)
     {
         using var metadataScope = EnterMetadataSessionScope(out var session);
         var rc = base.Symlink(dentry, target, uid, gid);
@@ -677,8 +684,8 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         session.ExecuteTransaction(tx =>
         {
             UpsertInodeMetadata(tx, dentry.Inode!);
-            tx.UpsertDentry((long)Ino, dentry.Name, (long)dentry.Inode!.Ino);
-            tx.ClearWhiteout((long)Ino, dentry.Name);
+            tx.UpsertDentry((long)Ino, dentry.Name.Bytes, (long)dentry.Inode!.Ino);
+            tx.ClearWhiteout((long)Ino, dentry.Name.Bytes);
         });
         if (dentry.Inode is SilkInode child)
             child.PersistSymlinkData();
@@ -696,8 +703,8 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         session.ExecuteTransaction(tx =>
         {
             UpsertInodeMetadata(tx, oldInode);
-            tx.UpsertDentry((long)Ino, dentry.Name, (long)oldInode.Ino);
-            tx.ClearWhiteout((long)Ino, dentry.Name);
+            tx.UpsertDentry((long)Ino, dentry.Name.Bytes, (long)oldInode.Ino);
+            tx.ClearWhiteout((long)Ino, dentry.Name.Bytes);
         });
         InvalidateEntriesCache();
         return 0;
@@ -740,7 +747,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         FlushDirtyMetadataIfNeeded();
     }
 
-    public override int Unlink(string name)
+    public override int Unlink(ReadOnlySpan<byte> name)
     {
         using var metadataScope = EnterMetadataSessionScope(out var session);
         var victim = Lookup(name)?.Inode;
@@ -750,10 +757,11 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (IsNamespaceMutationSuppressed)
             return 0;
 
+        var nameBytes = name.ToArray();
         session.ExecuteTransaction(tx =>
         {
-            tx.RemoveDentry((long)Ino, name);
-            tx.ClearWhiteout((long)Ino, name);
+            tx.RemoveDentry((long)Ino, nameBytes);
+            tx.ClearWhiteout((long)Ino, nameBytes);
             UpsertInodeMetadataIfLive(tx, victim);
         });
 
@@ -761,7 +769,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         return 0;
     }
 
-    public override int Rmdir(string name)
+    public override int Rmdir(ReadOnlySpan<byte> name)
     {
         using var metadataScope = EnterMetadataSessionScope(out var session);
         var victim = Lookup(name)?.Inode;
@@ -771,11 +779,12 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (IsNamespaceMutationSuppressed)
             return 0;
 
+        var nameBytes = name.ToArray();
         session.ExecuteTransaction(tx =>
         {
             UpsertInodeMetadataIfLive(tx, this);
-            tx.RemoveDentry((long)Ino, name);
-            tx.ClearWhiteout((long)Ino, name);
+            tx.RemoveDentry((long)Ino, nameBytes);
+            tx.ClearWhiteout((long)Ino, nameBytes);
             UpsertInodeMetadataIfLive(tx, victim);
         });
 
@@ -783,7 +792,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         return 0;
     }
 
-    public override int Rename(string oldName, Inode newParent, string newName)
+    public override int Rename(ReadOnlySpan<byte> oldName, Inode newParent, ReadOnlySpan<byte> newName)
     {
         using var metadataScope = EnterMetadataSessionScope(out var session);
         if (Lookup(oldName)?.Inode == null)
@@ -798,14 +807,16 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         }
 
         var movedInode = newParent.Lookup(newName)?.Inode;
+        var oldNameBytes = oldName.ToArray();
+        var newNameBytes = newName.ToArray();
         session.ExecuteTransaction(tx =>
         {
-            tx.RemoveDentry((long)Ino, oldName);
+            tx.RemoveDentry((long)Ino, oldNameBytes);
             if (movedInode != null && !movedInode.IsFinalized)
             {
                 UpsertInodeMetadata(tx, movedInode);
-                tx.UpsertDentry((long)newParent.Ino, newName, (long)movedInode.Ino);
-                tx.ClearWhiteout((long)newParent.Ino, newName);
+                tx.UpsertDentry((long)newParent.Ino, newNameBytes, (long)movedInode.Ino);
+                tx.ClearWhiteout((long)newParent.Ino, newNameBytes);
             }
 
             UpsertInodeMetadataIfLive(tx, this);
@@ -1032,7 +1043,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         return 0;
     }
 
-    public override int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)
+    public override int SetXAttr(ReadOnlySpan<byte> name, ReadOnlySpan<byte> value, int flags)
     {
         var rc = base.SetXAttr(name, value, flags);
         if (rc == 0)
@@ -1044,7 +1055,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         return rc;
     }
 
-    public override int RemoveXAttr(string name)
+    public override int RemoveXAttr(ReadOnlySpan<byte> name)
     {
         var rc = base.RemoveXAttr(name);
         if (rc == 0)

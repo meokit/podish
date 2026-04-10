@@ -113,31 +113,33 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
-    public Dentry? Lookup(FiberTask task, string name)
+    public Dentry? Lookup(FiberTask task, ReadOnlySpan<byte> name)
     {
+        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
+            return null;
         if (Dentries.Count == 0) return null;
         var root = Dentries[0];
 
         if (root.TryGetCachedChild(name, out var cached))
         {
-            if (int.TryParse(name, out var cachedPid) && task.CommonKernel.GetProcess(cachedPid) == null)
+            if (int.TryParse(decodedName, out var cachedPid) && task.CommonKernel.GetProcess(cachedPid) == null)
                 _ = root.TryUncacheChild(name, "ProcRootInode.Lookup.stale-pid", out _);
             else
                 return cached;
         }
 
-        var created = name switch
+        var created = decodedName switch
         {
-            "mounts" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateMounts(ctx.SyscallManager)),
-            "mountinfo" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager)),
-            "cpuinfo" => CreateFile(root, name, 0x124, _ => ProcFsManager.GenerateCpuInfo()),
-            "meminfo" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateMemInfo(ctx.SyscallManager)),
-            "version" => CreateFile(root, name, 0x124, _ => ProcFsManager.GenerateVersion()),
-            "stat" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateSystemStat(ctx.Scheduler)),
-            "uptime" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateUptime(ctx.Scheduler)),
-            "loadavg" => CreateFile(root, name, 0x124, ctx => ProcFsManager.GenerateLoadAvg(ctx.Scheduler)),
-            "sys" => CreateSysDirectory(root, name),
-            "self" => CreateSelfSymlink(root, name),
+            "mounts" => CreateFile(root, decodedName, 0x124, ctx => ProcFsManager.GenerateMounts(ctx.SyscallManager)),
+            "mountinfo" => CreateFile(root, decodedName, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager)),
+            "cpuinfo" => CreateFile(root, decodedName, 0x124, _ => ProcFsManager.GenerateCpuInfo()),
+            "meminfo" => CreateFile(root, decodedName, 0x124, ctx => ProcFsManager.GenerateMemInfo(ctx.SyscallManager)),
+            "version" => CreateFile(root, decodedName, 0x124, _ => ProcFsManager.GenerateVersion()),
+            "stat" => CreateFile(root, decodedName, 0x124, ctx => ProcFsManager.GenerateSystemStat(ctx.Scheduler)),
+            "uptime" => CreateFile(root, decodedName, 0x124, ctx => ProcFsManager.GenerateUptime(ctx.Scheduler)),
+            "loadavg" => CreateFile(root, decodedName, 0x124, ctx => ProcFsManager.GenerateLoadAvg(ctx.Scheduler)),
+            "sys" => CreateSysDirectory(root, decodedName),
+            "self" => CreateSelfSymlink(root, decodedName),
             _ => null
         };
 
@@ -147,7 +149,7 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
             return created;
         }
 
-        if (!int.TryParse(name, out var pid)) return null;
+        if (!int.TryParse(decodedName, out var pid)) return null;
         if (task.CommonKernel.GetProcess(pid) == null) return null;
 
         created = CreatePidDirectory(root, pid);
@@ -155,13 +157,15 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
         return created;
     }
 
-    public bool RevalidateCachedChild(FiberTask task, Dentry parent, string name, Dentry cached)
+    public bool RevalidateCachedChild(FiberTask task, Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
+        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
+            return false;
         // /proc/self must always reflect current task.
-        if (name == "self") return false;
+        if (decodedName == "self") return false;
 
         // /proc/<pid> must track live task table.
-        if (int.TryParse(name, out var pid))
+        if (int.TryParse(decodedName, out var pid))
             return task.CommonKernel.GetProcess(pid) != null;
 
         return true;
@@ -171,24 +175,24 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
     {
         var entries = new List<DirectoryEntry>
         {
-            new() { Name = ".", Ino = Ino, Type = InodeType.Directory },
-            new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
+            new() { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new() { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory }
         };
 
-        entries.Add(new DirectoryEntry { Name = "mounts", Ino = 0, Type = InodeType.File });
-        entries.Add(new DirectoryEntry { Name = "mountinfo", Ino = 0, Type = InodeType.File });
-        entries.Add(new DirectoryEntry { Name = "cpuinfo", Ino = 0, Type = InodeType.File });
-        entries.Add(new DirectoryEntry { Name = "meminfo", Ino = 0, Type = InodeType.File });
-        entries.Add(new DirectoryEntry { Name = "version", Ino = 0, Type = InodeType.File });
-        entries.Add(new DirectoryEntry { Name = "stat", Ino = 0, Type = InodeType.File });
-        entries.Add(new DirectoryEntry { Name = "uptime", Ino = 0, Type = InodeType.File });
-        entries.Add(new DirectoryEntry { Name = "loadavg", Ino = 0, Type = InodeType.File });
-        entries.Add(new DirectoryEntry { Name = "sys", Ino = 0, Type = InodeType.Directory });
-        entries.Add(new DirectoryEntry { Name = "self", Ino = 0, Type = InodeType.Symlink });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("mounts"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("mountinfo"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("cpuinfo"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("meminfo"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("version"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("stat"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("uptime"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("loadavg"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("sys"), Ino = 0, Type = InodeType.Directory });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("self"), Ino = 0, Type = InodeType.Symlink });
 
         var processes = task.CommonKernel.GetProcessesSnapshot();
         foreach (var process in processes)
-            entries.Add(new DirectoryEntry { Name = process.TGID.ToString(), Ino = 0, Type = InodeType.Directory });
+            entries.Add(new DirectoryEntry { Name = FsName.FromString(process.TGID.ToString()), Ino = 0, Type = InodeType.Directory });
 
         return entries;
     }
@@ -207,18 +211,18 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
     {
         return
         [
-            new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory },
-            new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory },
-            new DirectoryEntry { Name = "mounts", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "mountinfo", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "cpuinfo", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "meminfo", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "version", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "stat", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "uptime", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "loadavg", Ino = 0, Type = InodeType.File },
-            new DirectoryEntry { Name = "sys", Ino = 0, Type = InodeType.Directory },
-            new DirectoryEntry { Name = "self", Ino = 0, Type = InodeType.Symlink }
+            new DirectoryEntry { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = FsName.FromString("mounts"), Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = FsName.FromString("mountinfo"), Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = FsName.FromString("cpuinfo"), Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = FsName.FromString("meminfo"), Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = FsName.FromString("version"), Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = FsName.FromString("stat"), Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = FsName.FromString("uptime"), Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = FsName.FromString("loadavg"), Ino = 0, Type = InodeType.File },
+            new DirectoryEntry { Name = FsName.FromString("sys"), Ino = 0, Type = InodeType.Directory },
+            new DirectoryEntry { Name = FsName.FromString("self"), Ino = 0, Type = InodeType.Symlink }
         ];
     }
 
@@ -264,8 +268,10 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
-    public Dentry? Lookup(FiberTask task, string name)
+    public Dentry? Lookup(FiberTask task, ReadOnlySpan<byte> name)
     {
+        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
+            return null;
         if (Dentries.Count == 0) return null;
         if (task.CommonKernel.GetProcess(_pid) == null) return null;
 
@@ -273,36 +279,36 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         if (dir.TryGetCachedChild(name, out var cached))
             return cached;
 
-        var created = name switch
+        var created = decodedName switch
         {
-            "status" => CreateFile(dir, name, 0x124, _ =>
+            "status" => CreateFile(dir, decodedName, 0x124, _ =>
             {
                 var p = task.CommonKernel.GetProcess(_pid);
                 return p == null ? string.Empty : ProcFsManager.GenerateStatus(p);
             }),
-            "cmdline" => CreateFile(dir, name, 0x124, _ =>
+            "cmdline" => CreateFile(dir, decodedName, 0x124, _ =>
             {
                 var p = task.CommonKernel.GetProcess(_pid);
                 return p == null ? string.Empty : ProcFsManager.GenerateCmdline(p);
             }),
-            "stat" => CreateFile(dir, name, 0x124, _ =>
+            "stat" => CreateFile(dir, decodedName, 0x124, _ =>
             {
                 var p = task.CommonKernel.GetProcess(_pid);
                 return p == null ? string.Empty : ProcFsManager.GenerateStat(p);
             }),
-            "mountinfo" => CreateFile(dir, name, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager)),
-            "fd" => CreateFdDir(dir, name),
-            "fdinfo" => CreateFdInfoDir(dir, name),
-            "exe" => CreateSymlink(dir, name, p => p.ExecutablePath),
-            "cwd" => CreateSymlink(dir, name, p =>
+            "mountinfo" => CreateFile(dir, decodedName, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager)),
+            "fd" => CreateFdDir(dir, decodedName),
+            "fdinfo" => CreateFdInfoDir(dir, decodedName),
+            "exe" => CreateSymlink(dir, decodedName, p => FsEncoding.EncodeUtf8(p.ExecutablePath)),
+            "cwd" => CreateSymlink(dir, decodedName, p =>
             {
                 var proc = p.Syscalls;
-                return proc.GetAbsolutePath(proc.CurrentWorkingDirectory);
+                return proc.GetAbsolutePathBytes(proc.CurrentWorkingDirectory);
             }),
-            "root" => CreateSymlink(dir, name, p =>
+            "root" => CreateSymlink(dir, decodedName, p =>
             {
                 var proc = p.Syscalls;
-                return proc.GetAbsolutePath(proc.ProcessRoot);
+                return proc.GetAbsolutePathBytes(proc.ProcessRoot);
             }),
             _ => null
         };
@@ -313,13 +319,15 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         return created;
     }
 
-    public bool RevalidateCachedChild(FiberTask task, Dentry parent, string name, Dentry cached)
+    public bool RevalidateCachedChild(FiberTask task, Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
+        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
+            return false;
         // Whole /proc/<pid> subtree becomes invalid once process is gone.
         if (task.CommonKernel.GetProcess(_pid) == null) return false;
 
         // Keep fd/fdinfo hot paths fresh because child fd tables are highly dynamic.
-        if (name is "fd" or "fdinfo") return false;
+        if (decodedName is "fd" or "fdinfo") return false;
 
         return true;
     }
@@ -328,22 +336,22 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
     {
         var entries = new List<DirectoryEntry>
         {
-            new() { Name = ".", Ino = Ino, Type = InodeType.Directory },
-            new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
+            new() { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new() { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory }
         };
 
         if (task.CommonKernel.GetProcess(_pid) == null)
             return entries;
 
-        entries.Add(new DirectoryEntry { Name = "status", Ino = 0, Type = InodeType.File });
-        entries.Add(new DirectoryEntry { Name = "cmdline", Ino = 0, Type = InodeType.File });
-        entries.Add(new DirectoryEntry { Name = "stat", Ino = 0, Type = InodeType.File });
-        entries.Add(new DirectoryEntry { Name = "mountinfo", Ino = 0, Type = InodeType.File });
-        entries.Add(new DirectoryEntry { Name = "fd", Ino = 0, Type = InodeType.Directory });
-        entries.Add(new DirectoryEntry { Name = "fdinfo", Ino = 0, Type = InodeType.Directory });
-        entries.Add(new DirectoryEntry { Name = "exe", Ino = 0, Type = InodeType.Symlink });
-        entries.Add(new DirectoryEntry { Name = "cwd", Ino = 0, Type = InodeType.Symlink });
-        entries.Add(new DirectoryEntry { Name = "root", Ino = 0, Type = InodeType.Symlink });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("status"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("cmdline"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("stat"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("mountinfo"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("fd"), Ino = 0, Type = InodeType.Directory });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("fdinfo"), Ino = 0, Type = InodeType.Directory });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("exe"), Ino = 0, Type = InodeType.Symlink });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("cwd"), Ino = 0, Type = InodeType.Symlink });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("root"), Ino = 0, Type = InodeType.Symlink });
         return entries;
     }
 
@@ -361,8 +369,8 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
     {
         return
         [
-            new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory },
-            new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory }
+            new DirectoryEntry { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory }
         ];
     }
 
@@ -384,7 +392,7 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         return new Dentry(name, inode, parent, _sb);
     }
 
-    private Dentry CreateSymlink(Dentry parent, string name, Func<Process, string> resolver)
+    private Dentry CreateSymlink(Dentry parent, string name, Func<Process, byte[]> resolver)
     {
         var inode = new ProcPidSymlinkInode(_sb, _pid, resolver);
         return new Dentry(name, inode, parent, _sb);
@@ -395,9 +403,9 @@ file sealed class ProcPidSymlinkInode : Inode, IContextualSymlinkInode
 {
     private readonly int _pid;
     private readonly ProcSuperBlock _sb;
-    private readonly Func<Process, string> _targetResolver;
+    private readonly Func<Process, byte[]> _targetResolver;
 
-    public ProcPidSymlinkInode(ProcSuperBlock sb, int pid, Func<Process, string> targetResolver)
+    public ProcPidSymlinkInode(ProcSuperBlock sb, int pid, Func<Process, byte[]> targetResolver)
     {
         _sb = sb;
         _pid = pid;
@@ -410,14 +418,14 @@ file sealed class ProcPidSymlinkInode : Inode, IContextualSymlinkInode
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
-    public string Readlink(FiberTask task)
+    public byte[] Readlink(FiberTask task)
     {
         var process = task.CommonKernel.GetProcess(_pid);
-        if (process == null) return string.Empty;
+        if (process == null) return [];
 
         var target = _targetResolver(process);
-        if (string.IsNullOrEmpty(target))
-            return string.Empty;
+        if (target.Length == 0)
+            return [];
         return target;
     }
 
@@ -445,12 +453,14 @@ file sealed class ProcPidFdDirectoryInode : Inode, IContextualDirectoryInode
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
-    public Dentry? Lookup(FiberTask task, string name)
+    public Dentry? Lookup(FiberTask task, ReadOnlySpan<byte> name)
     {
+        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
+            return null;
         if (Dentries.Count == 0) return null;
         var process = task.CommonKernel.GetProcess(_pid);
         if (process == null) return null;
-        if (!int.TryParse(name, out var fd)) return null;
+        if (!int.TryParse(decodedName, out var fd)) return null;
         if (!process.Syscalls.FDs.ContainsKey(fd))
             return null;
 
@@ -459,16 +469,18 @@ file sealed class ProcPidFdDirectoryInode : Inode, IContextualDirectoryInode
             return cached;
 
         var inode = new ProcPidFdSymlinkInode(_sb, _pid, fd);
-        var dentry = new Dentry(name, inode, dir, _sb);
+        var dentry = new Dentry(decodedName, inode, dir, _sb);
         dir.CacheChild(dentry, "ProcPidFdDirectoryInode.Lookup");
         return dentry;
     }
 
-    public bool RevalidateCachedChild(FiberTask task, Dentry parent, string name, Dentry cached)
+    public bool RevalidateCachedChild(FiberTask task, Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
+        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
+            return false;
         var process = task.CommonKernel.GetProcess(_pid);
         if (process == null) return false;
-        if (!int.TryParse(name, out var fd)) return false;
+        if (!int.TryParse(decodedName, out var fd)) return false;
         return process.Syscalls.FDs.ContainsKey(fd);
     }
 
@@ -476,15 +488,15 @@ file sealed class ProcPidFdDirectoryInode : Inode, IContextualDirectoryInode
     {
         var entries = new List<DirectoryEntry>
         {
-            new() { Name = ".", Ino = Ino, Type = InodeType.Directory },
-            new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
+            new() { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new() { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory }
         };
 
         var process = task.CommonKernel.GetProcess(_pid);
         if (process == null) return entries;
 
         foreach (var fd in process.Syscalls.FDs.Keys.OrderBy(k => k))
-            entries.Add(new DirectoryEntry { Name = fd.ToString(), Ino = 0, Type = InodeType.Symlink });
+            entries.Add(new DirectoryEntry { Name = FsName.FromString(fd.ToString()), Ino = 0, Type = InodeType.Symlink });
         return entries;
     }
 
@@ -502,8 +514,8 @@ file sealed class ProcPidFdDirectoryInode : Inode, IContextualDirectoryInode
     {
         return
         [
-            new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory },
-            new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory }
+            new DirectoryEntry { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory }
         ];
     }
 }
@@ -525,12 +537,14 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode, IContextualDirectoryInode
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
-    public Dentry? Lookup(FiberTask task, string name)
+    public Dentry? Lookup(FiberTask task, ReadOnlySpan<byte> name)
     {
+        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
+            return null;
         if (Dentries.Count == 0) return null;
         var process = task.CommonKernel.GetProcess(_pid);
         if (process == null) return null;
-        if (!int.TryParse(name, out var fd)) return null;
+        if (!int.TryParse(decodedName, out var fd)) return null;
         if (!process.Syscalls.FDs.ContainsKey(fd)) return null;
 
         var dir = Dentries[0];
@@ -538,16 +552,18 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode, IContextualDirectoryInode
             return cached;
 
         var inode = new ProcPidFdInfoFileInode(_sb, _pid, fd);
-        var dentry = new Dentry(name, inode, dir, _sb);
+        var dentry = new Dentry(decodedName, inode, dir, _sb);
         dir.CacheChild(dentry, "ProcPidFdInfoDirectoryInode.Lookup");
         return dentry;
     }
 
-    public bool RevalidateCachedChild(FiberTask task, Dentry parent, string name, Dentry cached)
+    public bool RevalidateCachedChild(FiberTask task, Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
     {
+        if (!FsEncoding.TryDecodeUtf8(name, out var decodedName))
+            return false;
         var process = task.CommonKernel.GetProcess(_pid);
         if (process == null) return false;
-        if (!int.TryParse(name, out var fd)) return false;
+        if (!int.TryParse(decodedName, out var fd)) return false;
         return process.Syscalls.FDs.ContainsKey(fd);
     }
 
@@ -555,15 +571,15 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode, IContextualDirectoryInode
     {
         var entries = new List<DirectoryEntry>
         {
-            new() { Name = ".", Ino = Ino, Type = InodeType.Directory },
-            new() { Name = "..", Ino = Ino, Type = InodeType.Directory }
+            new() { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new() { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory }
         };
 
         var process = task.CommonKernel.GetProcess(_pid);
         if (process == null) return entries;
 
         foreach (var fd in process.Syscalls.FDs.Keys.OrderBy(k => k))
-            entries.Add(new DirectoryEntry { Name = fd.ToString(), Ino = 0, Type = InodeType.File });
+            entries.Add(new DirectoryEntry { Name = FsName.FromString(fd.ToString()), Ino = 0, Type = InodeType.File });
         return entries;
     }
 
@@ -581,8 +597,8 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode, IContextualDirectoryInode
     {
         return
         [
-            new DirectoryEntry { Name = ".", Ino = Ino, Type = InodeType.Directory },
-            new DirectoryEntry { Name = "..", Ino = Ino, Type = InodeType.Directory }
+            new DirectoryEntry { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory }
         ];
     }
 }
@@ -590,6 +606,7 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode, IContextualDirectoryInode
 file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode, IContextualMagicSymlinkInode,
     IContextualSymlinkInode
 {
+    private static readonly byte[] DeletedSuffixBytes = " (deleted)"u8.ToArray();
     private readonly int _fd;
     private readonly int _pid;
     private readonly ProcSuperBlock _sb;
@@ -632,18 +649,24 @@ file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode, IContextual
         return true;
     }
 
-    public string Readlink(FiberTask task)
+    public byte[] Readlink(FiberTask task)
     {
         var process = task.CommonKernel.GetProcess(_pid);
-        if (process == null) return string.Empty;
-        if (!process.Syscalls.FDs.TryGetValue(_fd, out var file)) return string.Empty;
+        if (process == null) return [];
+        if (!process.Syscalls.FDs.TryGetValue(_fd, out var file)) return [];
 
         if (file.Mount?.FsType == "anon_inodefs" && file.OpenedInode is not TmpfsInode { IsMemfd: true })
-            return $"anon_inode:{file.Dentry.Name}";
+            return FsEncoding.EncodeUtf8($"anon_inode:{file.Dentry.Name.ToDebugString()}");
 
-        var path = process.Syscalls.GetAbsolutePath(file.LivePath);
+        var path = process.Syscalls.GetAbsolutePathBytes(file.LivePath);
         if (!file.LivePath.Dentry!.IsHashed && file.OpenedInode is not TmpfsInode { IsMemfd: true })
-            path += " (deleted)";
+        {
+            var result = new byte[path.Length + DeletedSuffixBytes.Length];
+            path.CopyTo(result, 0);
+            DeletedSuffixBytes.CopyTo(result, path.Length);
+            return result;
+        }
+
         return path;
     }
 
@@ -872,9 +895,9 @@ file sealed class ProcSelfSymlinkInode : Inode, IContextualSymlinkInode
         MTime = ATime = CTime = DateTime.UtcNow;
     }
 
-    public string Readlink(FiberTask task)
+    public byte[] Readlink(FiberTask task)
     {
-        return task.Process.TGID.ToString();
+        return FsEncoding.EncodeUtf8(task.Process.TGID.ToString());
     }
 
     public override int Readlink(out string? target)

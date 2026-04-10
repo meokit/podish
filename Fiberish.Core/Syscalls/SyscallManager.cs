@@ -1081,7 +1081,13 @@ public partial class SyscallManager
 
     public string GetAbsolutePath(PathLocation loc)
     {
-        var parts = new List<string>();
+        return FsEncoding.DecodeUtf8Lossy(GetAbsolutePathBytes(loc));
+    }
+
+    public byte[] GetAbsolutePathBytes(PathLocation loc)
+    {
+        var parts = new List<byte[]>();
+        var totalLength = 1;
         var current = loc.Dentry;
         var currentMount = loc.Mount;
 
@@ -1097,14 +1103,34 @@ public partial class SyscallManager
                 continue;
             }
 
-            if (current.Name != "/") parts.Add(current.Name);
+            if (current.Name != "/")
+            {
+                var bytes = current.Name.Bytes.ToArray();
+                parts.Add(bytes);
+                totalLength += bytes.Length + 1;
+            }
 
             if (current.Parent == null || current.Parent == current) break;
             current = current.Parent;
         }
 
         parts.Reverse();
-        return "/" + string.Join("/", parts);
+        if (parts.Count == 0)
+            return [(byte)'/'];
+
+        var result = new byte[totalLength - 1];
+        var offset = 0;
+        result[offset++] = (byte)'/';
+        for (var i = 0; i < parts.Count; i++)
+        {
+            var part = parts[i];
+            part.CopyTo(result, offset);
+            offset += part.Length;
+            if (i != parts.Count - 1)
+                result[offset++] = (byte)'/';
+        }
+
+        return result;
     }
 
     private void InitStdio(SuperBlock devSb, TtyDiscipline? tty)

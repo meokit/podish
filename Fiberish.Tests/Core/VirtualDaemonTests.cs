@@ -43,7 +43,7 @@ public sealed class VirtualDaemonTests
             var endpoint = new UnixSockaddrInfo
             {
                 IsAbstract = false,
-                Path = "/virt-echo.sock",
+                PathBytes = "/virt-echo.sock"u8.ToArray(),
                 SunPathRaw = Encoding.UTF8.GetBytes("/virt-echo.sock\0")
             };
 
@@ -95,7 +95,7 @@ public sealed class VirtualDaemonTests
             var endpoint = new UnixSockaddrInfo
             {
                 IsAbstract = false,
-                Path = "/virt-memfd.sock",
+                PathBytes = "/virt-memfd.sock"u8.ToArray(),
                 SunPathRaw = Encoding.UTF8.GetBytes("/virt-memfd.sock\0")
             };
 
@@ -151,7 +151,7 @@ public sealed class VirtualDaemonTests
             var endpoint = new UnixSockaddrInfo
             {
                 IsAbstract = false,
-                Path = "/virt-sendmsg.sock",
+                PathBytes = "/virt-sendmsg.sock"u8.ToArray(),
                 SunPathRaw = Encoding.UTF8.GetBytes("/virt-sendmsg.sock\0")
             };
 
@@ -204,7 +204,7 @@ public sealed class VirtualDaemonTests
             var endpoint = new UnixSockaddrInfo
             {
                 IsAbstract = false,
-                Path = "/virt-sendmsg-in.sock",
+                PathBytes = "/virt-sendmsg-in.sock"u8.ToArray(),
                 SunPathRaw = Encoding.UTF8.GetBytes("/virt-sendmsg-in.sock\0")
             };
 
@@ -256,7 +256,7 @@ public sealed class VirtualDaemonTests
             var endpoint = new UnixSockaddrInfo
             {
                 IsAbstract = false,
-                Path = "/virt-sendmsg-out.sock",
+                PathBytes = "/virt-sendmsg-out.sock"u8.ToArray(),
                 SunPathRaw = Encoding.UTF8.GetBytes("/virt-sendmsg-out.sock\0")
             };
 
@@ -305,7 +305,7 @@ public sealed class VirtualDaemonTests
             var endpoint = new UnixSockaddrInfo
             {
                 IsAbstract = false,
-                Path = "/virt-frames.sock",
+                PathBytes = "/virt-frames.sock"u8.ToArray(),
                 SunPathRaw = Encoding.UTF8.GetBytes("/virt-frames.sock\0")
             };
 
@@ -365,7 +365,7 @@ public sealed class VirtualDaemonTests
             var endpoint = new UnixSockaddrInfo
             {
                 IsAbstract = false,
-                Path = "/virt-child-frames.sock",
+                PathBytes = "/virt-child-frames.sock"u8.ToArray(),
                 SunPathRaw = Encoding.UTF8.GetBytes("/virt-child-frames.sock\0")
             };
 

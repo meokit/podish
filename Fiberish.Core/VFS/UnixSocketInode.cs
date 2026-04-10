@@ -168,7 +168,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
             }
             else
             {
-                var loc = sm.PathWalk(unixAddr.Path);
+                var loc = sm.PathWalker.PathWalk(unixAddr.PathBytes, unixAddr.PathBytes.Length);
                 if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
                 if (loc.Dentry.Inode.Type != InodeType.Socket) return -(int)Errno.ECONNREFUSED;
                 explicitPeer = sm.LookupUnixPathSocket(loc.Dentry.Inode);
@@ -220,7 +220,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
             }
             else
             {
-                var loc = sm.PathWalk(unixAddr.Path);
+                var loc = sm.PathWalker.PathWalk(unixAddr.PathBytes, unixAddr.PathBytes.Length);
                 if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
                 if (loc.Dentry.Inode.Type != InodeType.Socket) return -(int)Errno.ECONNREFUSED;
                 explicitPeer = sm.LookupUnixPathSocket(loc.Dentry.Inode);
@@ -263,12 +263,12 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
             return 0;
         }
 
-        var (parent, name, createErr) = sm.PathWalkForCreate(unixAddr.Path);
+        var (parent, name, createErr) = sm.PathWalker.PathWalkForCreate(unixAddr.PathBytes, unixAddr.PathBytes.Length);
         if (createErr < 0) return createErr;
-        if (!parent.IsValid || string.IsNullOrEmpty(name)) return -(int)Errno.EINVAL;
+        if (!parent.IsValid || name.IsEmpty) return -(int)Errno.EINVAL;
         if (parent.Mount != null && parent.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
-        var existing = sm.PathWalk(unixAddr.Path);
+        var existing = sm.PathWalker.PathWalk(unixAddr.PathBytes, unixAddr.PathBytes.Length);
         if (existing.IsValid) return -(int)Errno.EADDRINUSE;
 
         var uid = task.Process.EUID;
@@ -332,7 +332,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         }
         else
         {
-            var loc = sm.PathWalk(unixAddr.Path);
+            var loc = sm.PathWalker.PathWalk(unixAddr.PathBytes, unixAddr.PathBytes.Length);
             if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
             if (loc.Dentry.Inode.Type != InodeType.Socket) return -(int)Errno.ECONNREFUSED;
             target = sm.LookupUnixPathSocket(loc.Dentry.Inode);

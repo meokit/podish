@@ -346,15 +346,15 @@ public class PathWalkRmdirSyscallTests
         }
 
         var link = new Dentry("link", null, lowerRoot, lowerSb);
-        lowerRoot.Inode.Symlink(link, "file", 0, 0);
+        lowerRoot.Inode.Symlink(link, "file"u8.ToArray(), 0, 0);
         var indirect = new Dentry("indirect", null, lowerRoot, lowerSb);
-        lowerRoot.Inode.Symlink(indirect, "link", 0, 0);
+        lowerRoot.Inode.Symlink(indirect, "link"u8.ToArray(), 0, 0);
         var broken = new Dentry("broken", null, lowerRoot, lowerSb);
-        lowerRoot.Inode.Symlink(broken, "/missing-target", 0, 0);
+        lowerRoot.Inode.Symlink(broken, "/missing-target"u8.ToArray(), 0, 0);
         var dirLink = new Dentry("dir-link", null, lowerRoot, lowerSb);
-        lowerRoot.Inode.Symlink(dirLink, "nonempty", 0, 0);
+        lowerRoot.Inode.Symlink(dirLink, "nonempty"u8.ToArray(), 0, 0);
         var dirChain = new Dentry("dir-chain", null, lowerRoot, lowerSb);
-        lowerRoot.Inode.Symlink(dirChain, "dir-link", 0, 0);
+        lowerRoot.Inode.Symlink(dirChain, "dir-link"u8.ToArray(), 0, 0);
 
         var overlayFs = new OverlayFileSystem();
         var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
