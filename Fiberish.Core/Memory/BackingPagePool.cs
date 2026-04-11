@@ -66,8 +66,11 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
     private readonly List<SegmentEntry> _nonFullPooledSegments = [];
     private readonly List<SegmentEntry> _pooledSegments = [];
     private readonly Dictionary<long, SegmentEntry> _segments = new();
+    private long _createdSegmentCount;
+    private long _freedSegmentCount;
     private long _legacyAllocOverQuota;
     private long _nextSegmentId;
+    private int _peakPooledSegmentCount;
     private long _strictAllocFail;
     private long _strictAllocReclaimSuccess;
     private long _strictAllocSuccess;
@@ -131,6 +134,39 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
         }
 
         return stats;
+    }
+
+    public BackingPagePoolSegmentStatsSnapshot CaptureSegmentStats()
+    {
+        lock (_globalLock)
+        {
+            long livePages = 0;
+            var emptySegments = 0;
+            var fullSegments = 0;
+            foreach (var segment in _pooledSegments)
+            {
+                livePages += segment.LivePages;
+                if (segment.LivePages == 0)
+                    emptySegments++;
+                if (segment.LivePages >= segment.PageCount)
+                    fullSegments++;
+            }
+
+            var segmentCount = _pooledSegments.Count;
+            var reservedBytes = (long)segmentCount * PooledSegmentBytes;
+            var reservedPages = (long)segmentCount * PooledSegmentPageCount;
+            return new BackingPagePoolSegmentStatsSnapshot(
+                segmentCount,
+                _nonFullPooledSegments.Count,
+                emptySegments,
+                fullSegments,
+                reservedBytes,
+                livePages,
+                Math.Max(0, reservedPages - livePages),
+                Interlocked.Read(ref _createdSegmentCount),
+                Interlocked.Read(ref _freedSegmentCount),
+                Volatile.Read(ref _peakPooledSegmentCount));
+        }
     }
 
     public BackingPageHandle AllocAnonPage(
@@ -239,8 +275,19 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
             ClearPoolBit(segment, pageIndex);
             if (segment.LivePages > 0)
                 segment.LivePages--;
-            if (wasFull)
-                AddNonFullSegmentLocked(segment);
+            if (segment.LivePages == 0)
+            {
+                FreePooledSegmentLocked(segment);
+            }
+            else
+            {
+                _ = PooledSegmentMemory.TryAdviseUnused(
+                    segment.Reservation,
+                    ptr,
+                    LinuxConstants.PageSize);
+                if (wasFull)
+                    AddNonFullSegmentLocked(segment);
+            }
         }
 
         if (countsTowardAnonymousAllocationTotals)
@@ -261,10 +308,7 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
         lock (_globalLock)
         {
             foreach (var segment in _pooledSegments)
-                unsafe
-                {
-                    NativeMemory.AlignedFree((void*)segment.BasePtr);
-                }
+                ReleasePooledSegmentMemory(segment);
 
             _pooledSegments.Clear();
             _nonFullPooledSegments.Clear();
@@ -347,26 +391,35 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
 
     private SegmentEntry? CreatePooledSegmentLocked()
     {
-        unsafe
-        {
-            var basePtr = (nint)NativeMemory.AlignedAlloc(PooledSegmentBytes, LinuxConstants.PageSize);
-            if (basePtr == 0)
-                return null;
+        var reservation = PooledSegmentMemory.Allocate(PooledSegmentBytes);
+        if (!reservation.IsAllocated)
+            return null;
 
-            new Span<byte>((void*)basePtr, PooledSegmentBytes).Clear();
-            var segment = new SegmentEntry
+        if (!reservation.IsZeroInitialized)
+            unsafe
             {
-                SegmentId = Interlocked.Increment(ref _nextSegmentId),
-                BasePtr = basePtr,
-                PageCount = PooledSegmentPageCount,
-                LivePages = 0,
-                PoolBitmap = new ulong[PooledSegmentWordCount]
-            };
-            _segments[segment.SegmentId] = segment;
-            _pooledSegments.Add(segment);
-            AddNonFullSegmentLocked(segment);
-            return segment;
-        }
+                new Span<byte>((void*)reservation.BasePtr, PooledSegmentBytes).Clear();
+            }
+
+        var segment = new SegmentEntry
+        {
+            SegmentId = Interlocked.Increment(ref _nextSegmentId),
+            Reservation = reservation,
+            PageCount = PooledSegmentPageCount,
+            LivePages = 0,
+            PoolBitmap = new ulong[PooledSegmentWordCount]
+        };
+        _segments[segment.SegmentId] = segment;
+        _pooledSegments.Add(segment);
+        Interlocked.Increment(ref _createdSegmentCount);
+        UpdatePeakPooledSegmentCount(_pooledSegments.Count);
+        AddNonFullSegmentLocked(segment);
+        return segment;
+    }
+
+    private static void ReleasePooledSegmentMemory(SegmentEntry segment)
+    {
+        PooledSegmentMemory.Free(segment.Reservation);
     }
 
     private bool TryAllocateFromPoolSegmentLocked(SegmentEntry segment, AllocationClass allocationClass,
@@ -463,6 +516,28 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
         segment.NextFreeWordHint = wordIndex;
     }
 
+    private void FreePooledSegmentLocked(SegmentEntry segment)
+    {
+        RemoveNonFullSegmentLocked(segment);
+        _segments.Remove(segment.SegmentId);
+        _pooledSegments.Remove(segment);
+        segment.PoolBitmap = null;
+        Interlocked.Increment(ref _freedSegmentCount);
+        ReleasePooledSegmentMemory(segment);
+    }
+
+    private void UpdatePeakPooledSegmentCount(int currentCount)
+    {
+        while (true)
+        {
+            var peak = Volatile.Read(ref _peakPooledSegmentCount);
+            if (currentCount <= peak)
+                return;
+            if (Interlocked.CompareExchange(ref _peakPooledSegmentCount, currentCount, peak) == peak)
+                return;
+        }
+    }
+
     private void AddNonFullSegmentLocked(SegmentEntry segment)
     {
         if (segment.NonFullListIndex >= 0)
@@ -502,13 +577,15 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
 
     private sealed class SegmentEntry
     {
-        public required nint BasePtr;
         public int LivePages;
         public int NextFreeWordHint;
         public int NonFullListIndex = -1;
         public required int PageCount;
         public ulong[]? PoolBitmap;
+        public required PooledSegmentMemoryReservation Reservation;
         public long SegmentId;
+
+        public nint BasePtr => Reservation.BasePtr;
     }
 
     private readonly record struct PooledReleaseToken(

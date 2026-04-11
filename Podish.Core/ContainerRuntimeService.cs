@@ -55,6 +55,7 @@ public sealed class ContainerRunRequest
     public bool EnableWaylandServer { get; init; }
     public int WaylandDesktopWidth { get; init; } = 1024;
     public int WaylandDesktopHeight { get; init; } = 768;
+    public string? MemoryPageRefLogFile { get; init; }
     public ushort? TerminalRows { get; init; }
     public ushort? TerminalCols { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
@@ -98,8 +99,68 @@ public sealed class ContainerRuntimeService
         ITtyDriver? driver = null;
         EventHandler? processExitHandler = null;
         ConsoleCancelEventHandler? cancelKeyPressHandler = null;
+        MemoryPageRefLogWriter? memoryPageLogWriter = null;
+        CancellationTokenSource? memoryPageLogCts = null;
+        Task? memoryPageLogTask = null;
         var rawModeEnabled = false;
         var isInteractive = request.UseTty && request.EnableHostConsoleInput && !Console.IsInputRedirected;
+
+        void WriteMemoryPageLog(string phase)
+        {
+            if (memoryPageLogWriter == null)
+                return;
+
+            try
+            {
+                memoryPageLogWriter.WriteSnapshot(phase, request, memoryContext, runtime?.Syscalls);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to write memory-page ref log phase={Phase} path={Path}",
+                    phase,
+                    memoryPageLogWriter.Path);
+            }
+        }
+
+        async Task StopMemoryPageLogAsync(string phase)
+        {
+            if (memoryPageLogWriter == null)
+                return;
+
+            WriteMemoryPageLog(phase);
+            if (memoryPageLogCts == null)
+                return;
+
+            memoryPageLogCts.Cancel();
+            if (memoryPageLogTask != null)
+                try
+                {
+                    await memoryPageLogTask;
+                }
+                catch (OperationCanceledException)
+                {
+                }
+
+            memoryPageLogTask = null;
+            memoryPageLogCts.Dispose();
+            memoryPageLogCts = null;
+        }
+
+        async Task RunMemoryPageLogLoopAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                while (true)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+                    WriteMemoryPageLog("tick");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
 
         using var logSink = CreateContainerLogSink(request.LogDriver, request.ContainerDir, _loggerFactory);
         var publishedPorts = request.PublishedPorts ?? Array.Empty<PublishedPortSpec>();
@@ -217,9 +278,16 @@ public sealed class ContainerRuntimeService
             if (request.MemoryQuotaBytes.HasValue)
                 memoryContext.MemoryQuotaBytes = request.MemoryQuotaBytes.Value;
 
+            if (!string.IsNullOrWhiteSpace(request.MemoryPageRefLogFile))
+            {
+                memoryPageLogWriter = new MemoryPageRefLogWriter(request.MemoryPageRefLogFile!);
+                WriteMemoryPageLog("context-created");
+            }
+
             runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag, memoryContext);
             scheduler.Runtime = runtime;
             runtime.EnableGuestStatsCollection = !string.IsNullOrWhiteSpace(request.GuestStatsExportDir);
+            WriteMemoryPageLog("runtime-created");
 
             if (effectiveNetworkMode == NetworkMode.Private)
                 networkBackend = new PrivateNetworkBackend(new DummySwitch());
@@ -475,6 +543,12 @@ public sealed class ContainerRuntimeService
             });
             request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-start", request.ContainerId,
                 request.Image));
+            if (memoryPageLogWriter != null)
+            {
+                WriteMemoryPageLog("container-start");
+                memoryPageLogCts = new CancellationTokenSource();
+                memoryPageLogTask = RunMemoryPageLogLoopAsync(memoryPageLogCts.Token);
+            }
 
             _logger.LogDebug(
                 "Starting scheduler run containerId={ContainerId} exe={Exe} args={Args} tty={UseTty} volumes={VolumeCount} logDriver={LogDriver} publishedPortCount={PublishedPortCount}",
@@ -486,6 +560,7 @@ public sealed class ContainerRuntimeService
                 "Scheduler run returned containerId={ContainerId} mainExited={MainExited}",
                 request.ContainerId, mainTask.Exited);
 
+            await StopMemoryPageLogAsync("scheduler-return");
             TryExportGuestStats(runtime, request);
             runtime.Engine.Dispose();
             runtime.Dispose();
@@ -511,6 +586,7 @@ public sealed class ContainerRuntimeService
         }
         catch (OutOfMemoryException ex)
         {
+            await StopMemoryPageLogAsync("oom");
             var message = initProcessStarted
                 ? $"ENOMEM: container ran out of memory while running '{actualExe}'."
                 : $"ENOMEM: container startup failed before init process was ready (phase={startupPhase}, exe='{actualExe}').";
@@ -524,6 +600,7 @@ public sealed class ContainerRuntimeService
         }
         catch (Exception ex)
         {
+            await StopMemoryPageLogAsync("exception");
             _logger.LogCritical(ex, "Critical Error during container emulation");
             Console.Error.WriteLine($"[Podish] Error: {ex}");
             request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", request.ContainerId,
@@ -533,6 +610,29 @@ public sealed class ContainerRuntimeService
         }
         finally
         {
+            if (memoryPageLogWriter != null)
+            {
+                if (memoryPageLogCts != null)
+                {
+                    WriteMemoryPageLog("teardown");
+                    memoryPageLogCts.Cancel();
+                    if (memoryPageLogTask != null)
+                        try
+                        {
+                            await memoryPageLogTask;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                        }
+
+                    memoryPageLogCts.Dispose();
+                    memoryPageLogCts = null;
+                    memoryPageLogTask = null;
+                }
+
+                memoryPageLogWriter.Dispose();
+            }
+
             _logger.LogDebug("Container teardown starting containerId={ContainerId}", request.ContainerId);
             try
             {
@@ -631,6 +731,50 @@ public sealed class ContainerRuntimeService
             _portForwardManager?.Dispose();
 
             _logger.LogDebug("Container teardown finished containerId={ContainerId}", request.ContainerId);
+        }
+    }
+
+    private sealed class MemoryPageRefLogWriter : IDisposable
+    {
+        private readonly StreamWriter _writer;
+        private long _sequence;
+
+        public MemoryPageRefLogWriter(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("Memory-page ref log path must be non-empty.", nameof(path));
+
+            Path = System.IO.Path.GetFullPath(path);
+            var directory = System.IO.Path.GetDirectoryName(Path);
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+
+            _writer = new StreamWriter(new FileStream(Path, FileMode.Create, FileAccess.Write, FileShare.Read))
+            {
+                AutoFlush = true
+            };
+        }
+
+        public string Path { get; }
+
+        public void WriteSnapshot(string phase, ContainerRunRequest request, MemoryRuntimeContext memoryContext,
+            SyscallManager? syscalls)
+        {
+            var entry = new MemoryPageRefLogEntry(
+                Interlocked.Increment(ref _sequence),
+                DateTimeOffset.UtcNow,
+                phase,
+                request.ContainerId,
+                request.Image,
+                memoryContext.CaptureMemoryStats(syscalls),
+                memoryContext.CaptureHostPageRefStats(),
+                memoryContext.CaptureBackingPagePoolSegmentStats());
+            _writer.WriteLine(JsonSerializer.Serialize(entry, PodishJsonContext.Default.MemoryPageRefLogEntry));
+        }
+
+        public void Dispose()
+        {
+            _writer.Dispose();
         }
     }
 

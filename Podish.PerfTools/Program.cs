@@ -92,12 +92,13 @@ internal static partial class Program
                             gen-superopcodes               Generate libfibercpu/src/generated/superopcodes.generated.cpp
                             pipeline                       Run the full benchmark + analysis pipeline
                             runner                         Run the benchmark harness and optional block analysis
-                            profile                        Record/analyze runtime profiles with auto-selected backend
+                            profile                        Record/analyze CPU or native-memory runtime profiles with auto-selected backend
 
                           Examples:
                             dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- pipeline --candidate-top 256 --superopcode-top 256 --reuse-rootfs
                             dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- runner --jit-handler-profile-block-dump --aggregate-superopcode-candidates --candidate-top 256
-                            dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- profile record-and-analyze --backend auto
+                            dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- profile record-and-analyze --backend auto --mode cpu
+                            dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- profile analyze --backend xctrace --mode native-memory --trace /tmp/repro.trace
                           """);
         return 0;
     }
@@ -420,6 +421,12 @@ internal static partial class Program
             ["metadata"] = new Dictionary<string, object?>
             {
                 ["backend"] = analysis.Backend,
+                ["mode"] = analysis.Mode switch
+                {
+                    ProfileModeKind.CpuHotspots => "cpu",
+                    ProfileModeKind.NativeMemory => "native-memory",
+                    _ => analysis.Mode.ToString()
+                },
                 ["trace_path"] = analysis.TracePath,
                 ["export_path"] = analysis.ExportPath,
                 ["binary_path"] = binaryPath,
@@ -428,6 +435,7 @@ internal static partial class Program
                 ["kept_rows"] = analysis.KeptRows
             },
             ["hotspots"] = analysis.Hotspots.Select(h => h.ToDictionary()).ToList(),
+            ["native_memory"] = analysis.NativeMemory?.ToDictionary(),
             ["disassembly"] = disassembly
         };
         File.WriteAllText(reportJsonPath, JsonSerializer.Serialize(payload, JsonOptions), Utf8NoBom);
@@ -437,28 +445,143 @@ internal static partial class Program
             $"# {name}",
             "",
             $"- backend: `{analysis.Backend}`",
+            $"- mode: `{(analysis.Mode == ProfileModeKind.NativeMemory ? "native-memory" : "cpu")}`",
             $"- trace: `{analysis.TracePath}`",
             $"- export: `{analysis.ExportPath}`",
             $"- binary: `{binaryPath}`",
             $"- warmup cutoff: `{analysis.WarmupSeconds:F1}s`",
             $"- kept samples: `{analysis.KeptRows}/{analysis.TotalRows}`",
-            "",
-            "| Rank | Self ms | Samples | Symbol | Binary |",
-            "|---:|---:|---:|---|---|"
         };
-        lines.AddRange(analysis.Hotspots.Select(hotspot =>
-            $"| {hotspot.Rank} | {hotspot.SelfMs.ToString("F3", CultureInfo.InvariantCulture)} | {hotspot.SampleCount} | `{hotspot.Symbol}` | `{hotspot.BinaryName ?? ""}` |"));
-        if (disassembly.Count > 0)
+
+        if (analysis.Mode == ProfileModeKind.NativeMemory && analysis.NativeMemory is not null)
+        {
+            lines.Add($"- live allocations kept: `{analysis.NativeMemory.LiveAllocationCount}`");
+            lines.Add($"- live bytes kept: `{FormatBytes(analysis.NativeMemory.LiveBytes)}`");
+            lines.Add("");
+            lines.Add("## Live Allocation Callers");
+            lines.Add("");
+            lines.Add("| Rank | Live Bytes | Count | Caller | Library | Top Category |");
+            lines.Add("|---:|---:|---:|---|---|---|");
+            lines.AddRange(analysis.NativeMemory.Callers.Select(entry =>
+                $"| {entry.Rank} | {FormatBytes(entry.LiveBytes)} | {entry.LiveCount} | `{entry.ResponsibleCaller}` | `{entry.ResponsibleLibrary ?? ""}` | `{entry.TopCategory ?? ""}` |"));
+            lines.Add("");
+            lines.Add("## Allocation Categories");
+            lines.Add("");
+            lines.Add("| Rank | Persistent Bytes | Live Count | Total Bytes | Category |");
+            lines.Add("|---:|---:|---:|---:|---|");
+            lines.AddRange(analysis.NativeMemory.Categories.Select(entry =>
+                $"| {entry.Rank} | {FormatBytes(entry.PersistentBytes)} | {entry.PersistentCount} | {FormatBytes(entry.TotalBytes)} | `{entry.Category}` |"));
+            lines.Add("");
+            lines.Add($"- statistics export: `{analysis.NativeMemory.StatisticsPath}`");
+            lines.Add($"- allocations export: `{analysis.NativeMemory.AllocationsPath}`");
+        }
+        else
         {
             lines.Add("");
-            lines.Add("## Disassembly");
-            lines.Add("");
-            foreach (var (symbol, path) in disassembly)
-                lines.Add($"- `{symbol}`: `{path}`");
+            lines.Add("| Rank | Self ms | Samples | Symbol | Binary |");
+            lines.Add("|---:|---:|---:|---|---|");
+            lines.AddRange(analysis.Hotspots.Select(hotspot =>
+                $"| {hotspot.Rank} | {hotspot.SelfMs.ToString("F3", CultureInfo.InvariantCulture)} | {hotspot.SampleCount} | `{hotspot.Symbol}` | `{hotspot.BinaryName ?? ""}` |"));
+            if (disassembly.Count > 0)
+            {
+                lines.Add("");
+                lines.Add("## Disassembly");
+                lines.Add("");
+                foreach (var (symbol, path) in disassembly)
+                    lines.Add($"- `{symbol}`: `{path}`");
+            }
         }
 
         File.WriteAllText(reportMarkdownPath, string.Join(Environment.NewLine, lines) + Environment.NewLine, Utf8NoBom);
         return new ProfileReportPaths(reportJsonPath, reportMarkdownPath);
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] units = ["B", "KiB", "MiB", "GiB", "TiB"];
+        double value = bytes;
+        var unitIndex = 0;
+        while (value >= 1024.0 && unitIndex < units.Length - 1)
+        {
+            value /= 1024.0;
+            unitIndex++;
+        }
+
+        var precision = unitIndex == 0 ? 0 : value >= 10.0 ? 1 : 2;
+        return $"{value.ToString($"F{precision}", CultureInfo.InvariantCulture)} {units[unitIndex]}";
+    }
+
+    private static string NormalizeNativeMemoryText(string? value, string fallback = "<unknown>")
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return fallback;
+        var trimmed = value.Trim();
+        if (string.Equals(trimmed, "<Call stack limit reached>", StringComparison.Ordinal) ||
+            string.Equals(trimmed, "<unknown>", StringComparison.Ordinal))
+            return fallback;
+        return trimmed;
+    }
+
+    private static bool TryGetLongAttribute(XElement element, string name, out long value)
+    {
+        return long.TryParse((string?)element.Attribute(name), NumberStyles.Integer, CultureInfo.InvariantCulture,
+            out value);
+    }
+
+    private static bool TryGetBoolAttribute(XElement element, string name, out bool value)
+    {
+        return bool.TryParse((string?)element.Attribute(name), out value);
+    }
+
+    private static int ParseIntAttribute(XElement element, string name)
+    {
+        return int.TryParse((string?)element.Attribute(name), NumberStyles.Integer, CultureInfo.InvariantCulture,
+            out var value)
+            ? value
+            : 0;
+    }
+
+    private static long ParseLongAttribute(XElement element, string name)
+    {
+        return TryGetLongAttribute(element, name, out var value) ? value : 0L;
+    }
+
+    private static bool TryParseNativeMemoryTimestamp(string? text, out double seconds)
+    {
+        seconds = 0.0;
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var colonParts = text.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (colonParts.Length < 2 || colonParts.Length > 3)
+            return false;
+
+        var hours = 0;
+        var minutesIndex = 0;
+        if (colonParts.Length == 3)
+        {
+            if (!int.TryParse(colonParts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out hours))
+                return false;
+            minutesIndex = 1;
+        }
+
+        if (!int.TryParse(colonParts[minutesIndex], NumberStyles.Integer, CultureInfo.InvariantCulture, out var minutes))
+            return false;
+
+        var secondParts = colonParts[^1].Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (secondParts.Length == 0 ||
+            !int.TryParse(secondParts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var wholeSeconds))
+            return false;
+
+        seconds = hours * 3600.0 + minutes * 60.0 + wholeSeconds;
+        if (secondParts.Length >= 2 &&
+            int.TryParse(secondParts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var millis))
+            seconds += millis / 1000.0;
+        if (secondParts.Length >= 3 &&
+            int.TryParse(secondParts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var micros))
+            seconds += micros / 1_000_000.0;
+
+        return true;
     }
 
     private static Dictionary<string, string> DisassembleSymbols(string binaryPath, List<string> symbols, string outDir)
@@ -1294,6 +1417,12 @@ internal static partial class Program
         Perf
     }
 
+    private enum ProfileModeKind
+    {
+        CpuHotspots,
+        NativeMemory
+    }
+
     private interface IProfileBackend
     {
         List<string> BuildRecordCommand(ProfileRecordOptions options, string tracePath, List<string> podishLaunch);
@@ -1318,7 +1447,7 @@ internal static partial class Program
                 "xctrace",
                 "record",
                 "--template",
-                "Time Profiler",
+                options.Mode == ProfileModeKind.NativeMemory ? "Allocations" : "Time Profiler",
                 "--time-limit",
                 $"{options.TimeLimitSeconds}s",
                 "--output",
@@ -1340,6 +1469,16 @@ internal static partial class Program
         }
 
         public ProfileAnalysisResult Analyze(ProfileAnalyzeOptions options, string outDir)
+        {
+            return options.Mode switch
+            {
+                ProfileModeKind.CpuHotspots => AnalyzeCpuHotspots(options, outDir),
+                ProfileModeKind.NativeMemory => AnalyzeNativeMemory(options, outDir),
+                _ => throw new ArgumentOutOfRangeException(nameof(options.Mode), options.Mode, null)
+            };
+        }
+
+        private static ProfileAnalysisResult AnalyzeCpuHotspots(ProfileAnalyzeOptions options, string outDir)
         {
             var exportPath = Path.Combine(outDir, $"{options.Name}.xml");
             var xml = RunCommandCheckedCapture(
@@ -1433,8 +1572,138 @@ internal static partial class Program
                     counts[item.Key], item.Key.Binary))
                 .ToList();
 
-            return new ProfileAnalysisResult("xctrace", options.TracePath, exportPath, options.WarmupSeconds, totalRows,
-                keptRows, hotspots);
+            return new ProfileAnalysisResult(
+                "xctrace",
+                ProfileModeKind.CpuHotspots,
+                options.TracePath,
+                exportPath,
+                options.WarmupSeconds,
+                totalRows,
+                keptRows,
+                hotspots,
+                null);
+        }
+
+        private static ProfileAnalysisResult AnalyzeNativeMemory(ProfileAnalyzeOptions options, string outDir)
+        {
+            var statisticsPath = Path.Combine(outDir, $"{options.Name}.allocations.statistics.xml");
+            var allocationsPath = Path.Combine(outDir, $"{options.Name}.allocations.live.xml");
+            var statisticsXml = RunCommandCheckedCapture(
+                "xcrun",
+                new[]
+                {
+                    "xctrace",
+                    "export",
+                    "--input",
+                    options.TracePath,
+                    "--xpath",
+                    "/trace-toc/run/tracks/track[@name=\"Allocations\"]/details/detail[@name=\"Statistics\"]"
+                },
+                RepoRoot());
+            File.WriteAllText(statisticsPath, statisticsXml, Utf8NoBom);
+
+            var allocationsXml = RunCommandCheckedCapture(
+                "xcrun",
+                new[]
+                {
+                    "xctrace",
+                    "export",
+                    "--input",
+                    options.TracePath,
+                    "--xpath",
+                    "/trace-toc/run/tracks/track[@name=\"Allocations\"]/details/detail[@name=\"Allocations List\"]"
+                },
+                RepoRoot());
+            File.WriteAllText(allocationsPath, allocationsXml, Utf8NoBom);
+
+            var statisticsDoc = XDocument.Parse(statisticsXml);
+            var categoryRows = statisticsDoc.Descendants("row").ToList();
+            var categories = categoryRows
+                .Where(row => TryGetLongAttribute(row, "persistent-bytes", out var persistentBytes) &&
+                              persistentBytes > 0 &&
+                              !string.IsNullOrWhiteSpace((string?)row.Attribute("category")))
+                .Select(row => new
+                {
+                    Category = (string?)row.Attribute("category") ?? "<unknown>",
+                    PersistentBytes = ParseLongAttribute(row, "persistent-bytes"),
+                    PersistentCount = ParseIntAttribute(row, "count-persistent"),
+                    TotalBytes = ParseLongAttribute(row, "total-bytes")
+                })
+                .OrderByDescending(row => row.PersistentBytes)
+                .Take(options.Top)
+                .Select((row, index) =>
+                    new ProfileNativeMemoryCategory(index + 1, row.Category, row.PersistentBytes, row.PersistentCount,
+                        row.TotalBytes))
+                .ToList();
+
+            var allocationsDoc = XDocument.Parse(allocationsXml);
+            var allocationRows = allocationsDoc.Descendants("row").ToList();
+            var callers = new Dictionary<(string Caller, string? Library), NativeMemoryAggregate>();
+            var liveAllocationCount = 0;
+            long liveBytes = 0;
+
+            foreach (var row in allocationRows)
+            {
+                if (!TryGetBoolAttribute(row, "live", out var isLive) || !isLive)
+                    continue;
+                if (!TryGetLongAttribute(row, "size", out var size) || size <= 0)
+                    continue;
+                if (!TryParseNativeMemoryTimestamp((string?)row.Attribute("timestamp"), out var timestampSeconds))
+                    timestampSeconds = 0.0;
+                if (timestampSeconds < options.WarmupSeconds)
+                    continue;
+
+                var caller = NormalizeNativeMemoryText((string?)row.Attribute("responsible-caller"));
+                var rawLibrary = NormalizeNativeMemoryText((string?)row.Attribute("responsible-library"), "");
+                var library = rawLibrary.Length == 0 ? null : rawLibrary;
+                var category = NormalizeNativeMemoryText((string?)row.Attribute("category"));
+                var key = (caller, library);
+                if (!callers.TryGetValue(key, out var aggregate))
+                {
+                    aggregate = new NativeMemoryAggregate();
+                    callers[key] = aggregate;
+                }
+
+                aggregate.LiveBytes += size;
+                aggregate.LiveCount++;
+                aggregate.FirstTimestampSeconds = aggregate.LiveCount == 1
+                    ? timestampSeconds
+                    : Math.Min(aggregate.FirstTimestampSeconds, timestampSeconds);
+                aggregate.LastTimestampSeconds = Math.Max(aggregate.LastTimestampSeconds, timestampSeconds);
+                aggregate.Categories[category] = aggregate.Categories.TryGetValue(category, out var existing)
+                    ? existing + size
+                    : size;
+                liveAllocationCount++;
+                liveBytes += size;
+            }
+
+            var topCallers = callers
+                .OrderByDescending(item => item.Value.LiveBytes)
+                .ThenBy(item => item.Key.Caller, StringComparer.Ordinal)
+                .Take(options.Top)
+                .Select((item, index) => new ProfileNativeMemoryCaller(
+                    index + 1,
+                    item.Key.Caller,
+                    item.Key.Library,
+                    item.Value.LiveBytes,
+                    item.Value.LiveCount,
+                    item.Value.Categories.OrderByDescending(x => x.Value).ThenBy(x => x.Key, StringComparer.Ordinal)
+                        .FirstOrDefault().Key,
+                    item.Value.FirstTimestampSeconds,
+                    item.Value.LastTimestampSeconds))
+                .ToList();
+
+            return new ProfileAnalysisResult(
+                "xctrace",
+                ProfileModeKind.NativeMemory,
+                options.TracePath,
+                allocationsPath,
+                options.WarmupSeconds,
+                allocationRows.Count,
+                liveAllocationCount,
+                new List<ProfileHotspot>(),
+                new ProfileNativeMemoryAnalysis(statisticsPath, allocationsPath, liveAllocationCount, liveBytes,
+                    categories, topCallers));
         }
     }
 
@@ -1443,6 +1712,9 @@ internal static partial class Program
         public List<string> BuildRecordCommand(ProfileRecordOptions options, string tracePath,
             List<string> podishLaunch)
         {
+            if (options.Mode == ProfileModeKind.NativeMemory)
+                throw new InvalidOperationException("perf backend only supports `--mode cpu`; use xctrace for native-memory analysis.");
+
             if (!CommandExists("perf"))
                 throw new InvalidOperationException("perf backend requires the `perf` tool to be installed.");
 
@@ -1477,6 +1749,9 @@ internal static partial class Program
 
         public ProfileAnalysisResult Analyze(ProfileAnalyzeOptions options, string outDir)
         {
+            if (options.Mode == ProfileModeKind.NativeMemory)
+                throw new InvalidOperationException("perf backend only supports `--mode cpu`; use xctrace for native-memory analysis.");
+
             var exportPath = Path.Combine(outDir, $"{options.Name}.perf-script.txt");
             var script = RunCommandCheckedCapture("perf", new[] { "script", "-i", options.TracePath }, RepoRoot());
             File.WriteAllText(exportPath, script, Utf8NoBom);
@@ -1596,13 +1871,22 @@ internal static partial class Program
                     counts[item.Key], item.Key.Binary))
                 .ToList();
 
-            return new ProfileAnalysisResult("perf", options.TracePath, exportPath, options.WarmupSeconds, totalRows,
-                keptRows, hotspots);
+            return new ProfileAnalysisResult(
+                "perf",
+                ProfileModeKind.CpuHotspots,
+                options.TracePath,
+                exportPath,
+                options.WarmupSeconds,
+                totalRows,
+                keptRows,
+                hotspots,
+                null);
         }
     }
 
     private sealed record ProfileRecordOptions(
         ProfileBackendKind BackendKind,
+        ProfileModeKind Mode,
         IProfileBackend Backend,
         string BinaryPath,
         string Rootfs,
@@ -1616,6 +1900,7 @@ internal static partial class Program
 
     private sealed record ProfileAnalyzeOptions(
         ProfileBackendKind BackendKind,
+        ProfileModeKind Mode,
         IProfileBackend Backend,
         string TracePath,
         string BinaryPath,
@@ -1628,12 +1913,14 @@ internal static partial class Program
 
     private sealed record ProfileAnalysisResult(
         string Backend,
+        ProfileModeKind Mode,
         string TracePath,
         string ExportPath,
         double WarmupSeconds,
         int TotalRows,
         int KeptRows,
-        List<ProfileHotspot> Hotspots);
+        List<ProfileHotspot> Hotspots,
+        ProfileNativeMemoryAnalysis? NativeMemory);
 
     private sealed record ProfileHotspot(int Rank, string Symbol, double SelfMs, int SampleCount, string? BinaryName)
     {
@@ -1646,6 +1933,74 @@ internal static partial class Program
                 ["self_ms"] = SelfMs,
                 ["sample_count"] = SampleCount,
                 ["binary_name"] = BinaryName
+            };
+        }
+    }
+
+    private sealed record ProfileNativeMemoryAnalysis(
+        string StatisticsPath,
+        string AllocationsPath,
+        int LiveAllocationCount,
+        long LiveBytes,
+        List<ProfileNativeMemoryCategory> Categories,
+        List<ProfileNativeMemoryCaller> Callers)
+    {
+        public Dictionary<string, object?> ToDictionary()
+        {
+            return new Dictionary<string, object?>
+            {
+                ["statistics_path"] = StatisticsPath,
+                ["allocations_path"] = AllocationsPath,
+                ["live_allocation_count"] = LiveAllocationCount,
+                ["live_bytes"] = LiveBytes,
+                ["categories"] = Categories.Select(x => x.ToDictionary()).ToList(),
+                ["callers"] = Callers.Select(x => x.ToDictionary()).ToList()
+            };
+        }
+    }
+
+    private sealed record ProfileNativeMemoryCategory(
+        int Rank,
+        string Category,
+        long PersistentBytes,
+        int PersistentCount,
+        long TotalBytes)
+    {
+        public Dictionary<string, object?> ToDictionary()
+        {
+            return new Dictionary<string, object?>
+            {
+                ["rank"] = Rank,
+                ["category"] = Category,
+                ["persistent_bytes"] = PersistentBytes,
+                ["persistent_count"] = PersistentCount,
+                ["total_bytes"] = TotalBytes
+            };
+        }
+    }
+
+    private sealed record ProfileNativeMemoryCaller(
+        int Rank,
+        string ResponsibleCaller,
+        string? ResponsibleLibrary,
+        long LiveBytes,
+        int LiveCount,
+        string? TopCategory,
+        double FirstTimestampSeconds,
+        double LastTimestampSeconds)
+    {
+        public Dictionary<string, object?> ToDictionary()
+        {
+            return new Dictionary<string, object?>
+            {
+                ["rank"] = Rank,
+                ["responsible_caller"] = ResponsibleCaller,
+                ["responsible_library"] = ResponsibleLibrary,
+                ["live_bytes"] = LiveBytes,
+                ["live_count"] = LiveCount,
+                ["top_category"] = TopCategory,
+                ["first_timestamp_seconds"] = Math.Round(FirstTimestampSeconds, 6),
+                ["last_timestamp_seconds"] = Math.Round(LastTimestampSeconds, 6)
             };
         }
     }
@@ -1665,6 +2020,15 @@ internal static partial class Program
         long RuntimeStart,
         int CodeSize,
         List<ProfileJitOpEntry> Ops);
+
+    private sealed class NativeMemoryAggregate
+    {
+        public long LiveBytes { get; set; }
+        public int LiveCount { get; set; }
+        public double FirstTimestampSeconds { get; set; }
+        public double LastTimestampSeconds { get; set; }
+        public Dictionary<string, long> Categories { get; } = new(StringComparer.Ordinal);
+    }
 
     private readonly record struct OpSnapshot(uint EaDesc, byte Modrm, byte Meta, byte Prefixes);
 

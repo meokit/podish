@@ -101,7 +101,7 @@ libfibercpu/src/generated/superopcodes.generated.cpp
 
 ## One: Profile Pipeline
 
-The `profile` command handles recording and analyzing runtime hotspots in `Podish.Cli`.
+The `profile` command handles recording and analyzing runtime hotspots or native-memory retention in `Podish.Cli`.
 
 ### Backend Selection
 
@@ -145,6 +145,7 @@ Most common usage:
 Common parameters:
 
 - `--backend auto|perf|xctrace`
+- `--mode cpu|native-memory`
 - `--name <name>`
 - `--output-dir <dir>`
 - `--binary <Podish.Cli binary>`
@@ -156,12 +157,25 @@ Common parameters:
 - `--disasm-top <n>`
 - `--jit-map-dir <dir>`
 
+`--mode cpu` is the default and uses:
+
+- macOS: `Time Profiler`
+- Linux: `perf`
+
+`--mode native-memory` currently requires macOS `xctrace` and uses the `Allocations` template. The analysis report
+includes:
+
+- live allocation callers aggregated by retained bytes
+- retained allocation categories from the `Allocations > Statistics` view
+- raw exports for `Allocations List` and `Statistics`
+
 ### 2. Record Only
 
 ```bash
  dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- \
    profile record \
    --backend auto \
+   --mode cpu \
    --name coremark-profile
 ```
 
@@ -182,8 +196,20 @@ This file is very useful as it allows reproducing the exact recording command la
  dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- \
    profile analyze \
    --backend auto \
+   --mode cpu \
    --trace benchmark/podish_perf/results/coremark-profile/coremark-profile.data \
    --name coremark-profile
+```
+
+For an existing `.trace` recorded with the `Allocations` template:
+
+```bash
+ dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- \
+   profile analyze \
+   --backend xctrace \
+   --mode native-memory \
+   --trace /tmp/repro.trace \
+   --name repro-native-memory
 ```
 
 ### 4. Compare Two Profiles

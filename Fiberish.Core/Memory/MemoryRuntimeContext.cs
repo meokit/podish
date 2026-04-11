@@ -69,6 +69,16 @@ public sealed class MemoryRuntimeContext : IDisposable
         return MemoryStatsSnapshot.CreateForRuntime(this, sm);
     }
 
+    public HostPageRefStatsSnapshot CaptureHostPageRefStats()
+    {
+        return HostPages.CaptureStats();
+    }
+
+    public BackingPagePoolSegmentStatsSnapshot CaptureBackingPagePoolSegmentStats()
+    {
+        return BackingPagePool.CaptureSegmentStats();
+    }
+
     internal SuperBlock GetOrCreateShmSuperBlock(DeviceNumberManager? deviceNumbers = null)
     {
         lock (_shmGate)

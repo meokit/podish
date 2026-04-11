@@ -64,16 +64,37 @@ public class ExternalPageManagerQuotaTests
     }
 
     [Fact]
-    public void ExternalPagePool_ReusesReleasedPage_AndReturnsZeroedMemory()
+    public void ExternalPagePool_ReleasesEmptySegment_AndKeepsAccountingBalanced()
     {
         using var context = CreateContext(long.MaxValue);
         var handle = context.BackingPagePool.AllocAnonPage(AllocationClass.Anonymous);
         var ptr = handle.Pointer;
         Assert.NotEqual(IntPtr.Zero, ptr);
+        Assert.Equal(LinuxConstants.PageSize, context.GetAllocatedBytes());
 
         var dirty = Enumerable.Repeat((byte)0xA5, LinuxConstants.PageSize).ToArray();
         System.Runtime.InteropServices.Marshal.Copy(dirty, 0, ptr, dirty.Length);
         BackingPageHandle.Release(ref handle);
+        Assert.Equal(0, context.GetAllocatedBytes());
+
+        var classStats = context.GetAllocationClassStats().Single(s => s.Class == AllocationClass.Anonymous);
+        Assert.Equal(1, classStats.AllocatedPages);
+        Assert.Equal(1, classStats.FreedPages);
+        Assert.Equal(0, classStats.LivePages);
+    }
+
+    [Fact]
+    public void ExternalPagePool_ReusesReleasedPageInNonEmptySegment_AndReturnsZeroedMemory()
+    {
+        using var context = CreateContext(long.MaxValue);
+        var first = context.BackingPagePool.AllocAnonPage(AllocationClass.Anonymous);
+        var second = context.BackingPagePool.AllocAnonPage(AllocationClass.Anonymous);
+        var ptr = first.Pointer;
+        Assert.NotEqual(IntPtr.Zero, ptr);
+
+        var dirty = Enumerable.Repeat((byte)0xA5, LinuxConstants.PageSize).ToArray();
+        System.Runtime.InteropServices.Marshal.Copy(dirty, 0, ptr, dirty.Length);
+        BackingPageHandle.Release(ref first);
 
         var reused = context.BackingPagePool.AllocAnonPage(AllocationClass.Anonymous);
         try
@@ -87,6 +108,7 @@ public class ExternalPageManagerQuotaTests
         finally
         {
             BackingPageHandle.Release(ref reused);
+            BackingPageHandle.Release(ref second);
         }
     }
 

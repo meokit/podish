@@ -1447,6 +1447,40 @@ internal sealed class HostPageManager : IDisposable
 {
     private readonly HostPageTableState _state = new();
 
+    internal HostPageRefStatsSnapshot CaptureStats()
+    {
+        var state = _state;
+        HostPageKindRefStatsAccumulator pageCache = default;
+        HostPageKindRefStatsAccumulator anon = default;
+        HostPageKindRefStatsAccumulator zero = default;
+        lock (state.Gate)
+        {
+            for (var slot = 0; slot < state.SlotCount; slot++)
+            {
+                ref var slotRef = ref state.GetSlotRef(slot);
+                if (!slotRef.InUse)
+                    continue;
+
+                ref var page = ref slotRef.Page;
+                switch (page.Kind)
+                {
+                    case HostPageKind.PageCache:
+                        pageCache.Include(page);
+                        break;
+                    case HostPageKind.Anon:
+                        anon.Include(page);
+                        break;
+                    case HostPageKind.Zero:
+                        zero.Include(page);
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException();
+                }
+            }
+        }
+
+        return new HostPageRefStatsSnapshot(pageCache.ToSnapshot(), anon.ToSnapshot(), zero.ToSnapshot());
+    }
 
     internal HostPageRef GetOrCreate(IntPtr ptr, HostPageKind preferredKind)
     {

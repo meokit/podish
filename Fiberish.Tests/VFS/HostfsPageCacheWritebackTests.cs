@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -11,6 +12,8 @@ namespace Fiberish.Tests.VFS;
 public class HostfsPageCacheWritebackTests
 {
     private readonly TestRuntimeFactory _runtime = new();
+    private static readonly HostMemoryMapGeometry BufferedOnlyGeometry =
+        new(LinuxConstants.PageSize, LinuxConstants.PageSize, LinuxConstants.PageSize, false, false);
 
     [Fact]
     public void MapShared_SyncVma_WritesBackPageCacheToHostFile()
@@ -484,6 +487,91 @@ public class HostfsPageCacheWritebackTests
             {
                 mappingRef.Release();
             }
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Close_MustFlushBufferedWritePageCacheWhenMappedBackendUnsupported()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-close-write-buffered-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "abcde");
+
+        try
+        {
+            var runtime = new TestRuntimeFactory(BufferedOnlyGeometry);
+            using var engine = runtime.CreateEngine();
+            var mm = runtime.CreateAddressSpace();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
+            loc.Dentry!.Inode!.Open(file);
+            var fd = sm.AllocFD(file);
+
+            var writeRc = file.Dentry.Inode!.WriteFromHost(null, file, "XY"u8.ToArray(), 1);
+            Assert.Equal(2, writeRc);
+            Assert.Equal("abcde", File.ReadAllText(hostFile));
+
+            sm.FreeFD(fd);
+            Assert.Equal("aXYde", File.ReadAllText(hostFile));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void EvictUnusedInodes_MustWriteBackBufferedDirtyPagesBeforeDroppingHostfsPageCache()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-evict-write-buffered-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "abcde");
+
+        try
+        {
+            var runtime = new TestRuntimeFactory(BufferedOnlyGeometry);
+            using var engine = runtime.CreateEngine();
+            var mm = runtime.CreateAddressSpace();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
+            loc.Dentry!.Inode!.Open(file);
+            var fd = sm.AllocFD(file);
+            var hostInode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
+
+            var writeRc = hostInode.WriteFromHost(null, file, "XY"u8.ToArray(), 1);
+            Assert.Equal(2, writeRc);
+            Assert.Equal("abcde", File.ReadAllText(hostFile));
+
+            sm.FreeFD(fd);
+            Assert.Equal("aXYde", File.ReadAllText(hostFile));
+
+            var pagePtr = hostInode.Mapping!.PeekPage(0);
+            Assert.NotEqual(IntPtr.Zero, pagePtr);
+            Marshal.WriteByte(pagePtr, 1, (byte)'Z');
+            Marshal.WriteByte(pagePtr, 2, (byte)'Z');
+            hostInode.SetPageDirty(0);
+            hostInode.Mapping.MarkDirty(0);
+
+            Assert.Equal("aXYde", File.ReadAllText(hostFile));
+            Assert.Contains(hostInode, hostInode.SuperBlock.Inodes);
+            hostInode.RefCount = 0;
+
+            var evicted = VfsShrinker.EvictUnusedInodes(hostInode.SuperBlock);
+            Assert.Equal("aZZde", File.ReadAllText(hostFile));
+            Assert.Equal(1, evicted);
+            Assert.True(hostInode.IsCacheEvicted);
         }
         finally
         {

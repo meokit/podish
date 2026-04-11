@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using Fiberish.Core.Net;
 using Fiberish.Core;
+using Fiberish.Memory;
 using Fiberish.VFS;
 
 namespace Podish.Core;
@@ -32,6 +33,7 @@ namespace Podish.Core;
 [JsonSerializable(typeof(GuestStatsFiles))]
 [JsonSerializable(typeof(BlockStatsSnapshot))]
 [JsonSerializable(typeof(ImagePullProgressMessage))]
+[JsonSerializable(typeof(MemoryPageRefLogEntry))]
 internal partial class PodishJsonContext : JsonSerializerContext
 {
 }

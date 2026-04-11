@@ -197,8 +197,15 @@ public static class VfsShrinker
 
         long evicted = 0;
         foreach (var inode in candidates)
+        {
+            // Hostfs buffered pages can outlive the last file handle, so drain them before
+            // dropping the inode cache entry and its address_space ownership.
+            if (inode is HostInode hostInode && !hostInode.FlushDirtyDataIfNeeded(null))
+                continue;
+
             if (inode.TryEvictCache("VfsShrinker.EvictUnusedInodes"))
                 evicted++;
+        }
 
         return evicted;
     }

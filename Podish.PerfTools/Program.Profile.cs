@@ -39,9 +39,11 @@ internal static partial class Program
         var options = ParseProfileAnalyzeOptions(args);
         var outDir = MakeOutputDir(options.OutputDir, options.Name);
         var analysis = options.Backend.Analyze(options, outDir);
-        var topHotspots = analysis.Hotspots.Take(options.Top).ToList();
+        var topHotspots = options.Mode == ProfileModeKind.CpuHotspots
+            ? analysis.Hotspots.Take(options.Top).ToList()
+            : new List<ProfileHotspot>();
         var topSymbols = topHotspots.Take(options.DisasmTop).Select(h => h.Symbol).ToList();
-        var disassembly = topSymbols.Count > 0
+        var disassembly = options.Mode == ProfileModeKind.CpuHotspots && topSymbols.Count > 0
             ? DisassembleSymbols(options.BinaryPath, topSymbols, outDir)
             : new Dictionary<string, string>(StringComparer.Ordinal);
         var written = WriteProfileReport(outDir, options.Name, analysis, options.BinaryPath, disassembly);
@@ -63,9 +65,11 @@ internal static partial class Program
 
         var analyzeOptions = ParseProfileAnalyzeOptions(args, tracePath, runBinary, outDir);
         var analysis = analyzeOptions.Backend.Analyze(analyzeOptions, outDir);
-        var topHotspots = analysis.Hotspots.Take(analyzeOptions.Top).ToList();
+        var topHotspots = analyzeOptions.Mode == ProfileModeKind.CpuHotspots
+            ? analysis.Hotspots.Take(analyzeOptions.Top).ToList()
+            : new List<ProfileHotspot>();
         var topSymbols = topHotspots.Take(analyzeOptions.DisasmTop).Select(h => h.Symbol).ToList();
-        var disassembly = topSymbols.Count > 0
+        var disassembly = analyzeOptions.Mode == ProfileModeKind.CpuHotspots && topSymbols.Count > 0
             ? DisassembleSymbols(runBinary, topSymbols, outDir)
             : new Dictionary<string, string>(StringComparer.Ordinal);
         var written = WriteProfileReport(outDir, analyzeOptions.Name, analysis, runBinary, disassembly);
@@ -93,6 +97,7 @@ internal static partial class Program
     private static ProfileRecordOptions ParseProfileRecordOptions(string[] args)
     {
         var backendKind = ResolveProfileBackendKind(GetValue(args, "--backend") ?? "auto");
+        var mode = ResolveProfileModeKind(GetValue(args, "--mode") ?? "cpu");
         var outputDir = Path.GetFullPath(GetValue(args, "--output-dir") ??
                                          Path.Combine(RepoRoot(), "benchmark", "podish_perf", "results"));
         var name = GetValue(args, "--name") ?? "coremark-profile";
@@ -115,6 +120,7 @@ internal static partial class Program
         RefreshDefaultProfileBinary(binaryPath);
         return new ProfileRecordOptions(
             backendKind,
+            mode,
             backend,
             binaryPath,
             rootfs,
@@ -135,12 +141,14 @@ internal static partial class Program
     {
         var tracePath = Path.GetFullPath(tracePathOverride ?? RequireValue(args, "--trace"));
         var backendKind = ResolveAnalyzeBackendKind(GetValue(args, "--backend") ?? "auto", tracePath);
+        var mode = ResolveProfileModeKind(GetValue(args, "--mode") ?? "cpu");
         var outputDir = Path.GetFullPath(outputDirOverride ?? GetValue(args, "--output-dir") ??
             Path.Combine(RepoRoot(), "benchmark", "podish_perf", "results"));
         var name = GetValue(args, "--name") ?? Path.GetFileNameWithoutExtension(tracePath);
         if (name.EndsWith(".trace", StringComparison.OrdinalIgnoreCase))
             name = Path.GetFileNameWithoutExtension(name);
-        var warmupSeconds = GetDoubleValue(args, "--warmup-seconds", 4.0);
+        var warmupDefault = mode == ProfileModeKind.NativeMemory ? 0.0 : 4.0;
+        var warmupSeconds = GetDoubleValue(args, "--warmup-seconds", warmupDefault);
         var top = GetIntValue(args, "--top", 25);
         var disasmTop = GetIntValue(args, "--disasm-top", 8);
         var jitMapDir = GetValue(args, "--jit-map-dir");
@@ -148,6 +156,7 @@ internal static partial class Program
         var backend = CreateProfileBackend(backendKind);
         return new ProfileAnalyzeOptions(
             backendKind,
+            mode,
             backend,
             tracePath,
             binaryPath,
@@ -214,6 +223,16 @@ internal static partial class Program
         if (tracePath.EndsWith(".data", StringComparison.OrdinalIgnoreCase))
             return ProfileBackendKind.Perf;
         return ResolveProfileBackendKind("auto");
+    }
+
+    private static ProfileModeKind ResolveProfileModeKind(string mode)
+    {
+        return mode switch
+        {
+            "cpu" => ProfileModeKind.CpuHotspots,
+            "native-memory" => ProfileModeKind.NativeMemory,
+            _ => throw new ArgumentException("--mode must be one of: cpu, native-memory")
+        };
     }
 
     private static IProfileBackend CreateProfileBackend(ProfileBackendKind backendKind)
