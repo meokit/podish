@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Text;
 using Fiberish.Auth.Permission;
@@ -11,6 +12,8 @@ namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
+    private const int StackDirentBufferLimit = 512;
+
     private static bool IsDotPath(ReadOnlySpan<byte> path)
     {
         return path.Length == 1 && path[0] == (byte)'.';
@@ -1687,21 +1690,9 @@ LocResolvedUtimens64:
 
                 if (writeOffset + recLen > count) break;
 
-                var baseAddr = bufAddr + (uint)writeOffset;
+                if (!WriteDirentRecord(engine, bufAddr + (uint)writeOffset, entry, recLen, writeOffset + recLen))
+                    return -(int)Errno.EFAULT;
 
-                var buf = new byte[recLen];
-                BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0), entry.Ino);
-                BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8), writeOffset + recLen);
-                BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(16), (ushort)recLen);
-
-                byte dType = 8; // DT_REG
-                if (entry.Type == InodeType.Directory) dType = 4;
-                buf[18] = dType;
-
-                nameBytes.CopyTo(buf.AsSpan(19));
-                buf[19 + nameBytes.Length] = 0;
-
-                if (!engine.CopyToUser(baseAddr, buf)) return -(int)Errno.EFAULT;
                 writeOffset += recLen;
                 f.Position = i + 1;
             }
@@ -1711,6 +1702,36 @@ LocResolvedUtimens64:
         catch
         {
             return -(int)Errno.EPERM;
+        }
+    }
+
+    private static bool WriteDirentRecord(Engine engine, uint baseAddr, DirectoryEntry entry, int recLen, long nextOffset)
+    {
+        byte[]? rented = null;
+        try
+        {
+            Span<byte> buf = recLen <= StackDirentBufferLimit
+                ? stackalloc byte[recLen]
+                : (rented = ArrayPool<byte>.Shared.Rent(recLen)).AsSpan(0, recLen);
+            buf.Clear();
+            BinaryPrimitives.WriteUInt64LittleEndian(buf.Slice(0, 8), entry.Ino);
+            BinaryPrimitives.WriteInt64LittleEndian(buf.Slice(8, 8), nextOffset);
+            BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(16, 2), (ushort)recLen);
+
+            byte dType = 8; // DT_REG
+            if (entry.Type == InodeType.Directory) dType = 4;
+            buf[18] = dType;
+
+            var nameBytes = entry.Name.Bytes;
+            nameBytes.CopyTo(buf.Slice(19, nameBytes.Length));
+            buf[19 + nameBytes.Length] = 0;
+
+            return engine.CopyToUser(baseAddr, buf.Slice(0, recLen));
+        }
+        finally
+        {
+            if (rented != null)
+                ArrayPool<byte>.Shared.Return(rented, clearArray: false);
         }
     }
 

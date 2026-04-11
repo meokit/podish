@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -33,6 +34,12 @@ public readonly struct FsName : IEquatable<FsName>, IComparable<FsName>
     public int Length => _bytes?.Length ?? 0;
 
     public bool IsEmpty => Length == 0;
+
+    public bool IsDot => _bytes is { Length: 1 } bytes && bytes[0] == (byte)'.';
+
+    public bool IsDotDot => _bytes is { Length: 2 } bytes && bytes[0] == (byte)'.' && bytes[1] == (byte)'.';
+
+    public bool IsDotOrDotDot => IsDot || IsDotDot;
 
     public static FsName FromOwnedBytes(byte[] ownedBytes, bool allowEmpty = false)
     {
@@ -275,7 +282,43 @@ public readonly struct FsName : IEquatable<FsName>, IComparable<FsName>
     {
         if (value == null)
             return false;
-        return Equals(FsEncoding.EncodeUtf8(value));
+
+        var bytes = Bytes;
+        if (value.Length == bytes.Length)
+        {
+            var asciiMatch = true;
+            for (var i = 0; i < value.Length; i++)
+            {
+                var ch = value[i];
+                if (ch > 0x7F || bytes[i] != (byte)ch)
+                {
+                    asciiMatch = false;
+                    break;
+                }
+            }
+
+            if (asciiMatch)
+                return true;
+        }
+
+        var encodedLength = Utf8.GetByteCount(value);
+        if (encodedLength != bytes.Length)
+            return false;
+
+        byte[]? rented = null;
+        try
+        {
+            Span<byte> encoded = encodedLength <= 256
+                ? stackalloc byte[encodedLength]
+                : (rented = ArrayPool<byte>.Shared.Rent(encodedLength)).AsSpan(0, encodedLength);
+            var written = Utf8.GetBytes(value, encoded);
+            return bytes.SequenceEqual(encoded[..written]);
+        }
+        finally
+        {
+            if (rented != null)
+                ArrayPool<byte>.Shared.Return(rented, clearArray: false);
+        }
     }
 
     private sealed class BytewiseFsNameComparer : IComparer<FsName>

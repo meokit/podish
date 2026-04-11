@@ -516,7 +516,7 @@ public class OverlayInode : MappingBackedInode
     public override uint GetLinkCountForStat()
     {
         if (Type == InodeType.Directory)
-            return (uint)Math.Max(0, ComputeMergedDirectoryLinkCount());
+            return (uint)Math.Max(0, HasExplicitLinkCount ? LinkCount : ComputeMergedDirectoryLinkCount());
 
         return SourceInode?.GetLinkCountForStat() ?? base.GetLinkCountForStat();
     }
@@ -609,7 +609,9 @@ public class OverlayInode : MappingBackedInode
 
     private void RefreshOverlayLinkCountFromSource(string reason)
     {
-        InitializeOverlayLinkCount(reason);
+        var refreshedLinkCount = ComputeOverlayLinkCount();
+        foreach (var alias in _state.SnapshotAliases())
+            alias.SetInitialLinkCount(refreshedLinkCount, reason);
     }
 
     public int CopyUp(LinuxFile? linuxFile)
@@ -1082,7 +1084,7 @@ public class OverlayInode : MappingBackedInode
             return -(int)Errno.ENOENT;
         if (overlayEntry.Inode?.Type != InodeType.Directory)
             return -(int)Errno.ENOTDIR;
-        if (overlayEntry.Inode.GetEntries().Any(e => e.Name != "." && e.Name != ".."))
+        if (overlayEntry.Inode.GetEntries().Any(e => !e.Name.IsDotOrDotDot))
             return -(int)Errno.ENOTEMPTY;
 
         var inUpper = UpperInode?.Lookup(name) != null;
@@ -1095,7 +1097,7 @@ public class OverlayInode : MappingBackedInode
                 var cleanupRc = RemoveUpperOverlayInternalEntries(upperDir);
                 if (cleanupRc < 0)
                     return cleanupRc;
-                if (upperDirInode.GetEntries().Any(e => e.Name != "." && e.Name != ".."))
+                if (upperDirInode.GetEntries().Any(e => !e.Name.IsDotOrDotDot))
                     return -(int)Errno.ENOTEMPTY;
             }
 
@@ -1114,7 +1116,7 @@ public class OverlayInode : MappingBackedInode
             }
 
             if (UpperInode?.Lookup(name) is { } upperDir &&
-                upperDir.Inode?.GetEntries().Any(e => e.Name != "." && e.Name != "..") == true)
+                upperDir.Inode?.GetEntries().Any(e => !e.Name.IsDotOrDotDot) == true)
                 return -(int)Errno.ENOTEMPTY;
             osb.AddWhiteout(new InodeKey(Dev, Ino), name);
             osb.WhiteoutCodec.TryCreateEncodedWhiteout(this, name);
@@ -1148,7 +1150,7 @@ public class OverlayInode : MappingBackedInode
         if (upperDirInode == null) return 0;
 
         var osb = (OverlaySuperBlock)SuperBlock;
-        foreach (var entry in upperDirInode.GetEntries().Where(e => e.Name != "." && e.Name != "..").ToList())
+        foreach (var entry in upperDirInode.GetEntries().Where(e => !e.Name.IsDotOrDotDot).ToList())
         {
             var child = upperDirInode.Lookup(entry.Name);
             if (!osb.WhiteoutCodec.IsEncodedOpaqueEntry(entry) &&
@@ -1196,7 +1198,7 @@ public class OverlayInode : MappingBackedInode
         {
             if (sourceOverlay.Type != InodeType.Directory)
                 return -(int)Errno.EISDIR;
-            if (targetEntry.Inode.GetEntries().Any(e => e.Name != "." && e.Name != ".."))
+            if (targetEntry.Inode.GetEntries().Any(e => !e.Name.IsDotOrDotDot))
                 return -(int)Errno.ENOTEMPTY;
 
             // If target directory is logically empty but exists in upper (e.g. contains whiteouts),
@@ -1205,7 +1207,7 @@ public class OverlayInode : MappingBackedInode
                 targetOverlay.UpperInode != null)
             {
                 // Clear all physical entries (whiteouts) in upper to allow rmdir
-                foreach (var e in targetOverlay.UpperInode.GetEntries().Where(e => e.Name != "." && e.Name != "..")
+                foreach (var e in targetOverlay.UpperInode.GetEntries().Where(e => !e.Name.IsDotOrDotDot)
                              .ToList())
                 {
                     var unlinkRc = targetOverlay.UpperInode.Unlink(e.Name.Bytes);
@@ -1423,17 +1425,19 @@ public class OverlayInode : MappingBackedInode
 
     internal void InitializeOverlayLinkCount(string reason)
     {
+        SetInitialLinkCount(ComputeOverlayLinkCount(), reason);
+    }
+
+    private int ComputeOverlayLinkCount()
+    {
         if (Type == InodeType.Directory)
-        {
-            SetInitialLinkCount(ComputeMergedDirectoryLinkCount(), reason);
-            return;
-        }
+            return ComputeMergedDirectoryLinkCount();
 
         var source = SourceInode;
         var nlink = source != null
             ? checked((int)Math.Min(int.MaxValue, source.GetLinkCountForStat()))
             : 1;
-        SetInitialLinkCount(Math.Max(0, nlink), reason);
+        return Math.Max(0, nlink);
     }
 
     private int ComputeMergedDirectoryLinkCount()
@@ -1442,7 +1446,7 @@ public class OverlayInode : MappingBackedInode
         var subdirCount = 0;
         foreach (var entry in entries)
         {
-            if (entry.Name == "." || entry.Name == "..") continue;
+            if (entry.Name.IsDotOrDotDot) continue;
             if (entry.Type == InodeType.Directory) subdirCount++;
         }
 
@@ -1654,7 +1658,7 @@ public class OverlayInode : MappingBackedInode
         if (UpperInode != null)
             foreach (var e in UpperInode.GetEntries())
             {
-                if (e.Name == "." || e.Name == "..")
+                if (e.Name.IsDotOrDotDot)
                 {
                     entries.Set(e.Name, e);
                     continue;
