@@ -1126,9 +1126,9 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
     }
 
     public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
-        bool writable, out PageHandle pageHandle)
+        bool writable, out BackingPageHandle backingPageHandle)
     {
-        pageHandle = default;
+        backingPageHandle = default;
         if (Type != InodeType.File && Type != InodeType.Symlink) return false;
         if (absoluteFileOffset < 0) return false;
         if ((absoluteFileOffset & LinuxConstants.PageOffsetMask) != 0) return false;
@@ -1147,7 +1147,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
                     out var releaseToken))
                 return false;
 
-            pageHandle = PageHandle.CreateOwned(pointer, this, releaseToken);
+            backingPageHandle = BackingPageHandle.CreateOwned(pointer, this, releaseToken);
             return true;
         }
     }

@@ -407,13 +407,13 @@ public class EngineMmuTransferTests
         }
 
         public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
-            bool writable, out PageHandle pageHandle)
+            bool writable, out BackingPageHandle backingPageHandle)
         {
             _ = linuxFile;
             _ = pageIndex;
             _ = absoluteFileOffset;
             _ = writable;
-            pageHandle = PageHandle.CreateOwned(_ptr, this, 1);
+            backingPageHandle = BackingPageHandle.CreateOwned(_ptr, this, 1);
             return true;
         }
 

@@ -77,7 +77,7 @@ internal static class TbCoh
                 continue;
             }
 
-            if (!mm.Pages.TryGet(pageStart, out _))
+            if (!mm.PageMapping.TryGet(pageStart, out _))
                 continue;
 
             engine.ReprotectMappedRange(pageStart, LinuxConstants.PageSize, (byte)(vma.Perms & ~Protection.Write));

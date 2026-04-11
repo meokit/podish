@@ -287,7 +287,7 @@ public class ProcFsTests
         PageManager.MemoryQuotaBytes = 64L * 1024 * 1024;
         try
         {
-            Assert.True(PageManager.TryAllocateExternalPageStrict(out allocated, AllocationClass.Anonymous));
+            Assert.True(PageManager.TryAllocAnonPageMayFail(out allocated, AllocationClass.Anonymous));
             var text = ProcFsManager.GenerateMemInfo(null);
 
             var total = ParseMemInfoKiB(text, "MemTotal");
@@ -322,7 +322,7 @@ public class ProcFsTests
         }
         finally
         {
-            if (allocated != IntPtr.Zero) PageManager.ReleasePtr(allocated);
+            if (allocated != IntPtr.Zero) PageManager.FreeAnonPage(allocated);
             PageManager.MemoryQuotaBytes = oldQuota;
         }
     }

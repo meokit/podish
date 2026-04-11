@@ -32,7 +32,7 @@ public class VMAManager
     private long _mapSequence;
     private int _sharedRefCount = 1;
 
-    public PageManager Pages { get; } = new();
+    public PageManager PageMapping { get; } = new();
     internal ProcessAddressSpaceHandle? AddressSpaceHandle { get; private set; }
 
     internal nuint AddressSpaceIdentity => AddressSpaceHandle?.Identity ?? 0;
@@ -685,7 +685,7 @@ public class VMAManager
         if (len == 0) return;
         var (start, endExclusive) = ComputePageAlignedRange(addr, len);
         for (var page = start; page < endExclusive; page += LinuxConstants.PageSize)
-            if (Pages.TryGet((uint)page, out var ptr))
+            if (PageMapping.TryGet((uint)page, out var ptr))
                 throw new InvalidOperationException(
                     $"{source}: stale external page mapping remains at 0x{page:x8}, ptr=0x{ptr.ToInt64():x}");
     }
@@ -731,7 +731,7 @@ public class VMAManager
         if (invalidateCodeRange)
             engine.ResetCodeCacheByRange(addr, len);
         engine.MemUnmap(addr, len);
-        Pages.ReleaseRange(addr, len, preserveOwnerBinding);
+        PageMapping.ReleaseRange(addr, len, preserveOwnerBinding);
         AssertExternalPagesReleasedForRange(addr, len, "TearDownNativeMappings");
     }
 
@@ -763,7 +763,7 @@ public class VMAManager
                     if ((mapping.Flags & X86Native.PageMappingFlags.External) == 0) continue;
                     var pageIndex = GetVmaPageIndex(vma, mapping.GuestPage);
                     var binding = CreateResolvedPageBinding(vma, pageIndex, mapping.HostPage);
-                    Pages.AddBinding(mapping.GuestPage, binding, out _);
+                    PageMapping.AddBinding(mapping.GuestPage, binding, out _);
                 }
 
                 cursor += chunkLen;
@@ -1028,9 +1028,9 @@ public class VMAManager
             newMM.RegisterVmAreaAttachments(cloned);
         }
 
-        foreach (var pageAddr in Pages.SnapshotMappedPages())
+        foreach (var pageAddr in PageMapping.SnapshotMappedPages())
         {
-            if (!Pages.TryGetBinding(pageAddr, out var binding) || binding == null) continue;
+            if (!PageMapping.TryGetBinding(pageAddr, out var binding) || binding == null) continue;
 
             var clonedVma = newMM.FindVmArea(pageAddr);
             if (clonedVma == null)
@@ -1049,7 +1049,7 @@ public class VMAManager
                 throw new InvalidOperationException(
                     $"Clone encountered unmanaged page binding owner={binding.OwnerKind} page=0x{pageAddr:X8}.");
 
-            _ = newMM.Pages.AddBinding(pageAddr, clonedBinding, out _);
+            _ = newMM.PageMapping.AddBinding(pageAddr, clonedBinding, out _);
         }
 
         return newMM;
@@ -1499,7 +1499,7 @@ public class VMAManager
     {
         if (maxPages <= 0) return 0;
 
-        var pages = Pages.SnapshotMappedPages();
+        var pages = PageMapping.SnapshotMappedPages();
         if (pages.Count == 0) return 0;
 
         var sorted = pages.ToArray();
@@ -1509,7 +1509,7 @@ public class VMAManager
         foreach (var pageAddr in sorted)
         {
             if (dropped >= maxPages) break;
-            if (!Pages.TryGet(pageAddr, out _)) continue;
+            if (!PageMapping.TryGet(pageAddr, out _)) continue;
 
             var vma = FindVmArea(pageAddr);
             if (vma == null) continue;
@@ -1519,7 +1519,7 @@ public class VMAManager
             if (vma.VmAnonVma != null && vma.VmAnonVma.PeekPage(pageIndex) != IntPtr.Zero) continue;
             if (IsAnonymousPrivateZeroSource(vma))
             {
-                if (!Pages.TryGetBinding(pageAddr, out var binding) ||
+                if (!PageMapping.TryGetBinding(pageAddr, out var binding) ||
                     binding == null ||
                     binding.OwnerKind != MappedPageOwnerKind.AddressSpace ||
                     !ReferenceEquals(binding.Mapping, vma.VmMapping))
@@ -1602,7 +1602,7 @@ public class VMAManager
             for (var page = captureStart; page < captureEnd; page += LinuxConstants.PageSize)
             {
                 if (!engine.IsDirty(page)) continue;
-                if (!Pages.TryGet(page, out var mappedPtr)) continue;
+                if (!PageMapping.TryGet(page, out var mappedPtr)) continue;
                 var pageIndex = vma.GetPageIndex(page);
                 var privatePtr = vma.VmAnonVma!.PeekPage(pageIndex);
                 if (privatePtr == IntPtr.Zero || privatePtr != mappedPtr) continue;
@@ -1619,10 +1619,10 @@ public class VMAManager
         out IntPtr privatePage)
     {
         privatePage = IntPtr.Zero;
-        if (!PageManager.TryAllocateExternalPageStrict(out privatePage, AllocationClass.Cow,
+        if (!PageManager.TryAllocAnonPageMayFail(out privatePage, AllocationClass.Cow,
                 AllocationSource.CowFirstPrivate))
             if (!TryRelieveFaultMemoryPressure(engine, pageStart, pressureSource) ||
-                !PageManager.TryAllocateExternalPageStrict(out privatePage, AllocationClass.Cow,
+                !PageManager.TryAllocAnonPageMayFail(out privatePage, AllocationClass.Cow,
                     AllocationSource.CowFirstPrivate))
                 return false;
 
@@ -1811,7 +1811,7 @@ public class VMAManager
     private FaultResult EnsureExternalMapping(uint pageStart, MappedPageBinding binding, byte perms, Engine engine)
     {
         var pagePtr = binding.Ptr;
-        var hasCurrent = Pages.TryGet(pageStart, out var mappedPtr);
+        var hasCurrent = PageMapping.TryGet(pageStart, out var mappedPtr);
         if (hasCurrent && mappedPtr == pagePtr)
         {
             engine.MemMap(pageStart, LinuxConstants.PageSize, perms);
@@ -1819,13 +1819,13 @@ public class VMAManager
         }
 
         if (hasCurrent)
-            Pages.Release(pageStart);
+            PageMapping.Release(pageStart);
 
-        if (!Pages.AddBinding(pageStart, binding, out var addedRef))
+        if (!PageMapping.AddBinding(pageStart, binding, out var addedRef))
             return FaultResult.Segv;
         if (!engine.MapManagedPage(pageStart, pagePtr, perms))
         {
-            if (addedRef) Pages.Release(pageStart);
+            if (addedRef) PageMapping.Release(pageStart);
             return FaultResult.Segv;
         }
 
@@ -1840,7 +1840,7 @@ public class VMAManager
         byte perms,
         Engine engine)
     {
-        var nonOwnerRefs = PageManager.GetRefCount(existingPrivate) - 1;
+        var nonOwnerRefs = PageManager.GetAnonPageRefCount(existingPrivate) - 1;
         if (nonOwnerRefs <= 0)
         {
             privateObject.MarkDirty(pageIndex);
@@ -1850,10 +1850,10 @@ public class VMAManager
                 perms, engine);
         }
 
-        if (!PageManager.TryAllocateExternalPageStrict(out var replacementPage, AllocationClass.Cow,
+        if (!PageManager.TryAllocAnonPageMayFail(out var replacementPage, AllocationClass.Cow,
                 AllocationSource.CowReplacePrivate))
             if (!TryRelieveFaultMemoryPressure(engine, pageStart, "CowReplacePrivate") ||
-                !PageManager.TryAllocateExternalPageStrict(out replacementPage, AllocationClass.Cow,
+                !PageManager.TryAllocAnonPageMayFail(out replacementPage, AllocationClass.Cow,
                     AllocationSource.CowReplacePrivate))
                 return FaultResult.Oom;
 

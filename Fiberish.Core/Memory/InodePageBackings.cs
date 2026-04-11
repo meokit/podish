@@ -27,7 +27,7 @@ internal static class GlobalMemoryAccounting
 
 internal static class InodePageAllocator
 {
-    public static PageHandle AllocatePage(
+    public static BackingPageHandle AllocatePage(
         AllocationClass allocationClass = AllocationClass.PageCache,
         AllocationSource allocationSource = AllocationSource.Unknown)
     {
@@ -41,16 +41,16 @@ internal static class InodePageAllocator
                 return default;
 
             new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
-            return PageHandle.CreateNative(ptr);
+            return BackingPageHandle.CreateNative(ptr);
         }
     }
 
     public static bool TryAllocatePageStrict(
-        out PageHandle pageHandle,
+        out BackingPageHandle backingPageHandle,
         AllocationClass allocationClass = AllocationClass.PageCache,
         AllocationSource allocationSource = AllocationSource.Unknown)
     {
-        pageHandle = default;
+        backingPageHandle = default;
         if (!GlobalMemoryAccounting.HasQuotaCapacity(LinuxConstants.PageSize))
         {
             _ = MemoryPressureCoordinator.TryReclaimForAllocation(
@@ -62,7 +62,7 @@ internal static class InodePageAllocator
                 return false;
         }
 
-        pageHandle = AllocatePage(allocationClass, allocationSource);
-        return pageHandle.IsValid;
+        backingPageHandle = AllocatePage(allocationClass, allocationSource);
+        return backingPageHandle.IsValid;
     }
 }

@@ -129,8 +129,8 @@ public class CowForkCloneTests
         Assert.Equal(0, buf[0]);
         Assert.Equal(allocatedBeforeRead, PageManager.GetAllocatedBytes());
 
-        Assert.True(mm.Pages.TryGet(map1, out var zero1));
-        Assert.True(mm.Pages.TryGet(map2, out var zero2));
+        Assert.True(mm.PageMapping.TryGet(map1, out var zero1));
+        Assert.True(mm.PageMapping.TryGet(map2, out var zero2));
         Assert.NotEqual(IntPtr.Zero, zero1);
         Assert.Equal(zero1, zero2);
 
@@ -250,12 +250,12 @@ public class CowForkCloneTests
         var pageIndex = parentVma.GetPageIndex(parentVma.Start);
         var sharedPrivatePage = parentVma.VmAnonVma!.GetPage(pageIndex);
         Assert.NotEqual(IntPtr.Zero, sharedPrivatePage);
-        Assert.True(parentMm.Pages.TryGet(mapAddr, out var mappedBeforeProtNone));
+        Assert.True(parentMm.PageMapping.TryGet(mapAddr, out var mappedBeforeProtNone));
         Assert.Equal(sharedPrivatePage, mappedBeforeProtNone);
 
         Assert.Equal(0, parentMm.Mprotect(mapAddr, LinuxConstants.PageSize, Protection.None, parentEngine,
             out _));
-        Assert.False(parentMm.Pages.TryGet(mapAddr, out _));
+        Assert.False(parentMm.PageMapping.TryGet(mapAddr, out _));
 
         using var childEngine = parentEngine.Clone(false);
         var childMm = parentMm.Clone();
@@ -263,7 +263,7 @@ public class CowForkCloneTests
             (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
 
         childMm.RebuildExternalMappingsFromNative(childEngine, childMm.VMAs);
-        Assert.False(childMm.Pages.TryGet(mapAddr, out _));
+        Assert.False(childMm.PageMapping.TryGet(mapAddr, out _));
 
         Assert.Equal(0, childMm.Mprotect(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
             childEngine, out _));

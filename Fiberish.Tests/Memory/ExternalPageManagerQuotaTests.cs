@@ -14,7 +14,7 @@ public class ExternalPageManagerQuotaTests
         PageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
         try
         {
-            var ok = PageManager.TryAllocateExternalPageStrict(out var ptr, AllocationClass.Anonymous);
+            var ok = PageManager.TryAllocAnonPageMayFail(out var ptr, AllocationClass.Anonymous);
             Assert.False(ok);
             Assert.Equal(IntPtr.Zero, ptr);
         }
@@ -39,13 +39,13 @@ public class ExternalPageManagerQuotaTests
         var ptr = IntPtr.Zero;
         try
         {
-            var ok = PageManager.TryAllocateExternalPageStrict(out ptr, AllocationClass.Anonymous);
+            var ok = PageManager.TryAllocAnonPageMayFail(out ptr, AllocationClass.Anonymous);
             Assert.True(ok);
             Assert.NotEqual(IntPtr.Zero, ptr);
         }
         finally
         {
-            if (ptr != IntPtr.Zero) PageManager.ReleasePtr(ptr);
+            if (ptr != IntPtr.Zero) PageManager.FreeAnonPage(ptr);
             PageManager.MemoryQuotaBytes = oldQuota;
         }
     }
@@ -58,12 +58,12 @@ public class ExternalPageManagerQuotaTests
         var ptr = IntPtr.Zero;
         try
         {
-            ptr = PageManager.AllocateExternalPage();
+            ptr = PageManager.AllocAnonPage();
             Assert.NotEqual(IntPtr.Zero, ptr);
         }
         finally
         {
-            if (ptr != IntPtr.Zero) PageManager.ReleasePtr(ptr);
+            if (ptr != IntPtr.Zero) PageManager.FreeAnonPage(ptr);
             PageManager.MemoryQuotaBytes = oldQuota;
         }
     }
@@ -72,14 +72,14 @@ public class ExternalPageManagerQuotaTests
     public void ExternalPagePool_ReusesReleasedPage_AndReturnsZeroedMemory()
     {
         using var scope = PageManager.BeginIsolatedScope();
-        var ptr = PageManager.AllocateExternalPage(AllocationClass.Anonymous);
+        var ptr = PageManager.AllocAnonPage(AllocationClass.Anonymous);
         Assert.NotEqual(IntPtr.Zero, ptr);
 
         var dirty = Enumerable.Repeat((byte)0xA5, LinuxConstants.PageSize).ToArray();
         System.Runtime.InteropServices.Marshal.Copy(dirty, 0, ptr, dirty.Length);
-        PageManager.ReleasePtr(ptr);
+        PageManager.FreeAnonPage(ptr);
 
-        var reused = PageManager.AllocateExternalPage(AllocationClass.Anonymous);
+        var reused = PageManager.AllocAnonPage(AllocationClass.Anonymous);
         try
         {
             Assert.Equal(ptr, reused);
@@ -91,7 +91,7 @@ public class ExternalPageManagerQuotaTests
         finally
         {
             if (reused != IntPtr.Zero)
-                PageManager.ReleasePtr(reused);
+                PageManager.FreeAnonPage(reused);
         }
     }
 
@@ -108,25 +108,25 @@ public class ExternalPageManagerQuotaTests
         {
             for (var i = 0; i < ptrs.Length; i++)
             {
-                ptrs[i] = PageManager.AllocateExternalPage(AllocationClass.Anonymous);
+                ptrs[i] = PageManager.AllocAnonPage(AllocationClass.Anonymous);
                 Assert.NotEqual(IntPtr.Zero, ptrs[i]);
             }
 
             var firstPoolPage = ptrs[0];
-            PageManager.ReleasePtr(firstPoolPage);
+            PageManager.FreeAnonPage(firstPoolPage);
             ptrs[0] = IntPtr.Zero;
 
-            reused = PageManager.AllocateExternalPage(AllocationClass.Anonymous);
+            reused = PageManager.AllocAnonPage(AllocationClass.Anonymous);
             Assert.Equal(firstPoolPage, reused);
         }
         finally
         {
             if (reused != IntPtr.Zero)
-                PageManager.ReleasePtr(reused);
+                PageManager.FreeAnonPage(reused);
 
             foreach (var ptr in ptrs)
                 if (ptr != IntPtr.Zero)
-                    PageManager.ReleasePtr(ptr);
+                    PageManager.FreeAnonPage(ptr);
         }
     }
 }

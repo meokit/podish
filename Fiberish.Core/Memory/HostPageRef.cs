@@ -324,7 +324,7 @@ internal sealed class OwnerRmapTracker
         return true;
     }
 
-    public void CollectHits(uint pageIndex, IntPtr hostPagePtr, HostPage hostPage, List<RmapHit> output)
+    public void CollectHits(uint pageIndex, IntPtr hostPagePtr, HostPageRef hostPageRef, List<RmapHit> output)
     {
         if (!_buckets.TryGetValue(pageIndex, out var bucket) ||
             !bucket.Pages.TryGetValue(hostPagePtr, out var pageBucket))
@@ -333,10 +333,10 @@ internal sealed class OwnerRmapTracker
         }
 
         foreach (var entry in pageBucket.Entries)
-            output.Add(new RmapHit(hostPage, entry.Mm, entry.Vma, entry.OwnerKind, entry.PageIndex, entry.GuestPageStart));
+            output.Add(new RmapHit(hostPageRef, entry.Mm, entry.Vma, entry.OwnerKind, entry.PageIndex, entry.GuestPageStart));
     }
 
-    public bool Visit<TState>(uint pageIndex, IntPtr hostPagePtr, HostPage hostPage, ref TState state,
+    public bool Visit<TState>(uint pageIndex, IntPtr hostPagePtr, HostPageRef hostPageRef, ref TState state,
         HostPageRmapVisitor<TState> visitor)
     {
         if (!_buckets.TryGetValue(pageIndex, out var bucket) ||
@@ -347,20 +347,20 @@ internal sealed class OwnerRmapTracker
         }
 
         foreach (var entry in pageBucket.Entries)
-            visitor(hostPage, entry, ref state);
+            visitor(hostPageRef, entry, ref state);
         return true;
     }
 }
 
 internal readonly record struct RmapHit(
-    HostPage HostPage,
+    HostPageRef HostPageRef,
     VMAManager Mm,
     VmArea Vma,
     HostPageOwnerKind OwnerKind,
     uint PageIndex,
     uint GuestPageStart);
 
-internal delegate void HostPageRmapVisitor<TState>(HostPage hostPage, in HostPageRmapRef rmapRef, ref TState state);
+internal delegate void HostPageRmapVisitor<TState>(HostPageRef hostPageRef, in HostPageRmapRef rmapRef, ref TState state);
 internal delegate void TbCohMmPageVisitor<TState>(VMAManager mm, uint guestPageStart, ref TState state);
 
 internal readonly record struct TbCohExecSummary(bool HasExecPeer, bool HasMultipleExecIdentities, nuint ExecIdentity);
@@ -416,7 +416,7 @@ internal sealed class HostPageTableState
     }
 }
 
-internal struct HostPage
+internal struct HostPageRef
 {
     private struct WriterPolicyApplyState
     {
@@ -434,7 +434,7 @@ internal struct HostPage
     internal readonly int Slot;
     internal readonly uint Generation;
 
-    internal HostPage(HostPageTableState owner, int slot, uint generation)
+    internal HostPageRef(HostPageTableState owner, int slot, uint generation)
     {
         Owner = owner;
         Slot = slot;
@@ -1102,7 +1102,7 @@ internal struct HostPage
         };
     }
 
-    private static void ApplyWriterPolicyForRmapRef(HostPage hostPage, in HostPageRmapRef rmapRef,
+    private static void ApplyWriterPolicyForRmapRef(HostPageRef hostPageRef, in HostPageRmapRef rmapRef,
         ref WriterPolicyApplyState state)
     {
         if (!HasWriteRole(rmapRef.Vma.Perms))
@@ -1111,7 +1111,7 @@ internal struct HostPage
         ApplyWriterPolicy(rmapRef.Mm, rmapRef.GuestPageStart, ref state);
     }
 
-    private static void VisitExecRmapRef<TState>(HostPage hostPage, in HostPageRmapRef rmapRef,
+    private static void VisitExecRmapRef<TState>(HostPageRef hostPageRef, in HostPageRmapRef rmapRef,
         ref ExecPageVisitState<TState> state)
     {
         if (!HasExecRole(rmapRef.Vma.Perms))
@@ -1250,7 +1250,7 @@ internal static class HostPageManager
         return new ScopeRestore(previous);
     }
 
-    internal static HostPage GetOrCreate(IntPtr ptr, HostPageKind preferredKind)
+    internal static HostPageRef GetOrCreate(IntPtr ptr, HostPageKind preferredKind)
     {
         if (ptr == IntPtr.Zero)
             throw new ArgumentException("Host page pointer must be non-zero.", nameof(ptr));
@@ -1261,7 +1261,7 @@ internal static class HostPageManager
             if (state.SlotByPtr.TryGetValue(ptr, out var slot))
             {
                 ref var existing = ref state.GetSlotRef(slot);
-                var hostPage = new HostPage(state, slot, existing.Generation);
+                var hostPage = new HostPageRef(state, slot, existing.Generation);
                 hostPage.UpgradeKind(preferredKind);
                 return hostPage;
             }
@@ -1284,34 +1284,34 @@ internal static class HostPageManager
                 LastAccessTimestamp = MonotonicTime.GetTimestamp()
             };
             state.SlotByPtr[ptr] = slot;
-            return new HostPage(state, slot, slotRef.Generation);
+            return new HostPageRef(state, slot, slotRef.Generation);
         }
     }
 
-    internal static bool TryLookup(IntPtr ptr, out HostPage page)
+    internal static bool TryLookup(IntPtr ptr, out HostPageRef pageRef)
     {
         var state = CurrentState;
         lock (state.Gate)
         {
             if (!state.SlotByPtr.TryGetValue(ptr, out var slot))
             {
-                page = default;
+                pageRef = default;
                 return false;
             }
 
             ref var slotRef = ref state.GetSlotRef(slot);
             if (!slotRef.InUse)
             {
-                page = default;
+                pageRef = default;
                 return false;
             }
 
-            page = new HostPage(state, slot, slotRef.Generation);
+            pageRef = new HostPageRef(state, slot, slotRef.Generation);
             return true;
         }
     }
 
-    internal static HostPage GetRequired(IntPtr ptr)
+    internal static HostPageRef GetRequired(IntPtr ptr)
     {
         if (!TryLookup(ptr, out var page))
             throw new InvalidOperationException($"HostPage metadata for 0x{ptr.ToInt64():X} is not registered.");
@@ -1319,7 +1319,7 @@ internal static class HostPageManager
         return page;
     }
 
-    internal static HostPage Retain(IntPtr ptr, HostPageKind preferredKind)
+    internal static HostPageRef Retain(IntPtr ptr, HostPageKind preferredKind)
     {
         var page = GetOrCreate(ptr, preferredKind);
         page.RefCount++;
@@ -1345,19 +1345,19 @@ internal static class HostPageManager
         TryRemoveIfUnused(page);
     }
 
-    internal static void TryRemoveIfUnused(HostPage page)
+    internal static void TryRemoveIfUnused(HostPageRef pageRef)
     {
-        if (page.Kind == HostPageKind.Zero)
+        if (pageRef.Kind == HostPageKind.Zero)
             return;
-        if (page.RefCount > 0 || page.MapCount > 0 || page.PinCount > 0 || page.HasOwnerRoot)
+        if (pageRef.RefCount > 0 || pageRef.MapCount > 0 || pageRef.PinCount > 0 || pageRef.HasOwnerRoot)
             return;
-        if (!TryGetLiveSlot(page, out var state, out var slot))
+        if (!TryGetLiveSlot(pageRef, out var state, out var slot))
             return;
 
         lock (state.Gate)
         {
             ref var slotRef = ref state.GetSlotRef(slot);
-            if (!slotRef.InUse || slotRef.Generation != page.Generation)
+            if (!slotRef.InUse || slotRef.Generation != pageRef.Generation)
                 return;
             if (slotRef.Page.Kind == HostPageKind.Zero)
                 return;
@@ -1444,17 +1444,17 @@ internal static class HostPageManager
         return page.RebindRmapRef(mm, oldVma, newVma, ownerKind, pageIndex, guestPageStart, oldPerms, newPerms);
     }
 
-    private static bool TryGetLiveSlot(HostPage page, out HostPageTableState state, out int slot)
+    private static bool TryGetLiveSlot(HostPageRef pageRef, out HostPageTableState state, out int slot)
     {
-        state = page.Owner!;
-        slot = page.Slot;
+        state = pageRef.Owner!;
+        slot = pageRef.Slot;
         if (state == null)
             return false;
         if ((uint)slot >= (uint)state.SlotCount)
             return false;
 
         ref var slotRef = ref state.GetSlotRef(slot);
-        return slotRef.InUse && slotRef.Generation == page.Generation;
+        return slotRef.InUse && slotRef.Generation == pageRef.Generation;
     }
 
 }

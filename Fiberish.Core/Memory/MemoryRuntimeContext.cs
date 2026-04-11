@@ -142,7 +142,7 @@ internal sealed class ZeroInode : MappingBackedInode
 {
     private readonly Lock _zeroPageGate = new();
     private IntPtr _sharedZeroPagePtr;
-    private PageHandle _sharedZeroPageHandle;
+    private BackingPageHandle _sharedZeroBackingPageHandle;
 
     public ZeroInode()
     {
@@ -165,7 +165,7 @@ internal sealed class ZeroInode : MappingBackedInode
                 if (!pageHandle.IsValid)
                     return null;
 
-                _sharedZeroPageHandle = pageHandle;
+                _sharedZeroBackingPageHandle = pageHandle;
                 HostPageManager.GetOrCreate(pageHandle.Pointer, HostPageKind.Zero);
                 _sharedZeroPagePtr = pageHandle.Pointer;
             }

@@ -2382,9 +2382,9 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     }
 
     public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
-        bool writable, out PageHandle pageHandle)
+        bool writable, out BackingPageHandle backingPageHandle)
     {
-        pageHandle = default;
+        backingPageHandle = default;
         if (Type != InodeType.File) return false;
         if (absoluteFileOffset < 0) return false;
         if ((absoluteFileOffset & LinuxConstants.PageOffsetMask) != 0) return false;
@@ -2402,7 +2402,7 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
                     out var releaseToken))
                 return false;
 
-            pageHandle = PageHandle.CreateOwned(pointer, this, releaseToken);
+            backingPageHandle = BackingPageHandle.CreateOwned(pointer, this, releaseToken);
             return true;
         }
     }

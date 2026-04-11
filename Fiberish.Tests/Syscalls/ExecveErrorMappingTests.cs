@@ -40,7 +40,7 @@ public class ExecveErrorMappingTests
 
             // Keep one page pinned so exec's first strict allocation reliably trips the quota
             // even if the old address space releases pages before loading the new image.
-            var reservedPage = PageManager.AllocateExternalPage();
+            var reservedPage = PageManager.AllocAnonPage();
             try
             {
                 PageManager.MemoryQuotaBytes = LinuxConstants.PageSize;
@@ -50,7 +50,7 @@ public class ExecveErrorMappingTests
             }
             finally
             {
-                PageManager.ReleasePtr(reservedPage);
+                PageManager.FreeAnonPage(reservedPage);
             }
         }
         finally

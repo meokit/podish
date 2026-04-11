@@ -5,9 +5,9 @@ namespace Fiberish.Memory;
 
 /// <summary>
 ///     Ownership record for an externally backed page pointer.
-///     This is a value type and must be released through <see cref="Release(ref PageHandle)" /> on the owner slot.
+///     This is a value type and must be released through <see cref="Release(ref BackingPageHandle)" /> on the owner slot.
 /// </summary>
-public struct PageHandle
+public struct BackingPageHandle
 {
     public IntPtr Pointer;
     internal long ReleaseToken;
@@ -15,23 +15,23 @@ public struct PageHandle
 
     public readonly bool IsValid => Pointer != IntPtr.Zero;
 
-    public static PageHandle CreateNative(IntPtr pointer)
+    public static BackingPageHandle CreateNative(IntPtr pointer)
     {
         return pointer == IntPtr.Zero
             ? default
-            : new PageHandle
+            : new BackingPageHandle
             {
                 Pointer = pointer,
                 ReleaseToken = pointer.ToInt64()
             };
     }
 
-    public static PageHandle CreateOwned(IntPtr pointer, Inode releaseOwner, long releaseToken)
+    public static BackingPageHandle CreateOwned(IntPtr pointer, Inode releaseOwner, long releaseToken)
     {
         ArgumentNullException.ThrowIfNull(releaseOwner);
         return pointer == IntPtr.Zero
             ? default
-            : new PageHandle
+            : new BackingPageHandle
             {
                 Pointer = pointer,
                 ReleaseOwner = releaseOwner,
@@ -39,7 +39,7 @@ public struct PageHandle
             };
     }
 
-    public static void Release(ref PageHandle handle)
+    public static void Release(ref BackingPageHandle handle)
     {
         var releasedPtr = Interlocked.Exchange(ref handle.Pointer, IntPtr.Zero);
         if (releasedPtr == IntPtr.Zero)

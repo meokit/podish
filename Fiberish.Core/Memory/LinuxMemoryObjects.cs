@@ -26,11 +26,11 @@ public sealed class AddressSpace
             AddressSpaceKind.Zero => HostPageKind.Zero,
             _ => HostPageKind.PageCache
         };
-        Pages = new VmPageSlots(CreateOwnerBinding, OnPageBindingChanged, OnPageCountChanged);
+        Pages = new OwnerPageSlots(CreateOwnerBinding, OnPageBindingChanged, OnPageCountChanged);
     }
 
     public AddressSpaceKind Kind { get; }
-    internal VmPageSlots Pages { get; }
+    internal OwnerPageSlots Pages { get; }
     public bool IsRecoverableWithoutSwap => Kind == AddressSpaceKind.File;
     internal bool IsZeroBacking => Kind == AddressSpaceKind.Zero;
     public int PageCount => Pages.PageCount;
@@ -67,13 +67,13 @@ public sealed class AddressSpace
         return Pages.PeekPage(pageIndex);
     }
 
-    internal VmPage? PeekVmPage(uint pageIndex)
+    internal ResidentPageRecord? PeekVmPage(uint pageIndex)
     {
         return Pages.PeekVmPage(pageIndex);
     }
 
     internal IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind,
-        Action<VmPage>? onReleased, out bool inserted)
+        Action<ResidentPageRecord>? onReleased, out bool inserted)
     {
         return Pages.InstallHostPageIfAbsent(pageIndex, ptr, hostPageKind, onReleased, out inserted);
     }
@@ -127,7 +127,7 @@ public sealed class AddressSpace
         return Pages.TryEvictCleanPage(pageIndex);
     }
 
-    internal int RemovePagesInRange(uint startPageIndex, uint endPageIndex, Func<VmPage, bool>? predicate = null)
+    internal int RemovePagesInRange(uint startPageIndex, uint endPageIndex, Func<ResidentPageRecord, bool>? predicate = null)
     {
         return Pages.RemovePagesInRange(startPageIndex, endPageIndex, predicate);
     }
@@ -252,17 +252,17 @@ public sealed class AddressSpace
             return _ownerRmap.TryRebind(pageIndex, hostPagePtr, oldKey, newEntry, out previous);
     }
 
-    internal void CollectOwnerRmapHits(uint pageIndex, IntPtr hostPagePtr, HostPage hostPage, List<RmapHit> output)
+    internal void CollectOwnerRmapHits(uint pageIndex, IntPtr hostPagePtr, HostPageRef hostPageRef, List<RmapHit> output)
     {
         lock (_rmapLock)
-            _ownerRmap.CollectHits(pageIndex, hostPagePtr, hostPage, output);
+            _ownerRmap.CollectHits(pageIndex, hostPagePtr, hostPageRef, output);
     }
 
-    internal bool VisitOwnerRmapRefs<TState>(uint pageIndex, IntPtr hostPagePtr, HostPage hostPage, ref TState state,
+    internal bool VisitOwnerRmapRefs<TState>(uint pageIndex, IntPtr hostPagePtr, HostPageRef hostPageRef, ref TState state,
         HostPageRmapVisitor<TState> visitor)
     {
         lock (_rmapLock)
-            return _ownerRmap.Visit(pageIndex, hostPagePtr, hostPage, ref state, visitor);
+            return _ownerRmap.Visit(pageIndex, hostPagePtr, hostPageRef, ref state, visitor);
     }
 
     private HostPageOwnerBinding CreateOwnerBinding(uint pageIndex)
@@ -346,12 +346,12 @@ public sealed class AnonVma
     {
         Parent = parent;
         Root = parent?.Root ?? this;
-        Pages = new VmPageSlots(CreateOwnerBinding, OnPageBindingChanged);
+        Pages = new OwnerPageSlots(CreateOwnerBinding, OnPageBindingChanged);
     }
 
     internal AnonVma? Parent { get; }
     internal AnonVma Root { get; }
-    internal VmPageSlots Pages { get; }
+    internal OwnerPageSlots Pages { get; }
     public int PageCount => Pages.PageCount;
 
     public void AddRef()
@@ -372,7 +372,7 @@ public sealed class AnonVma
         Pages.VisitPageStates(state =>
         {
             var page = Pages.PeekVmPage(state.PageIndex)!;
-            PageManager.AddRef(page.Ptr);
+            PageManager.RetainAnonPage(page.Ptr);
             clone.Pages.InstallExistingHostPage(state.PageIndex, page.Ptr, HostPageKind.Anon);
             var clonedPage = clone.Pages.PeekVmPage(state.PageIndex)!;
             clonedPage.Dirty = page.Dirty;
@@ -393,7 +393,7 @@ public sealed class AnonVma
         return Pages.PeekPage(pageIndex);
     }
 
-    internal VmPage? PeekVmPage(uint pageIndex)
+    internal ResidentPageRecord? PeekVmPage(uint pageIndex)
     {
         return Pages.PeekVmPage(pageIndex);
     }
@@ -418,14 +418,14 @@ public sealed class AnonVma
         return Pages.CountPagesInRange(startPageIndex, endPageIndex);
     }
 
-    internal int RemovePagesInRange(uint startPageIndex, uint endPageIndex, Func<VmPage, bool>? predicate = null)
+    internal int RemovePagesInRange(uint startPageIndex, uint endPageIndex, Func<ResidentPageRecord, bool>? predicate = null)
     {
         return Pages.RemovePagesInRange(startPageIndex, endPageIndex, predicate);
     }
 
-    internal bool RemovePageIfMatches(uint pageIndex, VmPage page)
+    internal bool RemovePageIfMatches(uint pageIndex, ResidentPageRecord pageRecord)
     {
-        return Pages.RemovePageIfMatches(pageIndex, page);
+        return Pages.RemovePageIfMatches(pageIndex, pageRecord);
     }
 
     public void TruncateToSize(long size)
@@ -547,17 +547,17 @@ public sealed class AnonVma
             return Root._ownerRmap.TryRebind(pageIndex, hostPagePtr, oldKey, newEntry, out previous);
     }
 
-    internal void CollectOwnerRmapHits(uint pageIndex, IntPtr hostPagePtr, HostPage hostPage, List<RmapHit> output)
+    internal void CollectOwnerRmapHits(uint pageIndex, IntPtr hostPagePtr, HostPageRef hostPageRef, List<RmapHit> output)
     {
         lock (Root._rmapLock)
-            Root._ownerRmap.CollectHits(pageIndex, hostPagePtr, hostPage, output);
+            Root._ownerRmap.CollectHits(pageIndex, hostPagePtr, hostPageRef, output);
     }
 
-    internal bool VisitOwnerRmapRefs<TState>(uint pageIndex, IntPtr hostPagePtr, HostPage hostPage, ref TState state,
+    internal bool VisitOwnerRmapRefs<TState>(uint pageIndex, IntPtr hostPagePtr, HostPageRef hostPageRef, ref TState state,
         HostPageRmapVisitor<TState> visitor)
     {
         lock (Root._rmapLock)
-            return Root._ownerRmap.Visit(pageIndex, hostPagePtr, hostPage, ref state, visitor);
+            return Root._ownerRmap.Visit(pageIndex, hostPagePtr, hostPageRef, ref state, visitor);
     }
 
     private HostPageOwnerBinding CreateOwnerBinding(uint pageIndex)

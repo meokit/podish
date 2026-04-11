@@ -33,29 +33,29 @@ internal sealed class MappedPageBinding
     public required MappedPageOwnerKind OwnerKind { get; init; }
     public AddressSpace? Mapping { get; init; }
     public AnonVma? AnonVma { get; init; }
-    public VmPage? Page { get; init; }
+    public ResidentPageRecord? Page { get; init; }
     public uint PageIndex { get; init; }
 
-    internal static MappedPageBinding FromAddressSpacePage(AddressSpace mapping, uint pageIndex, VmPage page)
+    internal static MappedPageBinding FromAddressSpacePage(AddressSpace mapping, uint pageIndex, ResidentPageRecord pageRecord)
     {
         return new MappedPageBinding
         {
-            Ptr = page.Ptr,
+            Ptr = pageRecord.Ptr,
             OwnerKind = MappedPageOwnerKind.AddressSpace,
             Mapping = mapping,
-            Page = page,
+            Page = pageRecord,
             PageIndex = pageIndex
         };
     }
 
-    internal static MappedPageBinding FromAnonVmaPage(AnonVma anonVma, uint pageIndex, VmPage page)
+    internal static MappedPageBinding FromAnonVmaPage(AnonVma anonVma, uint pageIndex, ResidentPageRecord pageRecord)
     {
         return new MappedPageBinding
         {
-            Ptr = page.Ptr,
+            Ptr = pageRecord.Ptr,
             OwnerKind = MappedPageOwnerKind.AnonVma,
             AnonVma = anonVma,
-            Page = page,
+            Page = pageRecord,
             PageIndex = pageIndex
         };
     }
@@ -165,12 +165,12 @@ public sealed class PageManager
         return _pages.Keys.ToArray();
     }
 
-    public static void AddRef(IntPtr ptr)
+    public static void RetainAnonPage(IntPtr ptr)
     {
         AddGlobalRef(ptr);
     }
 
-    public static int GetRefCount(IntPtr ptr)
+    public static int GetAnonPageRefCount(IntPtr ptr)
     {
         var state = CurrentState;
         lock (state.GlobalLock)
@@ -357,7 +357,7 @@ public sealed class PageManager
         }
     }
 
-    public static IntPtr AllocateExternalPage(
+    public static IntPtr AllocAnonPage(
         AllocationClass allocationClass = AllocationClass.KernelInternal,
         AllocationSource allocationSource = AllocationSource.Unknown)
     {
@@ -372,7 +372,7 @@ public sealed class PageManager
         return ptr;
     }
 
-    public static bool TryAllocateExternalPageStrict(
+    public static bool TryAllocAnonPageMayFail(
         out IntPtr ptr,
         AllocationClass allocationClass,
         AllocationSource allocationSource = AllocationSource.Unknown)
@@ -396,7 +396,7 @@ public sealed class PageManager
             }
         }
 
-        ptr = AllocateExternalPage(allocationClass, allocationSource);
+        ptr = AllocAnonPage(allocationClass, allocationSource);
         if (ptr == IntPtr.Zero)
         {
             Interlocked.Increment(ref state.StrictAllocFail);
@@ -593,13 +593,7 @@ public sealed class PageManager
         return next <= state.MemoryQuotaBytes;
     }
 
-    public static void AddRefPtr(IntPtr ptr, IDisposable? externalOwner = null)
-    {
-        if (ptr == IntPtr.Zero) return;
-        AddGlobalRef(ptr, externalOwner: externalOwner);
-    }
-
-    public static void ReleasePtr(IntPtr ptr)
+    public static void FreeAnonPage(IntPtr ptr)
     {
         if (ptr == IntPtr.Zero) return;
         ReleaseGlobalRef(ptr);

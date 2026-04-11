@@ -237,7 +237,7 @@ public class RmapTests
     {
         using var pageScope = PageManager.BeginIsolatedScope();
 
-        var ptr1 = PageManager.AllocateExternalPage(AllocationClass.KernelInternal);
+        var ptr1 = PageManager.AllocAnonPage(AllocationClass.KernelInternal);
         Assert.NotEqual(IntPtr.Zero, ptr1);
         var anonRoot1 = new AnonVma();
 
@@ -275,7 +275,7 @@ public class RmapTests
         Assert.Null(page1.OwnerRootKindForDebug);
         Assert.Null(page1.OwnerAnonRootForDebug);
 
-        var ptr2 = PageManager.AllocateExternalPage(AllocationClass.KernelInternal);
+        var ptr2 = PageManager.AllocAnonPage(AllocationClass.KernelInternal);
         Assert.NotEqual(IntPtr.Zero, ptr2);
         var mapping2 = new AddressSpace(AddressSpaceKind.File);
 
@@ -311,8 +311,8 @@ public class RmapTests
         Assert.True(page2.UnbindOwnerRoot(owner2));
         mapping2.Release();
         anonRoot1.Release();
-        PageManager.ReleasePtr(ptr2);
-        PageManager.ReleasePtr(ptr1);
+        PageManager.FreeAnonPage(ptr2);
+        PageManager.FreeAnonPage(ptr1);
     }
 
     private static List<RmapHit> ResolveHits(IntPtr ptr)

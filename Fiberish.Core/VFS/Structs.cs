@@ -1409,10 +1409,10 @@ public abstract class Inode : IAddressSpaceOperations
     ///     Return false to use regular in-memory page cache allocation + ReadPage fallback.
     /// </summary>
     public virtual bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,
-        bool writable, out PageHandle pageHandle)
+        bool writable, out BackingPageHandle backingPageHandle)
     {
         _ = writable;
-        pageHandle = default;
+        backingPageHandle = default;
         return false;
     }
 
@@ -1810,7 +1810,7 @@ public abstract class MappingBackedInode : Inode
                 var target = new Span<byte>((void*)ptr, LinuxConstants.PageSize);
                 if (!TryPopulateMappingPage(linuxFile, pageIndex, fileOffset, prefillLength, target))
                 {
-                    PageHandle.Release(ref pageHandle);
+                    BackingPageHandle.Release(ref pageHandle);
                     return null!;
                 }
             }
@@ -1825,7 +1825,7 @@ public abstract class MappingBackedInode : Inode
         }
         catch
         {
-            PageHandle.Release(ref pageHandle);
+            BackingPageHandle.Release(ref pageHandle);
             throw;
         }
     }
@@ -1839,7 +1839,7 @@ public abstract class MappingBackedInode : Inode
 
         if (pageHandle.Pointer == IntPtr.Zero)
         {
-            PageHandle.Release(ref pageHandle);
+            BackingPageHandle.Release(ref pageHandle);
             return null;
         }
 
