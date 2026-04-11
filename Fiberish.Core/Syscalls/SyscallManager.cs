@@ -40,13 +40,18 @@ public partial class SyscallManager
     public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null,
         DeviceNumberManager? deviceNumbers = null)
     {
+        ArgumentNullException.ThrowIfNull(engine);
+        ArgumentNullException.ThrowIfNull(mem);
+        if (!ReferenceEquals(engine.MemoryContext, mem.MemoryContext))
+            throw new InvalidOperationException("Engine and VMAManager must share the same MemoryRuntimeContext.");
+
         _mountNamespace = new MountNamespace();
         _sharedFdTable = new SharedFdTable();
         _sharedUnixSocketNamespace = new SharedUnixSocketNamespace();
         _sharedFsState = new SharedFsState();
         DeviceNumbers = deviceNumbers ?? new DeviceNumberManager();
         CurrentSyscallEngine = engine;
-        MemoryContext = engine.MemoryContext;
+        MemoryContext = mem.MemoryContext;
         Mem = mem;
         BrkAddr = brk;
         BrkBase = brk;
@@ -58,17 +63,49 @@ public partial class SyscallManager
         RegisterEngine(engine);
 
         // Register default filesystems
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "hostfs", Factory = devMgr => new Hostfs(devMgr) });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "tmpfs", Factory = devMgr => new Tmpfs(devMgr) });
-        FileSystemRegistry.TryRegister(new FileSystemType { Name = "devtmpfs", Factory = devMgr => new Tmpfs(devMgr) });
         FileSystemRegistry.TryRegister(new FileSystemType
-            { Name = "overlay", Factory = devMgr => new OverlayFileSystem(devMgr) });
+        {
+            Name = "hostfs",
+            Factory = devMgr => new Hostfs(devMgr),
+            FactoryWithContext = (devMgr, memoryContext) => new Hostfs(devMgr, memoryContext)
+        });
         FileSystemRegistry.TryRegister(new FileSystemType
-            { Name = "layerfs", Factory = devMgr => new LayerFileSystem(devMgr) });
+        {
+            Name = "tmpfs",
+            Factory = devMgr => new Tmpfs(devMgr),
+            FactoryWithContext = (devMgr, memoryContext) => new Tmpfs(devMgr, memoryContext)
+        });
         FileSystemRegistry.TryRegister(new FileSystemType
-            { Name = "silkfs", Factory = devMgr => new SilkFileSystem(devMgr) });
+        {
+            Name = "devtmpfs",
+            Factory = devMgr => new Tmpfs(devMgr),
+            FactoryWithContext = (devMgr, memoryContext) => new Tmpfs(devMgr, memoryContext)
+        });
+        FileSystemRegistry.TryRegister(new FileSystemType
+        {
+            Name = "overlay",
+            Factory = devMgr => new OverlayFileSystem(devMgr),
+            FactoryWithContext = (devMgr, memoryContext) => new OverlayFileSystem(devMgr, memoryContext)
+        });
+        FileSystemRegistry.TryRegister(new FileSystemType
+        {
+            Name = "layerfs",
+            Factory = devMgr => new LayerFileSystem(devMgr),
+            FactoryWithContext = (devMgr, memoryContext) => new LayerFileSystem(devMgr, memoryContext)
+        });
+        FileSystemRegistry.TryRegister(new FileSystemType
+        {
+            Name = "silkfs",
+            Factory = devMgr => new SilkFileSystem(devMgr),
+            FactoryWithContext = (devMgr, memoryContext) => new SilkFileSystem(devMgr, memoryContext)
+        });
         FileSystemRegistry.TryRegister(
-            new FileSystemType { Name = "proc", Factory = devMgr => new ProcFileSystem(devMgr) });
+            new FileSystemType
+            {
+                Name = "proc",
+                Factory = devMgr => new ProcFileSystem(devMgr),
+                FactoryWithContext = (devMgr, memoryContext) => new ProcFileSystem(devMgr, memoryContext)
+            });
 
         PtyManager = new PtyManager(Logger);
         var signalBroadcaster = new SignalBroadcasterImpl();
@@ -104,6 +141,10 @@ public partial class SyscallManager
         DeviceNumberManager deviceNumbers,
         MemoryRuntimeContext memoryContext)
     {
+        ArgumentNullException.ThrowIfNull(mem);
+        ArgumentNullException.ThrowIfNull(memoryContext);
+        if (!ReferenceEquals(mem.MemoryContext, memoryContext))
+            throw new InvalidOperationException("SyscallManager clone must keep VMAManager and MemoryRuntimeContext aligned.");
         Mem = mem;
         MemoryContext = memoryContext;
         _sharedFdTable = sharedFdTable;
@@ -278,15 +319,13 @@ public partial class SyscallManager
 
     public void MountRoot(SuperBlock sb, RootMountOptions? options = null)
     {
-        sb.MemoryContext = CurrentSyscallEngine.MemoryContext;
         MountRoot(CreateRootMount(sb, options));
     }
 
     public void MountRootHostfs(string hostPath, string options = "rw,relatime")
     {
         var hostFsType = FileSystemRegistry.Get("hostfs")!;
-        var sb = hostFsType.CreateFileSystem(DeviceNumbers).ReadSuper(hostFsType, 0, hostPath, options);
-        sb.MemoryContext = CurrentSyscallEngine.MemoryContext;
+        var sb = hostFsType.CreateFileSystem(DeviceNumbers, MemoryContext).ReadSuper(hostFsType, 0, hostPath, options);
         MountRoot(sb, new RootMountOptions
         {
             Source = hostPath,
@@ -305,8 +344,7 @@ public partial class SyscallManager
         string options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work")
     {
         var hostFsType = FileSystemRegistry.Get("hostfs")!;
-        var lowerSb = hostFsType.CreateFileSystem(DeviceNumbers).ReadSuper(hostFsType, 0, hostRoot, null);
-        lowerSb.MemoryContext = CurrentSyscallEngine.MemoryContext;
+        var lowerSb = hostFsType.CreateFileSystem(DeviceNumbers, MemoryContext).ReadSuper(hostFsType, 0, hostRoot, null);
         MountRootOverlayWithLower(lowerSb, upperFsType, upperSource, options);
     }
 
@@ -316,13 +354,11 @@ public partial class SyscallManager
         var upperType = FileSystemRegistry.Get(upperFsType) ??
                         throw new Exception($"Upper filesystem not registered: {upperFsType}");
         var overlayFsType = FileSystemRegistry.Get("overlay")!;
-        var upperSb = upperType.CreateFileSystem(DeviceNumbers).ReadSuper(upperType, 0, upperSource, null);
-        upperSb.MemoryContext = CurrentSyscallEngine.MemoryContext;
+        var upperSb = upperType.CreateFileSystem(DeviceNumbers, MemoryContext).ReadSuper(upperType, 0, upperSource, null);
 
         var overlayOptions = new OverlayMountOptions { Lower = lowerSb, Upper = upperSb };
-        var overlaySb = overlayFsType.CreateFileSystem(DeviceNumbers)
+        var overlaySb = overlayFsType.CreateFileSystem(DeviceNumbers, MemoryContext)
             .ReadSuper(overlayFsType, 0, "root_overlay", overlayOptions);
-        overlaySb.MemoryContext = CurrentSyscallEngine.MemoryContext;
 
         MountRoot(overlaySb, new RootMountOptions
         {
@@ -336,8 +372,7 @@ public partial class SyscallManager
     {
         var devLoc = ensureMountPoint ? EnsureDirectory(Root, FsName.FromString("dev")) : PathWalk("/dev");
         var devFsType = FileSystemRegistry.Get("devtmpfs")!;
-        var devSb = devFsType.CreateFileSystem(DeviceNumbers).ReadSuper(devFsType, 0, "dev", null);
-        devSb.MemoryContext = CurrentSyscallEngine.MemoryContext;
+        var devSb = devFsType.CreateFileSystem(DeviceNumbers, MemoryContext).ReadSuper(devFsType, 0, "dev", null);
 
         if (devLoc.IsValid && devLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
@@ -359,9 +394,8 @@ public partial class SyscallManager
         if (mountedDevLoc.IsValid && mountedDevLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
             var ptsLoc = EnsureDirectory(mountedDevLoc, FsName.FromString("pts"));
-            var devptsSb = _devptsFsType.CreateFileSystem(DeviceNumbers)
+            var devptsSb = _devptsFsType.CreateFileSystem(DeviceNumbers, MemoryContext)
                 .ReadSuper(_devptsFsType, 0, "devpts", null);
-            devptsSb.MemoryContext = CurrentSyscallEngine.MemoryContext;
             var devptsMount = CreateDetachedMount(devptsSb, "devpts", "devpts", 0, "gid=5,mode=620");
             var attachRc = AttachDetachedMount(devptsMount, ptsLoc);
             if (attachRc != 0)
@@ -378,7 +412,9 @@ public partial class SyscallManager
         return new FileSystemType
         {
             Name = "devpts",
-            Factory = devMgr => new DevPtsFileSystem(devMgr, PtyManager, signalBroadcaster, Logger)
+            Factory = devMgr => new DevPtsFileSystem(devMgr, PtyManager, signalBroadcaster, Logger),
+            FactoryWithContext = (devMgr, memoryContext) =>
+                new DevPtsFileSystem(devMgr, PtyManager, signalBroadcaster, Logger, memoryContext)
         };
     }
 
@@ -388,8 +424,7 @@ public partial class SyscallManager
         if (procLoc.IsValid && procLoc.Dentry!.Inode?.Type == InodeType.Directory)
         {
             var procFsType = FileSystemRegistry.Get("proc")!;
-            var procSb = procFsType.CreateFileSystem(DeviceNumbers).ReadSuper(procFsType, 0, "proc", this);
-            procSb.MemoryContext = CurrentSyscallEngine.MemoryContext;
+            var procSb = procFsType.CreateFileSystem(DeviceNumbers, MemoryContext).ReadSuper(procFsType, 0, "proc", this);
             var procMount = CreateDetachedMount(procSb, "proc", "proc", 0);
             var attachRc = AttachDetachedMount(procMount, procLoc);
             if (attachRc != 0)
@@ -404,8 +439,7 @@ public partial class SyscallManager
     public void MountStandardShm()
     {
         var tmpFsType = FileSystemRegistry.Get("tmpfs")!;
-        var shmSb = tmpFsType.CreateFileSystem(DeviceNumbers).ReadSuper(tmpFsType, 0, "shm", null);
-        shmSb.MemoryContext = CurrentSyscallEngine.MemoryContext;
+        var shmSb = tmpFsType.CreateFileSystem(DeviceNumbers, MemoryContext).ReadSuper(tmpFsType, 0, "shm", null);
 
         // Resolve through the mounted /dev to avoid creating shm under a detached devtmpfs root.
         var devLoc = PathWalk("/dev");
@@ -929,9 +963,8 @@ public partial class SyscallManager
 
         try
         {
-            sb = fsType.CreateFileSystem(DeviceNumbers).ReadSuper(fsType, readSuperFlags, source!, readSuperData);
-            if (sb != null)
-                sb.MemoryContext = CurrentSyscallEngine.MemoryContext;
+            sb = fsType.CreateFileSystem(DeviceNumbers, MemoryContext).ReadSuper(fsType, readSuperFlags, source!,
+                readSuperData);
         }
         catch
         {

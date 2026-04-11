@@ -86,12 +86,13 @@ public class SysVShmManagerTests
     [Fact]
     public void ShmDt_ShouldWorkAcrossProcessesSharingAddressSpace()
     {
-        var manager = new SysVShmManager();
-        var sharedVma = new VMAManager();
+        var runtime = new MemoryRuntimeContext();
+        var manager = new SysVShmManager(runtime);
+        var sharedVma = new VMAManager(runtime);
         sharedVma.AddSharedRef();
 
-        using var p1 = new TestContext(manager, 3101, sharedVma);
-        using var p2 = new TestContext(manager, 3102, sharedVma);
+        using var p1 = new TestContext(manager, 3101, sharedVma, runtime);
+        using var p2 = new TestContext(manager, 3102, sharedVma, runtime);
 
         var shmid = manager.ShmGet(LinuxConstants.IPC_PRIVATE, 4096, 0x1FF, 0, 0, 3101);
         Assert.True(shmid > 0);
@@ -146,12 +147,13 @@ public class SysVShmManagerTests
     [Fact]
     public void OnProcessExit_WithSharedAddressSpace_MustNotDetach()
     {
-        var manager = new SysVShmManager();
-        var sharedVma = new VMAManager();
+        var runtime = new MemoryRuntimeContext();
+        var manager = new SysVShmManager(runtime);
+        var sharedVma = new VMAManager(runtime);
         sharedVma.AddSharedRef();
 
-        using var p1 = new TestContext(manager, 3201, sharedVma);
-        using var p2 = new TestContext(manager, 3202, sharedVma);
+        using var p1 = new TestContext(manager, 3201, sharedVma, runtime);
+        using var p2 = new TestContext(manager, 3202, sharedVma, runtime);
 
         var shmid = manager.ShmGet(LinuxConstants.IPC_PRIVATE, 4096, 0x1FF, 0, 0, 3201);
         Assert.True(shmid > 0);
@@ -171,9 +173,10 @@ public class SysVShmManagerTests
     [Fact]
     public void ShmDt_MustNotDetachAttachmentOfAnotherProcess()
     {
-        var manager = new SysVShmManager();
-        using var p1 = new TestContext(manager, 2001);
-        using var p2 = new TestContext(manager, 2002);
+        var runtime = new MemoryRuntimeContext();
+        var manager = new SysVShmManager(runtime);
+        using var p1 = new TestContext(manager, 2001, runtime: runtime);
+        using var p2 = new TestContext(manager, 2002, runtime: runtime);
 
         var shmid = manager.ShmGet(0x8899, 4096, LinuxConstants.IPC_CREAT | 0x1FF, 0, 0, 2001);
         Assert.True(shmid > 0);
@@ -242,9 +245,9 @@ public class SysVShmManagerTests
         public TestContext(SysVShmManager? manager = null, int processId = 2000, VMAManager? vma = null,
             MemoryRuntimeContext? runtime = null)
         {
-            var memoryContext = runtime ?? MemoryRuntimeContext.Default;
+            var memoryContext = runtime ?? new MemoryRuntimeContext();
             Engine = new Engine(memoryContext);
-            Vma = vma ?? new VMAManager();
+            Vma = vma ?? new VMAManager(memoryContext);
             Manager = manager ?? new SysVShmManager(memoryContext);
 
             var kernel = new KernelScheduler();

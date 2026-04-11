@@ -186,9 +186,10 @@ public class SignalSyscallTests
         public SignalEnv()
         {
             Scheduler = new KernelScheduler();
+            var runtime = new TestRuntimeFactory();
 
-            CallerEngine = new Engine();
-            CallerMem = new VMAManager();
+            CallerEngine = runtime.CreateEngine();
+            CallerMem = runtime.CreateAddressSpace();
             CallerSys = new SyscallManager(CallerEngine, CallerMem, 0);
             CallerProcess = new Process(100, CallerMem, CallerSys)
             {
@@ -199,8 +200,8 @@ public class SignalSyscallTests
             CallerTask = new FiberTask(100, CallerProcess, CallerEngine, Scheduler);
             CallerEngine.Owner = CallerTask;
 
-            TargetEngine = new Engine();
-            TargetMem = new VMAManager();
+            TargetEngine = runtime.CreateEngine();
+            TargetMem = runtime.CreateAddressSpace();
             TargetSys = new SyscallManager(TargetEngine, TargetMem, 0);
             TargetGroupProcess = new Process(200, TargetMem, TargetSys)
             {

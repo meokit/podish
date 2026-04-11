@@ -26,11 +26,9 @@ public class WaitStatusEncodingTests
     [Fact]
     public void EncodeWaitExitStatus_NormalExit_UsesHighByte()
     {
-        var child = new Process(2000, null!, null!)
-        {
-            ExitedBySignal = false,
-            ExitStatus = 42
-        };
+        var child = TestRuntimeFactory.CreateProcess(2000);
+        child.ExitedBySignal = false;
+        child.ExitStatus = 42;
 
         var status = InvokePrivateInt("EncodeWaitExitStatus", child);
         Assert.Equal(42 << 8, status);
@@ -39,12 +37,10 @@ public class WaitStatusEncodingTests
     [Fact]
     public void EncodeWaitExitStatus_Signaled_UsesSignalBits()
     {
-        var child = new Process(2001, null!, null!)
-        {
-            ExitedBySignal = true,
-            TermSignal = (int)Signal.SIGTERM,
-            CoreDumped = false
-        };
+        var child = TestRuntimeFactory.CreateProcess(2001);
+        child.ExitedBySignal = true;
+        child.TermSignal = (int)Signal.SIGTERM;
+        child.CoreDumped = false;
 
         var status = InvokePrivateInt("EncodeWaitExitStatus", child);
         Assert.Equal((int)Signal.SIGTERM, status);
@@ -53,12 +49,10 @@ public class WaitStatusEncodingTests
     [Fact]
     public void EncodeWaitExitStatus_Coredump_SetsCoreBit()
     {
-        var child = new Process(2002, null!, null!)
-        {
-            ExitedBySignal = true,
-            TermSignal = (int)Signal.SIGSEGV,
-            CoreDumped = true
-        };
+        var child = TestRuntimeFactory.CreateProcess(2002);
+        child.ExitedBySignal = true;
+        child.TermSignal = (int)Signal.SIGSEGV;
+        child.CoreDumped = true;
 
         var status = InvokePrivateInt("EncodeWaitExitStatus", child);
         Assert.Equal(((int)Signal.SIGSEGV & 0x7f) | 0x80, status);
@@ -74,12 +68,10 @@ public class WaitStatusEncodingTests
     [Fact]
     public void BuildSigchldInfoForExit_UsesKilledCodeForSignaledExit()
     {
-        var child = new Process(2003, null!, null!)
-        {
-            ExitedBySignal = true,
-            TermSignal = (int)Signal.SIGKILL,
-            CoreDumped = false
-        };
+        var child = TestRuntimeFactory.CreateProcess(2003);
+        child.ExitedBySignal = true;
+        child.TermSignal = (int)Signal.SIGKILL;
+        child.CoreDumped = false;
 
         var info = InvokeBuildSigInfo(child);
         Assert.Equal((int)Signal.SIGCHLD, info.Signo);

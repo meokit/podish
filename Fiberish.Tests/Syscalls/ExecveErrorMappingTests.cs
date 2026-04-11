@@ -19,8 +19,9 @@ public class ExecveErrorMappingTests
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var oldQuota = PageManager.MemoryQuotaBytes;
 
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, mm, 0);
         var guestRoot = ResolveGuestRootForHelloStatic();
         sm.MountRootHostfs(guestRoot);
@@ -66,8 +67,9 @@ public class ExecveErrorMappingTests
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, mm, 0);
         var guestRoot = ResolveGuestRootForHelloStatic();
         sm.MountRootHostfs(guestRoot);
@@ -117,8 +119,9 @@ public class ExecveErrorMappingTests
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, mm, 0);
         var scheduler = new KernelScheduler();
         var process = new Process(9206, mm, sm);
@@ -134,9 +137,14 @@ public class ExecveErrorMappingTests
 
         try
         {
-            var tmpfsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            var lowerSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "execve-upper-lower", null);
-            lowerSb.MemoryContext = engine.MemoryContext;
+            var tmpfsType = new FileSystemType
+            {
+                Name = "tmpfs",
+                Factory = static _ => new Tmpfs(),
+                FactoryWithContext = static (_, memoryContext) => new Tmpfs(memoryContext: memoryContext)
+            };
+            var lowerSb = tmpfsType.CreateAnonymousFileSystem(runtime.MemoryContext)
+                .ReadSuper(tmpfsType, 0, "execve-upper-lower", null);
             sm.MountRootOverlayWithLower(lowerSb, "silkfs", silkRoot);
 
             var helloBytes = File.ReadAllBytes(Path.Combine(ResolveGuestRootForHelloStatic(), "hello_static"));
@@ -181,8 +189,9 @@ public class ExecveErrorMappingTests
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, mm, 0);
         sm.MountRootHostfs(ResolveGuestRootForHelloStatic());
         sm.MountStandardProc();
@@ -226,8 +235,9 @@ public class ExecveErrorMappingTests
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, mm, 0);
         sm.MountRootHostfs(ResolveGuestRootForHelloStatic());
         sm.MountStandardProc();
@@ -288,8 +298,9 @@ public class ExecveErrorMappingTests
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
 
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, mm, 0);
         sm.MountRootHostfs(ResolveGuestRootForHelloStatic());
         sm.MountStandardProc();

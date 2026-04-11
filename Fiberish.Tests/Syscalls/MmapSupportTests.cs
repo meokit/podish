@@ -207,9 +207,7 @@ public class MmapSupportTests
 
         var payload = new byte[1] { 0x42 };
         Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(secondPage, true, env.Engine));
-#pragma warning disable CS0618
-        env.Engine.MemWrite(secondPage, payload);
-#pragma warning restore CS0618
+        Assert.True(env.Engine.CopyToUser(secondPage, payload));
         Assert.True(env.Engine.IsDirty(secondPage));
 
         var vma = env.Vma.FindVmArea(baseAddr);
@@ -492,10 +490,12 @@ public class MmapSupportTests
 
     private sealed class TestEnv : IDisposable
     {
+        private readonly TestRuntimeFactory _runtime = new();
+
         public TestEnv()
         {
-            Engine = new Engine();
-            Vma = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Vma = _runtime.CreateAddressSpace();
             Engine.PageFaultResolver = (addr, isWrite) => Vma.HandleFault(addr, isWrite, Engine);
             SyscallManager = new SyscallManager(Engine, Vma, 0);
 

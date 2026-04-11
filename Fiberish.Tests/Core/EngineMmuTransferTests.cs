@@ -18,7 +18,8 @@ public class EngineMmuTransferTests
     [Fact]
     public void DetachThenAttach_RestoresMappings_AndConsumesHandle()
     {
-        using var engine = new Engine();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
         const uint addr = 0x00400000;
         var perms = (byte)(Protection.Read | Protection.Write);
         var page = engine.AllocatePage(addr, perms);
@@ -44,11 +45,12 @@ public class EngineMmuTransferTests
     [Fact]
     public void ShareMmuFrom_UsesSameMmuIdentity()
     {
-        using var parent = new Engine();
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
         var sharedId = parent.CurrentMmuIdentity;
         Assert.Equal(1, Engine.GetAttachmentCount(sharedId));
 
-        using (var child = new Engine())
+        using (var child = runtime.CreateEngine())
         {
             child.ShareMmuFrom(parent);
             Assert.Equal(parent.CurrentMmuIdentity, child.CurrentMmuIdentity);
@@ -61,7 +63,8 @@ public class EngineMmuTransferTests
     [Fact]
     public void SharedClone_ReusesSharedCodeCache()
     {
-        using var parent = new Engine();
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
         InstallSimpleCode(parent);
         WarmSimpleCode(parent);
 
@@ -83,7 +86,8 @@ public class EngineMmuTransferTests
     [Fact]
     public void SharedClone_ResetAllCodeCache_InvalidatesSharedCore()
     {
-        using var parent = new Engine();
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
         InstallSimpleCode(parent);
         WarmSimpleCode(parent);
 
@@ -99,7 +103,8 @@ public class EngineMmuTransferTests
     [Fact]
     public void SharedClone_ResetAllCodeCache_ForcesParentToRehydrateBlocks()
     {
-        using var parent = new Engine();
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
         InstallSimpleCode(parent);
         WarmSimpleCode(parent);
 
@@ -120,7 +125,8 @@ public class EngineMmuTransferTests
     [Fact]
     public void SharedClone_ResetCodeCacheByRange_AndMemUnmap_InvalidateSharedCore()
     {
-        using var parent = new Engine();
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
         InstallSimpleCode(parent);
         WarmSimpleCode(parent);
 
@@ -141,7 +147,8 @@ public class EngineMmuTransferTests
     [Fact]
     public void ResetCodeCacheByRange_ReusesInvalidatedBlock_WhenCodeUnchanged()
     {
-        using var engine = new Engine();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
         InstallSimpleCode(engine);
         WarmSimpleCode(engine);
 
@@ -160,7 +167,8 @@ public class EngineMmuTransferTests
     [Fact]
     public void ResetCodeCacheByRange_OnTrailingPage_InvalidatesCrossPageBlock()
     {
-        using var engine = new Engine();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
         InstallCrossPageCode(engine);
         WarmSimpleCode(engine, CrossPageCodeAddr);
 
@@ -180,7 +188,8 @@ public class EngineMmuTransferTests
     [Fact]
     public void DetachAndReattach_PreservesOriginalCoreCodeCache()
     {
-        using var engine = new Engine();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
         InstallSimpleCode(engine);
         WarmSimpleCode(engine);
 
@@ -202,7 +211,8 @@ public class EngineMmuTransferTests
     [Fact]
     public void ForkedOrClonedMmu_StartsWithEmptyCodeCache()
     {
-        using var parent = new Engine();
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
         InstallSimpleCode(parent);
         WarmSimpleCode(parent);
         Assert.True(parent.GetBlockCount() > 0);
@@ -216,7 +226,7 @@ public class EngineMmuTransferTests
             Assert.True(forked.GetBlockCount() > 0);
         }
 
-        using var freshEngine = new Engine();
+        using var freshEngine = runtime.CreateEngine();
         using var cloned = parent.CurrentMmu.CloneSkipExternal();
         freshEngine.ReplaceMmu(cloned);
         Assert.Equal(0, freshEngine.GetBlockCount());
@@ -226,7 +236,8 @@ public class EngineMmuTransferTests
     [Fact]
     public void DisposingSharedPeer_DoesNotCorruptSharedCodeCache()
     {
-        using var parent = new Engine();
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
         InstallSimpleCode(parent);
         WarmSimpleCode(parent);
         var warmedBlockCount = parent.GetBlockCount();
@@ -247,7 +258,8 @@ public class EngineMmuTransferTests
     [Fact]
     public void SharedClone_ResetMemory_ClearsMappingsAndSharedCodeCache()
     {
-        using var parent = new Engine();
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
         InstallSimpleCode(parent);
         WarmSimpleCode(parent);
 
@@ -262,8 +274,9 @@ public class EngineMmuTransferTests
     [Fact]
     public void AddressSpaceHandle_BindsSharedClone_AndRejectsForkedMmu()
     {
-        using var parent = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         mm.BindOrAssertAddressSpaceHandle(parent);
 
         using var shared = parent.Clone(true);
@@ -277,15 +290,16 @@ public class EngineMmuTransferTests
     [Fact]
     public void AddressSpaceHandle_DetachFromSharedEngine_CreatesNewIdentity()
     {
-        using var parent = new Engine();
-        var sharedMm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
+        var sharedMm = runtime.CreateAddressSpace();
         sharedMm.BindOrAssertAddressSpaceHandle(parent);
         var sharedIdentity = sharedMm.AddressSpaceIdentity;
 
         using var child = parent.Clone(true);
         Assert.Equal(sharedIdentity, child.CurrentMmuIdentity);
 
-        var detachedMm = new VMAManager();
+        var detachedMm = runtime.CreateAddressSpace();
         detachedMm.BindAddressSpaceHandle(ProcessAddressSpaceHandle.DetachFromSharedEngine(child));
 
         Assert.Equal(detachedMm.AddressSpaceIdentity, child.CurrentMmuIdentity);
@@ -426,6 +440,9 @@ public class EngineMmuTransferTests
 
     private sealed class TestSuperBlock : SuperBlock
     {
+        public TestSuperBlock() : base(null, new MemoryRuntimeContext())
+        {
+        }
     }
 
     private class TestInode : Inode

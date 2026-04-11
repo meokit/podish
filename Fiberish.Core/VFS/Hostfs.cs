@@ -11,7 +11,8 @@ namespace Fiberish.VFS;
 
 public class Hostfs : FileSystem
 {
-    public Hostfs(DeviceNumberManager? devManager = null) : base(devManager)
+    public Hostfs(DeviceNumberManager? devManager = null, MemoryRuntimeContext? memoryContext = null)
+        : base(devManager, memoryContext)
     {
         Name = "hostfs";
     }
@@ -19,7 +20,7 @@ public class Hostfs : FileSystem
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
         var opts = HostfsMountOptions.Parse(data as string);
-        var sb = new HostSuperBlock(fsType, devName, opts, DevManager); // devName is the root path on host
+        var sb = new HostSuperBlock(fsType, devName, opts, DevManager, MemoryContext); // devName is the root path on host
         var rootDentry = sb.GetDentry(devName, FsName.Empty, null) ??
                          throw new FileNotFoundException("Root path not found", devName);
         sb.Root = rootDentry;
@@ -48,7 +49,8 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
     private ulong _nextIno = 1;
 
     public HostSuperBlock(FileSystemType type, string hostRoot, HostfsMountOptions options,
-        DeviceNumberManager? devManager = null) : base(devManager)
+        DeviceNumberManager? devManager = null, MemoryRuntimeContext? memoryContext = null)
+        : base(devManager, memoryContext ?? new MemoryRuntimeContext())
     {
         Type = type;
         HostRoot = NormalizeHostPath(hostRoot);

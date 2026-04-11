@@ -102,7 +102,7 @@ public class PathPinSyscallTests
         var dir = new Dentry(FsName.FromString("isolated"), null, root, root.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
 
-        var child = env.SyscallManager.Clone(new VMAManager(), false, false);
+        var child = env.SyscallManager.Clone(new VMAManager(env.Vma.MemoryContext), false, false);
         try
         {
             child.UpdateCurrentWorkingDirectory(new PathLocation(dir, env.SyscallManager.Root.Mount), "CloneNoFs");
@@ -124,7 +124,7 @@ public class PathPinSyscallTests
         var dir = new Dentry(FsName.FromString("shared"), null, root, root.SuperBlock);
         rootInode.Mkdir(dir, 0x1ED, 0, 0);
 
-        var child = env.SyscallManager.Clone(new VMAManager(), false, true);
+        var child = env.SyscallManager.Clone(new VMAManager(env.Vma.MemoryContext), false, true);
         child.UpdateCurrentWorkingDirectory(new PathLocation(dir, env.SyscallManager.Root.Mount), "CloneFs");
         Assert.Same(dir, child.CurrentWorkingDirectory.Dentry);
         Assert.Same(dir, env.SyscallManager.CurrentWorkingDirectory.Dentry);
@@ -134,10 +134,12 @@ public class PathPinSyscallTests
 
     private sealed class TestEnv : IDisposable
     {
+        private readonly TestRuntimeFactory _runtime = new();
+
         public TestEnv()
         {
-            Engine = new Engine();
-            Vma = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Vma = _runtime.CreateAddressSpace();
             SyscallManager = new SyscallManager(Engine, Vma, 0);
 
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;

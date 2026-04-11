@@ -11,6 +11,8 @@ namespace Fiberish.Tests.VFS;
 
 public class LayerSilkOverlayTests
 {
+    private readonly TestRuntimeFactory _runtime = new();
+
     private static byte[] Utf8(string value) => Encoding.UTF8.GetBytes(value);
 
     [Fact]
@@ -25,8 +27,8 @@ public class LayerSilkOverlayTests
             index.AddEntry(new LayerIndexEntry("/etc/os-release", InodeType.File, 0x1A4, Size: (ulong)payload.Length,
                 InlineData: payload));
 
-            using var engine = new Engine();
-            var sm = new SyscallManager(engine, new VMAManager(), 0);
+            using var engine = _runtime.CreateEngine();
+            var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
 
             var layerType = FileSystemRegistry.Get("layerfs")!;
             var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(layerType, 0, "test-lower",
@@ -87,8 +89,8 @@ public class LayerSilkOverlayTests
             index.AddEntry(new LayerIndexEntry("/etc/os-release", InodeType.File, 0x1A4, Size: (ulong)payload.Length,
                 InlineData: payload));
 
-            using var engine = new Engine();
-            var sm = new SyscallManager(engine, new VMAManager(), 0);
+            using var engine = _runtime.CreateEngine();
+            var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
 
             var layerType = FileSystemRegistry.Get("layerfs")!;
             var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(layerType, 0, "test-lower",
@@ -149,9 +151,9 @@ public class LayerSilkOverlayTests
                 InlineData: busyboxPayload));
             index.AddEntry(new LayerIndexEntry("/bin/ash", InodeType.Symlink, 0x1FF, SymlinkTarget: "/bin/busybox"));
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -180,9 +182,9 @@ public class LayerSilkOverlayTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -222,9 +224,9 @@ public class LayerSilkOverlayTests
                 Size: 5,
                 InlineData: Encoding.UTF8.GetBytes("world")));
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -241,9 +243,9 @@ public class LayerSilkOverlayTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -280,9 +282,9 @@ public class LayerSilkOverlayTests
                 Size: 3,
                 InlineData: Encoding.UTF8.GetBytes("foo")));
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -300,9 +302,9 @@ public class LayerSilkOverlayTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -341,9 +343,9 @@ public class LayerSilkOverlayTests
                 Size: (ulong)payload.Length,
                 InlineData: payload));
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -361,9 +363,9 @@ public class LayerSilkOverlayTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -400,9 +402,9 @@ public class LayerSilkOverlayTests
             index.AddEntry(new LayerIndexEntry("/dev", InodeType.Directory, 0x1ED));
             const uint rdev = 0x0103;
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -424,9 +426,9 @@ public class LayerSilkOverlayTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -458,9 +460,9 @@ public class LayerSilkOverlayTests
             var index = new LayerIndex();
             index.AddEntry(new LayerIndexEntry("/run", InodeType.Directory, 0x1ED));
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -481,9 +483,9 @@ public class LayerSilkOverlayTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -520,9 +522,9 @@ public class LayerSilkOverlayTests
                 Size: 7,
                 InlineData: Encoding.UTF8.GetBytes("busybox")));
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -545,9 +547,9 @@ public class LayerSilkOverlayTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -593,9 +595,9 @@ public class LayerSilkOverlayTests
                 Size: 4,
                 InlineData: Encoding.UTF8.GetBytes("repo")));
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,
@@ -616,9 +618,9 @@ public class LayerSilkOverlayTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var sm = new SyscallManager(engine, new VMAManager(), 0);
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
                 var layerType = FileSystemRegistry.Get("layerfs")!;
                 var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
                     layerType,

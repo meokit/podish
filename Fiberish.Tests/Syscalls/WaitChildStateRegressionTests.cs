@@ -175,13 +175,16 @@ public class WaitChildStateRegressionTests
         private static readonly MethodInfo DrainEventsMethod =
             typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
+        private readonly TestRuntimeFactory _parentRuntime = new();
+        private readonly TestRuntimeFactory _childRuntime = new();
+
         public WaitEnv()
         {
             Scheduler = new KernelScheduler();
 
 
-            ParentEngine = new Engine();
-            ParentMem = new VMAManager();
+            ParentEngine = _parentRuntime.CreateEngine();
+            ParentMem = _parentRuntime.CreateAddressSpace();
             ParentSys = new SyscallManager(ParentEngine, ParentMem, 0);
             Parent = new Process(600, ParentMem, ParentSys)
             {
@@ -192,8 +195,8 @@ public class WaitChildStateRegressionTests
             ParentTask = new FiberTask(600, Parent, ParentEngine, Scheduler);
             ParentEngine.Owner = ParentTask;
 
-            ChildEngine = new Engine();
-            ChildMem = new VMAManager();
+            ChildEngine = _childRuntime.CreateEngine();
+            ChildMem = _childRuntime.CreateAddressSpace();
             ChildSys = new SyscallManager(ChildEngine, ChildMem, 0);
             Child = new Process(601, ChildMem, ChildSys)
             {

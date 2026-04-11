@@ -9,6 +9,8 @@ namespace Fiberish.Tests.VFS;
 
 public class HostMappedPageCacheGeometryTests
 {
+    private readonly TestRuntimeFactory _runtime = new();
+
     private static readonly HostMemoryMapGeometry Geometry16K =
         new(LinuxConstants.PageSize, 16384, 16384, true,
             true);
@@ -25,8 +27,9 @@ public class HostMappedPageCacheGeometryTests
 
         try
         {
-            using var engine = new Engine(new MemoryRuntimeContext(Geometry16K));
-            var mm = new VMAManager();
+            var runtime = new MemoryRuntimeContext(Geometry16K);
+            using var engine = new Engine(runtime);
+            var mm = new VMAManager(runtime);
             var sm = new SyscallManager(engine, mm, 0);
             sm.MountRootHostfs(root);
             var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
@@ -77,8 +80,9 @@ public class HostMappedPageCacheGeometryTests
 
         try
         {
-            using var engine = new Engine(new MemoryRuntimeContext(Geometry16K));
-            var mm = new VMAManager();
+            var runtime = new MemoryRuntimeContext(Geometry16K);
+            using var engine = new Engine(runtime);
+            var mm = new VMAManager(runtime);
             var sm = new SyscallManager(engine, mm, 0);
             sm.MountRootHostfs(root, "ro");
             var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
@@ -109,9 +113,10 @@ public class HostMappedPageCacheGeometryTests
 
         try
         {
-            using (var engine = new Engine(new MemoryRuntimeContext(Geometry16K)))
             {
-                var mm = new VMAManager();
+                var runtime = new MemoryRuntimeContext(Geometry16K);
+                using var engine = new Engine(runtime);
+                var mm = new VMAManager(runtime);
                 var sm = CreateTmpfsRoot(engine, mm);
                 var mountLoc = MountSilkfs(sm, silkRoot);
 
@@ -125,9 +130,10 @@ public class HostMappedPageCacheGeometryTests
                 sm.Close();
             }
 
-            using (var engine = new Engine(new MemoryRuntimeContext(Geometry16K)))
             {
-                var mm = new VMAManager();
+                var runtime = new MemoryRuntimeContext(Geometry16K);
+                using var engine = new Engine(runtime);
+                var mm = new VMAManager(runtime);
                 var sm = CreateTmpfsRoot(engine, mm);
                 MountSilkfs(sm, silkRoot);
                 var fileLoc = sm.PathWalkWithFlags("/mnt/mapped.bin", LookupFlags.FollowSymlink);
@@ -156,9 +162,10 @@ public class HostMappedPageCacheGeometryTests
                 sm.Close();
             }
 
-            using (var engine = new Engine(new MemoryRuntimeContext(Geometry16K)))
             {
-                var mm = new VMAManager();
+                var runtime = new MemoryRuntimeContext(Geometry16K);
+                using var engine = new Engine(runtime);
+                var mm = new VMAManager(runtime);
                 var sm = CreateTmpfsRoot(engine, mm);
                 MountSilkfs(sm, silkRoot);
                 var fileLoc = sm.PathWalkWithFlags("/mnt/mapped.bin", LookupFlags.FollowSymlink);
@@ -196,8 +203,8 @@ public class HostMappedPageCacheGeometryTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             sm.MountRootHostfs(root);
             var loc = sm.PathWalkWithFlags("/tail.bin", LookupFlags.FollowSymlink);

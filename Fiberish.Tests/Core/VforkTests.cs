@@ -13,7 +13,7 @@ public class VforkTests
 {
     private Process CreateMockProcess(int pid)
     {
-        return new Process(pid, null!, null!);
+        return TestRuntimeFactory.CreateProcess(pid);
     }
 
     /// <summary>

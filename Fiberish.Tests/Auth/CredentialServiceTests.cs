@@ -1,5 +1,6 @@
 using Fiberish.Auth.Cred;
 using Fiberish.Core;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Xunit;
@@ -115,7 +116,7 @@ public class CredentialServiceTests
 
     private class TestProcess : Process
     {
-        public TestProcess(int uid, int gid) : base(1, null!, null!)
+        public TestProcess(int uid, int gid) : base(1, new VMAManager(new MemoryRuntimeContext()), null!)
         {
             UID = uid;
             GID = gid;

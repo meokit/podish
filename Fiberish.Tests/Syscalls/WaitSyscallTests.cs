@@ -1072,10 +1072,12 @@ public class WaitSyscallTests
         private static readonly FieldInfo OwnerThreadIdField =
             typeof(KernelScheduler).GetField("_ownerThreadId", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
+        private readonly TestRuntimeFactory _runtime = new();
+
         public TestEnv()
         {
-            Engine = new Engine();
-            Vma = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Vma = _runtime.CreateAddressSpace();
             Process = new Process(100, Vma, null!);
             Scheduler = new KernelScheduler();
             Task = new FiberTask(100, Process, Engine, Scheduler);

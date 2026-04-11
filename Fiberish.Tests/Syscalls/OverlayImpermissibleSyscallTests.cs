@@ -96,11 +96,12 @@ public class OverlayImpermissibleSyscallTests
     private sealed class TestEnv : IDisposable
     {
         private readonly HashSet<uint> _mappedPages = [];
+        private readonly TestRuntimeFactory _runtime = new();
 
         public TestEnv()
         {
-            Engine = new Engine();
-            Vma = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Vma = _runtime.CreateAddressSpace();
             Process = new Process(100, Vma, null!)
             {
                 UID = 1000,

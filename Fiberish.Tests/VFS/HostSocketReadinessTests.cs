@@ -439,10 +439,12 @@ public class HostSocketReadinessTests
 
     private sealed class ReadinessEnv : IDisposable
     {
+        private readonly TestRuntimeFactory _runtime = new();
+
         public ReadinessEnv()
         {
-            Engine = new Engine();
-            Vma = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Vma = _runtime.CreateAddressSpace();
             Process = new Process(200, Vma, null!);
             Scheduler = new KernelScheduler();
             Task = new FiberTask(200, Process, Engine, Scheduler);

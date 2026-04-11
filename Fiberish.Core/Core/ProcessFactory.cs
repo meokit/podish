@@ -91,8 +91,8 @@ public static class ProcessFactory
         scheduler.AssertSchedulerThread();
 
         var pid = scheduler.AllocateTaskId();
-        var mem = new VMAManager();
-        var engine = new Engine();
+        var mem = new VMAManager(templateSyscalls.MemoryContext);
+        var engine = new Engine(templateSyscalls.MemoryContext);
         var syscalls = templateSyscalls.Clone(mem, false, true);
         syscalls.CurrentSyscallEngine = engine;
         syscalls.RegisterEngine(engine);

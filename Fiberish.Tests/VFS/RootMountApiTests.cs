@@ -11,8 +11,9 @@ public class RootMountApiTests
     [Fact]
     public void MountRoot_AllowsExternalSuperblockAndSubtreeRoot()
     {
-        using var engine = new Engine();
-        var sm = new SyscallManager(engine, new VMAManager(), 0);
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var sm = new SyscallManager(engine, runtime.CreateAddressSpace(), 0);
 
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
         var sb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);

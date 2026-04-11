@@ -183,11 +183,12 @@ public class RawPathnameSyscallTests
     {
         private uint _nextAddr = 0x10000;
         private readonly List<string> _tempDirs = [];
+        private readonly TestRuntimeFactory _runtime = new();
 
         public TestEnv()
         {
-            Engine = new Engine();
-            Memory = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Memory = _runtime.CreateAddressSpace();
             Engine.PageFaultResolver = (addr, isWrite) => Memory.HandleFault(addr, isWrite, Engine);
             Process = new Process(100, Memory, null!);
             Scheduler = new KernelScheduler();

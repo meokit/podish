@@ -62,8 +62,9 @@ public class CowForkCloneTests
     public void ForkClone_PrivateAnonymous_NoEagerCopyUntilWrite()
     {
         using var pageScope = PageManager.BeginIsolatedScope();
-        using var parentEngine = new Engine();
-        var parentMm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var parentEngine = runtime.CreateEngine();
+        var parentMm = runtime.CreateAddressSpace();
         parentEngine.PageFaultResolver =
             (addr, isWrite) => parentMm.HandleFaultDetailed(addr, isWrite, parentEngine) == FaultResult.Handled;
 
@@ -107,8 +108,9 @@ public class CowForkCloneTests
     public void PrivateAnonymousReadFault_MapsSharedReadOnlyZeroPage()
     {
         using var pageScope = PageManager.BeginIsolatedScope();
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         engine.PageFaultResolver =
             (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
 
@@ -153,8 +155,9 @@ public class CowForkCloneTests
     public void PrefaultRange_WithWriteIntent_CreatesPrivatePageWithoutSharedSourceMaterialization()
     {
         using var pageScope = PageManager.BeginIsolatedScope();
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         engine.PageFaultResolver =
             (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
 
@@ -184,8 +187,9 @@ public class CowForkCloneTests
     public void ForkClone_PrivateAnonymous_AlreadyPrivatePage_SharesUntilWriteWithoutExtraCloneAllocation()
     {
         using var pageScope = PageManager.BeginIsolatedScope();
-        using var parentEngine = new Engine();
-        var parentMm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var parentEngine = runtime.CreateEngine();
+        var parentMm = runtime.CreateAddressSpace();
         parentEngine.PageFaultResolver =
             (addr, isWrite) => parentMm.HandleFaultDetailed(addr, isWrite, parentEngine) == FaultResult.Handled;
 
@@ -234,8 +238,9 @@ public class CowForkCloneTests
     public void ForkClone_PrivateAnonymous_AfterProtNoneEviction_ChildWriteStillSplitsCow()
     {
         using var pageScope = PageManager.BeginIsolatedScope();
-        using var parentEngine = new Engine();
-        var parentMm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var parentEngine = runtime.CreateEngine();
+        var parentMm = runtime.CreateAddressSpace();
         parentEngine.PageFaultResolver =
             (addr, isWrite) => parentMm.HandleFaultDetailed(addr, isWrite, parentEngine) == FaultResult.Handled;
 
@@ -296,13 +301,20 @@ public class CowForkCloneTests
     {
         public TestEnv()
         {
-            ParentEngine = new Engine();
-            ParentMm = new VMAManager();
+            var runtime = new TestRuntimeFactory();
+            ParentEngine = runtime.CreateEngine();
+            ParentMm = runtime.CreateAddressSpace();
             ParentEngine.PageFaultResolver =
                 (addr, isWrite) => ParentMm.HandleFaultDetailed(addr, isWrite, ParentEngine) == FaultResult.Handled;
 
-            var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "cow-fork-clone", null);
+            var fsType = new FileSystemType
+            {
+                Name = "tmpfs",
+                Factory = static _ => new Tmpfs(),
+                FactoryWithContext = static (_, memoryContext) => new Tmpfs(memoryContext: memoryContext)
+            };
+            var sb = fsType.CreateAnonymousFileSystem(runtime.MemoryContext).ReadSuper(fsType, 0, "cow-fork-clone",
+                null);
             var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             var dentry = new Dentry(FsName.FromString("cow.bin"), null, sb.Root, sb);
             sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);

@@ -292,11 +292,12 @@ public class MknodAndXattrSyscallTests
     private sealed class TestEnv : IDisposable
     {
         private readonly string? _tempLowerDir;
+        private readonly TestRuntimeFactory _runtime = new();
 
         public TestEnv(bool useOverlayRoot = false)
         {
-            Engine = new Engine();
-            Vma = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Vma = _runtime.CreateAddressSpace();
             SyscallManager = new SyscallManager(Engine, Vma, 0);
 
             if (useOverlayRoot)

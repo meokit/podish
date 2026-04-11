@@ -10,7 +10,7 @@ public class SleepTests
 {
     private Process CreateMockProcess(int pid)
     {
-        return new Process(pid, null!, null!);
+        return TestRuntimeFactory.CreateProcess(pid);
     }
 
     [Fact(Timeout = 5000)]

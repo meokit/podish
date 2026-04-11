@@ -14,8 +14,9 @@ public class PageFaultOomTests
     {
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         var oldQuota = PageManager.MemoryQuotaBytes;
         PageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
         try
@@ -39,8 +40,9 @@ public class PageFaultOomTests
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var oldQuota = PageManager.MemoryQuotaBytes;
 
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, mm, 0);
         try
         {

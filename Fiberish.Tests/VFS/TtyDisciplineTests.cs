@@ -1247,6 +1247,10 @@ public class TtyDisciplineTests
 
     private sealed class TestSuperBlock : SuperBlock
     {
+        public TestSuperBlock() : base(null, new MemoryRuntimeContext())
+        {
+        }
+
         public override Inode AllocInode()
         {
             throw new NotSupportedException();
@@ -1275,14 +1279,17 @@ public class TtyDisciplineTests
         _tty.SessionId = _task.Process.TGID;
         _tty.ForegroundPgrp = 200;
 
-        var fgProcess = new Process(200, new VMAManager(), new SyscallManager(new Engine(), new VMAManager(), 0))
+        var runtime = new TestRuntimeFactory();
+        using var fgEngine = runtime.CreateEngine();
+        var fgMemory = runtime.CreateAddressSpace();
+        var fgProcess = new Process(200, fgMemory, new SyscallManager(fgEngine, fgMemory, 0))
         {
             SID = _task.Process.SID,
             PGID = 200,
             ControllingTty = _tty
         };
         _taskContext.Scheduler.RegisterProcess(fgProcess);
-        var fgTask = new FiberTask(200, fgProcess, new Engine(), _taskContext.Scheduler);
+        var fgTask = new FiberTask(200, fgProcess, fgEngine, _taskContext.Scheduler);
 
         _tty.Hangup();
 
@@ -1398,8 +1405,9 @@ public class TtyDisciplineTests
 
         public TtyTaskContext()
         {
-            Engine = new Engine();
-            Memory = new VMAManager();
+            var runtime = new TestRuntimeFactory();
+            Engine = runtime.CreateEngine();
+            Memory = runtime.CreateAddressSpace();
             SyscallManager = new SyscallManager(Engine, Memory, 0);
             Scheduler = new KernelScheduler();
             Process = new Process(1234, Memory, SyscallManager);

@@ -12,7 +12,8 @@ public abstract class IndexedMemorySuperBlock : SuperBlock
     protected ulong _nextIno = 1;
     private readonly Dictionary<ulong, FsNameMap<Dentry>> _dentriesByParent = [];
 
-    protected IndexedMemorySuperBlock(FileSystemType type, DeviceNumberManager devManager) : base(devManager)
+    protected IndexedMemorySuperBlock(FileSystemType type, DeviceNumberManager devManager, MemoryRuntimeContext memoryContext)
+        : base(devManager, memoryContext)
     {
         Type = type;
     }

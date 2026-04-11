@@ -409,10 +409,12 @@ public class PipeTests
 
     private sealed class TestEnv : IDisposable
     {
+        private readonly TestRuntimeFactory _runtime = new();
+
         public TestEnv(bool attachTaskOwner = true)
         {
-            Engine = new Engine();
-            Vma = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Vma = _runtime.CreateAddressSpace();
             if (attachTaskOwner)
             {
                 Process = new Process(100, Vma, null!);

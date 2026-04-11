@@ -238,7 +238,8 @@ public class RtSignalTests
     public void ProcessSignal_Prefers_TaskWaitingInSigTimedWaitSet()
     {
         using var env = new TestEnv();
-        using var waiterEngine = new Engine();
+        var waiterRuntime = new TestRuntimeFactory();
+        using var waiterEngine = waiterRuntime.CreateEngine();
         var waiter = new FiberTask(101, env.Process, waiterEngine, env.Scheduler)
         {
             Status = FiberTaskStatus.Waiting
@@ -266,7 +267,8 @@ public class RtSignalTests
     public void ProcessSignal_Prefers_TaskWaitingInSigSuspend()
     {
         using var env = new TestEnv();
-        using var waiterEngine = new Engine();
+        var waiterRuntime = new TestRuntimeFactory();
+        using var waiterEngine = waiterRuntime.CreateEngine();
         var waiter = new FiberTask(101, env.Process, waiterEngine, env.Scheduler)
         {
             Status = FiberTaskStatus.Waiting
@@ -300,12 +302,14 @@ public class RtSignalTests
 
     private sealed class TestEnv : IDisposable
     {
+        private readonly TestRuntimeFactory _runtime = new();
+
         public TestEnv()
         {
             Scheduler = new KernelScheduler();
 
-            Engine = new Engine();
-            Process = new Process(100, new VMAManager(), null!);
+            Engine = _runtime.CreateEngine();
+            Process = new Process(100, _runtime.CreateAddressSpace(), null!);
             Scheduler.RegisterProcess(Process);
             Task = new FiberTask(100, Process, Engine, Scheduler);
         }

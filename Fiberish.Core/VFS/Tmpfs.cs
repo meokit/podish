@@ -1,10 +1,12 @@
+using Fiberish.Memory;
 using Fiberish.Native;
 
 namespace Fiberish.VFS;
 
 public class Tmpfs : FileSystem
 {
-    public Tmpfs(DeviceNumberManager? devManager = null) : base(devManager)
+    public Tmpfs(DeviceNumberManager? devManager = null, MemoryRuntimeContext? memoryContext = null)
+        : base(devManager, memoryContext)
     {
         Name = "tmpfs";
     }
@@ -12,7 +14,7 @@ public class Tmpfs : FileSystem
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
         var sizeLimitBytes = ParseSizeLimitBytes(data);
-        var sb = new TmpfsSuperBlock(fsType, DevManager, sizeLimitBytes);
+        var sb = new TmpfsSuperBlock(fsType, DevManager, sizeLimitBytes, MemoryContext);
         var rootInode = sb.AllocInode();
         rootInode.Type = InodeType.Directory;
         rootInode.Mode = 0x1FF;
@@ -94,8 +96,8 @@ public class TmpfsSuperBlock : IndexedMemorySuperBlock
 {
     private long _usedDataBytes;
 
-    public TmpfsSuperBlock(FileSystemType type, DeviceNumberManager devManager, long sizeLimitBytes = 0) : base(type,
-        devManager)
+    public TmpfsSuperBlock(FileSystemType type, DeviceNumberManager devManager, long sizeLimitBytes = 0,
+        MemoryRuntimeContext? memoryContext = null) : base(type, devManager, memoryContext ?? new MemoryRuntimeContext())
     {
         SizeLimitBytes = sizeLimitBytes;
     }

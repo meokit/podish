@@ -304,13 +304,15 @@ public enum InodeRefKind
 
 public abstract class FileSystem
 {
-    protected FileSystem(DeviceNumberManager? devManager)
+    protected FileSystem(DeviceNumberManager? devManager, MemoryRuntimeContext? memoryContext = null)
     {
         DevManager = devManager ?? new DeviceNumberManager();
+        MemoryContext = memoryContext ?? new MemoryRuntimeContext();
     }
 
     public string Name { get; set; } = "";
     protected DeviceNumberManager DevManager { get; }
+    public MemoryRuntimeContext MemoryContext { get; internal set; }
 
     public abstract SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data);
 }
@@ -321,6 +323,7 @@ public class FileSystemType
 
     public Func<DeviceNumberManager, FileSystem> Factory { get; init; } = _ =>
         throw new InvalidOperationException("FileSystem factory is not configured.");
+    public Func<DeviceNumberManager, MemoryRuntimeContext, FileSystem>? FactoryWithContext { get; init; }
 
     public FileSystem CreateFileSystem(DeviceNumberManager devManager)
     {
@@ -328,16 +331,31 @@ public class FileSystemType
         return Factory(devManager);
     }
 
-    [Obsolete(
-        "Use CreateFileSystem(DeviceNumberManager) for mounted filesystems or CreateAnonymousFileSystem() for isolated tests/exports.")]
-    public FileSystem CreateFileSystem()
+    public FileSystem CreateFileSystem(DeviceNumberManager devManager, MemoryRuntimeContext memoryContext)
     {
-        return CreateAnonymousFileSystem();
+        ArgumentNullException.ThrowIfNull(memoryContext);
+        var fileSystem = FactoryWithContext != null
+            ? FactoryWithContext(devManager, memoryContext)
+            : CreateFileSystem(devManager);
+        if (!ReferenceEquals(fileSystem.MemoryContext, memoryContext))
+            fileSystem.MemoryContext = memoryContext;
+        return fileSystem;
     }
 
     public FileSystem CreateAnonymousFileSystem()
     {
         return Factory(new DeviceNumberManager());
+    }
+
+    public FileSystem CreateAnonymousFileSystem(MemoryRuntimeContext memoryContext)
+    {
+        ArgumentNullException.ThrowIfNull(memoryContext);
+        var fileSystem = FactoryWithContext != null
+            ? FactoryWithContext(new DeviceNumberManager(), memoryContext)
+            : CreateAnonymousFileSystem();
+        if (!ReferenceEquals(fileSystem.MemoryContext, memoryContext))
+            fileSystem.MemoryContext = memoryContext;
+        return fileSystem;
     }
 }
 
@@ -350,10 +368,11 @@ public abstract class SuperBlock
 
     protected HashSet<Inode> AllInodes = [];
 
-    protected SuperBlock(DeviceNumberManager? devManager = null, MemoryRuntimeContext? memoryContext = null)
+    protected SuperBlock(DeviceNumberManager? devManager, MemoryRuntimeContext memoryContext)
     {
+        ArgumentNullException.ThrowIfNull(memoryContext);
         _devManager = devManager;
-        MemoryContext = memoryContext ?? MemoryRuntimeContext.Default;
+        MemoryContext = memoryContext;
         // 0 means anonymous (no real device)
         Dev = devManager?.Allocate() ?? 0;
     }

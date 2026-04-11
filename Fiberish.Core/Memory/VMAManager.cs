@@ -32,8 +32,15 @@ public class VMAManager
     private long _mapSequence;
     private int _sharedRefCount = 1;
 
+    public VMAManager(MemoryRuntimeContext memoryContext)
+    {
+        ArgumentNullException.ThrowIfNull(memoryContext);
+        MemoryContext = memoryContext;
+    }
+
     public PageManager PageMapping { get; } = new();
     internal ProcessAddressSpaceHandle? AddressSpaceHandle { get; private set; }
+    internal MemoryRuntimeContext MemoryContext { get; }
 
     internal nuint AddressSpaceIdentity => AddressSpaceHandle?.Identity ?? 0;
 
@@ -966,14 +973,14 @@ public class VMAManager
                 if (isShared)
                 {
                     // Linux models MAP_SHARED|MAP_ANONYMOUS with an internal shmem/tmpfs backing object.
-                    anonymousSharedFile = engine.MemoryContext.CreateSharedAnonymousMappingFile(len);
+                    anonymousSharedFile = MemoryContext.CreateSharedAnonymousMappingFile(len);
                     file = anonymousSharedFile;
                     sharedObj = ResolveCurrentFileMappingBacking(file)!.AcquireMappingRef();
                     fileMapping = new VmaFileMapping(file);
                 }
                 else if (isPrivate)
                 {
-                    sharedObj = engine.MemoryContext.AcquireZeroMappingRef();
+                    sharedObj = MemoryContext.AcquireZeroMappingRef();
                 }
             }
             else if (isShared)
@@ -1019,7 +1026,7 @@ public class VMAManager
 
     public VMAManager Clone()
     {
-        var newMM = new VMAManager();
+        var newMM = new VMAManager(MemoryContext);
         foreach (var vma in _vmas)
         {
             var cloned = vma.Clone();
@@ -1744,10 +1751,12 @@ public class VMAManager
         if (IsAnonymousPrivateZeroSource(vma))
         {
             var mapping = RequireVmMapping(vma);
-            if (!engine.MemoryContext.IsZeroAddressSpace(mapping))
+            if (!ReferenceEquals(engine.MemoryContext, MemoryContext))
+                throw new InvalidOperationException("Engine memory context does not match VMAManager memory context.");
+            if (!MemoryContext.IsZeroAddressSpace(mapping))
                 return FaultResult.Segv;
 
-            pagePtr = engine.MemoryContext.AcquireZeroMappingPage(pageIndex);
+            pagePtr = MemoryContext.AcquireZeroMappingPage(pageIndex);
             return pagePtr != IntPtr.Zero ? FaultResult.Handled : FaultResult.Oom;
         }
 

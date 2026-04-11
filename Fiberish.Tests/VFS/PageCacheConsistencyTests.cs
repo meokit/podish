@@ -10,6 +10,8 @@ namespace Fiberish.Tests.VFS;
 
 public class PageCacheConsistencyTests
 {
+    private readonly TestRuntimeFactory _runtime = new();
+
     [Fact]
     public void Overlay_LayerfsCopyUpBeforePrivateMmap_UsesUpperTmpfsMappingAndData()
     {
@@ -26,8 +28,8 @@ public class PageCacheConsistencyTests
             Assert.Equal(5, overlayInode.ReadToHost(null, file, direct, 0));
             Assert.Equal("hXYlo", Encoding.ASCII.GetString(direct));
 
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             const uint mapAddr = 0x4C000000;
 
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read,
@@ -63,8 +65,8 @@ public class PageCacheConsistencyTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             const uint mapAddr = 0x4D000000;
 
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
@@ -119,8 +121,8 @@ public class PageCacheConsistencyTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var file = OpenHostFile(root, "data.bin");
 
             const uint mapAddr = 0x45000000;
@@ -144,8 +146,8 @@ public class PageCacheConsistencyTests
     [Fact]
     public void Tmpfs_MapSharedDirtyPage_IsVisibleToRead_BeforeWriteback()
     {
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        using var engine = _runtime.CreateEngine();
+        var mm = _runtime.CreateAddressSpace();
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
         var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
@@ -173,7 +175,7 @@ public class PageCacheConsistencyTests
         var runtime = new MemoryRuntimeContext();
         using var writeEngine = new Engine(runtime);
         using var readEngine = new Engine(runtime);
-        var writeMm = new VMAManager();
+        var writeMm = new VMAManager(runtime);
         writeMm.BindOrAssertAddressSpaceHandle(writeEngine);
 
         const uint writeAddr = 0x47400000;
@@ -237,8 +239,8 @@ public class PageCacheConsistencyTests
             Assert.NotNull(fileDentry);
             var file = new LinuxFile(fileDentry!, FileFlags.O_RDWR, null!);
 
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             const uint mapAddr = 0x47000000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
                 MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
@@ -267,8 +269,8 @@ public class PageCacheConsistencyTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var file = OpenHostFile(root, "data.bin");
 
             const uint mapAddr = 0x48000000;
@@ -293,8 +295,8 @@ public class PageCacheConsistencyTests
     [Fact]
     public void Tmpfs_Write_IsVisibleToMappedPage_Immediately()
     {
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        using var engine = _runtime.CreateEngine();
+        var mm = _runtime.CreateAddressSpace();
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
         var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
@@ -319,8 +321,8 @@ public class PageCacheConsistencyTests
     [Fact]
     public void Tmpfs_WriteBeforeMmap_UsesSamePageCacheObject()
     {
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        using var engine = _runtime.CreateEngine();
+        var mm = _runtime.CreateAddressSpace();
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
         var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
@@ -350,8 +352,8 @@ public class PageCacheConsistencyTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
 
@@ -421,8 +423,8 @@ public class PageCacheConsistencyTests
             Assert.NotNull(fileDentry);
             var file = new LinuxFile(fileDentry!, FileFlags.O_RDWR, null!);
 
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             const uint mapAddr = 0x4A000000;
             mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
                 MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);

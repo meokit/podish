@@ -1,3 +1,4 @@
+using Fiberish.Memory;
 using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Native;
@@ -371,7 +372,8 @@ public class DevPtsSuperBlock : SuperBlock
     private readonly Dictionary<int, Dentry> _slaveDentries = new();
 
     public DevPtsSuperBlock(PtyManager ptyManager, ISignalBroadcaster broadcaster, ILogger logger,
-        DeviceNumberManager? devManager = null) : base(devManager)
+        DeviceNumberManager? devManager = null, MemoryRuntimeContext? memoryContext = null)
+        : base(devManager, memoryContext ?? new MemoryRuntimeContext())
     {
         _ptyManager = ptyManager;
         _broadcaster = broadcaster;
@@ -469,7 +471,8 @@ public class DevPtsFileSystem : FileSystem
     private readonly PtyManager _ptyManager;
 
     public DevPtsFileSystem(DeviceNumberManager? devManager = null, PtyManager? ptyManager = null,
-        ISignalBroadcaster? broadcaster = null, ILogger? logger = null) : base(devManager)
+        ISignalBroadcaster? broadcaster = null, ILogger? logger = null,
+        MemoryRuntimeContext? memoryContext = null) : base(devManager, memoryContext)
     {
         Name = "devpts";
         _logger = logger ?? NullLogger.Instance;
@@ -479,7 +482,7 @@ public class DevPtsFileSystem : FileSystem
 
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
-        return new DevPtsSuperBlock(_ptyManager, _broadcaster, _logger, DevManager);
+        return new DevPtsSuperBlock(_ptyManager, _broadcaster, _logger, DevManager, MemoryContext);
     }
 }
 

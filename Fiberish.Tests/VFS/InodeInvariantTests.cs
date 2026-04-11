@@ -1,3 +1,4 @@
+using Fiberish.Memory;
 using Fiberish.VFS;
 using Xunit;
 
@@ -329,7 +330,7 @@ public class InodeInvariantTests
 
     private sealed class TestSuperBlock : SuperBlock
     {
-        public TestSuperBlock()
+        public TestSuperBlock() : base(null, new MemoryRuntimeContext())
         {
             Type = new FileSystemType
             {

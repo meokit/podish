@@ -390,11 +390,12 @@ public class CrossMountBehaviorTests
     private sealed class TestEnv : IDisposable
     {
         private uint _nextUserPageAddr = 0x40000;
+        private readonly TestRuntimeFactory _runtime = new();
 
         public TestEnv()
         {
-            Engine = new Engine();
-            Vma = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Vma = _runtime.CreateAddressSpace();
             SyscallManager = new SyscallManager(Engine, Vma, 0);
 
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;

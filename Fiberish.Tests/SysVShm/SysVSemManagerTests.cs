@@ -173,11 +173,12 @@ public class SysVSemManagerTests
                 BindingFlags.Instance | BindingFlags.NonPublic)!;
 
         private readonly KernelScheduler _kernel;
+        private readonly TestRuntimeFactory _runtime = new();
 
         public TestContext(SysVSemManager? manager = null, int processId = 2000)
         {
-            Engine = new Engine();
-            Vma = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Vma = _runtime.CreateAddressSpace();
             Manager = manager ?? new SysVSemManager();
 
             _kernel = new KernelScheduler();

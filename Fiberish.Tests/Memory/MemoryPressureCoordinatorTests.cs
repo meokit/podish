@@ -103,8 +103,9 @@ public class MemoryPressureCoordinatorTests
     {
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         engine.PageFaultResolver =
             (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
 
@@ -134,8 +135,9 @@ public class MemoryPressureCoordinatorTests
     {
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         engine.PageFaultResolver =
             (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
 

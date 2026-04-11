@@ -11,7 +11,7 @@ public class AsyncWaitQueueTests
     public void RegisterCancelable_DisposeBeforeSignal_DoesNotInvokeContinuation()
     {
         var scheduler = new KernelScheduler();
-        var process = new Process(100, null!, null!);
+        var process = TestRuntimeFactory.CreateProcess(100);
         scheduler.RegisterProcess(process);
 
         var queue = new AsyncWaitQueue(scheduler);
@@ -41,7 +41,7 @@ public class AsyncWaitQueueTests
     public void RegisterCancelable_DisposeOneOfMultiple_OnlyActiveContinuationRuns()
     {
         var scheduler = new KernelScheduler();
-        var process = new Process(200, null!, null!);
+        var process = TestRuntimeFactory.CreateProcess(200);
         scheduler.RegisterProcess(process);
 
         var queue = new AsyncWaitQueue(scheduler);
@@ -77,7 +77,7 @@ public class AsyncWaitQueueTests
     {
         var scheduler = new KernelScheduler();
         
-        var process = new Process(300, null!, null!);
+        var process = TestRuntimeFactory.CreateProcess(300);
         scheduler.RegisterProcess(process);
 
         var queue = new AsyncWaitQueue(scheduler);
@@ -109,7 +109,7 @@ public class AsyncWaitQueueTests
     {
         var scheduler = new KernelScheduler();
         
-        var process = new Process(400, null!, null!);
+        var process = TestRuntimeFactory.CreateProcess(400);
         scheduler.RegisterProcess(process);
 
         var queue = new AsyncWaitQueue(scheduler);
@@ -147,7 +147,7 @@ public class AsyncWaitQueueTests
     public void AsyncWaitQueue_BoundQueue_NonSchedulerThreadMutation_Throws()
     {
         var scheduler = new KernelScheduler();
-        var process = new Process(500, null!, null!);
+        var process = TestRuntimeFactory.CreateProcess(500);
         scheduler.RegisterProcess(process);
 
         var queue = new AsyncWaitQueue(scheduler);
@@ -194,7 +194,7 @@ public class AsyncWaitQueueTests
     public void Reset_MustNotDropAlreadyRegisteredWaiters()
     {
         var scheduler = new KernelScheduler();
-        var process = new Process(600, null!, null!);
+        var process = TestRuntimeFactory.CreateProcess(600);
         scheduler.RegisterProcess(process);
 
         var queue = new AsyncWaitQueue(scheduler);

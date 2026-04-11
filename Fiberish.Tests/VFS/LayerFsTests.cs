@@ -12,6 +12,8 @@ namespace Fiberish.Tests.VFS;
 
 public class LayerFsTests
 {
+    private readonly TestRuntimeFactory _runtime = new();
+
     [Fact]
     public void Lookup_IsCaseSensitive()
     {
@@ -370,8 +372,8 @@ public class LayerFsTests
             "layer",
             new LayerMountOptions { Root = rootNode });
 
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        using var engine = _runtime.CreateEngine();
+        var mm = _runtime.CreateAddressSpace();
         var dentry = sb.Root.Inode!.Lookup("mapped.txt");
         Assert.NotNull(dentry);
         sb.Root.CacheChild(dentry!, "LayerFsTests.MmapHold.cache");
@@ -407,8 +409,8 @@ public class LayerFsTests
             "layer",
             new LayerMountOptions { Root = rootNode });
 
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        using var engine = _runtime.CreateEngine();
+        var mm = _runtime.CreateAddressSpace();
         var dentry = sb.Root.Inode!.Lookup("reclaim.txt");
         Assert.NotNull(dentry);
         var inode = Assert.IsType<LayerInode>(dentry!.Inode);
@@ -450,8 +452,8 @@ public class LayerFsTests
     public void EndToEnd_ShrinkAll_PathWalkAndMmapCanRebuild()
     {
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        using var engine = _runtime.CreateEngine();
+        var mm = _runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, mm, 0);
 
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;

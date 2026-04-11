@@ -1,3 +1,4 @@
+using Fiberish.Memory;
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Native;
@@ -7,14 +8,15 @@ namespace Fiberish.VFS;
 
 public class ProcFileSystem : FileSystem
 {
-    public ProcFileSystem(DeviceNumberManager? devManager = null) : base(devManager)
+    public ProcFileSystem(DeviceNumberManager? devManager = null, MemoryRuntimeContext? memoryContext = null)
+        : base(devManager, memoryContext)
     {
         Name = "proc";
     }
 
     public override SuperBlock ReadSuper(FileSystemType fsType, int flags, string devName, object? data)
     {
-        return new ProcSuperBlock(fsType, DevManager);
+        return new ProcSuperBlock(fsType, DevManager, MemoryContext);
     }
 }
 
@@ -22,8 +24,9 @@ public class ProcSuperBlock : SuperBlock, IDentryCacheDropper
 {
     private ulong _nextIno = 1;
 
-    public ProcSuperBlock(FileSystemType type, DeviceNumberManager? devManager = null) :
-        base(devManager)
+    public ProcSuperBlock(FileSystemType type, DeviceNumberManager? devManager = null,
+        MemoryRuntimeContext? memoryContext = null) :
+        base(devManager, memoryContext ?? new MemoryRuntimeContext())
     {
         Type = type;
 

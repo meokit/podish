@@ -1,3 +1,4 @@
+using Fiberish.Memory;
 using Fiberish.VFS;
 using Xunit;
 
@@ -48,6 +49,10 @@ public class InodeMappingTests
 
     private sealed class TestSuperBlock : SuperBlock
     {
+        public TestSuperBlock() : base(null, new MemoryRuntimeContext())
+        {
+        }
+
         public override Inode AllocInode()
         {
             throw new NotSupportedException();

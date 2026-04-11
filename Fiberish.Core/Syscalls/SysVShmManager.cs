@@ -58,13 +58,9 @@ public class SysVShmManager
     private readonly Dictionary<int, SysVShmSegment> _segmentsByShmid = new();
     private int _nextShmid = 1;
 
-    public SysVShmManager()
-        : this(MemoryRuntimeContext.Default)
-    {
-    }
-
     internal SysVShmManager(MemoryRuntimeContext memoryContext, DeviceNumberManager? deviceNumbers = null)
     {
+        ArgumentNullException.ThrowIfNull(memoryContext);
         _memoryContext = memoryContext;
         _memoryContext.GetOrCreateShmSuperBlock(deviceNumbers);
     }

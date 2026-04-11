@@ -10,6 +10,8 @@ namespace Fiberish.Tests.VFS;
 
 public class HostfsPageCacheWritebackTests
 {
+    private readonly TestRuntimeFactory _runtime = new();
+
     [Fact]
     public void MapShared_SyncVma_WritesBackPageCacheToHostFile()
     {
@@ -20,8 +22,8 @@ public class HostfsPageCacheWritebackTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var file = OpenHostFile(root, "data.bin");
 
             const uint mapAddr = 0x41000000;
@@ -54,8 +56,8 @@ public class HostfsPageCacheWritebackTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var file = OpenHostFile(root, "data.bin");
 
             const uint mapAddr = 0x42000000;
@@ -86,8 +88,8 @@ public class HostfsPageCacheWritebackTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             sm.MountRootHostfs(root);
             var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
@@ -123,8 +125,8 @@ public class HostfsPageCacheWritebackTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             sm.MountRootHostfs(root);
 
@@ -172,8 +174,8 @@ public class HostfsPageCacheWritebackTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             sm.MountRootHostfs(root);
 
@@ -218,8 +220,8 @@ public class HostfsPageCacheWritebackTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             sm.MountRootHostfs(root);
 
@@ -268,8 +270,8 @@ public class HostfsPageCacheWritebackTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             sm.MountRootHostfs(root);
             var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
@@ -304,10 +306,12 @@ public class HostfsPageCacheWritebackTests
 
         try
         {
-            using var engine1 = new Engine();
-            using var engine2 = new Engine();
-            var mm1 = new VMAManager();
-            var mm2 = new VMAManager();
+            var runtime1 = new TestRuntimeFactory();
+            var runtime2 = new TestRuntimeFactory();
+            using var engine1 = runtime1.CreateEngine();
+            using var engine2 = runtime2.CreateEngine();
+            var mm1 = runtime1.CreateAddressSpace();
+            var mm2 = runtime2.CreateAddressSpace();
             var sm1 = new SyscallManager(engine1, mm1, 0);
             var sm2 = new SyscallManager(engine2, mm2, 0);
             sm1.MountRootHostfs(root);
@@ -350,9 +354,9 @@ public class HostfsPageCacheWritebackTests
 
         try
         {
-            using var engine1 = new Engine();
-            using var engine2 = new Engine();
-            var mm = new VMAManager();
+            using var engine1 = _runtime.CreateEngine();
+            using var engine2 = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var sm1 = new SyscallManager(engine1, mm, 0);
             var sm2 = new SyscallManager(engine2, mm, 0);
             sm1.MountRootHostfs(root);
@@ -403,10 +407,12 @@ public class HostfsPageCacheWritebackTests
 
         try
         {
-            using var engine1 = new Engine();
-            using var engine2 = new Engine();
-            var mm1 = new VMAManager();
-            var mm2 = new VMAManager();
+            var runtime1 = new TestRuntimeFactory();
+            var runtime2 = new TestRuntimeFactory();
+            using var engine1 = runtime1.CreateEngine();
+            using var engine2 = runtime2.CreateEngine();
+            var mm1 = runtime1.CreateAddressSpace();
+            var mm2 = runtime2.CreateAddressSpace();
             var sm1 = new SyscallManager(engine1, mm1, 0);
             sm1.MountRootHostfs(root);
             _ = new SyscallManager(engine2, mm2, 0);
@@ -451,8 +457,8 @@ public class HostfsPageCacheWritebackTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             sm.MountRootHostfs(root);
             var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
@@ -495,8 +501,8 @@ public class HostfsPageCacheWritebackTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             sm.MountRootHostfs(root);
             var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);

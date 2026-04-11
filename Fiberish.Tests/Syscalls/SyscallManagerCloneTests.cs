@@ -11,8 +11,9 @@ public class SyscallManagerCloneTests
     [Fact]
     public void Clone_ShouldPreserveAnonMount()
     {
-        var engine = new Engine();
-        var vma = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var vma = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, vma, 0);
         sm.MountRootHostfs(".");
 
@@ -25,8 +26,9 @@ public class SyscallManagerCloneTests
     [Fact]
     public void ClosingClonedSyscallManager_MustNotDetachParentProcMount()
     {
-        var engine = new Engine();
-        var vma = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var vma = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, vma, 0);
         sm.MountRootHostfs(".");
         sm.MountStandardProc();
@@ -48,8 +50,9 @@ public class SyscallManagerCloneTests
     [Fact]
     public void Clone_WithShareFiles_CloseOneOwner_MustKeepFdTableAlive()
     {
-        var engine = new Engine();
-        var vma = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var vma = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, vma, 0);
         sm.MountRootHostfs(".");
 
@@ -72,8 +75,9 @@ public class SyscallManagerCloneTests
     [Fact]
     public void Clone_MustShareDeviceNumberAllocator()
     {
-        var engine = new Engine();
-        var vma = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var vma = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, vma, 0);
 
         var cloned = sm.Clone(vma, false, false);

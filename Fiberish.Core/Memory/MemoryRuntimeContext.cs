@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 
 namespace Fiberish.Memory;
 
-public sealed class MemoryRuntimeContext
+public sealed class MemoryRuntimeContext(HostMemoryMapGeometry hostMemoryMapGeometry)
 {
     private readonly Lock _shmGate = new();
     private long _nextSharedAnonymousBackingId;
@@ -16,14 +16,7 @@ public sealed class MemoryRuntimeContext
     {
     }
 
-    public MemoryRuntimeContext(HostMemoryMapGeometry hostMemoryMapGeometry)
-    {
-        HostMemoryMapGeometry = hostMemoryMapGeometry;
-    }
-
-    public static MemoryRuntimeContext Default { get; } = new();
-
-    public HostMemoryMapGeometry HostMemoryMapGeometry { get; }
+    public HostMemoryMapGeometry HostMemoryMapGeometry { get; } = hostMemoryMapGeometry;
 
     internal SuperBlock GetOrCreateShmSuperBlock(DeviceNumberManager? deviceNumbers = null)
     {
@@ -32,12 +25,16 @@ public sealed class MemoryRuntimeContext
             if (_shmSuperBlock != null)
                 return _shmSuperBlock;
 
-            var fsType = new FileSystemType { Name = "tmpfs", Factory = static devMgr => new Tmpfs(devMgr) };
+            var fsType = new FileSystemType
+            {
+                Name = "tmpfs",
+                Factory = static devMgr => new Tmpfs(devMgr),
+                FactoryWithContext = static (devMgr, memoryContext) => new Tmpfs(devMgr, memoryContext)
+            };
             var fileSystem = deviceNumbers != null
-                ? fsType.CreateFileSystem(deviceNumbers)
-                : fsType.CreateAnonymousFileSystem();
+                ? fsType.CreateFileSystem(deviceNumbers, this)
+                : fsType.CreateAnonymousFileSystem(this);
             var superBlock = fileSystem.ReadSuper(fsType, 0, "shm_mnt", null);
-            superBlock.MemoryContext = this;
             _shmSuperBlock = superBlock;
             return superBlock;
         }

@@ -142,7 +142,8 @@ public class CloneThreadLifecycleTests
     public async Task SysExit_ClearsChildTidAndWakesFutexWaiters()
     {
         using var env = new TestEnv(200, 201);
-        var sibling = new FiberTask(202, env.Process, new Engine(), env.Scheduler);
+        var siblingRuntime = new TestRuntimeFactory();
+        var sibling = new FiberTask(202, env.Process, siblingRuntime.CreateEngine(), env.Scheduler);
         env.SyscallManager.RegisterEngine(sibling.CPU);
 
         const uint clearTidPtr = 0x00600000;
@@ -715,10 +716,12 @@ public class CloneThreadLifecycleTests
 
     private sealed class TestEnv : IDisposable
     {
+        private readonly TestRuntimeFactory _runtime = new();
+
         public TestEnv(int tgid, int tid)
         {
-            Engine = new Engine();
-            Vma = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Vma = _runtime.CreateAddressSpace();
             SyscallManager = new SyscallManager(Engine, Vma, 0);
             Process = new Process(tgid, Vma, SyscallManager);
             Scheduler = new KernelScheduler();

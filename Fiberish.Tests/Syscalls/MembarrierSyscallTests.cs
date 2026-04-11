@@ -75,10 +75,12 @@ public class MembarrierSyscallTests
 
     private sealed class TestEnv : IDisposable
     {
+        private readonly TestRuntimeFactory _runtime = new();
+
         public TestEnv()
         {
-            Engine = new Engine();
-            Vma = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Vma = _runtime.CreateAddressSpace();
             SyscallManager = new SyscallManager(Engine, Vma, 0);
             Process = new Process(5001, Vma, SyscallManager);
             Scheduler = new KernelScheduler();

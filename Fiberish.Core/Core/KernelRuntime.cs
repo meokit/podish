@@ -13,9 +13,10 @@ namespace Fiberish.Core;
 /// </summary>
 public sealed class KernelRuntime : IDisposable
 {
-    private KernelRuntime(Engine engine, VMAManager memory, SyscallManager syscalls, Configuration configuration,
-        DeviceNumberManager deviceNumbers)
+    private KernelRuntime(MemoryRuntimeContext memoryContext, Engine engine, VMAManager memory, SyscallManager syscalls,
+        Configuration configuration, DeviceNumberManager deviceNumbers)
     {
+        MemoryContext = memoryContext;
         Engine = engine;
         Memory = memory;
         Syscalls = syscalls;
@@ -23,6 +24,7 @@ public sealed class KernelRuntime : IDisposable
         DeviceNumbers = deviceNumbers;
     }
 
+    public MemoryRuntimeContext MemoryContext { get; }
     public Engine Engine { get; }
     public VMAManager Memory { get; }
     public SyscallManager Syscalls { get; }
@@ -114,8 +116,9 @@ public sealed class KernelRuntime : IDisposable
     public static KernelRuntime BootstrapBare(bool strace, TtyDiscipline? tty = null)
     {
         var configuration = new Configuration();
-        var engine = new Engine();
-        var mm = new VMAManager();
+        var memoryContext = new MemoryRuntimeContext();
+        var engine = new Engine(memoryContext);
+        var mm = new VMAManager(memoryContext);
         var deviceNumbers = new DeviceNumberManager();
 
         var sys = new SyscallManager(engine, mm, 0, tty, deviceNumbers)
@@ -123,7 +126,7 @@ public sealed class KernelRuntime : IDisposable
             Strace = strace
         };
 
-        return new KernelRuntime(engine, mm, sys, configuration, deviceNumbers);
+        return new KernelRuntime(memoryContext, engine, mm, sys, configuration, deviceNumbers);
     }
 
     public static KernelRuntime Bootstrap(string rootRes, bool strace, bool useOverlay, TtyDiscipline? tty = null)

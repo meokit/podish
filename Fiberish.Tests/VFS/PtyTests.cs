@@ -178,9 +178,10 @@ public class PtyTests
     public void PtyBuffer_ReadDrain_ResetsDataAvailableSignal()
     {
         var scheduler = NewScheduler();
-        var process = new Process(700, null!, null!);
+        var process = TestRuntimeFactory.CreateProcess(700);
         scheduler.RegisterProcess(process);
-        var task = new FiberTask(701, process, new Engine(), scheduler);
+        var runtime = new TestRuntimeFactory();
+        var task = new FiberTask(701, process, runtime.CreateEngine(), scheduler);
         var buffer = new PtyBuffer(scheduler, 1024);
 
         void Entry()
@@ -295,8 +296,9 @@ public class PtyTests
     {
         public PtyTaskContext()
         {
-            Engine = new Engine();
-            Memory = new VMAManager();
+            var runtime = new TestRuntimeFactory();
+            Engine = runtime.CreateEngine();
+            Memory = runtime.CreateAddressSpace();
             SyscallManager = new SyscallManager(Engine, Memory, 0);
             Scheduler = new KernelScheduler();
             Process = new Process(1234, Memory, SyscallManager)

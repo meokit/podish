@@ -11,6 +11,8 @@ namespace Fiberish.Tests.VFS;
 
 public class SilkFsAdapterTests
 {
+    private readonly TestRuntimeFactory _runtime = new();
+
     private static byte[] Utf8(string value) => Encoding.UTF8.GetBytes(value);
 
     private static readonly FsName Mnt = FsName.FromString("mnt");
@@ -44,8 +46,8 @@ public class SilkFsAdapterTests
     {
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-store-{Guid.NewGuid():N}");
 
-        using var engine = new Engine();
-        var vma = new VMAManager();
+        using var engine = _runtime.CreateEngine();
+        var vma = _runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, vma, 0);
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
         var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -116,9 +118,9 @@ public class SilkFsAdapterTests
 
         try
         {
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var vma = new VMAManager();
+                var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -157,9 +159,9 @@ public class SilkFsAdapterTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var vma = new VMAManager();
+                var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -222,9 +224,9 @@ public class SilkFsAdapterTests
 
         try
         {
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var vma = new VMAManager();
+                var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -260,9 +262,9 @@ public class SilkFsAdapterTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var vma = new VMAManager();
+                var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -307,9 +309,9 @@ public class SilkFsAdapterTests
 
         try
         {
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var vma = new VMAManager();
+                var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -352,9 +354,9 @@ public class SilkFsAdapterTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var vma = new VMAManager();
+                var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -411,8 +413,8 @@ public class SilkFsAdapterTests
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-store-{Guid.NewGuid():N}");
         try
         {
-            using var engine = new Engine();
-            var vma = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var vma = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
             var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -473,8 +475,8 @@ public class SilkFsAdapterTests
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-unlink-clean-{Guid.NewGuid():N}");
         try
         {
-            using var engine = new Engine();
-            var vma = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var vma = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
             var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -526,8 +528,8 @@ public class SilkFsAdapterTests
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-rename-overwrite-{Guid.NewGuid():N}");
         try
         {
-            using var engine = new Engine();
-            var vma = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var vma = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
             var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -587,8 +589,8 @@ public class SilkFsAdapterTests
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-orphan-open-{Guid.NewGuid():N}");
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
             var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -649,8 +651,8 @@ public class SilkFsAdapterTests
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-orphan-mmap-{Guid.NewGuid():N}");
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
             var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -711,9 +713,9 @@ public class SilkFsAdapterTests
 
         try
         {
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var mm = new VMAManager();
+                var mm = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, mm, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -756,9 +758,9 @@ public class SilkFsAdapterTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var mm = new VMAManager();
+                var mm = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, mm, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -802,9 +804,9 @@ public class SilkFsAdapterTests
 
         try
         {
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var mm = new VMAManager();
+                var mm = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, mm, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -843,9 +845,9 @@ public class SilkFsAdapterTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var mm = new VMAManager();
+                var mm = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, mm, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -890,8 +892,8 @@ public class SilkFsAdapterTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
             var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -962,8 +964,8 @@ public class SilkFsAdapterTests
 
         try
         {
-            using var engine = new Engine();
-            var mm = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
             var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -1028,8 +1030,8 @@ public class SilkFsAdapterTests
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-iget-evict-{Guid.NewGuid():N}");
         try
         {
-            using var engine = new Engine();
-            var vma = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var vma = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
             var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -1095,8 +1097,8 @@ public class SilkFsAdapterTests
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-drop-open-{Guid.NewGuid():N}");
         try
         {
-            using var engine = new Engine();
-            var vma = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var vma = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
             var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -1152,9 +1154,9 @@ public class SilkFsAdapterTests
 
         try
         {
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var vma = new VMAManager();
+                var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -1183,9 +1185,9 @@ public class SilkFsAdapterTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var vma = new VMAManager();
+                var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -1231,9 +1233,9 @@ public class SilkFsAdapterTests
 
         try
         {
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var vma = new VMAManager();
+                var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -1265,9 +1267,9 @@ public class SilkFsAdapterTests
                 sm.Close();
             }
 
-            using (var engine = new Engine())
+            using (var engine = _runtime.CreateEngine())
             {
-                var vma = new VMAManager();
+                var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
                 var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);

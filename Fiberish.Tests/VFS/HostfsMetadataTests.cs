@@ -12,6 +12,8 @@ namespace Fiberish.Tests.VFS;
 
 public class HostfsMetadataTests
 {
+    private readonly TestRuntimeFactory _runtime = new();
+
     [Fact]
     public void Hostfs_Mknod_UsesSidecarMetadataAndRoundtrips()
     {
@@ -298,8 +300,8 @@ public class HostfsMetadataTests
         Directory.CreateDirectory(hostDir);
         File.WriteAllText(Path.Combine(hostDir, "data.txt"), "hello");
 
-        using var engine = new Engine();
-        var vma = new VMAManager();
+        using var engine = _runtime.CreateEngine();
+        var vma = _runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, vma, 0);
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
         var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
@@ -341,8 +343,8 @@ public class HostfsMetadataTests
         Directory.CreateDirectory(hostDir);
         File.WriteAllText(Path.Combine(hostDir, "root-data.txt"), "hello-root");
 
-        using var engine = new Engine();
-        var vma = new VMAManager();
+        using var engine = _runtime.CreateEngine();
+        var vma = _runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, vma, 0);
 
         try

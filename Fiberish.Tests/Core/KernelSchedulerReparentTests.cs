@@ -12,10 +12,20 @@ public class KernelSchedulerReparentTests
     {
         var scheduler = new KernelScheduler();
 
-        var init = new Process(1, null!, null!) { SID = 1, PGID = 1 };
-        var parent = new Process(2, null!, null!) { SID = 2, PGID = 2 };
-        var child1 = new Process(3, null!, null!) { PPID = 2, SID = 2, PGID = 3 };
-        var child2 = new Process(4, null!, null!) { PPID = 2, SID = 2, PGID = 4 };
+        var init = TestRuntimeFactory.CreateProcess(1);
+        init.SID = 1;
+        init.PGID = 1;
+        var parent = TestRuntimeFactory.CreateProcess(2);
+        parent.SID = 2;
+        parent.PGID = 2;
+        var child1 = TestRuntimeFactory.CreateProcess(3);
+        child1.PPID = 2;
+        child1.SID = 2;
+        child1.PGID = 3;
+        var child2 = TestRuntimeFactory.CreateProcess(4);
+        child2.PPID = 2;
+        child2.SID = 2;
+        child2.PGID = 4;
 
         parent.Children.Add(3);
         parent.Children.Add(4);
@@ -53,15 +63,17 @@ public class KernelSchedulerReparentTests
     {
         var scheduler = new KernelScheduler();
 
-        var init = new Process(1, null!, null!) { SID = 1, PGID = 1 };
-        var parent = new Process(2, null!, null!) { SID = 200, PGID = 2 };
-        var child = new Process(3, null!, null!)
-        {
-            PPID = 2,
-            SID = 200,
-            PGID = 3,
-            State = ProcessState.Stopped
-        };
+        var init = TestRuntimeFactory.CreateProcess(1);
+        init.SID = 1;
+        init.PGID = 1;
+        var parent = TestRuntimeFactory.CreateProcess(2);
+        parent.SID = 200;
+        parent.PGID = 2;
+        var child = TestRuntimeFactory.CreateProcess(3);
+        child.PPID = 2;
+        child.SID = 200;
+        child.PGID = 3;
+        child.State = ProcessState.Stopped;
         parent.Children.Add(3);
 
         scheduler.RegisterProcess(init);
@@ -88,15 +100,17 @@ public class KernelSchedulerReparentTests
     {
         var scheduler = new KernelScheduler();
 
-        var init = new Process(1, null!, null!) { SID = 200, PGID = 1 };
-        var parent = new Process(2, null!, null!) { SID = 200, PGID = 2 };
-        var child = new Process(3, null!, null!)
-        {
-            PPID = 2,
-            SID = 200,
-            PGID = 3,
-            State = ProcessState.Stopped
-        };
+        var init = TestRuntimeFactory.CreateProcess(1);
+        init.SID = 200;
+        init.PGID = 1;
+        var parent = TestRuntimeFactory.CreateProcess(2);
+        parent.SID = 200;
+        parent.PGID = 2;
+        var child = TestRuntimeFactory.CreateProcess(3);
+        child.PPID = 2;
+        child.SID = 200;
+        child.PGID = 3;
+        child.State = ProcessState.Stopped;
         parent.Children.Add(3);
 
         scheduler.RegisterProcess(init);
@@ -122,12 +136,10 @@ public class KernelSchedulerReparentTests
     public void TryAutoReapZombie_WhenEngineInitEnabled_ReapsChildOfInit()
     {
         var scheduler = new KernelScheduler();
-        var init = new Process(1, null!, null!);
-        var child = new Process(2, null!, null!)
-        {
-            PPID = 1,
-            State = ProcessState.Zombie
-        };
+        var init = TestRuntimeFactory.CreateProcess(1);
+        var child = TestRuntimeFactory.CreateProcess(2);
+        child.PPID = 1;
+        child.State = ProcessState.Zombie;
         init.Children.Add(2);
 
         scheduler.RegisterProcess(init);
@@ -147,12 +159,10 @@ public class KernelSchedulerReparentTests
     public void TryAutoReapZombie_WhenDisabled_DoesNotReap()
     {
         var scheduler = new KernelScheduler();
-        var init = new Process(1, null!, null!);
-        var child = new Process(2, null!, null!)
-        {
-            PPID = 1,
-            State = ProcessState.Zombie
-        };
+        var init = TestRuntimeFactory.CreateProcess(1);
+        var child = TestRuntimeFactory.CreateProcess(2);
+        child.PPID = 1;
+        child.State = ProcessState.Zombie;
         init.Children.Add(2);
 
         scheduler.RegisterProcess(init);
@@ -172,8 +182,9 @@ public class KernelSchedulerReparentTests
     {
         var scheduler = new KernelScheduler();
 
-        var init = new Process(1, null!, null!);
-        var child = new Process(2, null!, null!) { PPID = 1 };
+        var init = TestRuntimeFactory.CreateProcess(1);
+        var child = TestRuntimeFactory.CreateProcess(2);
+        child.PPID = 1;
         init.Children.Add(2);
 
         scheduler.RegisterProcess(init);

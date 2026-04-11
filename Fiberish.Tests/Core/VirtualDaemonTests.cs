@@ -898,8 +898,8 @@ public sealed class VirtualDaemonTests
         private ClientTaskHandle CreateClientTaskCore(string name, bool track)
         {
             var pid = Scheduler.AllocateTaskId();
-            var mem = new VMAManager();
-            var engine = new Engine();
+            var mem = new VMAManager(Runtime.MemoryContext);
+            var engine = new Engine(Runtime.MemoryContext);
             var syscalls = Runtime.Syscalls.Clone(mem, false, true);
             syscalls.CurrentSyscallEngine = engine;
             syscalls.RegisterEngine(engine);

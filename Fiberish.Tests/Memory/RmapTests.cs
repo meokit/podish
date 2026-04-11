@@ -14,10 +14,11 @@ public class RmapTests
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var fixture = new TmpfsFileFixture(new byte[LinuxConstants.PageSize]);
-        using var engineA = new Engine();
-        using var engineB = new Engine();
-        var mmA = new VMAManager();
-        var mmB = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engineA = runtime.CreateEngine();
+        using var engineB = runtime.CreateEngine();
+        var mmA = runtime.CreateAddressSpace();
+        var mmB = runtime.CreateAddressSpace();
         var fileA = fixture.Open();
         var fileB = fixture.Open();
 
@@ -59,8 +60,9 @@ public class RmapTests
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var fixture = new TmpfsFileFixture("hello"u8.ToArray());
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         var file = fixture.Open();
         try
         {
@@ -111,9 +113,10 @@ public class RmapTests
     {
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var parentEngine = new Engine();
-        using var childEngine = new Engine();
-        var parentMm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var parentEngine = runtime.CreateEngine();
+        using var childEngine = runtime.CreateEngine();
+        var parentMm = runtime.CreateAddressSpace();
 
         const uint addr = 0x53000000;
         parentMm.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
@@ -159,8 +162,9 @@ public class RmapTests
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var fixture = new TmpfsFileFixture(new byte[LinuxConstants.PageSize * 2]);
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         var file = fixture.Open();
         try
         {
@@ -194,8 +198,9 @@ public class RmapTests
     public void MprotectSplit_RebuildsDirectRefsOnlyForResidentPages()
     {
         using var pageScope = PageManager.BeginIsolatedScope();
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
 
         const uint addr = 0x55000000;
         var secondPageAddr = addr + LinuxConstants.PageSize;
@@ -258,7 +263,8 @@ public class RmapTests
         var slotIndex1 = page1.SlotIndexForDebug;
         var generation1 = page1.HandleGenerationForDebug;
 
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        var mm = runtime.CreateAddressSpace();
         var vma = new VmArea
         {
             Start = 0x1000,

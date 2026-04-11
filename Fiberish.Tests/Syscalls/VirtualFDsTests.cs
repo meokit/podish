@@ -293,6 +293,8 @@ public class VirtualFDsTests
         private static readonly MethodInfo DrainEventsMethod =
             typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
+        private readonly TestRuntimeFactory _runtime = new();
+
         public TestEnv()
         {
             Scheduler = new KernelScheduler();
@@ -300,8 +302,8 @@ public class VirtualFDsTests
             var fs = new Tmpfs();
             MemfdSuperBlock = fs.ReadSuper(new FileSystemType { Name = "tmpfs" }, 0, "", null);
 
-            Vma = new VMAManager();
-            Engine = new Engine();
+            Vma = _runtime.CreateAddressSpace();
+            Engine = _runtime.CreateEngine();
             Process = new Process(100, Vma, null!);
             Scheduler.RegisterProcess(Process);
             Task = new FiberTask(100, Process, Engine, Scheduler);

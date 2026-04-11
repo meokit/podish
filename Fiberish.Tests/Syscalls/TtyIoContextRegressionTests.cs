@@ -109,10 +109,12 @@ public class TtyIoContextRegressionTests
 
     private sealed class TestEnv : IDisposable
     {
+        private readonly TestRuntimeFactory _runtime = new();
+
         public TestEnv()
         {
-            Engine = new Engine();
-            Vma = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Vma = _runtime.CreateAddressSpace();
             SyscallManager = new SyscallManager(Engine, Vma, 0);
             Scheduler = new KernelScheduler();
             Process = new Process(1234, Vma, SyscallManager);

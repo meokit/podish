@@ -340,8 +340,9 @@ public class NetworkTests
             var fs = new Tmpfs();
             MemfdSuperBlock = fs.ReadSuper(new FileSystemType { Name = "tmpfs" }, 0, "", null);
 
-            var vma = new VMAManager();
-            var engine = new Engine();
+            var runtime = new TestRuntimeFactory();
+            var vma = runtime.CreateAddressSpace();
+            var engine = runtime.CreateEngine();
             Process = new Process(100, vma, null!);
             Task = new FiberTask(100, Process, engine, Scheduler);
 

@@ -209,7 +209,7 @@ public sealed class VirtualDaemonRuntime
     {
         Scheduler.AssertSchedulerThread();
 
-        var engine = new Engine
+        var engine = new Engine(Syscalls.MemoryContext)
         {
             CurrentSyscallManager = Syscalls
         };

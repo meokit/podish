@@ -27,14 +27,10 @@ public class Engine : IDisposable
     private bool _disposed;
     private GCHandle _gcHandle;
 
-    public Engine()
-        : this(null)
+    public unsafe Engine(MemoryRuntimeContext memoryContext)
     {
-    }
-
-    public unsafe Engine(MemoryRuntimeContext? memoryContext)
-    {
-        MemoryContext = memoryContext ?? MemoryRuntimeContext.Default;
+        ArgumentNullException.ThrowIfNull(memoryContext);
+        MemoryContext = memoryContext;
         State = X86Native.Create();
         if (State == IntPtr.Zero)
             throw new InvalidOperationException("Failed to create Fiberish state");
@@ -53,7 +49,7 @@ public class Engine : IDisposable
 
     protected Engine(bool mock)
     {
-        MemoryContext = MemoryRuntimeContext.Default;
+        MemoryContext = new MemoryRuntimeContext();
         if (mock)
             State = IntPtr.Zero;
         else
@@ -444,19 +440,6 @@ public class Engine : IDisposable
     internal unsafe bool MapManagedPage(uint addr, IntPtr hostPage, byte perms)
     {
         return X86Native.MapManagedPage(State, addr, (void*)hostPage, perms) != 0;
-    }
-
-    /// <summary>
-    ///     DEPRECATED: Use CopyToUser instead. This is slow (byte-by-byte native calls) and has recursive fault risk.
-    /// </summary>
-    [Obsolete("Use CopyToUser instead. MemWrite is slow and risks recursive faults.")]
-    public unsafe void MemWrite(uint addr, ReadOnlySpan<byte> data)
-    {
-        EnsureAddressSpaceSynchronized();
-        fixed (byte* p = data)
-        {
-            X86Native.MemWrite(State, addr, p, (uint)data.Length);
-        }
     }
 
     public unsafe IntPtr GetPhysicalAddressSafe(uint vaddr, bool isWrite)

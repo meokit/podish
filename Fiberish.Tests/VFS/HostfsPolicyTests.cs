@@ -9,6 +9,8 @@ namespace Fiberish.Tests.VFS;
 
 public class HostfsPolicyTests
 {
+    private readonly TestRuntimeFactory _runtime = new();
+
     [Fact(Timeout = 1000)]
     public void Hostfs_CustomSpecialNodePolicy_CanHideRegularFiles()
     {
@@ -70,8 +72,8 @@ public class HostfsPolicyTests
 
         try
         {
-            using var engine = new Engine();
-            var vma = new VMAManager();
+            using var engine = _runtime.CreateEngine();
+            var vma = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, vma, 0);
 
             var fsType = new FileSystemType { Name = "hostfs" };

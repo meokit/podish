@@ -95,13 +95,11 @@ public class ProcFsTests
     {
         using var ctx = new ProcTestContext();
 
-        var process = new Process(4242, null!, null!)
-        {
-            PPID = 1,
-            PGID = 4242,
-            SID = 4242,
-            State = ProcessState.Running
-        };
+        var process = TestRuntimeFactory.CreateProcess(4242);
+        process.PPID = 1;
+        process.PGID = 4242;
+        process.SID = 4242;
+        process.State = ProcessState.Running;
         ctx.Scheduler.RegisterProcess(process);
 
         var fs = new ProcFileSystem();
@@ -163,7 +161,8 @@ public class ProcFsTests
     {
         using var ctx = new ProcTestContext();
 
-        var child = new Process(5555, null!, null!) { State = ProcessState.Zombie };
+        var child = TestRuntimeFactory.CreateProcess(5555);
+        child.State = ProcessState.Zombie;
         ctx.Scheduler.RegisterProcess(child);
 
         var fs = new ProcFileSystem();
@@ -266,7 +265,8 @@ public class ProcFsTests
         };
         ctx.Scheduler.RegisterProcess(process2);
 
-        using var engine2 = new Engine();
+        var runtime = new TestRuntimeFactory();
+        using var engine2 = runtime.CreateEngine();
         var task2 = new FiberTask(2, process2, engine2, ctx.Scheduler);
 
         var fs = new ProcFileSystem();
@@ -1120,10 +1120,12 @@ public class ProcFsTests
 
     private sealed class ProcTestContext : IDisposable
     {
+        private readonly TestRuntimeFactory _runtime = new();
+
         public ProcTestContext()
         {
-            Engine = new Engine();
-            Memory = new VMAManager();
+            Engine = _runtime.CreateEngine();
+            Memory = _runtime.CreateAddressSpace();
             SyscallManager = new SyscallManager(Engine, Memory, 0);
             Scheduler = new KernelScheduler();
             Process = new Process(1, Memory, SyscallManager);

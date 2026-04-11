@@ -67,9 +67,12 @@ public class Process
 
     public Process(int tgid, VMAManager mem, SyscallManager syscalls, UTSNamespace? uts = null)
     {
+        ArgumentNullException.ThrowIfNull(mem);
         TGID = tgid;
         Mem = mem;
         Syscalls = syscalls;
+        if (syscalls != null && !ReferenceEquals(mem.MemoryContext, syscalls.MemoryContext))
+            throw new InvalidOperationException("Process VMAManager and SyscallManager must share the same MemoryRuntimeContext.");
         UTS = uts ?? new UTSNamespace();
 
         // Default to root
@@ -353,7 +356,7 @@ public class Process
         // This is critical for vfork+execve: the child may share the parent's VMAManager
         // via CLONE_VM. We must NOT clear the shared memory — instead, create a private
         // VMAManager for this process before proceeding.
-        var freshMem = new VMAManager();
+        var freshMem = new VMAManager(oldMem.MemoryContext);
         if (hadSharedAddressSpace)
             freshMem.BindAddressSpaceHandle(ProcessAddressSpaceHandle.DetachFromSharedEngine(oldEngine));
         else

@@ -14,11 +14,13 @@ public class StandardMountsMigrationTests
     {
         var strictBefore = VfsDebugTrace.StrictInvariants;
         var enabledBefore = VfsDebugTrace.Enabled;
-        using var engine = new Engine();
-        var vma = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var vma = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, vma, 0);
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-        var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+        var rootSb = tmpfsType.CreateAnonymousFileSystem(runtime.MemoryContext).ReadSuper(tmpfsType, 0, "test-root",
+            null);
         var rootMount = new Mount(rootSb, rootSb.Root)
         {
             Source = "tmpfs",
@@ -52,11 +54,13 @@ public class StandardMountsMigrationTests
     [Fact]
     public void StandardMounts_AttachThroughDetachedFlow_AndRemainAccessible()
     {
-        using var engine = new Engine();
-        var vma = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var vma = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, vma, 0);
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-        var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+        var rootSb = tmpfsType.CreateAnonymousFileSystem(runtime.MemoryContext).ReadSuper(tmpfsType, 0, "test-root",
+            null);
         var rootMount = new Mount(rootSb, rootSb.Root)
         {
             Source = "tmpfs",
@@ -101,19 +105,25 @@ public class StandardMountsMigrationTests
     [Fact]
     public void DevPts_IsolatedPerSyscallManagerInstance()
     {
-        using var engine1 = new Engine();
-        using var engine2 = new Engine();
-        var sm1 = new SyscallManager(engine1, new VMAManager(), 0);
+        var runtime1 = new TestRuntimeFactory();
+        using var engine1 = runtime1.CreateEngine();
+        var mm1 = runtime1.CreateAddressSpace();
+        var sm1 = new SyscallManager(engine1, mm1, 0);
         sm1.PtyManager.BindScheduler(new KernelScheduler());
-        var sm2 = new SyscallManager(engine2, new VMAManager(), 0);
+        var runtime2 = new TestRuntimeFactory();
+        using var engine2 = runtime2.CreateEngine();
+        var mm2 = runtime2.CreateAddressSpace();
+        var sm2 = new SyscallManager(engine2, mm2, 0);
         sm2.PtyManager.BindScheduler(new KernelScheduler());
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
 
-        var rootSb1 = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root-1", null);
+        var rootSb1 = tmpfsType.CreateAnonymousFileSystem(runtime1.MemoryContext).ReadSuper(tmpfsType, 0,
+            "test-root-1", null);
         var rootMount1 = new Mount(rootSb1, rootSb1.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
         sm1.InitializeRoot(rootSb1.Root, rootMount1);
 
-        var rootSb2 = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root-2", null);
+        var rootSb2 = tmpfsType.CreateAnonymousFileSystem(runtime2.MemoryContext).ReadSuper(tmpfsType, 0,
+            "test-root-2", null);
         var rootMount2 = new Mount(rootSb2, rootSb2.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
         sm2.InitializeRoot(rootSb2.Root, rootMount2);
 

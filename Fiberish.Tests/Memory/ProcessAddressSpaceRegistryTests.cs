@@ -12,8 +12,9 @@ public class ProcessAddressSpaceRegistryTests
     [Fact]
     public void SyscallManagerClose_UnregistersEngineFromAddressSpaceRegistry()
     {
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, mm, 0);
         var state = engine.State;
 
@@ -27,8 +28,9 @@ public class ProcessAddressSpaceRegistryTests
     [Fact]
     public void DetachTask_UnregistersEngineFromAddressSpaceRegistry()
     {
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, mm, 0);
         var state = engine.State;
 

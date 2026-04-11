@@ -13,7 +13,7 @@ public class KernelSchedulerTests
         // We can't easily mock VMAManager/SyscallManager without real Engine, unless we mock them too.
         // For Scheduler tests, we might get away with nulls if we don't access them.
         // FiberTask checks Process.Mem for faults.
-        return new Process(pid, null!, null!);
+        return TestRuntimeFactory.CreateProcess(pid);
     }
 
     [Fact]

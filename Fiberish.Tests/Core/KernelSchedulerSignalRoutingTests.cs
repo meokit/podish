@@ -12,8 +12,9 @@ public class KernelSchedulerSignalRoutingTests
     public void SignalProcess_LeaderGone_FallsBackToAnotherThread()
     {
         var scheduler = new KernelScheduler();
-        var leaderEngine = new Engine();
-        var vma = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        var leaderEngine = runtime.CreateEngine();
+        var vma = runtime.CreateAddressSpace();
         var sm = new SyscallManager(leaderEngine, vma, 0);
         var process = new Process(500, vma, sm)
         {
@@ -23,7 +24,7 @@ public class KernelSchedulerSignalRoutingTests
         scheduler.RegisterProcess(process);
 
         var leader = new FiberTask(500, process, leaderEngine, scheduler);
-        var workerEngine = new Engine();
+        var workerEngine = runtime.CreateEngine();
         var worker = new FiberTask(501, process, workerEngine, scheduler);
 
         scheduler.DetachTask(leader);

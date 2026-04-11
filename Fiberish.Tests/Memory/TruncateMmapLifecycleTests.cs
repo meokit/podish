@@ -167,16 +167,17 @@ public class TruncateMmapLifecycleTests
     public async Task NotifyInodeTruncated_SharedAddressSpacePeerEngine_UsesSequenceInvalidation()
     {
         var scheduler = new KernelScheduler();
+        var runtime = new TestRuntimeFactory();
 
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-        var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "truncate-mm-shared", null);
+        var sb = fsType.CreateAnonymousFileSystem(runtime.MemoryContext).ReadSuper(fsType, 0, "truncate-mm-shared", null);
         var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
         var dentry = new Dentry(FsName.FromString("data.bin"), null, sb.Root, sb);
         sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
         var inode = dentry.Inode!;
 
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, mm, 0);
         var process = new Process(9101, mm, sm);
         scheduler.RegisterProcess(process);
@@ -268,12 +269,18 @@ public class TruncateMmapLifecycleTests
     {
         public TestEnv()
         {
-            Engine = new Engine();
-            Mm = new VMAManager();
+            var runtime = new TestRuntimeFactory();
+            Engine = runtime.CreateEngine();
+            Mm = runtime.CreateAddressSpace();
             Engine.PageFaultResolver = (addr, isWrite) => Mm.HandleFault(addr, isWrite, Engine);
 
-            var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "truncate-mm", null);
+            var fsType = new FileSystemType
+            {
+                Name = "tmpfs",
+                Factory = static _ => new Tmpfs(),
+                FactoryWithContext = static (_, memoryContext) => new Tmpfs(memoryContext: memoryContext)
+            };
+            var sb = fsType.CreateAnonymousFileSystem(runtime.MemoryContext).ReadSuper(fsType, 0, "truncate-mm", null);
             var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             var dentry = new Dentry(FsName.FromString("data.bin"), null, sb.Root, sb);
             sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
@@ -314,19 +321,24 @@ public class TruncateMmapLifecycleTests
         public MultiProcessEnv()
         {
             Scheduler = new KernelScheduler();
+            var runtime = new TestRuntimeFactory();
 
-
-            var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "truncate-mm-multi", null);
+            var fsType = new FileSystemType
+            {
+                Name = "tmpfs",
+                Factory = static _ => new Tmpfs(),
+                FactoryWithContext = static (_, memoryContext) => new Tmpfs(memoryContext: memoryContext)
+            };
+            var sb = fsType.CreateAnonymousFileSystem(runtime.MemoryContext).ReadSuper(fsType, 0, "truncate-mm-multi", null);
             var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             var dentry = new Dentry(FsName.FromString("data.bin"), null, sb.Root, sb);
             sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
             Inode = dentry.Inode!;
 
-            Engine1 = new Engine();
-            Engine2 = new Engine();
-            Mm1 = new VMAManager();
-            Mm2 = new VMAManager();
+            Engine1 = runtime.CreateEngine();
+            Engine2 = runtime.CreateEngine();
+            Mm1 = runtime.CreateAddressSpace();
+            Mm2 = runtime.CreateAddressSpace();
             Sm1 = new SyscallManager(Engine1, Mm1, 0);
             Sm2 = new SyscallManager(Engine2, Mm2, 0);
             Process1 = new Process(9001, Mm1, Sm1);
@@ -386,19 +398,24 @@ public class TruncateMmapLifecycleTests
         public MixedMappingEnv(MapFlags flags1, MapFlags flags2)
         {
             Scheduler = new KernelScheduler();
+            var runtime = new TestRuntimeFactory();
 
-
-            var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "mixed-mm", null);
+            var fsType = new FileSystemType
+            {
+                Name = "tmpfs",
+                Factory = static _ => new Tmpfs(),
+                FactoryWithContext = static (_, memoryContext) => new Tmpfs(memoryContext: memoryContext)
+            };
+            var sb = fsType.CreateAnonymousFileSystem(runtime.MemoryContext).ReadSuper(fsType, 0, "mixed-mm", null);
             var mount = new Mount(sb, sb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             var dentry = new Dentry(FsName.FromString("data.bin"), null, sb.Root, sb);
             sb.Root.Inode!.Create(dentry, 0x1A4, 0, 0);
             Inode = dentry.Inode!;
 
-            Engine1 = new Engine();
-            Engine2 = new Engine();
-            Mm1 = new VMAManager();
-            Mm2 = new VMAManager();
+            Engine1 = runtime.CreateEngine();
+            Engine2 = runtime.CreateEngine();
+            Mm1 = runtime.CreateAddressSpace();
+            Mm2 = runtime.CreateAddressSpace();
             Sm1 = new SyscallManager(Engine1, Mm1, 0);
             Sm2 = new SyscallManager(Engine2, Mm2, 0);
             Process1 = new Process(9101, Mm1, Sm1);

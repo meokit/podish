@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
+using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -16,7 +17,7 @@ public class FiberTaskAsyncSyscallTests
     public void Schedule_WhenTaskReusesReservedRunQueueToken_MustEmitFreshSchedulerWake()
     {
         var scheduler = new KernelScheduler();
-        var process = new Process(390, null!, null!);
+        var process = TestRuntimeFactory.CreateProcess(390);
         scheduler.RegisterProcess(process);
         var engine = new MockEngine();
         var task = new FiberTask(391, process, engine, scheduler);
@@ -37,7 +38,7 @@ public class FiberTaskAsyncSyscallTests
     public void Schedule_WhenReadyQueuedStateDriftsWithoutActualRunQueueEntry_MustRepairByReenqueuingTask()
     {
         var scheduler = new KernelScheduler();
-        var process = new Process(392, null!, null!);
+        var process = TestRuntimeFactory.CreateProcess(392);
         scheduler.RegisterProcess(process);
         var engine = new MockEngine();
         var task = new FiberTask(393, process, engine, scheduler);
@@ -59,7 +60,7 @@ public class FiberTaskAsyncSyscallTests
     public async Task HandleAsyncSyscall_WhenPendingSyscallThrows_MapsToEfaultAndClearsPendingSyscall()
     {
         var scheduler = new KernelScheduler();
-        var process = new Process(400, null!, null!);
+        var process = TestRuntimeFactory.CreateProcess(400);
         scheduler.RegisterProcess(process);
         var engine = new MockEngine();
         var task = new FiberTask(401, process, engine, scheduler);
@@ -75,7 +76,7 @@ public class FiberTaskAsyncSyscallTests
     public async Task HandleAsyncSyscall_WhenPendingSyscallThrowsOutOfMemory_MapsToEnomemAndClearsPendingSyscall()
     {
         var scheduler = new KernelScheduler();
-        var process = new Process(410, null!, null!);
+        var process = TestRuntimeFactory.CreateProcess(410);
         scheduler.RegisterProcess(process);
         var engine = new MockEngine();
         var task = new FiberTask(411, process, engine, scheduler);
@@ -93,7 +94,7 @@ public class FiberTaskAsyncSyscallTests
         var scheduler = new KernelScheduler();
         var engine = new MockEngine();
         var fakeSyscalls = CreateFakeSyscallManager();
-        var process = new Process(420, null!, fakeSyscalls);
+        var process = TestRuntimeFactory.CreateProcess(420, fakeSyscalls);
         scheduler.RegisterProcess(process);
         var task = new FiberTask(421, process, engine, scheduler)
         {
@@ -169,7 +170,14 @@ public class FiberTaskAsyncSyscallTests
     private static SyscallManager CreateFakeSyscallManager()
     {
         var syscalls = (SyscallManager)RuntimeHelpers.GetUninitializedObject(typeof(SyscallManager));
+        var memoryContext = new MemoryRuntimeContext();
+        syscalls.Mem = new VMAManager(memoryContext);
         syscalls.Strace = false;
+
+        var memoryContextField = typeof(SyscallManager).GetField("<MemoryContext>k__BackingField",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(memoryContextField);
+        memoryContextField!.SetValue(syscalls, memoryContext);
 
         var ptyManagerField = typeof(SyscallManager).GetField("<PtyManager>k__BackingField",
             BindingFlags.Instance | BindingFlags.NonPublic);

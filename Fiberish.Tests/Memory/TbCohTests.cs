@@ -24,7 +24,7 @@ public class TbCohTests
         var runtime = new MemoryRuntimeContext();
         using var writeEngine = new Engine(runtime);
         using var execEngine = new Engine(runtime);
-        var writeMm = new VMAManager();
+        var writeMm = new VMAManager(runtime);
         writeMm.BindOrAssertAddressSpaceHandle(writeEngine);
         writeEngine.PageFaultResolver =
             (addr, isWrite) => writeMm.HandleFaultDetailed(addr, isWrite, writeEngine) == FaultResult.Handled;
@@ -59,7 +59,7 @@ public class TbCohTests
         var runtime = new MemoryRuntimeContext();
         using var writeEngine = new Engine(runtime);
         using var execEngine = new Engine(runtime);
-        var writeMm = new VMAManager();
+        var writeMm = new VMAManager(runtime);
         writeMm.BindOrAssertAddressSpaceHandle(writeEngine);
         writeEngine.PageFaultResolver =
             (addr, isWrite) => writeMm.HandleFaultDetailed(addr, isWrite, writeEngine) == FaultResult.Handled;
@@ -100,8 +100,9 @@ public class TbCohTests
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var fixture = new TmpfsFileFixture(IncEaxTwice());
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         mm.BindOrAssertAddressSpaceHandle(engine);
         engine.PageFaultResolver =
             (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
@@ -143,7 +144,7 @@ public class TbCohTests
         var runtime = new MemoryRuntimeContext();
         using var writeEngine = new Engine(runtime);
         using var remoteEngine = new Engine(runtime);
-        var writeMm = new VMAManager();
+        var writeMm = new VMAManager(runtime);
         writeMm.BindOrAssertAddressSpaceHandle(writeEngine);
         writeEngine.PageFaultResolver =
             (addr, isWrite) => writeMm.HandleFaultDetailed(addr, isWrite, writeEngine) == FaultResult.Handled;
@@ -163,7 +164,7 @@ public class TbCohTests
             Assert.True(writeMm.HandleFault(rwAddr, false, writeEngine));
             Assert.True(writeMm.HandleFault(rxAddr, false, writeEngine));
 
-            var remoteMm = new VMAManager();
+            var remoteMm = new VMAManager(runtime);
             remoteMm.BindOrAssertAddressSpaceHandle(remoteEngine);
             remoteEngine.PageFaultResolver =
                 (addr, isWrite) => remoteMm.HandleFaultDetailed(addr, isWrite, remoteEngine) == FaultResult.Handled;
@@ -209,7 +210,7 @@ public class TbCohTests
         var runtime = new MemoryRuntimeContext();
         using var writeEngine = new Engine(runtime);
         using var execEngine = new Engine(runtime);
-        var writeMm = new VMAManager();
+        var writeMm = new VMAManager(runtime);
         writeMm.BindOrAssertAddressSpaceHandle(writeEngine);
         writeEngine.PageFaultResolver =
             (addr, isWrite) => writeMm.HandleFaultDetailed(addr, isWrite, writeEngine) == FaultResult.Handled;
@@ -224,7 +225,7 @@ public class TbCohTests
                     MapFlags.Shared | MapFlags.Fixed, rwFile, 0, "tbcoh-unfaulted-rw", writeEngine));
             Assert.True(writeMm.HandleFault(rwAddr, false, writeEngine));
 
-            var execMm = new VMAManager();
+            var execMm = new VMAManager(runtime);
             execMm.BindOrAssertAddressSpaceHandle(execEngine);
             execEngine.PageFaultResolver =
                 (addr, isWrite) => execMm.HandleFaultDetailed(addr, isWrite, execEngine) == FaultResult.Handled;
@@ -261,7 +262,7 @@ public class TbCohTests
         var runtime = new MemoryRuntimeContext();
         using var writeEngine = new Engine(runtime);
         using var execEngine = new Engine(runtime);
-        var writeMm = new VMAManager();
+        var writeMm = new VMAManager(runtime);
         writeMm.BindOrAssertAddressSpaceHandle(writeEngine);
         writeEngine.PageFaultResolver =
             (addr, isWrite) => writeMm.HandleFaultDetailed(addr, isWrite, writeEngine) == FaultResult.Handled;
@@ -276,7 +277,7 @@ public class TbCohTests
                     MapFlags.Shared | MapFlags.Fixed, rwFile, 0, "tbcoh-unfaulted-munmap-rw", writeEngine));
             Assert.True(writeMm.HandleFault(rwAddr, false, writeEngine));
 
-            var execMm = new VMAManager();
+            var execMm = new VMAManager(runtime);
             execMm.BindOrAssertAddressSpaceHandle(execEngine);
             execEngine.PageFaultResolver =
                 (addr, isWrite) => execMm.HandleFaultDetailed(addr, isWrite, execEngine) == FaultResult.Handled;
@@ -309,7 +310,7 @@ public class TbCohTests
         var runtime = new MemoryRuntimeContext();
         using var writeEngine = new Engine(runtime);
         using var readEngine = new Engine(runtime);
-        var writeMm = new VMAManager();
+        var writeMm = new VMAManager(runtime);
         writeMm.BindOrAssertAddressSpaceHandle(writeEngine);
         writeEngine.PageFaultResolver =
             (addr, isWrite) => writeMm.HandleFaultDetailed(addr, isWrite, writeEngine) == FaultResult.Handled;
@@ -324,7 +325,7 @@ public class TbCohTests
                     MapFlags.Shared | MapFlags.Fixed, rwFile, 0, "tbcoh-unfaulted-read-rw", writeEngine));
             Assert.True(writeMm.HandleFault(rwAddr, false, writeEngine));
 
-            var readMm = new VMAManager();
+            var readMm = new VMAManager(runtime);
             readMm.BindOrAssertAddressSpaceHandle(readEngine);
             readEngine.PageFaultResolver =
                 (addr, isWrite) => readMm.HandleFaultDetailed(addr, isWrite, readEngine) == FaultResult.Handled;
@@ -353,7 +354,7 @@ public class TbCohTests
         var runtime = new MemoryRuntimeContext();
         using var writeEngine = new Engine(runtime);
         using var privateEngine = new Engine(runtime);
-        var writeMm = new VMAManager();
+        var writeMm = new VMAManager(runtime);
         writeMm.BindOrAssertAddressSpaceHandle(writeEngine);
         writeEngine.PageFaultResolver =
             (addr, isWrite) => writeMm.HandleFaultDetailed(addr, isWrite, writeEngine) == FaultResult.Handled;
@@ -368,7 +369,7 @@ public class TbCohTests
                     MapFlags.Shared | MapFlags.Fixed, rwFile, 0, "tbcoh-unfaulted-private-rw", writeEngine));
             Assert.True(writeMm.HandleFault(rwAddr, false, writeEngine));
 
-            var privateMm = new VMAManager();
+            var privateMm = new VMAManager(runtime);
             privateMm.BindOrAssertAddressSpaceHandle(privateEngine);
             privateEngine.PageFaultResolver =
                 (addr, isWrite) =>
@@ -405,8 +406,9 @@ public class TbCohTests
         using var pageScope = PageManager.BeginIsolatedScope();
         using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var diagnostics = TbCohDiagnosticsScope.Begin();
-        using var engine = new Engine();
-        var mm = new VMAManager();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
         mm.BindOrAssertAddressSpaceHandle(engine);
         engine.PageFaultResolver =
             (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
@@ -474,8 +476,14 @@ public class TbCohTests
 
         public TmpfsFileFixture(byte[] contents)
         {
-            var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            _superBlock = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
+            var runtime = new MemoryRuntimeContext();
+            var fsType = new FileSystemType
+            {
+                Name = "tmpfs",
+                Factory = static _ => new Tmpfs(),
+                FactoryWithContext = static (_, memoryContext) => new Tmpfs(memoryContext: memoryContext)
+            };
+            _superBlock = fsType.CreateAnonymousFileSystem(runtime).ReadSuper(fsType, 0, "tmp", null);
             _root = _superBlock.Root;
             Dentry = new Dentry(FsName.FromString("tbcoh.bin"), null, _root, _superBlock);
             _root.Inode!.Create(Dentry, 0x1B6, 0, 0);
