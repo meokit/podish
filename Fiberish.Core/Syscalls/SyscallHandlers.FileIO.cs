@@ -705,12 +705,15 @@ public partial class SyscallManager
         if (f.OpenedInode == null)
             return -(int)Errno.EINVAL;
 
+        var writeStartOffset = offset == -1 ? f.Position : offset;
         var iovList = new ArraySegment<Iovec>(iovs, 0, iovCnt);
         var rc = await f.OpenedInode.WriteV(engine, f, task, iovList, offset, flags);
 
-        // Truncation check happens natively on writing but if we need ProcessAddressSpaceSync.NotifyInodeTruncated:
         if (rc > 0 && f.OpenedInode is Inode inode)
         {
+            ProcessAddressSpaceSync.NotifyFileContentChanged(sm.Mem, engine, inode, writeStartOffset, rc);
+
+            // Truncation check happens natively on writing but if we need ProcessAddressSpaceSync.NotifyInodeTruncated:
             var sizeAfterWrite = (long)inode.Size;
             ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, engine, inode, sizeAfterWrite);
         }

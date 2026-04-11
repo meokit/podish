@@ -815,6 +815,71 @@ public class VMAManager
         return ranges;
     }
 
+    private List<NativeRange> CollectExecutableFileContentRanges(Inode inode, long start, long len)
+    {
+        var ranges = new List<NativeRange>();
+        if (len <= 0) return ranges;
+
+        long end;
+        try
+        {
+            end = checked(start + len);
+        }
+        catch (OverflowException)
+        {
+            end = long.MaxValue;
+        }
+
+        foreach (var vma in _vmas)
+        {
+            if ((vma.Perms & Protection.Exec) == 0) continue;
+            if (!ReferenceEquals(ResolveCurrentFileBacking(vma.File), inode)) continue;
+
+            var mappingStart = vma.Offset;
+            long mappingEnd;
+            try
+            {
+                mappingEnd = checked(vma.Offset + (long)vma.Length);
+            }
+            catch (OverflowException)
+            {
+                mappingEnd = long.MaxValue;
+            }
+
+            var overlapStart = Math.Max(start, mappingStart);
+            var overlapEnd = Math.Min(end, mappingEnd);
+            if (overlapStart >= overlapEnd) continue;
+
+            var guestStart = vma.Start + (uint)(overlapStart - mappingStart);
+            var guestLen = (uint)(overlapEnd - overlapStart);
+            ranges.Add(new NativeRange(guestStart, guestLen));
+        }
+
+        MergeRangesInPlace(ranges);
+        return ranges;
+    }
+
+    public void NotifyFileContentChanged(Inode inode, long start, long len, IReadOnlyList<Engine> engines)
+    {
+        var ranges = CollectExecutableFileContentRanges(inode, start, len);
+        if (ranges.Count == 0)
+            return;
+
+        var sequence = BumpMapSequence();
+        foreach (var range in ranges)
+            RecordCodeCacheResetRange(sequence, range.Start, range.Length);
+
+        if (engines.Count == 0)
+            return;
+
+        foreach (var engine in engines)
+        {
+            foreach (var range in ranges)
+                engine.ResetCodeCacheByRange(range.Start, range.Length);
+            engine.AddressSpaceMapSequenceSeen = sequence;
+        }
+    }
+
     public void OnFileTruncate(Inode inode, long newSize, Engine engine)
     {
         OnFileTruncate(inode, newSize, [engine]);
@@ -1665,23 +1730,6 @@ public class VMAManager
         return true;
     }
 
-    private static bool TryPopulateFileBackedAddressSpacePage(
-        VmArea vma,
-        uint pageIndex,
-        long absoluteFileOffset,
-        long vmaRelativeOffset,
-        IntPtr ptr)
-    {
-        unsafe
-        {
-            Span<byte> buf = new((void*)ptr, LinuxConstants.PageSize);
-            var req = new PageIoRequest(pageIndex, absoluteFileOffset, GetPageReadLength(vma, vmaRelativeOffset));
-            var file = vma.File!;
-            var rc = file.OpenedInode!.ReadPage(file, req, buf);
-            return rc >= 0;
-        }
-    }
-
     private FaultResult ResolveAnonymousSharedAddressSpacePage(
         VmArea vma,
         uint pageIndex,
@@ -2134,11 +2182,6 @@ public class VMAManager
     public static void SyncVmArea(VmArea vma, IReadOnlyList<Engine> engines)
     {
         SyncVmArea(vma, engines, vma.Start, vma.End);
-    }
-
-    public void SyncMappedFile(LinuxFile file, Engine engine)
-    {
-        SyncMappedFile(file, [engine]);
     }
 
     public void SyncMappedFile(LinuxFile file, IReadOnlyList<Engine> engines)

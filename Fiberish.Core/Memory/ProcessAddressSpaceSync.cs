@@ -372,6 +372,21 @@ internal static class ProcessAddressSpaceSync
         }
     }
 
+    internal static void NotifyFileContentChanged(VMAManager vmaManager, Engine engine, Inode inode, long start,
+        long len, Process? process = null)
+    {
+        if (len <= 0) return;
+        using var scope = EnterAddressSpaceScope(engine, process);
+        var targets = inode.SnapshotMappedAddressSpaces();
+        foreach (var target in targets)
+        {
+            var fallback = ReferenceEquals(target, vmaManager) ? engine : null;
+            using var snapshot = RentEngineSnapshot();
+            FillAddressSpaceEngineSnapshot(target, snapshot.Engines, snapshot.SeenStates, fallback);
+            target.NotifyFileContentChanged(inode, start, len, snapshot.Engines.Count == 0 ? [] : snapshot.Engines);
+        }
+    }
+
     internal static void NotifyInodeTruncated(VMAManager vmaManager, Engine engine, Inode inode, long newSize,
         Process? process = null)
     {

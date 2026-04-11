@@ -1,6 +1,7 @@
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
+using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Fiberish.X86.Native;
 using Xunit;
@@ -134,6 +135,53 @@ public class TbCohTests
     }
 
     [Fact]
+    public void ForkedMmu_PreservedExternalRwAlias_RehydratesAliasTrackingForLaterRxAlias()
+    {
+        var runtime = new MemoryRuntimeContext();
+        using var fixture = new TmpfsFileFixture(runtime, IncEaxTwice());
+        using var parentEngine = new Engine(runtime);
+        var parentMm = new VMAManager(runtime);
+        parentMm.BindOrAssertAddressSpaceHandle(parentEngine);
+        parentEngine.PageFaultResolver =
+            (addr, isWrite) => parentMm.HandleFaultDetailed(addr, isWrite, parentEngine) == FaultResult.Handled;
+
+        var parentRwFile = fixture.Open();
+        var childRxFile = fixture.Open();
+        try
+        {
+            const uint rwAddr = 0x48680000;
+            const uint rxAddr = 0x48690000;
+            Assert.Equal(rwAddr,
+                parentMm.Mmap(rwAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                    MapFlags.Shared | MapFlags.Fixed, parentRwFile, 0, "tbcoh-fork-rw", parentEngine));
+            Assert.True(parentMm.HandleFault(rwAddr, false, parentEngine));
+
+            using var childEngine = parentEngine.Clone(false);
+            var childMm = parentMm.Clone();
+            childMm.BindOrAssertAddressSpaceHandle(childEngine);
+            childMm.RebuildExternalMappingsFromNative(childEngine, childMm.VMAs);
+            childEngine.PageFaultResolver =
+                (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
+
+            Assert.Equal(rxAddr,
+                childMm.Mmap(rxAddr, LinuxConstants.PageSize, Protection.Read | Protection.Exec,
+                    MapFlags.Shared | MapFlags.Fixed, childRxFile, 0, "tbcoh-fork-rx", childEngine));
+            Assert.True(childMm.HandleFault(rxAddr, false, childEngine));
+
+            RunPair(childEngine, childMm, rxAddr, 10, 12);
+            Assert.True(childEngine.GetBlockCount() > 0);
+
+            Assert.True(childEngine.CopyToUser(rwAddr, DecEaxTwice()));
+            RunPair(childEngine, childMm, rxAddr, 10, 8);
+        }
+        finally
+        {
+            parentRwFile.Close();
+            childRxFile.Close();
+        }
+    }
+
+    [Fact]
     public void MixedLocalAliasAndRemotePeer_InvalidatesLocalAndRemoteTbs()
     {
         var runtime = new MemoryRuntimeContext();
@@ -194,6 +242,76 @@ public class TbCohTests
         {
             rwFile.Close();
             rxFile.Close();
+        }
+    }
+
+    [Fact]
+    public async Task SysWrite_SharedFileExecAliases_InvalidateLocalAndRemoteTbs()
+    {
+        var runtime = new MemoryRuntimeContext();
+        using var fixture = new TmpfsFileFixture(runtime, IncEaxTwice());
+        using var writeEngine = new Engine(runtime);
+        using var remoteEngine = new Engine(runtime);
+        var writeMm = new VMAManager(runtime);
+        writeMm.BindOrAssertAddressSpaceHandle(writeEngine);
+        writeEngine.PageFaultResolver =
+            (addr, isWrite) => writeMm.HandleFaultDetailed(addr, isWrite, writeEngine) == FaultResult.Handled;
+        var writeSyscalls = new SyscallManager(writeEngine, writeMm, 0);
+
+        var rwFile = fixture.Open();
+        var localRxFile = fixture.Open();
+        var remoteRxFile = fixture.Open();
+        var writeFdFile = fixture.Open();
+        try
+        {
+            const uint rwAddr = 0x48880000;
+            const uint localRxAddr = 0x48890000;
+            const uint remoteRxAddr = 0x488A0000;
+            const uint writeBufAddr = 0x1A000;
+
+            Assert.Equal(rwAddr,
+                writeMm.Mmap(rwAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                    MapFlags.Shared | MapFlags.Fixed, rwFile, 0, "tbcoh-syswrite-rw", writeEngine));
+            Assert.Equal(localRxAddr,
+                writeMm.Mmap(localRxAddr, LinuxConstants.PageSize, Protection.Read | Protection.Exec,
+                    MapFlags.Shared | MapFlags.Fixed, localRxFile, 0, "tbcoh-syswrite-local-rx", writeEngine));
+            Assert.True(writeMm.HandleFault(rwAddr, false, writeEngine));
+            Assert.True(writeMm.HandleFault(localRxAddr, false, writeEngine));
+
+            var remoteMm = new VMAManager(runtime);
+            remoteMm.BindOrAssertAddressSpaceHandle(remoteEngine);
+            remoteEngine.PageFaultResolver =
+                (addr, isWrite) => remoteMm.HandleFaultDetailed(addr, isWrite, remoteEngine) == FaultResult.Handled;
+            Assert.Equal(remoteRxAddr,
+                remoteMm.Mmap(remoteRxAddr, LinuxConstants.PageSize, Protection.Read | Protection.Exec,
+                    MapFlags.Shared | MapFlags.Fixed, remoteRxFile, 0, "tbcoh-syswrite-remote-rx", remoteEngine));
+            Assert.True(remoteMm.HandleFault(remoteRxAddr, false, remoteEngine));
+
+            RunPair(writeEngine, writeMm, localRxAddr, 10, 12);
+            ProcessAddressSpaceSync.SyncEngineBeforeRun(remoteMm, remoteEngine);
+            RunPair(remoteEngine, remoteMm, remoteRxAddr, 10, 12);
+
+            MapWritableUserPage(writeMm, writeEngine, writeBufAddr);
+            var newCode = DecEaxTwice();
+            Assert.True(writeEngine.CopyToUser(writeBufAddr, newCode));
+
+            var fd = writeSyscalls.AllocFD(writeFdFile);
+            Assert.Equal(newCode.Length,
+                await writeSyscalls.SysWrite(writeEngine, (uint)fd, writeBufAddr, (uint)newCode.Length, 0, 0, 0));
+
+            // The current engine may continue guest execution in the same native run,
+            // so local executable aliases must be invalidated immediately.
+            RunPair(writeEngine, writeMm, localRxAddr, 10, 8);
+
+            ProcessAddressSpaceSync.SyncEngineBeforeRun(remoteMm, remoteEngine);
+            RunPair(remoteEngine, remoteMm, remoteRxAddr, 10, 8);
+        }
+        finally
+        {
+            writeSyscalls.Close();
+            rwFile.Close();
+            localRxFile.Close();
+            remoteRxFile.Close();
         }
     }
 
@@ -453,6 +571,14 @@ public class TbCohTests
         var vma = mm.FindVmArea(codeAddr);
         _output.WriteLine(
             $"{tag}: perms={vma?.Perms} readPtr=0x{readPtr.ToInt64():X} writePtr=0x{writePtr.ToInt64():X} canRead={canRead} bytes={BitConverter.ToString(bytes)} faultVec={engine.FaultVector}");
+    }
+
+    private static void MapWritableUserPage(VMAManager mm, Engine engine, uint addr)
+    {
+        Assert.Equal(addr,
+            mm.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[tbcoh-user]", engine));
+        Assert.True(mm.HandleFault(addr, true, engine));
     }
 
     private sealed class TmpfsFileFixture : IDisposable

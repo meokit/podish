@@ -620,6 +620,47 @@ private:
         return identity.fetch_add(1, std::memory_order_relaxed);
     }
 
+    static void RebuildExternalAliasesFromPageDirectory(MmuCore* core) {
+        if (!core || !core->page_directory) return;
+
+        core->external_aliases.clear();
+        auto* dir = core->page_directory.get();
+        for (uint32_t l1_idx = 0; l1_idx < dir->l1_directory.size(); ++l1_idx) {
+            const auto& chunk = dir->l1_directory[l1_idx];
+            if (!chunk) continue;
+
+            for (uint32_t l2_idx = 0; l2_idx < chunk->permissions.size(); ++l2_idx) {
+                const auto perms = chunk->permissions[l2_idx];
+                auto* page = chunk->pages[l2_idx];
+                if (page == nullptr || !has_property(perms, Property::External)) continue;
+
+                const uint32_t guest_page = (l1_idx << 22) | (l2_idx << 12);
+                auto& state = core->external_aliases[reinterpret_cast<uintptr_t>(page)];
+                state.guest_pages.push_unique(guest_page);
+                if (has_property(perms, Property::Exec)) state.exec_count++;
+                if (has_property(perms, Property::Write)) state.write_count++;
+            }
+        }
+
+        // Recompute ForceWriteSlow from the rebuilt alias graph so cloned MMUs
+        // preserve local SMC trapping when new aliases are introduced later.
+        for (const auto& [host_page_base, state] : core->external_aliases) {
+            const bool any_exec_alias = state.exec_count != 0;
+            auto* page = reinterpret_cast<HostAddr>(host_page_base);
+            for (uint32_t guest_page : state.guest_pages) {
+                const uint32_t l1_idx = guest_page >> 22;
+                const uint32_t l2_idx = (guest_page >> 12) & 0x3FF;
+                auto& chunk = dir->l1_directory[l1_idx];
+                if (!chunk || chunk->pages[l2_idx] != page) continue;
+
+                auto perms = chunk->permissions[l2_idx] & ~Property::ForceWriteSlow;
+                if (has_property(perms, Property::Exec) || (any_exec_alias && has_property(perms, Property::Write)))
+                    perms = perms | Property::ForceWriteSlow;
+                chunk->permissions[l2_idx] = perms;
+            }
+        }
+    }
+
     static MmuCore* create_core(std::unique_ptr<PageDirectory> page_directory) {
         auto* core = new MmuCore();
         core->page_directory = std::move(page_directory);
@@ -841,7 +882,9 @@ public:
             if (dst_chunk) cloned->l1_directory[l1] = std::move(dst_chunk);
         }
 
-        return create_core(std::move(cloned));
+        auto* cloned_core = create_core(std::move(cloned));
+        RebuildExternalAliasesFromPageDirectory(cloned_core);
+        return cloned_core;
     }
 
     [[nodiscard]] MmuCore* core_handle() const { return core_; }
