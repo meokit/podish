@@ -1776,8 +1776,9 @@ public abstract class MappingBackedInode : Inode
         return 0;
     }
 
-    private void ReleaseMappingPage(uint pageIndex, InodePageRecord record)
+    internal void ReleaseInstalledMappingPage(InodePageRecord record)
     {
+        var pageIndex = record.PageIndex;
         lock (_mappingPageLock)
         {
             if (_mappingPages.TryGetValue(pageIndex, out var existing) && ReferenceEquals(existing, record))
@@ -1886,7 +1887,7 @@ public abstract class MappingBackedInode : Inode
         if (TryGetMappingPageRecord(pageIndex, out var resident))
         {
             var installed = mapping.InstallHostPageIfAbsent(pageIndex, resident.Ptr, ref resident.Handle,
-                resident.HostPageKind, _ => ReleaseMappingPage(pageIndex, resident), out _);
+                resident.HostPageKind, this, resident, out _);
             return installed;
         }
 
@@ -1906,11 +1907,11 @@ public abstract class MappingBackedInode : Inode
                 return mapping.PeekPage(pageIndex);
 
             return mapping.InstallHostPageIfAbsent(pageIndex, resident.Ptr, ref resident.Handle,
-                resident.HostPageKind, _ => ReleaseMappingPage(pageIndex, resident), out _);
+                resident.HostPageKind, this, resident, out _);
         }
 
         var finalPtr = mapping.InstallHostPageIfAbsent(pageIndex, record.Ptr, ref record.Handle, record.HostPageKind,
-            _ => ReleaseMappingPage(pageIndex, record), out var inserted);
+            this, record, out var inserted);
         if (!inserted && finalPtr != record.Ptr)
         {
             lock (_mappingPageLock)

@@ -1,4 +1,5 @@
 using Fiberish.Native;
+using Fiberish.VFS;
 
 namespace Fiberish.Memory;
 
@@ -86,6 +87,13 @@ public sealed class AddressSpace
     {
         return Pages.InstallHostPageIfAbsent(pageIndex, ptr, ref backingHandle, hostPageKind, onReleased,
             out inserted);
+    }
+
+    internal IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, ref BackingPageHandle backingHandle,
+        HostPageKind hostPageKind, MappingBackedInode releaseOwner, InodePageRecord releaseRecord, out bool inserted)
+    {
+        return Pages.InstallHostPageIfAbsent(pageIndex, ptr, ref backingHandle, hostPageKind, releaseOwner,
+            releaseRecord, out inserted);
     }
 
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew)

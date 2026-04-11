@@ -8,6 +8,8 @@ namespace Fiberish.Tests.Memory;
 
 public class RmapTests
 {
+    private const int SmallEntryThreshold = 4;
+
     [Fact]
     public void SharedFilePage_RmapReturnsAllHoldingVmas()
     {
@@ -229,6 +231,59 @@ public class RmapTests
     }
 
     [Fact]
+    public void SharedFilePage_RmapPromotesToIndexedBucketWhenAliasCountExceedsThreshold()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var fixture = new TmpfsFileFixture(runtime.MemoryContext, new byte[LinuxConstants.PageSize]);
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
+        var files = new List<LinuxFile>();
+
+        try
+        {
+            var mappings = MapSharedAliases(fixture, engine, mm, SmallEntryThreshold + 1, files);
+            var hits = ResolveHits(runtime.MemoryContext.HostPages, mappings.HostPagePtr);
+
+            Assert.Equal(SmallEntryThreshold + 1, hits.Count);
+            AssertHitsMatch(hits, mm, mappings.Vmas);
+        }
+        finally
+        {
+            foreach (var file in files)
+                file.Close();
+        }
+    }
+
+    [Fact]
+    public void SharedFilePage_RmapDemotesBackToSmallBucketAfterAliasRemoval()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var fixture = new TmpfsFileFixture(runtime.MemoryContext, new byte[LinuxConstants.PageSize]);
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
+        var files = new List<LinuxFile>();
+
+        var mappings = MapSharedAliases(fixture, engine, mm, SmallEntryThreshold + 1, files);
+
+        mm.Munmap(mappings.Addresses[^1], LinuxConstants.PageSize, engine);
+        var remainingVmas = mappings.Vmas.Take(SmallEntryThreshold).ToArray();
+        var hitsAtThreshold = ResolveHits(runtime.MemoryContext.HostPages, mappings.HostPagePtr);
+        Assert.Equal(SmallEntryThreshold, hitsAtThreshold.Count);
+        AssertHitsMatch(hitsAtThreshold, mm, remainingVmas);
+        Assert.DoesNotContain(hitsAtThreshold, hit => ReferenceEquals(hit.Vma, mappings.Vmas[^1]));
+
+        for (var i = 1; i < SmallEntryThreshold; i++)
+            mm.Munmap(mappings.Addresses[i], LinuxConstants.PageSize, engine);
+
+        var singleHit = Assert.Single(ResolveHits(runtime.MemoryContext.HostPages, mappings.HostPagePtr));
+        Assert.Same(mm, singleHit.Mm);
+        Assert.Same(mappings.Vmas[0], singleHit.Vma);
+
+        mm.Munmap(mappings.Addresses[0], LinuxConstants.PageSize, engine);
+        Assert.Empty(ResolveHits(runtime.MemoryContext.HostPages, mappings.HostPagePtr));
+    }
+
+    [Fact]
     public void HostPageSlot_ReusesSlotWithNewGeneration_AndStaleHostPageCannotLeakTbCohState()
     {
         var runtime = new TestRuntimeFactory();
@@ -316,6 +371,43 @@ public class RmapTests
         var hits = new List<RmapHit>();
         VmRmap.ResolveHostPageHolders(hostPages, ptr, hits);
         return hits;
+    }
+
+    private static void AssertHitsMatch(IReadOnlyCollection<RmapHit> hits, VMAManager mm, IReadOnlyCollection<VmArea> expectedVmas)
+    {
+        Assert.Equal(expectedVmas.Count, hits.Count);
+        foreach (var expectedVma in expectedVmas)
+        {
+            Assert.Contains(hits, hit => ReferenceEquals(hit.Mm, mm) &&
+                                         ReferenceEquals(hit.Vma, expectedVma) &&
+                                         hit.OwnerKind == HostPageOwnerKind.AddressSpace);
+        }
+    }
+
+    private static (uint[] Addresses, VmArea[] Vmas, IntPtr HostPagePtr) MapSharedAliases(TmpfsFileFixture fixture,
+        Engine engine, VMAManager mm, int count, List<LinuxFile> files)
+    {
+        var addresses = new uint[count];
+        var vmas = new VmArea[count];
+
+        for (var i = 0; i < count; i++)
+        {
+            var addr = 0x56000000u + (uint)(i * LinuxConstants.PageSize * 2);
+            var file = fixture.Open();
+            files.Add(file);
+            mm.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, file, 0, $"MAP_SHARED_ALIAS_{i}", engine);
+
+            Assert.True(mm.HandleFault(addr, false, engine));
+
+            addresses[i] = addr;
+            vmas[i] = Assert.IsType<VmArea>(mm.FindVmArea(addr));
+        }
+
+        var pageIndex = vmas[0].GetPageIndex(addresses[0]);
+        var hostPagePtr = vmas[0].VmMapping!.PeekPage(pageIndex);
+        Assert.NotEqual(IntPtr.Zero, hostPagePtr);
+        return (addresses, vmas, hostPagePtr);
     }
 
     private sealed class TmpfsFileFixture : IDisposable

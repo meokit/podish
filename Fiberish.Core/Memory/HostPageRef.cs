@@ -183,36 +183,320 @@ internal struct HostPageRmapRef
 
 internal sealed class OwnerRmapTracker
 {
+    private readonly record struct OwnerRmapPageBucketKey(uint PageIndex, IntPtr HostPagePtr);
+
     private sealed class OwnerRmapPageBucket
     {
-        public List<HostPageRmapRef> Entries { get; } = [];
-        public Dictionary<HostPageRmapKey, int> EntryIndices { get; } = [];
+        private const int SmallEntryThreshold = 4;
+        private int _count;
+        private HostPageRmapRef _singleEntry;
+        private HostPageRmapRef[]? _entries;
+        private Dictionary<HostPageRmapKey, int>? _entryIndices;
 
-        public bool IsEmpty => Entries.Count == 0;
+        public bool IsEmpty => _count == 0;
+
+        public void AddOrUpdate(HostPageRmapRef entry, out HostPageRmapRef previous, out bool existed)
+        {
+            var key = entry.GetKey();
+            if (_count == 0)
+            {
+                _singleEntry = entry;
+                _count = 1;
+                previous = default;
+                existed = false;
+                return;
+            }
+
+            if (_count == 1)
+            {
+                if (_singleEntry.GetKey().Equals(key))
+                {
+                    previous = _singleEntry;
+                    _singleEntry = entry;
+                    existed = true;
+                    return;
+                }
+
+                EnsureEntryCapacity(2);
+                _entries![0] = _singleEntry;
+                _entries[1] = entry;
+                _singleEntry = default;
+                _count = 2;
+                previous = default;
+                existed = false;
+                return;
+            }
+
+            if (TryGetIndex(key, out var existingIndex))
+            {
+                previous = _entries![existingIndex];
+                _entries[existingIndex] = entry;
+                existed = true;
+                return;
+            }
+
+            var insertIndex = _count;
+            EnsureEntryCapacity(insertIndex + 1);
+            _entries![insertIndex] = entry;
+            _count = insertIndex + 1;
+            previous = default;
+            existed = false;
+
+            if (_entryIndices != null)
+            {
+                _entryIndices.Add(key, insertIndex);
+                return;
+            }
+
+            if (_count > SmallEntryThreshold)
+                PromoteToIndexed();
+        }
+
+        public bool TryRemove(HostPageRmapKey key, out HostPageRmapRef removed)
+        {
+            if (_count == 0)
+            {
+                removed = default;
+                return false;
+            }
+
+            if (_count == 1)
+            {
+                if (!_singleEntry.GetKey().Equals(key))
+                {
+                    removed = default;
+                    return false;
+                }
+
+                removed = _singleEntry;
+                Clear();
+                return true;
+            }
+
+            int index;
+            if (_entryIndices != null)
+            {
+                if (!_entryIndices.Remove(key, out index))
+                {
+                    removed = default;
+                    return false;
+                }
+            }
+            else if (!TryGetIndexLinear(key, out index))
+            {
+                removed = default;
+                return false;
+            }
+
+            removed = _entries![index];
+            RemoveAt(index);
+            return true;
+        }
+
+        public bool Contains(HostPageRmapKey key)
+        {
+            return TryGetIndex(key, out _);
+        }
+
+        public bool TryRebind(HostPageRmapKey oldKey, HostPageRmapRef newEntry, out HostPageRmapRef previous)
+        {
+            if (_count == 0)
+            {
+                previous = default;
+                return false;
+            }
+
+            var newKey = newEntry.GetKey();
+            if (_count == 1)
+            {
+                if (!_singleEntry.GetKey().Equals(oldKey))
+                {
+                    previous = default;
+                    return false;
+                }
+
+                previous = _singleEntry;
+                _singleEntry = newEntry;
+                return true;
+            }
+
+            int index;
+            if (_entryIndices != null)
+            {
+                if (!_entryIndices.TryGetValue(oldKey, out index))
+                {
+                    previous = default;
+                    return false;
+                }
+
+                if (!oldKey.Equals(newKey))
+                {
+                    _entryIndices.Remove(oldKey);
+                    _entryIndices[newKey] = index;
+                }
+            }
+            else if (!TryGetIndexLinear(oldKey, out index))
+            {
+                previous = default;
+                return false;
+            }
+
+            previous = _entries![index];
+            _entries[index] = newEntry;
+            return true;
+        }
+
+        public void CollectHits(HostPageRef hostPageRef, List<RmapHit> output)
+        {
+            if (_count == 0)
+                return;
+
+            if (_count == 1)
+            {
+                output.Add(new RmapHit(hostPageRef, _singleEntry.Mm, _singleEntry.Vma, _singleEntry.OwnerKind,
+                    _singleEntry.PageIndex, _singleEntry.GuestPageStart));
+                return;
+            }
+
+            var entries = _entries!;
+            for (var i = 0; i < _count; i++)
+            {
+                var entry = entries[i];
+                output.Add(new RmapHit(hostPageRef, entry.Mm, entry.Vma, entry.OwnerKind, entry.PageIndex,
+                    entry.GuestPageStart));
+            }
+        }
+
+        public bool Visit<TState>(HostPageRef hostPageRef, ref TState state, HostPageRmapVisitor<TState> visitor)
+        {
+            if (_count == 0)
+                return false;
+
+            if (_count == 1)
+            {
+                visitor(hostPageRef, _singleEntry, ref state);
+                return true;
+            }
+
+            var entries = _entries!;
+            for (var i = 0; i < _count; i++)
+                visitor(hostPageRef, entries[i], ref state);
+            return true;
+        }
+
+        private bool TryGetIndex(HostPageRmapKey key, out int index)
+        {
+            if (_count == 0)
+            {
+                index = -1;
+                return false;
+            }
+
+            if (_count == 1)
+            {
+                if (_singleEntry.GetKey().Equals(key))
+                {
+                    index = 0;
+                    return true;
+                }
+
+                index = -1;
+                return false;
+            }
+
+            if (_entryIndices != null)
+                return _entryIndices.TryGetValue(key, out index);
+
+            return TryGetIndexLinear(key, out index);
+        }
+
+        private bool TryGetIndexLinear(HostPageRmapKey key, out int index)
+        {
+            var entries = _entries!;
+            for (var i = 0; i < _count; i++)
+            {
+                if (!entries[i].GetKey().Equals(key))
+                    continue;
+
+                index = i;
+                return true;
+            }
+
+            index = -1;
+            return false;
+        }
+
+        private void EnsureEntryCapacity(int requiredCount)
+        {
+            if (_entries == null)
+            {
+                _entries = new HostPageRmapRef[Math.Max(SmallEntryThreshold, requiredCount)];
+                return;
+            }
+
+            if (_entries.Length >= requiredCount)
+                return;
+
+            Array.Resize(ref _entries, Math.Max(_entries.Length * 2, requiredCount));
+        }
+
+        private void PromoteToIndexed()
+        {
+            var entryIndices = new Dictionary<HostPageRmapKey, int>(_count);
+            var entries = _entries!;
+            for (var i = 0; i < _count; i++)
+                entryIndices.Add(entries[i].GetKey(), i);
+
+            _entryIndices = entryIndices;
+        }
+
+        private void RemoveAt(int index)
+        {
+            var entries = _entries!;
+            var lastIndex = _count - 1;
+            if (index != lastIndex)
+            {
+                var swapped = entries[lastIndex];
+                entries[index] = swapped;
+                if (_entryIndices != null)
+                    _entryIndices[swapped.GetKey()] = index;
+            }
+
+            entries[lastIndex] = default;
+            _count--;
+
+            if (_count == 1)
+            {
+                _singleEntry = entries[0];
+                entries[0] = default;
+                _entries = null;
+                _entryIndices = null;
+                return;
+            }
+
+            if (_count <= SmallEntryThreshold)
+                _entryIndices = null;
+        }
+
+        private void Clear()
+        {
+            _count = 0;
+            _singleEntry = default;
+            _entries = null;
+            _entryIndices = null;
+        }
     }
 
-    private sealed class OwnerRmapBucket
-    {
-        public Dictionary<IntPtr, OwnerRmapPageBucket> Pages { get; } = [];
-
-        public bool IsEmpty => Pages.Count == 0;
-    }
-
-    private readonly Dictionary<uint, OwnerRmapBucket> _buckets = [];
+    private readonly Dictionary<OwnerRmapPageBucketKey, OwnerRmapPageBucket> _buckets = [];
 
     private OwnerRmapPageBucket GetOrAddPageBucket(uint pageIndex, IntPtr hostPagePtr)
     {
-        if (!_buckets.TryGetValue(pageIndex, out var bucket))
-        {
-            bucket = new OwnerRmapBucket();
-            _buckets.Add(pageIndex, bucket);
-        }
-
-        if (bucket.Pages.TryGetValue(hostPagePtr, out var existing))
+        var bucketKey = new OwnerRmapPageBucketKey(pageIndex, hostPagePtr);
+        if (_buckets.TryGetValue(bucketKey, out var existing))
             return existing;
 
         var created = new OwnerRmapPageBucket();
-        bucket.Pages.Add(hostPagePtr, created);
+        _buckets.Add(bucketKey, created);
         return created;
     }
 
@@ -221,112 +505,67 @@ internal sealed class OwnerRmapTracker
         if (!pageBucket.IsEmpty)
             return;
 
-        if (!_buckets.TryGetValue(pageIndex, out var bucket))
-            return;
-
-        bucket.Pages.Remove(hostPagePtr);
-        if (bucket.IsEmpty)
-            _buckets.Remove(pageIndex);
+        _buckets.Remove(new OwnerRmapPageBucketKey(pageIndex, hostPagePtr));
     }
 
     public void AddOrUpdate(uint pageIndex, IntPtr hostPagePtr, HostPageRmapRef entry, out HostPageRmapRef previous,
         out bool existed)
     {
         var pageBucket = GetOrAddPageBucket(pageIndex, hostPagePtr);
-        var key = entry.GetKey();
-        if (pageBucket.EntryIndices.TryGetValue(key, out var existingIndex))
-        {
-            existed = true;
-            previous = pageBucket.Entries[existingIndex];
-            pageBucket.Entries[existingIndex] = entry;
-            return;
-        }
-
-        existed = false;
-        previous = default;
-        pageBucket.EntryIndices.Add(key, pageBucket.Entries.Count);
-        pageBucket.Entries.Add(entry);
+        pageBucket.AddOrUpdate(entry, out previous, out existed);
     }
 
     public bool TryRemove(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey key, out HostPageRmapRef removed)
     {
-        if (!_buckets.TryGetValue(pageIndex, out var bucket) ||
-            !bucket.Pages.TryGetValue(hostPagePtr, out var pageBucket) ||
-            !pageBucket.EntryIndices.Remove(key, out var index))
+        if (!_buckets.TryGetValue(new OwnerRmapPageBucketKey(pageIndex, hostPagePtr), out var pageBucket) ||
+            !pageBucket.TryRemove(key, out removed))
         {
             removed = default;
             return false;
         }
 
-        removed = pageBucket.Entries[index];
-        var lastIndex = pageBucket.Entries.Count - 1;
-        if (index != lastIndex)
-        {
-            var swapped = pageBucket.Entries[lastIndex];
-            pageBucket.Entries[index] = swapped;
-            pageBucket.EntryIndices[swapped.GetKey()] = index;
-        }
-
-        pageBucket.Entries.RemoveAt(lastIndex);
         RemovePageBucketIfEmpty(pageIndex, hostPagePtr, pageBucket);
         return true;
     }
 
     public bool Contains(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey key)
     {
-        return _buckets.TryGetValue(pageIndex, out var bucket) &&
-               bucket.Pages.TryGetValue(hostPagePtr, out var pageBucket) &&
-               pageBucket.EntryIndices.ContainsKey(key);
+        return _buckets.TryGetValue(new OwnerRmapPageBucketKey(pageIndex, hostPagePtr), out var pageBucket) &&
+               pageBucket.Contains(key);
     }
 
     public bool TryRebind(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey oldKey, HostPageRmapRef newEntry,
         out HostPageRmapRef previous)
     {
-        if (!_buckets.TryGetValue(pageIndex, out var bucket) ||
-            !bucket.Pages.TryGetValue(hostPagePtr, out var pageBucket) ||
-            !pageBucket.EntryIndices.TryGetValue(oldKey, out var index))
+        if (!_buckets.TryGetValue(new OwnerRmapPageBucketKey(pageIndex, hostPagePtr), out var pageBucket) ||
+            !pageBucket.TryRebind(oldKey, newEntry, out previous))
         {
             previous = default;
             return false;
         }
-
-        previous = pageBucket.Entries[index];
-        var newKey = newEntry.GetKey();
-        if (!oldKey.Equals(newKey))
-        {
-            pageBucket.EntryIndices.Remove(oldKey);
-            pageBucket.EntryIndices[newKey] = index;
-        }
-
-        pageBucket.Entries[index] = newEntry;
         return true;
     }
 
     public void CollectHits(uint pageIndex, IntPtr hostPagePtr, HostPageRef hostPageRef, List<RmapHit> output)
     {
-        if (!_buckets.TryGetValue(pageIndex, out var bucket) ||
-            !bucket.Pages.TryGetValue(hostPagePtr, out var pageBucket))
+        if (!_buckets.TryGetValue(new OwnerRmapPageBucketKey(pageIndex, hostPagePtr), out var pageBucket))
         {
             return;
         }
 
-        foreach (var entry in pageBucket.Entries)
-            output.Add(new RmapHit(hostPageRef, entry.Mm, entry.Vma, entry.OwnerKind, entry.PageIndex, entry.GuestPageStart));
+        pageBucket.CollectHits(hostPageRef, output);
     }
 
     public bool Visit<TState>(uint pageIndex, IntPtr hostPagePtr, HostPageRef hostPageRef, ref TState state,
         HostPageRmapVisitor<TState> visitor)
     {
-        if (!_buckets.TryGetValue(pageIndex, out var bucket) ||
-            !bucket.Pages.TryGetValue(hostPagePtr, out var pageBucket) ||
-            pageBucket.Entries.Count == 0)
+        if (!_buckets.TryGetValue(new OwnerRmapPageBucketKey(pageIndex, hostPagePtr), out var pageBucket) ||
+            pageBucket.IsEmpty)
         {
             return false;
         }
 
-        foreach (var entry in pageBucket.Entries)
-            visitor(hostPageRef, entry, ref state);
-        return true;
+        return pageBucket.Visit(hostPageRef, ref state, visitor);
     }
 }
 

@@ -1,4 +1,5 @@
 using Fiberish.Native;
+using Fiberish.VFS;
 
 namespace Fiberish.Memory;
 
@@ -157,6 +158,23 @@ internal sealed class OwnerPageSlots
     internal IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, ref BackingPageHandle backingHandle,
         HostPageKind hostPageKind, Action<ResidentPageRecord>? onReleased, out bool inserted)
     {
+        return InstallHostPageIfAbsent(pageIndex, ptr, ref backingHandle, hostPageKind, onReleased, null, null,
+            out inserted);
+    }
+
+    internal IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, ref BackingPageHandle backingHandle,
+        HostPageKind hostPageKind, MappingBackedInode releaseOwner, InodePageRecord releaseRecord, out bool inserted)
+    {
+        ArgumentNullException.ThrowIfNull(releaseOwner);
+        ArgumentNullException.ThrowIfNull(releaseRecord);
+        return InstallHostPageIfAbsent(pageIndex, ptr, ref backingHandle, hostPageKind, null, releaseOwner,
+            releaseRecord, out inserted);
+    }
+
+    private IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, ref BackingPageHandle backingHandle,
+        HostPageKind hostPageKind, Action<ResidentPageRecord>? onReleased, MappingBackedInode? releaseOwner,
+        InodePageRecord? releaseRecord, out bool inserted)
+    {
         var pageCountDelta = 0;
         ptr = ptr != IntPtr.Zero ? ptr : backingHandle.Pointer;
         HostPageRef hostPage;
@@ -173,7 +191,8 @@ internal sealed class OwnerPageSlots
             hostPage = EnsureHostPageRegistered(ptr, hostPageKind, ref backingHandle);
             var ownerBinding = _ownerBindingFactory(pageIndex);
             hostPage.BindOwnerRoot(ownerBinding);
-            _pages[pageIndex] = CreateVmPage(hostPage, hostPageKind, ownerBinding, onReleased);
+            _pages[pageIndex] = CreateVmPage(hostPage, hostPageKind, ownerBinding, onReleased, releaseOwner,
+                releaseRecord);
             Touch(_pages[pageIndex]);
             inserted = true;
             pageCountDelta = 1;
@@ -515,6 +534,8 @@ internal sealed class OwnerPageSlots
 
         if (pageRecord.OnReleased != null)
             pageRecord.OnReleased(pageRecord);
+        else if (pageRecord.MappingReleaseOwner != null && pageRecord.MappingReleaseRecord != null)
+            pageRecord.MappingReleaseOwner.ReleaseInstalledMappingPage(pageRecord.MappingReleaseRecord);
 
         _memoryContext.HostPages.UnbindOwnerRoot(pageRecord.Ptr, pageRecord.OwnerBinding);
         _memoryContext.HostPages.TryRemoveIfUnused(pageRecord.Ptr);
@@ -522,7 +543,8 @@ internal sealed class OwnerPageSlots
 
     private static ResidentPageRecord CreateVmPage(HostPageRef hostPage, HostPageKind hostPageKind,
         HostPageOwnerBinding ownerBinding,
-        Action<ResidentPageRecord>? onReleased = null)
+        Action<ResidentPageRecord>? onReleased = null, MappingBackedInode? releaseOwner = null,
+        InodePageRecord? releaseRecord = null)
     {
         return new ResidentPageRecord
         {
@@ -530,7 +552,9 @@ internal sealed class OwnerPageSlots
             HostPage = hostPage,
             HostPageKind = hostPageKind,
             OwnerBinding = ownerBinding,
-            OnReleased = onReleased
+            OnReleased = onReleased,
+            MappingReleaseOwner = releaseOwner,
+            MappingReleaseRecord = releaseRecord
         };
     }
 
@@ -563,6 +587,8 @@ internal sealed class ResidentPageRecord
     public required HostPageKind HostPageKind { get; set; }
     public required HostPageOwnerBinding OwnerBinding { get; set; }
     public Action<ResidentPageRecord>? OnReleased { get; set; }
+    public MappingBackedInode? MappingReleaseOwner { get; set; }
+    public InodePageRecord? MappingReleaseRecord { get; set; }
 
     public bool Dirty
     {
