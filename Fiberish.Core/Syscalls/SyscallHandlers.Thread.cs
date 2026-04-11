@@ -693,7 +693,7 @@ public partial class SyscallManager
         var entry = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
         var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(4, 4));
 
-        Logger.LogInformation($"[SysSetThreadArea] Entry={entry} Base={baseAddr:X}");
+        LogSetThreadArea(entry, baseAddr);
 
         engine.SetSegBase(Seg.GS, baseAddr);
 

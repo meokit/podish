@@ -83,6 +83,12 @@ public class InodeInvariantTests
             inode.ReleaseRef(InodeRefKind.KernelInternal, "test");
 
             var trace = VfsDebugTrace.SnapshotRefTrace().Where(t => t.Ino == inode.Ino).ToList();
+            if (!VfsDebugTrace.CompilerEnabled)
+            {
+                Assert.Empty(trace);
+                return;
+            }
+
             Assert.Contains(trace,
                 t => t.Operation == "Inode.AcquireRef.KernelInternal" && t.RefBefore == 0 && t.RefAfter == 1);
             Assert.Contains(trace,

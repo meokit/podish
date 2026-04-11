@@ -489,7 +489,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
                 }
 
                 primaryDentry.CacheChild(cached, "SilkInode.Lookup.refresh-hit");
-                ChildNames.Add(FsName.FromBytes(name));
+                ChildNames.Add(cached.Name);
                 return cached;
             }
 
@@ -499,11 +499,12 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
             var childInode = ((SilkSuperBlock)IndexedSb).GetOrLoadInode(childIno.Value);
             if (childInode == null) return null;
 
-            var created = new Dentry(FsName.FromBytes(name), childInode, primaryDentry, SuperBlock);
+            var childName = FsName.FromBytes(name);
+            var created = new Dentry(childName, childInode, primaryDentry, SuperBlock);
             IndexedSb.SetDentry(Ino, created);
 
             primaryDentry.CacheChild(created, "SilkInode.Lookup.refresh-create");
-            ChildNames.Add(FsName.FromBytes(name));
+            ChildNames.Add(childName);
             return created;
         }
     }
@@ -569,8 +570,8 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (childDentry.Inode == null)
             childDentry.Instantiate(childInode);
         childDentry.Parent ??= parent;
-        childDentry.Name = FsName.FromBytes(name);
-        ChildNames.Add(FsName.FromBytes(name));
+        if (!childDentry.Name.Equals(name))
+            childDentry.Name = FsName.FromBytes(name);
         return true;
     }
 

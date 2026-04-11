@@ -1140,8 +1140,7 @@ LocResolvedUtimens64:
         var newPathErr = ReadPathArgumentBytes(a4, out var newPath);
         if (newPathErr != 0) return newPathErr;
         using var newPathLease = newPath;
-        Logger.LogInformation(
-            $"[RenameAt] olddirfd={(int)a1} oldpath='{FsEncoding.DecodeUtf8Lossy(oldPath.Span)}' newdirfd={(int)a3} newpath='{FsEncoding.DecodeUtf8Lossy(newPath.Span)}'");
+        LogRenameAt(oldPath.Span, (int)a1, newPath.Span, (int)a3);
         return ImplRename(this, (int)a1, oldPath, (int)a3, newPath, 0);
     }
 
@@ -1153,8 +1152,7 @@ LocResolvedUtimens64:
         var newPathErr = ReadPathArgumentBytes(a4, out var newPath);
         if (newPathErr != 0) return newPathErr;
         using var newPathLease = newPath;
-        Logger.LogInformation(
-            $"[RenameAt2] olddirfd={(int)a1} oldpath='{FsEncoding.DecodeUtf8Lossy(oldPath.Span)}' newdirfd={(int)a3} newpath='{FsEncoding.DecodeUtf8Lossy(newPath.Span)}' flags={a5}");
+        LogRenameAt2(oldPath.Span, (int)a1, newPath.Span, (int)a3, a5);
         return ImplRename(this, (int)a1, oldPath, (int)a3, newPath, a5);
     }
 
@@ -1188,14 +1186,14 @@ LocResolvedUtimens64:
         var (oldParentLoc, oldName, oldErr) = sm.PathWalker.PathWalkForCreate(oldPath.UnsafeBuffer, oldPath.Length, oldStart);
         if (oldErr != 0)
         {
-            Logger.LogInformation($"[Rename] PathWalkForCreate(oldPath) failed err={oldErr}");
+            LogRenamePathWalkFailure("oldPath", oldErr);
             return oldErr;
         }
 
         var (newParentLoc, newName, newErr) = sm.PathWalker.PathWalkForCreate(newPath.UnsafeBuffer, newPath.Length, newStart);
         if (newErr != 0)
         {
-            Logger.LogInformation($"[Rename] PathWalkForCreate(newPath) failed err={newErr}");
+            LogRenamePathWalkFailure("newPath", newErr);
             return newErr;
         }
 

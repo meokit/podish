@@ -710,7 +710,7 @@ public partial class SyscallManager
                 return 0;
 
             default:
-                Logger.LogWarning($"[SysPrctl] Unhandled option: {option}");
+                LogUnhandledPrctlOption(option);
                 return 0; // Success for many non-critical options
         }
     }

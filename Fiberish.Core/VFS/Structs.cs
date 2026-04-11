@@ -2620,19 +2620,21 @@ public readonly record struct InodeRefTrace(
     int DentryCount,
     string? Detail);
 
-public static class VfsDebugTrace
+public static partial class VfsDebugTrace
 {
     private const int MaxTraceEntries = 4096;
     private static readonly ILogger Logger = Logging.CreateLogger("Fiberish.VFS.RefTrace");
     private static readonly Lock TraceLock = new();
     private static readonly Queue<InodeRefTrace> RefTraceQueue = [];
 
-    public static bool Enabled { get; set; } =
+    public static bool CompilerEnabled =>
 #if VFS_REFTRACE
         true;
 #else
         false;
 #endif
+
+    public static bool Enabled { get; set; } = CompilerEnabled;
 
     public static bool StrictInvariants { get; set; } =
 #if DEBUG
@@ -2657,6 +2659,7 @@ public static class VfsDebugTrace
         }
     }
 
+    [Conditional("VFS_REFTRACE")]
     public static void RecordRefChange(Inode inode, string operation, int before, int after, string? detail)
     {
         var entry = new InodeRefTrace(
@@ -2676,67 +2679,62 @@ public static class VfsDebugTrace
         }
 
         if (Enabled)
-            Logger.LogDebug(
-                "[VFS-Ref] op={Operation} ino={Ino} type={Type} ref:{Before}->{After} dentries={DentryCount} detail={Detail}",
-                operation, inode.Ino, inode.Type, before, after, inode.Dentries.Count, detail ?? "");
+            LogRefChangeCore(Logger, operation, inode.Ino, inode.Type, before, after, inode.Dentries.Count,
+                detail ?? string.Empty);
     }
 
+    [Conditional("VFS_REFTRACE")]
     public static void RecordDentryBinding(Inode inode, Dentry dentry, string operation, string reason)
     {
         if (!Enabled) return;
-        Logger.LogDebug(
-            "[VFS-Dentry] op={Operation} reason={Reason} ino={Ino} dentry={Name} dentryId={DentryId} parent={Parent} dentries={DentryCount}",
-            operation, reason, inode.Ino, dentry.Name.ToDebugString(), dentry.Id,
-            dentry.Parent != null ? dentry.Parent.Name.ToDebugString() : "<null>",
-            inode.Dentries.Count);
+        LogDentryBindingCore(Logger, operation, reason, inode.Ino, dentry.Name.ToDebugString(), dentry.Id,
+            dentry.Parent != null ? dentry.Parent.Name.ToDebugString() : "<null>", inode.Dentries.Count);
     }
 
+    [Conditional("VFS_REFTRACE")]
     public static void RecordDentryRefChange(Dentry dentry, string operation, int before, int after, string? reason)
     {
         if (!Enabled) return;
-        Logger.LogDebug(
-            "[VFS-DentryRef] op={Operation} dentry={Name} dentryId={DentryId} ref:{Before}->{After} lru={Lru} reason={Reason}",
-            operation, dentry.Name, dentry.Id, before, after, dentry.IsOnLru, reason ?? "");
+        LogDentryRefChangeCore(Logger, operation, dentry.Name, dentry.Id, before, after, dentry.IsOnLru,
+            reason ?? string.Empty);
     }
 
+    [Conditional("VFS_REFTRACE")]
     public static void RecordDentryCacheUpdate(Dentry parent, Dentry child, string operation, string reason)
     {
         if (!Enabled) return;
-        Logger.LogDebug(
-            "[VFS-Dcache] op={Operation} reason={Reason} parent={ParentName} parentId={ParentId} child={ChildName} childId={ChildId}",
-            operation, reason, parent.Name, parent.Id, child.Name, child.Id);
+        LogDentryCacheUpdateCore(Logger, operation, reason, parent.Name, parent.Id, child.Name, child.Id);
     }
 
+    [Conditional("VFS_REFTRACE")]
     public static void RecordStatNlink(Inode inode, string source, uint nlink)
     {
         if (!Enabled) return;
-        Logger.LogDebug(
-            "[VFS-StatNlink] source={Source} ino={Ino} type={Type} nlink={Nlink} ref={RefCount} dentries={DentryCount}",
-            source, inode.Ino, inode.Type, nlink, inode.RefCount, inode.Dentries.Count);
+        LogStatNlinkCore(Logger, source, inode.Ino, inode.Type, nlink, inode.RefCount, inode.Dentries.Count);
     }
 
+    [Conditional("VFS_REFTRACE")]
     public static void RecordLinkChange(Inode inode, string operation, int before, int after, string? reason)
     {
         if (!Enabled) return;
-        Logger.LogDebug(
-            "[VFS-Link] op={Operation} ino={Ino} type={Type} nlink:{Before}->{After} ref={RefCount} dentries={DentryCount} reason={Reason}",
-            operation, inode.Ino, inode.Type, before, after, inode.RefCount, inode.Dentries.Count, reason ?? "");
+        LogLinkChangeCore(Logger, operation, inode.Ino, inode.Type, before, after, inode.RefCount,
+            inode.Dentries.Count, reason ?? string.Empty);
     }
 
+    [Conditional("VFS_REFTRACE")]
     public static void RecordCacheEvict(Inode inode, string operation, string? reason)
     {
         if (!Enabled) return;
-        Logger.LogDebug(
-            "[VFS-CacheEvict] op={Operation} ino={Ino} type={Type} nlink={Nlink} ref={RefCount} reason={Reason}",
-            operation, inode.Ino, inode.Type, inode.LinkCount, inode.RefCount, reason ?? "");
+        LogCacheEvictCore(Logger, operation, inode.Ino, inode.Type, inode.LinkCount, inode.RefCount,
+            reason ?? string.Empty);
     }
 
+    [Conditional("VFS_REFTRACE")]
     public static void RecordFinalize(Inode inode, string operation, string? reason)
     {
         if (!Enabled) return;
-        Logger.LogDebug(
-            "[VFS-Finalize] op={Operation} ino={Ino} type={Type} nlink={Nlink} ref={RefCount} reason={Reason}",
-            operation, inode.Ino, inode.Type, inode.LinkCount, inode.RefCount, reason ?? "");
+        LogFinalizeCore(Logger, operation, inode.Ino, inode.Type, inode.LinkCount, inode.RefCount,
+            reason ?? string.Empty);
     }
 
     public static void AssertDentryMembership(Dentry dentry, string source)

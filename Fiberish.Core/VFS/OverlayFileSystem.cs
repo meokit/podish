@@ -826,7 +826,6 @@ public class OverlayInode : MappingBackedInode
         if (name.SequenceEqual(".."u8)) return null; // Handled by VFS
         if (name.SequenceEqual("."u8)) return null; // Handled by VFS
         var osb = (OverlaySuperBlock)SuperBlock;
-        var childName = FsName.FromBytes(name);
         if (osb.WhiteoutCodec.IsInternalMarkerName(name)) return null;
 
         var dirKey = new InodeKey(Dev, Ino);
@@ -856,6 +855,7 @@ public class OverlayInode : MappingBackedInode
         if (upperDentry == null && lowerDentry == null) return null;
 
         // Create Overlay Inode
+        var childName = FsName.FromBytes(name);
         var state = _state.GetOrCreateChildState(childName, lowerDentry != null ? [lowerDentry] : null, upperDentry);
         var inode = new OverlayInode(SuperBlock, lowerDentry != null ? [lowerDentry] : null, upperDentry, state);
 
@@ -1061,7 +1061,7 @@ public class OverlayInode : MappingBackedInode
         if (overlayEntry.Inode is OverlayInode overlayChild)
         {
             overlayChild.RefreshOverlayLinkCountFromSource("OverlayInode.Unlink.child-refresh");
-            DetachRemovedChildState(FsName.FromBytes(name), overlayEntry);
+            DetachRemovedChildState(overlayEntry.Name, overlayEntry);
         }
 
         foreach (var alias in Dentries)
@@ -1121,7 +1121,7 @@ public class OverlayInode : MappingBackedInode
         }
 
         RefreshOverlayLinkCountFromSource("OverlayInode.Rmdir.parent-refresh");
-        DetachRemovedChildState(FsName.FromBytes(name), overlayEntry);
+        DetachRemovedChildState(overlayEntry.Name, overlayEntry);
         foreach (var alias in Dentries)
             alias.TryUncacheChild(name, "OverlayInode.Rmdir.parent-drop-stale", out _);
         return 0;
@@ -1241,7 +1241,7 @@ public class OverlayInode : MappingBackedInode
 
         if (sourceLowerOnly)
         {
-            var copyRc = sourceOverlay.CopyUpToCurrentParent(FsName.FromBytes(oldName), this, null);
+            var copyRc = sourceOverlay.CopyUpToCurrentParent(oldNameFs, this, null);
             if (copyRc < 0)
                 return copyRc;
         }
@@ -1660,14 +1660,21 @@ public class OverlayInode : MappingBackedInode
                     continue;
                 }
 
-                var child = UpperInode.Lookup(e.Name);
                 if (osb.WhiteoutCodec.IsEncodedOpaqueEntry(e))
                 {
                     osb.MarkOpaque(dirKey);
                     continue;
                 }
 
-                if (osb.WhiteoutCodec.TryDecodeEncodedWhiteout(e, child?.Inode, out var targetName))
+                if (osb.WhiteoutCodec.TryDecodeEncodedWhiteout(e, null, out var targetName))
+                {
+                    osb.AddWhiteout(dirKey, targetName.Bytes);
+                    entries.Remove(targetName);
+                    continue;
+                }
+
+                var child = UpperInode.Lookup(e.Name);
+                if (osb.WhiteoutCodec.TryDecodeEncodedWhiteout(e, child?.Inode, out targetName))
                 {
                     osb.AddWhiteout(dirKey, targetName.Bytes);
                     entries.Remove(targetName);
@@ -1775,6 +1782,7 @@ public sealed class LogicalWhiteoutCodec : IOverlayWhiteoutCodec
 
 public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
 {
+    private const int MaxStackEncodedWhiteoutBytes = 320;
     private static readonly byte[] OpaqueMarkerBytes = ".wh..wh..opq"u8.ToArray();
     private static readonly byte[] WhiteoutPrefixBytes = ".wh."u8.ToArray();
 
@@ -1786,7 +1794,12 @@ public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
     public bool HasEncodedWhiteout(Inode? upperDir, ReadOnlySpan<byte> name)
     {
         if (upperDir == null) return false;
-        if (upperDir.Lookup(BuildEncodedWhiteoutName(name)) != null) return true;
+        var encodedNameLength = WhiteoutPrefixBytes.Length + name.Length;
+        Span<byte> encodedName = encodedNameLength <= MaxStackEncodedWhiteoutBytes
+            ? stackalloc byte[encodedNameLength]
+            : new byte[encodedNameLength];
+        WriteEncodedWhiteoutName(name, encodedName);
+        if (upperDir.Lookup(encodedName) != null) return true;
         var sameName = upperDir.Lookup(name);
         return IsWhiteoutInode(sameName?.Inode);
     }
@@ -1861,7 +1874,11 @@ public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
             return;
         }
 
-        var encodedName = BuildEncodedWhiteoutName(name);
+        var encodedNameLength = WhiteoutPrefixBytes.Length + name.Length;
+        Span<byte> encodedName = encodedNameLength <= MaxStackEncodedWhiteoutBytes
+            ? stackalloc byte[encodedNameLength]
+            : new byte[encodedNameLength];
+        WriteEncodedWhiteoutName(name, encodedName);
         var encoded = dir.UpperInode.Lookup(encodedName);
         if (encoded != null)
             dir.UpperInode.Unlink(encodedName);
@@ -1870,8 +1887,13 @@ public sealed class HybridWhiteoutCodec : IOverlayWhiteoutCodec
     private static byte[] BuildEncodedWhiteoutName(ReadOnlySpan<byte> name)
     {
         var encoded = new byte[WhiteoutPrefixBytes.Length + name.Length];
-        WhiteoutPrefixBytes.CopyTo(encoded, 0);
-        name.CopyTo(encoded.AsSpan(WhiteoutPrefixBytes.Length));
+        WriteEncodedWhiteoutName(name, encoded);
         return encoded;
+    }
+
+    private static void WriteEncodedWhiteoutName(ReadOnlySpan<byte> name, Span<byte> destination)
+    {
+        WhiteoutPrefixBytes.CopyTo(destination);
+        name.CopyTo(destination[WhiteoutPrefixBytes.Length..]);
     }
 }

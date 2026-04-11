@@ -95,17 +95,6 @@ public readonly struct FsName : IEquatable<FsName>, IComparable<FsName>
         return FsEncoding.DecodeUtf8Lossy(Bytes);
     }
 
-    public bool StartsWith(string prefix)
-    {
-        return StartsWith(prefix, StringComparison.Ordinal);
-    }
-
-    public bool StartsWith(string prefix, StringComparison comparison)
-    {
-        ArgumentNullException.ThrowIfNull(prefix);
-        return ToString().StartsWith(prefix, comparison);
-    }
-
     public string ToDebugString()
     {
         if (FsEncoding.TryDecodeUtf8(Bytes, out var decoded))
