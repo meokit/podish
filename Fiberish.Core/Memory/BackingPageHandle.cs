@@ -2,11 +2,9 @@ using Fiberish.VFS;
 
 namespace Fiberish.Memory;
 
-internal enum BackingPageHandleReleaseKind
+internal interface IBackingPageHandleReleaseOwner
 {
-    None,
-    PooledPage,
-    OwnedReleaseToken,
+    void ReleaseBackingPageHandle(IntPtr pointer, long releaseToken);
 }
 
 /// <summary>
@@ -16,13 +14,8 @@ internal enum BackingPageHandleReleaseKind
 public struct BackingPageHandle
 {
     public IntPtr Pointer;
-    internal long ReleaseToken;
-    internal int PooledPageIndex;
-    internal BackingPageHandleReleaseKind ReleaseKind;
-    internal AllocationClass AllocationClass;
-    internal AllocationSource AllocationSource;
-    internal bool CountsTowardAnonymousAllocationTotals;
-    internal Inode? ReleaseOwner;
+    private IBackingPageHandleReleaseOwner? _releaseOwner;
+    private long _releaseToken;
 
     public readonly bool IsValid => Pointer != IntPtr.Zero;
 
@@ -34,26 +27,27 @@ public struct BackingPageHandle
             : new BackingPageHandle
             {
                 Pointer = pointer,
-                ReleaseKind = BackingPageHandleReleaseKind.OwnedReleaseToken,
-                ReleaseOwner = releaseOwner,
-                ReleaseToken = releaseToken
+                _releaseOwner = releaseOwner,
+                _releaseToken = releaseToken
             };
     }
 
-    internal static BackingPageHandle CreatePooled(IntPtr pointer, long segmentId, int pageIndex,
+    internal static BackingPageHandle CreatePooled(BackingPagePool releaseOwner, IntPtr pointer, long segmentId, int pageIndex,
         AllocationClass allocationClass, AllocationSource allocationSource, bool countsTowardAnonymousAllocationTotals)
     {
+        ArgumentNullException.ThrowIfNull(releaseOwner);
         return pointer == IntPtr.Zero
             ? default
             : new BackingPageHandle
             {
                 Pointer = pointer,
-                ReleaseKind = BackingPageHandleReleaseKind.PooledPage,
-                ReleaseToken = segmentId,
-                PooledPageIndex = pageIndex,
-                AllocationClass = allocationClass,
-                AllocationSource = allocationSource,
-                CountsTowardAnonymousAllocationTotals = countsTowardAnonymousAllocationTotals
+                _releaseOwner = releaseOwner,
+                _releaseToken = BackingPagePool.CreatePooledReleaseToken(
+                    segmentId,
+                    pageIndex,
+                    allocationClass,
+                    allocationSource,
+                    countsTowardAnonymousAllocationTotals)
             };
     }
 
@@ -63,34 +57,14 @@ public struct BackingPageHandle
         if (releasedPtr == IntPtr.Zero)
             return;
 
-        var releaseKind = handle.ReleaseKind;
-        var releaseOwner = handle.ReleaseOwner;
-        var releaseToken = handle.ReleaseToken;
-        var pooledPageIndex = handle.PooledPageIndex;
-        var allocationClass = handle.AllocationClass;
-        var allocationSource = handle.AllocationSource;
-        var countsTowardAnonymousAllocationTotals = handle.CountsTowardAnonymousAllocationTotals;
-        handle.ReleaseKind = BackingPageHandleReleaseKind.None;
-        handle.ReleaseOwner = null;
-        handle.ReleaseToken = 0;
-        handle.PooledPageIndex = 0;
-        handle.AllocationClass = default;
-        handle.AllocationSource = default;
-        handle.CountsTowardAnonymousAllocationTotals = false;
+        var releaseOwner = handle._releaseOwner;
+        var releaseToken = handle._releaseToken;
+        handle._releaseOwner = null;
+        handle._releaseToken = 0;
 
-        if (releaseKind == BackingPageHandleReleaseKind.OwnedReleaseToken)
-        {
-            if (releaseOwner == null)
-                throw new InvalidOperationException("Owned backing page handle is missing its release owner.");
+        if (releaseOwner == null)
+            throw new InvalidOperationException("Backing page handle is missing its release owner.");
 
-            releaseOwner.ReleaseMappedPageHandle(releaseToken);
-            return;
-        }
-
-        if (releaseKind == BackingPageHandleReleaseKind.PooledPage)
-        {
-            PageManager.ReleasePooledPage(releasedPtr, releaseToken, pooledPageIndex, allocationClass,
-                allocationSource, countsTowardAnonymousAllocationTotals);
-        }
+        releaseOwner.ReleaseBackingPageHandle(releasedPtr, releaseToken);
     }
 }

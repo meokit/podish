@@ -19,7 +19,7 @@ public class LayerFsTests
     {
         var rootNode = LayerNode.Directory("/")
             .AddChild(LayerNode.File("Readme", "hello"u8.ToArray()));
-        var fs = new LayerFileSystem();
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var sb = fs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -38,7 +38,7 @@ public class LayerFsTests
     {
         var rootNode = LayerNode.Directory("/")
             .AddChild(LayerNode.File("x.txt", Encoding.UTF8.GetBytes("abc")));
-        var fs = new LayerFileSystem();
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var sb = fs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -60,7 +60,7 @@ public class LayerFsTests
     {
         var rootNode = LayerNode.Directory("/")
             .AddChild(LayerNode.Symlink("sh", "/bin/busybox"));
-        var fs = new LayerFileSystem();
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var sb = fs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -78,7 +78,7 @@ public class LayerFsTests
     {
         var rootNode = LayerNode.Directory("/")
             .AddChild(LayerNode.File("ok", "hello"u8.ToArray()));
-        var fs = new LayerFileSystem();
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var sb = fs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -128,7 +128,7 @@ public class LayerFsTests
     {
         var rootNode = LayerNode.Directory("/")
             .AddChild(LayerNode.File("x.txt", Encoding.UTF8.GetBytes("abc")));
-        var fs = new LayerFileSystem();
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var sb = fs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -162,7 +162,7 @@ public class LayerFsTests
             3,
             InlineData: "abc"u8.ToArray()));
 
-        var fs = new LayerFileSystem();
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var sb = fs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -194,7 +194,7 @@ public class LayerFsTests
             Size: 7,
             DataOffset: 2));
 
-        var fs = new LayerFileSystem();
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var sb = fs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -220,7 +220,7 @@ public class LayerFsTests
     {
         var rootNode = LayerNode.Directory("/")
             .AddChild(LayerNode.File("x.txt", Encoding.UTF8.GetBytes("abc")));
-        var fs = new LayerFileSystem();
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var sb = fs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -251,7 +251,7 @@ public class LayerFsTests
         index.AddEntry(new LayerIndexEntry("/etc/os-release", InodeType.File, 0x1A4, Size: (ulong)payload.Length,
             InlineData: payload));
 
-        var fs = new LayerFileSystem();
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var sb = fs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -291,7 +291,7 @@ public class LayerFsTests
     {
         var rootNode = LayerNode.Directory("/")
             .AddChild(LayerNode.File("x.txt", Encoding.UTF8.GetBytes("abc")));
-        var fs = new LayerFileSystem();
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var sb = fs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -332,7 +332,7 @@ public class LayerFsTests
         var rootNode = LayerNode.Directory("/")
             .AddChild(LayerNode.File("a.txt", Encoding.UTF8.GetBytes("a")))
             .AddChild(LayerNode.File("b.txt", Encoding.UTF8.GetBytes("b")));
-        var fs = new LayerFileSystem();
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var sb = fs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -365,7 +365,7 @@ public class LayerFsTests
     {
         var rootNode = LayerNode.Directory("/")
             .AddChild(LayerNode.File("mapped.txt", Encoding.UTF8.GetBytes("abc")));
-        var fs = new LayerFileSystem();
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var sb = fs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -399,10 +399,9 @@ public class LayerFsTests
     [Fact]
     public void PageCacheReclaim_ShouldSkipMappedPage_AndReadStillCorrectAfterUnmap()
     {
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var rootNode = LayerNode.Directory("/")
             .AddChild(LayerNode.File("reclaim.txt", Encoding.UTF8.GetBytes("hello")));
-        var fs = new LayerFileSystem();
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var sb = fs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -424,13 +423,13 @@ public class LayerFsTests
         var cache = Assert.IsType<AddressSpace>(inode.Mapping);
         Assert.True(cache.PageCount > 0);
 
-        var reclaimedWhileMapped = AddressSpacePolicy.TryReclaimBytes(LinuxConstants.PageSize);
+        var reclaimedWhileMapped = _runtime.MemoryContext.AddressSpacePolicy.TryReclaimBytes(LinuxConstants.PageSize);
         Assert.True(reclaimedWhileMapped < LinuxConstants.PageSize);
         Assert.True(cache.PageCount > 0);
 
         mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
 
-        var reclaimedAfterUnmap = AddressSpacePolicy.TryReclaimBytes(LinuxConstants.PageSize);
+        var reclaimedAfterUnmap = _runtime.MemoryContext.AddressSpacePolicy.TryReclaimBytes(LinuxConstants.PageSize);
         Assert.True(reclaimedAfterUnmap >= LinuxConstants.PageSize);
         Assert.Equal(0, cache.PageCount);
 
@@ -451,13 +450,12 @@ public class LayerFsTests
     [Fact]
     public void EndToEnd_ShrinkAll_PathWalkAndMmapCanRebuild()
     {
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var engine = _runtime.CreateEngine();
         var mm = _runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, mm, 0);
 
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-        var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+        var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
         var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
         sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -470,7 +468,7 @@ public class LayerFsTests
             root.CacheChild(mountPoint, "LayerFsTests.EndToEnd.mountpoint");
         }
 
-        var layerFs = new LayerFileSystem();
+        var layerFs = new LayerFileSystem(memoryContext: sm.MemoryContext);
         var layerSb = layerFs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,

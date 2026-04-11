@@ -40,13 +40,15 @@ public readonly record struct MemoryStatsSnapshot(
     private static readonly long ActiveThresholdTimestampDelta =
         MonotonicTime.ToTimestampDelta(TimeSpan.FromSeconds(30));
 
-    public static MemoryStatsSnapshot Capture(SyscallManager? sm = null)
+    internal static MemoryStatsSnapshot CreateForRuntime(MemoryRuntimeContext memoryContext, SyscallManager? sm = null)
     {
-        var cache = AddressSpacePolicy.GetAddressSpaceStats();
-        var cacheStates = AddressSpacePolicy.GetAddressSpacePageStatesSnapshot();
+        ArgumentNullException.ThrowIfNull(memoryContext);
+
+        var cache = memoryContext.AddressSpacePolicy.GetAddressSpaceStats();
+        var cacheStates = memoryContext.AddressSpacePolicy.GetAddressSpacePageStatesSnapshot();
         var hostMapped = AggregateHostMappedCacheStats(sm);
         var cachedBytes = cache.TotalPages * LinuxConstants.PageSize;
-        var anonymousAllocated = PageManager.GetAllocatedBytes();
+        var anonymousAllocated = memoryContext.GetAllocatedBytes();
         var allocated = anonymousAllocated + cachedBytes;
         var dirtyBytes = cache.DirtyPages * LinuxConstants.PageSize;
         var reclaimable = cache.CleanPages * LinuxConstants.PageSize;
@@ -68,7 +70,7 @@ public readonly record struct MemoryStatsSnapshot(
         var active = activeFile + activeShmem + activeAnon;
         var inactive = inactiveFile + inactiveShmem + inactiveAnon;
 
-        var quota = PageManager.MemoryQuotaBytes;
+        var quota = memoryContext.MemoryQuotaBytes;
         var total = quota > 0 ? quota : Math.Max(allocated, 256L * 1024 * 1024);
         var free = Math.Max(0, total - allocated);
         // Simplified MemAvailable heuristic: free + reclaimable cache - dirty/writeback pressure.

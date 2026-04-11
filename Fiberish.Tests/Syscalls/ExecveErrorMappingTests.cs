@@ -15,10 +15,6 @@ public class ExecveErrorMappingTests
     [Fact]
     public async Task SysExecve_WhenExecPathHitsOom_ReturnsEnomem()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        var oldQuota = PageManager.MemoryQuotaBytes;
-
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
@@ -33,6 +29,7 @@ public class ExecveErrorMappingTests
         var task = new FiberTask(process.TGID, process, engine, scheduler);
         engine.Owner = task;
 
+        var oldQuota = runtime.MemoryContext.MemoryQuotaBytes;
         try
         {
             const uint filenameAddr = 0x61000000;
@@ -41,10 +38,10 @@ public class ExecveErrorMappingTests
 
             // Keep one page pinned so exec's first strict allocation reliably trips the quota
             // even if the old address space releases pages before loading the new image.
-            var reservedPage = PageManager.AllocAnonPage();
+            var reservedPage = runtime.MemoryContext.BackingPagePool.AllocAnonPage();
             try
             {
-                PageManager.MemoryQuotaBytes = LinuxConstants.PageSize;
+                runtime.MemoryContext.MemoryQuotaBytes = LinuxConstants.PageSize;
 
                 var rc = await Call(sm, "SysExecve", filenameAddr);
                 Assert.Equal(-(int)Errno.ENOMEM, rc);
@@ -56,7 +53,7 @@ public class ExecveErrorMappingTests
         }
         finally
         {
-            PageManager.MemoryQuotaBytes = oldQuota;
+            runtime.MemoryContext.MemoryQuotaBytes = oldQuota;
             sm.Close();
         }
     }
@@ -64,9 +61,6 @@ public class ExecveErrorMappingTests
     [Fact]
     public async Task SysExecve_WhenProcSelfFdPointsToUnlinkedMemfdScript_UsesLiveFileForShebang()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
@@ -116,9 +110,6 @@ public class ExecveErrorMappingTests
         // This test relies on debug-only file holder tracking which is disabled in Release builds
         await Task.CompletedTask;
     #else
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
@@ -186,9 +177,6 @@ public class ExecveErrorMappingTests
     [Fact]
     public async Task ProcFdReadlink_WhenMemfd_DoesNotAppendDeletedSuffix()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
@@ -232,9 +220,6 @@ public class ExecveErrorMappingTests
     [Fact]
     public async Task ProcFdOpen_CreatesNewFileDescriptionWithIndependentOffset()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
@@ -295,9 +280,6 @@ public class ExecveErrorMappingTests
     [Fact]
     public async Task ProcFdOpen_RechecksPermissionsInsteadOfReusingOriginalOpenFile()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();

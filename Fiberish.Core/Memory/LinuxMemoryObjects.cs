@@ -11,6 +11,7 @@ public enum AddressSpaceKind
 
 public sealed class AddressSpace
 {
+    private readonly MemoryRuntimeContext _memoryContext;
     private readonly HostPageKind _pageKind;
     private readonly OwnerRmapTracker _ownerRmap = new();
     private readonly List<RmapAttachment> _rmapAttachments = [];
@@ -18,18 +19,20 @@ public sealed class AddressSpace
     private Action<int>? _trackedPageCountDelta;
     private int _refCount = 1;
 
-    public AddressSpace(AddressSpaceKind kind)
+    public AddressSpace(MemoryRuntimeContext memoryContext, AddressSpaceKind kind)
     {
+        _memoryContext = memoryContext;
         Kind = kind;
         _pageKind = kind switch
         {
             AddressSpaceKind.Zero => HostPageKind.Zero,
             _ => HostPageKind.PageCache
         };
-        Pages = new OwnerPageSlots(CreateOwnerBinding, OnPageBindingChanged, OnPageCountChanged);
+        Pages = new OwnerPageSlots(memoryContext, CreateOwnerBinding, OnPageBindingChanged, OnPageCountChanged);
     }
 
     public AddressSpaceKind Kind { get; }
+    internal MemoryRuntimeContext MemoryContext => _memoryContext;
     internal OwnerPageSlots Pages { get; }
     public bool IsRecoverableWithoutSwap => Kind == AddressSpaceKind.File;
     internal bool IsZeroBacking => Kind == AddressSpaceKind.Zero;
@@ -302,15 +305,15 @@ public sealed class AddressSpace
             (attachment.Vma.VmAnonVma?.PeekPage(pageIndex) ?? IntPtr.Zero) != IntPtr.Zero)
             return;
 
-        var changed = HostPageManager.AddOrUpdateRmapRef(hostPagePtr, _pageKind, attachment.Mm, attachment.Vma,
+        var changed = _memoryContext.HostPages.AddOrUpdateRmapRef(hostPagePtr, _pageKind, attachment.Mm, attachment.Vma,
             HostPageOwnerKind.AddressSpace, pageIndex, attachment.Vma.GetGuestPageStart(pageIndex));
         tbCohWorkSet?.AddIfChanged(hostPagePtr, changed);
     }
 
-    private static void RemoveDirectRefLocked(RmapAttachment attachment, uint pageIndex, IntPtr hostPagePtr,
+    private void RemoveDirectRefLocked(RmapAttachment attachment, uint pageIndex, IntPtr hostPagePtr,
         TbCohWorkSet? tbCohWorkSet = null)
     {
-        var changed = HostPageManager.RemoveRmapRef(hostPagePtr, attachment.Mm, attachment.Vma,
+        var changed = _memoryContext.HostPages.RemoveRmapRef(hostPagePtr, attachment.Mm, attachment.Vma,
             HostPageOwnerKind.AddressSpace, pageIndex);
         tbCohWorkSet?.AddIfChanged(hostPagePtr, changed);
     }
@@ -326,16 +329,18 @@ public sealed class AddressSpace
 
 public sealed class AnonVma
 {
+    private readonly MemoryRuntimeContext _memoryContext;
     private readonly OwnerRmapTracker _ownerRmap = new();
     private readonly List<RmapAttachment> _rmapAttachments = [];
     private readonly Lock _rmapLock = new();
     private int _refCount = 1;
 
-    public AnonVma(AnonVma? parent = null)
+    public AnonVma(MemoryRuntimeContext memoryContext, AnonVma? parent = null)
     {
+        _memoryContext = memoryContext;
         Parent = parent;
         Root = parent?.Root ?? this;
-        Pages = new OwnerPageSlots(CreateOwnerBinding, OnPageBindingChanged);
+        Pages = new OwnerPageSlots(memoryContext, CreateOwnerBinding, OnPageBindingChanged);
     }
 
     internal AnonVma? Parent { get; }
@@ -357,7 +362,7 @@ public sealed class AnonVma
 
     public AnonVma CloneForFork()
     {
-        var clone = new AnonVma(this);
+        var clone = new AnonVma(_memoryContext, this);
         Pages.VisitPageStates(state =>
         {
             var page = Pages.PeekVmPage(state.PageIndex)!;
@@ -594,32 +599,32 @@ public sealed class AnonVma
         if (!ReferenceEquals(attachment.Vma.VmAnonVma, this))
             return;
 
-        var changed = HostPageManager.AddOrUpdateRmapRef(hostPagePtr, HostPageKind.Anon, attachment.Mm,
+        var changed = _memoryContext.HostPages.AddOrUpdateRmapRef(hostPagePtr, HostPageKind.Anon, attachment.Mm,
             attachment.Vma, HostPageOwnerKind.AnonVma, pageIndex, attachment.Vma.GetGuestPageStart(pageIndex));
         tbCohWorkSet?.AddIfChanged(hostPagePtr, changed);
     }
 
-    private static void RemoveDirectRefLocked(RmapAttachment attachment, uint pageIndex, IntPtr hostPagePtr,
+    private void RemoveDirectRefLocked(RmapAttachment attachment, uint pageIndex, IntPtr hostPagePtr,
         TbCohWorkSet? tbCohWorkSet = null)
     {
-        var changed = HostPageManager.RemoveRmapRef(hostPagePtr, attachment.Mm, attachment.Vma,
+        var changed = _memoryContext.HostPages.RemoveRmapRef(hostPagePtr, attachment.Mm, attachment.Vma,
             HostPageOwnerKind.AnonVma, pageIndex);
         tbCohWorkSet?.AddIfChanged(hostPagePtr, changed);
     }
 
-    private static void RemoveSharedMappingRefLocked(RmapAttachment attachment, uint pageIndex,
+    private void RemoveSharedMappingRefLocked(RmapAttachment attachment, uint pageIndex,
         TbCohWorkSet? tbCohWorkSet = null)
     {
         var sharedHostPagePtr = attachment.Vma.VmMapping?.PeekPage(pageIndex) ?? IntPtr.Zero;
         if (sharedHostPagePtr == IntPtr.Zero)
             return;
 
-        var changed = HostPageManager.RemoveRmapRef(sharedHostPagePtr, attachment.Mm, attachment.Vma,
+        var changed = _memoryContext.HostPages.RemoveRmapRef(sharedHostPagePtr, attachment.Mm, attachment.Vma,
             HostPageOwnerKind.AddressSpace, pageIndex);
         tbCohWorkSet?.AddIfChanged(sharedHostPagePtr, changed);
     }
 
-    private static void RestoreSharedMappingRefLocked(RmapAttachment attachment, uint pageIndex,
+    private void RestoreSharedMappingRefLocked(RmapAttachment attachment, uint pageIndex,
         TbCohWorkSet? tbCohWorkSet = null)
     {
         if ((attachment.Vma.VmAnonVma?.PeekPage(pageIndex) ?? IntPtr.Zero) != IntPtr.Zero)
@@ -632,7 +637,7 @@ public sealed class AnonVma
         var preferredKind = attachment.Vma.VmMapping?.IsZeroBacking == true
             ? HostPageKind.Zero
             : HostPageKind.PageCache;
-        var changed = HostPageManager.AddOrUpdateRmapRef(sharedHostPagePtr, preferredKind, attachment.Mm,
+        var changed = _memoryContext.HostPages.AddOrUpdateRmapRef(sharedHostPagePtr, preferredKind, attachment.Mm,
             attachment.Vma, HostPageOwnerKind.AddressSpace, pageIndex, attachment.Vma.GetGuestPageStart(pageIndex));
         tbCohWorkSet?.AddIfChanged(sharedHostPagePtr, changed);
     }

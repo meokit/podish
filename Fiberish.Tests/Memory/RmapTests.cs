@@ -11,10 +11,8 @@ public class RmapTests
     [Fact]
     public void SharedFilePage_RmapReturnsAllHoldingVmas()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var fixture = new TmpfsFileFixture(new byte[LinuxConstants.PageSize]);
         var runtime = new TestRuntimeFactory();
+        using var fixture = new TmpfsFileFixture(runtime.MemoryContext, new byte[LinuxConstants.PageSize]);
         using var engineA = runtime.CreateEngine();
         using var engineB = runtime.CreateEngine();
         var mmA = runtime.CreateAddressSpace();
@@ -40,7 +38,7 @@ public class RmapTests
             var filePtr = vmaA.VmMapping!.PeekPage(pageIndexA);
             Assert.NotEqual(IntPtr.Zero, filePtr);
 
-            var hits = ResolveHits(filePtr);
+            var hits = ResolveHits(runtime.MemoryContext.HostPages, filePtr);
 
             Assert.Equal(2, hits.Count);
             Assert.Contains(hits, hit => ReferenceEquals(hit.Mm, mmA) && ReferenceEquals(hit.Vma, vmaA));
@@ -57,10 +55,8 @@ public class RmapTests
     [Fact]
     public void PrivateFilePage_CowMovesRmapFromFilePageToAnonPage()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var fixture = new TmpfsFileFixture("hello"u8.ToArray());
         var runtime = new TestRuntimeFactory();
+        using var fixture = new TmpfsFileFixture(runtime.MemoryContext, "hello"u8.ToArray());
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
         var file = fixture.Open();
@@ -75,12 +71,12 @@ public class RmapTests
             var pageIndex = vma.GetPageIndex(addr);
             var filePtr = vma.VmMapping!.PeekPage(pageIndex);
             Assert.NotEqual(IntPtr.Zero, filePtr);
-            var filePage = HostPageManager.GetRequired(filePtr);
+            var filePage = runtime.MemoryContext.HostPages.GetRequired(filePtr);
             Assert.Equal(HostPageOwnerKind.AddressSpace, filePage.OwnerRootKindForDebug);
             Assert.Same(vma.VmMapping, filePage.OwnerAddressSpaceForDebug);
             Assert.Equal(pageIndex, filePage.OwnerPageIndexForDebug);
 
-            var fileHitsBeforeCow = ResolveHits(filePtr);
+            var fileHitsBeforeCow = ResolveHits(runtime.MemoryContext.HostPages, filePtr);
             Assert.Single(fileHitsBeforeCow);
             Assert.Same(vma, fileHitsBeforeCow[0].Vma);
             Assert.Equal(HostPageOwnerKind.AddressSpace, fileHitsBeforeCow[0].OwnerKind);
@@ -89,15 +85,15 @@ public class RmapTests
             var anonPtr = vma.VmAnonVma!.PeekPage(pageIndex);
             Assert.NotEqual(IntPtr.Zero, anonPtr);
             Assert.NotEqual(filePtr, anonPtr);
-            var anonPage = HostPageManager.GetRequired(anonPtr);
+            var anonPage = runtime.MemoryContext.HostPages.GetRequired(anonPtr);
             Assert.Equal(HostPageOwnerKind.AnonVma, anonPage.OwnerRootKindForDebug);
             Assert.Same(vma.VmAnonVma.Root, anonPage.OwnerAnonRootForDebug);
             Assert.Equal(pageIndex, anonPage.OwnerPageIndexForDebug);
 
-            var fileHitsAfterCow = ResolveHits(filePtr);
+            var fileHitsAfterCow = ResolveHits(runtime.MemoryContext.HostPages, filePtr);
             Assert.Empty(fileHitsAfterCow);
 
-            var anonHits = ResolveHits(anonPtr);
+            var anonHits = ResolveHits(runtime.MemoryContext.HostPages, anonPtr);
             Assert.Single(anonHits);
             Assert.Same(vma, anonHits[0].Vma);
             Assert.Equal(HostPageOwnerKind.AnonVma, anonHits[0].OwnerKind);
@@ -111,8 +107,6 @@ public class RmapTests
     [Fact]
     public void ForkSharedPrivatePage_RmapTracksParentAndChildUntilCow()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var runtime = new TestRuntimeFactory();
         using var parentEngine = runtime.CreateEngine();
         using var childEngine = runtime.CreateEngine();
@@ -132,12 +126,12 @@ public class RmapTests
         var childVma = Assert.IsType<VmArea>(childMm.FindVmArea(addr));
         Assert.NotSame(parentVma.VmAnonVma, childVma.VmAnonVma);
         Assert.Same(parentVma.VmAnonVma!.Root, childVma.VmAnonVma!.Root);
-        var sharedPage = HostPageManager.GetRequired(sharedPtr);
+        var sharedPage = runtime.MemoryContext.HostPages.GetRequired(sharedPtr);
         Assert.Equal(HostPageOwnerKind.AnonVma, sharedPage.OwnerRootKindForDebug);
         Assert.Same(parentVma.VmAnonVma.Root, sharedPage.OwnerAnonRootForDebug);
         Assert.Equal(pageIndex, sharedPage.OwnerPageIndexForDebug);
 
-        var sharedHits = ResolveHits(sharedPtr);
+        var sharedHits = ResolveHits(runtime.MemoryContext.HostPages, sharedPtr);
         Assert.Equal(2, sharedHits.Count);
         Assert.Contains(sharedHits, hit => ReferenceEquals(hit.Mm, parentMm) && ReferenceEquals(hit.Vma, parentVma));
         Assert.Contains(sharedHits, hit => ReferenceEquals(hit.Mm, childMm) && ReferenceEquals(hit.Vma, childVma));
@@ -147,11 +141,11 @@ public class RmapTests
         Assert.NotEqual(IntPtr.Zero, childPtr);
         Assert.NotEqual(sharedPtr, childPtr);
 
-        var parentHits = ResolveHits(sharedPtr);
+        var parentHits = ResolveHits(runtime.MemoryContext.HostPages, sharedPtr);
         Assert.Single(parentHits);
         Assert.Same(parentVma, parentHits[0].Vma);
 
-        var childHits = ResolveHits(childPtr);
+        var childHits = ResolveHits(runtime.MemoryContext.HostPages, childPtr);
         Assert.Single(childHits);
         Assert.Same(childVma, childHits[0].Vma);
     }
@@ -159,10 +153,8 @@ public class RmapTests
     [Fact]
     public void MprotectSplit_UpdatesRmapToNewVmaFragment()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var fixture = new TmpfsFileFixture(new byte[LinuxConstants.PageSize * 2]);
         var runtime = new TestRuntimeFactory();
+        using var fixture = new TmpfsFileFixture(runtime.MemoryContext, new byte[LinuxConstants.PageSize * 2]);
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
         var file = fixture.Open();
@@ -183,7 +175,7 @@ public class RmapTests
 
             Assert.Equal(0, mm.Mprotect(secondPageAddr, LinuxConstants.PageSize, Protection.Read, engine, out _));
 
-            var hits = ResolveHits(secondPagePtr);
+            var hits = ResolveHits(runtime.MemoryContext.HostPages, secondPagePtr);
             var hit = Assert.Single(hits);
             Assert.Equal(secondPageAddr, hit.Vma.Start);
             Assert.Equal(secondPageAddr + LinuxConstants.PageSize, hit.Vma.End);
@@ -197,7 +189,6 @@ public class RmapTests
     [Fact]
     public void MprotectSplit_RebuildsDirectRefsOnlyForResidentPages()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
@@ -216,7 +207,7 @@ public class RmapTests
 
         Assert.Equal(0, mm.Mprotect(secondPageAddr, LinuxConstants.PageSize, Protection.Read, engine, out _));
 
-        var secondHitsAfterSplit = ResolveHits(secondPagePtr);
+        var secondHitsAfterSplit = ResolveHits(runtime.MemoryContext.HostPages, secondPagePtr);
         var secondHit = Assert.Single(secondHitsAfterSplit);
         Assert.Same(mm, secondHit.Mm);
         Assert.Equal(secondPageAddr, secondHit.Vma.Start);
@@ -227,25 +218,25 @@ public class RmapTests
         var firstPagePtr = firstVma.VmMapping!.PeekPage(firstVma.GetPageIndex(addr));
         Assert.NotEqual(IntPtr.Zero, firstPagePtr);
 
-        var firstHits = ResolveHits(firstPagePtr);
+        var firstHits = ResolveHits(runtime.MemoryContext.HostPages, firstPagePtr);
         var firstHit = Assert.Single(firstHits);
         Assert.Same(mm, firstHit.Mm);
         Assert.Equal(addr, firstHit.Vma.Start);
         Assert.Equal(addr + LinuxConstants.PageSize, firstHit.Vma.End);
 
-        secondHitsAfterSplit = ResolveHits(secondPagePtr);
+        secondHitsAfterSplit = ResolveHits(runtime.MemoryContext.HostPages, secondPagePtr);
         Assert.Single(secondHitsAfterSplit);
     }
 
     [Fact]
     public void HostPageSlot_ReusesSlotWithNewGeneration_AndStaleHostPageCannotLeakTbCohState()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
+        var runtime = new TestRuntimeFactory();
 
-        var handle1 = PageManager.AllocAnonPage(AllocationClass.KernelInternal);
+        var handle1 = runtime.MemoryContext.BackingPagePool.AllocAnonPage(AllocationClass.KernelInternal);
         var ptr1 = handle1.Pointer;
         Assert.NotEqual(IntPtr.Zero, ptr1);
-        var anonRoot1 = new AnonVma();
+        var anonRoot1 = new AnonVma(runtime.MemoryContext);
 
         HostPageOwnerBinding owner1 = new()
         {
@@ -254,7 +245,7 @@ public class RmapTests
             PageIndex = 1
         };
 
-        var page1 = HostPageManager.CreateWithBacking(ref handle1, HostPageKind.Anon);
+        var page1 = runtime.MemoryContext.HostPages.CreateWithBacking(ref handle1, HostPageKind.Anon);
         Assert.True(page1.BindOwnerRoot(owner1));
         Assert.True(page1.HasOwnerRoot);
         Assert.Equal(HostPageOwnerKind.AnonVma, page1.OwnerRootKindForDebug);
@@ -263,7 +254,6 @@ public class RmapTests
         var slotIndex1 = page1.SlotIndexForDebug;
         var generation1 = page1.HandleGenerationForDebug;
 
-        var runtime = new TestRuntimeFactory();
         var mm = runtime.CreateAddressSpace();
         var vma = new VmArea
         {
@@ -273,19 +263,19 @@ public class RmapTests
             VmAnonVma = anonRoot1
         };
         Assert.True(page1.AddOrUpdateRmapRef(mm, vma, HostPageOwnerKind.AnonVma, 1, 0x1000));
-        Assert.Equal(TbCohApplyKind.SlowScan, HostPageManager.ApplyTbCohPolicyIfChanged(ptr1).Kind);
+        Assert.Equal(TbCohApplyKind.SlowScan, runtime.MemoryContext.HostPages.ApplyTbCohPolicyIfChanged(ptr1).Kind);
         Assert.True(page1.RemoveRmapRef(mm, vma, HostPageOwnerKind.AnonVma, 1));
 
         Assert.True(page1.UnbindOwnerRoot(owner1));
-        Assert.False(HostPageManager.TryLookup(ptr1, out _));
+        Assert.False(runtime.MemoryContext.HostPages.TryLookup(ptr1, out _));
         Assert.False(page1.HasOwnerRoot);
         Assert.Null(page1.OwnerRootKindForDebug);
         Assert.Null(page1.OwnerAnonRootForDebug);
 
-        var handle2 = PageManager.AllocatePoolBackedPage(AllocationClass.KernelInternal);
+        var handle2 = runtime.MemoryContext.BackingPagePool.AllocatePoolBackedPage(AllocationClass.KernelInternal);
         var ptr2 = handle2.Pointer;
         Assert.NotEqual(IntPtr.Zero, ptr2);
-        var mapping2 = new AddressSpace(AddressSpaceKind.File);
+        var mapping2 = new AddressSpace(runtime.MemoryContext, AddressSpaceKind.File);
 
         HostPageOwnerBinding owner2 = new()
         {
@@ -294,7 +284,7 @@ public class RmapTests
             PageIndex = 2
         };
 
-        var page2 = HostPageManager.CreateWithBacking(ref handle2, HostPageKind.PageCache);
+        var page2 = runtime.MemoryContext.HostPages.CreateWithBacking(ref handle2, HostPageKind.PageCache);
         Assert.True(page2.BindOwnerRoot(owner2));
         Assert.True(page2.HasOwnerRoot);
         Assert.Equal(slotIndex1, page2.SlotIndexForDebug);
@@ -302,7 +292,7 @@ public class RmapTests
         Assert.Equal(HostPageOwnerKind.AddressSpace, page2.OwnerRootKindForDebug);
         Assert.Same(mapping2, page2.OwnerAddressSpaceForDebug);
         Assert.Equal(2u, page2.OwnerPageIndexForDebug);
-        Assert.Equal(TbCohApplyKind.FastNoWriters, HostPageManager.ApplyTbCohPolicyIfChanged(ptr2).Kind);
+        Assert.Equal(TbCohApplyKind.FastNoWriters, runtime.MemoryContext.HostPages.ApplyTbCohPolicyIfChanged(ptr2).Kind);
 
         Assert.False(page1.BindOwnerRoot(new HostPageOwnerBinding
         {
@@ -321,10 +311,10 @@ public class RmapTests
         anonRoot1.Release();
     }
 
-    private static List<RmapHit> ResolveHits(IntPtr ptr)
+    private static List<RmapHit> ResolveHits(HostPageManager hostPages, IntPtr ptr)
     {
         var hits = new List<RmapHit>();
-        VmRmap.ResolveHostPageHolders(ptr, hits);
+        VmRmap.ResolveHostPageHolders(hostPages, ptr, hits);
         return hits;
     }
 
@@ -332,10 +322,11 @@ public class RmapTests
     {
         private readonly SuperBlock _superBlock;
         private readonly Dentry _root;
-        public TmpfsFileFixture(byte[] contents)
+
+        public TmpfsFileFixture(MemoryRuntimeContext memoryContext, byte[] contents)
         {
             var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            _superBlock = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
+            _superBlock = fsType.CreateAnonymousFileSystem(memoryContext).ReadSuper(fsType, 0, "tmp", null);
             _root = _superBlock.Root;
             Dentry = new Dentry(FsName.FromString("data.bin"), null, _root, _superBlock);
             _root.Inode!.Create(Dentry, 0x1B6, 0, 0);

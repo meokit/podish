@@ -93,16 +93,17 @@ internal static class TbCoh
         hostPages.Clear();
         mm.CollectManagedHostPagesInRange(addr, len, hostPages);
         foreach (var hostPagePtr in hostPages)
-            ApplyWx(hostPagePtr);
+            ApplyWx(mm.MemoryContext, hostPagePtr);
         hostPages.Clear();
     }
 
-    internal static void ApplyWx(IntPtr hostPagePtr)
+    internal static void ApplyWx(MemoryRuntimeContext memoryContext, IntPtr hostPagePtr)
     {
+        ArgumentNullException.ThrowIfNull(memoryContext);
         if (hostPagePtr == IntPtr.Zero)
             return;
 
-        var result = HostPageManager.ApplyTbCohPolicyIfChanged(hostPagePtr);
+        var result = memoryContext.HostPages.ApplyTbCohPolicyIfChanged(hostPagePtr);
         TbCohDiagnosticsScope.Record(result);
     }
 
@@ -124,13 +125,13 @@ internal static class TbCoh
             WriterIdentity = GetCoherenceIdentity(writerMm),
             UsedSetCount = 0
         };
-        if (!HostPageManager.VisitTbCohExecPages(hostPagePtr, ref invalidationState, CollectInvalidations))
+        if (!writerMm.MemoryContext.HostPages.VisitTbCohExecPages(hostPagePtr, ref invalidationState, CollectInvalidations))
             return;
 
         if (invByMm.Count == 0)
             return;
 
-        ApplyWx(hostPagePtr);
+        ApplyWx(writerMm.MemoryContext, hostPagePtr);
         writerMm.MarkTbWp(pageStart);
 
         foreach (var (targetMm, pages) in invByMm)

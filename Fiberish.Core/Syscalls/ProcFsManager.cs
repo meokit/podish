@@ -109,7 +109,7 @@ public static class ProcFsManager
 
     public static string GenerateMemInfo(SyscallManager? sm)
     {
-        var snapshot = MemoryStatsSnapshot.Capture(sm);
+        var snapshot = sm?.MemoryContext.CaptureMemoryStats(sm) ?? default;
         var totalKb = ToKiB(snapshot.MemTotalBytes);
         var freeKb = ToKiB(snapshot.FreeBytes);
         var availableKb = ToKiB(snapshot.MemAvailableBytes);

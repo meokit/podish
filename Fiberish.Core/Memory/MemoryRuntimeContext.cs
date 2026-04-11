@@ -1,12 +1,14 @@
-using Fiberish.Native;
-using Fiberish.VFS;
 using System.Runtime.InteropServices;
+using Fiberish.Native;
+using Fiberish.Syscalls;
+using Fiberish.VFS;
 
 namespace Fiberish.Memory;
 
-public sealed class MemoryRuntimeContext(HostMemoryMapGeometry hostMemoryMapGeometry)
+public sealed class MemoryRuntimeContext : IDisposable
 {
     private readonly Lock _shmGate = new();
+    private bool _disposed;
     private long _nextSharedAnonymousBackingId;
     private SuperBlock? _shmSuperBlock;
     private ZeroInode? _zeroInode;
@@ -16,12 +18,62 @@ public sealed class MemoryRuntimeContext(HostMemoryMapGeometry hostMemoryMapGeom
     {
     }
 
-    public HostMemoryMapGeometry HostMemoryMapGeometry { get; } = hostMemoryMapGeometry;
+    public MemoryRuntimeContext(HostMemoryMapGeometry hostMemoryMapGeometry)
+    {
+        HostMemoryMapGeometry = hostMemoryMapGeometry;
+        BackingPagePool = new BackingPagePool(this);
+        HostPages = new HostPageManager();
+        AddressSpacePolicy = new AddressSpacePolicy();
+        MemoryPressure = new MemoryPressureCoordinator(AddressSpacePolicy);
+    }
+
+    public HostMemoryMapGeometry HostMemoryMapGeometry { get; }
+    public BackingPagePool BackingPagePool { get; }
+    internal HostPageManager HostPages { get; }
+    public AddressSpacePolicy AddressSpacePolicy { get; }
+    public MemoryPressureCoordinator MemoryPressure { get; }
+
+    public long MemoryQuotaBytes
+    {
+        get => BackingPagePool.MemoryQuotaBytes;
+        set => BackingPagePool.MemoryQuotaBytes = value;
+    }
+
+    public long GetAllocatedBytes()
+    {
+        return BackingPagePool.GetAllocatedBytes();
+    }
+
+    public long GetCachedBytes()
+    {
+        return AddressSpacePolicy.GetTotalCachedPages() * LinuxConstants.PageSize;
+    }
+
+    public long GetTotalTrackedBytes()
+    {
+        return GetAllocatedBytes() + GetCachedBytes();
+    }
+
+    public IReadOnlyList<AllocationClassStat> GetAllocationClassStats()
+    {
+        return BackingPagePool.GetAllocationClassStats();
+    }
+
+    public string GetAllocationClassStatsSummary()
+    {
+        return BackingPagePool.GetAllocationClassStatsSummary();
+    }
+
+    public MemoryStatsSnapshot CaptureMemoryStats(SyscallManager? sm = null)
+    {
+        return MemoryStatsSnapshot.CreateForRuntime(this, sm);
+    }
 
     internal SuperBlock GetOrCreateShmSuperBlock(DeviceNumberManager? deviceNumbers = null)
     {
         lock (_shmGate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (_shmSuperBlock != null)
                 return _shmSuperBlock;
 
@@ -86,12 +138,30 @@ public sealed class MemoryRuntimeContext(HostMemoryMapGeometry hostMemoryMapGeom
         }
     }
 
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+        lock (_shmGate)
+        {
+            _zeroInode?.Dispose();
+            _zeroInode = null;
+            _shmSuperBlock = null;
+        }
+
+        AddressSpacePolicy.Dispose();
+        HostPages.Dispose();
+        BackingPagePool.Dispose();
+    }
+
     private void EnsureZeroInodeCreated()
     {
         if (_zeroInode != null)
             return;
 
-        _zeroInode = new ZeroInode();
+        _zeroInode = new ZeroInode(this);
     }
 
     private LinuxFile CreateUnlinkedShmFile(string name, uint length, int mode, int uid, int gid, FileFlags fileFlags,
@@ -136,13 +206,16 @@ public sealed class MemoryRuntimeContext(HostMemoryMapGeometry hostMemoryMapGeom
     }
 }
 
-internal sealed class ZeroInode : MappingBackedInode
+internal sealed class ZeroInode : MappingBackedInode, IDisposable
 {
+    private readonly MemoryRuntimeContext _memoryContext;
     private readonly Lock _zeroPageGate = new();
     private IntPtr _sharedZeroPagePtr;
 
-    public ZeroInode()
+    public ZeroInode(MemoryRuntimeContext memoryContext)
     {
+        _memoryContext = memoryContext;
+        Mapping = new AddressSpace(memoryContext, AddressSpaceKind.Zero);
         Ino = 0;
         Type = InodeType.File;
         Mode = 0x124;
@@ -167,13 +240,9 @@ internal sealed class ZeroInode : MappingBackedInode
                     new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
                     _sharedZeroPagePtr = ptr;
                 }
+            }
 
-                HostPageManager.GetOrCreate(_sharedZeroPagePtr, HostPageKind.Zero);
-            }
-            else
-            {
-                HostPageManager.GetOrCreate(_sharedZeroPagePtr, HostPageKind.Zero);
-            }
+            _memoryContext.HostPages.GetOrCreate(_sharedZeroPagePtr, HostPageKind.Zero);
 
             return new InodePageRecord
             {
@@ -181,6 +250,25 @@ internal sealed class ZeroInode : MappingBackedInode
                 Ptr = _sharedZeroPagePtr,
                 BackingKind = FilePageBackingKind.ZeroSharedPage
             };
+        }
+    }
+
+    public void Dispose()
+    {
+        Mapping?.Release();
+        Mapping = null;
+
+        lock (_zeroPageGate)
+        {
+            if (_sharedZeroPagePtr == IntPtr.Zero)
+                return;
+
+            unsafe
+            {
+                NativeMemory.AlignedFree((void*)_sharedZeroPagePtr);
+            }
+
+            _sharedZeroPagePtr = IntPtr.Zero;
         }
     }
 }

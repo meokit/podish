@@ -50,7 +50,7 @@ public class SilkFsAdapterTests
         var vma = _runtime.CreateAddressSpace();
         var sm = new SyscallManager(engine, vma, 0);
         var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-        var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+        var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
         var rootMount = new Mount(rootSb, rootSb.Root)
         {
             Source = "tmpfs",
@@ -123,7 +123,7 @@ public class SilkFsAdapterTests
                 var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root)
                 {
                     Source = "tmpfs",
@@ -164,7 +164,7 @@ public class SilkFsAdapterTests
                 var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root)
                 {
                     Source = "tmpfs",
@@ -229,7 +229,7 @@ public class SilkFsAdapterTests
                 var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root)
                 {
                     Source = "tmpfs",
@@ -267,7 +267,7 @@ public class SilkFsAdapterTests
                 var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root)
                 {
                     Source = "tmpfs",
@@ -314,7 +314,7 @@ public class SilkFsAdapterTests
                 var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -359,7 +359,7 @@ public class SilkFsAdapterTests
                 var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -417,7 +417,7 @@ public class SilkFsAdapterTests
             var vma = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -479,7 +479,7 @@ public class SilkFsAdapterTests
             var vma = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -532,7 +532,7 @@ public class SilkFsAdapterTests
             var vma = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -593,7 +593,7 @@ public class SilkFsAdapterTests
             var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -655,7 +655,7 @@ public class SilkFsAdapterTests
             var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -718,7 +718,7 @@ public class SilkFsAdapterTests
                 var mm = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, mm, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -763,7 +763,7 @@ public class SilkFsAdapterTests
                 var mm = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, mm, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -809,7 +809,7 @@ public class SilkFsAdapterTests
                 var mm = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, mm, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -850,7 +850,7 @@ public class SilkFsAdapterTests
                 var mm = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, mm, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -887,7 +887,6 @@ public class SilkFsAdapterTests
     [Fact]
     public void Silkfs_PageCache_CanBeReclaimedUnderPressure_AndReadStillCorrect()
     {
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-reclaim-{Guid.NewGuid():N}");
 
         try
@@ -896,7 +895,7 @@ public class SilkFsAdapterTests
             var mm = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, mm, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -931,7 +930,7 @@ public class SilkFsAdapterTests
             var cache = Assert.IsType<AddressSpace>(silkInode.Mapping);
             Assert.True(cache.PageCount > 0);
 
-            var reclaimed = AddressSpacePolicy.TryReclaimBytes(LinuxConstants.PageSize);
+            var reclaimed = sm.MemoryContext.AddressSpacePolicy.TryReclaimBytes(LinuxConstants.PageSize);
             Assert.True(reclaimed >= LinuxConstants.PageSize);
             Assert.Equal(0, cache.PageCount);
 
@@ -952,23 +951,23 @@ public class SilkFsAdapterTests
     [Fact]
     public void Silkfs_PageCache_AutoReclaim_OnMaintenancePressure()
     {
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        var originalHigh = AddressSpacePolicy.HighWatermarkBytes;
-        var originalLow = AddressSpacePolicy.LowWatermarkBytes;
-        var originalInterval = AddressSpacePolicy.WritebackInterval;
+        using var engine = _runtime.CreateEngine();
+        var mm = _runtime.CreateAddressSpace();
+        var sm = new SyscallManager(engine, mm, 0);
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-auto-reclaim-{Guid.NewGuid():N}");
 
-        AddressSpacePolicy.HighWatermarkBytes = 0;
-        AddressSpacePolicy.LowWatermarkBytes = 0;
-        AddressSpacePolicy.WritebackInterval = TimeSpan.Zero;
+        var originalHigh = sm.MemoryContext.AddressSpacePolicy.HighWatermarkBytes;
+        var originalLow = sm.MemoryContext.AddressSpacePolicy.LowWatermarkBytes;
+        var originalInterval = sm.MemoryContext.AddressSpacePolicy.WritebackInterval;
+
+        sm.MemoryContext.AddressSpacePolicy.HighWatermarkBytes = 0;
+        sm.MemoryContext.AddressSpacePolicy.LowWatermarkBytes = 0;
+        sm.MemoryContext.AddressSpacePolicy.WritebackInterval = TimeSpan.Zero;
 
         try
         {
-            using var engine = _runtime.CreateEngine();
-            var mm = _runtime.CreateAddressSpace();
-            var sm = new SyscallManager(engine, mm, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -1003,7 +1002,7 @@ public class SilkFsAdapterTests
             var cache = Assert.IsType<AddressSpace>(silkInode.Mapping);
             Assert.True(cache.PageCount > 0);
 
-            AddressSpacePolicy.MaybeRunMaintenance(mm, engine);
+            sm.MemoryContext.AddressSpacePolicy.MaybeRunMaintenance(mm, engine);
 
             Assert.Equal(0, cache.PageCount);
 
@@ -1017,9 +1016,9 @@ public class SilkFsAdapterTests
         }
         finally
         {
-            AddressSpacePolicy.HighWatermarkBytes = originalHigh;
-            AddressSpacePolicy.LowWatermarkBytes = originalLow;
-            AddressSpacePolicy.WritebackInterval = originalInterval;
+            sm.MemoryContext.AddressSpacePolicy.HighWatermarkBytes = originalHigh;
+            sm.MemoryContext.AddressSpacePolicy.LowWatermarkBytes = originalLow;
+            sm.MemoryContext.AddressSpacePolicy.WritebackInterval = originalInterval;
             if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
         }
     }
@@ -1034,7 +1033,7 @@ public class SilkFsAdapterTests
             var vma = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -1101,7 +1100,7 @@ public class SilkFsAdapterTests
             var vma = _runtime.CreateAddressSpace();
             var sm = new SyscallManager(engine, vma, 0);
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
             sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -1159,7 +1158,7 @@ public class SilkFsAdapterTests
                 var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -1190,7 +1189,7 @@ public class SilkFsAdapterTests
                 var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -1238,7 +1237,7 @@ public class SilkFsAdapterTests
                 var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 
@@ -1272,7 +1271,7 @@ public class SilkFsAdapterTests
                 var vma = _runtime.CreateAddressSpace();
                 var sm = new SyscallManager(engine, vma, 0);
                 var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-                var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
                 var rootMount = new Mount(rootSb, rootSb.Root) { Source = "tmpfs", FsType = "tmpfs", Options = "rw" };
                 sm.InitializeRoot(rootSb.Root, rootMount);
 

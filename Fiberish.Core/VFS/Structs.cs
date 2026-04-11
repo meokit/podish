@@ -539,7 +539,7 @@ internal static class VfsFileHolderTracking
     }
 }
 
-public abstract class Inode : IAddressSpaceOperations
+public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleReleaseOwner
 {
     // All dentries pointing to this inode (hard links / aliases).
     // Exposed as read-only; callers must go through BindInode/UnbindInode.
@@ -1440,6 +1440,12 @@ public abstract class Inode : IAddressSpaceOperations
         _ = releaseToken;
     }
 
+    void IBackingPageHandleReleaseOwner.ReleaseBackingPageHandle(IntPtr pointer, long releaseToken)
+    {
+        _ = pointer;
+        ReleaseMappedPageHandle(releaseToken);
+    }
+
     public virtual bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex)
     {
         _ = linuxFile;
@@ -1666,9 +1672,9 @@ public abstract class MappingBackedInode : Inode
 
     protected AddressSpace CreateMapping()
     {
-        var mapping = new AddressSpace(MappingKind);
+        var mapping = new AddressSpace(SuperBlock.MemoryContext, MappingKind);
         if (MappingCacheClass is { } cacheClass)
-            AddressSpacePolicy.TrackAddressSpace(mapping, cacheClass);
+            SuperBlock.MemoryContext.AddressSpacePolicy.TrackAddressSpace(mapping, cacheClass);
 
         Mapping = mapping;
         return mapping;
@@ -1718,7 +1724,7 @@ public abstract class MappingBackedInode : Inode
         if (TryGetMappingPageRecord(request.PageIndex, out var record) &&
             record.BackingKind == FilePageBackingKind.HostMappedWindow)
         {
-            AddressSpacePolicy.BeginAddressSpaceWriteback();
+            SuperBlock.MemoryContext.AddressSpacePolicy.BeginAddressSpaceWriteback();
             try
             {
                 var flushRc = SyncMappedPage(linuxFile, mapping, request, record);
@@ -1727,7 +1733,7 @@ public abstract class MappingBackedInode : Inode
             }
             finally
             {
-                AddressSpacePolicy.EndAddressSpaceWriteback();
+                SuperBlock.MemoryContext.AddressSpacePolicy.EndAddressSpaceWriteback();
             }
 
             CompleteCachedPageSync(linuxFile, mapping, request.PageIndex, record);
@@ -1816,7 +1822,7 @@ public abstract class MappingBackedInode : Inode
     private InodePageRecord CreateAllocatedMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
         int prefillLength)
     {
-        if (!PageManager.TryAllocatePoolBackedPageStrict(out var pageHandle) ||
+        if (!SuperBlock.MemoryContext.BackingPagePool.TryAllocatePoolBackedPageStrict(out var pageHandle) ||
             !pageHandle.IsValid)
             return null!;
 

@@ -5,16 +5,18 @@ namespace Fiberish.Memory;
 internal sealed class OwnerPageSlots
 {
     private readonly Lock _lock = new();
+    private readonly MemoryRuntimeContext _memoryContext;
     private readonly Func<uint, HostPageOwnerBinding> _ownerBindingFactory;
     private readonly Action<uint, IntPtr, IntPtr>? _pageBindingChanged;
     private readonly Action<int>? _pageCountChanged;
     private readonly Dictionary<uint, ResidentPageRecord> _pages = [];
     private int _pageCount;
 
-    internal OwnerPageSlots(Func<uint, HostPageOwnerBinding> ownerBindingFactory,
+    internal OwnerPageSlots(MemoryRuntimeContext memoryContext, Func<uint, HostPageOwnerBinding> ownerBindingFactory,
         Action<uint, IntPtr, IntPtr>? pageBindingChanged = null,
         Action<int>? pageCountChanged = null)
     {
+        _memoryContext = memoryContext;
         _ownerBindingFactory = ownerBindingFactory;
         _pageBindingChanged = pageBindingChanged;
         _pageCountChanged = pageCountChanged;
@@ -72,7 +74,7 @@ internal sealed class OwnerPageSlots
     {
         ResidentPageRecord? oldPage = null;
         var pageCountDelta = 0;
-        var hostPage = HostPageManager.GetOrCreate(ptr, hostPageKind);
+        var hostPage = _memoryContext.HostPages.GetOrCreate(ptr, hostPageKind);
         lock (_lock)
         {
             if (_pages.TryGetValue(pageIndex, out var existing))
@@ -201,7 +203,7 @@ internal sealed class OwnerPageSlots
         {
             if (strictQuota)
             {
-                if (!PageManager.TryAllocAnonPageMayFail(out backingPageHandle, allocationClass, allocationSource))
+                if (!_memoryContext.BackingPagePool.TryAllocAnonPageMayFail(out backingPageHandle, allocationClass, allocationSource))
                 {
                     isNew = false;
                     return IntPtr.Zero;
@@ -209,14 +211,14 @@ internal sealed class OwnerPageSlots
             }
             else
             {
-                backingPageHandle = PageManager.AllocAnonPage(allocationClass, allocationSource);
+                backingPageHandle = _memoryContext.BackingPagePool.AllocAnonPage(allocationClass, allocationSource);
             }
         }
         else
         {
             if (strictQuota)
             {
-                if (!PageManager.TryAllocatePoolBackedPageStrict(out backingPageHandle, allocationClass,
+                if (!_memoryContext.BackingPagePool.TryAllocatePoolBackedPageStrict(out backingPageHandle, allocationClass,
                         allocationSource))
                 {
                     isNew = false;
@@ -225,7 +227,7 @@ internal sealed class OwnerPageSlots
             }
             else
             {
-                backingPageHandle = PageManager.AllocatePoolBackedPage(allocationClass, allocationSource);
+                backingPageHandle = _memoryContext.BackingPagePool.AllocatePoolBackedPage(allocationClass, allocationSource);
             }
         }
 
@@ -429,6 +431,7 @@ internal sealed class OwnerPageSlots
             if (entry.Dirty) return false;
             if (entry.MapCount > 0 || entry.PinCount > 0) return false;
             if (entry.HostPage.OwnerResidentCount > 1) return false;
+
             page = entry;
             _pages.Remove(pageIndex);
             pageCountDelta = -1;
@@ -513,8 +516,8 @@ internal sealed class OwnerPageSlots
         if (pageRecord.OnReleased != null)
             pageRecord.OnReleased(pageRecord);
 
-        HostPageManager.UnbindOwnerRoot(pageRecord.Ptr, pageRecord.OwnerBinding);
-        HostPageManager.TryRemoveIfUnused(pageRecord.Ptr);
+        _memoryContext.HostPages.UnbindOwnerRoot(pageRecord.Ptr, pageRecord.OwnerBinding);
+        _memoryContext.HostPages.TryRemoveIfUnused(pageRecord.Ptr);
     }
 
     private static ResidentPageRecord CreateVmPage(HostPageRef hostPage, HostPageKind hostPageKind,
@@ -537,19 +540,19 @@ internal sealed class OwnerPageSlots
         hostPage.LastAccessTimestamp = MonotonicTime.GetTimestamp();
     }
 
-    private static HostPageRef EnsureHostPageRegistered(IntPtr ptr, HostPageKind hostPageKind,
+    private HostPageRef EnsureHostPageRegistered(IntPtr ptr, HostPageKind hostPageKind,
         ref BackingPageHandle backingPageHandle)
     {
         if (ptr == IntPtr.Zero)
             throw new ArgumentException("Host page pointer must be non-zero.", nameof(ptr));
 
         if (!backingPageHandle.IsValid)
-            return HostPageManager.GetOrCreate(ptr, hostPageKind);
+            return _memoryContext.HostPages.GetOrCreate(ptr, hostPageKind);
 
         if (backingPageHandle.Pointer != ptr)
             throw new InvalidOperationException("Backing handle pointer does not match host page pointer.");
 
-        return HostPageManager.CreateWithBacking(ref backingPageHandle, hostPageKind);
+        return _memoryContext.HostPages.CreateWithBacking(ref backingPageHandle, hostPageKind);
     }
 }
 

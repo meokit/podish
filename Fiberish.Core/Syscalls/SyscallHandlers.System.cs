@@ -122,12 +122,12 @@ public partial class SyscallManager
         var t = engine.Owner as FiberTask;
         if (t == null) return -(int)Errno.EPERM;
 
-        var trackedPages = AddressSpacePolicy.GetTrackedPageCounts();
+        var trackedPages = MemoryContext.AddressSpacePolicy.GetTrackedPageCounts();
         var totalCachedBytes = Math.Max(0, trackedPages.TotalPages) * LinuxConstants.PageSize;
         var shmemBytes = Math.Max(0, trackedPages.ShmemPages) * LinuxConstants.PageSize;
         var sharedBytes = Math.Max(0, shmemBytes + SysVShm.GetResidentBytesSnapshot());
-        var allocatedBytes = Math.Max(0, PageManager.GetAllocatedBytes() + totalCachedBytes);
-        var quotaBytes = PageManager.MemoryQuotaBytes;
+        var allocatedBytes = Math.Max(0, MemoryContext.GetAllocatedBytes() + totalCachedBytes);
+        var quotaBytes = MemoryContext.MemoryQuotaBytes;
         var totalBytes = Math.Max(0, quotaBytes > 0 ? quotaBytes : Math.Max(allocatedBytes, 256L * 1024 * 1024));
         var freeBytes = Math.Max(0, totalBytes - allocatedBytes);
         var bufferBytes = 0L; // /proc/meminfo currently reports Buffers: 0

@@ -97,10 +97,8 @@ public class TbCohTests
     [Fact]
     public void SameMmu_SharedFileRwRxAliases_InvalidateLocalTbWithoutTbCoh()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var fixture = new TmpfsFileFixture(IncEaxTwice());
         var runtime = new TestRuntimeFactory();
+        using var fixture = new TmpfsFileFixture(runtime.MemoryContext, IncEaxTwice());
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
         mm.BindOrAssertAddressSpaceHandle(engine);
@@ -138,10 +136,8 @@ public class TbCohTests
     [Fact]
     public void MixedLocalAliasAndRemotePeer_InvalidatesLocalAndRemoteTbs()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var fixture = new TmpfsFileFixture(IncEaxTwice());
         var runtime = new MemoryRuntimeContext();
+        using var fixture = new TmpfsFileFixture(runtime, IncEaxTwice());
         using var writeEngine = new Engine(runtime);
         using var remoteEngine = new Engine(runtime);
         var writeMm = new VMAManager(runtime);
@@ -204,10 +200,8 @@ public class TbCohTests
     [Fact]
     public void UnfaultedRemoteExecPeer_MprotectUpdatesWriterWpState()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var fixture = new TmpfsFileFixture(IncEaxTwice());
         var runtime = new MemoryRuntimeContext();
+        using var fixture = new TmpfsFileFixture(runtime, IncEaxTwice());
         using var writeEngine = new Engine(runtime);
         using var execEngine = new Engine(runtime);
         var writeMm = new VMAManager(runtime);
@@ -256,10 +250,8 @@ public class TbCohTests
     [Fact]
     public void UnfaultedRemoteExecPeer_MunmapClearsWriterWpState()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var fixture = new TmpfsFileFixture(IncEaxTwice());
         var runtime = new MemoryRuntimeContext();
+        using var fixture = new TmpfsFileFixture(runtime, IncEaxTwice());
         using var writeEngine = new Engine(runtime);
         using var execEngine = new Engine(runtime);
         var writeMm = new VMAManager(runtime);
@@ -304,10 +296,8 @@ public class TbCohTests
     [Fact]
     public void UnfaultedRemoteSharedReadPeer_MmapDoesNotChangeWriterWpState()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var fixture = new TmpfsFileFixture(IncEaxTwice());
         var runtime = new MemoryRuntimeContext();
+        using var fixture = new TmpfsFileFixture(runtime, IncEaxTwice());
         using var writeEngine = new Engine(runtime);
         using var readEngine = new Engine(runtime);
         var writeMm = new VMAManager(runtime);
@@ -348,10 +338,8 @@ public class TbCohTests
     [Fact]
     public void UnfaultedRemotePrivateWritePeer_MmapAndMprotectDoNotChangeWriterWpState()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        using var fixture = new TmpfsFileFixture(IncEaxTwice());
         var runtime = new MemoryRuntimeContext();
+        using var fixture = new TmpfsFileFixture(runtime, IncEaxTwice());
         using var writeEngine = new Engine(runtime);
         using var privateEngine = new Engine(runtime);
         var writeMm = new VMAManager(runtime);
@@ -403,8 +391,6 @@ public class TbCohTests
     [Fact]
     public void PartialMprotect_SplitVma_OnlyAppliesWxToTouchedPage()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         using var diagnostics = TbCohDiagnosticsScope.Begin();
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
@@ -474,16 +460,15 @@ public class TbCohTests
         private readonly SuperBlock _superBlock;
         private readonly Dentry _root;
 
-        public TmpfsFileFixture(byte[] contents)
+        public TmpfsFileFixture(MemoryRuntimeContext memoryContext, byte[] contents)
         {
-            var runtime = new MemoryRuntimeContext();
             var fsType = new FileSystemType
             {
                 Name = "tmpfs",
                 Factory = static _ => new Tmpfs(),
                 FactoryWithContext = static (_, memoryContext) => new Tmpfs(memoryContext: memoryContext)
             };
-            _superBlock = fsType.CreateAnonymousFileSystem(runtime).ReadSuper(fsType, 0, "tmp", null);
+            _superBlock = fsType.CreateAnonymousFileSystem(memoryContext).ReadSuper(fsType, 0, "tmp", null);
             _root = _superBlock.Root;
             Dentry = new Dentry(FsName.FromString("tbcoh.bin"), null, _root, _superBlock);
             _root.Inode!.Create(Dentry, 0x1B6, 0, 0);

@@ -12,13 +12,11 @@ public class PageFaultOomTests
     [Fact]
     public void AnonymousFault_WhenQuotaExhausted_ReturnsOom()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
-        var oldQuota = PageManager.MemoryQuotaBytes;
-        PageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
+        var oldQuota = runtime.MemoryContext.MemoryQuotaBytes;
+        runtime.MemoryContext.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
         try
         {
             var mapped = mm.Mmap(0x72000000, LinuxConstants.PageSize, Protection.Read | Protection.Write,
@@ -29,20 +27,17 @@ public class PageFaultOomTests
         }
         finally
         {
-            PageManager.MemoryQuotaBytes = oldQuota;
+            runtime.MemoryContext.MemoryQuotaBytes = oldQuota;
         }
     }
 
     [Fact]
     public void TaskPageFault_WhenOom_KillsProcessWithSigkill()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        var oldQuota = PageManager.MemoryQuotaBytes;
-
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
+        var oldQuota = runtime.MemoryContext.MemoryQuotaBytes;
         var sm = new SyscallManager(engine, mm, 0);
         try
         {
@@ -57,7 +52,7 @@ public class PageFaultOomTests
             var mapped = mm.Mmap(0x73000000, LinuxConstants.PageSize, Protection.Read | Protection.Write,
                 MapFlags.Private | MapFlags.Anonymous, null, 0, "oom-task", engine);
             Assert.Equal((uint)0x73000000, mapped);
-            PageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
+            runtime.MemoryContext.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
 
             var method = typeof(FiberTask).GetMethod("HandlePageFault", BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.NotNull(method);
@@ -70,7 +65,7 @@ public class PageFaultOomTests
         }
         finally
         {
-            PageManager.MemoryQuotaBytes = oldQuota;
+            runtime.MemoryContext.MemoryQuotaBytes = oldQuota;
             sm.Close();
         }
     }

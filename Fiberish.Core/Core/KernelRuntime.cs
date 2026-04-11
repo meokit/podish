@@ -37,6 +37,8 @@ public sealed class KernelRuntime : IDisposable
     public void Dispose()
     {
         while (RetiredEngines.TryDequeue(out var engine)) engine.Dispose();
+        Engine.Dispose();
+        MemoryContext.Dispose();
     }
 
     public unsafe void DumpAllBlocks(Stream output)
@@ -113,10 +115,11 @@ public sealed class KernelRuntime : IDisposable
         }
     }
 
-    public static KernelRuntime BootstrapBare(bool strace, TtyDiscipline? tty = null)
+    public static KernelRuntime BootstrapBare(bool strace, TtyDiscipline? tty = null,
+        MemoryRuntimeContext? memoryContext = null)
     {
         var configuration = new Configuration();
-        var memoryContext = new MemoryRuntimeContext();
+        memoryContext ??= new MemoryRuntimeContext();
         var engine = new Engine(memoryContext);
         var mm = new VMAManager(memoryContext);
         var deviceNumbers = new DeviceNumberManager();

@@ -14,7 +14,7 @@ public class SysinfoSyscallTests
     public async Task Sysinfo_WritesExpectedFields()
     {
         using var env = new TestEnv();
-        PageManager.MemoryQuotaBytes = 64L * 1024 * 1024;
+        env.MemoryContext.MemoryQuotaBytes = 64L * 1024 * 1024;
         env.RegisterProcess(101);
         env.RegisterProcess(202);
 
@@ -39,7 +39,7 @@ public class SysinfoSyscallTests
     public async Task Sysinfo_ScalesMemoryFieldsWhenValuesExceedInt32()
     {
         using var env = new TestEnv();
-        PageManager.MemoryQuotaBytes = (long)int.MaxValue + 2L * LinuxConstants.PageSize;
+        env.MemoryContext.MemoryQuotaBytes = (long)int.MaxValue + 2L * LinuxConstants.PageSize;
 
         const uint sysinfoPtr = 0x12000;
         env.MapUserPage(sysinfoPtr);
@@ -48,14 +48,12 @@ public class SysinfoSyscallTests
 
         Assert.Equal(0, rc);
         Assert.Equal(LinuxConstants.PageSize, env.ReadInt32(sysinfoPtr + 52));
-        Assert.Equal(PageManager.MemoryQuotaBytes / LinuxConstants.PageSize, env.ReadInt32(sysinfoPtr + 16));
+        Assert.Equal(env.MemoryContext.MemoryQuotaBytes / LinuxConstants.PageSize, env.ReadInt32(sysinfoPtr + 16));
         Assert.Equal(1, env.ReadInt16(sysinfoPtr + 40));
     }
 
     private sealed class TestEnv : IDisposable
     {
-        private readonly IDisposable _addressSpaceScope = AddressSpacePolicy.BeginIsolatedScope();
-        private readonly IDisposable _pageManagerScope = PageManager.BeginIsolatedScope();
         private readonly TestRuntimeFactory _runtime = new();
 
         public TestEnv()
@@ -75,12 +73,11 @@ public class SysinfoSyscallTests
         public KernelScheduler Scheduler { get; }
         public FiberTask Task { get; }
         public SyscallManager SyscallManager { get; }
+        public MemoryRuntimeContext MemoryContext => _runtime.MemoryContext;
 
         public void Dispose()
         {
             SyscallManager.Close();
-            _pageManagerScope.Dispose();
-            _addressSpaceScope.Dispose();
         }
 
         public ValueTask<int> Invoke(string methodName, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

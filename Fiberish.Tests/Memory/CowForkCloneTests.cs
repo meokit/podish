@@ -61,7 +61,6 @@ public class CowForkCloneTests
     [Fact]
     public void ForkClone_PrivateAnonymous_NoEagerCopyUntilWrite()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
         var runtime = new TestRuntimeFactory();
         using var parentEngine = runtime.CreateEngine();
         var parentMm = runtime.CreateAddressSpace();
@@ -107,7 +106,6 @@ public class CowForkCloneTests
     [Fact]
     public void PrivateAnonymousReadFault_MapsSharedReadOnlyZeroPage()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
@@ -123,13 +121,13 @@ public class CowForkCloneTests
             mm.Mmap(map2, LinuxConstants.PageSize, Protection.Read | Protection.Write,
                 MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "anon-zero-2", engine));
 
-        var allocatedBeforeRead = PageManager.GetAllocatedBytes();
+        var allocatedBeforeRead = runtime.MemoryContext.GetAllocatedBytes();
         var buf = new byte[1];
         Assert.True(engine.CopyFromUser(map1, buf));
         Assert.Equal(0, buf[0]);
         Assert.True(engine.CopyFromUser(map2, buf));
         Assert.Equal(0, buf[0]);
-        Assert.Equal(allocatedBeforeRead, PageManager.GetAllocatedBytes());
+        Assert.Equal(allocatedBeforeRead, runtime.MemoryContext.GetAllocatedBytes());
 
         Assert.True(mm.PageMapping.TryGet(map1, out var zero1));
         Assert.True(mm.PageMapping.TryGet(map2, out var zero2));
@@ -154,7 +152,6 @@ public class CowForkCloneTests
     [Fact]
     public void PrefaultRange_WithWriteIntent_CreatesPrivatePageWithoutSharedSourceMaterialization()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
@@ -186,7 +183,6 @@ public class CowForkCloneTests
     [Fact]
     public void ForkClone_PrivateAnonymous_AlreadyPrivatePage_SharesUntilWriteWithoutExtraCloneAllocation()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
         var runtime = new TestRuntimeFactory();
         using var parentEngine = runtime.CreateEngine();
         var parentMm = runtime.CreateAddressSpace();
@@ -203,7 +199,7 @@ public class CowForkCloneTests
         var pageIndex = parentVma.GetPageIndex(parentVma.Start);
         var parentPrivatePage = parentVma.VmAnonVma!.GetPage(pageIndex);
         Assert.NotEqual(IntPtr.Zero, parentPrivatePage);
-        var allocatedBeforeClone = PageManager.GetAllocatedBytes();
+        var allocatedBeforeClone = runtime.MemoryContext.GetAllocatedBytes();
 
         var childMm = parentMm.Clone();
         using var childEngine = parentEngine.Clone(false);
@@ -215,7 +211,7 @@ public class CowForkCloneTests
         var childVma = Assert.Single(childMm.VMAs);
         Assert.NotSame(parentVma.VmAnonVma, childVma.VmAnonVma);
         Assert.Equal(parentPrivatePage, childVma.VmAnonVma!.GetPage(childVma.GetPageIndex(childVma.Start)));
-        Assert.Equal(allocatedBeforeClone, PageManager.GetAllocatedBytes());
+        Assert.Equal(allocatedBeforeClone, runtime.MemoryContext.GetAllocatedBytes());
 
         var parentRead = new byte[1];
         var childRead = new byte[1];
@@ -237,7 +233,6 @@ public class CowForkCloneTests
     [Fact]
     public void ForkClone_PrivateAnonymous_AfterProtNoneEviction_ChildWriteStillSplitsCow()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
         var runtime = new TestRuntimeFactory();
         using var parentEngine = runtime.CreateEngine();
         var parentMm = runtime.CreateAddressSpace();

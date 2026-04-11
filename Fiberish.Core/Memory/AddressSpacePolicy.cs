@@ -5,10 +5,10 @@ using Fiberish.Native;
 namespace Fiberish.Memory;
 
 /// <summary>
-///     Global address_space cache policy manager.
+///     address_space cache policy manager scoped to a single <see cref="MemoryRuntimeContext"/>.
 ///     Maintenance runs at syscall safe-points to avoid concurrent VM mutation.
 /// </summary>
-public static class AddressSpacePolicy
+public sealed class AddressSpacePolicy : IDisposable
 {
     public enum AddressSpaceCacheClass
     {
@@ -16,111 +16,95 @@ public static class AddressSpacePolicy
         Shmem
     }
 
-    private static readonly AsyncLocal<State?> ScopedState = new();
-    private static readonly State DefaultState = new();
-    private static State CurrentState => ScopedState.Value ?? DefaultState;
+    private readonly State _state = new();
 
-    public static TimeSpan WritebackInterval
+    public TimeSpan WritebackInterval
     {
-        get => CurrentState.WritebackInterval;
-        set => CurrentState.WritebackInterval = value;
+        get => _state.WritebackInterval;
+        set => _state.WritebackInterval = value;
     }
 
-    public static long HighWatermarkBytes
+    public long HighWatermarkBytes
     {
-        get => CurrentState.HighWatermarkBytes;
-        set => CurrentState.HighWatermarkBytes = value;
+        get => _state.HighWatermarkBytes;
+        set => _state.HighWatermarkBytes = value;
     }
 
-    public static long LowWatermarkBytes
+    public long LowWatermarkBytes
     {
-        get => CurrentState.LowWatermarkBytes;
-        set => CurrentState.LowWatermarkBytes = value;
+        get => _state.LowWatermarkBytes;
+        set => _state.LowWatermarkBytes = value;
     }
 
-    public static IDisposable BeginIsolatedScope()
-    {
-        var previous = ScopedState.Value;
-        ScopedState.Value = new State();
-        return new ScopeRestore(previous);
-    }
-
-    public static void TrackAddressSpace(AddressSpace mapping,
+    public void TrackAddressSpace(AddressSpace mapping,
         AddressSpaceCacheClass cacheClass = AddressSpaceCacheClass.File)
     {
-        var state = CurrentState;
         var key = RuntimeHelpers.GetHashCode(mapping);
         var initialPageCount = mapping.PageCount;
         var entry = new TrackedEntry(new WeakReference<AddressSpace>(mapping), cacheClass, initialPageCount);
         TrackedEntry? replaced = null;
-        lock (state.Gate)
+        lock (_state.Gate)
         {
-            if (state.TrackedCaches.TryGetValue(key, out var existing) &&
+            if (_state.TrackedCaches.TryGetValue(key, out var existing) &&
                 existing.Cache.TryGetTarget(out var existingCache) &&
                 ReferenceEquals(existingCache, mapping))
                 return;
 
-            if (state.TrackedCaches.TryGetValue(key, out existing))
+            if (_state.TrackedCaches.TryGetValue(key, out existing))
                 replaced = existing;
-            state.TrackedCaches[key] = entry;
+            _state.TrackedCaches[key] = entry;
         }
 
         if (replaced != null)
         {
             var replacedPageCount = Interlocked.Read(ref replaced.PageCount);
-            Interlocked.Add(ref state.TotalTrackedPages, -replacedPageCount);
+            Interlocked.Add(ref _state.TotalTrackedPages, -replacedPageCount);
             if (replaced.Class == AddressSpaceCacheClass.Shmem)
-                Interlocked.Add(ref state.ShmemTrackedPages, -replacedPageCount);
+                Interlocked.Add(ref _state.ShmemTrackedPages, -replacedPageCount);
         }
 
-        Interlocked.Add(ref state.TotalTrackedPages, initialPageCount);
+        Interlocked.Add(ref _state.TotalTrackedPages, initialPageCount);
         if (cacheClass == AddressSpaceCacheClass.Shmem)
-            Interlocked.Add(ref state.ShmemTrackedPages, initialPageCount);
+            Interlocked.Add(ref _state.ShmemTrackedPages, initialPageCount);
 
-        mapping.SetTrackedPageCountDeltaCallback(delta => OnTrackedPageCountDelta(state, entry, delta));
+        mapping.SetTrackedPageCountDeltaCallback(delta => OnTrackedPageCountDelta(_state, entry, delta));
     }
 
-    public static void MaybeRunMaintenance(VMAManager mm, Engine engine)
+    public void MaybeRunMaintenance(VMAManager mm, Engine engine)
     {
         if (engine == null || engine.State == IntPtr.Zero) return;
-        var state = CurrentState;
         var now = DateTime.UtcNow.Ticks;
-        lock (state.Gate)
+        lock (_state.Gate)
         {
-            if (now < state.NextMaintenanceTicks) return;
-            state.NextMaintenanceTicks = now + state.WritebackInterval.Ticks;
+            if (now < _state.NextMaintenanceTicks) return;
+            _state.NextMaintenanceTicks = now + _state.WritebackInterval.Ticks;
         }
 
-        // 1) Periodic writeback of mmap-shared dirty pages.
         try
         {
             ProcessAddressSpaceSync.SyncAllMappedSharedFiles(mm, engine);
         }
         catch
         {
-            // Best-effort policy pass: syscall path must not fail because of maintenance.
         }
 
-        // 2) Best-effort cache reclaim under memory pressure.
         try
         {
             ReclaimIfNeeded();
         }
         catch
         {
-            // Best-effort policy pass: ignore reclaim errors.
         }
     }
 
-    public static AddressSpaceStats GetAddressSpaceStats()
+    public AddressSpaceStats GetAddressSpaceStats()
     {
-        var state = CurrentState;
         long dirty = 0;
-        lock (state.Gate)
+        lock (_state.Gate)
         {
-            var deadKeys = state.DeadCacheKeysScratch;
+            var deadKeys = _state.DeadCacheKeysScratch;
             deadKeys.Clear();
-            foreach (var (key, entry) in state.TrackedCaches)
+            foreach (var (key, entry) in _state.TrackedCaches)
             {
                 if (!entry.Cache.TryGetTarget(out var cache))
                 {
@@ -128,39 +112,38 @@ public static class AddressSpacePolicy
                     continue;
                 }
 
-                cache.GetPageStats(out var totalPages, out var dirtyPages);
+                cache.GetPageStats(out _, out var dirtyPages);
                 dirty += dirtyPages;
             }
 
-            RemoveDeadCachesLocked(state, deadKeys);
+            RemoveDeadCachesLocked(_state, deadKeys);
         }
 
-        var total = Interlocked.Read(ref state.TotalTrackedPages);
-        var shmem = Interlocked.Read(ref state.ShmemTrackedPages);
+        var total = Interlocked.Read(ref _state.TotalTrackedPages);
+        var shmem = Interlocked.Read(ref _state.ShmemTrackedPages);
         return new AddressSpaceStats(
             total,
             total - dirty,
             dirty,
             shmem,
-            Interlocked.Read(ref state.WritebackPagesInFlight));
+            Interlocked.Read(ref _state.WritebackPagesInFlight));
     }
 
-    public static long GetTotalCachedPages()
+    public long GetTotalCachedPages()
     {
         return GetTrackedPageCounts().TotalPages;
     }
 
-    public static AddressSpaceTrackedPageCounts GetTrackedPageCounts()
+    public AddressSpaceTrackedPageCounts GetTrackedPageCounts()
     {
-        var state = CurrentState;
         return new AddressSpaceTrackedPageCounts(
-            Interlocked.Read(ref state.TotalTrackedPages),
-            Interlocked.Read(ref state.ShmemTrackedPages));
+            Interlocked.Read(ref _state.TotalTrackedPages),
+            Interlocked.Read(ref _state.ShmemTrackedPages));
     }
 
-    public static IReadOnlyList<AddressSpacePageState> GetAddressSpacePageStatesSnapshot()
+    public IReadOnlyList<AddressSpacePageState> GetAddressSpacePageStatesSnapshot()
     {
-        var caches = GetLiveCaches(CurrentState);
+        var caches = GetLiveCaches(_state);
         if (caches.Count == 0) return Array.Empty<AddressSpacePageState>();
 
         var states = new List<AddressSpacePageState>();
@@ -174,40 +157,50 @@ public static class AddressSpacePolicy
         return states;
     }
 
-    public static void BeginAddressSpaceWriteback(int pages = 1)
+    public void BeginAddressSpaceWriteback(int pages = 1)
     {
         if (pages <= 0) return;
-        var state = CurrentState;
-        Interlocked.Add(ref state.WritebackPagesInFlight, pages);
+        Interlocked.Add(ref _state.WritebackPagesInFlight, pages);
     }
 
-    public static void EndAddressSpaceWriteback(int pages = 1)
+    public void EndAddressSpaceWriteback(int pages = 1)
     {
         if (pages <= 0) return;
-        var state = CurrentState;
-        var current = Interlocked.Add(ref state.WritebackPagesInFlight, -pages);
+        var current = Interlocked.Add(ref _state.WritebackPagesInFlight, -pages);
         if (current >= 0) return;
-        Interlocked.Exchange(ref state.WritebackPagesInFlight, 0);
+        Interlocked.Exchange(ref _state.WritebackPagesInFlight, 0);
     }
 
-    public static long TryReclaimBytes(long targetBytes)
+    public long TryReclaimBytes(long targetBytes)
     {
         if (targetBytes <= 0) return 0;
-        var caches = GetLiveCaches(CurrentState);
+        var caches = GetLiveCaches(_state);
         return ReclaimFromCaches(caches, targetBytes);
     }
 
-    private static void ReclaimIfNeeded()
+    public void Dispose()
     {
-        var state = CurrentState;
-        var caches = GetLiveCaches(state);
+        lock (_state.Gate)
+        {
+            _state.TrackedCaches.Clear();
+            _state.DeadCacheKeysScratch.Clear();
+            _state.NextMaintenanceTicks = 0;
+            _state.ShmemTrackedPages = 0;
+            _state.TotalTrackedPages = 0;
+            _state.WritebackPagesInFlight = 0;
+        }
+    }
+
+    private void ReclaimIfNeeded()
+    {
+        var caches = GetLiveCaches(_state);
 
         if (caches.Count == 0) return;
 
-        var totalBytes = Interlocked.Read(ref state.TotalTrackedPages) * LinuxConstants.PageSize;
-        if (totalBytes <= state.HighWatermarkBytes) return;
+        var totalBytes = Interlocked.Read(ref _state.TotalTrackedPages) * LinuxConstants.PageSize;
+        if (totalBytes <= _state.HighWatermarkBytes) return;
 
-        var targetFree = totalBytes - state.LowWatermarkBytes;
+        var targetFree = totalBytes - _state.LowWatermarkBytes;
         if (targetFree <= 0) return;
         ReclaimFromCaches(caches, targetFree);
     }
@@ -299,21 +292,6 @@ public static class AddressSpacePolicy
         public long TotalTrackedPages;
         public TimeSpan WritebackInterval = TimeSpan.FromSeconds(5);
         public long WritebackPagesInFlight;
-    }
-
-    private sealed class ScopeRestore : IDisposable
-    {
-        private readonly State? _previous;
-
-        public ScopeRestore(State? previous)
-        {
-            _previous = previous;
-        }
-
-        public void Dispose()
-        {
-            ScopedState.Value = _previous;
-        }
     }
 
     private sealed class TrackedEntry

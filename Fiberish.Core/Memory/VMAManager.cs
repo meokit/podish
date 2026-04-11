@@ -36,9 +36,10 @@ public class VMAManager
     {
         ArgumentNullException.ThrowIfNull(memoryContext);
         MemoryContext = memoryContext;
+        PageMapping = new ProcessPageManager(memoryContext);
     }
 
-    public PageManager PageMapping { get; } = new();
+    public ProcessPageManager PageMapping { get; }
     internal ProcessAddressSpaceHandle? AddressSpaceHandle { get; private set; }
     internal MemoryRuntimeContext MemoryContext { get; }
 
@@ -412,8 +413,7 @@ public class VMAManager
                 continue;
             }
 
-            var preferredKind = ownerKind == HostPageOwnerKind.AnonVma ? HostPageKind.Anon : HostPageKind.PageCache;
-            var changed = HostPageManager.UpdateTbCohRolesForRmapRef(hostPagePtr, this, vma, ownerKind, pageIndex,
+            var changed = MemoryContext.HostPages.UpdateTbCohRolesForRmapRef(hostPagePtr, this, vma, ownerKind, pageIndex,
                 page, oldPerms, newPerms);
             tbCohWorkSet?.AddIfChanged(hostPagePtr, changed);
         }
@@ -445,7 +445,7 @@ public class VMAManager
                 continue;
             }
 
-            var changed = HostPageManager.RebindRmapRef(hostPagePtr, this, sourceVma, targetVma, ownerKind,
+            var changed = MemoryContext.HostPages.RebindRmapRef(hostPagePtr, this, sourceVma, targetVma, ownerKind,
                 pageIndex, page, oldPerms, newPerms);
             tbCohWorkSet?.AddIfChanged(hostPagePtr, changed);
         }
@@ -1226,7 +1226,7 @@ public class VMAManager
 
         ClearTbWpRange(addr, length);
         foreach (var hostPagePtr in unmappedHostPages)
-            TbCoh.ApplyWx(hostPagePtr);
+            TbCoh.ApplyWx(MemoryContext, hostPagePtr);
     }
 
     public int Mprotect(uint addr, uint len, Protection prot, Engine engine, out bool resetCodeCacheRange)
@@ -1555,7 +1555,7 @@ public class VMAManager
     private bool TryRelieveFaultMemoryPressure(Engine engine, uint faultAddr, string source)
     {
         const int TargetPages = 1024; // 4 MiB
-        var result = MemoryPressureCoordinator.TryRelieveFault(
+        var result = MemoryContext.MemoryPressure.TryRelieveFault(
             this,
             engine,
             (long)LinuxConstants.PageSize * TargetPages,
@@ -1626,10 +1626,10 @@ public class VMAManager
         out BackingPageHandle privatePage)
     {
         privatePage = default;
-        if (!PageManager.TryAllocAnonPageMayFail(out privatePage, AllocationClass.Cow,
+        if (!MemoryContext.BackingPagePool.TryAllocAnonPageMayFail(out privatePage, AllocationClass.Cow,
                 AllocationSource.CowFirstPrivate))
             if (!TryRelieveFaultMemoryPressure(engine, pageStart, pressureSource) ||
-                !PageManager.TryAllocAnonPageMayFail(out privatePage, AllocationClass.Cow,
+                !MemoryContext.BackingPagePool.TryAllocAnonPageMayFail(out privatePage, AllocationClass.Cow,
                     AllocationSource.CowFirstPrivate))
                 return false;
 
@@ -1778,7 +1778,7 @@ public class VMAManager
         var binding = CreateResolvedPageBinding(vma, pageIndex, pagePtr);
         var result = EnsureExternalMapping(pageStart, binding, perms, engine);
         if (result == FaultResult.Handled && (vma.Perms & Protection.Exec) != 0)
-            TbCoh.ApplyWx(binding.Ptr);
+            TbCoh.ApplyWx(MemoryContext, binding.Ptr);
         return result;
     }
 
@@ -1850,7 +1850,7 @@ public class VMAManager
         byte perms,
         Engine engine)
     {
-        var ownerResidentCount = HostPageManager.GetRequired(existingPrivate).OwnerResidentCount;
+        var ownerResidentCount = MemoryContext.HostPages.GetRequired(existingPrivate).OwnerResidentCount;
         if (ownerResidentCount <= 1)
         {
             privateObject.MarkDirty(pageIndex);
@@ -1860,10 +1860,10 @@ public class VMAManager
                 perms, engine);
         }
 
-        if (!PageManager.TryAllocAnonPageMayFail(out var replacementPage, AllocationClass.Cow,
+        if (!MemoryContext.BackingPagePool.TryAllocAnonPageMayFail(out var replacementPage, AllocationClass.Cow,
                 AllocationSource.CowReplacePrivate))
             if (!TryRelieveFaultMemoryPressure(engine, pageStart, "CowReplacePrivate") ||
-                !PageManager.TryAllocAnonPageMayFail(out replacementPage, AllocationClass.Cow,
+                !MemoryContext.BackingPagePool.TryAllocAnonPageMayFail(out replacementPage, AllocationClass.Cow,
                     AllocationSource.CowReplacePrivate))
                 return FaultResult.Oom;
 
@@ -1941,7 +1941,7 @@ public class VMAManager
                 var binding = MappedPageBinding.FromAnonVmaPage(privateObject, pageIndex, privatePage);
                 var result = EnsureExternalMapping(pageStart, binding, readPerms, engine);
                 if (result == FaultResult.Handled && (vma.Perms & Protection.Exec) != 0)
-                    TbCoh.ApplyWx(binding.Ptr);
+                    TbCoh.ApplyWx(MemoryContext, binding.Ptr);
                 return result;
             }
 
@@ -1965,7 +1965,7 @@ public class VMAManager
         Interlocked.Increment(ref _cowAllocFirstCount);
         if (privateObject == null)
         {
-            privateObject = new AnonVma();
+            privateObject = new AnonVma(MemoryContext);
             vma.VmAnonVma = privateObject;
             RegisterVmAreaAnonAttachment(vma);
         }

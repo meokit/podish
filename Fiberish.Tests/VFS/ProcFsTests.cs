@@ -282,13 +282,14 @@ public class ProcFsTests
     [Fact]
     public void ProcMemInfo_ShouldUseLiveMemoryStats()
     {
-        var oldQuota = PageManager.MemoryQuotaBytes;
+        using var ctx = new ProcTestContext();
+        var oldQuota = ctx.SyscallManager.MemoryContext.MemoryQuotaBytes;
         var allocated = default(BackingPageHandle);
-        PageManager.MemoryQuotaBytes = 64L * 1024 * 1024;
+        ctx.SyscallManager.MemoryContext.MemoryQuotaBytes = 64L * 1024 * 1024;
         try
         {
-            Assert.True(PageManager.TryAllocAnonPageMayFail(out allocated, AllocationClass.Anonymous));
-            var text = ProcFsManager.GenerateMemInfo(null);
+            Assert.True(ctx.SyscallManager.MemoryContext.BackingPagePool.TryAllocAnonPageMayFail(out allocated, AllocationClass.Anonymous));
+            var text = ProcFsManager.GenerateMemInfo(ctx.SyscallManager);
 
             var total = ParseMemInfoKiB(text, "MemTotal");
             var free = ParseMemInfoKiB(text, "MemFree");
@@ -323,14 +324,13 @@ public class ProcFsTests
         finally
         {
             BackingPageHandle.Release(ref allocated);
-            PageManager.MemoryQuotaBytes = oldQuota;
+            ctx.SyscallManager.MemoryContext.MemoryQuotaBytes = oldQuota;
         }
     }
 
     [Fact]
     public void ProcSysVmDropCaches_WriteShouldReclaimPageCache()
     {
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(rootDir);
         AddressSpace? cache = null;
@@ -344,8 +344,8 @@ public class ProcFsTests
             Assert.True(loc.IsValid);
             Assert.Equal("0\n", ReadAll(task, loc));
 
-            cache = new AddressSpace(AddressSpaceKind.File);
-            AddressSpacePolicy.TrackAddressSpace(cache);
+            cache = new AddressSpace(runtime.MemoryContext, AddressSpaceKind.File);
+            runtime.MemoryContext.AddressSpacePolicy.TrackAddressSpace(cache);
             var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.True(cache.PageCount > 0);
@@ -415,7 +415,6 @@ public class ProcFsTests
     [Fact]
     public void ProcSysVmDropCaches_Mode3_ShouldReclaimPagecacheAndVfsCaches()
     {
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(rootDir);
         AddressSpace? cache = null;
@@ -435,8 +434,8 @@ public class ProcFsTests
             Assert.NotNull(Lookup(task, procRootDentry, "sys"));
             Assert.True(procRootDentry.TryGetCachedChild("sys", out _));
 
-            cache = new AddressSpace(AddressSpaceKind.File);
-            AddressSpacePolicy.TrackAddressSpace(cache);
+            cache = new AddressSpace(runtime.MemoryContext, AddressSpaceKind.File);
+            runtime.MemoryContext.AddressSpacePolicy.TrackAddressSpace(cache);
             var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.True(cache.PageCount > 0);
@@ -469,7 +468,6 @@ public class ProcFsTests
     [Fact]
     public void ProcSysVmDropCaches_Mode1_ShouldTrimHostfsMappedWindows_WhenInactive()
     {
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var hostRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(hostRoot);
         File.WriteAllBytes(Path.Combine(hostRoot, "data.bin"), new byte[LinuxConstants.PageSize * 2]);
@@ -498,14 +496,14 @@ public class ProcFsTests
             Assert.True(cache.PageCount > 0);
             Assert.True(inode.GetMappedPageCacheDiagnostics().WindowBytes > 0);
 
-            var before = MemoryStatsSnapshot.Capture(sm);
+            var before = sm.MemoryContext.CaptureMemoryStats(sm);
             Assert.True(before.HostMappedWindowBytes > 0);
 
             Assert.Equal(2, WriteAll(task, dropLoc, "1\n"));
 
             Assert.Equal(0, cache.PageCount);
             Assert.Equal(0, inode.GetMappedPageCacheDiagnostics().WindowBytes);
-            var after = MemoryStatsSnapshot.Capture(sm);
+            var after = sm.MemoryContext.CaptureMemoryStats(sm);
             Assert.Equal(0, after.HostMappedWindowBytes);
         }
         finally
@@ -517,7 +515,6 @@ public class ProcFsTests
     [Fact]
     public void ProcSysVmDropCaches_Mode1_ShouldPreserveHostfsMappedWindows_WhenActive()
     {
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var hostRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(hostRoot);
         File.WriteAllBytes(Path.Combine(hostRoot, "data.bin"), new byte[LinuxConstants.PageSize * 2]);
@@ -561,7 +558,6 @@ public class ProcFsTests
     [Fact]
     public void ProcSysVmDropCaches_Mode1_ShouldTrimSilkMappedWindows_WhenInactive()
     {
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-drop-{Guid.NewGuid():N}");
 
         try
@@ -595,14 +591,14 @@ public class ProcFsTests
             Assert.True(cache.PageCount > 0);
             Assert.True(inode.GetMappedPageCacheDiagnostics().WindowBytes >= 0);
 
-            var before = MemoryStatsSnapshot.Capture(sm);
+            var before = sm.MemoryContext.CaptureMemoryStats(sm);
             Assert.True(before.HostMappedWindowBytes >= 0);
 
             Assert.Equal(2, WriteAll(task, dropLoc, "1\n"));
 
             Assert.Equal(0, cache.PageCount);
             Assert.Equal(0, inode.GetMappedPageCacheDiagnostics().WindowBytes);
-            var after = MemoryStatsSnapshot.Capture(sm);
+            var after = sm.MemoryContext.CaptureMemoryStats(sm);
             Assert.Equal(0, after.HostMappedWindowBytes);
         }
         finally
@@ -614,7 +610,6 @@ public class ProcFsTests
     [Fact]
     public void ProcSysVmDropCaches_Mode1_ShouldPreserveSilkMappedWindows_WhenActive()
     {
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-drop-{Guid.NewGuid():N}");
 
         try
@@ -867,7 +862,6 @@ public class ProcFsTests
     [Fact]
     public async Task ProcSysVmDropCaches_OpenWithTrunc_ShouldSucceedAndKeepReadValueAtZero()
     {
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var rootDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(rootDir);
         AddressSpace? cache = null;
@@ -885,8 +879,8 @@ public class ProcFsTests
             WriteCString(runtime, pathAddr, "/proc/sys/vm/drop_caches");
             Assert.True(runtime.Engine.CopyToUser(writeAddr, Encoding.UTF8.GetBytes("1\n")));
 
-            cache = new AddressSpace(AddressSpaceKind.File);
-            AddressSpacePolicy.TrackAddressSpace(cache);
+            cache = new AddressSpace(runtime.MemoryContext, AddressSpaceKind.File);
+            runtime.MemoryContext.AddressSpacePolicy.TrackAddressSpace(cache);
             _ = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.True(cache.PageCount > 0);
 
@@ -1015,7 +1009,7 @@ public class ProcFsTests
         return KernelRuntime.BootstrapWithRoot(false, sys =>
         {
             var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
-            var rootSb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, "proc-test-root", null);
+            var rootSb = tmpfsType.CreateAnonymousFileSystem(sys.MemoryContext).ReadSuper(tmpfsType, 0, "proc-test-root", null);
             var rootMount = new Mount(rootSb, rootSb.Root)
             {
                 Source = "tmpfs",

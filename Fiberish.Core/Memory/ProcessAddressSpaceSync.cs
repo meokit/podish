@@ -271,7 +271,7 @@ internal static class ProcessAddressSpaceSync
         var rc = vmaManager.Mprotect(addr, len, prot, engine, out var resetCodeCacheRange, tbCohWorkSet);
         if (rc == 0)
         {
-            tbCohWorkSet?.Visit(TbCoh.ApplyWx);
+            tbCohWorkSet?.Visit(hostPagePtr => TbCoh.ApplyWx(vmaManager.MemoryContext, hostPagePtr));
             PublishInvalidation(vmaManager, engine, addr, len, resetCodeCacheRange);
         }
         return rc;
@@ -313,7 +313,7 @@ internal static class ProcessAddressSpaceSync
             MunmapCore(vmaManager, engine, addr, alignedLen);
 
         var mapped = vmaManager.Mmap(addr, len, perms, flags, file, offset, name, engine, tbCohWorkSet);
-        tbCohWorkSet?.Visit(TbCoh.ApplyWx);
+        tbCohWorkSet?.Visit(hostPagePtr => TbCoh.ApplyWx(vmaManager.MemoryContext, hostPagePtr));
         PublishInvalidation(vmaManager, engine, mapped, alignedLen, true);
         return mapped;
     }

@@ -149,7 +149,7 @@ public class PageCacheConsistencyTests
         using var engine = _runtime.CreateEngine();
         var mm = _runtime.CreateAddressSpace();
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-        var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
+        var sb = fsType.CreateAnonymousFileSystem(_runtime.MemoryContext).ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
         var dentry = new Dentry(FsName.FromString("data.bin"), null, root, sb);
         root.Inode!.Create(dentry, 0x1B6, 0, 0);
@@ -226,7 +226,7 @@ public class PageCacheConsistencyTests
             lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
 
             var tmpType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            var upperSb = tmpType.CreateAnonymousFileSystem().ReadSuper(tmpType, 0, "ovl-upper", null);
+            var upperSb = tmpType.CreateAnonymousFileSystem(_runtime.MemoryContext).ReadSuper(tmpType, 0, "ovl-upper", null);
 
             var overlayFs = new OverlayFileSystem();
             var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -298,7 +298,7 @@ public class PageCacheConsistencyTests
         using var engine = _runtime.CreateEngine();
         var mm = _runtime.CreateAddressSpace();
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-        var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
+        var sb = fsType.CreateAnonymousFileSystem(_runtime.MemoryContext).ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
         var dentry = new Dentry(FsName.FromString("data.bin"), null, root, sb);
         root.Inode!.Create(dentry, 0x1B6, 0, 0);
@@ -324,7 +324,7 @@ public class PageCacheConsistencyTests
         using var engine = _runtime.CreateEngine();
         var mm = _runtime.CreateAddressSpace();
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-        var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
+        var sb = fsType.CreateAnonymousFileSystem(_runtime.MemoryContext).ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
         var dentry = new Dentry(FsName.FromString("data.bin"), null, root, sb);
         root.Inode!.Create(dentry, 0x1B6, 0, 0);
@@ -410,7 +410,7 @@ public class PageCacheConsistencyTests
             lowerSb.Root = lowerSb.GetDentry(tempLower, FsName.Empty, null)!;
 
             var tmpType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-            var upperSb = tmpType.CreateAnonymousFileSystem().ReadSuper(tmpType, 0, "ovl-upper-reverse", null);
+            var upperSb = tmpType.CreateAnonymousFileSystem(_runtime.MemoryContext).ReadSuper(tmpType, 0, "ovl-upper-reverse", null);
 
             var overlayFs = new OverlayFileSystem();
             var overlaySb = (OverlaySuperBlock)overlayFs.ReadSuper(
@@ -487,7 +487,7 @@ public class PageCacheConsistencyTests
     public void Tmpfs_WritePath_MustMarkMemoryObjectDirty_BeforeWriteback()
     {
         var fsType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-        var sb = fsType.CreateAnonymousFileSystem().ReadSuper(fsType, 0, "tmp", null);
+        var sb = fsType.CreateAnonymousFileSystem(_runtime.MemoryContext).ReadSuper(fsType, 0, "tmp", null);
         var root = sb.Root;
         var dentry = new Dentry(FsName.FromString("data.bin"), null, root, sb);
         root.Inode!.Create(dentry, 0x1B6, 0, 0);
@@ -560,7 +560,7 @@ public class PageCacheConsistencyTests
         return file;
     }
 
-    private static OverlaySuperBlock CreateLayerLowerTmpfsUpperOverlay(string fileContents)
+    private OverlaySuperBlock CreateLayerLowerTmpfsUpperOverlay(string fileContents)
     {
         var payload = Encoding.ASCII.GetBytes(fileContents);
         var index = new LayerIndex();
@@ -572,7 +572,7 @@ public class PageCacheConsistencyTests
             Size: (ulong)payload.Length,
             InlineData: payload));
 
-        var layerFs = new LayerFileSystem();
+        var layerFs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
         var lowerSb = layerFs.ReadSuper(
             new FileSystemType { Name = "layerfs" },
             0,
@@ -580,7 +580,8 @@ public class PageCacheConsistencyTests
             new LayerMountOptions { Index = index, ContentProvider = new InMemoryLayerContentProvider() });
 
         var tmpType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
-        var upperSb = tmpType.CreateAnonymousFileSystem().ReadSuper(tmpType, 0, "test-tmpfs-upper", null);
+        var upperSb = tmpType.CreateAnonymousFileSystem(_runtime.MemoryContext)
+            .ReadSuper(tmpType, 0, "test-tmpfs-upper", null);
 
         var overlayFs = new OverlayFileSystem();
         return (OverlaySuperBlock)overlayFs.ReadSuper(

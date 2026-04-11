@@ -11,17 +11,16 @@ public class MemoryPressureCoordinatorTests
     [Fact]
     public void TryReclaimForAllocation_ReclaimsCleanFilePageCache()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        var cache = new AddressSpace(AddressSpaceKind.File);
+        using var context = new MemoryRuntimeContext();
+        var cache = new AddressSpace(context, AddressSpaceKind.File);
         try
         {
-            AddressSpacePolicy.TrackAddressSpace(cache);
+            context.AddressSpacePolicy.TrackAddressSpace(cache);
             var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.Equal(1, cache.PageCount);
 
-            var reclaimed = MemoryPressureCoordinator.TryReclaimForAllocation(
+            var reclaimed = context.MemoryPressure.TryReclaimForAllocation(
                 LinuxConstants.PageSize,
                 AllocationClass.Anonymous,
                 AllocationSource.AnonFault);
@@ -37,17 +36,16 @@ public class MemoryPressureCoordinatorTests
     [Fact]
     public void TryReclaimForAllocation_Readahead_DoesNotTriggerReclaim()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        var cache = new AddressSpace(AddressSpaceKind.File);
+        using var context = new MemoryRuntimeContext();
+        var cache = new AddressSpace(context, AddressSpaceKind.File);
         try
         {
-            AddressSpacePolicy.TrackAddressSpace(cache);
+            context.AddressSpacePolicy.TrackAddressSpace(cache);
             var page = cache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache);
             Assert.NotEqual(IntPtr.Zero, page);
             Assert.Equal(1, cache.PageCount);
 
-            var reclaimed = MemoryPressureCoordinator.TryReclaimForAllocation(
+            var reclaimed = context.MemoryPressure.TryReclaimForAllocation(
                 LinuxConstants.PageSize,
                 AllocationClass.Readahead,
                 AllocationSource.Unknown);
@@ -63,14 +61,13 @@ public class MemoryPressureCoordinatorTests
     [Fact]
     public void GetAddressSpaceStats_CountsPagesWithoutSnapshottingPageStates()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
-        var fileCache = new AddressSpace(AddressSpaceKind.File);
-        var shmemCache = new AddressSpace(AddressSpaceKind.Shmem);
+        using var context = new MemoryRuntimeContext();
+        var fileCache = new AddressSpace(context, AddressSpaceKind.File);
+        var shmemCache = new AddressSpace(context, AddressSpaceKind.Shmem);
         try
         {
-            AddressSpacePolicy.TrackAddressSpace(fileCache);
-            AddressSpacePolicy.TrackAddressSpace(shmemCache, AddressSpacePolicy.AddressSpaceCacheClass.Shmem);
+            context.AddressSpacePolicy.TrackAddressSpace(fileCache);
+            context.AddressSpacePolicy.TrackAddressSpace(shmemCache, AddressSpacePolicy.AddressSpaceCacheClass.Shmem);
 
             Assert.NotEqual(IntPtr.Zero,
                 fileCache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache));
@@ -82,14 +79,14 @@ public class MemoryPressureCoordinatorTests
                 shmemCache.GetOrCreatePage(0, _ => true, out _, true, AllocationClass.PageCache));
             shmemCache.MarkDirty(0);
 
-            var stats = AddressSpacePolicy.GetAddressSpaceStats();
+            var stats = context.AddressSpacePolicy.GetAddressSpaceStats();
 
             Assert.Equal(3, stats.TotalPages);
             Assert.Equal(1, stats.CleanPages);
             Assert.Equal(2, stats.DirtyPages);
             Assert.Equal(1, stats.ShmemPages);
             Assert.Equal(0, stats.WritebackPages);
-            Assert.Equal(3L * LinuxConstants.PageSize, PageManager.GetCachedBytes());
+            Assert.Equal(3L * LinuxConstants.PageSize, context.GetCachedBytes());
         }
         finally
         {
@@ -101,8 +98,6 @@ public class MemoryPressureCoordinatorTests
     [Fact]
     public void TryRelieveFault_Reclaims_ReadOnlyPrivateAnonymousSharedSource()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
@@ -121,7 +116,7 @@ public class MemoryPressureCoordinatorTests
         Assert.Null(vma.VmAnonVma);
         Assert.True(mm.PageMapping.TryGet(addr, out _));
 
-        var result = MemoryPressureCoordinator.TryRelieveFault(mm, engine, LinuxConstants.PageSize, 1);
+        var result = runtime.MemoryContext.MemoryPressure.TryRelieveFault(mm, engine, LinuxConstants.PageSize, 1);
 
         Assert.True(result.MadeProgress);
         Assert.False(mm.PageMapping.TryGet(addr, out _));
@@ -133,8 +128,6 @@ public class MemoryPressureCoordinatorTests
     [Fact]
     public void TryRelieveFault_DoesNotReclaim_PrivateAnonymousOverlayPage()
     {
-        using var pageScope = PageManager.BeginIsolatedScope();
-        using var cacheScope = AddressSpacePolicy.BeginIsolatedScope();
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         var mm = runtime.CreateAddressSpace();
@@ -151,7 +144,7 @@ public class MemoryPressureCoordinatorTests
         var privatePage = vma.VmAnonVma!.GetPage(pageIndex);
         Assert.NotEqual(IntPtr.Zero, privatePage);
 
-        var result = MemoryPressureCoordinator.TryRelieveFault(mm, engine, LinuxConstants.PageSize, 1);
+        var result = runtime.MemoryContext.MemoryPressure.TryRelieveFault(mm, engine, LinuxConstants.PageSize, 1);
 
         Assert.False(result.MadeProgress);
         Assert.True(mm.PageMapping.TryGet(addr, out _));

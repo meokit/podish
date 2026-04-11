@@ -656,7 +656,7 @@ internal struct HostPageRef
             }
         }
 
-        HostPageManager.TryRemoveIfUnused(this);
+        TryRemoveIfUnused();
         return true;
     }
 
@@ -669,6 +669,40 @@ internal struct HostPageRef
 
             return owner.GetSlotRef(slot).Page.HasOwnerRoot;
         }
+    }
+
+    internal void TryRemoveIfUnused()
+    {
+        BackingPageHandle backingHandle = default;
+        if (Kind == HostPageKind.Zero)
+            return;
+        if (OwnerResidentCount > 0 || MapCount > 0 || PinCount > 0 || HasOwnerRoot)
+            return;
+        if (!TryGetLiveSlot(out var state, out var slot))
+            return;
+
+        lock (state.Gate)
+        {
+            ref var slotRef = ref state.GetSlotRef(slot);
+            if (!slotRef.InUse || slotRef.Generation != Generation)
+                return;
+            if (slotRef.Page.Kind == HostPageKind.Zero)
+                return;
+            if (slotRef.Page.OwnerResidentCount > 0 || slotRef.Page.MapCount > 0 || slotRef.Page.PinCount > 0)
+                return;
+            if (slotRef.Page.HasOwnerRoot)
+                return;
+
+            backingHandle = slotRef.Page.BackingHandle;
+            slotRef.Page.BackingHandle = default;
+            state.SlotByPtr.Remove(slotRef.Page.Ptr);
+            slotRef.Page = default;
+            slotRef.InUse = false;
+            state.FreeSlots.Push(slot);
+        }
+
+        if (backingHandle.IsValid)
+            BackingPageHandle.Release(ref backingHandle);
     }
 
     private static bool HasExecRole(Protection perms)
@@ -906,15 +940,11 @@ internal struct HostPageRef
             : null;
 
     internal uint OwnerPageIndexForDebug => TryGetOwnerBinding(out var binding) ? binding.PageIndex : 0;
-    internal BackingPageHandleReleaseKind BackingReleaseKindForDebug =>
-        TryGetLiveSlot(out var owner, out var slot) ? owner.GetSlotRef(slot).Page.BackingHandle.ReleaseKind : default;
 
     private bool TryGetLiveSlot(out HostPageTableState owner, out int slot)
     {
         owner = Owner!;
         slot = Slot;
-        if (owner == null)
-            return false;
         if ((uint)slot >= (uint)owner.SlotCount)
             return false;
 
@@ -1174,41 +1204,17 @@ internal struct HostPageRef
     }
 }
 
-internal static class HostPageManager
+internal sealed class HostPageManager : IDisposable
 {
-    private sealed class ScopeRestore : IDisposable
-    {
-        private readonly HostPageTableState? _previous;
+    private readonly HostPageTableState _state = new();
 
-        public ScopeRestore(HostPageTableState? previous)
-        {
-            _previous = previous;
-        }
 
-        public void Dispose()
-        {
-            ScopedState.Value = _previous;
-        }
-    }
-
-    private static readonly AsyncLocal<HostPageTableState?> ScopedState = new();
-    private static readonly HostPageTableState DefaultState = new();
-
-    private static HostPageTableState CurrentState => ScopedState.Value ?? DefaultState;
-
-    internal static IDisposable BeginIsolatedScope()
-    {
-        var previous = ScopedState.Value;
-        ScopedState.Value = new HostPageTableState();
-        return new ScopeRestore(previous);
-    }
-
-    internal static HostPageRef GetOrCreate(IntPtr ptr, HostPageKind preferredKind)
+    internal HostPageRef GetOrCreate(IntPtr ptr, HostPageKind preferredKind)
     {
         if (ptr == IntPtr.Zero)
             throw new ArgumentException("Host page pointer must be non-zero.", nameof(ptr));
 
-        var state = CurrentState;
+        var state = _state;
         lock (state.Gate)
         {
             if (state.SlotByPtr.TryGetValue(ptr, out var slot))
@@ -1241,13 +1247,13 @@ internal static class HostPageManager
         }
     }
 
-    internal static HostPageRef CreateWithBacking(ref BackingPageHandle backingHandle, HostPageKind preferredKind)
+    internal HostPageRef CreateWithBacking(ref BackingPageHandle backingHandle, HostPageKind preferredKind)
     {
         if (!backingHandle.IsValid)
             throw new ArgumentException("Backing handle must be valid.", nameof(backingHandle));
 
         var ptr = backingHandle.Pointer;
-        var state = CurrentState;
+        var state = _state;
         lock (state.Gate)
         {
             if (state.SlotByPtr.TryGetValue(ptr, out var slot))
@@ -1287,9 +1293,9 @@ internal static class HostPageManager
         }
     }
 
-    internal static bool TryLookup(IntPtr ptr, out HostPageRef pageRef)
+    internal bool TryLookup(IntPtr ptr, out HostPageRef pageRef)
     {
-        var state = CurrentState;
+        var state = _state;
         lock (state.Gate)
         {
             if (!state.SlotByPtr.TryGetValue(ptr, out var slot))
@@ -1310,7 +1316,7 @@ internal static class HostPageManager
         }
     }
 
-    internal static HostPageRef GetRequired(IntPtr ptr)
+    internal HostPageRef GetRequired(IntPtr ptr)
     {
         if (!TryLookup(ptr, out var page))
             throw new InvalidOperationException($"HostPage metadata for 0x{ptr.ToInt64():X} is not registered.");
@@ -1318,41 +1324,12 @@ internal static class HostPageManager
         return page;
     }
 
-    internal static void TryRemoveIfUnused(HostPageRef pageRef)
+    internal void TryRemoveIfUnused(HostPageRef pageRef)
     {
-        BackingPageHandle backingHandle = default;
-        if (pageRef.Kind == HostPageKind.Zero)
-            return;
-        if (pageRef.OwnerResidentCount > 0 || pageRef.MapCount > 0 || pageRef.PinCount > 0 || pageRef.HasOwnerRoot)
-            return;
-        if (!TryGetLiveSlot(pageRef, out var state, out var slot))
-            return;
-
-        lock (state.Gate)
-        {
-            ref var slotRef = ref state.GetSlotRef(slot);
-            if (!slotRef.InUse || slotRef.Generation != pageRef.Generation)
-                return;
-            if (slotRef.Page.Kind == HostPageKind.Zero)
-                return;
-            if (slotRef.Page.OwnerResidentCount > 0 || slotRef.Page.MapCount > 0 || slotRef.Page.PinCount > 0)
-                return;
-            if (slotRef.Page.HasOwnerRoot)
-                return;
-
-            backingHandle = slotRef.Page.BackingHandle;
-            slotRef.Page.BackingHandle = default;
-            state.SlotByPtr.Remove(slotRef.Page.Ptr);
-            slotRef.Page = default;
-            slotRef.InUse = false;
-            state.FreeSlots.Push(slot);
-        }
-
-        if (backingHandle.IsValid)
-            BackingPageHandle.Release(ref backingHandle);
+        pageRef.TryRemoveIfUnused();
     }
 
-    internal static void TryRemoveIfUnused(IntPtr ptr)
+    internal void TryRemoveIfUnused(IntPtr ptr)
     {
         if (!TryLookup(ptr, out var page))
             return;
@@ -1360,7 +1337,7 @@ internal static class HostPageManager
         TryRemoveIfUnused(page);
     }
 
-    internal static TbCohApplyResult ApplyTbCohPolicyIfChanged(IntPtr ptr)
+    internal TbCohApplyResult ApplyTbCohPolicyIfChanged(IntPtr ptr)
     {
         if (!TryLookup(ptr, out var page))
             return new TbCohApplyResult(TbCohApplyKind.FastNoWriters, 0);
@@ -1368,7 +1345,7 @@ internal static class HostPageManager
         return page.ApplyTbCohPolicyIfChanged();
     }
 
-    internal static bool VisitTbCohExecPages<TState>(IntPtr ptr, ref TState state, TbCohMmPageVisitor<TState> visitor)
+    internal bool VisitTbCohExecPages<TState>(IntPtr ptr, ref TState state, TbCohMmPageVisitor<TState> visitor)
     {
         ArgumentNullException.ThrowIfNull(visitor);
         if (!TryLookup(ptr, out var page))
@@ -1377,12 +1354,12 @@ internal static class HostPageManager
         return page.VisitTbCohExecPages(ref state, visitor);
     }
 
-    internal static bool BindOwnerRoot(IntPtr ptr, HostPageKind preferredKind, HostPageOwnerBinding ownerBinding)
+    internal bool BindOwnerRoot(IntPtr ptr, HostPageKind preferredKind, HostPageOwnerBinding ownerBinding)
     {
         return GetOrCreate(ptr, preferredKind).BindOwnerRoot(ownerBinding);
     }
 
-    internal static bool UnbindOwnerRoot(IntPtr ptr, HostPageOwnerBinding ownerBinding)
+    internal bool UnbindOwnerRoot(IntPtr ptr, HostPageOwnerBinding ownerBinding)
     {
         if (!TryLookup(ptr, out var page))
             return false;
@@ -1390,13 +1367,13 @@ internal static class HostPageManager
         return page.UnbindOwnerRoot(ownerBinding);
     }
 
-    internal static bool AddOrUpdateRmapRef(IntPtr ptr, HostPageKind preferredKind, VMAManager mm, VmArea vma,
+    internal bool AddOrUpdateRmapRef(IntPtr ptr, HostPageKind preferredKind, VMAManager mm, VmArea vma,
         HostPageOwnerKind ownerKind, uint pageIndex, uint guestPageStart)
     {
         return GetOrCreate(ptr, preferredKind).AddOrUpdateRmapRef(mm, vma, ownerKind, pageIndex, guestPageStart);
     }
 
-    internal static bool RemoveRmapRef(IntPtr ptr, VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind,
+    internal bool RemoveRmapRef(IntPtr ptr, VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind,
         uint pageIndex)
     {
         if (!TryLookup(ptr, out var page))
@@ -1405,7 +1382,7 @@ internal static class HostPageManager
         return page.RemoveRmapRef(mm, vma, ownerKind, pageIndex);
     }
 
-    internal static bool UpdateTbCohRolesForRmapRef(IntPtr ptr, VMAManager mm, VmArea vma,
+    internal bool UpdateTbCohRolesForRmapRef(IntPtr ptr, VMAManager mm, VmArea vma,
         HostPageOwnerKind ownerKind, uint pageIndex, uint guestPageStart, Protection oldPerms, Protection newPerms)
     {
         if (!TryLookup(ptr, out var page))
@@ -1414,13 +1391,50 @@ internal static class HostPageManager
         return page.UpdateTbCohRolesForRmapRef(mm, vma, ownerKind, pageIndex, guestPageStart, oldPerms, newPerms);
     }
 
-    internal static bool RebindRmapRef(IntPtr ptr, VMAManager mm, VmArea oldVma, VmArea newVma,
+    internal bool RebindRmapRef(IntPtr ptr, VMAManager mm, VmArea oldVma, VmArea newVma,
         HostPageOwnerKind ownerKind, uint pageIndex, uint guestPageStart, Protection oldPerms, Protection newPerms)
     {
         if (!TryLookup(ptr, out var page))
             return false;
 
         return page.RebindRmapRef(mm, oldVma, newVma, ownerKind, pageIndex, guestPageStart, oldPerms, newPerms);
+    }
+
+    public void Dispose()
+    {
+        List<BackingPageHandle>? handles = null;
+        lock (_state.Gate)
+        {
+            for (var slot = 0; slot < _state.SlotCount; slot++)
+            {
+                ref var slotRef = ref _state.GetSlotRef(slot);
+                if (!slotRef.InUse)
+                    continue;
+
+                if (slotRef.Page.BackingHandle.IsValid)
+                {
+                    handles ??= [];
+                    handles.Add(slotRef.Page.BackingHandle);
+                    slotRef.Page.BackingHandle = default;
+                }
+
+                slotRef.Page = default;
+                slotRef.InUse = false;
+            }
+
+            _state.SlotByPtr.Clear();
+            _state.FreeSlots.Clear();
+            _state.SlotCount = 0;
+        }
+
+        if (handles == null)
+            return;
+
+        foreach (var handle in handles)
+        {
+            var released = handle;
+            BackingPageHandle.Release(ref released);
+        }
     }
 
     private static bool TryGetLiveSlot(HostPageRef pageRef, out HostPageTableState state, out int slot)
@@ -1440,19 +1454,22 @@ internal static class HostPageManager
 
 internal static class VmRmap
 {
-    internal static void ResolveHostPageHolders(IntPtr ptr, List<RmapHit> output)
+    internal static void ResolveHostPageHolders(HostPageManager hostPages, IntPtr ptr, List<RmapHit> output)
     {
+        ArgumentNullException.ThrowIfNull(hostPages);
         ArgumentNullException.ThrowIfNull(output);
         output.Clear();
-        if (!HostPageManager.TryLookup(ptr, out var hostPage))
+        if (!hostPages.TryLookup(ptr, out var hostPage))
             return;
         hostPage.CollectRmapHits(output);
     }
 
-    internal static bool VisitHostPageHolders<TState>(IntPtr ptr, ref TState state, HostPageRmapVisitor<TState> visitor)
+    internal static bool VisitHostPageHolders<TState>(HostPageManager hostPages, IntPtr ptr, ref TState state,
+        HostPageRmapVisitor<TState> visitor)
     {
+        ArgumentNullException.ThrowIfNull(hostPages);
         ArgumentNullException.ThrowIfNull(visitor);
-        if (!HostPageManager.TryLookup(ptr, out var hostPage))
+        if (!hostPages.TryLookup(ptr, out var hostPage))
             return false;
 
         hostPage.VisitRmapRefs(ref state, visitor);
