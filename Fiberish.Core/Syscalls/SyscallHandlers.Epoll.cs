@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using Fiberish.Core;
 using Fiberish.Native;
@@ -8,6 +9,8 @@ namespace Fiberish.Syscalls;
 public partial class SyscallManager
 {
     private static readonly FsName Epoll = FsName.FromString("[epoll]");
+    private const int EpollEventSize = 12;
+    private const int StackEpollBufferLimit = 256;
 
 #pragma warning disable CS1998
     private static int ValidateAndNormalizeEpollCtlEvents(ref uint events)
@@ -104,11 +107,11 @@ public partial class SyscallManager
         if (op != LinuxConstants.EPOLL_CTL_DEL)
         {
             if (eventPtr == 0) return -(int)Errno.EFAULT;
-            var buf = new byte[12];
+            Span<byte> buf = stackalloc byte[EpollEventSize];
             if (!task.CPU.CopyFromUser(eventPtr, buf)) return -(int)Errno.EFAULT;
 
-            events = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
-            data = BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(4, 8));
+            events = BinaryPrimitives.ReadUInt32LittleEndian(buf.Slice(0, 4));
+            data = BinaryPrimitives.ReadUInt64LittleEndian(buf.Slice(4, 8));
 
             var validateRc = ValidateAndNormalizeEpollCtlEvents(ref events);
             if (validateRc != 0) return validateRc;
@@ -117,10 +120,8 @@ public partial class SyscallManager
         return epollInode.Ctl(task, op, fd, targetFile, events, data);
     }
 
-    private async ValueTask<int> SysEpollWait(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
-    {
-        return await DoEpollWait(this, engine, a1, a2, a3, (int)a4, X86SyscallNumbers.epoll_wait);
-    }
+    private ValueTask<int> SysEpollWait(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) =>
+        DoEpollWait(this, engine, a1, a2, a3, (int)a4, X86SyscallNumbers.epoll_wait);
 
     private async ValueTask<int> SysEpollPwait(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
@@ -164,36 +165,75 @@ public partial class SyscallManager
         return result;
     }
 
-    private static async ValueTask<int> DoEpollWait(SyscallManager sm, Engine engine, uint epfdArg, uint eventsPtr,
+    private static ValueTask<int> DoEpollWait(SyscallManager sm, Engine engine, uint epfdArg, uint eventsPtr,
         uint maxeventsArg, int timeoutMs, uint syscallNr)
     {
         var task = engine.Owner as FiberTask;
-        if (task == null) return -(int)Errno.EPERM;
+        if (task == null) return new ValueTask<int>(-(int)Errno.EPERM);
 
         var epfd = (int)epfdArg;
         var maxevents = (int)maxeventsArg;
-        if (maxevents <= 0) return -(int)Errno.EINVAL;
+        if (maxevents <= 0) return new ValueTask<int>(-(int)Errno.EINVAL);
+        if (maxevents > int.MaxValue / EpollEventSize) return new ValueTask<int>(-(int)Errno.EINVAL);
 
         var epFile = sm.GetFD(epfd);
-        if (epFile == null) return -(int)Errno.EBADF;
-        if (epFile.OpenedInode is not EpollInode epollInode) return -(int)Errno.EINVAL;
+        if (epFile == null) return new ValueTask<int>(-(int)Errno.EBADF);
+        if (epFile.OpenedInode is not EpollInode epollInode) return new ValueTask<int>(-(int)Errno.EINVAL);
 
-        // epoll_event is 12 bytes on i386.
-        var buf = new byte[maxevents * 12];
+        var bytesNeeded = maxevents * EpollEventSize;
 
-        var ready = epollInode.TryHarvestNow(buf, maxevents);
+        var ready = TryHarvestEpollEvents(task, epollInode, eventsPtr, maxevents, bytesNeeded, out var fastPathError);
+        if (fastPathError != 0)
+            return new ValueTask<int>(fastPathError);
         if (ready > 0 || timeoutMs == 0)
+            return new ValueTask<int>(ready);
+
+        return DoEpollWaitSlow(task, epollInode, eventsPtr, maxevents, bytesNeeded, timeoutMs, syscallNr);
+    }
+
+    private static int TryHarvestEpollEvents(FiberTask task, EpollInode epollInode, uint eventsPtr, int maxevents,
+        int bytesNeeded, out int error)
+    {
+        byte[]? rented = null;
+        try
         {
-            if (ready > 0 && !task.CPU.CopyToUser(eventsPtr, buf.AsSpan(0, ready * 12)))
-                return -(int)Errno.EFAULT;
+            Span<byte> fastBuffer = bytesNeeded <= StackEpollBufferLimit
+                ? stackalloc byte[bytesNeeded]
+                : (rented = ArrayPool<byte>.Shared.Rent(bytesNeeded)).AsSpan(0, bytesNeeded);
+
+            var ready = epollInode.TryHarvestNow(fastBuffer, maxevents);
+            if (ready > 0 && !task.CPU.CopyToUser(eventsPtr, fastBuffer.Slice(0, ready * EpollEventSize)))
+            {
+                error = -(int)Errno.EFAULT;
+                return 0;
+            }
+
+            error = 0;
             return ready;
         }
+        finally
+        {
+            if (rented != null)
+                ArrayPool<byte>.Shared.Return(rented, clearArray: false);
+        }
+    }
 
-        var result = await epollInode.WaitAsync(task, buf, maxevents, timeoutMs, syscallNr);
-        if (result > 0 && !task.CPU.CopyToUser(eventsPtr, buf.AsSpan(0, result * 12)))
-            return -(int)Errno.EFAULT;
+    private static async ValueTask<int> DoEpollWaitSlow(FiberTask task, EpollInode epollInode, uint eventsPtr,
+        int maxevents, int bytesNeeded, int timeoutMs, uint syscallNr)
+    {
+        var rented = ArrayPool<byte>.Shared.Rent(bytesNeeded);
+        try
+        {
+            var result = await epollInode.WaitAsync(task, rented, maxevents, timeoutMs, syscallNr);
+            if (result > 0 && !task.CPU.CopyToUser(eventsPtr, rented.AsSpan(0, result * EpollEventSize)))
+                return -(int)Errno.EFAULT;
 
-        return result;
+            return result;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented, clearArray: false);
+        }
     }
 #pragma warning restore CS1998
 }

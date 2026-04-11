@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
@@ -19,6 +20,7 @@ internal sealed class EpollItem
 
 public class EpollInode : TmpfsInode
 {
+    private const int EpollEventSize = 12;
     private readonly List<EpollItem> _readyList = new();
     private readonly AsyncWaitQueue _waitQueue;
     private readonly Dictionary<LinuxFile, EpollItem> _watches = new();
@@ -131,7 +133,7 @@ public class EpollInode : TmpfsInode
     }
 
 
-    public int TryHarvestNow(byte[] eventsBuffer, int maxEvents)
+    public int TryHarvestNow(Span<byte> eventsBuffer, int maxEvents)
     {
         AssertSchedulerThread();
         if (_readyList.Count > 0)
@@ -145,65 +147,76 @@ public class EpollInode : TmpfsInode
         return new EpollAwaitable(task, this, eventsBuffer, maxEvents, timeout, syscallNr);
     }
 
-    private int HarvestEvents(byte[] buffer, int maxEvents)
+    private int HarvestEvents(Span<byte> buffer, int maxEvents)
     {
         AssertSchedulerThread();
         var count = Math.Min(_readyList.Count, maxEvents);
-        var structSize = 12; // Linux i386 struct epoll_event is 12 bytes packed (__uint32_t events, __uint64_t data)
-
-        // Items to re-evaluate for Level-Triggered
-        var reEvalList = new List<EpollItem>();
+        EpollItem[]? reEvalItems = null;
+        var reEvalCount = 0;
 
         var harvested = 0;
-        for (var i = 0; i < count; i++)
+        try
         {
-            var item = _readyList[i];
+            if (count > 0)
+                reEvalItems = ArrayPool<EpollItem>.Shared.Rent(count);
 
-            // Re-poll the underlying FD one last time exactly at harvest to get the precise mask
-            var watchEvents = (short)(item.Events & 0xFFFF);
-            var currentEvents = item.File.OpenedInode!.Poll(item.File, watchEvents);
-            var mask = (short)(watchEvents | LinuxConstants.EPOLLERR |
-                               LinuxConstants.EPOLLHUP);
-
-            var finalEvents = (uint)(currentEvents & mask);
-
-            if (finalEvents == 0)
+            for (var i = 0; i < count; i++)
             {
-                // False alarm or event cleared before we harvested
+                var item = _readyList[i];
+
+                // Re-poll the underlying FD one last time exactly at harvest to get the precise mask
+                var watchEvents = (short)(item.Events & 0xFFFF);
+                var currentEvents = item.File.OpenedInode!.Poll(item.File, watchEvents);
+                var mask = (short)(watchEvents | LinuxConstants.EPOLLERR |
+                                   LinuxConstants.EPOLLHUP);
+
+                var finalEvents = (uint)(currentEvents & mask);
+
+                if (finalEvents == 0)
+                {
+                    // False alarm or event cleared before we harvested
+                    item.IsReady = false;
+                    if ((item.Events & LinuxConstants.EPOLLONESHOT) == 0)
+                        reEvalItems![reEvalCount++] = item;
+                    continue;
+                }
+
+                var evSpan = buffer.Slice(harvested * EpollEventSize, EpollEventSize);
+                BinaryPrimitives.WriteUInt32LittleEndian(evSpan.Slice(0, 4), finalEvents);
+                BinaryPrimitives.WriteUInt64LittleEndian(evSpan.Slice(4, 8), item.Data);
+
                 item.IsReady = false;
-                if ((item.Events & LinuxConstants.EPOLLONESHOT) == 0)
-                    reEvalList.Add(item);
-                continue;
+                harvested++;
+
+                if ((item.Events & LinuxConstants.EPOLLONESHOT) != 0)
+                    // Oneshot means it's disabled after triggering
+                    item.Events &= ~(uint)0xFFFF; // Clear watch events, keep data
+                else if ((item.Events & LinuxConstants.EPOLLET) == 0)
+                    // Level-triggered: it should keep firing if data is still available.
+                    // We'll re-evaluate it immediately after slicing the read queue.
+                    reEvalItems![reEvalCount++] = item;
             }
 
-            // Write into the byte span
-            var evSpan = buffer.AsSpan().Slice(harvested * structSize, structSize);
-            BinaryPrimitives.WriteUInt32LittleEndian(evSpan.Slice(0, 4), finalEvents);
-            BinaryPrimitives.WriteUInt64LittleEndian(evSpan.Slice(4, 8), item.Data);
+            _readyList.RemoveRange(0, count);
 
-            item.IsReady = false;
-            harvested++;
+            // Re-arm LT events implicitly by re-checking them
+            for (var i = 0; i < reEvalCount; i++)
+            {
+                var item = reEvalItems![i];
+                if (_watches.ContainsValue(item))
+                    CheckAndRegister(item);
+            }
 
-            if ((item.Events & LinuxConstants.EPOLLONESHOT) != 0)
-                // Oneshot means it's disabled after triggering
-                item.Events &= ~(uint)0xFFFF; // Clear watch events, keep data
-            else if ((item.Events & LinuxConstants.EPOLLET) == 0)
-                // Level-triggered: it should keep firing if data is still available.
-                // We'll re-evaluate it immediately after slicing the read queue.
-                reEvalList.Add(item);
+            if (_readyList.Count == 0)
+                _waitQueue.Reset();
+
+            return harvested;
         }
-
-        _readyList.RemoveRange(0, count);
-
-        // Re-arm LT events implicitly by re-checking them
-        foreach (var item in reEvalList)
-            if (_watches.ContainsValue(item))
-                CheckAndRegister(item);
-
-        if (_readyList.Count == 0)
-            _waitQueue.Reset();
-
-        return harvested;
+        finally
+        {
+            if (reEvalItems != null)
+                ArrayPool<EpollItem>.Shared.Return(reEvalItems, clearArray: true);
+        }
     }
 
     private static void AssertSchedulerThread([CallerMemberName] string? caller = null)
