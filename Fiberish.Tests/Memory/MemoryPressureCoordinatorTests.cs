@@ -89,7 +89,7 @@ public class MemoryPressureCoordinatorTests
             Assert.Equal(2, stats.DirtyPages);
             Assert.Equal(1, stats.ShmemPages);
             Assert.Equal(0, stats.WritebackPages);
-            Assert.Equal(3L * LinuxConstants.PageSize, GlobalMemoryAccounting.GetCachedBytes());
+            Assert.Equal(3L * LinuxConstants.PageSize, PageManager.GetCachedBytes());
         }
         finally
         {

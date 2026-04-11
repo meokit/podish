@@ -1797,12 +1797,11 @@ public abstract class MappingBackedInode : Inode
     private InodePageRecord CreateAllocatedMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
         int prefillLength)
     {
-        if (!InodePageAllocator.TryAllocatePageStrict(out var pageHandle) ||
+        if (!PageManager.TryAllocatePoolBackedPageStrict(out var pageHandle) ||
             !pageHandle.IsValid)
             return null!;
 
         var ptr = pageHandle.Pointer;
-        HostPageManager.GetOrCreate(ptr, HostPageKind.PageCache);
         try
         {
             unsafe
@@ -1842,8 +1841,6 @@ public abstract class MappingBackedInode : Inode
             BackingPageHandle.Release(ref pageHandle);
             return null;
         }
-
-        HostPageManager.GetOrCreate(pageHandle.Pointer, HostPageKind.PageCache);
         return new InodePageRecord
         {
             PageIndex = pageIndex,
@@ -1863,8 +1860,8 @@ public abstract class MappingBackedInode : Inode
 
         if (TryGetMappingPageRecord(pageIndex, out var resident))
         {
-            var installed = mapping.InstallHostPageIfAbsent(pageIndex, resident.Ptr, resident.HostPageKind,
-                _ => ReleaseMappingPage(pageIndex, resident), out _);
+            var installed = mapping.InstallHostPageIfAbsent(pageIndex, resident.Ptr, ref resident.Handle,
+                resident.HostPageKind, _ => ReleaseMappingPage(pageIndex, resident), out _);
             return installed;
         }
 
@@ -1883,11 +1880,11 @@ public abstract class MappingBackedInode : Inode
             if (!TryGetMappingPageRecord(pageIndex, out resident))
                 return mapping.PeekPage(pageIndex);
 
-            return mapping.InstallHostPageIfAbsent(pageIndex, resident.Ptr, resident.HostPageKind,
-                _ => ReleaseMappingPage(pageIndex, resident), out _);
+            return mapping.InstallHostPageIfAbsent(pageIndex, resident.Ptr, ref resident.Handle,
+                resident.HostPageKind, _ => ReleaseMappingPage(pageIndex, resident), out _);
         }
 
-        var finalPtr = mapping.InstallHostPageIfAbsent(pageIndex, record.Ptr, record.HostPageKind,
+        var finalPtr = mapping.InstallHostPageIfAbsent(pageIndex, record.Ptr, ref record.Handle, record.HostPageKind,
             _ => ReleaseMappingPage(pageIndex, record), out var inserted);
         if (!inserted && finalPtr != record.Ptr)
         {

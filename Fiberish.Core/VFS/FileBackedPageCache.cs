@@ -31,6 +31,5 @@ internal sealed class InodePageRecord
     public void ReleaseOwnership()
     {
         BackingPageHandle.Release(ref Handle);
-        HostPageManager.TryRemoveIfUnused(Ptr);
     }
 }

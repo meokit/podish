@@ -237,7 +237,8 @@ public class RmapTests
     {
         using var pageScope = PageManager.BeginIsolatedScope();
 
-        var ptr1 = PageManager.AllocAnonPage(AllocationClass.KernelInternal);
+        var handle1 = PageManager.AllocAnonPage(AllocationClass.KernelInternal);
+        var ptr1 = handle1.Pointer;
         Assert.NotEqual(IntPtr.Zero, ptr1);
         var anonRoot1 = new AnonVma();
 
@@ -248,7 +249,7 @@ public class RmapTests
             PageIndex = 1
         };
 
-        var page1 = HostPageManager.GetOrCreate(ptr1, HostPageKind.Anon);
+        var page1 = HostPageManager.CreateWithBacking(ref handle1, HostPageKind.Anon);
         Assert.True(page1.BindOwnerRoot(owner1));
         Assert.True(page1.HasOwnerRoot);
         Assert.Equal(HostPageOwnerKind.AnonVma, page1.OwnerRootKindForDebug);
@@ -275,7 +276,8 @@ public class RmapTests
         Assert.Null(page1.OwnerRootKindForDebug);
         Assert.Null(page1.OwnerAnonRootForDebug);
 
-        var ptr2 = PageManager.AllocAnonPage(AllocationClass.KernelInternal);
+        var handle2 = PageManager.AllocatePoolBackedPage(AllocationClass.KernelInternal);
+        var ptr2 = handle2.Pointer;
         Assert.NotEqual(IntPtr.Zero, ptr2);
         var mapping2 = new AddressSpace(AddressSpaceKind.File);
 
@@ -286,7 +288,7 @@ public class RmapTests
             PageIndex = 2
         };
 
-        var page2 = HostPageManager.GetOrCreate(ptr2, HostPageKind.PageCache);
+        var page2 = HostPageManager.CreateWithBacking(ref handle2, HostPageKind.PageCache);
         Assert.True(page2.BindOwnerRoot(owner2));
         Assert.True(page2.HasOwnerRoot);
         Assert.Equal(slotIndex1, page2.SlotIndexForDebug);
@@ -311,8 +313,6 @@ public class RmapTests
         Assert.True(page2.UnbindOwnerRoot(owner2));
         mapping2.Release();
         anonRoot1.Release();
-        PageManager.FreeAnonPage(ptr2);
-        PageManager.FreeAnonPage(ptr1);
     }
 
     private static List<RmapHit> ResolveHits(IntPtr ptr)

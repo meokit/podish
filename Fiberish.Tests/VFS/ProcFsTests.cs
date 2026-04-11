@@ -283,7 +283,7 @@ public class ProcFsTests
     public void ProcMemInfo_ShouldUseLiveMemoryStats()
     {
         var oldQuota = PageManager.MemoryQuotaBytes;
-        var allocated = IntPtr.Zero;
+        var allocated = default(BackingPageHandle);
         PageManager.MemoryQuotaBytes = 64L * 1024 * 1024;
         try
         {
@@ -322,7 +322,7 @@ public class ProcFsTests
         }
         finally
         {
-            if (allocated != IntPtr.Zero) PageManager.FreeAnonPage(allocated);
+            BackingPageHandle.Release(ref allocated);
             PageManager.MemoryQuotaBytes = oldQuota;
         }
     }

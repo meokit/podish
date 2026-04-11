@@ -185,11 +185,10 @@ internal sealed class OwnerRmapTracker
 {
     private sealed class OwnerRmapPageBucket
     {
-        public int ResidentOwnerCount;
         public List<HostPageRmapRef> Entries { get; } = [];
         public Dictionary<HostPageRmapKey, int> EntryIndices { get; } = [];
 
-        public bool IsEmpty => ResidentOwnerCount == 0 && Entries.Count == 0;
+        public bool IsEmpty => Entries.Count == 0;
     }
 
     private sealed class OwnerRmapBucket
@@ -228,27 +227,6 @@ internal sealed class OwnerRmapTracker
         bucket.Pages.Remove(hostPagePtr);
         if (bucket.IsEmpty)
             _buckets.Remove(pageIndex);
-    }
-
-    public void RetainResident(uint pageIndex, IntPtr hostPagePtr)
-    {
-        GetOrAddPageBucket(pageIndex, hostPagePtr).ResidentOwnerCount++;
-    }
-
-    public int ReleaseResident(uint pageIndex, IntPtr hostPagePtr)
-    {
-        if (!_buckets.TryGetValue(pageIndex, out var bucket) ||
-            !bucket.Pages.TryGetValue(hostPagePtr, out var pageBucket))
-        {
-            return 0;
-        }
-
-        if (pageBucket.ResidentOwnerCount > 0)
-            pageBucket.ResidentOwnerCount--;
-
-        var remaining = pageBucket.ResidentOwnerCount;
-        RemovePageBucketIfEmpty(pageIndex, hostPagePtr, pageBucket);
-        return remaining;
     }
 
     public void AddOrUpdate(uint pageIndex, IntPtr hostPagePtr, HostPageRmapRef entry, out HostPageRmapRef previous,
@@ -374,13 +352,14 @@ internal struct HostPageData
     public bool Writeback;
     public int MapCount;
     public int PinCount;
-    public int RefCount;
+    public int OwnerResidentCount;
     public long LastAccessTimestamp;
     public bool HasOwnerRoot;
     public HostPageOwnerKind OwnerRootKind;
     public AddressSpace? OwnerAddressSpace;
     public AnonVma? OwnerAnonRoot;
     public uint OwnerPageIndex;
+    public BackingPageHandle BackingHandle;
     public HostPageTbCohSummary TbCohSummary;
 }
 
@@ -553,21 +532,14 @@ internal struct HostPageRef
         }
     }
 
-    public int RefCount
+    public int OwnerResidentCount
     {
         get
         {
             if (!TryGetLiveSlot(out var owner, out var slot))
                 return 0;
 
-            return owner.GetSlotRef(slot).Page.RefCount;
-        }
-        set
-        {
-            if (!TryGetLiveSlot(out var owner, out var slot))
-                return;
-
-            owner.GetSlotRef(slot).Page.RefCount = value;
+            return owner.GetSlotRef(slot).Page.OwnerResidentCount;
         }
     }
 
@@ -634,9 +606,10 @@ internal struct HostPageRef
             {
                 SetOwnerBinding(ref page, ownerBinding);
             }
+
+            page.OwnerResidentCount++;
         }
 
-        RetainOwnerResident(ownerBinding);
         return true;
     }
 
@@ -663,8 +636,7 @@ internal struct HostPageRef
             ownerBinding = existing;
         }
 
-        var remainingResidents = ReleaseOwnerResident(ownerBinding);
-        if (remainingResidents == 0 && TryGetLiveSlot(out owner, out slot))
+        if (TryGetLiveSlot(out owner, out slot))
         {
             lock (owner.Gate)
             {
@@ -673,7 +645,13 @@ internal struct HostPageRef
                     return false;
 
                 ref var page = ref slotRef.Page;
-                if (page.HasOwnerRoot && GetOwnerBinding(ref page).Matches(ownerBinding))
+                if (!page.HasOwnerRoot || !GetOwnerBinding(ref page).Matches(ownerBinding))
+                    return false;
+
+                if (page.OwnerResidentCount > 0)
+                    page.OwnerResidentCount--;
+
+                if (page.OwnerResidentCount == 0)
                     ClearOwnerBinding(ref page);
             }
         }
@@ -928,6 +906,8 @@ internal struct HostPageRef
             : null;
 
     internal uint OwnerPageIndexForDebug => TryGetOwnerBinding(out var binding) ? binding.PageIndex : 0;
+    internal BackingPageHandleReleaseKind BackingReleaseKindForDebug =>
+        TryGetLiveSlot(out var owner, out var slot) ? owner.GetSlotRef(slot).Page.BackingHandle.ReleaseKind : default;
 
     private bool TryGetLiveSlot(out HostPageTableState owner, out int slot)
     {
@@ -988,33 +968,6 @@ internal struct HostPageRef
         page.OwnerAddressSpace = null;
         page.OwnerAnonRoot = null;
         page.OwnerPageIndex = 0;
-    }
-
-    private void RetainOwnerResident(HostPageOwnerBinding binding)
-    {
-        var hostPagePtr = Ptr;
-        switch (binding.OwnerKind)
-        {
-            case HostPageOwnerKind.AddressSpace:
-                binding.Mapping?.RetainOwnerResident(binding.PageIndex, hostPagePtr);
-                break;
-            case HostPageOwnerKind.AnonVma:
-                binding.AnonVmaRoot?.RetainOwnerResident(binding.PageIndex, hostPagePtr);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException();
-        }
-    }
-
-    private int ReleaseOwnerResident(HostPageOwnerBinding binding)
-    {
-        var hostPagePtr = Ptr;
-        return binding.OwnerKind switch
-        {
-            HostPageOwnerKind.AddressSpace => binding.Mapping?.ReleaseOwnerResident(binding.PageIndex, hostPagePtr) ?? 0,
-            HostPageOwnerKind.AnonVma => binding.AnonVmaRoot?.ReleaseOwnerResident(binding.PageIndex, hostPagePtr) ?? 0,
-            _ => throw new ArgumentOutOfRangeException()
-        };
     }
 
     private void AddOrUpdateOwnerRmap(HostPageOwnerBinding binding, HostPageRmapRef entry, out HostPageRmapRef previous,
@@ -1288,6 +1241,52 @@ internal static class HostPageManager
         }
     }
 
+    internal static HostPageRef CreateWithBacking(ref BackingPageHandle backingHandle, HostPageKind preferredKind)
+    {
+        if (!backingHandle.IsValid)
+            throw new ArgumentException("Backing handle must be valid.", nameof(backingHandle));
+
+        var ptr = backingHandle.Pointer;
+        var state = CurrentState;
+        lock (state.Gate)
+        {
+            if (state.SlotByPtr.TryGetValue(ptr, out var slot))
+            {
+                ref var existing = ref state.GetSlotRef(slot);
+                var hostPage = new HostPageRef(state, slot, existing.Generation);
+                hostPage.UpgradeKind(preferredKind);
+                if (existing.Page.BackingHandle.IsValid)
+                    throw new InvalidOperationException($"Host page 0x{ptr.ToInt64():X} already owns backing state.");
+
+                existing.Page.BackingHandle = backingHandle;
+                backingHandle = default;
+                return hostPage;
+            }
+
+            slot = state.RentSlot();
+            ref var slotRef = ref state.GetSlotRef(slot);
+            unchecked
+            {
+                slotRef.Generation++;
+                if (slotRef.Generation == 0)
+                    slotRef.Generation = 1;
+            }
+
+            slotRef.InUse = true;
+            slotRef.Page = new HostPageData
+            {
+                Ptr = ptr,
+                Kind = preferredKind,
+                Uptodate = true,
+                LastAccessTimestamp = MonotonicTime.GetTimestamp(),
+                BackingHandle = backingHandle
+            };
+            backingHandle = default;
+            state.SlotByPtr[ptr] = slot;
+            return new HostPageRef(state, slot, slotRef.Generation);
+        }
+    }
+
     internal static bool TryLookup(IntPtr ptr, out HostPageRef pageRef)
     {
         var state = CurrentState;
@@ -1319,37 +1318,12 @@ internal static class HostPageManager
         return page;
     }
 
-    internal static HostPageRef Retain(IntPtr ptr, HostPageKind preferredKind)
-    {
-        var page = GetOrCreate(ptr, preferredKind);
-        page.RefCount++;
-        return page;
-    }
-
-    internal static bool TryRetainExisting(IntPtr ptr)
-    {
-        if (!TryLookup(ptr, out var page))
-            return false;
-
-        page.RefCount++;
-        return true;
-    }
-
-    internal static void Release(IntPtr ptr)
-    {
-        if (!TryLookup(ptr, out var page))
-            return;
-
-        if (page.RefCount > 0)
-            page.RefCount--;
-        TryRemoveIfUnused(page);
-    }
-
     internal static void TryRemoveIfUnused(HostPageRef pageRef)
     {
+        BackingPageHandle backingHandle = default;
         if (pageRef.Kind == HostPageKind.Zero)
             return;
-        if (pageRef.RefCount > 0 || pageRef.MapCount > 0 || pageRef.PinCount > 0 || pageRef.HasOwnerRoot)
+        if (pageRef.OwnerResidentCount > 0 || pageRef.MapCount > 0 || pageRef.PinCount > 0 || pageRef.HasOwnerRoot)
             return;
         if (!TryGetLiveSlot(pageRef, out var state, out var slot))
             return;
@@ -1361,16 +1335,21 @@ internal static class HostPageManager
                 return;
             if (slotRef.Page.Kind == HostPageKind.Zero)
                 return;
-            if (slotRef.Page.RefCount > 0 || slotRef.Page.MapCount > 0 || slotRef.Page.PinCount > 0)
+            if (slotRef.Page.OwnerResidentCount > 0 || slotRef.Page.MapCount > 0 || slotRef.Page.PinCount > 0)
                 return;
             if (slotRef.Page.HasOwnerRoot)
                 return;
 
+            backingHandle = slotRef.Page.BackingHandle;
+            slotRef.Page.BackingHandle = default;
             state.SlotByPtr.Remove(slotRef.Page.Ptr);
             slotRef.Page = default;
             slotRef.InUse = false;
             state.FreeSlots.Push(slot);
         }
+
+        if (backingHandle.IsValid)
+            BackingPageHandle.Release(ref backingHandle);
     }
 
     internal static void TryRemoveIfUnused(IntPtr ptr)

@@ -1,5 +1,6 @@
 using Fiberish.Native;
 using Fiberish.VFS;
+using System.Runtime.InteropServices;
 
 namespace Fiberish.Memory;
 
@@ -142,7 +143,6 @@ internal sealed class ZeroInode : MappingBackedInode
 {
     private readonly Lock _zeroPageGate = new();
     private IntPtr _sharedZeroPagePtr;
-    private BackingPageHandle _sharedZeroBackingPageHandle;
 
     public ZeroInode()
     {
@@ -161,13 +161,17 @@ internal sealed class ZeroInode : MappingBackedInode
         {
             if (_sharedZeroPagePtr == IntPtr.Zero)
             {
-                var pageHandle = InodePageAllocator.AllocatePage(AllocationClass.KernelInternal);
-                if (!pageHandle.IsValid)
-                    return null;
+                unsafe
+                {
+                    var ptr = (IntPtr)NativeMemory.AlignedAlloc(LinuxConstants.PageSize, LinuxConstants.PageSize);
+                    if (ptr == IntPtr.Zero)
+                        return null;
 
-                _sharedZeroBackingPageHandle = pageHandle;
-                HostPageManager.GetOrCreate(pageHandle.Pointer, HostPageKind.Zero);
-                _sharedZeroPagePtr = pageHandle.Pointer;
+                    new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
+                    _sharedZeroPagePtr = ptr;
+                }
+
+                HostPageManager.GetOrCreate(_sharedZeroPagePtr, HostPageKind.Zero);
             }
             else
             {

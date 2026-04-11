@@ -1616,9 +1616,9 @@ public class VMAManager
         uint pageStart,
         IntPtr sourcePage,
         string pressureSource,
-        out IntPtr privatePage)
+        out BackingPageHandle privatePage)
     {
-        privatePage = IntPtr.Zero;
+        privatePage = default;
         if (!PageManager.TryAllocAnonPageMayFail(out privatePage, AllocationClass.Cow,
                 AllocationSource.CowFirstPrivate))
             if (!TryRelieveFaultMemoryPressure(engine, pageStart, pressureSource) ||
@@ -1626,9 +1626,10 @@ public class VMAManager
                     AllocationSource.CowFirstPrivate))
                 return false;
 
+        var privatePagePtr = privatePage.Pointer;
         unsafe
         {
-            Buffer.MemoryCopy((void*)sourcePage, (void*)privatePage,
+            Buffer.MemoryCopy((void*)sourcePage, (void*)privatePagePtr,
                 LinuxConstants.PageSize, LinuxConstants.PageSize);
         }
 
@@ -1794,12 +1795,12 @@ public class VMAManager
         AnonVma anonVma,
         uint pageStart,
         uint pageIndex,
-        IntPtr pagePtr,
+        ref BackingPageHandle backingHandle,
         byte perms,
         Engine engine,
         bool markDirty)
     {
-        anonVma.SetPage(pageIndex, pagePtr);
+        anonVma.SetPage(pageIndex, ref backingHandle);
         if (markDirty)
             anonVma.MarkDirty(pageIndex);
         UnmarkTbWp(pageStart);
@@ -1840,8 +1841,8 @@ public class VMAManager
         byte perms,
         Engine engine)
     {
-        var nonOwnerRefs = PageManager.GetAnonPageRefCount(existingPrivate) - 1;
-        if (nonOwnerRefs <= 0)
+        var ownerResidentCount = HostPageManager.GetRequired(existingPrivate).OwnerResidentCount;
+        if (ownerResidentCount <= 1)
         {
             privateObject.MarkDirty(pageIndex);
             TbCoh.OnWriteFault(this, pageStart, privateObject.PeekVmPage(pageIndex)!.Ptr);
@@ -1858,13 +1859,14 @@ public class VMAManager
                 return FaultResult.Oom;
 
         Interlocked.Increment(ref _cowAllocReplaceCount);
+        var replacementPagePtr = replacementPage.Pointer;
         unsafe
         {
-            Buffer.MemoryCopy((void*)existingPrivate, (void*)replacementPage,
+            Buffer.MemoryCopy((void*)existingPrivate, (void*)replacementPagePtr,
                 LinuxConstants.PageSize, LinuxConstants.PageSize);
         }
 
-        return InstallPrivatePageAndMap(privateObject, pageStart, pageIndex, replacementPage, perms, engine,
+        return InstallPrivatePageAndMap(privateObject, pageStart, pageIndex, ref replacementPage, perms, engine,
             true);
     }
 
@@ -1947,7 +1949,8 @@ public class VMAManager
         if (sharedSourceResult != FaultResult.Handled)
             return sharedSourceResult;
 
-        if (!TryAllocatePrivateCopyFromSource(engine, pageStart, sourcePage, "CowFirstPrivate", out sourcePage))
+        if (!TryAllocatePrivateCopyFromSource(engine, pageStart, sourcePage, "CowFirstPrivate",
+                out var privatePageHandle))
             return FaultResult.Oom;
 
         Interlocked.Increment(ref _cowAllocFirstCount);
@@ -1958,7 +1961,8 @@ public class VMAManager
             RegisterVmAreaAnonAttachment(vma);
         }
 
-        return InstallPrivatePageAndMap(privateObject, pageStart, pageIndex, sourcePage, (byte)vma.Perms, engine,
+        return InstallPrivatePageAndMap(privateObject, pageStart, pageIndex, ref privatePageHandle, (byte)vma.Perms,
+            engine,
             true);
     }
 

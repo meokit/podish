@@ -154,13 +154,13 @@ public class KernelScheduler
         AssertSchedulerThread();
         if (process.MemoryReleased) return true;
 
-        var beforeBytes = GlobalMemoryAccounting.GetTotalTrackedBytes();
+        var beforeBytes = PageManager.GetTotalTrackedBytes();
         var beforeByClass = PageManager.GetAllocationClassStatsSummary();
         var (cowFirstBefore, cowReplaceBefore) = VMAManager.GetCowAllocationCounters();
         var refsBefore = process.Mem.GetSharedRefCount();
         var refsAfter = process.Mem.ReleaseSharedRef(engine);
         process.MemoryReleased = true;
-        var afterBytes = GlobalMemoryAccounting.GetTotalTrackedBytes();
+        var afterBytes = PageManager.GetTotalTrackedBytes();
         var afterByClass = PageManager.GetAllocationClassStatsSummary();
         var (cowFirstAfter, cowReplaceAfter) = VMAManager.GetCowAllocationCounters();
         Logger.LogDebug(

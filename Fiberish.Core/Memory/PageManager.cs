@@ -117,15 +117,10 @@ public sealed class PageManager
         if (binding.Ptr == IntPtr.Zero) return false;
         if (_pages.TryGetValue(pageAddr, out var existing)) return existing.Ptr == binding.Ptr;
 
-        if (HostPageManager.GetRequired(binding.Ptr).Kind != HostPageKind.Zero)
-        {
-            AddGlobalRef(binding.Ptr);
-            addedRef = true;
-        }
-
-        var boundHostPage = HostPageManager.GetRequired(binding.Ptr);
+        var boundHostPage = binding.Page?.HostPage ?? HostPageManager.GetRequired(binding.Ptr);
         boundHostPage.MapCount++;
         _pages[pageAddr] = binding;
+        addedRef = true;
         return true;
     }
 
@@ -133,22 +128,19 @@ public sealed class PageManager
     {
         if (!_pages.TryGetValue(pageAddr, out var binding)) return;
         _pages.Remove(pageAddr);
-        var hostPage = HostPageManager.GetRequired(binding.Ptr);
+        var hostPage = binding.Page?.HostPage ?? HostPageManager.GetRequired(binding.Ptr);
 
         if (hostPage.MapCount > 0)
             hostPage.MapCount--;
-
-        if (hostPage.Kind != HostPageKind.Zero)
-            ReleaseGlobalRef(binding.Ptr);
 
         if (!preserveOwnerBinding &&
             binding.OwnerKind == MappedPageOwnerKind.AnonVma &&
             binding.AnonVma is { } anonVma &&
             binding.Page is { } anonPage &&
-            HostPageManager.GetRequired(anonPage.Ptr) is { MapCount: <= 0, PinCount: <= 0, RefCount: <= 0 })
+            anonPage.HostPage is { MapCount: <= 0, PinCount: <= 0, OwnerResidentCount: <= 1 })
             anonVma.RemovePageIfMatches(binding.PageIndex, anonPage);
 
-        HostPageManager.TryRemoveIfUnused(binding.Ptr);
+        HostPageManager.TryRemoveIfUnused(hostPage);
     }
 
     public void ReleaseRange(uint addr, uint length, bool preserveOwnerBinding = false)
@@ -165,20 +157,6 @@ public sealed class PageManager
         return _pages.Keys.ToArray();
     }
 
-    public static void RetainAnonPage(IntPtr ptr)
-    {
-        AddGlobalRef(ptr);
-    }
-
-    public static int GetAnonPageRefCount(IntPtr ptr)
-    {
-        var state = CurrentState;
-        lock (state.GlobalLock)
-        {
-            return state.PageRefs.TryGetValue(ptr, out var entry) ? entry.RefCount : 0;
-        }
-    }
-
     public static long GetAllocatedPageCount()
     {
         var state = CurrentState;
@@ -190,15 +168,14 @@ public sealed class PageManager
         return GetAllocatedPageCount() * LinuxConstants.PageSize;
     }
 
-    public static (long StrictSuccess, long StrictReclaimSuccess, long StrictFail, long LegacyOverQuota)
-        GetAllocationStats()
+    internal static long GetCachedBytes()
     {
-        var state = CurrentState;
-        return (
-            Interlocked.Read(ref state.StrictAllocSuccess),
-            Interlocked.Read(ref state.StrictAllocReclaimSuccess),
-            Interlocked.Read(ref state.StrictAllocFail),
-            Interlocked.Read(ref state.LegacyAllocOverQuota));
+        return AddressSpacePolicy.GetTotalCachedPages() * LinuxConstants.PageSize;
+    }
+
+    internal static long GetTotalTrackedBytes()
+    {
+        return GetAllocatedBytes() + GetCachedBytes();
     }
 
     public static IReadOnlyList<AllocationClassStat> GetAllocationClassStats()
@@ -249,137 +226,56 @@ public sealed class PageManager
                 $"{s.Source}:live={s.LivePages},alloc={s.AllocatedPages},free={s.FreedPages}"));
     }
 
-    private static void AddGlobalRef(IntPtr ptr, AllocationClass? allocationClass = null,
-        AllocationSource? allocationSource = null, IDisposable? externalOwner = null)
-    {
-        if (ptr == IntPtr.Zero) return;
-        var state = CurrentState;
-        HostPageManager.TryRetainExisting(ptr);
-        lock (state.GlobalLock)
-        {
-            var key = ptr;
-            if (state.PageRefs.TryGetValue(key, out var existing))
-            {
-                existing.RefCount++;
-                externalOwner?.Dispose();
-                return;
-            }
-
-            // Backward-compatible fallback: allow attaching metadata to an externally supplied
-            // standalone page pointer. This keeps existing call sites working while we move
-            // internals to segment/page accounting.
-            var cls = allocationClass ?? AllocationClass.KernelInternal;
-            var source = allocationSource ?? AllocationSource.Unknown;
-            var segmentId = Interlocked.Increment(ref state.NextSegmentId);
-            state.Segments[segmentId] = new SegmentEntry
-            {
-                BasePtr = key,
-                PageCount = 1,
-                // Unknown pointer source: do not assume ownership.
-                Owned = false,
-                BackingKind = SegmentBackingKind.ExternalUnknown,
-                LivePages = 1,
-                ExternalOwner = externalOwner
-            };
-            state.PageRefs[key] = new PageRefEntry
-            {
-                SegmentId = segmentId,
-                PageIndex = 0,
-                Ptr = key,
-                Class = cls,
-                Source = source,
-                RefCount = 1
-            };
-            Interlocked.Increment(ref state.TotalAllocatedPages);
-            Interlocked.Increment(ref state.AllocPagesByClass[(int)cls]);
-            Interlocked.Increment(ref state.AllocPagesBySource[(int)source]);
-        }
-    }
-
-    private static void ReleaseGlobalRef(IntPtr ptr)
-    {
-        var state = CurrentState;
-        AllocationClass allocationClass;
-        AllocationSource allocationSource;
-        SegmentEntry? segmentToFree = null;
-
-        lock (state.GlobalLock)
-        {
-            var key = ptr;
-            if (!state.PageRefs.TryGetValue(key, out var entry)) return;
-            entry.RefCount--;
-            if (entry.RefCount > 0) return;
-
-            allocationClass = entry.Class;
-            allocationSource = entry.Source;
-            state.PageRefs.Remove(key);
-            Interlocked.Decrement(ref state.TotalAllocatedPages);
-
-            if (state.Segments.TryGetValue(entry.SegmentId, out var segment))
-            {
-                var wasFull = segment.BackingKind == SegmentBackingKind.PooledAlignedAlloc &&
-                              segment.LivePages >= segment.PageCount;
-                segment.LivePages--;
-                if (segment.BackingKind == SegmentBackingKind.PooledAlignedAlloc)
-                {
-                    unsafe
-                    {
-                        new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
-                    }
-
-                    ClearPoolBit(segment, entry.PageIndex);
-                    if (wasFull)
-                        AddNonFullSegmentLocked(state, segment);
-                }
-                else if (segment.LivePages <= 0)
-                {
-                    state.Segments.Remove(entry.SegmentId);
-                    segmentToFree = segment;
-                }
-            }
-        }
-
-        HostPageManager.Release(ptr);
-
-        Interlocked.Increment(ref state.FreedPagesByClass[(int)allocationClass]);
-        Interlocked.Increment(ref state.FreedPagesBySource[(int)allocationSource]);
-
-        if (segmentToFree is { Owned: true })
-        {
-            unsafe
-            {
-                NativeMemory.AlignedFree((void*)segmentToFree.BasePtr);
-            }
-        }
-        else
-        {
-            segmentToFree?.ExternalOwner?.Dispose();
-        }
-    }
-
-    public static IntPtr AllocAnonPage(
+    public static BackingPageHandle AllocAnonPage(
         AllocationClass allocationClass = AllocationClass.KernelInternal,
         AllocationSource allocationSource = AllocationSource.Unknown)
     {
-        ValidateManagedAllocationClass(allocationClass);
+        ValidateAnonAllocationClass(allocationClass);
         var state = CurrentState;
         var overQuota = state.MemoryQuotaBytes > 0 &&
-                        GlobalMemoryAccounting.GetTotalTrackedBytes() + LinuxConstants.PageSize > state.MemoryQuotaBytes;
-        if (!TryAllocatePooledPage(state, allocationClass, allocationSource, out var ptr))
-            return IntPtr.Zero;
+                        GetTotalTrackedBytes() + LinuxConstants.PageSize > state.MemoryQuotaBytes;
+        if (!TryAllocatePooledPageCore(state, allocationClass, allocationSource, true, out var handle))
+            return default;
 
         if (overQuota) Interlocked.Increment(ref state.LegacyAllocOverQuota);
-        return ptr;
+        return handle;
     }
 
     public static bool TryAllocAnonPageMayFail(
-        out IntPtr ptr,
+        out BackingPageHandle handle,
         AllocationClass allocationClass,
         AllocationSource allocationSource = AllocationSource.Unknown)
     {
-        ValidateManagedAllocationClass(allocationClass);
+        ValidateAnonAllocationClass(allocationClass);
+        return TryAllocatePooledPageStrictCore(out handle, allocationClass, allocationSource, true, true);
+    }
+
+    internal static BackingPageHandle AllocatePoolBackedPage(
+        AllocationClass allocationClass = AllocationClass.PageCache,
+        AllocationSource allocationSource = AllocationSource.Unknown)
+    {
+        return TryAllocatePooledPageCore(CurrentState, allocationClass, allocationSource, false, out var handle)
+            ? handle
+            : default;
+    }
+
+    internal static bool TryAllocatePoolBackedPageStrict(
+        out BackingPageHandle handle,
+        AllocationClass allocationClass = AllocationClass.PageCache,
+        AllocationSource allocationSource = AllocationSource.Unknown)
+    {
+        return TryAllocatePooledPageStrictCore(out handle, allocationClass, allocationSource, false, false);
+    }
+
+    private static bool TryAllocatePooledPageStrictCore(
+        out BackingPageHandle handle,
+        AllocationClass allocationClass,
+        AllocationSource allocationSource,
+        bool countsTowardAnonymousAllocationTotals,
+        bool recordStrictAnonStats)
+    {
         var state = CurrentState;
-        ptr = IntPtr.Zero;
+        handle = default;
         var reclaimed = false;
         if (!HasQuotaCapacity())
         {
@@ -391,34 +287,45 @@ public sealed class PageManager
 
             if (!HasQuotaCapacity())
             {
-                Interlocked.Increment(ref state.StrictAllocFail);
+                if (recordStrictAnonStats)
+                    Interlocked.Increment(ref state.StrictAllocFail);
                 return false;
             }
         }
 
-        ptr = AllocAnonPage(allocationClass, allocationSource);
-        if (ptr == IntPtr.Zero)
+        if (!TryAllocatePooledPageCore(state, allocationClass, allocationSource, countsTowardAnonymousAllocationTotals,
+                out handle))
         {
-            Interlocked.Increment(ref state.StrictAllocFail);
+            if (recordStrictAnonStats)
+                Interlocked.Increment(ref state.StrictAllocFail);
             return false;
         }
 
-        if (reclaimed)
-            Interlocked.Increment(ref state.StrictAllocReclaimSuccess);
-        else
-            Interlocked.Increment(ref state.StrictAllocSuccess);
+        if (!handle.IsValid)
+        {
+            if (recordStrictAnonStats)
+                Interlocked.Increment(ref state.StrictAllocFail);
+            return false;
+        }
+
+        if (recordStrictAnonStats)
+            if (reclaimed)
+                Interlocked.Increment(ref state.StrictAllocReclaimSuccess);
+            else
+                Interlocked.Increment(ref state.StrictAllocSuccess);
         return true;
     }
 
-    private static bool TryAllocatePooledPage(State state, AllocationClass allocationClass,
-        AllocationSource allocationSource, out IntPtr ptr)
+    private static bool TryAllocatePooledPageCore(State state, AllocationClass allocationClass,
+        AllocationSource allocationSource, bool countsTowardAnonymousAllocationTotals, out BackingPageHandle handle)
     {
         lock (state.GlobalLock)
         {
             while (state.NonFullPooledSegments.Count > 0)
             {
                 var segment = state.NonFullPooledSegments[^1];
-                if (TryAllocateFromPoolSegmentLocked(state, segment, allocationClass, allocationSource, out ptr))
+                if (TryAllocateFromPoolSegmentLocked(state, segment, allocationClass, allocationSource,
+                        countsTowardAnonymousAllocationTotals, out handle))
                     return true;
 
                 RemoveNonFullSegmentLocked(state, segment);
@@ -426,11 +333,12 @@ public sealed class PageManager
 
             var created = CreatePooledSegmentLocked(state);
             if (created != null &&
-                TryAllocateFromPoolSegmentLocked(state, created, allocationClass, allocationSource, out ptr))
+                TryAllocateFromPoolSegmentLocked(state, created, allocationClass, allocationSource,
+                    countsTowardAnonymousAllocationTotals, out handle))
                 return true;
         }
 
-        ptr = IntPtr.Zero;
+        handle = default;
         return false;
     }
 
@@ -448,10 +356,7 @@ public sealed class PageManager
                 SegmentId = Interlocked.Increment(ref state.NextSegmentId),
                 BasePtr = basePtr,
                 PageCount = PooledSegmentPageCount,
-                Owned = true,
-                BackingKind = SegmentBackingKind.PooledAlignedAlloc,
                 LivePages = 0,
-                ExternalOwner = null,
                 PoolBitmap = new ulong[PooledSegmentWordCount]
             };
             state.Segments[segment.SegmentId] = segment;
@@ -462,18 +367,18 @@ public sealed class PageManager
     }
 
     private static bool TryAllocateFromPoolSegmentLocked(State state, SegmentEntry segment, AllocationClass allocationClass,
-        AllocationSource allocationSource, out IntPtr ptr)
+        AllocationSource allocationSource, bool countsTowardAnonymousAllocationTotals, out BackingPageHandle handle)
     {
         if (segment.PoolBitmap == null || segment.LivePages >= segment.PageCount)
         {
-            ptr = IntPtr.Zero;
+            handle = default;
             return false;
         }
 
         var pageIndex = FindFirstZeroUniversal(segment.PoolBitmap, segment.NextFreeWordHint);
         if (pageIndex < 0 || pageIndex >= segment.PageCount)
         {
-            ptr = IntPtr.Zero;
+            handle = default;
             return false;
         }
 
@@ -483,19 +388,12 @@ public sealed class PageManager
             RemoveNonFullSegmentLocked(state, segment);
 
         var pagePtr = segment.BasePtr + pageIndex * LinuxConstants.PageSize;
-        state.PageRefs[pagePtr] = new PageRefEntry
-        {
-            SegmentId = segment.SegmentId,
-            PageIndex = pageIndex,
-            Ptr = pagePtr,
-            Class = allocationClass,
-            Source = allocationSource,
-            RefCount = 1
-        };
-        Interlocked.Increment(ref state.TotalAllocatedPages);
+        if (countsTowardAnonymousAllocationTotals)
+            Interlocked.Increment(ref state.TotalAllocatedPages);
         Interlocked.Increment(ref state.AllocPagesByClass[(int)allocationClass]);
         Interlocked.Increment(ref state.AllocPagesBySource[(int)allocationSource]);
-        ptr = pagePtr;
+        handle = BackingPageHandle.CreatePooled(pagePtr, segment.SegmentId, pageIndex, allocationClass,
+            allocationSource, countsTowardAnonymousAllocationTotals);
         return true;
     }
 
@@ -589,17 +487,51 @@ public sealed class PageManager
     {
         var state = CurrentState;
         if (state.MemoryQuotaBytes <= 0) return true;
-        var next = GlobalMemoryAccounting.GetTotalTrackedBytes() + LinuxConstants.PageSize;
+        var next = GetTotalTrackedBytes() + LinuxConstants.PageSize;
         return next <= state.MemoryQuotaBytes;
     }
 
-    public static void FreeAnonPage(IntPtr ptr)
+    internal static void ReleasePooledPage(IntPtr ptr, long segmentId, int pageIndex,
+        AllocationClass allocationClass, AllocationSource allocationSource,
+        bool countsTowardAnonymousAllocationTotals)
     {
-        if (ptr == IntPtr.Zero) return;
-        ReleaseGlobalRef(ptr);
+        if (ptr == IntPtr.Zero)
+            return;
+
+        var state = CurrentState;
+        lock (state.GlobalLock)
+        {
+            if (!state.Segments.TryGetValue(segmentId, out var segment))
+                throw new InvalidOperationException($"Unknown anonymous pooled segment {segmentId} for 0x{ptr.ToInt64():X}.");
+
+            if (segment.PoolBitmap == null)
+                throw new InvalidOperationException($"Anonymous pooled segment {segmentId} is missing its bitmap.");
+
+            var expectedPtr = segment.BasePtr + pageIndex * LinuxConstants.PageSize;
+            if (expectedPtr != ptr)
+                throw new InvalidOperationException(
+                    $"Anonymous pooled page handle mismatch: segment={segmentId}, index={pageIndex}, expected=0x{expectedPtr.ToInt64():X}, actual=0x{ptr.ToInt64():X}.");
+
+            var wasFull = segment.LivePages >= segment.PageCount;
+            unsafe
+            {
+                new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
+            }
+
+            ClearPoolBit(segment, pageIndex);
+            if (segment.LivePages > 0)
+                segment.LivePages--;
+            if (wasFull)
+                AddNonFullSegmentLocked(state, segment);
+        }
+
+        if (countsTowardAnonymousAllocationTotals)
+            Interlocked.Decrement(ref state.TotalAllocatedPages);
+        Interlocked.Increment(ref state.FreedPagesByClass[(int)allocationClass]);
+        Interlocked.Increment(ref state.FreedPagesBySource[(int)allocationSource]);
     }
 
-    private static void ValidateManagedAllocationClass(AllocationClass allocationClass)
+    private static void ValidateAnonAllocationClass(AllocationClass allocationClass)
     {
         if (allocationClass is AllocationClass.PageCache or AllocationClass.Readahead)
             throw new InvalidOperationException(
@@ -614,7 +546,6 @@ public sealed class PageManager
         public readonly long[] FreedPagesBySource = new long[Enum.GetValues<AllocationSource>().Length];
         public readonly Lock GlobalLock = new();
         public readonly List<SegmentEntry> NonFullPooledSegments = [];
-        public readonly Dictionary<nint, PageRefEntry> PageRefs = new();
         public readonly List<SegmentEntry> PooledSegments = [];
         public readonly Dictionary<long, SegmentEntry> Segments = new();
         public long LegacyAllocOverQuota;
@@ -647,34 +578,15 @@ public sealed class PageManager
         }
     }
 
-    private enum SegmentBackingKind
-    {
-        ExternalUnknown,
-        PooledAlignedAlloc
-    }
-
     private sealed class SegmentEntry
     {
-        public required SegmentBackingKind BackingKind;
         public required nint BasePtr;
-        public IDisposable? ExternalOwner;
         public int LivePages;
         public int NextFreeWordHint;
         public int NonFullListIndex = -1;
-        public required bool Owned;
         public required int PageCount;
         public ulong[]? PoolBitmap;
         public long SegmentId;
-    }
-
-    private sealed class PageRefEntry
-    {
-        public required AllocationClass Class;
-        public required int PageIndex;
-        public required nint Ptr;
-        public int RefCount;
-        public required long SegmentId;
-        public required AllocationSource Source;
     }
 
     public readonly record struct AllocationClassStat(
@@ -701,6 +613,7 @@ public sealed class PageManager
 
             state.PooledSegments.Clear();
             state.NonFullPooledSegments.Clear();
+            state.Segments.Clear();
         }
     }
 }

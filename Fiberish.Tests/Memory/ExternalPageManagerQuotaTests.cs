@@ -14,9 +14,9 @@ public class ExternalPageManagerQuotaTests
         PageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
         try
         {
-            var ok = PageManager.TryAllocAnonPageMayFail(out var ptr, AllocationClass.Anonymous);
+            var ok = PageManager.TryAllocAnonPageMayFail(out var handle, AllocationClass.Anonymous);
             Assert.False(ok);
-            Assert.Equal(IntPtr.Zero, ptr);
+            Assert.False(handle.IsValid);
         }
         finally
         {
@@ -36,16 +36,16 @@ public class ExternalPageManagerQuotaTests
     {
         var oldQuota = PageManager.MemoryQuotaBytes;
         PageManager.MemoryQuotaBytes = long.MaxValue;
-        var ptr = IntPtr.Zero;
+        var handle = default(BackingPageHandle);
         try
         {
-            var ok = PageManager.TryAllocAnonPageMayFail(out ptr, AllocationClass.Anonymous);
+            var ok = PageManager.TryAllocAnonPageMayFail(out handle, AllocationClass.Anonymous);
             Assert.True(ok);
-            Assert.NotEqual(IntPtr.Zero, ptr);
+            Assert.True(handle.IsValid);
         }
         finally
         {
-            if (ptr != IntPtr.Zero) PageManager.FreeAnonPage(ptr);
+            BackingPageHandle.Release(ref handle);
             PageManager.MemoryQuotaBytes = oldQuota;
         }
     }
@@ -55,15 +55,15 @@ public class ExternalPageManagerQuotaTests
     {
         var oldQuota = PageManager.MemoryQuotaBytes;
         PageManager.MemoryQuotaBytes = LinuxConstants.PageSize - 1;
-        var ptr = IntPtr.Zero;
+        var handle = default(BackingPageHandle);
         try
         {
-            ptr = PageManager.AllocAnonPage();
-            Assert.NotEqual(IntPtr.Zero, ptr);
+            handle = PageManager.AllocAnonPage();
+            Assert.True(handle.IsValid);
         }
         finally
         {
-            if (ptr != IntPtr.Zero) PageManager.FreeAnonPage(ptr);
+            BackingPageHandle.Release(ref handle);
             PageManager.MemoryQuotaBytes = oldQuota;
         }
     }
@@ -72,26 +72,26 @@ public class ExternalPageManagerQuotaTests
     public void ExternalPagePool_ReusesReleasedPage_AndReturnsZeroedMemory()
     {
         using var scope = PageManager.BeginIsolatedScope();
-        var ptr = PageManager.AllocAnonPage(AllocationClass.Anonymous);
+        var handle = PageManager.AllocAnonPage(AllocationClass.Anonymous);
+        var ptr = handle.Pointer;
         Assert.NotEqual(IntPtr.Zero, ptr);
 
         var dirty = Enumerable.Repeat((byte)0xA5, LinuxConstants.PageSize).ToArray();
         System.Runtime.InteropServices.Marshal.Copy(dirty, 0, ptr, dirty.Length);
-        PageManager.FreeAnonPage(ptr);
+        BackingPageHandle.Release(ref handle);
 
         var reused = PageManager.AllocAnonPage(AllocationClass.Anonymous);
         try
         {
-            Assert.Equal(ptr, reused);
+            Assert.Equal(ptr, reused.Pointer);
             var data = new byte[LinuxConstants.PageSize];
-            System.Runtime.InteropServices.Marshal.Copy(reused, data, 0, data.Length);
+            System.Runtime.InteropServices.Marshal.Copy(reused.Pointer, data, 0, data.Length);
             foreach (var b in data)
                 Assert.Equal((byte)0, b);
         }
         finally
         {
-            if (reused != IntPtr.Zero)
-                PageManager.FreeAnonPage(reused);
+            BackingPageHandle.Release(ref reused);
         }
     }
 
@@ -101,32 +101,29 @@ public class ExternalPageManagerQuotaTests
         using var scope = PageManager.BeginIsolatedScope();
         const int pooledSegmentBytes = 4 * 1024 * 1024;
         var pagesPerPool = pooledSegmentBytes / LinuxConstants.PageSize;
-        var ptrs = new IntPtr[pagesPerPool + 1];
-        var reused = IntPtr.Zero;
+        var handles = new BackingPageHandle[pagesPerPool + 1];
+        var reused = default(BackingPageHandle);
 
         try
         {
-            for (var i = 0; i < ptrs.Length; i++)
+            for (var i = 0; i < handles.Length; i++)
             {
-                ptrs[i] = PageManager.AllocAnonPage(AllocationClass.Anonymous);
-                Assert.NotEqual(IntPtr.Zero, ptrs[i]);
+                handles[i] = PageManager.AllocAnonPage(AllocationClass.Anonymous);
+                Assert.True(handles[i].IsValid);
             }
 
-            var firstPoolPage = ptrs[0];
-            PageManager.FreeAnonPage(firstPoolPage);
-            ptrs[0] = IntPtr.Zero;
+            var firstPoolPage = handles[0].Pointer;
+            BackingPageHandle.Release(ref handles[0]);
 
             reused = PageManager.AllocAnonPage(AllocationClass.Anonymous);
-            Assert.Equal(firstPoolPage, reused);
+            Assert.Equal(firstPoolPage, reused.Pointer);
         }
         finally
         {
-            if (reused != IntPtr.Zero)
-                PageManager.FreeAnonPage(reused);
+            BackingPageHandle.Release(ref reused);
 
-            foreach (var ptr in ptrs)
-                if (ptr != IntPtr.Zero)
-                    PageManager.FreeAnonPage(ptr);
+            for (var i = 0; i < handles.Length; i++)
+                BackingPageHandle.Release(ref handles[i]);
         }
     }
 }

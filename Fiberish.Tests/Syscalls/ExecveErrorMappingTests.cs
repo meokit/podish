@@ -50,7 +50,7 @@ public class ExecveErrorMappingTests
             }
             finally
             {
-                PageManager.FreeAnonPage(reservedPage);
+                BackingPageHandle.Release(ref reservedPage);
             }
         }
         finally

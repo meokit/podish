@@ -78,6 +78,13 @@ public sealed class AddressSpace
         return Pages.InstallHostPageIfAbsent(pageIndex, ptr, hostPageKind, onReleased, out inserted);
     }
 
+    internal IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, ref BackingPageHandle backingHandle,
+        HostPageKind hostPageKind, Action<ResidentPageRecord>? onReleased, out bool inserted)
+    {
+        return Pages.InstallHostPageIfAbsent(pageIndex, ptr, ref backingHandle, hostPageKind, onReleased,
+            out inserted);
+    }
+
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew)
     {
         return Pages.GetOrCreatePage(pageIndex, onFirstCreate, out isNew, false, AllocationClass.PageCache,
@@ -206,24 +213,6 @@ public sealed class AddressSpace
             StartPageIndex = startPageIndex,
             EndPageIndexExclusive = startPageIndex + vma.Length / LinuxConstants.PageSize
         });
-    }
-
-    internal void RetainOwnerResident(uint pageIndex, IntPtr hostPagePtr)
-    {
-        if (IsZeroBacking)
-            return;
-
-        lock (_rmapLock)
-            _ownerRmap.RetainResident(pageIndex, hostPagePtr);
-    }
-
-    internal int ReleaseOwnerResident(uint pageIndex, IntPtr hostPagePtr)
-    {
-        if (IsZeroBacking)
-            return 0;
-
-        lock (_rmapLock)
-            return _ownerRmap.ReleaseResident(pageIndex, hostPagePtr);
     }
 
     internal void AddOrUpdateOwnerRmap(uint pageIndex, IntPtr hostPagePtr, HostPageRmapRef entry,
@@ -372,7 +361,6 @@ public sealed class AnonVma
         Pages.VisitPageStates(state =>
         {
             var page = Pages.PeekVmPage(state.PageIndex)!;
-            PageManager.RetainAnonPage(page.Ptr);
             clone.Pages.InstallExistingHostPage(state.PageIndex, page.Ptr, HostPageKind.Anon);
             var clonedPage = clone.Pages.PeekVmPage(state.PageIndex)!;
             clonedPage.Dirty = page.Dirty;
@@ -401,6 +389,11 @@ public sealed class AnonVma
     public void SetPage(uint pageIndex, IntPtr ptr)
     {
         Pages.ReplacePage(pageIndex, ptr, HostPageKind.Anon);
+    }
+
+    public void SetPage(uint pageIndex, ref BackingPageHandle backingHandle)
+    {
+        Pages.ReplacePage(pageIndex, ref backingHandle, HostPageKind.Anon);
     }
 
     public void MarkDirty(uint pageIndex)
@@ -507,18 +500,6 @@ public sealed class AnonVma
             StartPageIndex = startPageIndex,
             EndPageIndexExclusive = startPageIndex + vma.Length / LinuxConstants.PageSize
         });
-    }
-
-    internal void RetainOwnerResident(uint pageIndex, IntPtr hostPagePtr)
-    {
-        lock (Root._rmapLock)
-            Root._ownerRmap.RetainResident(pageIndex, hostPagePtr);
-    }
-
-    internal int ReleaseOwnerResident(uint pageIndex, IntPtr hostPagePtr)
-    {
-        lock (Root._rmapLock)
-            return Root._ownerRmap.ReleaseResident(pageIndex, hostPagePtr);
     }
 
     internal void AddOrUpdateOwnerRmap(uint pageIndex, IntPtr hostPagePtr, HostPageRmapRef entry,
