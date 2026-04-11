@@ -348,6 +348,76 @@ public class MmapSupportTests
     }
 
     [Fact]
+    public async Task Munmap_PrivateAnonymousHeadTrim_RefaultPreservesCowPageData()
+    {
+        using var env = new TestEnv();
+        const uint baseAddr = 0x54380000;
+        var mapLen = (uint)(LinuxConstants.PageSize * 3);
+
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, mapLen,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+
+        var secondPage = baseAddr + LinuxConstants.PageSize;
+        Assert.True(env.Engine.CopyToUser(secondPage, new byte[1] { 0x5A }));
+
+        var originalVma = Assert.Single(env.Vma.VMAs.Where(v => v.Start == baseAddr));
+        Assert.NotNull(originalVma.VmAnonVma);
+        Assert.NotEqual(IntPtr.Zero, originalVma.VmAnonVma!.PeekPage(originalVma.GetPageIndex(secondPage)));
+
+        Assert.Equal(0, await env.Call("SysMunmap", baseAddr, LinuxConstants.PageSize));
+
+        var trimmedVma = Assert.Single(env.Vma.VMAs.Where(v => v.Start == secondPage && v.End == baseAddr + mapLen));
+        Assert.Equal(1UL, trimmedVma.VmPgoff);
+
+        env.Vma.TearDownNativeMappings(env.Engine, secondPage, LinuxConstants.PageSize,
+            captureDirtySharedPages: false, invalidateCodeRange: true, releaseExternalPages: true,
+            preserveOwnerBinding: true);
+
+        var probe = new byte[1];
+        Assert.True(env.Engine.CopyFromUser(secondPage, probe));
+        Assert.Equal(0x5A, probe[0]);
+    }
+
+    [Fact]
+    public async Task Munmap_PrivateFileHeadTrim_PreservesPageIndexBaseForRefaults()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x1A000);
+        env.MapUserPage(0x1B000);
+        env.WriteCString(0x1A000, "/cow-head-trim-file");
+
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x1A000, 0x8000 | 0x1A4));
+        var fd = await env.Call("SysOpen", 0x1A000, (uint)FileFlags.O_RDWR);
+        Assert.True(fd >= 0);
+
+        Assert.True(env.Engine.CopyToUser(0x1B000, new byte[1] { (byte)'A' }));
+        Assert.Equal(1, await env.Call("SysWrite", (uint)fd, 0x1B000, 1));
+        Assert.Equal(LinuxConstants.PageSize, await env.Call("SysLseek", (uint)fd, LinuxConstants.PageSize, 0));
+        Assert.True(env.Engine.CopyToUser(0x1B000, new byte[1] { (byte)'B' }));
+        Assert.Equal(1, await env.Call("SysWrite", (uint)fd, 0x1B000, 1));
+
+        const uint baseAddr = 0x543C0000;
+        var mapLen = (uint)(LinuxConstants.PageSize * 2);
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, mapLen,
+            (uint)Protection.Read, (uint)(MapFlags.Private | MapFlags.Fixed), (uint)fd));
+
+        var mappedVma = Assert.Single(env.Vma.VMAs.Where(v => v.Start == baseAddr));
+        Assert.NotNull(mappedVma.VmMapping);
+        Assert.True(mappedVma.VmMapping!.PageCount >= 2);
+
+        Assert.Equal(0, await env.Call("SysMunmap", baseAddr, LinuxConstants.PageSize));
+
+        var secondPage = baseAddr + LinuxConstants.PageSize;
+        var trimmedVma = Assert.Single(env.Vma.VMAs.Where(v => v.Start == secondPage && v.End == baseAddr + mapLen));
+        Assert.Equal(1UL, trimmedVma.VmPgoff);
+
+        var probe = new byte[1];
+        Assert.True(env.Engine.CopyFromUser(secondPage, probe));
+        Assert.Equal((byte)'B', probe[0]);
+    }
+
+    [Fact]
     public async Task Munmap_SharedFileMiddleRange_DoesNotDropAddressSpacePages()
     {
         using var env = new TestEnv();

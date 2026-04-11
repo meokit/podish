@@ -1226,8 +1226,9 @@ public class VMAManager
                     QueueUnmappedObjectPages(vma, vma.Start, end, pendingObjectPageReleases ??= []);
                     UnregisterVmAreaAttachments(vma);
                     var diff = end - vma.Start;
+                    var newVmPgoff = vma.GetPageIndex(end);
                     vma.Start = end;
-                    vma.VmPgoff = vma.GetPageIndex(end);
+                    vma.VmPgoff = newVmPgoff;
                     if (vma.File != null)
                         vma.Offset += diff;
                     replacements.Add(vma);
