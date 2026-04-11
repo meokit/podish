@@ -1,160 +1,243 @@
 # Memory Management Deep Dive
 
-This document describes the current memory-management implementation in Fiberish. It is intentionally implementation-first: names, responsibilities, and lifecycle rules match the current code, not older transition states.
+This document describes the current Fiberish memory-management implementation as it exists in code today.
+It focuses on the real object graph and runtime behavior in:
 
-For the forward-looking redesign of host-page metadata, see [HostPage Linux-Style Redesign](./hostpage-linux-style-design.md) and the preferred [HostPage Slot Ownership Design](./hostpage-slot-ownership-design.md).
+- `Fiberish.Core/Memory/VMAManager.cs`
+- `Fiberish.Core/Memory/VmArea.cs`
+- `Fiberish.Core/Memory/LinuxMemoryObjects.cs`
+- `Fiberish.Core/Memory/OwnerPageSlots.cs`
+- `Fiberish.Core/Memory/HostPageRef.cs`
+- `Fiberish.Core/Memory/ProcessPageManager.cs`
+- `Fiberish.Core/Memory/BackingPageHandle.cs`
+- `Fiberish.Core/VFS/Structs.cs`
+
+For forward-looking host-page redesign notes, see [HostPage Linux-Style Redesign](./hostpage-linux-style-design.md) and [HostPage Slot Ownership Design](./hostpage-slot-ownership-design.md). This document is about the current implementation, not those proposals.
 
 ## Table of Contents
 
 1. High-Level Model
-2. Native MMU Layer
-3. Managed VM Layer
-4. `AddressSpace`, `AnonVma`, and `VmPageSlots`
-5. `MappedPageBinding` and Native Mapping Lifecycle
-6. Fault Handling
-7. `fork`, `mprotect`, `munmap`, and truncate
-8. Shared-file writeback and page-cache maintenance
-9. Host-mapped file page cache
-10. Shared memory and futexes
+2. Core Objects and Relationships
+3. The Actual Ownership Model
+4. Host Page Metadata and Reverse Mapping
+5. Fault Path and Mapping Installation
+6. Lifecycle
+7. `fork`, `mprotect`, `munmap`, truncate, and inode invalidation
+8. Writeback, reclaim, shared memory, and zero pages
+9. Corrections vs older design descriptions
+10. Ownership Summary
 
 ## 1. High-Level Model
 
-The current design is closest to a Linux-style split between:
+The current design is best understood as a split between four layers:
 
-- `VMAManager`: process address-space metadata (`mm_struct`-like)
-- `VmArea`: virtual memory ranges (`vm_area_struct`-like)
-- `AddressSpace`: file/shmem page cache (`address_space`-like)
-- `AnonVma`: anonymous/private COW pages (`anon_vma`-like)
-- `VmPageSlots`: reusable page-slot storage for `AddressSpace` and `AnonVma`
-- `ExternalPageManager`: per-address-space installed native mappings
+1. `VMAManager` manages one process-visible guest address space.
+2. `VmArea` describes virtual ranges inside that address space.
+3. `AddressSpace` and `AnonVma` own resident managed pages.
+4. `ProcessPageManager` mirrors which guest pages are currently installed into the native MMU.
 
-The key rule is:
+A useful rule of thumb is:
 
-- Managed objects decide what memory exists and who owns it.
-- The native MMU is an acceleration cache of installed guest->host mappings.
+- managed objects (`VmArea`, `AddressSpace`, `AnonVma`, `HostPageManager`) define semantics and lifetime;
+- native MMU state is a cache of installed guest->host mappings;
+- `ProcessPageManager` is the managed mirror of that installed cache.
 
-That means native mappings can be zapped and rebuilt from managed state without changing guest-visible semantics.
+This means a native mapping can be torn down and later rebuilt from managed state without losing guest-visible memory contents, as long as the underlying managed owner still retains the page.
 
-## 2. Native MMU Layer
+## 2. Core Objects and Relationships
 
-The native MMU lives in `libfibercpu`. It provides:
+### 2.1 Object relationship graph
 
-- page-table mappings
-- external-page mappings (`map_external_page`)
-- owned-page allocation
-- TLB flush
-- translated-block cache reset
-- mapping reprotect
+```mermaid
+flowchart TD
+    P[Process] --> MM[VMAManager]
+    MM --> VMAS[VmArea list]
+    MM --> PM[ProcessPageManager]
+    MM --> ASH[ProcessAddressSpaceHandle]
 
-Relevant exported operations:
+    VMAS --> VMA[VmArea]
+    VMA -->|shared source / file cache / zero source| MAP[AddressSpace]
+    VMA -->|private COW overlay| AV[AnonVma]
+    VMA -->|optional| FM[VmaFileMapping -> LinuxFile -> Inode]
 
-- `X86_Clone(...)`
-- `X86_ReprotectMappedRange(...)`
-- `X86_ResetCodeCacheByRange(...)`
-- `X86_ResetAllCodeCache(...)`
+    INODE[MappingBackedInode] -->|owns| MAP
+    MAP --> OPS1[OwnerPageSlots]
+    AV --> OPS2[OwnerPageSlots]
 
-Current clone behavior:
+    OPS1 --> RPR1[ResidentPageRecord]
+    OPS2 --> RPR2[ResidentPageRecord]
 
-- `share_mem=1`: share one MMU core
-- `share_mem=0`: clone owned pages and preserve external mappings
-- external pages are never internalized into owned MMU pages
-- child block cache starts empty
+    RPR1 --> HP[HostPageManager / HostPageRef]
+    RPR2 --> HP
 
-Current reprotect behavior:
+    PM --> MPB[MappedPageBinding]
+    MPB -->|installed guest page| RPR1
+    MPB -->|installed guest page| RPR2
+    MPB --> HP
 
-- `X86_ReprotectMappedRange(...)` only updates permissions for already mapped native pages
-- it does not create mappings
-- it does not release external-page bindings
+    HP --> RMAP[OwnerRmapTracker + HostPageRmapRef]
+    HP --> TBCOH[TB coherence summary]
+    HP --> BPH[BackingPageHandle]
+```
 
-Current code-cache reset behavior:
+### 2.2 `VMAManager`
 
-- `ResetCodeCacheByRange` only drops translated blocks for a guest range
-- it does not change page tables or page ownership
+`VMAManager` is the authoritative managed address-space object for a process. It owns:
 
-## 3. Managed VM Layer
+- the sorted `_vmas` list;
+- `PageMapping : ProcessPageManager`;
+- address-space synchronization state (`_mapSequence`, `_pendingCodeCacheResets`);
+- TB-coherence write-protect tracking (`_tbWpPages`);
+- mapped-inode reference counts used to register/unregister with inodes;
+- `AddressSpaceHandle`, which represents the MMU identity used for TB coherence and engine attachment.
 
-### 3.1 `VMAManager`
+Its main jobs are:
 
-`VMAManager` is the authoritative managed address-space object. It owns:
+- create/split/remove `VmArea`s;
+- resolve faults;
+- install or tear down native mappings;
+- capture dirty state back into managed owners when needed;
+- publish invalidation sequence changes to peer engines through `ProcessAddressSpaceSync`.
 
-- sorted `VmArea` list
-- one `ExternalPageManager`
-- inode-owned `AddressSpace` refs
-- mapping-change sequence / deferred invalidation state
+### 2.3 `VmArea`
 
-Its job is to:
-
-- create and split `VmArea`s
-- resolve page faults
-- keep native mappings synchronized with managed state
-- perform zap/teardown on `munmap`, truncate, reclaim, and exit
-
-### 3.2 `VmArea`
-
-`VmArea` is the current range metadata object. Main fields:
+`VmArea` is the per-range metadata object. Important fields are:
 
 - `Start`, `End`
-- `Perms`
-- `Flags`
-- `FileMapping`
-- `Offset`
-- `VmPgoff`
+- `Perms`, `Flags`
+- `FileMapping`, `File`
+- `Offset`, `VmPgoff`
 - `VmMapping : AddressSpace?`
 - `VmAnonVma : AnonVma?`
 
 Current interpretation:
 
-- file-backed shared/private mappings use `VmMapping`
-- private COW pages live in `VmAnonVma`
-- anonymous private mappings start with `VmMapping == null` and `VmAnonVma == null`
-- anonymous shared mappings use a shmem-style `AddressSpace`
+- `VmMapping` is the shared backing view for the VMA.
+- `VmAnonVma` is the private overlay for `MAP_PRIVATE` pages that have been materialized.
+- even anonymous private mappings usually still have a non-null `VmMapping`: they use the runtime's shared zero `AddressSpace`.
+- shared anonymous mappings are represented as shmem-backed `AddressSpace`, created through an internal tmpfs file.
+- file-private mappings use both:
+  - `VmMapping` as the clean/shared source;
+  - `VmAnonVma` as the private COW destination once pages are written.
 
-Helpers on `VmArea` are now the only supported way to compute:
+`VmArea` also provides the canonical page-index and offset helpers used throughout the implementation:
 
-- guest page index
-- relative offset inside a mapping
-- absolute file offset
-- effective file-backed length
+- `GetPageIndex(...)`
+- `GetRelativeOffsetForPageIndex(...)`
+- `GetGuestPageStart(...)`
+- `GetAbsoluteFileOffsetForPageIndex(...)`
+- `GetFileBackingLength()`
 
-The old `ViewPageOffset` / `FileBackingLength` transition fields are gone.
+### 2.4 `AddressSpace`
 
-### 3.3 `ProcessAddressSpaceSync`
+`AddressSpace` is the managed owner for file-backed, shmem-backed, and zero-backed shared source pages.
 
-Fiberish does not eagerly walk every engine and rewrite all native mappings on each managed change.
+Current `AddressSpaceKind` values are:
 
-Current synchronization model:
+- `File`
+- `Shmem`
+- `Zero`
 
-- `VMAManager` owns `CurrentMapSequence`
-- mapping/protection changes publish sequence advances through `ProcessAddressSpaceSync`
-- each `Engine` tracks `AddressSpaceMapSequenceSeen`
-- `SyncEngineBeforeRun(...)` reconciles one engine at run boundary
+Each `AddressSpace` contains:
 
-The current reconciliation step is:
+- `OwnerPageSlots Pages`
+- rmap attachment state (`_rmapAttachments`)
+- owner-root rmap storage (`_ownerRmap`)
+- reference counting (`AddRef` / `Release`)
 
-1. collect code-cache reset ranges since the engine's last seen sequence
-2. flush MMU TLB state for that engine
-3. reset translated block cache for recorded ranges only
-4. advance `AddressSpaceMapSequenceSeen`
+Important behavior:
 
-This is why:
+- file-backed mappings use the inode's `MappingBackedInode.Mapping` object;
+- shmem uses the same `AddressSpace` machinery but is tracked as `Shmem` in `AddressSpacePolicy`;
+- zero-fill anonymous private read faults are backed by a special `ZeroInode` whose mapping kind is `Zero`.
 
-- `mprotect` can be implemented as reprotect + publish
-- `munmap` / truncate can zap immediately for the current engine but still publish address-space change state for peers
-- non-current engines are synchronized lazily at the next run boundary
+### 2.5 `AnonVma`
 
-## 4. `AddressSpace`, `AnonVma`, and `VmPageSlots`
+`AnonVma` owns private resident pages for `MAP_PRIVATE` mappings.
 
-### 4.1 `VmPageSlots`
+It contains:
 
-`VmPageSlots` is now the reusable page-slot container. It is not a VM owner.
+- `OwnerPageSlots Pages`
+- `Parent`
+- `Root`
+- rmap attachment state for the concrete `AnonVma`
+- owner-root rmap storage anchored on `Root`
+
+Two details matter in the current implementation:
+
+1. `VmAnonVma` is created lazily on first private write fault.
+2. `CloneForFork()` creates a new `AnonVma(parent: this)`, but the clone shares the same `Root` as the original root. That lets fork-related descendants share one owner-root namespace for reverse mapping, while each concrete `AnonVma` still carries its own resident-page table and VMA attachments.
+
+### 2.6 `ProcessPageManager`
+
+`ProcessPageManager` is the current installed-mapping table for one `VMAManager`.
+It is not the owner of page contents.
 
 It stores:
 
-- `pageIndex -> VmPage`
+- `guest page start -> MappedPageBinding`
 
-Each `VmPage` carries:
+Each `MappedPageBinding` describes:
 
 - `Ptr`
+- `OwnerKind` (`AddressSpace` or `AnonVma`)
+- owner object reference (`Mapping` or `AnonVma`)
+- `ResidentPageRecord? Page`
+- `PageIndex`
+
+Important current behavior:
+
+- adding a binding increments `HostPage.MapCount`;
+- releasing a binding decrements `HostPage.MapCount`;
+- for anon bindings, release may immediately remove the `AnonVma` page if it is no longer mapped, pinned, or multiply owned.
+
+### 2.7 `BackingPageHandle`
+
+`BackingPageHandle` is the ownership token for externally backed host memory.
+It is a value type that remembers:
+
+- `Pointer`
+- a release owner implementing `IBackingPageHandleReleaseOwner`
+- a release token
+
+Current release owners are:
+
+- `BackingPagePool` for pool-backed/anonymous pages;
+- `Inode` for host-mapped file windows and similar inode-owned mapped handles.
+
+`BackingPageHandle` does not describe virtual mapping state. It exists purely so host memory can be released correctly when the final managed owner disappears.
+
+## 3. The Actual Ownership Model
+
+### 3.1 Guest-range ownership vs page ownership
+
+Ownership is intentionally split:
+
+- `VMAManager` owns address-space metadata.
+- `VmArea` owns the range-level view.
+- `AddressSpace` or `AnonVma` owns the resident page slot.
+- `HostPageManager` owns host-page metadata records.
+- `BackingPageHandle` owns the release path for the underlying host allocation or mapped window.
+- `ProcessPageManager` owns only the fact that a host page is currently installed into the native MMU for a guest page.
+
+### 3.2 `OwnerPageSlots` is the real resident-page container
+
+Older descriptions used `VmPageSlots` / `VmPage`, but the current implementation uses:
+
+- `OwnerPageSlots`
+- `ResidentPageRecord`
+
+`OwnerPageSlots` stores `Dictionary<uint, ResidentPageRecord>` and is responsible for:
+
+- insertion/replacement of owner pages;
+- allocating pages on demand for owners;
+- binding and unbinding `HostPage` owner roots;
+- truncation and removal;
+- eviction of clean file-cache pages;
+- notifying rmap attachment code when a page binding changes.
+
+`ResidentPageRecord` is a thin wrapper over `HostPageRef` and exposes page state through the shared host-page metadata:
+
 - `Dirty`
 - `Uptodate`
 - `Writeback`
@@ -162,323 +245,468 @@ Each `VmPage` carries:
 - `PinCount`
 - `LastAccessTimestamp`
 
-`VmPageSlots` provides storage operations only:
+### 3.3 Host page metadata is global per pointer
 
-- install / create page
-- peek / get page
-- mark dirty / clear dirty
-- truncate by size
-- evict clean page
-- remove page(s)
-- snapshot state
+`HostPageManager` keeps one metadata record per live host page pointer.
+Each record tracks:
 
-### 4.2 `AddressSpace`
+- `Kind` (`PageCache`, `Anon`, `Zero`)
+- dirty/uptodate/writeback bits
+- `MapCount`
+- `PinCount`
+- `OwnerResidentCount`
+- owner-root binding (`AddressSpace` or `AnonVma.Root`, plus page index)
+- optional `BackingPageHandle`
+- TB-coherence summary
 
-`AddressSpace` is the owner for file/shmem-backed cache.
+This means the real lifecycle decision is based on the host page, not on any single VMA.
 
-Current properties:
+## 4. Host Page Metadata and Reverse Mapping
 
-- `Kind`: `File` or `Shmem`
-- `Pages : VmPageSlots`
-- `RefCount`
-- `IsRecoverableWithoutSwap => Kind == File`
+### 4.1 What “rmap” means here
 
-Current rules:
+The current rmap system answers the question:
 
-- file page cache lives in `Inode.Mapping`
-- ordinary `munmap` never deletes `AddressSpace` pages
-- clean file pages may be reclaimed by `GlobalAddressSpaceCacheManager`
-- shmem pages are tracked as `AddressSpace`, but are not currently reclaimed like file cache
+- given a host page pointer, which `(VMAManager, VmArea, guest page)` currently refer to it?
 
-### 4.3 `AnonVma`
+That information is needed for:
 
-`AnonVma` owns anonymous/private COW pages.
+- TB coherence / W^X policy changes;
+- code-cache invalidation after writes;
+- debugging and reverse-holder lookup.
 
-Current rules:
+### 4.2 Two layers of rmap bookkeeping
 
-- anonymous private mappings do not create a fake shared object anymore
-- zero-fill source is provided directly by the fault path
-- the first private write lazily creates `VmAnonVma`
-- file-private COW pages also live in `VmAnonVma`
-- `fork()` clones `AnonVma` by sharing page pointers and splitting lazily on later writes
+There are two distinct structures involved.
 
-Unlike `AddressSpace`, `AnonVma` pages are not page-cache objects:
+#### A. Attachment layer: which VMAs can contribute refs
 
-- they are not tracked by `GlobalAddressSpaceCacheManager`
-- they are not reclaimed as file cache
-- they are freed when unmapping drops `MapCount` to zero and `PinCount` is also zero
+Both `AddressSpace` and `AnonVma` maintain `_rmapAttachments`, each entry containing:
 
-## 5. `MappedPageBinding` and Native Mapping Lifecycle
+- `Mm : VMAManager`
+- `Vma : VmArea`
+- `StartPageIndex`
+- `EndPageIndexExclusive`
 
-`ExternalPageManager` no longer models native mappings as `guestPage -> raw ptr` only. It stores typed bindings:
+`VMAManager` updates these attachments when a VMA is:
 
-- `Ptr`
+- inserted;
+- split by `munmap` or `mprotect`;
+- migrated to a new mapping;
+- removed.
+
+#### B. Owner-root layer: actual reverse refs for resident host pages
+
+Actual reverse refs are stored in `OwnerRmapTracker` using this logical key:
+
+- owner-local `pageIndex`
+- `hostPagePtr`
+- `HostPageRmapKey(MM, VMA, ownerKind, pageIndex)`
+
+The value is `HostPageRmapRef`, which stores:
+
+- `Mm`
+- `Vma`
 - `OwnerKind`
-- `AddressSpace? Mapping`
-- `AnonVma? AnonVma`
-- `VmPage? Page`
 - `PageIndex`
+- `GuestPageStart`
 
-Current owner kinds:
+This storage lives:
 
-- `RawPointer`
-- `AddressSpace`
-- `AnonVma`
-- `ZeroPage`
-- `Special`
+- on `AddressSpace._ownerRmap` for page-cache / zero-backed pages;
+- on `AnonVma.Root._ownerRmap` for anon-private pages.
 
-Binding rules:
+### 4.3 How refs are added and removed
 
-- installing a binding increments `VmPage.MapCount` when a typed `VmPage` exists
-- releasing a binding decrements `MapCount`
-- zero page is special-cased and does not enter normal quota / global-ref accounting
-- when an `AnonVma` page loses its last map and `PinCount == 0`, it is removed from the owner
-- `AddressSpace` pages keep living after unmap; unmap only removes the native mapping
+#### Shared mapping side (`AddressSpace`)
 
-This is the current basis for future DRI/device-memory style mappings as well: typed bindings plus page-level lifetime, not raw pointers alone.
+When a VMA attaches to an `AddressSpace`:
 
-## 6. Fault Handling
+- `AddRmapAttachment(...)` records the attachment;
+- all already-resident pages in the covered index range are scanned;
+- `HostPages.AddOrUpdateRmapRef(...)` is called for each resident page.
 
-### 6.1 Shared/shared-source faults
+When a resident page appears or disappears later:
 
-Shared-source resolution is centralized in `VMAManager`:
+- `OwnerPageSlots` invokes `OnPageBindingChanged(...)`;
+- `AddressSpace` adds or removes the direct rmap ref for every attached VMA that covers that page index.
+
+For private mappings, `AddressSpace.AddDirectRefLocked(...)` skips adding the shared ref if the same page index already has an overriding private page in `VmAnonVma`.
+
+#### Private overlay side (`AnonVma`)
+
+When a private page is installed:
+
+- `AnonVma.OnPageBindingChanged(...)` removes the shared `AddressSpace` rmap ref for covered VMAs at that page index;
+- then adds the anon direct ref.
+
+When a private page disappears:
+
+- the anon direct ref is removed;
+- if there is no longer a private page for that slot, the shared mapping ref is restored from `VmMapping`.
+
+That “remove shared ref on private install, restore it on private removal” behavior is the core of how the current implementation models `MAP_PRIVATE` overlay semantics in rmap.
+
+### 4.4 `mprotect` and VMA split interaction
+
+When `mprotect` splits a VMA, the code does not tear down and rebuild all resident pages from scratch.
+Instead it updates reverse refs in place by using:
+
+- `UpdateTbCohRolesForVmaRange(...)`
+- `RebindRmapRefsForVmaRange(...)`
+- `ResetVmAreaAttachmentsForSplit(...)`
+
+So the host page retains the same owner/root, while the `(old VMA -> new VMA)` reverse references are rebound to the new range objects.
+
+### 4.5 TB coherence on top of rmap
+
+Each host page also carries `HostPageTbCohSummary`, which counts:
+
+- writer refs;
+- executable identities (`VMAManager.AddressSpaceIdentity`).
+
+From that summary the page derives a writer policy:
+
+- no writers;
+- allow all writers;
+- protect all writers;
+- protect all except one executable identity.
+
+`TbCoh` uses rmap to:
+
+- discover executable peers of a host page;
+- invalidate translated blocks in peer address spaces on write fault;
+- maintain `_tbWpPages` in each `VMAManager` so writable mappings can be temporarily write-protected at the native MMU layer.
+
+This is tightly coupled with rmap: without reverse refs, the runtime would not know which executable guest pages must be invalidated when a writable alias faults.
+
+## 5. Fault Path and Mapping Installation
+
+### 5.1 Shared-source resolution
+
+Shared-source resolution is centralized in:
 
 - `ResolveSharedBackingPage(...)`
 - `ResolveAndMapSharedBackingPage(...)`
 - `MapResolvedBackingPage(...)`
 
-Current behavior:
+There are three main shared-source cases:
 
-- anonymous private read miss with no `VmAnonVma` page -> map global zero page
-- file/shared mapping miss -> resolve through `VmMapping`
-- file-backed direct-mapped page cache is tried before buffered population where applicable
+1. `AddressSpaceKind.Zero`
+   - anonymous private mappings without a private page read from the shared zero mapping.
+2. file-backed source
+   - `MappingBackedInode.AcquireMappingPage(...)` supplies page-cache pages.
+3. shared-anonymous source
+   - shmem `AddressSpace.GetOrCreatePage(...)` allocates/populates pages directly.
 
-### 6.2 Private faults
+### 5.2 Private fault resolution
 
-Private write faults are centralized through:
+Private faults are handled by `ResolvePrivateFault(...)`.
 
-- `ResolvePrivateFault(...)`
-- `InstallPrivatePageAndMap(...)`
+Current behavior is:
 
-Current behavior:
+- read fault with existing private page:
+  - map that `AnonVma` page read-only.
+- read fault without private page:
+  - map the shared source (`VmMapping`), which may be file-backed or zero-backed.
+- write fault with existing private page:
+  - if the host page has `OwnerResidentCount <= 1`, keep it and just make it writable;
+  - otherwise allocate a replacement page and copy for COW replacement.
+- first write fault without private page:
+  - resolve the shared source page;
+  - allocate an anon page;
+  - copy source contents;
+  - lazily create `VmAnonVma` if needed;
+  - install the page into `AnonVma` and map it writable.
 
-- file-private read:
-  - use `VmAnonVma` if page exists
-  - otherwise fall back to `VmMapping`
-- file-private write:
-  - allocate/copy into `VmAnonVma`
-- anonymous private read:
-  - use `VmAnonVma` if page exists
-  - otherwise map zero page
-- anonymous private write:
-  - lazily create `VmAnonVma`
-  - copy from zero page or current source into a private page
+### 5.3 Native mapping install path
 
-### 6.3 Dirty capture
-
-Private dirty capture:
-
-- `CaptureDirtyPrivatePages(...)`
-
-Shared-file dirty capture:
-
-- `CaptureDirtySharedPages(...)`
-- `CaptureDirtySharedFilePages(...)`
-
-The current model is explicit:
-
-- engine/native dirty bits are captured back into managed `VmPage` state before teardown-sensitive operations
-- `fork()` captures private dirty pages before cloning
-- shared-file teardown paths capture shared dirty pages before unmapping
-
-## 7. `fork`, `mprotect`, `munmap`, and truncate
-
-### 7.1 `fork`
-
-Current non-`CLONE_VM` fork behavior:
-
-1. capture parent private dirty pages
-2. clone native engine/MMU preserving external mappings
-3. clone managed `VMAManager`
-4. rebuild child `ExternalPageManager` bindings from native mappings
-5. wrprotect private ranges in parent and child
-6. do not tear down parent private mappings
-7. do not tear down child private mappings
+Actual native installation is funneled through `EnsureExternalMapping(...)`.
 
 Important current semantics:
 
-- fork does not range-reset the block cache
-- child block cache starts empty anyway
-- parent executable mappings keep their existing code cache
-- later private writes split through normal COW fault handling
+- if the same host pointer is already installed for that guest page, only permissions are refreshed with `engine.MemMap(...)`;
+- if a different page is already installed, `ProcessPageManager.Release(...)` is called first;
+- successful install adds a `MappedPageBinding` to `ProcessPageManager` and maps the host pointer into the MMU;
+- `MapCount` changes are therefore tied to `ProcessPageManager`, not to `OwnerPageSlots`.
+
+## 6. Lifecycle
+
+### 6.1 Page lifecycle graph
+
+```mermaid
+stateDiagram-v2
+    [*] --> SharedSourceOnly: VMA exists, no resident private page
+    SharedSourceOnly --> SharedResident: shared source page instantiated in AddressSpace
+    SharedSourceOnly --> PrivateResident: first private write allocates AnonVma page
+    SharedResident --> NativeMapped: ProcessPageManager installs guest->host binding
+    PrivateResident --> NativeMapped: ProcessPageManager installs guest->host binding
+    NativeMapped --> SharedResident: native unmap releases ProcessPageManager binding
+    NativeMapped --> PrivateResident: native unmap releases binding but owner still retains page
+    PrivateResident --> SharedResident: private page removed, shared source ref restored
+    SharedResident --> Reclaimed: clean file-cache page evicted from AddressSpace
+    PrivateResident --> Freed: anon page loses owner/map/pin references
+    Reclaimed --> [*]
+    Freed --> [*]
+```
+
+### 6.2 Resident page lifetime
+
+A resident page typically passes through these stages:
+
+1. host memory is obtained
+   - from `BackingPagePool`, or
+   - from inode-provided mapped-page handles, or
+   - from the shared zero page.
+2. `HostPageManager` registers metadata for that pointer.
+3. `OwnerPageSlots` binds the host page to an owner root (`AddressSpace` or `AnonVma.Root`).
+4. reverse refs appear as VMAs attach and/or as pages become resident.
+5. `ProcessPageManager` may map the page into one or more guest pages, incrementing `MapCount`.
+6. later, owner residency, installed mappings, and pins each drop independently.
+7. once all of these are gone, `HostPageManager.TryRemoveIfUnused(...)` removes the host-page metadata and releases the backing handle.
+
+### 6.3 `BackingPageHandle` lifecycle
+
+`BackingPageHandle` is attached when a host page comes from an external backing source.
+
+Typical flow:
+
+1. allocator or inode creates the handle;
+2. `OwnerPageSlots` consumes the handle while registering the host page;
+3. the live `HostPage` metadata stores the handle;
+4. when the last owner/map/pin state disappears, `HostPageRef.TryRemoveIfUnused()` releases the handle;
+5. the release callback returns memory to `BackingPagePool` or tells the inode/backend to release its mapped window.
+
+### 6.4 Why `OwnerResidentCount` matters
+
+`OwnerResidentCount` counts how many owner slots currently retain the page under the same owner root binding.
+It is used for two important decisions:
+
+- whether an existing private page can be reused in place on write fault (`OwnerResidentCount <= 1`);
+- whether an anon page can be removed immediately when a native mapping disappears.
+
+This is why `fork()` can share a private host page across parent/child descendants until a later write forces replacement.
+
+## 7. `fork`, `mprotect`, `munmap`, truncate, and inode invalidation
+
+### 7.1 `fork`
+
+Current non-`CLONE_VM` fork behavior is:
+
+1. parent captures dirty private pages with `CaptureDirtyPrivatePages(...)`;
+2. native CPU/MMU is cloned with external mappings preserved;
+3. managed `VMAManager` is cloned;
+4. `VmArea.Clone()` clones file references and calls `VmAnonVma?.CloneForFork()`;
+5. child `ProcessPageManager` is rebuilt from native installed mappings via `RebuildExternalMappingsFromNative(...)`;
+6. parent and child private ranges are reprotected read-only to enforce later COW;
+7. mappings are not torn down at fork time.
+
+Important current details:
+
+- the child gets its own cloned `AnonVma` objects, but those objects share the same `Root` lineage for owner-root rmap accounting;
+- `CloneForFork()` installs the same host page pointers into the child anon owner table, so private pages are initially shared page-for-page;
+- later writes decide whether the page can be reused in place or must be replaced, based on `OwnerResidentCount`.
 
 ### 7.2 `mprotect`
 
 Current `mprotect` behavior:
 
-- split/adjust `VmArea` metadata as needed
-- call `ReprotectMappedRange(...)`
-- publish protection change through `ProcessAddressSpaceSync`
-- only reset the block cache if execute permission changed
+- validates that the whole range is covered;
+- splits/reuses `VmArea`s as needed;
+- updates or rebinds rmap references for resident pages;
+- adjusts TB-coherence roles;
+- if resulting protection is not `Protection.None`, calls `ReprotectNativeMappings(...)`;
+- if resulting protection is `Protection.None`, uses `TearDownNativeMappings(...)` to fully unmap the native pages.
 
-It does not:
+So the current statement is:
 
-- `MemUnmap`
-- release external bindings
-- capture shared dirty pages
-
-So current `mprotect` is reprotect, not teardown.
+- ordinary protection changes are reprotect-only;
+- `prot == NONE` is a special case that behaves like tearing down installed mappings.
 
 ### 7.3 `munmap`
 
-Current `munmap` behavior:
+Current `munmap` behavior is:
 
-1. split/remove `VmArea`s
-2. `SyncVmArea(...)` shared-file regions if needed
-3. release unmapped `AnonVma` object pages for the removed object-page range
-4. zap native mappings via `TearDownNativeMappings(...)`
+1. find affected `VmArea`s;
+2. for removed portions of shared file mappings, call `SyncVmArea(...)` first;
+3. collect affected host pages for TB-coherence recomputation;
+4. queue anon object-page release ranges if private overlays are being unmapped;
+5. unregister VMA attachments and rewrite/split/remove `VmArea`s;
+6. tear down native mappings with `TearDownNativeMappings(...)`;
+7. if native teardown succeeded, actually release queued anon pages;
+8. clear TB write-protect tracking and recompute W^X policy for affected host pages.
 
-`TearDownNativeMappings(...)` is still the current unified zap helper. It performs:
+The `preserveOwnerBinding` path during teardown is important:
 
-- optional shared dirty capture
-- `ResetCodeCacheByRange(...)`
-- `MemUnmap(...)`
-- `ExternalPages.ReleaseRange(...)`
+- `ProcessPageManager.ReleaseRange(..., preserveOwnerBinding: true)` temporarily keeps owner binding intact while the VMA surgery is finishing;
+- after teardown completes, queued anon owner slots are removed explicitly.
 
-Current lifecycle rule:
+That ordering prevents losing owner state too early during `munmap`.
 
-- `AddressSpace` pages survive ordinary `munmap`
-- `AnonVma` pages can die immediately after the last guest mapping is removed
+### 7.4 truncate and inode invalidation
 
-### 7.4 truncate and inode-range invalidation
+There are two related but distinct paths.
 
-Current inode invalidation path is Linux-shaped:
+#### File truncate
 
-- `Inode.UnmapMappingRange(...)`
-- `Inode.TruncateInodePagesRange(...)`
-- `Inode.InvalidateInodePages2Range(...)`
+`OnFileTruncate(...)`:
 
-`ProcessAddressSpaceSync` broadcasts these operations to all mapped address spaces of an inode.
+- computes the guest ranges that now lie beyond EOF;
+- truncates both `AddressSpace` and `VmAnonVma` owner tables to the new size;
+- publishes code-cache invalidation sequences;
+- tears down affected native mappings in every participating engine of the target address space.
 
-Current truncate behavior:
+Notably, private file-backed COW pages are truncated in metadata too; they are not written back to the file.
 
-- file-backed mappings beyond new EOF are torn down
-- later access re-faults and enforces the new EOF rules
-- shared file page cache may be invalidated/truncated
-- private COW pages are not written back to the file
+#### Inode invalidation / unmap mapping range
 
-Current `UnmapMappingRange(..., evenCows)` behavior:
+`UnmapMappingRange(...)`:
 
-- `evenCows=false`: invalidate shared file-backed mappings without forcing private COW state to die
-- `evenCows=true`: used by truncate/hole-punch style operations that must also tear down affected private file mappings so later access re-faults against the new file state
+- enumerates all `VMAManager`s registered on the inode;
+- computes guest ranges overlapping the invalidated file interval;
+- if `evenCows == false`, skips `MAP_PRIVATE` VMAs;
+- if `evenCows == true`, also tears down private file mappings so later access re-faults against new file state.
 
-## 8. Shared-file writeback and page-cache maintenance
+This matches the intended Linux-style distinction between “invalidate shared mappings” and “invalidate even private COW views”.
 
-Shared-file writeback is now explicitly expressed as `AddressSpace`-based sync, not generic object sync.
+## 8. Writeback, reclaim, shared memory, and zero pages
 
-Key helpers in `VMAManager`:
+### 8.1 Shared file writeback
 
-- `IsSharedFileVmArea(...)`
-- `TryGetSharedFileVmAreaState(...)`
-- `EnumerateSharedFileVmAreas(...)`
-- `TryGetVmAreaOverlap(...)`
+Only shared file mappings participate in writeback through:
+
+- `CaptureDirtySharedPages(...)`
 - `SyncVmArea(...)`
 - `SyncMappedFile(...)`
 - `SyncAllMappedSharedFiles(...)`
-- `SyncSharedFilePage(...)`
-
-Current writeback rules:
-
-- only `MAP_SHARED` file mappings participate
-- dirty pages are captured from engines before sync
-- per-page sync first tries inode direct mapped-page flush
-- if direct flush is unavailable, it falls back to copying page contents back through inode writeback
-- pages beyond effective file backing are not written back
-
-Global maintenance is handled by `GlobalAddressSpaceCacheManager`:
-
-- tracks only `AddressSpace`
-- may trigger `SyncAllMappedSharedFiles(...)`
-- may reclaim clean file-backed pages
-- does not treat `AnonVma` as cache
-
-## 9. Host-mapped file page cache
-
-`HostFS` and `SilkFS` may use host file mappings as page-cache backing.
-
-Current policy:
-
-- full guest 4K file pages use the host-mapped backend when available
-- Darwin/Linux also allow direct mapping of partial EOF tail pages
-- Windows/WASI keep partial EOF tail pages on the buffered path
-
-Current backend split:
-
-- normal windows: `.NET MemoryMappedFile`
-- Unix tail-extension windows: native `mmap/msync/munmap`
-
-Why:
-
-- `.NET MemoryMappedFile` cannot represent the final partial page without either failing or extending the file
-- native Unix `mmap` can represent the final partial page without changing file size
-
-Current validated Darwin/Linux behavior:
-
-- EOF tail bytes are initially zero-filled
-- `MAP_SHARED` tail writes are visible to other shared mappings of the same page
-- those tail writes do not become file contents via `msync`
-- later `ftruncate` growth does not resurrect those tail writes as persisted file contents
-- a page fully beyond EOF faults as `SIGBUS`
-
-Fiberish currently accepts one Linux-like consequence:
-
-- if a cached shared tail page is reused later, EOF-tail bytes may be observed again
-
-## 10. Shared memory and futexes
-
-### 10.1 `MAP_SHARED|MAP_ANONYMOUS`
 
 Current model:
 
-- represented as shmem/tmpfs-style `AddressSpace`
-- not as anonymous private zero-source
+- dirty state is first sampled from engines (`engine.IsDirty(page)`);
+- dirtiness is copied into `AddressSpace` and inode dirty state;
+- `MappingBackedInode.SyncCachedPages(...)` writes dirty cached pages back;
+- host-mapped file pages may use `TryFlushMappedPage(...)` / `SyncMappedPage(...)` fast paths.
 
-### 10.2 SysV SHM
+Private COW pages in `AnonVma` are not part of file writeback.
 
-Current model:
+### 8.2 Reclaim policy
 
-- SysV SHM backing is an `AddressSpace`
-- attaching inserts a `VmArea`
-- detaching zaps the mapping
-- object lifetime is independent of one process unmapping it
+The current global cache policy object is `AddressSpacePolicy`, not `GlobalAddressSpaceCacheManager`.
 
-### 10.3 Futexes
+It tracks `AddressSpace` instances by weak reference and page-count callback, with cache classes:
 
-Shared futexes are keyed by the resolved host physical pointer once the page is mapped.
+- `File`
+- `Shmem`
+
+Current reclaim behavior:
+
+- only clean file-cache pages are reclaim candidates;
+- shmem pages are tracked for accounting but skipped by reclaim;
+- reclaim works by calling `AddressSpace.TryEvictCleanPage(...)` on least-recently-used clean file pages.
+
+`AnonVma` pages are not tracked by `AddressSpacePolicy` and are never reclaimed through this path.
+
+### 8.3 Shared anonymous memory and SysV SHM
 
 Current behavior:
 
-- `WAIT` path faults/touches the page, then resolves a shared host key
-- `WAKE` path tries to do the same
-- if `WAKE` still cannot resolve a shared host key, it falls back to a best-effort private key instead of crashing
+- `MAP_SHARED | MAP_ANONYMOUS` is implemented by creating an internal tmpfs/shmem file through `MemoryRuntimeContext.CreateSharedAnonymousMappingFile(...)`;
+- SysV SHM also uses shmem/tmpfs-backed files and therefore normal `AddressSpace` machinery;
+- both therefore behave like shared `AddressSpace`, not like private anonymous zero-source mappings.
 
-This is sufficient for shared mappings backed by the same installed host page to rendezvous across processes.
+### 8.4 Zero page
 
-## 11. Ownership Summary
+Anonymous private mappings do not use `VmMapping == null` as a zero source.
+They use a real `AddressSpaceKind.Zero` mapping owned by `ZeroInode`.
 
-Current ownership boundaries:
+That zero mapping:
 
-| Object | Owned By | Holds | Purpose |
+- provides one shared zero-filled host page;
+- is registered in `HostPageManager` as `HostPageKind.Zero`;
+- participates in the same shared-source fault path as other `AddressSpace` owners, but does not behave like ordinary reclaimable page cache.
+
+## 9. Corrections vs older design descriptions
+
+The following statements are outdated and should not be used anymore:
+
+### 9.1 `VmPageSlots` / `VmPage`
+
+Outdated description:
+
+- resident owner pages live in `VmPageSlots` as `VmPage` objects.
+
+Current implementation:
+
+- resident owner pages live in `OwnerPageSlots` as `ResidentPageRecord` entries backed by `HostPageRef`.
+
+### 9.2 `ExternalPageManager`
+
+Outdated description:
+
+- the installed native-mapping mirror is `ExternalPageManager`.
+
+Current implementation:
+
+- the installed native-mapping mirror is `ProcessPageManager`.
+
+### 9.3 anonymous private mappings start with `VmMapping == null`
+
+Outdated description:
+
+- anonymous private mappings have no shared managed backing until a private page is created.
+
+Current implementation:
+
+- anonymous private mappings use the shared zero `AddressSpace` from `ZeroInode` as their initial shared source;
+- `VmAnonVma` is still created lazily on first private write.
+
+### 9.4 `MappedPageBinding` supports raw/zero/special owner kinds
+
+Outdated description:
+
+- installed native bindings distinguish `RawPointer`, `ZeroPage`, or `Special` owner kinds.
+
+Current implementation:
+
+- `MappedPageBinding.OwnerKind` only has two values:
+  - `AddressSpace`
+  - `AnonVma`
+- zero pages are represented as `AddressSpaceKind.Zero` / `HostPageKind.Zero`, not as a separate binding kind.
+
+### 9.5 `GlobalAddressSpaceCacheManager`
+
+Outdated description:
+
+- global cache maintenance is handled by `GlobalAddressSpaceCacheManager`.
+
+Current implementation:
+
+- global address-space accounting and reclaim live in `AddressSpacePolicy` and `MemoryPressureCoordinator`.
+
+### 9.6 `mprotect` never tears down mappings
+
+This is only mostly true.
+
+Current implementation:
+
+- normal permission changes use reprotect;
+- but `mprotect(..., Protection.None)` explicitly goes through `TearDownNativeMappings(...)` and releases installed native bindings.
+
+## 10. Ownership Summary
+
+| Object | Owned By | Holds | Current role |
 |---|---|---|---|
-| `Engine` | runtime / `FiberTask` | native CPU state + current MMU | execution |
-| `VMAManager` | `Process` | `VmArea[]`, `ExternalPageManager` | address-space semantics |
-| `VmArea` | `VMAManager` | mapping metadata + refs to `AddressSpace` / `AnonVma` | virtual range description |
-| `AddressSpace` | `Inode.Mapping` or shmem owner | `VmPageSlots` | file/shmem page cache |
-| `AnonVma` | private mappings | `VmPageSlots` | anonymous/private COW pages |
-| `ExternalPageManager` | `VMAManager` | `guestPage -> MappedPageBinding` | installed native mappings |
-| `VmPage` | `VmPageSlots` owner | page state + map/pin counts | page lifecycle |
+| `VMAManager` | `Process` | `VmArea` list, `ProcessPageManager`, invalidation state | authoritative managed address space |
+| `VmArea` | `VMAManager` | range metadata, refs to `AddressSpace` / `AnonVma` / file | one virtual range |
+| `AddressSpace` | inode, shmem object, or `ZeroInode` | `OwnerPageSlots`, rmap attachments, owner-root rmap | shared source/file/shmem/zero backing |
+| `AnonVma` | private mapping lineage | `OwnerPageSlots`, rmap attachments, root-shared owner rmap | private COW backing |
+| `OwnerPageSlots` | `AddressSpace` or `AnonVma` | `pageIndex -> ResidentPageRecord` | resident-page container |
+| `ResidentPageRecord` | `OwnerPageSlots` | host-page ref + owner binding | one resident owner slot |
+| `HostPageManager` | `MemoryRuntimeContext` | global host-page metadata table | metadata per live host pointer |
+| `ProcessPageManager` | `VMAManager` | `guestPage -> MappedPageBinding` | installed native-mapping mirror |
+| `BackingPageHandle` | host allocation / inode backend | release callback token | releases underlying host memory/window |
 
-The important rule remains:
+The key rule remains:
 
-- `VMAManager`, `VmArea`, `AddressSpace`, and `AnonVma` are authoritative.
-- Native MMU mappings and translated blocks are caches derived from that managed state.
+- `VMAManager`, `VmArea`, `AddressSpace`, `AnonVma`, `OwnerPageSlots`, and `HostPageManager` together define the real memory model.
+- native page-table state and translated blocks are derived caches.
