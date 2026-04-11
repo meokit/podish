@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace Fiberish.Memory;
 
@@ -16,18 +15,37 @@ internal enum HostPageOwnerKind
     AnonVma
 }
 
-internal sealed class HostPageOwnerRef
+internal readonly record struct HostPageOwnerBinding
 {
     public required HostPageOwnerKind OwnerKind { get; init; }
     public AddressSpace? Mapping { get; init; }
-    public AnonVma? AnonVma { get; init; }
+    public AnonVma? AnonVmaRoot { get; init; }
     public required uint PageIndex { get; init; }
 
-    public bool Matches(HostPageOwnerRef other)
+    public void Validate(HostPageKind pageKind)
+    {
+        switch (pageKind)
+        {
+            case HostPageKind.PageCache:
+                if (OwnerKind != HostPageOwnerKind.AddressSpace || Mapping == null || AnonVmaRoot != null)
+                    throw new InvalidOperationException("Page-cache host pages must bind to an AddressSpace root.");
+                break;
+            case HostPageKind.Anon:
+                if (OwnerKind != HostPageOwnerKind.AnonVma || AnonVmaRoot == null || Mapping != null)
+                    throw new InvalidOperationException("Anonymous host pages must bind to an anon-vma root.");
+                break;
+            case HostPageKind.Zero:
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(pageKind), pageKind, null);
+        }
+    }
+
+    public bool Matches(in HostPageOwnerBinding other)
     {
         return OwnerKind == other.OwnerKind &&
                ReferenceEquals(Mapping, other.Mapping) &&
-               ReferenceEquals(AnonVma, other.AnonVma) &&
+               ReferenceEquals(AnonVmaRoot, other.AnonVmaRoot) &&
                PageIndex == other.PageIndex;
     }
 }
@@ -43,164 +61,6 @@ internal sealed class RmapAttachment
     {
         return pageIndex >= StartPageIndex && pageIndex < EndPageIndexExclusive;
     }
-}
-
-internal readonly record struct TbCohMmPageKey(VMAManager Mm, uint GuestPageStart)
-{
-    public bool Equals(TbCohMmPageKey other)
-    {
-        return ReferenceEquals(Mm, other.Mm) &&
-               GuestPageStart == other.GuestPageStart;
-    }
-
-    public override int GetHashCode()
-    {
-        var hash = new HashCode();
-        hash.Add(RuntimeHelpers.GetHashCode(Mm));
-        hash.Add(GuestPageStart);
-        return hash.ToHashCode();
-    }
-}
-
-internal struct TbCohMmPageEntry
-{
-    public int ExecRefCount;
-    public int WriteRefCount;
-}
-
-internal sealed class SmallPageSet
-{
-    private HashSet<uint>? _overflow;
-    private int _count;
-    private uint _item0;
-    private uint _item1;
-    private uint _item2;
-    private uint _item3;
-
-    public int Count => _overflow?.Count ?? _count;
-
-    public bool Add(uint value)
-    {
-        if (_overflow != null)
-            return _overflow.Add(value);
-
-        if (ContainsInline(value))
-            return false;
-
-        switch (_count)
-        {
-            case 0:
-                _item0 = value;
-                _count = 1;
-                return true;
-            case 1:
-                _item1 = value;
-                _count = 2;
-                return true;
-            case 2:
-                _item2 = value;
-                _count = 3;
-                return true;
-            case 3:
-                _item3 = value;
-                _count = 4;
-                return true;
-            default:
-                _overflow = new HashSet<uint>(5) { _item0, _item1, _item2, _item3, value };
-                _count = 0;
-                _item0 = 0;
-                _item1 = 0;
-                _item2 = 0;
-                _item3 = 0;
-                return true;
-        }
-    }
-
-    public bool Remove(uint value)
-    {
-        if (_overflow != null)
-            return _overflow.Remove(value);
-
-        var index = IndexOfInline(value);
-        if (index < 0)
-            return false;
-
-        var lastIndex = _count - 1;
-        if (index != lastIndex)
-            SetInline(index, GetInline(lastIndex));
-        SetInline(lastIndex, 0);
-        _count--;
-        return true;
-    }
-
-    public void Visit<TState>(ref TState state, SmallPageSetVisitor<TState> visitor)
-    {
-        ArgumentNullException.ThrowIfNull(visitor);
-        if (_overflow != null)
-        {
-            foreach (var value in _overflow)
-                visitor(value, ref state);
-            return;
-        }
-
-        for (var i = 0; i < _count; i++)
-            visitor(GetInline(i), ref state);
-    }
-
-    private bool ContainsInline(uint value)
-    {
-        return IndexOfInline(value) >= 0;
-    }
-
-    private int IndexOfInline(uint value)
-    {
-        for (var i = 0; i < _count; i++)
-            if (GetInline(i) == value)
-                return i;
-        return -1;
-    }
-
-    private uint GetInline(int index)
-    {
-        return index switch
-        {
-            0 => _item0,
-            1 => _item1,
-            2 => _item2,
-            3 => _item3,
-            _ => throw new ArgumentOutOfRangeException(nameof(index))
-        };
-    }
-
-    private void SetInline(int index, uint value)
-    {
-        switch (index)
-        {
-            case 0:
-                _item0 = value;
-                break;
-            case 1:
-                _item1 = value;
-                break;
-            case 2:
-                _item2 = value;
-                break;
-            case 3:
-                _item3 = value;
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(index));
-        }
-    }
-}
-
-internal sealed class TbCohMmBucket
-{
-    public required VMAManager Mm { get; init; }
-    public SmallPageSet ExecPages { get; } = new();
-    public SmallPageSet WriterPages { get; } = new();
-
-    public bool IsEmpty => ExecPages.Count == 0 && WriterPages.Count == 0;
 }
 
 internal enum TbCohWriterPolicyKind
@@ -223,261 +83,62 @@ internal enum TbCohApplyKind
 
 internal readonly record struct TbCohApplyResult(TbCohApplyKind Kind, int VisitedWriterPages);
 
+internal struct HostPageTbCohSummary
+{
+    public int WriterRefCount;
+    public int ExecIdentityCount;
+    public nuint SingleExecIdentity;
+    public Dictionary<nuint, int>? ExecIdentityRefCounts;
+    public TbCohWriterPolicy AppliedPolicy;
+    public bool AppliedPolicyValid;
+
+    public readonly TbCohExecSummary GetExecSummary()
+    {
+        return new TbCohExecSummary(ExecIdentityCount != 0, ExecIdentityCount > 1, SingleExecIdentity);
+    }
+
+    public readonly TbCohWriterPolicy GetDesiredPolicy()
+    {
+        if (WriterRefCount == 0)
+            return new TbCohWriterPolicy(TbCohWriterPolicyKind.NoWriters);
+
+        if (ExecIdentityCount == 0)
+            return new TbCohWriterPolicy(TbCohWriterPolicyKind.AllowAllWriters);
+
+        if (ExecIdentityCount == 1)
+            return new TbCohWriterPolicy(TbCohWriterPolicyKind.ProtectAllExceptSingleExecIdentity, SingleExecIdentity);
+
+        return new TbCohWriterPolicy(TbCohWriterPolicyKind.ProtectAllWriters);
+    }
+}
+
 internal sealed class TbCohWorkSet
 {
-    private readonly HashSet<HostPage> _hostPages = [];
+    private readonly HashSet<IntPtr> _hostPages = [];
 
     public int Count => _hostPages.Count;
 
-    public void Add(HostPage hostPage)
+    public void Add(IntPtr hostPagePtr)
     {
-        ArgumentNullException.ThrowIfNull(hostPage);
-        _hostPages.Add(hostPage);
+        if (hostPagePtr == IntPtr.Zero)
+            return;
+
+        _hostPages.Add(hostPagePtr);
     }
 
-    public void AddIfChanged(HostPage hostPage, bool changed)
+    public void AddIfChanged(IntPtr hostPagePtr, bool changed)
     {
         if (!changed)
             return;
 
-        Add(hostPage);
+        Add(hostPagePtr);
     }
 
-    public void Visit(Action<HostPage> visitor)
+    public void Visit(Action<IntPtr> visitor)
     {
         ArgumentNullException.ThrowIfNull(visitor);
-        foreach (var hostPage in _hostPages)
-            visitor(hostPage);
-    }
-}
-
-internal sealed class HostPageTbCohIndex
-{
-    private readonly Dictionary<TbCohMmPageKey, TbCohMmPageEntry> _byMmPage = [];
-    private readonly Dictionary<VMAManager, TbCohMmBucket> _byMm = [];
-    private readonly Dictionary<nuint, int> _execIdentityCounts = [];
-    private int _execIdentityCount;
-    private nuint _singleExecIdentity;
-    private TbCohWriterPolicy _lastAppliedWriterPolicy;
-    private int _lastAppliedWriterEpoch = -1;
-    private int _writerPageCount;
-    private int _writerEpoch;
-
-    private static bool HasExecRole(Protection perms)
-    {
-        return (perms & Protection.Exec) != 0;
-    }
-
-    private static bool HasWriteRole(Protection perms)
-    {
-        return (perms & Protection.Write) != 0;
-    }
-
-    private static nuint GetCoherenceIdentity(VMAManager mm)
-    {
-        return mm.AddressSpaceIdentity;
-    }
-
-    private TbCohMmBucket GetOrAddBucket(VMAManager mm)
-    {
-        if (_byMm.TryGetValue(mm, out var existing))
-            return existing;
-
-        var created = new TbCohMmBucket { Mm = mm };
-        _byMm[mm] = created;
-        return created;
-    }
-
-    private void AddExecIdentity(nuint identity)
-    {
-        if (_execIdentityCounts.TryGetValue(identity, out var existing))
-        {
-            _execIdentityCounts[identity] = existing + 1;
-            return;
-        }
-
-        _execIdentityCounts[identity] = 1;
-        _execIdentityCount++;
-        _singleExecIdentity = _execIdentityCount == 1 ? identity : 0;
-    }
-
-    private void RemoveExecIdentity(nuint identity)
-    {
-        if (!_execIdentityCounts.TryGetValue(identity, out var existing))
-            return;
-
-        if (existing > 1)
-        {
-            _execIdentityCounts[identity] = existing - 1;
-            return;
-        }
-
-        _execIdentityCounts.Remove(identity);
-        _execIdentityCount--;
-        if (_execIdentityCount == 1)
-        {
-            foreach (var remainingIdentity in _execIdentityCounts.Keys)
-            {
-                _singleExecIdentity = remainingIdentity;
-                return;
-            }
-        }
-
-        _singleExecIdentity = 0;
-    }
-
-    public bool AddRoles(VMAManager mm, uint guestPageStart, Protection perms)
-    {
-        var hasExec = HasExecRole(perms);
-        var hasWrite = HasWriteRole(perms);
-        if (!hasExec && !hasWrite)
-            return false;
-
-        var key = new TbCohMmPageKey(mm, guestPageStart);
-        ref var entry = ref CollectionsMarshal.GetValueRefOrAddDefault(_byMmPage, key, out _);
-
-        TbCohMmBucket? bucket = null;
-        var changed = false;
-        if (hasExec)
-        {
-            if (entry.ExecRefCount == 0)
-            {
-                bucket = GetOrAddBucket(mm);
-                bucket.ExecPages.Add(guestPageStart);
-                AddExecIdentity(GetCoherenceIdentity(mm));
-                changed = true;
-            }
-
-            entry.ExecRefCount++;
-        }
-
-        if (hasWrite)
-        {
-            if (entry.WriteRefCount == 0)
-            {
-                bucket ??= GetOrAddBucket(mm);
-                bucket.WriterPages.Add(guestPageStart);
-                _writerPageCount++;
-                _writerEpoch++;
-                changed = true;
-            }
-
-            entry.WriteRefCount++;
-        }
-
-        return changed;
-    }
-
-    public bool RemoveRoles(VMAManager mm, uint guestPageStart, Protection perms)
-    {
-        var hasExec = HasExecRole(perms);
-        var hasWrite = HasWriteRole(perms);
-        if (!hasExec && !hasWrite)
-            return false;
-
-        var key = new TbCohMmPageKey(mm, guestPageStart);
-        ref var entry = ref CollectionsMarshal.GetValueRefOrNullRef(_byMmPage, key);
-        if (Unsafe.IsNullRef(ref entry))
-            return false;
-
-        _byMm.TryGetValue(mm, out var bucket);
-        var changed = false;
-        if (hasExec && entry.ExecRefCount > 0)
-        {
-            entry.ExecRefCount--;
-            if (entry.ExecRefCount == 0)
-            {
-                bucket?.ExecPages.Remove(guestPageStart);
-                RemoveExecIdentity(GetCoherenceIdentity(mm));
-                changed = true;
-            }
-        }
-
-        if (hasWrite && entry.WriteRefCount > 0)
-        {
-            entry.WriteRefCount--;
-            if (entry.WriteRefCount == 0)
-            {
-                bucket?.WriterPages.Remove(guestPageStart);
-                _writerPageCount--;
-                _writerEpoch++;
-                changed = true;
-            }
-        }
-
-        if (entry.ExecRefCount == 0 && entry.WriteRefCount == 0)
-            _byMmPage.Remove(key);
-
-        if (bucket is { IsEmpty: true })
-            _byMm.Remove(mm);
-
-        return changed;
-    }
-
-    public bool UpdateRoles(VMAManager mm, uint guestPageStart, Protection oldPerms, Protection newPerms)
-    {
-        if (HasExecRole(oldPerms) == HasExecRole(newPerms) && HasWriteRole(oldPerms) == HasWriteRole(newPerms))
-            return false;
-
-        var removed = RemoveRoles(mm, guestPageStart, oldPerms);
-        var added = AddRoles(mm, guestPageStart, newPerms);
-        return removed || added;
-    }
-
-    public TbCohExecSummary GetExecSummary()
-    {
-        return new TbCohExecSummary(_execIdentityCount != 0, _execIdentityCount > 1, _singleExecIdentity);
-    }
-
-    public TbCohWriterPolicy GetDesiredWriterPolicy()
-    {
-        if (_writerPageCount == 0)
-            return new TbCohWriterPolicy(TbCohWriterPolicyKind.NoWriters);
-
-        if (_execIdentityCount == 0)
-            return new TbCohWriterPolicy(TbCohWriterPolicyKind.AllowAllWriters);
-
-        if (_execIdentityCount == 1)
-            return new TbCohWriterPolicy(TbCohWriterPolicyKind.ProtectAllExceptSingleExecIdentity, _singleExecIdentity);
-
-        return new TbCohWriterPolicy(TbCohWriterPolicyKind.ProtectAllWriters);
-    }
-
-    public bool IsWriterPolicyApplied(TbCohWriterPolicy desired)
-    {
-        return _lastAppliedWriterEpoch == _writerEpoch && _lastAppliedWriterPolicy == desired;
-    }
-
-    public void CommitAppliedWriterPolicy(TbCohWriterPolicy desired)
-    {
-        _lastAppliedWriterPolicy = desired;
-        _lastAppliedWriterEpoch = _writerEpoch;
-    }
-
-    public void VisitWriterPages<TState>(ref TState state, TbCohMmPageVisitor<TState> visitor)
-    {
-        ArgumentNullException.ThrowIfNull(visitor);
-        foreach (var bucket in _byMm.Values)
-        {
-            var mm = bucket.Mm;
-            bucket.WriterPages.Visit(ref state, (uint guestPageStart, ref TState innerState) =>
-            {
-                visitor(mm, guestPageStart, ref innerState);
-            });
-        }
-    }
-
-    public void VisitExecPages<TState>(ref TState state, TbCohMmPageVisitor<TState> visitor)
-    {
-        ArgumentNullException.ThrowIfNull(visitor);
-        foreach (var bucket in _byMm.Values)
-        {
-            var mm = bucket.Mm;
-            bucket.ExecPages.Visit(ref state, (uint guestPageStart, ref TState innerState) =>
-            {
-                visitor(mm, guestPageStart, ref innerState);
-            });
-        }
+        foreach (var hostPagePtr in _hostPages)
+            visitor(hostPagePtr);
     }
 }
 
@@ -520,6 +181,177 @@ internal struct HostPageRmapRef
     }
 }
 
+internal sealed class OwnerRmapTracker
+{
+    private sealed class OwnerRmapPageBucket
+    {
+        public int ResidentOwnerCount;
+        public List<HostPageRmapRef> Entries { get; } = [];
+        public Dictionary<HostPageRmapKey, int> EntryIndices { get; } = [];
+
+        public bool IsEmpty => ResidentOwnerCount == 0 && Entries.Count == 0;
+    }
+
+    private sealed class OwnerRmapBucket
+    {
+        public Dictionary<IntPtr, OwnerRmapPageBucket> Pages { get; } = [];
+
+        public bool IsEmpty => Pages.Count == 0;
+    }
+
+    private readonly Dictionary<uint, OwnerRmapBucket> _buckets = [];
+
+    private OwnerRmapPageBucket GetOrAddPageBucket(uint pageIndex, IntPtr hostPagePtr)
+    {
+        if (!_buckets.TryGetValue(pageIndex, out var bucket))
+        {
+            bucket = new OwnerRmapBucket();
+            _buckets.Add(pageIndex, bucket);
+        }
+
+        if (bucket.Pages.TryGetValue(hostPagePtr, out var existing))
+            return existing;
+
+        var created = new OwnerRmapPageBucket();
+        bucket.Pages.Add(hostPagePtr, created);
+        return created;
+    }
+
+    private void RemovePageBucketIfEmpty(uint pageIndex, IntPtr hostPagePtr, OwnerRmapPageBucket pageBucket)
+    {
+        if (!pageBucket.IsEmpty)
+            return;
+
+        if (!_buckets.TryGetValue(pageIndex, out var bucket))
+            return;
+
+        bucket.Pages.Remove(hostPagePtr);
+        if (bucket.IsEmpty)
+            _buckets.Remove(pageIndex);
+    }
+
+    public void RetainResident(uint pageIndex, IntPtr hostPagePtr)
+    {
+        GetOrAddPageBucket(pageIndex, hostPagePtr).ResidentOwnerCount++;
+    }
+
+    public int ReleaseResident(uint pageIndex, IntPtr hostPagePtr)
+    {
+        if (!_buckets.TryGetValue(pageIndex, out var bucket) ||
+            !bucket.Pages.TryGetValue(hostPagePtr, out var pageBucket))
+        {
+            return 0;
+        }
+
+        if (pageBucket.ResidentOwnerCount > 0)
+            pageBucket.ResidentOwnerCount--;
+
+        var remaining = pageBucket.ResidentOwnerCount;
+        RemovePageBucketIfEmpty(pageIndex, hostPagePtr, pageBucket);
+        return remaining;
+    }
+
+    public void AddOrUpdate(uint pageIndex, IntPtr hostPagePtr, HostPageRmapRef entry, out HostPageRmapRef previous,
+        out bool existed)
+    {
+        var pageBucket = GetOrAddPageBucket(pageIndex, hostPagePtr);
+        var key = entry.GetKey();
+        if (pageBucket.EntryIndices.TryGetValue(key, out var existingIndex))
+        {
+            existed = true;
+            previous = pageBucket.Entries[existingIndex];
+            pageBucket.Entries[existingIndex] = entry;
+            return;
+        }
+
+        existed = false;
+        previous = default;
+        pageBucket.EntryIndices.Add(key, pageBucket.Entries.Count);
+        pageBucket.Entries.Add(entry);
+    }
+
+    public bool TryRemove(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey key, out HostPageRmapRef removed)
+    {
+        if (!_buckets.TryGetValue(pageIndex, out var bucket) ||
+            !bucket.Pages.TryGetValue(hostPagePtr, out var pageBucket) ||
+            !pageBucket.EntryIndices.Remove(key, out var index))
+        {
+            removed = default;
+            return false;
+        }
+
+        removed = pageBucket.Entries[index];
+        var lastIndex = pageBucket.Entries.Count - 1;
+        if (index != lastIndex)
+        {
+            var swapped = pageBucket.Entries[lastIndex];
+            pageBucket.Entries[index] = swapped;
+            pageBucket.EntryIndices[swapped.GetKey()] = index;
+        }
+
+        pageBucket.Entries.RemoveAt(lastIndex);
+        RemovePageBucketIfEmpty(pageIndex, hostPagePtr, pageBucket);
+        return true;
+    }
+
+    public bool Contains(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey key)
+    {
+        return _buckets.TryGetValue(pageIndex, out var bucket) &&
+               bucket.Pages.TryGetValue(hostPagePtr, out var pageBucket) &&
+               pageBucket.EntryIndices.ContainsKey(key);
+    }
+
+    public bool TryRebind(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey oldKey, HostPageRmapRef newEntry,
+        out HostPageRmapRef previous)
+    {
+        if (!_buckets.TryGetValue(pageIndex, out var bucket) ||
+            !bucket.Pages.TryGetValue(hostPagePtr, out var pageBucket) ||
+            !pageBucket.EntryIndices.TryGetValue(oldKey, out var index))
+        {
+            previous = default;
+            return false;
+        }
+
+        previous = pageBucket.Entries[index];
+        var newKey = newEntry.GetKey();
+        if (!oldKey.Equals(newKey))
+        {
+            pageBucket.EntryIndices.Remove(oldKey);
+            pageBucket.EntryIndices[newKey] = index;
+        }
+
+        pageBucket.Entries[index] = newEntry;
+        return true;
+    }
+
+    public void CollectHits(uint pageIndex, IntPtr hostPagePtr, HostPage hostPage, List<RmapHit> output)
+    {
+        if (!_buckets.TryGetValue(pageIndex, out var bucket) ||
+            !bucket.Pages.TryGetValue(hostPagePtr, out var pageBucket))
+        {
+            return;
+        }
+
+        foreach (var entry in pageBucket.Entries)
+            output.Add(new RmapHit(hostPage, entry.Mm, entry.Vma, entry.OwnerKind, entry.PageIndex, entry.GuestPageStart));
+    }
+
+    public bool Visit<TState>(uint pageIndex, IntPtr hostPagePtr, HostPage hostPage, ref TState state,
+        HostPageRmapVisitor<TState> visitor)
+    {
+        if (!_buckets.TryGetValue(pageIndex, out var bucket) ||
+            !bucket.Pages.TryGetValue(hostPagePtr, out var pageBucket) ||
+            pageBucket.Entries.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var entry in pageBucket.Entries)
+            visitor(hostPage, entry, ref state);
+        return true;
+    }
+}
+
 internal readonly record struct RmapHit(
     HostPage HostPage,
     VMAManager Mm,
@@ -530,11 +362,61 @@ internal readonly record struct RmapHit(
 
 internal delegate void HostPageRmapVisitor<TState>(HostPage hostPage, in HostPageRmapRef rmapRef, ref TState state);
 internal delegate void TbCohMmPageVisitor<TState>(VMAManager mm, uint guestPageStart, ref TState state);
-internal delegate void SmallPageSetVisitor<TState>(uint pageStart, ref TState state);
 
 internal readonly record struct TbCohExecSummary(bool HasExecPeer, bool HasMultipleExecIdentities, nuint ExecIdentity);
 
-internal sealed class HostPage
+internal struct HostPageData
+{
+    public IntPtr Ptr;
+    public HostPageKind Kind;
+    public bool Dirty;
+    public bool Uptodate;
+    public bool Writeback;
+    public int MapCount;
+    public int PinCount;
+    public int RefCount;
+    public long LastAccessTimestamp;
+    public bool HasOwnerRoot;
+    public HostPageOwnerKind OwnerRootKind;
+    public AddressSpace? OwnerAddressSpace;
+    public AnonVma? OwnerAnonRoot;
+    public uint OwnerPageIndex;
+    public HostPageTbCohSummary TbCohSummary;
+}
+
+internal struct HostPageSlot
+{
+    public bool InUse;
+    public uint Generation;
+    public HostPageData Page;
+}
+
+internal sealed class HostPageTableState
+{
+    public readonly Lock Gate = new();
+    public readonly Dictionary<IntPtr, int> SlotByPtr = [];
+    public readonly Stack<int> FreeSlots = [];
+    public HostPageSlot[] Slots = new HostPageSlot[16];
+    public int SlotCount;
+
+    public ref HostPageSlot GetSlotRef(int slot)
+    {
+        return ref Slots[slot];
+    }
+
+    public int RentSlot()
+    {
+        if (FreeSlots.TryPop(out var slot))
+            return slot;
+
+        if (SlotCount == Slots.Length)
+            Array.Resize(ref Slots, Slots.Length * 2);
+
+        return SlotCount++;
+    }
+}
+
+internal struct HostPage
 {
     private struct WriterPolicyApplyState
     {
@@ -542,79 +424,288 @@ internal sealed class HostPage
         public int VisitedWriterPages;
     }
 
-    private readonly Lock _gate = new();
-    private readonly List<HostPageOwnerRef> _ownerRefs = [];
-    private readonly List<HostPageRmapRef> _rmapRefs = [];
-    private readonly Dictionary<HostPageRmapKey, int> _rmapRefIndices = [];
-    private readonly HostPageTbCohIndex _tbCohIndex = new();
-
-    public HostPage(IntPtr ptr, HostPageKind kind)
+    private struct ExecPageVisitState<TState>
     {
-        Ptr = ptr;
-        Kind = kind;
+        public required TbCohMmPageVisitor<TState> Visitor;
+        public TState State;
     }
 
-    public IntPtr Ptr { get; }
-    public HostPageKind Kind { get; private set; }
-    public bool Dirty { get; set; }
-    public bool Uptodate { get; set; } = true;
-    public bool Writeback { get; set; }
-    public int MapCount { get; set; }
-    public int PinCount { get; set; }
-    public int RefCount { get; set; }
-    // Monotonic timestamp used for recency comparisons in reclaim and stats paths.
-    public long LastAccessTimestamp { get; set; } = MonotonicTime.GetTimestamp();
+    internal readonly HostPageTableState? Owner;
+    internal readonly int Slot;
+    internal readonly uint Generation;
 
-    public void UpgradeKind(HostPageKind preferredKind)
+    internal HostPage(HostPageTableState owner, int slot, uint generation)
     {
-        if (Kind == preferredKind)
-            return;
-
-        if (Kind == HostPageKind.Zero || preferredKind == HostPageKind.Zero)
-            throw new InvalidOperationException(
-                $"Host page kind mismatch for {Ptr}: existing={Kind}, requested={preferredKind}.");
-
-        // The owner graph is authoritative. A live page may be reachable from both
-        // page-cache and anon owners during COW / truncate lifecycle transitions.
-        // Zero pages remain exclusive and are guarded above.
+        Owner = owner;
+        Slot = slot;
+        Generation = generation;
     }
 
-    public void AddOwnerRef(HostPageOwnerRef ownerRef)
-    {
-        lock (_gate)
-        {
-            foreach (var existing in _ownerRefs)
-                if (existing.Matches(ownerRef))
-                    return;
-
-            _ownerRefs.Add(ownerRef);
-        }
-    }
-
-    public void RemoveOwnerRef(HostPageOwnerRef ownerRef)
-    {
-        lock (_gate)
-        {
-            for (var i = 0; i < _ownerRefs.Count; i++)
-                if (_ownerRefs[i].Matches(ownerRef))
-                {
-                    _ownerRefs.RemoveAt(i);
-                    break;
-                }
-        }
-
-        HostPageManager.TryRemoveIfUnused(this);
-    }
-
-    public bool HasOwnerRefs
+    public IntPtr Ptr
     {
         get
         {
-            lock (_gate)
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return IntPtr.Zero;
+
+            return owner.GetSlotRef(slot).Page.Ptr;
+        }
+    }
+
+    public HostPageKind Kind
+    {
+        get
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return default;
+
+            return owner.GetSlotRef(slot).Page.Kind;
+        }
+    }
+
+    public bool Dirty
+    {
+        get
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return false;
+
+            return owner.GetSlotRef(slot).Page.Dirty;
+        }
+        set
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return;
+
+            owner.GetSlotRef(slot).Page.Dirty = value;
+        }
+    }
+
+    public bool Uptodate
+    {
+        get
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return false;
+
+            return owner.GetSlotRef(slot).Page.Uptodate;
+        }
+        set
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return;
+
+            owner.GetSlotRef(slot).Page.Uptodate = value;
+        }
+    }
+
+    public bool Writeback
+    {
+        get
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return false;
+
+            return owner.GetSlotRef(slot).Page.Writeback;
+        }
+        set
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return;
+
+            owner.GetSlotRef(slot).Page.Writeback = value;
+        }
+    }
+
+    public int MapCount
+    {
+        get
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return 0;
+
+            return owner.GetSlotRef(slot).Page.MapCount;
+        }
+        set
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return;
+
+            owner.GetSlotRef(slot).Page.MapCount = value;
+        }
+    }
+
+    public int PinCount
+    {
+        get
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return 0;
+
+            return owner.GetSlotRef(slot).Page.PinCount;
+        }
+        set
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return;
+
+            owner.GetSlotRef(slot).Page.PinCount = value;
+        }
+    }
+
+    public int RefCount
+    {
+        get
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return 0;
+
+            return owner.GetSlotRef(slot).Page.RefCount;
+        }
+        set
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return;
+
+            owner.GetSlotRef(slot).Page.RefCount = value;
+        }
+    }
+
+    public long LastAccessTimestamp
+    {
+        get
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return 0;
+
+            return owner.GetSlotRef(slot).Page.LastAccessTimestamp;
+        }
+        set
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return;
+
+            owner.GetSlotRef(slot).Page.LastAccessTimestamp = value;
+        }
+    }
+
+    public void UpgradeKind(HostPageKind preferredKind)
+    {
+        if (!TryGetLiveSlot(out var owner, out var slot))
+            return;
+
+        ref var page = ref owner.GetSlotRef(slot).Page;
+        if (page.Kind == preferredKind)
+            return;
+
+        if (page.Kind == HostPageKind.Zero || preferredKind == HostPageKind.Zero)
+            throw new InvalidOperationException(
+                $"Host page kind mismatch for {page.Ptr}: existing={page.Kind}, requested={preferredKind}.");
+
+        // Keep the non-zero kind stable if callsites discover the page through
+        // slightly different paths before owner-root binding finishes.
+        page.Kind = preferredKind;
+    }
+
+    public bool BindOwnerRoot(HostPageOwnerBinding ownerBinding)
+    {
+        if (!TryGetLiveSlot(out var owner, out var slot))
+            return false;
+
+        lock (owner.Gate)
+        {
+            ref var slotRef = ref owner.GetSlotRef(slot);
+            if (!slotRef.InUse || slotRef.Generation != Generation)
+                return false;
+
+            ref var page = ref slotRef.Page;
+            if (page.Kind == HostPageKind.Zero)
+                return true;
+
+            ownerBinding.Validate(page.Kind);
+            if (page.HasOwnerRoot)
             {
-                return _ownerRefs.Count != 0;
+                var existing = GetOwnerBinding(ref page);
+                if (!existing.Matches(ownerBinding))
+                    throw new InvalidOperationException(
+                        $"Host page {page.Ptr} is already bound to a different owner root.");
+            }
+            else
+            {
+                SetOwnerBinding(ref page, ownerBinding);
             }
         }
+
+        RetainOwnerResident(ownerBinding);
+        return true;
+    }
+
+    public bool UnbindOwnerRoot(HostPageOwnerBinding ownerBinding)
+    {
+        if (!TryGetLiveSlot(out var owner, out var slot))
+            return false;
+
+        lock (owner.Gate)
+        {
+            ref var slotRef = ref owner.GetSlotRef(slot);
+            if (!slotRef.InUse || slotRef.Generation != Generation)
+                return false;
+
+            ref var page = ref slotRef.Page;
+            if (page.Kind == HostPageKind.Zero || !page.HasOwnerRoot)
+                return true;
+
+            var existing = GetOwnerBinding(ref page);
+            if (!existing.Matches(ownerBinding))
+                throw new InvalidOperationException(
+                    $"Host page {page.Ptr} attempted to unbind a non-owning owner root.");
+
+            ownerBinding = existing;
+        }
+
+        var remainingResidents = ReleaseOwnerResident(ownerBinding);
+        if (remainingResidents == 0 && TryGetLiveSlot(out owner, out slot))
+        {
+            lock (owner.Gate)
+            {
+                ref var slotRef = ref owner.GetSlotRef(slot);
+                if (!slotRef.InUse || slotRef.Generation != Generation)
+                    return false;
+
+                ref var page = ref slotRef.Page;
+                if (page.HasOwnerRoot && GetOwnerBinding(ref page).Matches(ownerBinding))
+                    ClearOwnerBinding(ref page);
+            }
+        }
+
+        HostPageManager.TryRemoveIfUnused(this);
+        return true;
+    }
+
+    public bool HasOwnerRoot
+    {
+        get
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return false;
+
+            return owner.GetSlotRef(slot).Page.HasOwnerRoot;
+        }
+    }
+
+    private static bool HasExecRole(Protection perms)
+    {
+        return (perms & Protection.Exec) != 0;
+    }
+
+    private static bool HasWriteRole(Protection perms)
+    {
+        return (perms & Protection.Write) != 0;
+    }
+
+    private static nuint GetCoherenceIdentity(VMAManager mm)
+    {
+        return mm.AddressSpaceIdentity;
     }
 
     private static void ApplyWriterPolicy(VMAManager mm, uint pageStart, ref WriterPolicyApplyState state)
@@ -642,93 +733,106 @@ internal sealed class HostPage
 
     public TbCohApplyResult ApplyTbCohPolicyIfChanged()
     {
-        lock (_gate)
+        while (true)
         {
-            var desired = _tbCohIndex.GetDesiredWriterPolicy();
-            if (desired.Kind == TbCohWriterPolicyKind.NoWriters)
-            {
-                _tbCohIndex.CommitAppliedWriterPolicy(desired);
+            if (!TryGetLiveSlot(out var owner, out var slot))
                 return new TbCohApplyResult(TbCohApplyKind.FastNoWriters, 0);
+
+            TbCohWriterPolicy desired;
+            lock (owner.Gate)
+            {
+                ref var slotRef = ref owner.GetSlotRef(slot);
+                if (!slotRef.InUse || slotRef.Generation != Generation)
+                    continue;
+
+                ref var page = ref slotRef.Page;
+                desired = page.TbCohSummary.GetDesiredPolicy();
+                if (desired.Kind == TbCohWriterPolicyKind.NoWriters)
+                {
+                    page.TbCohSummary.AppliedPolicy = desired;
+                    page.TbCohSummary.AppliedPolicyValid = true;
+                    return new TbCohApplyResult(TbCohApplyKind.FastNoWriters, 0);
+                }
+
+                if (page.TbCohSummary.AppliedPolicyValid && page.TbCohSummary.AppliedPolicy == desired)
+                    return new TbCohApplyResult(TbCohApplyKind.FastSamePolicy, 0);
             }
 
-            if (_tbCohIndex.IsWriterPolicyApplied(desired))
-                return new TbCohApplyResult(TbCohApplyKind.FastSamePolicy, 0);
+            var applyState = new WriterPolicyApplyState { Policy = desired };
+            VisitRmapRefs(ref applyState, ApplyWriterPolicyForRmapRef);
 
-            var state = new WriterPolicyApplyState { Policy = desired };
-            _tbCohIndex.VisitWriterPages(ref state, ApplyWriterPolicy);
-            _tbCohIndex.CommitAppliedWriterPolicy(desired);
-            return new TbCohApplyResult(TbCohApplyKind.SlowScan, state.VisitedWriterPages);
+            lock (owner.Gate)
+            {
+                ref var slotRef = ref owner.GetSlotRef(slot);
+                if (!slotRef.InUse || slotRef.Generation != Generation)
+                    continue;
+
+                ref var page = ref slotRef.Page;
+                if (page.TbCohSummary.GetDesiredPolicy() != desired)
+                    continue;
+
+                page.TbCohSummary.AppliedPolicy = desired;
+                page.TbCohSummary.AppliedPolicyValid = true;
+                return new TbCohApplyResult(TbCohApplyKind.SlowScan, applyState.VisitedWriterPages);
+            }
         }
     }
 
     public bool AddOrUpdateRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex,
         uint guestPageStart)
     {
+        if (!TryGetOwnerBinding(out var ownerBinding))
+            return false;
+        if (ownerBinding.OwnerKind != ownerKind || ownerBinding.PageIndex != pageIndex)
+            return false;
+
         var key = new HostPageRmapKey(mm, vma, ownerKind, pageIndex);
-        lock (_gate)
+        var entry = new HostPageRmapRef
         {
-            if (_rmapRefIndices.TryGetValue(key, out var existingIndex))
-            {
-                var existing = _rmapRefs[existingIndex];
-                if (existing.GuestPageStart == guestPageStart)
-                    return false;
+            Mm = mm,
+            Vma = vma,
+            OwnerKind = ownerKind,
+            PageIndex = pageIndex,
+            GuestPageStart = guestPageStart
+        };
 
-                var removed = _tbCohIndex.RemoveRoles(mm, existing.GuestPageStart, existing.Vma.Perms);
-                existing.GuestPageStart = guestPageStart;
-                _rmapRefs[existingIndex] = existing;
-                var added = _tbCohIndex.AddRoles(mm, guestPageStart, vma.Perms);
-                return removed || added;
-            }
+        AddOrUpdateOwnerRmap(ownerBinding, entry, out var previous, out var existed);
+        if (existed)
+            return previous.GuestPageStart != guestPageStart &&
+                   TryUpdateTbCohSummary(mm, previous.Vma.Perms, vma.Perms, out var changedExisting)
+                ? changedExisting
+                : false;
 
-            _rmapRefIndices.Add(key, _rmapRefs.Count);
-            _rmapRefs.Add(new HostPageRmapRef
-            {
-                Mm = mm,
-                Vma = vma,
-                OwnerKind = ownerKind,
-                PageIndex = pageIndex,
-                GuestPageStart = guestPageStart
-            });
-            return _tbCohIndex.AddRoles(mm, guestPageStart, vma.Perms);
-        }
+        return TryUpdateTbCohSummary(mm, Protection.None, vma.Perms, out var changed) && changed;
     }
 
     public bool RemoveRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex)
     {
+        if (!TryGetOwnerBinding(out var ownerBinding))
+            return false;
+        if (ownerBinding.OwnerKind != ownerKind || ownerBinding.PageIndex != pageIndex)
+            return false;
+
         var key = new HostPageRmapKey(mm, vma, ownerKind, pageIndex);
-        var changed = false;
-        lock (_gate)
-        {
-            if (!_rmapRefIndices.Remove(key, out var index))
-                return false;
+        if (!RemoveOwnerRmap(ownerBinding, key, out var removedEntry))
+            return false;
 
-            var removed = _rmapRefs[index];
-            changed = _tbCohIndex.RemoveRoles(mm, removed.GuestPageStart, removed.Vma.Perms);
-            var lastIndex = _rmapRefs.Count - 1;
-            if (index != lastIndex)
-            {
-                var swapped = _rmapRefs[lastIndex];
-                _rmapRefs[index] = swapped;
-                _rmapRefIndices[swapped.GetKey()] = index;
-            }
-
-            _rmapRefs.RemoveAt(lastIndex);
-        }
-
-        return changed;
+        return TryUpdateTbCohSummary(mm, removedEntry.Vma.Perms, Protection.None, out var changed) && changed;
     }
 
     public bool UpdateTbCohRolesForRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex,
         uint guestPageStart, Protection oldPerms, Protection newPerms)
     {
-        var key = new HostPageRmapKey(mm, vma, ownerKind, pageIndex);
-        lock (_gate)
-        {
-            if (!_rmapRefIndices.ContainsKey(key))
-                return false;
+        if (!TryGetOwnerBinding(out var ownerBinding))
+            return false;
+        if (ownerBinding.OwnerKind != ownerKind || ownerBinding.PageIndex != pageIndex)
+            return false;
 
-            return _tbCohIndex.UpdateRoles(mm, guestPageStart, oldPerms, newPerms);
-        }
+        var key = new HostPageRmapKey(mm, vma, ownerKind, pageIndex);
+        if (!ContainsOwnerRmap(ownerBinding, key))
+            return false;
+
+        return TryUpdateTbCohSummary(mm, oldPerms, newPerms, out var changed) && changed;
     }
 
     public bool RebindRmapRef(VMAManager mm, VmArea oldVma, VmArea newVma, HostPageOwnerKind ownerKind, uint pageIndex,
@@ -739,95 +843,391 @@ internal sealed class HostPage
         ArgumentNullException.ThrowIfNull(newVma);
 
         var oldKey = new HostPageRmapKey(mm, oldVma, ownerKind, pageIndex);
-        var newKey = new HostPageRmapKey(mm, newVma, ownerKind, pageIndex);
-        lock (_gate)
+        if (!TryGetOwnerBinding(out var ownerBinding))
+            return false;
+        if (ownerBinding.OwnerKind != ownerKind || ownerBinding.PageIndex != pageIndex)
+            return false;
+
+        var newEntry = new HostPageRmapRef
         {
-            if (!_rmapRefIndices.TryGetValue(oldKey, out var index))
-                return false;
+            Mm = mm,
+            Vma = newVma,
+            OwnerKind = ownerKind,
+            PageIndex = pageIndex,
+            GuestPageStart = guestPageStart
+        };
 
-            var existing = _rmapRefs[index];
-            if (!oldKey.Equals(newKey))
-            {
-                _rmapRefIndices.Remove(oldKey);
-                _rmapRefIndices[newKey] = index;
-            }
+        if (!RebindOwnerRmap(ownerBinding, oldKey, newEntry, out var previous))
+            return false;
 
-            if (!ReferenceEquals(existing.Vma, newVma) || existing.GuestPageStart != guestPageStart)
-            {
-                _rmapRefs[index] = new HostPageRmapRef
-                {
-                    Mm = existing.Mm,
-                    Vma = newVma,
-                    OwnerKind = existing.OwnerKind,
-                    PageIndex = existing.PageIndex,
-                    GuestPageStart = guestPageStart
-                };
-            }
+        if (previous.GuestPageStart != guestPageStart)
+            return TryUpdateTbCohSummary(mm, oldPerms, newPerms, out var changedRebindGuest) && changedRebindGuest;
 
-            if (existing.GuestPageStart != guestPageStart)
-            {
-                var removed = _tbCohIndex.RemoveRoles(mm, existing.GuestPageStart, oldPerms);
-                var added = _tbCohIndex.AddRoles(mm, guestPageStart, newPerms);
-                return removed || added;
-            }
-
-            return _tbCohIndex.UpdateRoles(mm, guestPageStart, oldPerms, newPerms);
-        }
+        return TryUpdateTbCohSummary(mm, oldPerms, newPerms, out var changedRebind) && changedRebind;
     }
 
     public TbCohExecSummary GetTbCohExecSummary()
     {
-        lock (_gate)
+        if (!TryGetLiveSlot(out var owner, out var slot))
+            return default;
+
+        lock (owner.Gate)
         {
-            return _tbCohIndex.GetExecSummary();
+            ref var slotRef = ref owner.GetSlotRef(slot);
+            if (!slotRef.InUse || slotRef.Generation != Generation)
+                return default;
+
+            return slotRef.Page.TbCohSummary.GetExecSummary();
         }
     }
 
-    public void VisitTbCohWriterPages<TState>(ref TState state, TbCohMmPageVisitor<TState> visitor)
+    public bool VisitTbCohExecPages<TState>(ref TState state, TbCohMmPageVisitor<TState> visitor)
     {
         ArgumentNullException.ThrowIfNull(visitor);
-        lock (_gate)
-            _tbCohIndex.VisitWriterPages(ref state, visitor);
-    }
+        var visitState = new ExecPageVisitState<TState> { Visitor = visitor, State = state };
+        if (!TryGetOwnerBinding(out var ownerBinding))
+            return false;
 
-    public void VisitTbCohExecPages<TState>(ref TState state, TbCohMmPageVisitor<TState> visitor)
-    {
-        ArgumentNullException.ThrowIfNull(visitor);
-        lock (_gate)
-            _tbCohIndex.VisitExecPages(ref state, visitor);
+        var visited = VisitOwnerRmapRefs(ownerBinding, ref visitState, VisitExecRmapRef);
+        state = visitState.State;
+        return visited;
     }
 
     public void CollectRmapHits(List<RmapHit> output)
     {
         ArgumentNullException.ThrowIfNull(output);
-        lock (_gate)
-            foreach (var rmapRef in _rmapRefs)
-                output.Add(new RmapHit(this, rmapRef.Mm, rmapRef.Vma, rmapRef.OwnerKind, rmapRef.PageIndex,
-                    rmapRef.GuestPageStart));
+        if (!TryGetOwnerBinding(out var ownerBinding))
+            return;
+
+        CollectOwnerRmapHits(ownerBinding, output);
     }
 
     public void VisitRmapRefs<TState>(ref TState state, HostPageRmapVisitor<TState> visitor)
     {
         ArgumentNullException.ThrowIfNull(visitor);
-        lock (_gate)
-            foreach (var rmapRef in _rmapRefs)
-                visitor(this, rmapRef, ref state);
+        if (!TryGetOwnerBinding(out var ownerBinding))
+            return;
+
+        VisitOwnerRmapRefs(ownerBinding, ref state, visitor);
+    }
+
+    internal int SlotIndexForDebug => Slot;
+
+    internal uint HandleGenerationForDebug => Generation;
+
+    internal HostPageOwnerKind? OwnerRootKindForDebug => TryGetOwnerBinding(out var binding) ? binding.OwnerKind : null;
+
+    internal AddressSpace? OwnerAddressSpaceForDebug =>
+        TryGetOwnerBinding(out var binding) && binding.OwnerKind == HostPageOwnerKind.AddressSpace
+            ? binding.Mapping
+            : null;
+
+    internal AnonVma? OwnerAnonRootForDebug =>
+        TryGetOwnerBinding(out var binding) && binding.OwnerKind == HostPageOwnerKind.AnonVma
+            ? binding.AnonVmaRoot
+            : null;
+
+    internal uint OwnerPageIndexForDebug => TryGetOwnerBinding(out var binding) ? binding.PageIndex : 0;
+
+    private bool TryGetLiveSlot(out HostPageTableState owner, out int slot)
+    {
+        owner = Owner!;
+        slot = Slot;
+        if (owner == null)
+            return false;
+        if ((uint)slot >= (uint)owner.SlotCount)
+            return false;
+
+        ref var slotRef = ref owner.GetSlotRef(slot);
+        return slotRef.InUse && slotRef.Generation == Generation;
+    }
+
+    private bool TryGetOwnerBinding(out HostPageOwnerBinding binding)
+    {
+        if (!TryGetLiveSlot(out var owner, out var slot))
+        {
+            binding = default;
+            return false;
+        }
+
+        ref var page = ref owner.GetSlotRef(slot).Page;
+        if (!page.HasOwnerRoot)
+        {
+            binding = default;
+            return false;
+        }
+
+        binding = GetOwnerBinding(ref page);
+        return true;
+    }
+
+    private static HostPageOwnerBinding GetOwnerBinding(ref HostPageData page)
+    {
+        return new HostPageOwnerBinding
+        {
+            OwnerKind = page.OwnerRootKind,
+            Mapping = page.OwnerAddressSpace,
+            AnonVmaRoot = page.OwnerAnonRoot,
+            PageIndex = page.OwnerPageIndex
+        };
+    }
+
+    private static void SetOwnerBinding(ref HostPageData page, HostPageOwnerBinding binding)
+    {
+        page.HasOwnerRoot = true;
+        page.OwnerRootKind = binding.OwnerKind;
+        page.OwnerAddressSpace = binding.OwnerKind == HostPageOwnerKind.AddressSpace ? binding.Mapping : null;
+        page.OwnerAnonRoot = binding.OwnerKind == HostPageOwnerKind.AnonVma ? binding.AnonVmaRoot : null;
+        page.OwnerPageIndex = binding.PageIndex;
+    }
+
+    private static void ClearOwnerBinding(ref HostPageData page)
+    {
+        page.HasOwnerRoot = false;
+        page.OwnerRootKind = default;
+        page.OwnerAddressSpace = null;
+        page.OwnerAnonRoot = null;
+        page.OwnerPageIndex = 0;
+    }
+
+    private void RetainOwnerResident(HostPageOwnerBinding binding)
+    {
+        var hostPagePtr = Ptr;
+        switch (binding.OwnerKind)
+        {
+            case HostPageOwnerKind.AddressSpace:
+                binding.Mapping?.RetainOwnerResident(binding.PageIndex, hostPagePtr);
+                break;
+            case HostPageOwnerKind.AnonVma:
+                binding.AnonVmaRoot?.RetainOwnerResident(binding.PageIndex, hostPagePtr);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException();
+        }
+    }
+
+    private int ReleaseOwnerResident(HostPageOwnerBinding binding)
+    {
+        var hostPagePtr = Ptr;
+        return binding.OwnerKind switch
+        {
+            HostPageOwnerKind.AddressSpace => binding.Mapping?.ReleaseOwnerResident(binding.PageIndex, hostPagePtr) ?? 0,
+            HostPageOwnerKind.AnonVma => binding.AnonVmaRoot?.ReleaseOwnerResident(binding.PageIndex, hostPagePtr) ?? 0,
+            _ => throw new ArgumentOutOfRangeException()
+        };
+    }
+
+    private void AddOrUpdateOwnerRmap(HostPageOwnerBinding binding, HostPageRmapRef entry, out HostPageRmapRef previous,
+        out bool existed)
+    {
+        var hostPagePtr = Ptr;
+        switch (binding.OwnerKind)
+        {
+            case HostPageOwnerKind.AddressSpace:
+                binding.Mapping!.AddOrUpdateOwnerRmap(binding.PageIndex, hostPagePtr, entry, out previous, out existed);
+                return;
+            case HostPageOwnerKind.AnonVma:
+                binding.AnonVmaRoot!.AddOrUpdateOwnerRmap(binding.PageIndex, hostPagePtr, entry, out previous, out existed);
+                return;
+            default:
+                throw new ArgumentOutOfRangeException();
+        }
+    }
+
+    private bool RemoveOwnerRmap(HostPageOwnerBinding binding, HostPageRmapKey key, out HostPageRmapRef removed)
+    {
+        var hostPagePtr = Ptr;
+        return binding.OwnerKind switch
+        {
+            HostPageOwnerKind.AddressSpace => binding.Mapping!.RemoveOwnerRmap(binding.PageIndex, hostPagePtr, key,
+                out removed),
+            HostPageOwnerKind.AnonVma => binding.AnonVmaRoot!.RemoveOwnerRmap(binding.PageIndex, hostPagePtr, key,
+                out removed),
+            _ => throw new ArgumentOutOfRangeException()
+        };
+    }
+
+    private bool ContainsOwnerRmap(HostPageOwnerBinding binding, HostPageRmapKey key)
+    {
+        var hostPagePtr = Ptr;
+        return binding.OwnerKind switch
+        {
+            HostPageOwnerKind.AddressSpace => binding.Mapping!.ContainsOwnerRmap(binding.PageIndex, hostPagePtr, key),
+            HostPageOwnerKind.AnonVma => binding.AnonVmaRoot!.ContainsOwnerRmap(binding.PageIndex, hostPagePtr, key),
+            _ => throw new ArgumentOutOfRangeException()
+        };
+    }
+
+    private bool RebindOwnerRmap(HostPageOwnerBinding binding, HostPageRmapKey oldKey, HostPageRmapRef newEntry,
+        out HostPageRmapRef previous)
+    {
+        var hostPagePtr = Ptr;
+        return binding.OwnerKind switch
+        {
+            HostPageOwnerKind.AddressSpace => binding.Mapping!.RebindOwnerRmap(binding.PageIndex, hostPagePtr, oldKey,
+                newEntry, out previous),
+            HostPageOwnerKind.AnonVma => binding.AnonVmaRoot!.RebindOwnerRmap(binding.PageIndex, hostPagePtr, oldKey,
+                newEntry, out previous),
+            _ => throw new ArgumentOutOfRangeException()
+        };
+    }
+
+    private void CollectOwnerRmapHits(HostPageOwnerBinding binding, List<RmapHit> output)
+    {
+        var hostPagePtr = Ptr;
+        switch (binding.OwnerKind)
+        {
+            case HostPageOwnerKind.AddressSpace:
+                binding.Mapping!.CollectOwnerRmapHits(binding.PageIndex, hostPagePtr, this, output);
+                return;
+            case HostPageOwnerKind.AnonVma:
+                binding.AnonVmaRoot!.CollectOwnerRmapHits(binding.PageIndex, hostPagePtr, this, output);
+                return;
+            default:
+                throw new ArgumentOutOfRangeException();
+        }
+    }
+
+    private bool VisitOwnerRmapRefs<TState>(HostPageOwnerBinding binding, ref TState state,
+        HostPageRmapVisitor<TState> visitor)
+    {
+        var hostPagePtr = Ptr;
+        return binding.OwnerKind switch
+        {
+            HostPageOwnerKind.AddressSpace => binding.Mapping!.VisitOwnerRmapRefs(binding.PageIndex, hostPagePtr, this,
+                ref state, visitor),
+            HostPageOwnerKind.AnonVma => binding.AnonVmaRoot!.VisitOwnerRmapRefs(binding.PageIndex, hostPagePtr, this,
+                ref state, visitor),
+            _ => throw new ArgumentOutOfRangeException()
+        };
+    }
+
+    private static void ApplyWriterPolicyForRmapRef(HostPage hostPage, in HostPageRmapRef rmapRef,
+        ref WriterPolicyApplyState state)
+    {
+        if (!HasWriteRole(rmapRef.Vma.Perms))
+            return;
+
+        ApplyWriterPolicy(rmapRef.Mm, rmapRef.GuestPageStart, ref state);
+    }
+
+    private static void VisitExecRmapRef<TState>(HostPage hostPage, in HostPageRmapRef rmapRef,
+        ref ExecPageVisitState<TState> state)
+    {
+        if (!HasExecRole(rmapRef.Vma.Perms))
+            return;
+
+        state.Visitor(rmapRef.Mm, rmapRef.GuestPageStart, ref state.State);
+    }
+
+    private bool TryUpdateTbCohSummary(VMAManager mm, Protection oldPerms, Protection newPerms, out bool changed)
+    {
+        changed = false;
+        if (!TryGetLiveSlot(out var owner, out var slot))
+            return false;
+
+        lock (owner.Gate)
+        {
+            ref var slotRef = ref owner.GetSlotRef(slot);
+            if (!slotRef.InUse || slotRef.Generation != Generation)
+                return false;
+
+            changed = UpdateTbCohSummary(ref slotRef.Page.TbCohSummary, mm, oldPerms, newPerms);
+            return true;
+        }
+    }
+
+    private static bool UpdateTbCohSummary(ref HostPageTbCohSummary summary, VMAManager mm, Protection oldPerms,
+        Protection newPerms)
+    {
+        var oldExec = HasExecRole(oldPerms);
+        var newExec = HasExecRole(newPerms);
+        var oldWrite = HasWriteRole(oldPerms);
+        var newWrite = HasWriteRole(newPerms);
+        if (oldExec == newExec && oldWrite == newWrite)
+            return false;
+
+        if (oldWrite != newWrite)
+        {
+            if (newWrite)
+            {
+                summary.WriterRefCount++;
+            }
+            else if (summary.WriterRefCount > 0)
+            {
+                summary.WriterRefCount--;
+            }
+        }
+
+        if (oldExec != newExec)
+        {
+            var identity = GetCoherenceIdentity(mm);
+            if (newExec)
+                AddExecIdentity(ref summary, identity);
+            else
+                RemoveExecIdentity(ref summary, identity);
+        }
+
+        summary.AppliedPolicyValid = false;
+        return true;
+    }
+
+    private static void AddExecIdentity(ref HostPageTbCohSummary summary, nuint identity)
+    {
+        summary.ExecIdentityRefCounts ??= [];
+        if (summary.ExecIdentityRefCounts.TryGetValue(identity, out var existing))
+        {
+            summary.ExecIdentityRefCounts[identity] = existing + 1;
+            return;
+        }
+
+        summary.ExecIdentityRefCounts[identity] = 1;
+        summary.ExecIdentityCount++;
+        summary.SingleExecIdentity = summary.ExecIdentityCount == 1 ? identity : 0;
+    }
+
+    private static void RemoveExecIdentity(ref HostPageTbCohSummary summary, nuint identity)
+    {
+        var counts = summary.ExecIdentityRefCounts;
+        if (counts == null || !counts.TryGetValue(identity, out var existing))
+            return;
+
+        if (existing > 1)
+        {
+            counts[identity] = existing - 1;
+            return;
+        }
+
+        counts.Remove(identity);
+        if (counts.Count == 0)
+        {
+            summary.ExecIdentityRefCounts = null;
+            summary.ExecIdentityCount = 0;
+            summary.SingleExecIdentity = 0;
+            return;
+        }
+
+        summary.ExecIdentityCount--;
+        if (summary.ExecIdentityCount == 1)
+        {
+            foreach (var remainingIdentity in counts.Keys)
+            {
+                summary.SingleExecIdentity = remainingIdentity;
+                return;
+            }
+        }
+
+        summary.SingleExecIdentity = 0;
     }
 }
 
 internal static class HostPageManager
 {
-    private sealed class State
-    {
-        public readonly Lock Gate = new();
-        public readonly Dictionary<IntPtr, HostPage> Pages = [];
-    }
-
     private sealed class ScopeRestore : IDisposable
     {
-        private readonly State? _previous;
+        private readonly HostPageTableState? _previous;
 
-        public ScopeRestore(State? previous)
+        public ScopeRestore(HostPageTableState? previous)
         {
             _previous = previous;
         }
@@ -838,15 +1238,15 @@ internal static class HostPageManager
         }
     }
 
-    private static readonly AsyncLocal<State?> ScopedState = new();
-    private static readonly State DefaultState = new();
+    private static readonly AsyncLocal<HostPageTableState?> ScopedState = new();
+    private static readonly HostPageTableState DefaultState = new();
 
-    private static State CurrentState => ScopedState.Value ?? DefaultState;
+    private static HostPageTableState CurrentState => ScopedState.Value ?? DefaultState;
 
     internal static IDisposable BeginIsolatedScope()
     {
         var previous = ScopedState.Value;
-        ScopedState.Value = new State();
+        ScopedState.Value = new HostPageTableState();
         return new ScopeRestore(previous);
     }
 
@@ -858,15 +1258,33 @@ internal static class HostPageManager
         var state = CurrentState;
         lock (state.Gate)
         {
-            if (state.Pages.TryGetValue(ptr, out var existing))
+            if (state.SlotByPtr.TryGetValue(ptr, out var slot))
             {
-                existing.UpgradeKind(preferredKind);
-                return existing;
+                ref var existing = ref state.GetSlotRef(slot);
+                var hostPage = new HostPage(state, slot, existing.Generation);
+                hostPage.UpgradeKind(preferredKind);
+                return hostPage;
             }
 
-            var hostPage = new HostPage(ptr, preferredKind);
-            state.Pages[ptr] = hostPage;
-            return hostPage;
+            slot = state.RentSlot();
+            ref var slotRef = ref state.GetSlotRef(slot);
+            unchecked
+            {
+                slotRef.Generation++;
+                if (slotRef.Generation == 0)
+                    slotRef.Generation = 1;
+            }
+
+            slotRef.InUse = true;
+            slotRef.Page = new HostPageData
+            {
+                Ptr = ptr,
+                Kind = preferredKind,
+                Uptodate = true,
+                LastAccessTimestamp = MonotonicTime.GetTimestamp()
+            };
+            state.SlotByPtr[ptr] = slot;
+            return new HostPage(state, slot, slotRef.Generation);
         }
     }
 
@@ -875,8 +1293,30 @@ internal static class HostPageManager
         var state = CurrentState;
         lock (state.Gate)
         {
-            return state.Pages.TryGetValue(ptr, out page!);
+            if (!state.SlotByPtr.TryGetValue(ptr, out var slot))
+            {
+                page = default;
+                return false;
+            }
+
+            ref var slotRef = ref state.GetSlotRef(slot);
+            if (!slotRef.InUse)
+            {
+                page = default;
+                return false;
+            }
+
+            page = new HostPage(state, slot, slotRef.Generation);
+            return true;
         }
+    }
+
+    internal static HostPage GetRequired(IntPtr ptr)
+    {
+        if (!TryLookup(ptr, out var page))
+            throw new InvalidOperationException($"HostPage metadata for 0x{ptr.ToInt64():X} is not registered.");
+
+        return page;
     }
 
     internal static HostPage Retain(IntPtr ptr, HostPageKind preferredKind)
@@ -909,20 +1349,114 @@ internal static class HostPageManager
     {
         if (page.Kind == HostPageKind.Zero)
             return;
-        if (page.RefCount > 0 || page.MapCount > 0 || page.PinCount > 0 || page.HasOwnerRefs)
+        if (page.RefCount > 0 || page.MapCount > 0 || page.PinCount > 0 || page.HasOwnerRoot)
+            return;
+        if (!TryGetLiveSlot(page, out var state, out var slot))
             return;
 
-        var state = CurrentState;
         lock (state.Gate)
         {
-            if (!state.Pages.TryGetValue(page.Ptr, out var existing) || !ReferenceEquals(existing, page))
+            ref var slotRef = ref state.GetSlotRef(slot);
+            if (!slotRef.InUse || slotRef.Generation != page.Generation)
                 return;
-            if (page.RefCount > 0 || page.MapCount > 0 || page.PinCount > 0 || page.HasOwnerRefs)
+            if (slotRef.Page.Kind == HostPageKind.Zero)
+                return;
+            if (slotRef.Page.RefCount > 0 || slotRef.Page.MapCount > 0 || slotRef.Page.PinCount > 0)
+                return;
+            if (slotRef.Page.HasOwnerRoot)
                 return;
 
-            state.Pages.Remove(page.Ptr);
+            state.SlotByPtr.Remove(slotRef.Page.Ptr);
+            slotRef.Page = default;
+            slotRef.InUse = false;
+            state.FreeSlots.Push(slot);
         }
     }
+
+    internal static void TryRemoveIfUnused(IntPtr ptr)
+    {
+        if (!TryLookup(ptr, out var page))
+            return;
+
+        TryRemoveIfUnused(page);
+    }
+
+    internal static TbCohApplyResult ApplyTbCohPolicyIfChanged(IntPtr ptr)
+    {
+        if (!TryLookup(ptr, out var page))
+            return new TbCohApplyResult(TbCohApplyKind.FastNoWriters, 0);
+
+        return page.ApplyTbCohPolicyIfChanged();
+    }
+
+    internal static bool VisitTbCohExecPages<TState>(IntPtr ptr, ref TState state, TbCohMmPageVisitor<TState> visitor)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        if (!TryLookup(ptr, out var page))
+            return false;
+
+        return page.VisitTbCohExecPages(ref state, visitor);
+    }
+
+    internal static bool BindOwnerRoot(IntPtr ptr, HostPageKind preferredKind, HostPageOwnerBinding ownerBinding)
+    {
+        return GetOrCreate(ptr, preferredKind).BindOwnerRoot(ownerBinding);
+    }
+
+    internal static bool UnbindOwnerRoot(IntPtr ptr, HostPageOwnerBinding ownerBinding)
+    {
+        if (!TryLookup(ptr, out var page))
+            return false;
+
+        return page.UnbindOwnerRoot(ownerBinding);
+    }
+
+    internal static bool AddOrUpdateRmapRef(IntPtr ptr, HostPageKind preferredKind, VMAManager mm, VmArea vma,
+        HostPageOwnerKind ownerKind, uint pageIndex, uint guestPageStart)
+    {
+        return GetOrCreate(ptr, preferredKind).AddOrUpdateRmapRef(mm, vma, ownerKind, pageIndex, guestPageStart);
+    }
+
+    internal static bool RemoveRmapRef(IntPtr ptr, VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind,
+        uint pageIndex)
+    {
+        if (!TryLookup(ptr, out var page))
+            return false;
+
+        return page.RemoveRmapRef(mm, vma, ownerKind, pageIndex);
+    }
+
+    internal static bool UpdateTbCohRolesForRmapRef(IntPtr ptr, VMAManager mm, VmArea vma,
+        HostPageOwnerKind ownerKind, uint pageIndex, uint guestPageStart, Protection oldPerms, Protection newPerms)
+    {
+        if (!TryLookup(ptr, out var page))
+            return false;
+
+        return page.UpdateTbCohRolesForRmapRef(mm, vma, ownerKind, pageIndex, guestPageStart, oldPerms, newPerms);
+    }
+
+    internal static bool RebindRmapRef(IntPtr ptr, VMAManager mm, VmArea oldVma, VmArea newVma,
+        HostPageOwnerKind ownerKind, uint pageIndex, uint guestPageStart, Protection oldPerms, Protection newPerms)
+    {
+        if (!TryLookup(ptr, out var page))
+            return false;
+
+        return page.RebindRmapRef(mm, oldVma, newVma, ownerKind, pageIndex, guestPageStart, oldPerms, newPerms);
+    }
+
+    private static bool TryGetLiveSlot(HostPage page, out HostPageTableState state, out int slot)
+    {
+        state = page.Owner!;
+        slot = page.Slot;
+        if (state == null)
+            return false;
+        if ((uint)slot >= (uint)state.SlotCount)
+            return false;
+
+        ref var slotRef = ref state.GetSlotRef(slot);
+        return slotRef.InUse && slotRef.Generation == page.Generation;
+    }
+
 }
 
 internal static class VmRmap

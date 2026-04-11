@@ -21,14 +21,16 @@ internal sealed class InodePageRecord
 {
     public PageHandle Handle;
     public required uint PageIndex { get; init; }
-    public required HostPage HostPage { get; init; }
+    public required IntPtr Ptr { get; init; }
     public required FilePageBackingKind BackingKind { get; init; }
 
-    public IntPtr Ptr => HostPage.Ptr;
+    public HostPageKind HostPageKind => BackingKind == FilePageBackingKind.ZeroSharedPage
+        ? HostPageKind.Zero
+        : HostPageKind.PageCache;
 
     public void ReleaseOwnership()
     {
         PageHandle.Release(ref Handle);
-        HostPageManager.TryRemoveIfUnused(HostPage);
+        HostPageManager.TryRemoveIfUnused(Ptr);
     }
 }

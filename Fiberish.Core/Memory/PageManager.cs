@@ -29,8 +29,7 @@ public enum MappedPageOwnerKind
 
 internal sealed class MappedPageBinding
 {
-    public required HostPage HostPage { get; init; }
-    public IntPtr Ptr => HostPage.Ptr;
+    public required IntPtr Ptr { get; init; }
     public required MappedPageOwnerKind OwnerKind { get; init; }
     public AddressSpace? Mapping { get; init; }
     public AnonVma? AnonVma { get; init; }
@@ -41,7 +40,7 @@ internal sealed class MappedPageBinding
     {
         return new MappedPageBinding
         {
-            HostPage = page.HostPage,
+            Ptr = page.Ptr,
             OwnerKind = MappedPageOwnerKind.AddressSpace,
             Mapping = mapping,
             Page = page,
@@ -53,7 +52,7 @@ internal sealed class MappedPageBinding
     {
         return new MappedPageBinding
         {
-            HostPage = page.HostPage,
+            Ptr = page.Ptr,
             OwnerKind = MappedPageOwnerKind.AnonVma,
             AnonVma = anonVma,
             Page = page,
@@ -118,13 +117,14 @@ public sealed class PageManager
         if (binding.Ptr == IntPtr.Zero) return false;
         if (_pages.TryGetValue(pageAddr, out var existing)) return existing.Ptr == binding.Ptr;
 
-        if (binding.HostPage.Kind != HostPageKind.Zero)
+        if (HostPageManager.GetRequired(binding.Ptr).Kind != HostPageKind.Zero)
         {
             AddGlobalRef(binding.Ptr);
             addedRef = true;
         }
 
-        binding.HostPage.MapCount++;
+        var boundHostPage = HostPageManager.GetRequired(binding.Ptr);
+        boundHostPage.MapCount++;
         _pages[pageAddr] = binding;
         return true;
     }
@@ -133,20 +133,22 @@ public sealed class PageManager
     {
         if (!_pages.TryGetValue(pageAddr, out var binding)) return;
         _pages.Remove(pageAddr);
-        if (binding.HostPage.MapCount > 0)
-            binding.HostPage.MapCount--;
+        var hostPage = HostPageManager.GetRequired(binding.Ptr);
 
-        if (binding.HostPage.Kind != HostPageKind.Zero)
+        if (hostPage.MapCount > 0)
+            hostPage.MapCount--;
+
+        if (hostPage.Kind != HostPageKind.Zero)
             ReleaseGlobalRef(binding.Ptr);
 
         if (!preserveOwnerBinding &&
             binding.OwnerKind == MappedPageOwnerKind.AnonVma &&
             binding.AnonVma is { } anonVma &&
             binding.Page is { } anonPage &&
-            anonPage.HostPage is { MapCount: <= 0, PinCount: <= 0, RefCount: <= 0 })
+            HostPageManager.GetRequired(anonPage.Ptr) is { MapCount: <= 0, PinCount: <= 0, RefCount: <= 0 })
             anonVma.RemovePageIfMatches(binding.PageIndex, anonPage);
 
-        HostPageManager.TryRemoveIfUnused(binding.HostPage);
+        HostPageManager.TryRemoveIfUnused(binding.Ptr);
     }
 
     public void ReleaseRange(uint addr, uint length, bool preserveOwnerBinding = false)

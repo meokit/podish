@@ -306,11 +306,38 @@ public class VMAManager
         vma.VmAnonVma?.RemoveRmapAttachments(vma, tbCohWorkSet);
     }
 
-    private static void ReleaseUnmappedObjectPages(VmArea vma, uint guestStart, uint guestEndExclusive)
+    private static void QueueUnmappedObjectPages(VmArea vma, uint guestStart, uint guestEndExclusive,
+        List<(AnonVma AnonVma, uint StartPageIndex, uint EndPageIndexExclusive)> pendingObjectPageReleases)
     {
-        if (guestStart >= guestEndExclusive) return;
+        ArgumentNullException.ThrowIfNull(pendingObjectPageReleases);
+        if (guestStart >= guestEndExclusive || vma.VmAnonVma == null)
+            return;
+
         var (startPageIndex, endPageIndexExclusive) = GetObjectPageRange(vma, guestStart, guestEndExclusive);
-        vma.VmAnonVma?.RemovePagesInRange(startPageIndex, endPageIndexExclusive);
+        if (startPageIndex >= endPageIndexExclusive)
+            return;
+
+        vma.VmAnonVma.AddRef();
+        pendingObjectPageReleases.Add((vma.VmAnonVma, startPageIndex, endPageIndexExclusive));
+    }
+
+    private static void ReleasePendingObjectPages(
+        List<(AnonVma AnonVma, uint StartPageIndex, uint EndPageIndexExclusive)>? pendingObjectPageReleases,
+        bool releasePages)
+    {
+        if (pendingObjectPageReleases == null)
+            return;
+
+        foreach (var (anonVma, startPageIndex, endPageIndexExclusive) in pendingObjectPageReleases)
+            try
+            {
+                if (releasePages)
+                    anonVma.RemovePagesInRange(startPageIndex, endPageIndexExclusive);
+            }
+            finally
+            {
+                anonVma.Release();
+            }
     }
 
     private static uint GetVmaPageIndex(VmArea vma, uint guestPageStart)
@@ -318,7 +345,7 @@ public class VMAManager
         return vma.GetPageIndex(guestPageStart);
     }
 
-    internal void CollectManagedHostPagesInRange(uint addr, uint len, HashSet<HostPage> output)
+    internal void CollectManagedHostPagesInRange(uint addr, uint len, HashSet<IntPtr> output)
     {
         ArgumentNullException.ThrowIfNull(output);
         if (len == 0) return;
@@ -333,7 +360,7 @@ public class VMAManager
     }
 
     private static void CollectHostPagesForVmaRange(VmArea vma, uint guestStart, uint guestEndExclusive,
-        HashSet<HostPage> output)
+        HashSet<IntPtr> output)
     {
         ArgumentNullException.ThrowIfNull(vma);
         ArgumentNullException.ThrowIfNull(output);
@@ -344,9 +371,9 @@ public class VMAManager
         for (var page = startPage; page < endPageExclusive; page += LinuxConstants.PageSize)
         {
             var pageIndex = vma.GetPageIndex(page);
-            var hostPage = vma.VmAnonVma?.PeekHostPage(pageIndex) ?? vma.VmMapping?.PeekHostPage(pageIndex);
-            if (hostPage != null)
-                output.Add(hostPage);
+            var hostPagePtr = vma.VmAnonVma?.PeekPage(pageIndex) ?? vma.VmMapping?.PeekPage(pageIndex) ?? IntPtr.Zero;
+            if (hostPagePtr != IntPtr.Zero)
+                output.Add(hostPagePtr);
         }
     }
 
@@ -363,16 +390,14 @@ public class VMAManager
         for (var page = startPage; page < endPageExclusive; page += LinuxConstants.PageSize)
         {
             var pageIndex = vma.GetPageIndex(page);
-            HostPage? hostPage;
+            IntPtr hostPagePtr;
             HostPageOwnerKind ownerKind;
-            if (vma.VmAnonVma?.PeekHostPage(pageIndex) is { } anonPage)
+            if ((hostPagePtr = vma.VmAnonVma?.PeekPage(pageIndex) ?? IntPtr.Zero) != IntPtr.Zero)
             {
-                hostPage = anonPage;
                 ownerKind = HostPageOwnerKind.AnonVma;
             }
-            else if (vma.VmMapping?.PeekHostPage(pageIndex) is { } sharedPage)
+            else if ((hostPagePtr = vma.VmMapping?.PeekPage(pageIndex) ?? IntPtr.Zero) != IntPtr.Zero)
             {
-                hostPage = sharedPage;
                 ownerKind = HostPageOwnerKind.AddressSpace;
             }
             else
@@ -380,9 +405,10 @@ public class VMAManager
                 continue;
             }
 
-            var changed =
-                hostPage.UpdateTbCohRolesForRmapRef(this, vma, ownerKind, pageIndex, page, oldPerms, newPerms);
-            tbCohWorkSet?.AddIfChanged(hostPage, changed);
+            var preferredKind = ownerKind == HostPageOwnerKind.AnonVma ? HostPageKind.Anon : HostPageKind.PageCache;
+            var changed = HostPageManager.UpdateTbCohRolesForRmapRef(hostPagePtr, this, vma, ownerKind, pageIndex,
+                page, oldPerms, newPerms);
+            tbCohWorkSet?.AddIfChanged(hostPagePtr, changed);
         }
     }
 
@@ -397,16 +423,14 @@ public class VMAManager
         for (var page = startPage; page < endPageExclusive; page += LinuxConstants.PageSize)
         {
             var pageIndex = sourceVma.GetPageIndex(page);
-            HostPage? hostPage;
+            IntPtr hostPagePtr;
             HostPageOwnerKind ownerKind;
-            if (sourceVma.VmAnonVma?.PeekHostPage(pageIndex) is { } anonPage)
+            if ((hostPagePtr = sourceVma.VmAnonVma?.PeekPage(pageIndex) ?? IntPtr.Zero) != IntPtr.Zero)
             {
-                hostPage = anonPage;
                 ownerKind = HostPageOwnerKind.AnonVma;
             }
-            else if (sourceVma.VmMapping?.PeekHostPage(pageIndex) is { } sharedPage)
+            else if ((hostPagePtr = sourceVma.VmMapping?.PeekPage(pageIndex) ?? IntPtr.Zero) != IntPtr.Zero)
             {
-                hostPage = sharedPage;
                 ownerKind = HostPageOwnerKind.AddressSpace;
             }
             else
@@ -414,9 +438,9 @@ public class VMAManager
                 continue;
             }
 
-            var changed = hostPage.RebindRmapRef(this, sourceVma, targetVma, ownerKind, pageIndex, page, oldPerms,
-                newPerms);
-            tbCohWorkSet?.AddIfChanged(hostPage, changed);
+            var changed = HostPageManager.RebindRmapRef(hostPagePtr, this, sourceVma, targetVma, ownerKind,
+                pageIndex, page, oldPerms, newPerms);
+            tbCohWorkSet?.AddIfChanged(hostPagePtr, changed);
         }
     }
 
@@ -1043,7 +1067,8 @@ public class VMAManager
     public void Munmap(uint addr, uint length, Engine engine)
     {
         if (length == 0) return;
-        var unmappedHostPages = new HashSet<HostPage>();
+        var unmappedHostPages = new HashSet<IntPtr>();
+        List<(AnonVma AnonVma, uint StartPageIndex, uint EndPageIndexExclusive)>? pendingObjectPageReleases = null;
         uint end;
         try
         {
@@ -1073,7 +1098,7 @@ public class VMAManager
                 {
                     SyncVmArea(vma, engine, vma.Start, vma.End);
                     CollectHostPagesForVmaRange(vma, vma.Start, vma.End, unmappedHostPages);
-                    ReleaseUnmappedObjectPages(vma, vma.Start, vma.End);
+                    QueueUnmappedObjectPages(vma, vma.Start, vma.End, pendingObjectPageReleases ??= []);
                     UnregisterVmAreaAttachments(vma);
                     if (ReferenceEquals(_lastFaultVma, vma)) _lastFaultVma = null;
                     (removedVmas ??= []).Add(vma);
@@ -1086,7 +1111,7 @@ public class VMAManager
                 {
                     SyncVmArea(vma, engine, addr, end);
                     CollectHostPagesForVmaRange(vma, addr, end, unmappedHostPages);
-                    ReleaseUnmappedObjectPages(vma, addr, end);
+                    QueueUnmappedObjectPages(vma, addr, end, pendingObjectPageReleases ??= []);
                     UnregisterVmAreaAttachments(vma);
                     var tailStart = end;
                     var tailEnd = vma.End;
@@ -1126,7 +1151,7 @@ public class VMAManager
                 {
                     SyncVmArea(vma, engine, vma.Start, end);
                     CollectHostPagesForVmaRange(vma, vma.Start, end, unmappedHostPages);
-                    ReleaseUnmappedObjectPages(vma, vma.Start, end);
+                    QueueUnmappedObjectPages(vma, vma.Start, end, pendingObjectPageReleases ??= []);
                     UnregisterVmAreaAttachments(vma);
                     var diff = end - vma.Start;
                     vma.Start = end;
@@ -1143,7 +1168,7 @@ public class VMAManager
                 {
                     SyncVmArea(vma, engine, addr, vma.End);
                     CollectHostPagesForVmaRange(vma, addr, vma.End, unmappedHostPages);
-                    ReleaseUnmappedObjectPages(vma, addr, vma.End);
+                    QueueUnmappedObjectPages(vma, addr, vma.End, pendingObjectPageReleases ??= []);
                     UnregisterVmAreaAttachments(vma);
                     vma.End = addr;
                     replacements.Add(vma);
@@ -1174,16 +1199,27 @@ public class VMAManager
                 }
         }
 
-        TearDownNativeMappings(
-            engine,
-            addr,
-            length,
-            false,
-            true,
-            true);
+        var nativeMappingsTornDown = false;
+        try
+        {
+            TearDownNativeMappings(
+                engine,
+                addr,
+                length,
+                false,
+                true,
+                true,
+                preserveOwnerBinding: pendingObjectPageReleases != null);
+            nativeMappingsTornDown = true;
+        }
+        finally
+        {
+            ReleasePendingObjectPages(pendingObjectPageReleases, nativeMappingsTornDown);
+        }
+
         ClearTbWpRange(addr, length);
-        foreach (var hostPage in unmappedHostPages)
-            TbCoh.ApplyWx(hostPage);
+        foreach (var hostPagePtr in unmappedHostPages)
+            TbCoh.ApplyWx(hostPagePtr);
     }
 
     public int Mprotect(uint addr, uint len, Protection prot, Engine engine, out bool resetCodeCacheRange)
@@ -1732,7 +1768,7 @@ public class VMAManager
         var binding = CreateResolvedPageBinding(vma, pageIndex, pagePtr);
         var result = EnsureExternalMapping(pageStart, binding, perms, engine);
         if (result == FaultResult.Handled && (vma.Perms & Protection.Exec) != 0)
-            TbCoh.ApplyWx(binding.HostPage);
+            TbCoh.ApplyWx(binding.Ptr);
         return result;
     }
 
@@ -1808,7 +1844,7 @@ public class VMAManager
         if (nonOwnerRefs <= 0)
         {
             privateObject.MarkDirty(pageIndex);
-            TbCoh.OnWriteFault(this, pageStart, privateObject.PeekVmPage(pageIndex)!.HostPage);
+            TbCoh.OnWriteFault(this, pageStart, privateObject.PeekVmPage(pageIndex)!.Ptr);
             return EnsureExternalMapping(pageStart,
                 MappedPageBinding.FromAnonVmaPage(privateObject, pageIndex, privateObject.PeekVmPage(pageIndex)!),
                 perms, engine);
@@ -1856,7 +1892,7 @@ public class VMAManager
             if (writeSourceResult != FaultResult.Handled)
                 return writeSourceResult;
 
-            TbCoh.OnWriteFault(this, pageStart, CreateResolvedPageBinding(vma, pageIndex, writePagePtr).HostPage);
+            TbCoh.OnWriteFault(this, pageStart, CreateResolvedPageBinding(vma, pageIndex, writePagePtr).Ptr);
             var writeMapResult = MapResolvedBackingPage(vma, pageStart, pageIndex, writePagePtr, (byte)tempPerms,
                 engine);
             if (writeMapResult != FaultResult.Handled)
@@ -1894,7 +1930,7 @@ public class VMAManager
                 var binding = MappedPageBinding.FromAnonVmaPage(privateObject, pageIndex, privatePage);
                 var result = EnsureExternalMapping(pageStart, binding, readPerms, engine);
                 if (result == FaultResult.Handled && (vma.Perms & Protection.Exec) != 0)
-                    TbCoh.ApplyWx(binding.HostPage);
+                    TbCoh.ApplyWx(binding.Ptr);
                 return result;
             }
 

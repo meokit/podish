@@ -2591,7 +2591,16 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             return false;
         }
 
-        return TryCreateFsName(name, out componentName);
+        try
+        {
+            componentName = FsName.FromBytes(name);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            componentName = default;
+            return false;
+        }
     }
 
     private static bool TryDecodeHostComponent(FsName name, out string decoded)
@@ -2601,7 +2610,7 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
     private static bool TryCreateFsName(ReadOnlySpan<byte> name, out FsName fsName)
     {
-        if (!FsEncoding.TryDecodeUtf8(name, out _))
+        if (!FsEncoding.IsValidUtf8(name))
         {
             fsName = default;
             return false;

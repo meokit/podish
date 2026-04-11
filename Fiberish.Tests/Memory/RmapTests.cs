@@ -73,6 +73,10 @@ public class RmapTests
             var pageIndex = vma.GetPageIndex(addr);
             var filePtr = vma.VmMapping!.PeekPage(pageIndex);
             Assert.NotEqual(IntPtr.Zero, filePtr);
+            var filePage = HostPageManager.GetRequired(filePtr);
+            Assert.Equal(HostPageOwnerKind.AddressSpace, filePage.OwnerRootKindForDebug);
+            Assert.Same(vma.VmMapping, filePage.OwnerAddressSpaceForDebug);
+            Assert.Equal(pageIndex, filePage.OwnerPageIndexForDebug);
 
             var fileHitsBeforeCow = ResolveHits(filePtr);
             Assert.Single(fileHitsBeforeCow);
@@ -83,6 +87,10 @@ public class RmapTests
             var anonPtr = vma.VmAnonVma!.PeekPage(pageIndex);
             Assert.NotEqual(IntPtr.Zero, anonPtr);
             Assert.NotEqual(filePtr, anonPtr);
+            var anonPage = HostPageManager.GetRequired(anonPtr);
+            Assert.Equal(HostPageOwnerKind.AnonVma, anonPage.OwnerRootKindForDebug);
+            Assert.Same(vma.VmAnonVma.Root, anonPage.OwnerAnonRootForDebug);
+            Assert.Equal(pageIndex, anonPage.OwnerPageIndexForDebug);
 
             var fileHitsAfterCow = ResolveHits(filePtr);
             Assert.Empty(fileHitsAfterCow);
@@ -119,6 +127,12 @@ public class RmapTests
 
         var childMm = parentMm.Clone();
         var childVma = Assert.IsType<VmArea>(childMm.FindVmArea(addr));
+        Assert.NotSame(parentVma.VmAnonVma, childVma.VmAnonVma);
+        Assert.Same(parentVma.VmAnonVma!.Root, childVma.VmAnonVma!.Root);
+        var sharedPage = HostPageManager.GetRequired(sharedPtr);
+        Assert.Equal(HostPageOwnerKind.AnonVma, sharedPage.OwnerRootKindForDebug);
+        Assert.Same(parentVma.VmAnonVma.Root, sharedPage.OwnerAnonRootForDebug);
+        Assert.Equal(pageIndex, sharedPage.OwnerPageIndexForDebug);
 
         var sharedHits = ResolveHits(sharedPtr);
         Assert.Equal(2, sharedHits.Count);
@@ -216,6 +230,89 @@ public class RmapTests
 
         secondHitsAfterSplit = ResolveHits(secondPagePtr);
         Assert.Single(secondHitsAfterSplit);
+    }
+
+    [Fact]
+    public void HostPageSlot_ReusesSlotWithNewGeneration_AndStaleHostPageCannotLeakTbCohState()
+    {
+        using var pageScope = PageManager.BeginIsolatedScope();
+
+        var ptr1 = PageManager.AllocateExternalPage(AllocationClass.KernelInternal);
+        Assert.NotEqual(IntPtr.Zero, ptr1);
+        var anonRoot1 = new AnonVma();
+
+        HostPageOwnerBinding owner1 = new()
+        {
+            OwnerKind = HostPageOwnerKind.AnonVma,
+            AnonVmaRoot = anonRoot1.Root,
+            PageIndex = 1
+        };
+
+        var page1 = HostPageManager.GetOrCreate(ptr1, HostPageKind.Anon);
+        Assert.True(page1.BindOwnerRoot(owner1));
+        Assert.True(page1.HasOwnerRoot);
+        Assert.Equal(HostPageOwnerKind.AnonVma, page1.OwnerRootKindForDebug);
+        Assert.Same(anonRoot1.Root, page1.OwnerAnonRootForDebug);
+        Assert.Equal(1u, page1.OwnerPageIndexForDebug);
+        var slotIndex1 = page1.SlotIndexForDebug;
+        var generation1 = page1.HandleGenerationForDebug;
+
+        var mm = new VMAManager();
+        var vma = new VmArea
+        {
+            Start = 0x1000,
+            End = 0x2000,
+            Perms = Protection.Read | Protection.Write | Protection.Exec,
+            VmAnonVma = anonRoot1
+        };
+        Assert.True(page1.AddOrUpdateRmapRef(mm, vma, HostPageOwnerKind.AnonVma, 1, 0x1000));
+        Assert.Equal(TbCohApplyKind.SlowScan, HostPageManager.ApplyTbCohPolicyIfChanged(ptr1).Kind);
+        Assert.True(page1.RemoveRmapRef(mm, vma, HostPageOwnerKind.AnonVma, 1));
+
+        Assert.True(page1.UnbindOwnerRoot(owner1));
+        Assert.False(HostPageManager.TryLookup(ptr1, out _));
+        Assert.False(page1.HasOwnerRoot);
+        Assert.Null(page1.OwnerRootKindForDebug);
+        Assert.Null(page1.OwnerAnonRootForDebug);
+
+        var ptr2 = PageManager.AllocateExternalPage(AllocationClass.KernelInternal);
+        Assert.NotEqual(IntPtr.Zero, ptr2);
+        var mapping2 = new AddressSpace(AddressSpaceKind.File);
+
+        HostPageOwnerBinding owner2 = new()
+        {
+            OwnerKind = HostPageOwnerKind.AddressSpace,
+            Mapping = mapping2,
+            PageIndex = 2
+        };
+
+        var page2 = HostPageManager.GetOrCreate(ptr2, HostPageKind.PageCache);
+        Assert.True(page2.BindOwnerRoot(owner2));
+        Assert.True(page2.HasOwnerRoot);
+        Assert.Equal(slotIndex1, page2.SlotIndexForDebug);
+        Assert.NotEqual(generation1, page2.HandleGenerationForDebug);
+        Assert.Equal(HostPageOwnerKind.AddressSpace, page2.OwnerRootKindForDebug);
+        Assert.Same(mapping2, page2.OwnerAddressSpaceForDebug);
+        Assert.Equal(2u, page2.OwnerPageIndexForDebug);
+        Assert.Equal(TbCohApplyKind.FastNoWriters, HostPageManager.ApplyTbCohPolicyIfChanged(ptr2).Kind);
+
+        Assert.False(page1.BindOwnerRoot(new HostPageOwnerBinding
+        {
+            OwnerKind = HostPageOwnerKind.AnonVma,
+            AnonVmaRoot = anonRoot1.Root,
+            PageIndex = 99
+        }));
+
+        Assert.False(page1.HasOwnerRoot);
+        Assert.True(page2.HasOwnerRoot);
+        Assert.Same(mapping2, page2.OwnerAddressSpaceForDebug);
+        Assert.Equal(2u, page2.OwnerPageIndexForDebug);
+
+        Assert.True(page2.UnbindOwnerRoot(owner2));
+        mapping2.Release();
+        anonRoot1.Release();
+        PageManager.ReleasePtr(ptr2);
+        PageManager.ReleasePtr(ptr1);
     }
 
     private static List<RmapHit> ResolveHits(IntPtr ptr)

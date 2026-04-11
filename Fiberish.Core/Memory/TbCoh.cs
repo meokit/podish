@@ -7,7 +7,7 @@ internal static class TbCoh
 {
     private sealed class ScratchState
     {
-        public readonly HashSet<HostPage> HostPages = [];
+        public readonly HashSet<IntPtr> HostPages = [];
         public readonly Dictionary<VMAManager, HashSet<uint>> InvalidationPagesByMm = [];
         public readonly List<HashSet<uint>> InvalidationPageSetPool = [];
     }
@@ -92,23 +92,25 @@ internal static class TbCoh
         var hostPages = scratch.HostPages;
         hostPages.Clear();
         mm.CollectManagedHostPagesInRange(addr, len, hostPages);
-        foreach (var hostPage in hostPages)
-            ApplyWx(hostPage);
+        foreach (var hostPagePtr in hostPages)
+            ApplyWx(hostPagePtr);
         hostPages.Clear();
     }
 
-    internal static void ApplyWx(HostPage hostPage)
+    internal static void ApplyWx(IntPtr hostPagePtr)
     {
-        ArgumentNullException.ThrowIfNull(hostPage);
+        if (hostPagePtr == IntPtr.Zero)
+            return;
 
-        var result = hostPage.ApplyTbCohPolicyIfChanged();
+        var result = HostPageManager.ApplyTbCohPolicyIfChanged(hostPagePtr);
         TbCohDiagnosticsScope.Record(result);
     }
 
-    internal static void OnWriteFault(VMAManager writerMm, uint pageStart, HostPage hostPage)
+    internal static void OnWriteFault(VMAManager writerMm, uint pageStart, IntPtr hostPagePtr)
     {
         ArgumentNullException.ThrowIfNull(writerMm);
-        ArgumentNullException.ThrowIfNull(hostPage);
+        if (hostPagePtr == IntPtr.Zero)
+            return;
 
         var scratch = GetScratch();
         var invByMm = scratch.InvalidationPagesByMm;
@@ -122,12 +124,13 @@ internal static class TbCoh
             WriterIdentity = GetCoherenceIdentity(writerMm),
             UsedSetCount = 0
         };
-        hostPage.VisitTbCohExecPages(ref invalidationState, CollectInvalidations);
+        if (!HostPageManager.VisitTbCohExecPages(hostPagePtr, ref invalidationState, CollectInvalidations))
+            return;
 
         if (invByMm.Count == 0)
             return;
 
-        ApplyWx(hostPage);
+        ApplyWx(hostPagePtr);
         writerMm.MarkTbWp(pageStart);
 
         foreach (var (targetMm, pages) in invByMm)

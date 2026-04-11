@@ -2,6 +2,8 @@
 
 This document describes the current memory-management implementation in Fiberish. It is intentionally implementation-first: names, responsibilities, and lifecycle rules match the current code, not older transition states.
 
+For the forward-looking redesign of host-page metadata, see [HostPage Linux-Style Redesign](./hostpage-linux-style-design.md) and the preferred [HostPage Slot Ownership Design](./hostpage-slot-ownership-design.md).
+
 ## Table of Contents
 
 1. High-Level Model

@@ -12,6 +12,7 @@ public enum AddressSpaceKind
 public sealed class AddressSpace
 {
     private readonly HostPageKind _pageKind;
+    private readonly OwnerRmapTracker _ownerRmap = new();
     private readonly List<RmapAttachment> _rmapAttachments = [];
     private readonly Lock _rmapLock = new();
     private Action<int>? _trackedPageCountDelta;
@@ -25,7 +26,7 @@ public sealed class AddressSpace
             AddressSpaceKind.Zero => HostPageKind.Zero,
             _ => HostPageKind.PageCache
         };
-        Pages = new VmPageSlots(CreateOwnerRef, OnPageBindingChanged, OnPageCountChanged);
+        Pages = new VmPageSlots(CreateOwnerBinding, OnPageBindingChanged, OnPageCountChanged);
     }
 
     public AddressSpaceKind Kind { get; }
@@ -66,20 +67,15 @@ public sealed class AddressSpace
         return Pages.PeekPage(pageIndex);
     }
 
-    internal HostPage? PeekHostPage(uint pageIndex)
-    {
-        return Pages.PeekHostPage(pageIndex);
-    }
-
     internal VmPage? PeekVmPage(uint pageIndex)
     {
         return Pages.PeekVmPage(pageIndex);
     }
 
-    internal IntPtr InstallHostPageIfAbsent(uint pageIndex, HostPage hostPage, Action<VmPage>? onReleased,
-        out bool inserted)
+    internal IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind,
+        Action<VmPage>? onReleased, out bool inserted)
     {
-        return Pages.InstallHostPageIfAbsent(pageIndex, hostPage, onReleased, out inserted);
+        return Pages.InstallHostPageIfAbsent(pageIndex, ptr, hostPageKind, onReleased, out inserted);
     }
 
     public IntPtr GetOrCreatePage(uint pageIndex, Func<IntPtr, bool>? onFirstCreate, out bool isNew)
@@ -212,9 +208,66 @@ public sealed class AddressSpace
         });
     }
 
-    private HostPageOwnerRef CreateOwnerRef(uint pageIndex)
+    internal void RetainOwnerResident(uint pageIndex, IntPtr hostPagePtr)
     {
-        return new HostPageOwnerRef
+        if (IsZeroBacking)
+            return;
+
+        lock (_rmapLock)
+            _ownerRmap.RetainResident(pageIndex, hostPagePtr);
+    }
+
+    internal int ReleaseOwnerResident(uint pageIndex, IntPtr hostPagePtr)
+    {
+        if (IsZeroBacking)
+            return 0;
+
+        lock (_rmapLock)
+            return _ownerRmap.ReleaseResident(pageIndex, hostPagePtr);
+    }
+
+    internal void AddOrUpdateOwnerRmap(uint pageIndex, IntPtr hostPagePtr, HostPageRmapRef entry,
+        out HostPageRmapRef previous, out bool existed)
+    {
+        lock (_rmapLock)
+            _ownerRmap.AddOrUpdate(pageIndex, hostPagePtr, entry, out previous, out existed);
+    }
+
+    internal bool RemoveOwnerRmap(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey key, out HostPageRmapRef removed)
+    {
+        lock (_rmapLock)
+            return _ownerRmap.TryRemove(pageIndex, hostPagePtr, key, out removed);
+    }
+
+    internal bool ContainsOwnerRmap(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey key)
+    {
+        lock (_rmapLock)
+            return _ownerRmap.Contains(pageIndex, hostPagePtr, key);
+    }
+
+    internal bool RebindOwnerRmap(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey oldKey,
+        HostPageRmapRef newEntry, out HostPageRmapRef previous)
+    {
+        lock (_rmapLock)
+            return _ownerRmap.TryRebind(pageIndex, hostPagePtr, oldKey, newEntry, out previous);
+    }
+
+    internal void CollectOwnerRmapHits(uint pageIndex, IntPtr hostPagePtr, HostPage hostPage, List<RmapHit> output)
+    {
+        lock (_rmapLock)
+            _ownerRmap.CollectHits(pageIndex, hostPagePtr, hostPage, output);
+    }
+
+    internal bool VisitOwnerRmapRefs<TState>(uint pageIndex, IntPtr hostPagePtr, HostPage hostPage, ref TState state,
+        HostPageRmapVisitor<TState> visitor)
+    {
+        lock (_rmapLock)
+            return _ownerRmap.Visit(pageIndex, hostPagePtr, hostPage, ref state, visitor);
+    }
+
+    private HostPageOwnerBinding CreateOwnerBinding(uint pageIndex)
+    {
+        return new HostPageOwnerBinding
         {
             OwnerKind = HostPageOwnerKind.AddressSpace,
             Mapping = this,
@@ -222,7 +275,7 @@ public sealed class AddressSpace
         };
     }
 
-    private void OnPageBindingChanged(uint pageIndex, HostPage? oldHostPage, HostPage? newHostPage)
+    private void OnPageBindingChanged(uint pageIndex, IntPtr oldHostPagePtr, IntPtr newHostPagePtr)
     {
         lock (_rmapLock)
         {
@@ -231,10 +284,10 @@ public sealed class AddressSpace
                 if (pageIndex < attachment.StartPageIndex || pageIndex >= attachment.EndPageIndexExclusive)
                     continue;
 
-                if (oldHostPage != null)
-                    RemoveDirectRefLocked(attachment, pageIndex, oldHostPage);
-                if (newHostPage != null)
-                    AddDirectRefLocked(attachment, pageIndex, newHostPage);
+                if (oldHostPagePtr != IntPtr.Zero)
+                    RemoveDirectRefLocked(attachment, pageIndex, oldHostPagePtr);
+                if (newHostPagePtr != IntPtr.Zero)
+                    AddDirectRefLocked(attachment, pageIndex, newHostPagePtr);
             }
         }
     }
@@ -245,31 +298,32 @@ public sealed class AddressSpace
             (pageIndex, page) =>
             {
                 if (add)
-                    AddDirectRefLocked(attachment, pageIndex, page.HostPage, tbCohWorkSet);
+                    AddDirectRefLocked(attachment, pageIndex, page.Ptr, tbCohWorkSet);
                 else
-                    RemoveDirectRefLocked(attachment, pageIndex, page.HostPage, tbCohWorkSet);
+                    RemoveDirectRefLocked(attachment, pageIndex, page.Ptr, tbCohWorkSet);
             });
     }
 
-    private void AddDirectRefLocked(RmapAttachment attachment, uint pageIndex, HostPage hostPage,
+    private void AddDirectRefLocked(RmapAttachment attachment, uint pageIndex, IntPtr hostPagePtr,
         TbCohWorkSet? tbCohWorkSet = null)
     {
         if (!ReferenceEquals(attachment.Vma.VmMapping, this))
             return;
         if ((attachment.Vma.Flags & MapFlags.Private) != 0 &&
-            attachment.Vma.VmAnonVma?.PeekHostPage(pageIndex) != null)
+            (attachment.Vma.VmAnonVma?.PeekPage(pageIndex) ?? IntPtr.Zero) != IntPtr.Zero)
             return;
 
-        var changed = hostPage.AddOrUpdateRmapRef(attachment.Mm, attachment.Vma, HostPageOwnerKind.AddressSpace,
-            pageIndex, attachment.Vma.GetGuestPageStart(pageIndex));
-        tbCohWorkSet?.AddIfChanged(hostPage, changed);
+        var changed = HostPageManager.AddOrUpdateRmapRef(hostPagePtr, _pageKind, attachment.Mm, attachment.Vma,
+            HostPageOwnerKind.AddressSpace, pageIndex, attachment.Vma.GetGuestPageStart(pageIndex));
+        tbCohWorkSet?.AddIfChanged(hostPagePtr, changed);
     }
 
-    private static void RemoveDirectRefLocked(RmapAttachment attachment, uint pageIndex, HostPage hostPage,
+    private static void RemoveDirectRefLocked(RmapAttachment attachment, uint pageIndex, IntPtr hostPagePtr,
         TbCohWorkSet? tbCohWorkSet = null)
     {
-        var changed = hostPage.RemoveRmapRef(attachment.Mm, attachment.Vma, HostPageOwnerKind.AddressSpace, pageIndex);
-        tbCohWorkSet?.AddIfChanged(hostPage, changed);
+        var changed = HostPageManager.RemoveRmapRef(hostPagePtr, attachment.Mm, attachment.Vma,
+            HostPageOwnerKind.AddressSpace, pageIndex);
+        tbCohWorkSet?.AddIfChanged(hostPagePtr, changed);
     }
 
     private void ClearRmapAttachments()
@@ -283,15 +337,20 @@ public sealed class AddressSpace
 
 public sealed class AnonVma
 {
+    private readonly OwnerRmapTracker _ownerRmap = new();
     private readonly List<RmapAttachment> _rmapAttachments = [];
     private readonly Lock _rmapLock = new();
     private int _refCount = 1;
 
-    public AnonVma()
+    public AnonVma(AnonVma? parent = null)
     {
-        Pages = new VmPageSlots(CreateOwnerRef, OnPageBindingChanged);
+        Parent = parent;
+        Root = parent?.Root ?? this;
+        Pages = new VmPageSlots(CreateOwnerBinding, OnPageBindingChanged);
     }
 
+    internal AnonVma? Parent { get; }
+    internal AnonVma Root { get; }
     internal VmPageSlots Pages { get; }
     public int PageCount => Pages.PageCount;
 
@@ -309,12 +368,12 @@ public sealed class AnonVma
 
     public AnonVma CloneForFork()
     {
-        var clone = new AnonVma();
+        var clone = new AnonVma(this);
         Pages.VisitPageStates(state =>
         {
             var page = Pages.PeekVmPage(state.PageIndex)!;
             PageManager.AddRef(page.Ptr);
-            clone.Pages.InstallExistingHostPage(state.PageIndex, page.HostPage);
+            clone.Pages.InstallExistingHostPage(state.PageIndex, page.Ptr, HostPageKind.Anon);
             var clonedPage = clone.Pages.PeekVmPage(state.PageIndex)!;
             clonedPage.Dirty = page.Dirty;
             clonedPage.Uptodate = page.Uptodate;
@@ -332,11 +391,6 @@ public sealed class AnonVma
     public IntPtr PeekPage(uint pageIndex)
     {
         return Pages.PeekPage(pageIndex);
-    }
-
-    internal HostPage? PeekHostPage(uint pageIndex)
-    {
-        return Pages.PeekHostPage(pageIndex);
     }
 
     internal VmPage? PeekVmPage(uint pageIndex)
@@ -455,17 +509,68 @@ public sealed class AnonVma
         });
     }
 
-    private HostPageOwnerRef CreateOwnerRef(uint pageIndex)
+    internal void RetainOwnerResident(uint pageIndex, IntPtr hostPagePtr)
     {
-        return new HostPageOwnerRef
+        lock (Root._rmapLock)
+            Root._ownerRmap.RetainResident(pageIndex, hostPagePtr);
+    }
+
+    internal int ReleaseOwnerResident(uint pageIndex, IntPtr hostPagePtr)
+    {
+        lock (Root._rmapLock)
+            return Root._ownerRmap.ReleaseResident(pageIndex, hostPagePtr);
+    }
+
+    internal void AddOrUpdateOwnerRmap(uint pageIndex, IntPtr hostPagePtr, HostPageRmapRef entry,
+        out HostPageRmapRef previous, out bool existed)
+    {
+        lock (Root._rmapLock)
+            Root._ownerRmap.AddOrUpdate(pageIndex, hostPagePtr, entry, out previous, out existed);
+    }
+
+    internal bool RemoveOwnerRmap(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey key, out HostPageRmapRef removed)
+    {
+        lock (Root._rmapLock)
+            return Root._ownerRmap.TryRemove(pageIndex, hostPagePtr, key, out removed);
+    }
+
+    internal bool ContainsOwnerRmap(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey key)
+    {
+        lock (Root._rmapLock)
+            return Root._ownerRmap.Contains(pageIndex, hostPagePtr, key);
+    }
+
+    internal bool RebindOwnerRmap(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey oldKey,
+        HostPageRmapRef newEntry, out HostPageRmapRef previous)
+    {
+        lock (Root._rmapLock)
+            return Root._ownerRmap.TryRebind(pageIndex, hostPagePtr, oldKey, newEntry, out previous);
+    }
+
+    internal void CollectOwnerRmapHits(uint pageIndex, IntPtr hostPagePtr, HostPage hostPage, List<RmapHit> output)
+    {
+        lock (Root._rmapLock)
+            Root._ownerRmap.CollectHits(pageIndex, hostPagePtr, hostPage, output);
+    }
+
+    internal bool VisitOwnerRmapRefs<TState>(uint pageIndex, IntPtr hostPagePtr, HostPage hostPage, ref TState state,
+        HostPageRmapVisitor<TState> visitor)
+    {
+        lock (Root._rmapLock)
+            return Root._ownerRmap.Visit(pageIndex, hostPagePtr, hostPage, ref state, visitor);
+    }
+
+    private HostPageOwnerBinding CreateOwnerBinding(uint pageIndex)
+    {
+        return new HostPageOwnerBinding
         {
             OwnerKind = HostPageOwnerKind.AnonVma,
-            AnonVma = this,
+            AnonVmaRoot = Root,
             PageIndex = pageIndex
         };
     }
 
-    private void OnPageBindingChanged(uint pageIndex, HostPage? oldHostPage, HostPage? newHostPage)
+    private void OnPageBindingChanged(uint pageIndex, IntPtr oldHostPagePtr, IntPtr newHostPagePtr)
     {
         lock (_rmapLock)
         {
@@ -474,13 +579,13 @@ public sealed class AnonVma
                 if (pageIndex < attachment.StartPageIndex || pageIndex >= attachment.EndPageIndexExclusive)
                     continue;
 
-                if (oldHostPage != null)
-                    RemoveDirectRefLocked(attachment, pageIndex, oldHostPage);
+                if (oldHostPagePtr != IntPtr.Zero)
+                    RemoveDirectRefLocked(attachment, pageIndex, oldHostPagePtr);
 
-                if (newHostPage != null)
+                if (newHostPagePtr != IntPtr.Zero)
                 {
                     RemoveSharedMappingRefLocked(attachment, pageIndex);
-                    AddDirectRefLocked(attachment, pageIndex, newHostPage);
+                    AddDirectRefLocked(attachment, pageIndex, newHostPagePtr);
                 }
                 else
                 {
@@ -496,55 +601,59 @@ public sealed class AnonVma
             (pageIndex, page) =>
             {
                 if (add)
-                    AddDirectRefLocked(attachment, pageIndex, page.HostPage, tbCohWorkSet);
+                    AddDirectRefLocked(attachment, pageIndex, page.Ptr, tbCohWorkSet);
                 else
-                    RemoveDirectRefLocked(attachment, pageIndex, page.HostPage, tbCohWorkSet);
+                    RemoveDirectRefLocked(attachment, pageIndex, page.Ptr, tbCohWorkSet);
             });
     }
 
-    private void AddDirectRefLocked(RmapAttachment attachment, uint pageIndex, HostPage hostPage,
+    private void AddDirectRefLocked(RmapAttachment attachment, uint pageIndex, IntPtr hostPagePtr,
         TbCohWorkSet? tbCohWorkSet = null)
     {
         if (!ReferenceEquals(attachment.Vma.VmAnonVma, this))
             return;
 
-        var changed = hostPage.AddOrUpdateRmapRef(attachment.Mm, attachment.Vma, HostPageOwnerKind.AnonVma,
-            pageIndex, attachment.Vma.GetGuestPageStart(pageIndex));
-        tbCohWorkSet?.AddIfChanged(hostPage, changed);
+        var changed = HostPageManager.AddOrUpdateRmapRef(hostPagePtr, HostPageKind.Anon, attachment.Mm,
+            attachment.Vma, HostPageOwnerKind.AnonVma, pageIndex, attachment.Vma.GetGuestPageStart(pageIndex));
+        tbCohWorkSet?.AddIfChanged(hostPagePtr, changed);
     }
 
-    private static void RemoveDirectRefLocked(RmapAttachment attachment, uint pageIndex, HostPage hostPage,
+    private static void RemoveDirectRefLocked(RmapAttachment attachment, uint pageIndex, IntPtr hostPagePtr,
         TbCohWorkSet? tbCohWorkSet = null)
     {
-        var changed = hostPage.RemoveRmapRef(attachment.Mm, attachment.Vma, HostPageOwnerKind.AnonVma, pageIndex);
-        tbCohWorkSet?.AddIfChanged(hostPage, changed);
+        var changed = HostPageManager.RemoveRmapRef(hostPagePtr, attachment.Mm, attachment.Vma,
+            HostPageOwnerKind.AnonVma, pageIndex);
+        tbCohWorkSet?.AddIfChanged(hostPagePtr, changed);
     }
 
     private static void RemoveSharedMappingRefLocked(RmapAttachment attachment, uint pageIndex,
         TbCohWorkSet? tbCohWorkSet = null)
     {
-        var sharedHostPage = attachment.Vma.VmMapping?.PeekHostPage(pageIndex);
-        if (sharedHostPage == null)
+        var sharedHostPagePtr = attachment.Vma.VmMapping?.PeekPage(pageIndex) ?? IntPtr.Zero;
+        if (sharedHostPagePtr == IntPtr.Zero)
             return;
 
-        var changed =
-            sharedHostPage.RemoveRmapRef(attachment.Mm, attachment.Vma, HostPageOwnerKind.AddressSpace, pageIndex);
-        tbCohWorkSet?.AddIfChanged(sharedHostPage, changed);
+        var changed = HostPageManager.RemoveRmapRef(sharedHostPagePtr, attachment.Mm, attachment.Vma,
+            HostPageOwnerKind.AddressSpace, pageIndex);
+        tbCohWorkSet?.AddIfChanged(sharedHostPagePtr, changed);
     }
 
     private static void RestoreSharedMappingRefLocked(RmapAttachment attachment, uint pageIndex,
         TbCohWorkSet? tbCohWorkSet = null)
     {
-        if (attachment.Vma.VmAnonVma?.PeekHostPage(pageIndex) != null)
+        if ((attachment.Vma.VmAnonVma?.PeekPage(pageIndex) ?? IntPtr.Zero) != IntPtr.Zero)
             return;
 
-        var sharedHostPage = attachment.Vma.VmMapping?.PeekHostPage(pageIndex);
-        if (sharedHostPage == null)
+        var sharedHostPagePtr = attachment.Vma.VmMapping?.PeekPage(pageIndex) ?? IntPtr.Zero;
+        if (sharedHostPagePtr == IntPtr.Zero)
             return;
 
-        var changed = sharedHostPage.AddOrUpdateRmapRef(attachment.Mm, attachment.Vma,
-            HostPageOwnerKind.AddressSpace, pageIndex, attachment.Vma.GetGuestPageStart(pageIndex));
-        tbCohWorkSet?.AddIfChanged(sharedHostPage, changed);
+        var preferredKind = attachment.Vma.VmMapping?.IsZeroBacking == true
+            ? HostPageKind.Zero
+            : HostPageKind.PageCache;
+        var changed = HostPageManager.AddOrUpdateRmapRef(sharedHostPagePtr, preferredKind, attachment.Mm,
+            attachment.Vma, HostPageOwnerKind.AddressSpace, pageIndex, attachment.Vma.GetGuestPageStart(pageIndex));
+        tbCohWorkSet?.AddIfChanged(sharedHostPagePtr, changed);
     }
 
     private void ClearRmapAttachments()

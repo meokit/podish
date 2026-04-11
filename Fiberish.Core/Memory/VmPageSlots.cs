@@ -5,17 +5,17 @@ namespace Fiberish.Memory;
 internal sealed class VmPageSlots
 {
     private readonly Lock _lock = new();
-    private readonly Func<uint, HostPageOwnerRef> _ownerRefFactory;
-    private readonly Action<uint, HostPage?, HostPage?>? _pageBindingChanged;
+    private readonly Func<uint, HostPageOwnerBinding> _ownerBindingFactory;
+    private readonly Action<uint, IntPtr, IntPtr>? _pageBindingChanged;
     private readonly Action<int>? _pageCountChanged;
     private readonly Dictionary<uint, VmPage> _pages = [];
     private int _pageCount;
 
-    internal VmPageSlots(Func<uint, HostPageOwnerRef> ownerRefFactory,
-        Action<uint, HostPage?, HostPage?>? pageBindingChanged = null,
+    internal VmPageSlots(Func<uint, HostPageOwnerBinding> ownerBindingFactory,
+        Action<uint, IntPtr, IntPtr>? pageBindingChanged = null,
         Action<int>? pageCountChanged = null)
     {
-        _ownerRefFactory = ownerRefFactory;
+        _ownerBindingFactory = ownerBindingFactory;
         _pageBindingChanged = pageBindingChanged;
         _pageCountChanged = pageCountChanged;
     }
@@ -43,7 +43,7 @@ internal sealed class VmPageSlots
         {
             if (_pages.TryGetValue(pageIndex, out var entry))
             {
-                Touch(entry.HostPage);
+                Touch(entry);
                 return entry.Ptr;
             }
 
@@ -59,14 +59,6 @@ internal sealed class VmPageSlots
         }
     }
 
-    internal HostPage? PeekHostPage(uint pageIndex)
-    {
-        lock (_lock)
-        {
-            return _pages.TryGetValue(pageIndex, out var entry) ? entry.HostPage : null;
-        }
-    }
-
     internal VmPage? PeekVmPage(uint pageIndex)
     {
         lock (_lock)
@@ -77,31 +69,33 @@ internal sealed class VmPageSlots
 
     internal void InstallPage(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind)
     {
-        var hostPage = HostPageManager.GetOrCreate(ptr, hostPageKind);
-        InstallExistingHostPage(pageIndex, hostPage);
+        HostPageManager.GetOrCreate(ptr, hostPageKind);
+        InstallExistingHostPage(pageIndex, ptr, hostPageKind);
     }
 
-    internal void InstallExistingHostPage(uint pageIndex, HostPage hostPage, Action<VmPage>? onReleased = null)
+    internal void InstallExistingHostPage(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind,
+        Action<VmPage>? onReleased = null)
     {
         VmPage? oldPage = null;
         var pageCountDelta = 0;
+        HostPageManager.GetOrCreate(ptr, hostPageKind);
         lock (_lock)
         {
             if (_pages.TryGetValue(pageIndex, out var existing))
             {
-                if (ReferenceEquals(existing.HostPage, hostPage))
+                if (existing.Ptr == ptr)
                 {
-                    Touch(existing.HostPage);
+                    Touch(existing);
                     return;
                 }
 
                 oldPage = existing;
             }
 
-            var ownerRef = _ownerRefFactory(pageIndex);
-            hostPage.AddOwnerRef(ownerRef);
-            _pages[pageIndex] = CreateVmPage(hostPage, ownerRef, onReleased);
-            Touch(hostPage);
+            var ownerBinding = _ownerBindingFactory(pageIndex);
+            HostPageManager.BindOwnerRoot(ptr, hostPageKind, ownerBinding);
+            _pages[pageIndex] = CreateVmPage(ptr, hostPageKind, ownerBinding, onReleased);
+            Touch(_pages[pageIndex]);
             if (oldPage == null)
                 pageCountDelta = 1;
         }
@@ -109,32 +103,32 @@ internal sealed class VmPageSlots
         ApplyPageCountDelta(pageCountDelta);
         if (oldPage != null)
             ReleasePageOwnership(pageIndex, oldPage, false);
-        _pageBindingChanged?.Invoke(pageIndex, oldPage?.HostPage, hostPage);
+        _pageBindingChanged?.Invoke(pageIndex, oldPage?.Ptr ?? IntPtr.Zero, ptr);
     }
 
     internal void ReplacePage(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind)
     {
         VmPage? oldPage = null;
-        var hostPage = HostPageManager.GetOrCreate(ptr, hostPageKind);
+        HostPageManager.GetOrCreate(ptr, hostPageKind);
         var pageCountDelta = 0;
 
         lock (_lock)
         {
             if (_pages.TryGetValue(pageIndex, out var existing))
             {
-                if (ReferenceEquals(existing.HostPage, hostPage))
+                if (existing.Ptr == ptr)
                 {
-                    Touch(existing.HostPage);
+                    Touch(existing);
                     return;
                 }
 
                 oldPage = existing;
             }
 
-            var ownerRef = _ownerRefFactory(pageIndex);
-            hostPage.AddOwnerRef(ownerRef);
-            _pages[pageIndex] = CreateVmPage(hostPage, ownerRef);
-            Touch(hostPage);
+            var ownerBinding = _ownerBindingFactory(pageIndex);
+            HostPageManager.BindOwnerRoot(ptr, hostPageKind, ownerBinding);
+            _pages[pageIndex] = CreateVmPage(ptr, hostPageKind, ownerBinding);
+            Touch(_pages[pageIndex]);
             if (oldPage == null)
                 pageCountDelta = 1;
         }
@@ -142,40 +136,40 @@ internal sealed class VmPageSlots
         ApplyPageCountDelta(pageCountDelta);
         if (oldPage != null)
             ReleasePageOwnership(pageIndex, oldPage, false);
-        _pageBindingChanged?.Invoke(pageIndex, oldPage?.HostPage, hostPage);
+        _pageBindingChanged?.Invoke(pageIndex, oldPage?.Ptr ?? IntPtr.Zero, ptr);
     }
 
     internal IntPtr InstallPageIfAbsent(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind, out bool inserted)
     {
-        var hostPage = HostPageManager.GetOrCreate(ptr, hostPageKind);
-        return InstallHostPageIfAbsent(pageIndex, hostPage, null, out inserted);
+        HostPageManager.GetOrCreate(ptr, hostPageKind);
+        return InstallHostPageIfAbsent(pageIndex, ptr, hostPageKind, null, out inserted);
     }
 
-    internal IntPtr InstallHostPageIfAbsent(uint pageIndex, HostPage hostPage, Action<VmPage>? onReleased,
-        out bool inserted)
+    internal IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind,
+        Action<VmPage>? onReleased, out bool inserted)
     {
-        var ptr = hostPage.Ptr;
         var pageCountDelta = 0;
+        HostPageManager.GetOrCreate(ptr, hostPageKind);
 
         lock (_lock)
         {
             if (_pages.TryGetValue(pageIndex, out var existing))
             {
                 inserted = false;
-                Touch(existing.HostPage);
+                Touch(existing);
                 return existing.Ptr;
             }
 
-            var ownerRef = _ownerRefFactory(pageIndex);
-            hostPage.AddOwnerRef(ownerRef);
-            _pages[pageIndex] = CreateVmPage(hostPage, ownerRef, onReleased);
-            Touch(hostPage);
+            var ownerBinding = _ownerBindingFactory(pageIndex);
+            HostPageManager.BindOwnerRoot(ptr, hostPageKind, ownerBinding);
+            _pages[pageIndex] = CreateVmPage(ptr, hostPageKind, ownerBinding, onReleased);
+            Touch(_pages[pageIndex]);
             inserted = true;
             pageCountDelta = 1;
         }
 
         ApplyPageCountDelta(pageCountDelta);
-        _pageBindingChanged?.Invoke(pageIndex, null, hostPage);
+        _pageBindingChanged?.Invoke(pageIndex, IntPtr.Zero, ptr);
         return ptr;
     }
 
@@ -188,7 +182,7 @@ internal sealed class VmPageSlots
             if (_pages.TryGetValue(pageIndex, out var existing))
             {
                 isNew = false;
-                Touch(existing.HostPage);
+                Touch(existing);
                 return existing.Ptr;
             }
         }
@@ -256,20 +250,20 @@ internal sealed class VmPageSlots
                 else
                     PageManager.ReleasePtr(ptr);
                 isNew = false;
-                Touch(raced.HostPage);
+                Touch(raced);
                 return raced.Ptr;
             }
 
-            var ownerRef = _ownerRefFactory(pageIndex);
-            hostPage.AddOwnerRef(ownerRef);
-            _pages[pageIndex] = CreateVmPage(hostPage, ownerRef, null, pageHandle);
-            Touch(hostPage);
+            var ownerBinding = _ownerBindingFactory(pageIndex);
+            HostPageManager.BindOwnerRoot(hostPage.Ptr, hostPageKind, ownerBinding);
+            _pages[pageIndex] = CreateVmPage(hostPage.Ptr, hostPageKind, ownerBinding, null, pageHandle);
+            Touch(_pages[pageIndex]);
             isNew = true;
             pageCountDelta = 1;
         }
 
         ApplyPageCountDelta(pageCountDelta);
-        _pageBindingChanged?.Invoke(pageIndex, null, hostPage);
+        _pageBindingChanged?.Invoke(pageIndex, IntPtr.Zero, ptr);
         return ptr;
     }
 
@@ -280,7 +274,7 @@ internal sealed class VmPageSlots
             if (_pages.TryGetValue(pageIndex, out var entry))
             {
                 entry.Dirty = true;
-                Touch(entry.HostPage);
+                Touch(entry);
             }
         }
     }
@@ -512,8 +506,11 @@ internal sealed class VmPageSlots
     private void ReleasePageOwnership(uint pageIndex, VmPage page, bool notify)
     {
         if (notify)
-            _pageBindingChanged?.Invoke(pageIndex, page.HostPage, null);
-        page.HostPage.RemoveOwnerRef(page.OwnerRef);
+        {
+            _pageBindingChanged?.Invoke(pageIndex, page.Ptr, IntPtr.Zero);
+        }
+
+        HostPageManager.UnbindOwnerRoot(page.Ptr, page.OwnerBinding);
         if (page.Handle.IsValid)
             PageHandle.Release(ref page.Handle);
         else if (page.OnReleased != null)
@@ -522,20 +519,22 @@ internal sealed class VmPageSlots
             PageManager.ReleasePtr(page.Ptr);
     }
 
-    private static VmPage CreateVmPage(HostPage hostPage, HostPageOwnerRef ownerRef, Action<VmPage>? onReleased = null,
-        PageHandle handle = default)
+    private static VmPage CreateVmPage(IntPtr ptr, HostPageKind hostPageKind, HostPageOwnerBinding ownerBinding,
+        Action<VmPage>? onReleased = null, PageHandle handle = default)
     {
         return new VmPage
         {
-            HostPage = hostPage,
-            OwnerRef = ownerRef,
+            Ptr = ptr,
+            HostPageKind = hostPageKind,
+            OwnerBinding = ownerBinding,
             OnReleased = onReleased,
             Handle = handle
         };
     }
 
-    private static void Touch(HostPage hostPage)
+    private static void Touch(VmPage page)
     {
+        var hostPage = HostPageManager.GetOrCreate(page.Ptr, page.HostPageKind);
         hostPage.LastAccessTimestamp = MonotonicTime.GetTimestamp();
     }
 }
@@ -543,45 +542,69 @@ internal sealed class VmPageSlots
 internal sealed class VmPage
 {
     public PageHandle Handle;
-    public required HostPage HostPage { get; set; }
-    public required HostPageOwnerRef OwnerRef { get; set; }
+    public required IntPtr Ptr { get; set; }
+    public required HostPageKind HostPageKind { get; set; }
+    public required HostPageOwnerBinding OwnerBinding { get; set; }
     public Action<VmPage>? OnReleased { get; set; }
-    public IntPtr Ptr => HostPage.Ptr;
 
     public bool Dirty
     {
-        get => HostPage.Dirty;
-        set => HostPage.Dirty = value;
+        get => HostPageManager.GetOrCreate(Ptr, HostPageKind).Dirty;
+        set
+        {
+            var hostPage = HostPageManager.GetOrCreate(Ptr, HostPageKind);
+            hostPage.Dirty = value;
+        }
     }
 
     public bool Uptodate
     {
-        get => HostPage.Uptodate;
-        set => HostPage.Uptodate = value;
+        get => HostPageManager.GetOrCreate(Ptr, HostPageKind).Uptodate;
+        set
+        {
+            var hostPage = HostPageManager.GetOrCreate(Ptr, HostPageKind);
+            hostPage.Uptodate = value;
+        }
     }
 
     public bool Writeback
     {
-        get => HostPage.Writeback;
-        set => HostPage.Writeback = value;
+        get => HostPageManager.GetOrCreate(Ptr, HostPageKind).Writeback;
+        set
+        {
+            var hostPage = HostPageManager.GetOrCreate(Ptr, HostPageKind);
+            hostPage.Writeback = value;
+        }
     }
 
     public int MapCount
     {
-        get => HostPage.MapCount;
-        set => HostPage.MapCount = value;
+        get => HostPageManager.GetOrCreate(Ptr, HostPageKind).MapCount;
+        set
+        {
+            var hostPage = HostPageManager.GetOrCreate(Ptr, HostPageKind);
+            hostPage.MapCount = value;
+        }
     }
 
     public int PinCount
     {
-        get => HostPage.PinCount;
-        set => HostPage.PinCount = value;
+        get => HostPageManager.GetOrCreate(Ptr, HostPageKind).PinCount;
+        set
+        {
+            var hostPage = HostPageManager.GetOrCreate(Ptr, HostPageKind);
+            hostPage.PinCount = value;
+        }
     }
 
     public long LastAccessTimestamp
     {
-        get => HostPage.LastAccessTimestamp;
-        set => HostPage.LastAccessTimestamp = value;
+        get => HostPageManager.GetOrCreate(Ptr, HostPageKind).LastAccessTimestamp;
+        set
+        {
+            var hostPage = HostPageManager.GetOrCreate(Ptr, HostPageKind);
+            hostPage.LastAccessTimestamp = value;
+        }
     }
 }
 
