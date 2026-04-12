@@ -290,6 +290,9 @@ public class ElfLoader
                         var vfsFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount!);
                         ProcessAddressSpaceSync.Mmap(mm, engine, pageStart, fileMapLen, perms,
                             MapFlags.Private | MapFlags.Fixed, vfsFile, pageOffset, "ELF_LOAD");
+
+                        if (bssStart < fileMapEnd && bssEnd > bssStart)
+                            mm.FindVmArea(pageStart)?.SetSyntheticZeroRange(bssStart, Math.Min(fileMapEnd, bssEnd));
                     }
 
                     // Zero-fill the BSS portion on the last file page

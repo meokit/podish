@@ -1301,10 +1301,17 @@ public sealed class ContainerRuntimeService
 
                 var start = entry.DataOffset + offset;
                 if (start < 0 || start >= stream.Length)
-                    return true;
+                    return false;
 
                 stream.Seek(start, SeekOrigin.Begin);
-                bytesRead = stream.Read(buffer[..maxReadable]);
+                while (bytesRead < maxReadable)
+                {
+                    var n = stream.Read(buffer[bytesRead..maxReadable]);
+                    if (n <= 0)
+                        return false;
+                    bytesRead += n;
+                }
+
                 return true;
             }
         }

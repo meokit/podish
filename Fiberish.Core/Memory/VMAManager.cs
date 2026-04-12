@@ -1205,11 +1205,15 @@ public class VMAManager
                         Name = vma.Name,
                         VmMapping = vma.VmMapping,
                         VmAnonVma = ShareVmAnonVmaForSplit(vma),
-                        VmPgoff = vma.GetPageIndex(tailStart)
+                        VmPgoff = vma.GetPageIndex(tailStart),
+                        SyntheticZeroStart = vma.SyntheticZeroStart,
+                        SyntheticZeroEnd = vma.SyntheticZeroEnd
                     };
                     vma.VmMapping?.AddRef();
+                    tailVmArea.TrimSyntheticZeroRangeToBounds();
 
                     vma.End = addr;
+                    vma.TrimSyntheticZeroRangeToBounds();
                     replacements.Add(vma);
                     replacements.Add(tailVmArea);
                     (addedVmas ??= []).Add(tailVmArea);
@@ -1231,6 +1235,7 @@ public class VMAManager
                     vma.VmPgoff = newVmPgoff;
                     if (vma.File != null)
                         vma.Offset += diff;
+                    vma.TrimSyntheticZeroRangeToBounds();
                     replacements.Add(vma);
                     (registerAfter ??= []).Add(vma);
                     continue;
@@ -1244,6 +1249,7 @@ public class VMAManager
                     QueueUnmappedObjectPages(vma, addr, vma.End, pendingObjectPageReleases ??= []);
                     UnregisterVmAreaAttachments(vma);
                     vma.End = addr;
+                    vma.TrimSyntheticZeroRangeToBounds();
                     replacements.Add(vma);
                     (registerAfter ??= []).Add(vma);
                 }
@@ -1372,9 +1378,12 @@ public class VMAManager
                     Name = vma.Name,
                     VmMapping = vma.VmMapping,
                     VmAnonVma = ShareVmAnonVmaForSplit(vma),
-                    VmPgoff = vma.GetPageIndex(overlapStart)
+                    VmPgoff = vma.GetPageIndex(overlapStart),
+                    SyntheticZeroStart = vma.SyntheticZeroStart,
+                    SyntheticZeroEnd = vma.SyntheticZeroEnd
                 };
                 vma.VmMapping?.AddRef();
+                mid.TrimSyntheticZeroRangeToBounds();
 
                 // Left tail stays in the existing VmArea.
                 var hasLeft = overlapStart > oldStart;
@@ -1386,6 +1395,7 @@ public class VMAManager
                     vma.Start = oldStart;
                     vma.End = overlapStart;
                     vma.Perms = oldPerms;
+                    vma.TrimSyntheticZeroRangeToBounds();
                 }
 
                 // Right tail (if any) keeps old perms.
@@ -1404,9 +1414,12 @@ public class VMAManager
                         Name = vma.Name,
                         VmMapping = vma.VmMapping,
                         VmAnonVma = ShareVmAnonVmaForSplit(vma),
-                        VmPgoff = vma.GetPageIndex(overlapEnd)
+                        VmPgoff = vma.GetPageIndex(overlapEnd),
+                        SyntheticZeroStart = vma.SyntheticZeroStart,
+                        SyntheticZeroEnd = vma.SyntheticZeroEnd
                     };
                     vma.VmMapping?.AddRef();
+                    right.TrimSyntheticZeroRangeToBounds();
                 }
 
                 if (!hasLeft)
@@ -1423,6 +1436,8 @@ public class VMAManager
                     vma.VmPgoff = mid.VmPgoff;
                     vma.VmMapping = mid.VmMapping;
                     vma.VmAnonVma = mid.VmAnonVma;
+                    vma.SyntheticZeroStart = mid.SyntheticZeroStart;
+                    vma.SyntheticZeroEnd = mid.SyntheticZeroEnd;
                     mid.VmAnonVma = null;
                     mid.FileMapping = null;
                     // Drop the temporary extra ref held by mid.
@@ -1721,6 +1736,29 @@ public class VMAManager
                (vma.Perms & Protection.Write) != 0;
     }
 
+    private static void ApplySyntheticZeroFill(VmArea vma, uint pageStart, IntPtr pagePtr)
+    {
+        if (!vma.TryGetSyntheticZeroPageSlice(pageStart, out var zeroOffset, out var zeroLength))
+            return;
+
+        unsafe
+        {
+            new Span<byte>((byte*)pagePtr + zeroOffset, zeroLength).Clear();
+        }
+    }
+
+    private AnonVma EnsurePrivateObject(VmArea vma)
+    {
+        var privateObject = vma.VmAnonVma;
+        if (privateObject != null)
+            return privateObject;
+
+        privateObject = new AnonVma(MemoryContext);
+        vma.VmAnonVma = privateObject;
+        RegisterVmAreaAnonAttachment(vma);
+        return privateObject;
+    }
+
     private static bool TryPopulateAnonymousAddressSpacePage(IntPtr ptr)
     {
         unsafe
@@ -1994,6 +2032,27 @@ public class VMAManager
                 return result;
             }
 
+            if (vma.TryGetSyntheticZeroPageSlice(pageStart, out _, out _))
+            {
+                var syntheticSourceResult = ResolveSharedBackingPage(vma, pageIndex, vmaRelativeOffset,
+                    absoluteFileOffset, false, engine, out var syntheticSourcePage);
+                if (syntheticSourceResult != FaultResult.Handled)
+                    return syntheticSourceResult;
+
+                if (!TryAllocatePrivateCopyFromSource(engine, pageStart, syntheticSourcePage,
+                        "ElfSyntheticZeroPrivateRead", out var syntheticPrivatePageHandle))
+                    return FaultResult.Oom;
+
+                ApplySyntheticZeroFill(vma, pageStart, syntheticPrivatePageHandle.Pointer);
+                privateObject = EnsurePrivateObject(vma);
+                var installResult = InstallPrivatePageAndMap(privateObject, pageStart, pageIndex,
+                    ref syntheticPrivatePageHandle, readPerms, engine, false);
+                if (installResult == FaultResult.Handled && (vma.Perms & Protection.Exec) != 0 &&
+                    privateObject.PeekVmPage(pageIndex) is { } syntheticPrivatePage)
+                    TbCoh.ApplyWx(MemoryContext, syntheticPrivatePage.Ptr);
+                return installResult;
+            }
+
             return ResolveAndMapSharedBackingPage(vma, pageStart, pageIndex, vmaRelativeOffset, absoluteFileOffset,
                 false, readPerms, engine);
         }
@@ -2012,12 +2071,8 @@ public class VMAManager
             return FaultResult.Oom;
 
         Interlocked.Increment(ref _cowAllocFirstCount);
-        if (privateObject == null)
-        {
-            privateObject = new AnonVma(MemoryContext);
-            vma.VmAnonVma = privateObject;
-            RegisterVmAreaAnonAttachment(vma);
-        }
+        ApplySyntheticZeroFill(vma, pageStart, privatePageHandle.Pointer);
+        privateObject = EnsurePrivateObject(vma);
 
         return InstallPrivatePageAndMap(privateObject, pageStart, pageIndex, ref privatePageHandle, (byte)vma.Perms,
             engine,

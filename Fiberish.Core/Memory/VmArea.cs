@@ -43,8 +43,11 @@ public class VmArea
     ///     Null for MAP_SHARED and other non-private mappings.
     /// </summary>
     public AnonVma? VmAnonVma { get; set; }
+    public uint SyntheticZeroStart { get; set; }
+    public uint SyntheticZeroEnd { get; set; }
 
     public uint Length => End - Start;
+    public bool HasSyntheticZeroRange => SyntheticZeroStart < SyntheticZeroEnd;
 
     public bool IsFileBacked => File != null;
 
@@ -101,6 +104,53 @@ public class VmArea
         return LinuxConstants.PageSize;
     }
 
+    public void SetSyntheticZeroRange(uint start, uint end)
+    {
+        SyntheticZeroStart = start;
+        SyntheticZeroEnd = end;
+        TrimSyntheticZeroRangeToBounds();
+    }
+
+    public void TrimSyntheticZeroRangeToBounds()
+    {
+        if (!HasSyntheticZeroRange || End <= Start)
+        {
+            SyntheticZeroStart = 0;
+            SyntheticZeroEnd = 0;
+            return;
+        }
+
+        var clampedStart = SyntheticZeroStart < Start ? Start : SyntheticZeroStart;
+        var clampedEnd = SyntheticZeroEnd > End ? End : SyntheticZeroEnd;
+        if (clampedStart >= clampedEnd)
+        {
+            SyntheticZeroStart = 0;
+            SyntheticZeroEnd = 0;
+            return;
+        }
+
+        SyntheticZeroStart = clampedStart;
+        SyntheticZeroEnd = clampedEnd;
+    }
+
+    public bool TryGetSyntheticZeroPageSlice(uint guestPageStart, out int zeroOffset, out int zeroLength)
+    {
+        zeroOffset = 0;
+        zeroLength = 0;
+        if (!HasSyntheticZeroRange)
+            return false;
+
+        var pageEnd = checked(guestPageStart + LinuxConstants.PageSize);
+        var overlapStart = SyntheticZeroStart > guestPageStart ? SyntheticZeroStart : guestPageStart;
+        var overlapEnd = SyntheticZeroEnd < pageEnd ? SyntheticZeroEnd : pageEnd;
+        if (overlapStart >= overlapEnd)
+            return false;
+
+        zeroOffset = checked((int)(overlapStart - guestPageStart));
+        zeroLength = checked((int)(overlapEnd - overlapStart));
+        return true;
+    }
+
     public VmArea Clone()
     {
         VmMapping?.AddRef();
@@ -119,7 +169,9 @@ public class VmArea
             VmPgoff = VmPgoff,
             Name = Name,
             VmMapping = VmMapping,
-            VmAnonVma = privateObj
+            VmAnonVma = privateObj,
+            SyntheticZeroStart = SyntheticZeroStart,
+            SyntheticZeroEnd = SyntheticZeroEnd
         };
     }
 }

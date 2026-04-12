@@ -1,0 +1,107 @@
+using System.Buffers.Binary;
+using Fiberish.Core;
+using Fiberish.Memory;
+using Fiberish.Native;
+using Xunit;
+
+namespace Fiberish.Tests.Loader;
+
+public class ElfLoaderRegressionTests
+{
+    private const string GuestElfPath = "/tail-bss.elf";
+    private const uint SegmentVirtualAddress = 0x08048000;
+    private const uint SegmentFileOffset = 0x1000;
+    private const uint SegmentFileSize = 0x120;
+    private const uint SegmentMemorySize = 0x200;
+
+    [Fact]
+    public void PtLoadTailZeroFill_RemainsZero_AfterNativeTearDown_AndRefault()
+    {
+        var guestRoot = Path.Combine(Path.GetTempPath(), $"elf-tail-bss-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(guestRoot);
+        File.WriteAllBytes(Path.Combine(guestRoot, "tail-bss.elf"), BuildTailBssElfImage());
+
+        try
+        {
+            using var runtime = KernelRuntime.Bootstrap(guestRoot, false, false);
+            var scheduler = new KernelScheduler();
+            var (loc, resolvedGuestPath) = runtime.Syscalls.ResolvePath(GuestElfPath, true);
+            Assert.True(loc.IsValid);
+            Assert.NotNull(loc.Dentry);
+            Assert.NotNull(loc.Mount);
+
+            var task = ProcessFactory.CreateInitProcess(
+                runtime,
+                loc.Dentry!,
+                resolvedGuestPath,
+                [resolvedGuestPath],
+                [],
+                scheduler,
+                null,
+                loc.Mount);
+
+            var mm = task.Process.Mem;
+            var bssStart = SegmentVirtualAddress + SegmentFileSize;
+            var bssBytes = new byte[checked((int)(SegmentMemorySize - SegmentFileSize))];
+
+            Assert.True(runtime.Engine.CopyFromUser(bssStart, bssBytes));
+            Assert.All(bssBytes, static value => Assert.Equal((byte)0, value));
+
+            mm.TearDownNativeMappings(
+                runtime.Engine,
+                SegmentVirtualAddress,
+                LinuxConstants.PageSize,
+                false,
+                false,
+                true);
+
+            Assert.True(mm.HandleFault(bssStart, false, runtime.Engine));
+
+            Array.Fill(bssBytes, (byte)0x5A);
+            Assert.True(runtime.Engine.CopyFromUser(bssStart, bssBytes));
+            Assert.All(bssBytes, static value => Assert.Equal((byte)0, value));
+        }
+        finally
+        {
+            Directory.Delete(guestRoot, true);
+        }
+    }
+
+    private static byte[] BuildTailBssElfImage()
+    {
+        var image = new byte[checked((int)(SegmentFileOffset + LinuxConstants.PageSize))];
+        var span = image.AsSpan();
+
+        span[0] = 0x7F;
+        span[1] = (byte)'E';
+        span[2] = (byte)'L';
+        span[3] = (byte)'F';
+        span[4] = 1;
+        span[5] = 1;
+        span[6] = 1;
+
+        BinaryPrimitives.WriteUInt16LittleEndian(span[16..18], 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(span[18..20], 3);
+        BinaryPrimitives.WriteUInt32LittleEndian(span[20..24], 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(span[24..28], SegmentVirtualAddress);
+        BinaryPrimitives.WriteUInt32LittleEndian(span[28..32], 0x34);
+        BinaryPrimitives.WriteUInt16LittleEndian(span[40..42], 52);
+        BinaryPrimitives.WriteUInt16LittleEndian(span[42..44], 32);
+        BinaryPrimitives.WriteUInt16LittleEndian(span[44..46], 1);
+
+        var programHeader = span[0x34..0x54];
+        BinaryPrimitives.WriteUInt32LittleEndian(programHeader[..4], 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(programHeader[4..8], SegmentFileOffset);
+        BinaryPrimitives.WriteUInt32LittleEndian(programHeader[8..12], SegmentVirtualAddress);
+        BinaryPrimitives.WriteUInt32LittleEndian(programHeader[16..20], SegmentFileSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(programHeader[20..24], SegmentMemorySize);
+        BinaryPrimitives.WriteUInt32LittleEndian(programHeader[24..28], 5);
+        BinaryPrimitives.WriteUInt32LittleEndian(programHeader[28..32], LinuxConstants.PageSize);
+
+        span.Slice((int)SegmentFileOffset, (int)SegmentFileSize).Fill(0x90);
+        span.Slice((int)(SegmentFileOffset + SegmentFileSize),
+            LinuxConstants.PageSize - (int)SegmentFileSize).Fill(0xCC);
+
+        return image;
+    }
+}

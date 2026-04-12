@@ -139,6 +139,39 @@ public sealed class MemoryRuntimeContext : IDisposable
         }
     }
 
+    internal bool IsZeroPageHostReadOnlyProtected
+    {
+        get
+        {
+            lock (_shmGate)
+            {
+                return _zeroInode?.IsHostReadOnlyProtected ?? false;
+            }
+        }
+    }
+
+    internal PooledSegmentAllocationKind? ZeroPageAllocationKind
+    {
+        get
+        {
+            lock (_shmGate)
+            {
+                return _zeroInode?.AllocationKind;
+            }
+        }
+    }
+
+    internal nuint ZeroPageReservationSizeBytes
+    {
+        get
+        {
+            lock (_shmGate)
+            {
+                return _zeroInode?.ReservationSizeBytes ?? 0;
+            }
+        }
+    }
+
     internal IntPtr AcquireZeroMappingPage(uint pageIndex)
     {
         lock (_shmGate)
@@ -221,6 +254,8 @@ internal sealed class ZeroInode : MappingBackedInode, IDisposable
     private readonly MemoryRuntimeContext _memoryContext;
     private readonly Lock _zeroPageGate = new();
     private IntPtr _sharedZeroPagePtr;
+    private PooledSegmentMemoryReservation _sharedZeroPageReservation;
+    private bool _sharedZeroPageHostProtected;
 
     public ZeroInode(MemoryRuntimeContext memoryContext)
     {
@@ -234,6 +269,10 @@ internal sealed class ZeroInode : MappingBackedInode, IDisposable
 
     protected override AddressSpaceKind MappingKind => AddressSpaceKind.Zero;
     protected override AddressSpacePolicy.AddressSpaceCacheClass? MappingCacheClass => null;
+    internal bool IsHostReadOnlyProtected => _sharedZeroPageHostProtected;
+    internal PooledSegmentAllocationKind? AllocationKind =>
+        _sharedZeroPageReservation.IsAllocated ? _sharedZeroPageReservation.AllocationKind : null;
+    internal nuint ReservationSizeBytes => _sharedZeroPageReservation.Size;
 
     internal override InodePageRecord? TryCreateIntrinsicMappingPage(uint pageIndex)
     {
@@ -241,14 +280,43 @@ internal sealed class ZeroInode : MappingBackedInode, IDisposable
         {
             if (_sharedZeroPagePtr == IntPtr.Zero)
             {
-                unsafe
-                {
-                    var ptr = (IntPtr)NativeMemory.AlignedAlloc(LinuxConstants.PageSize, LinuxConstants.PageSize);
-                    if (ptr == IntPtr.Zero)
-                        return null;
+                var zeroPageBytes = checked((nuint)Math.Max(
+                    LinuxConstants.PageSize,
+                    _memoryContext.HostMemoryMapGeometry.HostPageSize));
+                var reservation = PooledSegmentMemory.Allocate(zeroPageBytes);
+                if (!reservation.IsAllocated)
+                    return null;
 
-                    new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
-                    _sharedZeroPagePtr = ptr;
+                try
+                {
+                    unsafe
+                    {
+                        if (!reservation.IsZeroInitialized)
+                            new Span<byte>((void*)reservation.BasePtr, checked((int)reservation.Size)).Clear();
+                    }
+
+                    var zeroPagePtr = (IntPtr)reservation.BasePtr;
+                    var hostProtected = false;
+                    if (PooledSegmentMemory.SupportsReadOnlyProtection)
+                    {
+                        if (!PooledSegmentMemory.TryProtectReadOnly(reservation, reservation.BasePtr, reservation.Size))
+                        {
+                            throw new InvalidOperationException(
+                                $"Failed to mark shared zero page 0x{reservation.BasePtr.ToInt64():X} read-only: " +
+                                $"osError={Marshal.GetLastPInvokeError()}.");
+                        }
+
+                        hostProtected = true;
+                    }
+
+                    _sharedZeroPageReservation = reservation;
+                    _sharedZeroPagePtr = zeroPagePtr;
+                    _sharedZeroPageHostProtected = hostProtected;
+                }
+                catch
+                {
+                    PooledSegmentMemory.Free(reservation);
+                    throw;
                 }
             }
 
@@ -273,12 +341,10 @@ internal sealed class ZeroInode : MappingBackedInode, IDisposable
             if (_sharedZeroPagePtr == IntPtr.Zero)
                 return;
 
-            unsafe
-            {
-                NativeMemory.AlignedFree((void*)_sharedZeroPagePtr);
-            }
-
+            PooledSegmentMemory.Free(_sharedZeroPageReservation);
+            _sharedZeroPageReservation = default;
             _sharedZeroPagePtr = IntPtr.Zero;
+            _sharedZeroPageHostProtected = false;
         }
     }
 }

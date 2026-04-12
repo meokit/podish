@@ -469,8 +469,10 @@ public class LayerInode : MappingBackedInode
             }
         }
 
-        var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
-        return rc < 0 ? rc : 0;
+        return TryReadBackingContent(request.FileOffset, pageBuffer[..request.Length], requireFullRead: true,
+            out _)
+            ? 0
+            : -(int)Errno.EIO;
     }
 
     protected override int AopsReadahead(LinuxFile? linuxFile, ReadaheadRequest request)
@@ -500,7 +502,6 @@ public class LayerInode : MappingBackedInode
         if (maxPageCount <= 0 || startPageIndex >= maxPageCount)
             return;
 
-        var sb = (LayerSuperBlock)SuperBlock;
         var page = ArrayPool<byte>.Shared.Rent(LinuxConstants.PageSize);
         try
         {
@@ -513,7 +514,8 @@ public class LayerInode : MappingBackedInode
                 {
                     page.AsSpan().Clear();
                     var fileOffset = pageIndex * LinuxConstants.PageSize;
-                    if (!sb.ContentProvider.TryRead(_entry, fileOffset, page, out var readLen)) return false;
+                    if (!TryReadBackingContent(fileOffset, page, requireFullRead: true, out var readLen))
+                        return false;
                     unsafe
                     {
                         var dst = new Span<byte>((void*)p, LinuxConstants.PageSize);
@@ -593,7 +595,28 @@ public class LayerInode : MappingBackedInode
 
     private int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
     {
+        return TryReadBackingContent(offset, buffer, requireFullRead: false, out var n) ? n : -(int)Errno.EIO;
+    }
+
+    private bool TryReadBackingContent(long offset, Span<byte> buffer, bool requireFullRead, out int bytesRead)
+    {
+        bytesRead = 0;
+        if (_entry.Type != InodeType.File || buffer.Length == 0)
+            return true;
+        if (offset < 0)
+            return false;
+
+        var remaining = (long)_entry.Size - offset;
+        if (remaining <= 0)
+            return true;
+
+        var expected = (int)Math.Min(buffer.Length, remaining);
         var sb = (LayerSuperBlock)SuperBlock;
-        return sb.ContentProvider.TryRead(_entry, offset, buffer, out var n) ? n : -(int)Errno.EIO;
+        if (!sb.ContentProvider.TryRead(_entry, offset, buffer[..expected], out bytesRead))
+            return false;
+        if ((uint)bytesRead > (uint)expected)
+            return false;
+
+        return !requireFullRead || bytesRead == expected;
     }
 }

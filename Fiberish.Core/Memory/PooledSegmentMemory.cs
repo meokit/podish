@@ -23,12 +23,15 @@ internal static partial class PooledSegmentMemory
     private const uint MemCommit = 0x1000;
     private const uint MemReserve = 0x2000;
     private const uint MemRelease = 0x8000;
+    private const uint PageReadOnly = 0x02;
     private const uint PageReadWrite = 0x04;
     private const int ProtRead = 0x1;
     private const int ProtWrite = 0x2;
     private const int MapPrivate = 0x2;
     private const int MadviseDontNeed = 4;
     private static readonly nint MmapFailed = new(-1);
+
+    public static bool SupportsReadOnlyProtection => SupportsVirtualMemoryApi();
 
     public static unsafe PooledSegmentMemoryReservation Allocate(nuint size)
     {
@@ -87,15 +90,32 @@ internal static partial class PooledSegmentMemory
         return false;
     }
 
+    public static bool TryProtectReadOnly(PooledSegmentMemoryReservation reservation, nint addr, nuint length)
+    {
+        if (!reservation.IsAllocated || reservation.AllocationKind != PooledSegmentAllocationKind.VirtualMemory ||
+            addr == 0 || length == 0 || !SupportsReadOnlyProtection)
+            return false;
+
+        var reservationStart = reservation.BasePtr.ToInt64();
+        var reservationEnd = checked(reservationStart + (long)reservation.Size);
+        var protectStart = addr.ToInt64();
+        var protectEnd = checked(protectStart + (long)length);
+        if (protectStart < reservationStart || protectEnd > reservationEnd)
+            return false;
+
+        if (OperatingSystem.IsWindows())
+            return VirtualProtect(addr, length, PageReadOnly, out _);
+
+        return mprotect(addr, length, ProtRead) == 0;
+    }
+
     private static bool TryAllocateVirtualMemory(nuint size, out PooledSegmentMemoryReservation reservation)
     {
-#if NET8_0_OR_GREATER
-        if (OperatingSystem.IsBrowser() || OperatingSystem.IsWasi())
+        if (!SupportsVirtualMemoryApi())
         {
             reservation = default;
             return false;
         }
-#endif
 
         if (OperatingSystem.IsWindows())
         {
@@ -165,12 +185,31 @@ internal static partial class PooledSegmentMemory
         return MadviseDontNeed;
     }
 
+    private static bool SupportsVirtualMemoryApi()
+    {
+        if (OperatingSystem.IsBrowser())
+            return false;
+#if NET8_0_OR_GREATER
+        if (OperatingSystem.IsWasi())
+            return false;
+#endif
+        return true;
+    }
+
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial nint VirtualAlloc(nint lpAddress, nuint dwSize, uint flAllocationType, uint flProtect);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool VirtualFree(nint lpAddress, nuint dwSize, uint dwFreeType);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool VirtualProtect(
+        nint lpAddress,
+        nuint dwSize,
+        uint flNewProtect,
+        out uint lpflOldProtect);
 
     [LibraryImport("libc", SetLastError = true)]
     private static partial nint mmap(nint addr, nuint length, int prot, int flags, int fd, nint offset);
@@ -180,4 +219,7 @@ internal static partial class PooledSegmentMemory
 
     [LibraryImport("libc", SetLastError = true)]
     private static partial int madvise(nint addr, nuint length, int advice);
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int mprotect(nint addr, nuint length, int prot);
 }

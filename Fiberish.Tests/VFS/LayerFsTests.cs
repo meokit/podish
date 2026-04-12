@@ -216,6 +216,48 @@ public class LayerFsTests
     }
 
     [Fact]
+    public void MmapFault_WhenProviderReturnsZeroBytesBeforeEof_ShouldFail()
+    {
+        var index = new LayerIndex();
+        index.AddEntry(new LayerIndexEntry(
+            "/faulty.bin",
+            InodeType.File,
+            0x1A4,
+            Size: 4,
+            DataOffset: 0));
+
+        var fs = new LayerFileSystem(memoryContext: _runtime.MemoryContext);
+        var sb = fs.ReadSuper(
+            new FileSystemType { Name = "layerfs" },
+            0,
+            "layer",
+            new LayerMountOptions
+            {
+                Index = index,
+                ContentProvider = new ZeroByteSuccessContentProvider()
+            });
+
+        using var engine = _runtime.CreateEngine();
+        var mm = _runtime.CreateAddressSpace();
+        var dentry = sb.Root.Inode!.Lookup("faulty.bin");
+        Assert.NotNull(dentry);
+
+        const uint mapAddr = 0x51000000;
+        mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read, MapFlags.Private | MapFlags.Fixed,
+            new LinuxFile(dentry!, FileFlags.O_RDONLY, null!, LinuxFile.ReferenceKind.MmapHold), 0,
+            "FAULTY_LAYER_MMAP", engine);
+
+        try
+        {
+            Assert.False(mm.HandleFault(mapAddr, false, engine));
+        }
+        finally
+        {
+            mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
+        }
+    }
+
+    [Fact]
     public void PageCacheOps_ReadPageWorks_AndWritePageReturnsErofs()
     {
         var rootNode = LayerNode.Directory("/")
@@ -556,6 +598,19 @@ public class LayerFsTests
             blob.AsSpan(start, toCopy).CopyTo(buffer);
             bytesRead = toCopy;
             return true;
+        }
+    }
+
+    private sealed class ZeroByteSuccessContentProvider : ILayerContentProvider
+    {
+        public bool TryRead(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead)
+        {
+            _ = buffer;
+            bytesRead = 0;
+            if (entry.Type != InodeType.File)
+                return true;
+
+            return offset >= 0;
         }
     }
 }
