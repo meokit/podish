@@ -298,6 +298,9 @@ public partial class SyscallManager
             case X86SyscallNumbers.times:
                 handled = true;
                 return SysTimes(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getrusage:
+                handled = true;
+                return SysGetRusage(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.nice:
                 handled = true;
                 return SysNice(engine, ebx, ecx, edx, esi, edi, ebp);

@@ -18,6 +18,10 @@ public partial class SyscallManager
     private const long VirtualCpuHz = 1_000_000_000L; // Assume a fixed 1 GHz virtual CPU.
     private const int UserHz = 100; // Linux i386 userspace clock ticks per second for times().
     private const int SysInfo32Size = 64;
+    private const int Rusage32Size = 72;
+    private const int RusageSelf = 0;
+    private const int RusageChildren = -1;
+    private const int RusageThread = 1;
 
     private const int SupportedMembarrierCommands =
         LinuxConstants.MEMBARRIER_CMD_GLOBAL |
@@ -89,6 +93,37 @@ public partial class SyscallManager
         }
 
         return ticks;
+    }
+
+    private async ValueTask<int> SysGetRusage(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var who = unchecked((int)a1);
+        var usagePtr = a2;
+
+        long userUsec;
+        long systemUsec;
+
+        switch (who)
+        {
+            case RusageSelf:
+            case RusageThread:
+                // We do not maintain precise per-task accounting yet, so expose the emulator's
+                // virtual CPU clock as user time and keep system time at zero.
+                userUsec = GetVirtualCpuCycles() / 1_000L;
+                systemUsec = 0;
+                break;
+            case RusageChildren:
+                userUsec = 0;
+                systemUsec = 0;
+                break;
+            default:
+                return -(int)Errno.EINVAL;
+        }
+
+        if (!WriteRusage32(engine, usagePtr, userUsec, systemUsec))
+            return -(int)Errno.EFAULT;
+
+        return 0;
     }
 
     private async ValueTask<int> SysUname(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -628,6 +663,22 @@ public partial class SyscallManager
         var buf = new byte[8];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)(totalNs / 1_000_000_000L));
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)(totalNs % 1_000_000_000L));
+        return engine.CopyToUser(ptr, buf);
+    }
+
+    private static bool WriteRusage32(Engine engine, uint ptr, long userUsec, long systemUsec, int maxRssKiB = 0)
+    {
+        if (ptr == 0) return false;
+
+        Span<byte> buf = stackalloc byte[Rusage32Size];
+        buf.Clear();
+
+        BinaryPrimitives.WriteInt32LittleEndian(buf.Slice(0, 4), (int)(userUsec / 1_000_000L));
+        BinaryPrimitives.WriteInt32LittleEndian(buf.Slice(4, 4), (int)(userUsec % 1_000_000L));
+        BinaryPrimitives.WriteInt32LittleEndian(buf.Slice(8, 4), (int)(systemUsec / 1_000_000L));
+        BinaryPrimitives.WriteInt32LittleEndian(buf.Slice(12, 4), (int)(systemUsec % 1_000_000L));
+        BinaryPrimitives.WriteInt32LittleEndian(buf.Slice(16, 4), maxRssKiB);
+
         return engine.CopyToUser(ptr, buf);
     }
 
