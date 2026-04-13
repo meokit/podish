@@ -330,6 +330,55 @@ public class NetworkTests
         Assert.Equal(1, result);
     }
 
+    [Fact]
+    public void UnixSocketInode_Ioctl_Fionbio_TogglesNonBlockingFlag()
+    {
+        using var env = new TestEnv();
+        var sock = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Stream, env.Scheduler);
+        var file = new LinuxFile(new Dentry(FsName.FromString("s"), sock, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+            null!);
+
+        const uint argAddr = 0x41000000;
+        env.MapWritablePage(argAddr);
+
+        env.WriteUserInt32(argAddr, 1);
+        Assert.Equal(0, sock.Ioctl(file, env.Task, LinuxConstants.FIONBIO, argAddr));
+        Assert.True((file.Flags & FileFlags.O_NONBLOCK) != 0);
+
+        env.WriteUserInt32(argAddr, 0);
+        Assert.Equal(0, sock.Ioctl(file, env.Task, LinuxConstants.FIONBIO, argAddr));
+        Assert.False((file.Flags & FileFlags.O_NONBLOCK) != 0);
+    }
+
+    [Fact]
+    public async Task UnixSocketInode_Ioctl_Fionread_StreamSocket_ReportsQueuedBytes()
+    {
+        using var env = new TestEnv();
+        var sock1 = new UnixSocketInode(1, env.MemfdSuperBlock, SocketType.Stream, env.Scheduler);
+        var sock2 = new UnixSocketInode(2, env.MemfdSuperBlock, SocketType.Stream, env.Scheduler);
+        sock1.ConnectPair(sock2);
+        sock2.ConnectPair(sock1);
+
+        var file1 = new LinuxFile(new Dentry(FsName.FromString("s1"), sock1, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+            null!);
+        var file2 = new LinuxFile(new Dentry(FsName.FromString("s2"), sock2, null, env.MemfdSuperBlock), FileFlags.O_RDWR,
+            null!);
+
+        const uint argAddr = 0x41001000;
+        env.MapWritablePage(argAddr);
+
+        Assert.Equal(5, await sock1.SendAsync(file1, env.Task, "hello"u8.ToArray(), 0));
+
+        Assert.Equal(0, sock2.Ioctl(file2, env.Task, LinuxConstants.FIONREAD, argAddr));
+        Assert.Equal(5, env.ReadUserInt32(argAddr));
+
+        var readBuf = new byte[2];
+        Assert.Equal(2, await sock2.RecvAsync(file2, env.Task, readBuf, 0, readBuf.Length));
+
+        Assert.Equal(0, sock2.Ioctl(file2, env.Task, LinuxConstants.FIONREAD, argAddr));
+        Assert.Equal(3, env.ReadUserInt32(argAddr));
+    }
+
     private class TestEnv : IDisposable
     {
         public TestEnv()
@@ -353,6 +402,26 @@ public class NetworkTests
         public Process Process { get; }
         public FiberTask Task { get; }
         public SuperBlock MemfdSuperBlock { get; }
+
+        public void MapWritablePage(uint addr)
+        {
+            Process.Mem.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed, null, 0, "network-test-page", Task.CPU);
+        }
+
+        public void WriteUserInt32(uint addr, int value)
+        {
+            Span<byte> buffer = stackalloc byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(buffer, value);
+            Assert.True(Task.CPU.CopyToUser(addr, buffer.ToArray()));
+        }
+
+        public int ReadUserInt32(uint addr)
+        {
+            Span<byte> buffer = stackalloc byte[4];
+            Assert.True(Task.CPU.CopyFromUser(addr, buffer));
+            return BinaryPrimitives.ReadInt32LittleEndian(buffer);
+        }
 
         public void Dispose()
         {

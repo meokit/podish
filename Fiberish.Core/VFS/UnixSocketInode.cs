@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Fiberish.Auth.Permission;
 using Fiberish.Core;
 using Fiberish.Native;
@@ -787,6 +788,17 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         return _receiveQueue.Count > 0 || _partialBuffer != null || _shutDownRead || _peerWriteClosed;
     }
 
+    private int BytesAvailableLocked()
+    {
+        if (_partialBuffer != null)
+            return _partialBuffer.Length - _partialOffset;
+
+        if (UnixSocketType != SocketType.Stream && _receiveQueue.TryPeek(out var nextMessage))
+            return nextMessage.Data.Length;
+
+        return _queuedBytes;
+    }
+
     private QueueReadinessWatch BuildWriteWatch(short events)
     {
         if ((events & PollEvents.POLLOUT) == 0 || _listening || _shutDownWrite || _peer == null || _peer._shutDownRead)
@@ -804,6 +816,41 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
     {
         return null;
+    }
+
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
+    {
+        var engine = task.CPU;
+        switch (request)
+        {
+            case LinuxConstants.FIONBIO:
+            {
+                Span<byte> valBuf = stackalloc byte[4];
+                if (!engine.CopyFromUser(arg, valBuf))
+                    return -(int)Errno.EFAULT;
+
+                var val = MemoryMarshal.Read<int>(valBuf);
+                if (val != 0)
+                    linuxFile.Flags |= FileFlags.O_NONBLOCK;
+                else
+                    linuxFile.Flags &= ~FileFlags.O_NONBLOCK;
+                return 0;
+            }
+            case LinuxConstants.FIONREAD:
+            {
+                int available;
+                using (EnterStateScope())
+                {
+                    available = BytesAvailableLocked();
+                }
+
+                Span<byte> valBuf = stackalloc byte[4];
+                MemoryMarshal.Write(valBuf, in available);
+                return engine.CopyToUser(arg, valBuf) ? 0 : -(int)Errno.EFAULT;
+            }
+            default:
+                return base.Ioctl(linuxFile, task, request, arg);
+        }
     }
 
     public override async ValueTask<AwaitResult> WaitForRead(LinuxFile file, FiberTask task)
