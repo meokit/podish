@@ -33,7 +33,6 @@ namespace Podish.Core;
 [JsonSerializable(typeof(GuestStatsFiles))]
 [JsonSerializable(typeof(BlockStatsSnapshot))]
 [JsonSerializable(typeof(ImagePullProgressMessage))]
-[JsonSerializable(typeof(MemoryPageRefLogEntry))]
 internal partial class PodishJsonContext : JsonSerializerContext
 {
 }

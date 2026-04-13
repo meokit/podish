@@ -29,14 +29,9 @@ internal class Program
             new[] { "--log-file" },
             () => null,
             "Path to a file where Podish.Cli engine logs will be written");
-        var memoryPageRefLogFileOption = new Option<string?>(
-            new[] { "--memory-page-ref-log-file" },
-            () => null,
-            "Path to a JSONL file where page-cache/anon page ref stats will be written");
 
         rootCommand.AddGlobalOption(logLevelOption);
         rootCommand.AddGlobalOption(logFileOption);
-        rootCommand.AddGlobalOption(memoryPageRefLogFileOption);
 
         // --- Run Command ---
         var runCommand = new Command("run", "Run a command in a new container");
@@ -207,7 +202,6 @@ internal class Program
 
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
-            var memoryPageRefLogFile = context.ParseResult.GetValueForOption(memoryPageRefLogFileOption);
 
             if (!TryParseDesktopSize(waylandDesktopSizeRaw, out var waylandDesktopSize))
             {
@@ -420,7 +414,6 @@ internal class Program
                 eventStore,
                 publishedPorts,
                 guestStatsExportDir,
-                memoryPageRefLogFile,
                 memoryQuotaBytes,
                 enablePulseServer,
                 enableWaylandServer,
@@ -452,7 +445,6 @@ internal class Program
             var containerId = context.ParseResult.GetValueForArgument(startContainerArgument);
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
-            var memoryPageRefLogFile = context.ParseResult.GetValueForOption(memoryPageRefLogFileOption);
             var guestStatsExportDir = context.ParseResult.GetValueForOption(guestStatsExportDirOption);
 
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
@@ -578,7 +570,6 @@ internal class Program
                 eventStore,
                 spec.PublishedPorts,
                 guestStatsExportDir,
-                memoryPageRefLogFile,
                 spec.MemoryQuotaBytes,
                 spec.PulseServer,
                 spec.WaylandServer,
@@ -1403,7 +1394,6 @@ internal class Program
         string containerId, string? containerName, string hostname, NetworkMode networkMode, string image,
         string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts, string? guestStatsExportDir,
-        string? memoryPageRefLogFile,
         long? memoryQuotaBytes, bool enablePulseServer, bool enableWaylandServer,
         WaylandDesktopOptions waylandDesktopOptions)
     {
@@ -1437,7 +1427,6 @@ internal class Program
                 EventStore = eventStore,
                 PublishedPorts = publishedPorts,
                 GuestStatsExportDir = guestStatsExportDir,
-                MemoryPageRefLogFile = memoryPageRefLogFile,
                 MemoryQuotaBytes = memoryQuotaBytes,
                 EnablePulseServer = enablePulseServer,
                 EnableWaylandServer = enableWaylandServer,

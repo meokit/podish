@@ -1,5 +1,4 @@
 using Fiberish.Core.Net;
-using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Core;
 using Podish.Core.Networking;
@@ -197,39 +196,6 @@ public sealed class ContainerMemoryLimitsTests
         }
     }
 
-    [Fact]
-    public async Task RunAsync_MemoryPageRefLogFile_WritesJsonlSnapshots()
-    {
-        var root = CreateRuntimeTestRoot();
-        var logPath = Path.Combine(root, "memory-page-refs.jsonl");
-
-        try
-        {
-            var service = new ContainerRuntimeService(NullLogger.Instance, NullLoggerFactory.Instance);
-            var request = CreateHelloStaticRequest(root, NetworkMode.Host, Array.Empty<PublishedPortSpec>(), logPath);
-
-            var rc = await service.RunAsync(request);
-
-            Assert.Equal(0, rc);
-            Assert.True(File.Exists(logPath));
-
-            var entries = File.ReadAllLines(logPath).Where(line => !string.IsNullOrWhiteSpace(line)).ToArray();
-            Assert.NotEmpty(entries);
-
-            using var doc = JsonDocument.Parse(entries[^1]);
-            Assert.True(doc.RootElement.TryGetProperty("Phase", out var phase));
-            Assert.Equal("scheduler-return", phase.GetString());
-            Assert.True(doc.RootElement.TryGetProperty("HostPageRefs", out var hostPageRefs));
-            Assert.True(hostPageRefs.TryGetProperty("PageCache", out _));
-            Assert.True(hostPageRefs.TryGetProperty("Anon", out _));
-            Assert.True(doc.RootElement.TryGetProperty("Memory", out _));
-        }
-        finally
-        {
-            Directory.Delete(root, true);
-        }
-    }
-
     private static string CreateRuntimeTestRoot()
     {
         var root = Path.Combine(Path.GetTempPath(), "podish-runtime-test-" + Guid.NewGuid().ToString("N"));
@@ -239,7 +205,7 @@ public sealed class ContainerMemoryLimitsTests
     }
 
     private static ContainerRunRequest CreateHelloStaticRequest(string root, NetworkMode networkMode,
-        IReadOnlyList<PublishedPortSpec> publishedPorts, string? memoryPageRefLogFile = null)
+        IReadOnlyList<PublishedPortSpec> publishedPorts)
     {
         var guestRoot = ResolveGuestRootForHelloStatic();
         return new ContainerRunRequest
@@ -261,8 +227,7 @@ public sealed class ContainerMemoryLimitsTests
             ContainerDir = Path.Combine(root, "ctr"),
             LogDriver = ContainerLogDriver.None,
             EventStore = new ContainerEventStore(Path.Combine(root, "events.jsonl")),
-            PublishedPorts = publishedPorts,
-            MemoryPageRefLogFile = memoryPageRefLogFile
+            PublishedPorts = publishedPorts
         };
     }
 
