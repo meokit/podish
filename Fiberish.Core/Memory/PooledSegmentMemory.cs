@@ -30,6 +30,7 @@ internal static partial class PooledSegmentMemory
     private const int MapPrivate = 0x2;
     private const int MadviseDontNeed = 4;
     private static readonly nint MmapFailed = new(-1);
+    internal static Action<nint, nuint>? TestAdviseUnusedObserver;
 
     public static bool SupportsReadOnlyProtection => SupportsVirtualMemoryApi();
 
@@ -76,6 +77,8 @@ internal static partial class PooledSegmentMemory
         if (!reservation.IsAllocated || reservation.AllocationKind != PooledSegmentAllocationKind.VirtualMemory ||
             addr == 0 || length == 0)
             return false;
+
+        TestAdviseUnusedObserver?.Invoke(addr, length);
 
         if (OperatingSystem.IsWindows())
             return false;

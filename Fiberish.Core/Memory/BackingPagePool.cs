@@ -37,7 +37,6 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
 {
     private const int PooledSegmentBytes = 4 * 1024 * 1024;
     private const int PooledSegmentPageCount = PooledSegmentBytes / LinuxConstants.PageSize;
-    private const int PooledSegmentWordCount = PooledSegmentPageCount / 64;
     private const int PooledReleaseTokenCountsBitCount = 1;
     private const int PooledReleaseTokenSourceBitCount = 2;
     private const int PooledReleaseTokenClassBitCount = 3;
@@ -65,6 +64,8 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
     private readonly Lock _globalLock = new();
     private readonly List<SegmentEntry> _nonFullPooledSegments = [];
     private readonly List<SegmentEntry> _pooledSegments = [];
+    private readonly int _pooledHostPageGuestSpan = 1;
+    private readonly nuint _pooledHostPageSizeBytes = LinuxConstants.PageSize;
     private readonly Dictionary<long, SegmentEntry> _segments = new();
     private long _createdSegmentCount;
     private long _freedSegmentCount;
@@ -80,6 +81,13 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
     {
         ArgumentNullException.ThrowIfNull(memoryContext);
         _memoryContext = memoryContext;
+
+        var hostPageSize = Math.Max(LinuxConstants.PageSize, _memoryContext.HostMemoryMapGeometry.HostPageSize);
+        if (hostPageSize % LinuxConstants.PageSize == 0)
+        {
+            _pooledHostPageSizeBytes = checked((nuint)hostPageSize);
+            _pooledHostPageGuestSpan = hostPageSize / LinuxConstants.PageSize;
+        }
     }
 
     public long MemoryQuotaBytes
@@ -153,8 +161,13 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
             }
 
             var segmentCount = _pooledSegments.Count;
-            var reservedBytes = (long)segmentCount * PooledSegmentBytes;
-            var reservedPages = (long)segmentCount * PooledSegmentPageCount;
+            long reservedBytes = 0;
+            long reservedPages = 0;
+            foreach (var segment in _pooledSegments)
+            {
+                reservedBytes += checked((long)segment.Reservation.Size);
+                reservedPages += segment.PageCount;
+            }
             return new BackingPagePoolSegmentStatsSnapshot(
                 segmentCount,
                 _nonFullPooledSegments.Count,
@@ -267,6 +280,7 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
                     $"Anonymous pooled page handle mismatch: segment={segmentId}, index={pageIndex}, expected=0x{expectedPtr.ToInt64():X}, actual=0x{ptr.ToInt64():X}.");
 
             var wasFull = segment.LivePages >= segment.PageCount;
+            var hostPageBecameEmpty = DecrementHostPageLiveCountLocked(segment, pageIndex);
             unsafe
             {
                 new Span<byte>((void*)ptr, LinuxConstants.PageSize).Clear();
@@ -281,10 +295,8 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
             }
             else
             {
-                _ = PooledSegmentMemory.TryAdviseUnused(
-                    segment.Reservation,
-                    ptr,
-                    LinuxConstants.PageSize);
+                if (hostPageBecameEmpty)
+                    _ = TryAdviseUnusedHostPageLocked(segment, pageIndex);
                 if (wasFull)
                     AddNonFullSegmentLocked(segment);
             }
@@ -406,8 +418,9 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
             SegmentId = Interlocked.Increment(ref _nextSegmentId),
             Reservation = reservation,
             PageCount = PooledSegmentPageCount,
+            HostPageLiveCounts = new ushort[GetHostPageCount(PooledSegmentPageCount)],
             LivePages = 0,
-            PoolBitmap = new ulong[PooledSegmentWordCount]
+            PoolBitmap = new ulong[(PooledSegmentPageCount + 63) / 64]
         };
         _segments[segment.SegmentId] = segment;
         _pooledSegments.Add(segment);
@@ -431,7 +444,7 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
             return false;
         }
 
-        var pageIndex = FindFirstZeroUniversal(segment.PoolBitmap, segment.NextFreeWordHint);
+        var pageIndex = FindFirstAvailablePageIndexLocked(segment);
         if (pageIndex < 0 || pageIndex >= segment.PageCount)
         {
             handle = default;
@@ -439,6 +452,7 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
         }
 
         SetPoolBit(segment, pageIndex);
+        IncrementHostPageLiveCountLocked(segment, pageIndex);
         segment.LivePages++;
         if (segment.LivePages >= segment.PageCount)
             RemoveNonFullSegmentLocked(segment);
@@ -451,6 +465,37 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
         handle = BackingPageHandle.CreatePooled(this, pagePtr, segment.SegmentId, pageIndex, allocationClass,
             allocationSource, countsTowardAnonymousAllocationTotals);
         return true;
+    }
+
+    private int FindFirstAvailablePageIndexLocked(SegmentEntry segment)
+    {
+        var bitmap = segment.PoolBitmap;
+        if (bitmap == null || bitmap.Length == 0)
+            return -1;
+
+        var startWordIndex = segment.NextFreeWordHint;
+        if ((uint)startWordIndex >= (uint)bitmap.Length)
+            startWordIndex = 0;
+
+        for (var pass = 0; pass < 2; pass++)
+        {
+            var start = pass == 0 ? startWordIndex : 0;
+            var end = pass == 0 ? bitmap.Length : startWordIndex;
+            for (var wordIndex = start; wordIndex < end; wordIndex++)
+            {
+                var available = ~bitmap[wordIndex];
+                while (available != 0)
+                {
+                    var bitIndex = BitOperations.TrailingZeroCount(available);
+                    var candidate = wordIndex * 64 + bitIndex;
+                    if (candidate < segment.PageCount)
+                        return candidate;
+                    available &= available - 1;
+                }
+            }
+        }
+
+        return -1;
     }
 
     private static int FindFirstZeroUniversal(ReadOnlySpan<ulong> data, int startWordIndex = 0)
@@ -516,11 +561,56 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
         segment.NextFreeWordHint = wordIndex;
     }
 
+    private void IncrementHostPageLiveCountLocked(SegmentEntry segment, int pageIndex)
+    {
+        var hostPageLiveCounts = segment.HostPageLiveCounts;
+        if (hostPageLiveCounts == null)
+            throw new InvalidOperationException($"Anonymous pooled segment {segment.SegmentId} is missing host-page counters.");
+
+        var hostPageIndex = GetHostPageIndex(pageIndex);
+        if ((uint)hostPageIndex >= (uint)hostPageLiveCounts.Length)
+            throw new InvalidOperationException(
+                $"Anonymous pooled page host-page index out of range: segment={segment.SegmentId}, pageIndex={pageIndex}, hostPageIndex={hostPageIndex}.");
+
+        checked
+        {
+            hostPageLiveCounts[hostPageIndex]++;
+        }
+    }
+
+    private bool DecrementHostPageLiveCountLocked(SegmentEntry segment, int pageIndex)
+    {
+        var hostPageLiveCounts = segment.HostPageLiveCounts;
+        if (hostPageLiveCounts == null)
+            throw new InvalidOperationException($"Anonymous pooled segment {segment.SegmentId} is missing host-page counters.");
+
+        var hostPageIndex = GetHostPageIndex(pageIndex);
+        if ((uint)hostPageIndex >= (uint)hostPageLiveCounts.Length)
+            throw new InvalidOperationException(
+                $"Anonymous pooled page host-page index out of range: segment={segment.SegmentId}, pageIndex={pageIndex}, hostPageIndex={hostPageIndex}.");
+        if (hostPageLiveCounts[hostPageIndex] == 0)
+            throw new InvalidOperationException(
+                $"Anonymous pooled page host-page counter underflow: segment={segment.SegmentId}, pageIndex={pageIndex}, hostPageIndex={hostPageIndex}.");
+
+        hostPageLiveCounts[hostPageIndex]--;
+        return hostPageLiveCounts[hostPageIndex] == 0;
+    }
+
+    private bool TryAdviseUnusedHostPageLocked(SegmentEntry segment, int pageIndex)
+    {
+        var hostPageStart = GetHostPageStart(segment, pageIndex);
+        return PooledSegmentMemory.TryAdviseUnused(
+            segment.Reservation,
+            hostPageStart,
+            _pooledHostPageSizeBytes);
+    }
+
     private void FreePooledSegmentLocked(SegmentEntry segment)
     {
         RemoveNonFullSegmentLocked(segment);
         _segments.Remove(segment.SegmentId);
         _pooledSegments.Remove(segment);
+        segment.HostPageLiveCounts = null;
         segment.PoolBitmap = null;
         Interlocked.Increment(ref _freedSegmentCount);
         ReleasePooledSegmentMemory(segment);
@@ -568,6 +658,25 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
         return next <= MemoryQuotaBytes;
     }
 
+    private int GetHostPageIndex(int logicalPageIndex)
+    {
+        return logicalPageIndex / _pooledHostPageGuestSpan;
+    }
+
+    private int GetHostPageCount(int logicalPageCount)
+    {
+        if (logicalPageCount <= 0)
+            return 0;
+
+        return checked(GetHostPageIndex(logicalPageCount - 1) + 1);
+    }
+
+    private nint GetHostPageStart(SegmentEntry segment, int logicalPageIndex)
+    {
+        var hostPageByteOffset = checked(GetHostPageIndex(logicalPageIndex) * (int)_pooledHostPageSizeBytes);
+        return segment.BasePtr + hostPageByteOffset;
+    }
+
     private static void ValidateAnonAllocationClass(AllocationClass allocationClass)
     {
         if (allocationClass is AllocationClass.PageCache or AllocationClass.Readahead)
@@ -577,6 +686,7 @@ public sealed class BackingPagePool : IDisposable, IBackingPageHandleReleaseOwne
 
     private sealed class SegmentEntry
     {
+        public ushort[]? HostPageLiveCounts;
         public int LivePages;
         public int NextFreeWordHint;
         public int NonFullListIndex = -1;

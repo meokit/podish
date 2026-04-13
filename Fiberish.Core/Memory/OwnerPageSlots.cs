@@ -273,7 +273,8 @@ internal sealed class OwnerPageSlots
                 BackingPageHandle.Release(ref backingPageHandle);
                 isNew = false;
                 Touch(raced);
-                return raced.Ptr;
+                var racedPtr = raced.Ptr;
+                return racedPtr;
             }
 
             hostPage = EnsureHostPageRegistered(ptr, hostPageKind, ref backingPageHandle);
@@ -578,6 +579,7 @@ internal sealed class OwnerPageSlots
 
         return _memoryContext.HostPages.CreateWithBacking(ref backingPageHandle, hostPageKind);
     }
+
 }
 
 internal sealed class ResidentPageRecord

@@ -913,6 +913,8 @@ internal struct HostPageRef
     internal void TryRemoveIfUnused()
     {
         BackingPageHandle backingHandle = default;
+        IntPtr removedPtr = IntPtr.Zero;
+        HostPageKind removedKind = default;
         if (Kind == HostPageKind.Zero)
             return;
         if (OwnerResidentCount > 0 || MapCount > 0 || PinCount > 0 || HasOwnerRoot)
@@ -933,6 +935,8 @@ internal struct HostPageRef
                 return;
 
             backingHandle = slotRef.Page.BackingHandle;
+            removedPtr = slotRef.Page.Ptr;
+            removedKind = slotRef.Page.Kind;
             slotRef.Page.BackingHandle = default;
             state.SlotByPtr.Remove(slotRef.Page.Ptr);
             slotRef.Page = default;
@@ -1527,6 +1531,7 @@ internal sealed class HostPageManager : IDisposable
 
         var ptr = backingHandle.Pointer;
         var state = _state;
+        HostPageRef result;
         lock (state.Gate)
         {
             if (state.SlotByPtr.TryGetValue(ptr, out var slot))
@@ -1539,7 +1544,8 @@ internal sealed class HostPageManager : IDisposable
 
                 existing.Page.BackingHandle = backingHandle;
                 backingHandle = default;
-                return hostPage;
+                result = hostPage;
+                goto ExitLock;
             }
 
             slot = state.RentSlot();
@@ -1562,8 +1568,11 @@ internal sealed class HostPageManager : IDisposable
             };
             backingHandle = default;
             state.SlotByPtr[ptr] = slot;
-            return new HostPageRef(state, slot, slotRef.Generation);
+            result = new HostPageRef(state, slot, slotRef.Generation);
         }
+
+ExitLock:
+        return result;
     }
 
     internal bool TryLookup(IntPtr ptr, out HostPageRef pageRef)
