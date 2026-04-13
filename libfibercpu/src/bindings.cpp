@@ -22,6 +22,7 @@
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#include <signal.h>
 #endif
 
 using namespace fiberish;
@@ -267,7 +268,27 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
 }
 
 // Signal Handler for safety
-#if !defined(__EMSCRIPTEN__)
+#if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
+void SignalHandler(int sig, siginfo_t* info, void* /*ucontext*/) {
+    void* array[20];
+    size_t size;
+    size = backtrace(array, 20);
+    void* fault_addr = info ? info->si_addr : nullptr;
+    fprintf(stderr, "\n[CRASH] Signal %d caught", sig);
+    if (fault_addr) fprintf(stderr, " at host addr=%p", fault_addr);
+    fprintf(stderr, ":\n");
+    backtrace_symbols_fd(array, size, STDERR_FILENO);
+    _exit(1);
+}
+
+static void RegisterFatalSignalHandler(int sig) {
+    struct sigaction sa{};
+    sa.sa_sigaction = SignalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigaction(sig, &sa, nullptr);
+}
+#elif !defined(__EMSCRIPTEN__)
 void SignalHandler(int sig) {
     void* array[20];
     size_t size;
@@ -287,9 +308,15 @@ static bool g_SignalRegistered = false;
 EmuState* X86_Create() {
     if (!g_SignalRegistered) {
 #if !defined(__EMSCRIPTEN__)
+#if !defined(_WIN32)
+        RegisterFatalSignalHandler(SIGSEGV);
+        RegisterFatalSignalHandler(SIGILL);
+        RegisterFatalSignalHandler(SIGBUS);
+#else
         signal(SIGSEGV, SignalHandler);
         signal(SIGILL, SignalHandler);
         signal(SIGBUS, SignalHandler);
+#endif
 #endif
         g_SignalRegistered = true;
     }
