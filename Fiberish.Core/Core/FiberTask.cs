@@ -1927,6 +1927,7 @@ public class FiberTask
                 };
                 createdProcess = newProc;
                 newProc.CopyImageFrom(Process);
+                newProc.CopyResourceLimitsFrom(Process);
 
                 // Inherit signal dispositions
                 foreach (var kv in Process.SignalActions) newProc.SignalActions[kv.Key] = kv.Value;

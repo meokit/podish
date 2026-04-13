@@ -159,6 +159,28 @@ public static class LinuxConstants
     public const uint MADV_DONTFORK = 10;
     public const uint MADV_DOFORK = 11;
 
+    // rlimit resources
+    public const int RLIMIT_CPU = 0;
+    public const int RLIMIT_FSIZE = 1;
+    public const int RLIMIT_DATA = 2;
+    public const int RLIMIT_STACK = 3;
+    public const int RLIMIT_CORE = 4;
+    public const int RLIMIT_RSS = 5;
+    public const int RLIMIT_NPROC = 6;
+    public const int RLIMIT_NOFILE = 7;
+    public const int RLIMIT_MEMLOCK = 8;
+    public const int RLIMIT_AS = 9;
+    public const int RLIMIT_LOCKS = 10;
+    public const int RLIMIT_SIGPENDING = 11;
+    public const int RLIMIT_MSGQUEUE = 12;
+    public const int RLIMIT_NICE = 13;
+    public const int RLIMIT_RTPRIO = 14;
+    public const int RLIMIT_RTTIME = 15;
+    public const int RLIMIT_NLIMITS = 16;
+
+    public const uint RLIM32_INFINITY = 0xFFFFFFFF;
+    public const ulong RLIM64_INFINITY = ulong.MaxValue;
+
     // Auxv types
     public const uint AT_NULL = 0;
     public const uint AT_IGNORE = 1;

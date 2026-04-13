@@ -33,6 +33,8 @@ public enum ProcessKind
     VirtualDaemon
 }
 
+public readonly record struct ResourceLimit(ulong Soft, ulong Hard);
+
 public class UTSNamespace
 {
     public string SysName { get; set; } = "Linux";
@@ -60,6 +62,7 @@ public class Process
 {
     public const int CapabilitySysAdmin = 21;
     private static readonly byte[] EmptyCmdline = [];
+    private static readonly ResourceLimit[] DefaultResourceLimits = CreateDefaultResourceLimits();
 
     // Event signaled when process state changes (exit, stop, continue)
     // Used by parent's wait4() to avoid busy-polling
@@ -79,6 +82,7 @@ public class Process
         UID = GID = EUID = EGID = SUID = SGID = FSUID = FSGID = 0;
         // Minimal capability model: root starts with CAP_SYS_ADMIN effective+permitted.
         SetCapability(CapabilitySysAdmin, true, true, false);
+        ResourceLimits = (ResourceLimit[])DefaultResourceLimits.Clone();
     }
 
     public int TGID { get; set; }
@@ -138,6 +142,7 @@ public class Process
     public string[] CommandLineArguments { get; private set; } = [];
     public byte[] CommandLineRaw { get; private set; } = EmptyCmdline;
     public string Comm { get; private set; } = "process";
+    public ResourceLimit[] ResourceLimits { get; }
 
     public string Name
     {
@@ -405,6 +410,33 @@ public class Process
         Comm = src.Comm;
     }
 
+    public bool TryGetResourceLimit(int resource, out ResourceLimit limit)
+    {
+        if ((uint)resource >= (uint)ResourceLimits.Length)
+        {
+            limit = default;
+            return false;
+        }
+
+        limit = ResourceLimits[resource];
+        return true;
+    }
+
+    public bool TrySetResourceLimit(int resource, ResourceLimit limit)
+    {
+        if ((uint)resource >= (uint)ResourceLimits.Length || limit.Soft > limit.Hard)
+            return false;
+
+        ResourceLimits[resource] = limit;
+        return true;
+    }
+
+    public void CopyResourceLimitsFrom(Process src)
+    {
+        ArgumentNullException.ThrowIfNull(src);
+        Array.Copy(src.ResourceLimits, ResourceLimits, ResourceLimits.Length);
+    }
+
     private void UpdateProcessImage(string exe, string[] args)
     {
         ExecutablePath = exe;
@@ -422,5 +454,35 @@ public class Process
 
         var cmdline = string.Join('\0', args) + '\0';
         CommandLineRaw = Encoding.UTF8.GetBytes(cmdline);
+    }
+
+    private static ResourceLimit[] CreateDefaultResourceLimits()
+    {
+        var limits = new ResourceLimit[LinuxConstants.RLIMIT_NLIMITS];
+
+        var addressSpaceLimit = (ulong)LinuxConstants.TaskSize32;
+        limits[LinuxConstants.RLIMIT_CPU] = Unlimited();
+        limits[LinuxConstants.RLIMIT_FSIZE] = Unlimited();
+        limits[LinuxConstants.RLIMIT_DATA] = new ResourceLimit(addressSpaceLimit, addressSpaceLimit);
+        limits[LinuxConstants.RLIMIT_STACK] =
+            new ResourceLimit(8UL * 1024 * 1024, LinuxConstants.RLIM64_INFINITY);
+        limits[LinuxConstants.RLIMIT_CORE] = new ResourceLimit(0, 0);
+        limits[LinuxConstants.RLIMIT_RSS] = new ResourceLimit(addressSpaceLimit, addressSpaceLimit);
+        limits[LinuxConstants.RLIMIT_NPROC] = new ResourceLimit(1024, 1024);
+        limits[LinuxConstants.RLIMIT_NOFILE] = new ResourceLimit(1024, 4096);
+        limits[LinuxConstants.RLIMIT_MEMLOCK] = new ResourceLimit(64UL * 1024, 64UL * 1024);
+        limits[LinuxConstants.RLIMIT_AS] = new ResourceLimit(addressSpaceLimit, addressSpaceLimit);
+        limits[LinuxConstants.RLIMIT_LOCKS] = Unlimited();
+        limits[LinuxConstants.RLIMIT_SIGPENDING] = new ResourceLimit(1024, 1024);
+        limits[LinuxConstants.RLIMIT_MSGQUEUE] = new ResourceLimit(819_200, 819_200);
+        limits[LinuxConstants.RLIMIT_NICE] = new ResourceLimit(0, 0);
+        limits[LinuxConstants.RLIMIT_RTPRIO] = new ResourceLimit(0, 0);
+        limits[LinuxConstants.RLIMIT_RTTIME] = Unlimited();
+        return limits;
+
+        static ResourceLimit Unlimited()
+        {
+            return new ResourceLimit(LinuxConstants.RLIM64_INFINITY, LinuxConstants.RLIM64_INFINITY);
+        }
     }
 }
