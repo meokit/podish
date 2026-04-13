@@ -663,6 +663,9 @@ file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode, IContextual
         if (file.Mount?.FsType == "anon_inodefs" && file.OpenedInode is not TmpfsInode { IsMemfd: true })
             return FsEncoding.EncodeUtf8($"anon_inode:{file.Dentry.Name.ToDebugString()}");
 
+        if (file.OpenedInode is TmpfsInode { IsMemfd: true } memfdInode)
+            return FsEncoding.EncodeUtf8($"/memfd:{memfdInode.MemfdDisplayName}");
+
         var path = process.Syscalls.GetAbsolutePathBytes(file.LivePath);
         if (!file.LivePath.Dentry!.IsHashed && file.OpenedInode is not TmpfsInode { IsMemfd: true })
         {

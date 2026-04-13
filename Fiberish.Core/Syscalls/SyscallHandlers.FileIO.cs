@@ -315,7 +315,7 @@ public partial class SyscallManager
             var uid = t?.Process.EUID ?? 0;
             var gid = t?.Process.EGID ?? 0;
 
-            var display = string.IsNullOrEmpty(name) ? "memfd:anon" : $"memfd:{name}";
+            var display = string.IsNullOrEmpty(name) ? "anon" : name;
 
             var fdFlags = FileFlags.O_RDWR;
             if ((flags & MFD_CLOEXEC) != 0) fdFlags |= FileFlags.O_CLOEXEC;
@@ -330,7 +330,7 @@ public partial class SyscallManager
         catch (Exception ex)
         {
             Logger.LogError(ex, "SysMemfdCreate failed");
-            return -(int)Errno.ENOMEM;
+            return MapSyscallExceptionToErrno(ex);
         }
     }
 

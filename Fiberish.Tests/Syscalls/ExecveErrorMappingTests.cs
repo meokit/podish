@@ -218,6 +218,49 @@ public class ExecveErrorMappingTests
     }
 
     [Fact]
+    public async Task ProcFdReadlink_WhenMemfdNameContainsSlash_PreservesNameAndCreateSucceeds()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
+        var sm = new SyscallManager(engine, mm, 0);
+        sm.MountRootHostfs(ResolveGuestRootForHelloStatic());
+        sm.MountStandardProc();
+
+        var scheduler = new KernelScheduler();
+        var process = new Process(9206, mm, sm);
+        scheduler.RegisterProcess(process);
+        var task = new FiberTask(process.TGID, process, engine, scheduler);
+        engine.Owner = task;
+
+        const uint nameAddr = 0x6100D000;
+        const uint pathAddr = 0x6100E000;
+        const uint bufAddr = 0x6100F000;
+        MapUserPage(mm, engine, nameAddr);
+        MapUserPage(mm, engine, pathAddr);
+        MapUserPage(mm, engine, bufAddr);
+
+        try
+        {
+            WriteCString(engine, nameAddr, "apk/tmp.trigger");
+            var fd = await Call(sm, "SysMemfdCreate", nameAddr);
+            Assert.True(fd >= 0);
+
+            WriteCString(engine, pathAddr, $"/proc/{process.TGID}/fd/{fd}");
+            var rc = await Call(sm, "SysReadlink", pathAddr, bufAddr, 256);
+
+            Assert.True(rc > 0);
+            var target = Encoding.UTF8.GetString(ReadBytes(engine, bufAddr, rc));
+            Assert.Contains("/memfd:apk/tmp.trigger", target, StringComparison.Ordinal);
+            Assert.False(target.EndsWith(" (deleted)", StringComparison.Ordinal));
+        }
+        finally
+        {
+            sm.Close();
+        }
+    }
+
+    [Fact]
     public async Task ProcFdOpen_CreatesNewFileDescriptionWithIndependentOffset()
     {
         var runtime = new TestRuntimeFactory();

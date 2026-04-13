@@ -118,8 +118,10 @@ public sealed class MemoryRuntimeContext : IDisposable
     internal LinuxFile CreateMemfdFile(string displayName, FileFlags fileFlags, int mode, int uid, int gid,
         bool allowSealing, bool executable, bool noExecSeal, Mount mount)
     {
-        return CreateUnlinkedShmFile(displayName, 0, mode, uid, gid, fileFlags, mount,
-            LinuxFile.ReferenceKind.Normal, inode => inode.InitializeMemfd(allowSealing, executable, noExecSeal));
+        var internalName = $".memfd.{Interlocked.Increment(ref _nextSharedAnonymousBackingId)}";
+        return CreateUnlinkedShmFile(internalName, 0, mode, uid, gid, fileFlags, mount,
+            LinuxFile.ReferenceKind.Normal,
+            inode => inode.InitializeMemfd(displayName, allowSealing, executable, noExecSeal));
     }
 
     internal AddressSpace AcquireZeroMappingRef()
