@@ -4,6 +4,9 @@
 
 #include <simde/x86/sse.h>
 
+#include <cmath>
+#include <limits>
+
 #include "../dispatch.h"
 #include "../exec_utils.h"
 #include "../ops.h"
@@ -12,6 +15,18 @@
 
 namespace fiberish {
 namespace op {
+
+template <typename FloatT>
+FORCE_INLINE int32_t CvttToInt32(FloatT value) {
+    if (!std::isfinite(value)) return std::numeric_limits<int32_t>::min();
+
+    double truncated = std::trunc(static_cast<double>(value));
+    if (truncated < static_cast<double>(std::numeric_limits<int32_t>::min()) ||
+        truncated > static_cast<double>(std::numeric_limits<int32_t>::max()))
+        return std::numeric_limits<int32_t>::min();
+
+    return static_cast<int32_t>(truncated);
+}
 
 FORCE_INLINE LogicFlow OpCvt_2A(LogicFuncParams) {
     // 0F 2A: CVTPI2PS (MMX) / CVTSI2SS (F3) / CVTSI2SD (F2)
@@ -55,8 +70,7 @@ FORCE_INLINE LogicFlow OpCvt_2C(LogicFuncParams) {
             if (!b_res) return LogicFlow::RestartMemoryOp;
             b = *b_res;
         }
-        // Truncate
-        res = (int32_t)b;
+        res = CvttToInt32(b);
     } else if (op->prefixes.flags.rep) {  // F3: CVTTSS2SI (Single -> Int32)
         float b;
         if (op->modrm >= 0xC0) {
@@ -66,7 +80,7 @@ FORCE_INLINE LogicFlow OpCvt_2C(LogicFuncParams) {
             if (!b_res) return LogicFlow::RestartMemoryOp;
             b = *b_res;
         }
-        res = (int32_t)b;
+        res = CvttToInt32(b);
     } else {
         state->fault_vector = 6;
         if (!state->hooks.on_invalid_opcode(state)) {
