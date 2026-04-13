@@ -580,6 +580,48 @@ public class HostfsPageCacheWritebackTests
     }
 
     [Fact]
+    public void ExternalHostShrinkAfterReclaim_MustNotRefaultZeroExtendedData()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-refault-host-shrink-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "hello");
+
+        LinuxFile? file = null;
+        AddressSpace? cache = null;
+        try
+        {
+            var runtime = new TestRuntimeFactory(BufferedOnlyGeometry);
+            file = OpenHostFile(root, "data.bin", runtime.MemoryContext);
+            var inode = Assert.IsType<HostInode>(file.Dentry.Inode);
+            cache = inode.AcquireMappingRef();
+
+            var warm = new byte[5];
+            Assert.Equal(5, inode.ReadToHost(null, file, warm, 0));
+            Assert.Equal("hello", System.Text.Encoding.ASCII.GetString(warm));
+            Assert.NotEqual(IntPtr.Zero, cache.GetPage(0));
+
+            File.WriteAllText(hostFile, "he");
+            Assert.Equal(2UL, inode.Size);
+
+            var reclaimed = runtime.MemoryContext.AddressSpacePolicy.TryReclaimBytes(LinuxConstants.PageSize);
+            Assert.True(reclaimed >= LinuxConstants.PageSize);
+            Assert.Equal(0, cache.PageCount);
+
+            var readBack = new byte[5];
+            var n = inode.ReadToHost(null, file, readBack, 0);
+            Assert.Equal(2, n);
+            Assert.Equal("he", System.Text.Encoding.ASCII.GetString(readBack, 0, n));
+        }
+        finally
+        {
+            if (file?.Dentry.Inode != null) file.Dentry.Inode.Release(file);
+            cache?.Release();
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task Mmap_HoldsFileReference_AfterFdCloseUntilMunmap()
     {
         var root = Path.Combine(Path.GetTempPath(), "hostfs-mmap-file-ref-" + Guid.NewGuid().ToString("N"));
@@ -630,11 +672,11 @@ public class HostfsPageCacheWritebackTests
         }
     }
 
-    private static LinuxFile OpenHostFile(string rootDir, string relativePath)
+    private static LinuxFile OpenHostFile(string rootDir, string relativePath, MemoryRuntimeContext? memoryContext = null)
     {
         var fsType = new FileSystemType { Name = "hostfs" };
         var opts = HostfsMountOptions.Parse("rw");
-        var sb = new HostSuperBlock(fsType, rootDir, opts);
+        var sb = new HostSuperBlock(fsType, rootDir, opts, memoryContext: memoryContext);
         sb.Root = sb.GetDentry(rootDir, FsName.Empty, null)!;
         var dentry = sb.Root.Inode!.Lookup(relativePath);
         Assert.NotNull(dentry);

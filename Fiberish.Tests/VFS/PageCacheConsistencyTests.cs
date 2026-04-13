@@ -11,6 +11,8 @@ namespace Fiberish.Tests.VFS;
 public class PageCacheConsistencyTests
 {
     private readonly TestRuntimeFactory _runtime = new();
+    private static readonly HostMemoryMapGeometry BufferedOnlyGeometry =
+        new(LinuxConstants.PageSize, LinuxConstants.PageSize, LinuxConstants.PageSize, false, false);
 
     [Fact]
     public void Overlay_LayerfsCopyUpBeforePrivateMmap_UsesUpperTmpfsMappingAndData()
@@ -386,6 +388,56 @@ public class PageCacheConsistencyTests
             var mapped = new byte[5];
             Assert.True(engine.CopyFromUser(mapAddr, mapped));
             Assert.Equal("hXYlo", Encoding.ASCII.GetString(mapped));
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot))
+                Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Silkfs_RefaultAfterBackingShrink_MustFailInsteadOfZeroFillingTail()
+    {
+        var runtime = new TestRuntimeFactory(BufferedOnlyGeometry);
+        var silkRoot = Path.Combine(Path.GetTempPath(), "silkfs-refault-short-read-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            using var engine = runtime.CreateEngine();
+            var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
+            repo.Initialize();
+
+            var sb = new SilkSuperBlock(new FileSystemType { Name = "silkfs" }, repo, new DeviceNumberManager(),
+                runtime.MemoryContext);
+            sb.LoadFromMetadata();
+
+            var root = sb.Root;
+            var dentry = new Dentry(FsName.FromString("data.bin"), null, root, sb);
+            Assert.Equal(0, root.Inode!.Create(dentry, 0x1B6, 0, 0));
+
+            using var file = new LinuxFile(dentry, FileFlags.O_RDWR, null!);
+            Assert.Equal(5, dentry.Inode!.WriteFromHost(null, file, "hello"u8.ToArray(), 0));
+
+            var silkInode = Assert.IsType<SilkInode>(dentry.Inode);
+            var cache = Assert.IsType<AddressSpace>(silkInode.Mapping);
+            silkInode.Sync(file);
+            Assert.False(cache.IsDirty(0));
+
+            var warm = new byte[5];
+            Assert.Equal(5, silkInode.ReadToHost(null, file, warm, 0));
+            Assert.Equal("hello", Encoding.ASCII.GetString(warm));
+            Assert.NotEqual(IntPtr.Zero, cache.GetPage(0));
+
+            repo.TruncateLiveInodeData((long)silkInode.Ino, 2);
+
+            var reclaimed = runtime.MemoryContext.AddressSpacePolicy.TryReclaimBytes(LinuxConstants.PageSize);
+            Assert.True(reclaimed >= LinuxConstants.PageSize);
+            Assert.Equal(0, cache.PageCount);
+
+            var readBack = new byte[5];
+            var rc = silkInode.ReadToHost(null, file, readBack, 0);
+            Assert.Equal(-(int)Errno.EIO, rc);
         }
         finally
         {

@@ -1357,20 +1357,33 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
     internal string? MetadataObjectId { get; set; }
 
+    private bool TryGetBackingFileLength(out ulong hostLength)
+    {
+        try
+        {
+            hostLength = (ulong)new FileInfo(HostPath).Length;
+            return true;
+        }
+        catch
+        {
+            hostLength = 0;
+            return false;
+        }
+    }
+
     public override ulong Size
     {
         get
         {
             if (Type == InodeType.Directory) return 4096;
             if (Type == InodeType.Symlink) return 0;
-            try
-            {
-                return Math.Max((ulong)new FileInfo(HostPath).Length, base.Size);
-            }
-            catch
-            {
+
+            if (!TryGetBackingFileLength(out var hostLength))
                 return base.Size;
-            }
+
+            return HasDirtyPageCachePages()
+                ? Math.Max(hostLength, base.Size)
+                : hostLength;
         }
         set => base.Size = value;
     }
@@ -2222,7 +2235,12 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         pageBuffer.Clear();
         if (request.Length == 0) return 0;
         var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
-        return rc < 0 ? rc : 0;
+        if (rc < 0)
+            return rc;
+        if (rc != request.Length)
+            return -(int)Errno.EIO;
+
+        return 0;
     }
 
     internal override void OnMappingPageReleased(uint pageIndex, InodePageRecord record)

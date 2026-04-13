@@ -1840,13 +1840,14 @@ public abstract class MappingBackedInode : Inode
                 }
             }
 
-            return new InodePageRecord
+            var record = new InodePageRecord
             {
                 PageIndex = pageIndex,
                 Ptr = ptr,
                 BackingKind = FilePageBackingKind.AllocatedPageCache,
                 Handle = pageHandle
             };
+            return record;
         }
         catch
         {
@@ -1867,13 +1868,14 @@ public abstract class MappingBackedInode : Inode
             BackingPageHandle.Release(ref pageHandle);
             return null;
         }
-        return new InodePageRecord
+        var record = new InodePageRecord
         {
             PageIndex = pageIndex,
             Ptr = pageHandle.Pointer,
             BackingKind = FilePageBackingKind.HostMappedWindow,
             Handle = pageHandle
         };
+        return record;
     }
 
     internal IntPtr AcquireMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
@@ -1906,8 +1908,9 @@ public abstract class MappingBackedInode : Inode
             if (!TryGetMappingPageRecord(pageIndex, out resident))
                 return mapping.PeekPage(pageIndex);
 
-            return mapping.InstallHostPageIfAbsent(pageIndex, resident.Ptr, ref resident.Handle,
+            var installed = mapping.InstallHostPageIfAbsent(pageIndex, resident.Ptr, ref resident.Handle,
                 resident.HostPageKind, this, resident, out _);
+            return installed;
         }
 
         var finalPtr = mapping.InstallHostPageIfAbsent(pageIndex, record.Ptr, ref record.Handle, record.HostPageKind,
@@ -2067,7 +2070,8 @@ public abstract class MappingBackedInode : Inode
         if (pageReadLen > 0)
         {
             var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
-            if (rc < 0) return (IntPtr.Zero, null);
+            if (rc < 0)
+                return (IntPtr.Zero, null);
         }
 
         if (pageCache == null)
@@ -2134,7 +2138,8 @@ public abstract class MappingBackedInode : Inode
             tempPage.AsSpan().Clear();
             pageReadLen = (int)Math.Min(LinuxConstants.PageSize, (long)Size - pageFileOffset);
             var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
-            if (rc < 0) return IntPtr.Zero;
+            if (rc < 0)
+                return IntPtr.Zero;
         }
 
         if (pageCache.Kind is AddressSpaceKind.File or AddressSpaceKind.Shmem or AddressSpaceKind.Zero)

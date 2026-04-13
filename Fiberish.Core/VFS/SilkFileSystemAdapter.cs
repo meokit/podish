@@ -445,11 +445,26 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         var fileSize = (long)Size;
         if (offset >= fileSize) return 0;
 
-        if (linuxFile?.PrivateData is SafeFileHandle handle)
-            return RandomAccess.Read(handle, buffer, offset);
+        try
+        {
+            if (linuxFile?.PrivateData is SafeFileHandle handle)
+                return RandomAccess.Read(handle, buffer, offset);
 
-        using var tempHandle = _repository.OpenLiveInodeHandle((long)Ino, FileMode.OpenOrCreate, FileAccess.Read);
-        return RandomAccess.Read(tempHandle, buffer, offset);
+            using var tempHandle = _repository.OpenLiveInodeHandle((long)Ino, FileMode.Open, FileAccess.Read);
+            return RandomAccess.Read(tempHandle, buffer, offset);
+        }
+        catch (FileNotFoundException)
+        {
+            return -(int)Errno.EIO;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return -(int)Errno.EIO;
+        }
+        catch (IOException)
+        {
+            return -(int)Errno.EIO;
+        }
     }
 
     public override int Readlink(out byte[]? target)
@@ -897,7 +912,12 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         pageBuffer.Clear();
         if (request.Length == 0) return 0;
         var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
-        return rc < 0 ? rc : 0;
+        if (rc < 0)
+            return rc;
+        if (rc != request.Length)
+            return -(int)Errno.EIO;
+
+        return 0;
     }
 
     internal override void OnMappingPageReleased(uint pageIndex, InodePageRecord record)
