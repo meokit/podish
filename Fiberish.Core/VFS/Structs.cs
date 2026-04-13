@@ -1810,19 +1810,25 @@ public abstract class MappingBackedInode : Inode
     }
 
     protected virtual bool TryPopulateMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
-        int prefillLength, Span<byte> pageBuffer)
+        int prefillLength, Span<byte> pageBuffer, out int error)
     {
+        error = 0;
         pageBuffer.Clear();
         if (prefillLength <= 0 || MappingKind != AddressSpaceKind.File)
             return true;
 
         var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, fileOffset, prefillLength), pageBuffer);
-        return rc >= 0;
+        if (rc >= 0)
+            return true;
+
+        error = rc;
+        return false;
     }
 
     private InodePageRecord CreateAllocatedMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
-        int prefillLength)
+        int prefillLength, out int error)
     {
+        error = -(int)Errno.ENOMEM;
         if (!SuperBlock.MemoryContext.BackingPagePool.TryAllocatePoolBackedPageStrict(out var pageHandle) ||
             !pageHandle.IsValid)
             return null!;
@@ -1833,7 +1839,7 @@ public abstract class MappingBackedInode : Inode
             unsafe
             {
                 var target = new Span<byte>((void*)ptr, LinuxConstants.PageSize);
-                if (!TryPopulateMappingPage(linuxFile, pageIndex, fileOffset, prefillLength, target))
+                if (!TryPopulateMappingPage(linuxFile, pageIndex, fileOffset, prefillLength, target, out error))
                 {
                     BackingPageHandle.Release(ref pageHandle);
                     return null!;
@@ -1881,6 +1887,14 @@ public abstract class MappingBackedInode : Inode
     internal IntPtr AcquireMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
         PageCacheAccessMode accessMode, int prefillLength, bool allowHostMapped = true)
     {
+        return AcquireMappingPage(linuxFile, pageIndex, fileOffset, accessMode, prefillLength, out _,
+            allowHostMapped);
+    }
+
+    internal IntPtr AcquireMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
+        PageCacheAccessMode accessMode, int prefillLength, out int error, bool allowHostMapped = true)
+    {
+        error = 0;
         var mapping = EnsureMapping();
         var pagePtr = mapping.GetPage(pageIndex);
         if (pagePtr != IntPtr.Zero)
@@ -1898,9 +1912,14 @@ public abstract class MappingBackedInode : Inode
         if (record == null && allowHostMapped && mapping.Kind == AddressSpaceKind.File &&
             PreferHostMappedMappingPage(accessMode))
             record = TryCreateHostMappedMappingPage(linuxFile, pageIndex, fileOffset, writable);
-        record ??= CreateAllocatedMappingPage(linuxFile, pageIndex, fileOffset, prefillLength);
         if (record == null)
+            record = CreateAllocatedMappingPage(linuxFile, pageIndex, fileOffset, prefillLength, out error);
+        if (record == null)
+        {
+            if (error == 0)
+                error = -(int)Errno.ENOMEM;
             return IntPtr.Zero;
+        }
 
         if (!TryRegisterMappingPage(pageIndex, record))
         {
@@ -2012,8 +2031,8 @@ public abstract class MappingBackedInode : Inode
             var pageOffset = (int)(cursor & LinuxConstants.PageOffsetMask);
             var chunk = Math.Min(buffer.Length - consumed, LinuxConstants.PageSize - pageOffset);
 
-            var pagePtr = EnsurePageInCacheForWrite(pageCache, linuxFile, pageIndex, pageOffset, chunk);
-            if (pagePtr == IntPtr.Zero) return consumed > 0 ? consumed : -(int)Errno.ENOMEM;
+            var (pagePtr, pageError) = EnsurePageInCacheForWrite(pageCache, linuxFile, pageIndex, pageOffset, chunk);
+            if (pagePtr == IntPtr.Zero) return consumed > 0 ? consumed : pageError;
 
             unsafe
             {
@@ -2121,11 +2140,11 @@ public abstract class MappingBackedInode : Inode
         return new PageSyncRequest(pageIndex, fileOffset, length);
     }
 
-    private IntPtr EnsurePageInCacheForWrite(
+    private (IntPtr PagePtr, int Error) EnsurePageInCacheForWrite(
         AddressSpace pageCache, LinuxFile linuxFile, uint pageIndex, int pageOffset, int chunk)
     {
         var pagePtr = pageCache.GetPage(pageIndex);
-        if (pagePtr != IntPtr.Zero) return pagePtr;
+        if (pagePtr != IntPtr.Zero) return (pagePtr, 0);
 
         var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
         var pageReadLen = 0;
@@ -2139,20 +2158,21 @@ public abstract class MappingBackedInode : Inode
             pageReadLen = (int)Math.Min(LinuxConstants.PageSize, (long)Size - pageFileOffset);
             var rc = ReadPage(linuxFile, new PageIoRequest(pageIndex, pageFileOffset, pageReadLen), tempPage);
             if (rc < 0)
-                return IntPtr.Zero;
+                return (IntPtr.Zero, rc);
         }
 
         if (pageCache.Kind is AddressSpaceKind.File or AddressSpaceKind.Shmem or AddressSpaceKind.Zero)
         {
             var writeEndOffset = pageFileOffset + pageOffset + chunk;
             var allowHostMapped = writeEndOffset <= (long)Size;
-            return AcquireMappingPage(linuxFile, pageIndex, pageFileOffset, PageCacheAccessMode.Write, pageReadLen,
-                allowHostMapped);
+            pagePtr = AcquireMappingPage(linuxFile, pageIndex, pageFileOffset, PageCacheAccessMode.Write, pageReadLen,
+                out var error, allowHostMapped);
+            return (pagePtr, pagePtr != IntPtr.Zero ? 0 : error);
         }
 
         var captured = tempPage;
         var capturedReadLen = pageReadLen;
-        return pageCache.GetOrCreatePage(pageIndex, p =>
+        pagePtr = pageCache.GetOrCreatePage(pageIndex, p =>
         {
             unsafe
             {
@@ -2163,6 +2183,7 @@ public abstract class MappingBackedInode : Inode
 
             return true;
         }, out _, true, AllocationClass.PageCache);
+        return (pagePtr, pagePtr != IntPtr.Zero ? 0 : -(int)Errno.ENOMEM);
     }
 }
 

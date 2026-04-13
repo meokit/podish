@@ -905,6 +905,14 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         _ = WritePages(linuxFile, new WritePagesRequest(0, long.MaxValue, true));
     }
 
+    private bool HasDirtyPageAtOrAfter(long pageIndex)
+    {
+        lock (_dirtyPageLock)
+        {
+            return _dirtyPageIndexes.Any(i => i >= pageIndex);
+        }
+    }
+
     protected override int AopsReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
     {
         if (request.Length < 0 || request.Length > pageBuffer.Length)
@@ -914,10 +922,14 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         var rc = BackendRead(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         if (rc < 0)
             return rc;
-        if (rc != request.Length)
-            return -(int)Errno.EIO;
+        if (rc == request.Length)
+            return 0;
 
-        return 0;
+        // Buffered sparse writes can extend logical size before the live inode file is written back.
+        if (HasDirtyPageAtOrAfter(request.PageIndex))
+            return 0;
+
+        return -(int)Errno.EIO;
     }
 
     internal override void OnMappingPageReleased(uint pageIndex, InodePageRecord record)
