@@ -115,6 +115,12 @@ public partial class SyscallManager
             case X86SyscallNumbers.getppid:
                 handled = true;
                 return SysGetPPid(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.setrlimit:
+                handled = true;
+                return SysSetRlimit(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.getrlimit:
+                handled = true;
+                return SysGetRlimit(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.setreuid:
                 handled = true;
                 return SysSetReUid(engine, ebx, ecx, edx, esi, edi, ebp);
@@ -172,6 +178,9 @@ public partial class SyscallManager
             case X86SyscallNumbers.getresuid:
                 handled = true;
                 return SysGetResUid16(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.ugetrlimit:
+                handled = true;
+                return SysUGetRlimit(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.setresgid:
                 handled = true;
                 return SysSetResGid(engine, ebx, ecx, edx, esi, edi, ebp);

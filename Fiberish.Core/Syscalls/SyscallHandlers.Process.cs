@@ -837,28 +837,140 @@ public partial class SyscallManager
         return task.Process.PGID;
     }
 
+    private async ValueTask<int> SysSetRlimit(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (!TryReadRlimit32(engine, a2, out var newLimit)) return -(int)Errno.EFAULT;
+        return ApplyResourceLimit(task.Process, (int)a1, newLimit);
+    }
+
+    private async ValueTask<int> SysGetRlimit(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (!task.Process.TryGetResourceLimit((int)a1, out var limit)) return -(int)Errno.EINVAL;
+        return WriteRlimit32(engine, a2, limit) ? 0 : -(int)Errno.EFAULT;
+    }
+
+    private async ValueTask<int> SysUGetRlimit(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return await SysGetRlimit(engine, a1, a2, a3, a4, a5, a6);
+    }
+
     private async ValueTask<int> SysPrlimit64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var pid = (int)a1;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        var targetProcess = ResolvePrlimitTarget(task, (int)a1, out var targetError);
+        if (targetError != 0) return targetError;
+
         var resource = (int)a2;
         var newLimitPtr = a3;
         var oldLimitPtr = a4;
 
-        if (pid != 0 && (GetTID == null || pid != GetTID(engine))) return -(int)Errno.EPERM;
+        if (!targetProcess!.TryGetResourceLimit(resource, out var currentLimit)) return -(int)Errno.EINVAL;
+        if (oldLimitPtr != 0 && !WriteRlimit64(engine, oldLimitPtr, currentLimit)) return -(int)Errno.EFAULT;
 
-        if (oldLimitPtr != 0)
-        {
-            var buf = new byte[16];
-            BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0, 8), 1024); // soft
-            BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(8, 8), 4096); // hard
-            if (!engine.CopyToUser(oldLimitPtr, buf)) return -(int)Errno.EFAULT;
-        }
+        if (newLimitPtr == 0) return 0;
+        if (!TryReadRlimit64(engine, newLimitPtr, out var newLimit)) return -(int)Errno.EFAULT;
 
-        return 0;
+        return ApplyResourceLimit(targetProcess, resource, newLimit);
     }
 
     private ValueTask<int> SysMagicDebug(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         return ValueTask.FromResult(-(int)Errno.EPERM);
+    }
+
+    private static int ApplyResourceLimit(Process process, int resource, ResourceLimit newLimit)
+    {
+        if (!process.TryGetResourceLimit(resource, out var currentLimit)) return -(int)Errno.EINVAL;
+        if (newLimit.Soft > newLimit.Hard) return -(int)Errno.EINVAL;
+
+        // CAP_SYS_RESOURCE is not modeled; root can still raise hard limits.
+        if (process.EUID != 0 && newLimit.Hard > currentLimit.Hard) return -(int)Errno.EPERM;
+
+        return process.TrySetResourceLimit(resource, newLimit) ? 0 : -(int)Errno.EINVAL;
+    }
+
+    private static Process? ResolvePrlimitTarget(FiberTask task, int pid, out int error)
+    {
+        error = 0;
+        if (pid == 0 || pid == task.Process.TGID || pid == task.TID) return task.Process;
+
+        var target = task.CommonKernel.GetProcess(pid);
+        if (target == null)
+        {
+            error = -(int)Errno.ESRCH;
+            return null;
+        }
+
+        error = -(int)Errno.EPERM;
+        return null;
+    }
+
+    private static bool TryReadRlimit32(Engine engine, uint ptr, out ResourceLimit limit)
+    {
+        var buf = new byte[8];
+        if (!engine.CopyFromUser(ptr, buf))
+        {
+            limit = default;
+            return false;
+        }
+
+        limit = new ResourceLimit(ExpandLegacyRlimit(BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4))),
+            ExpandLegacyRlimit(BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(4, 4))));
+        return true;
+    }
+
+    private static bool TryReadRlimit64(Engine engine, uint ptr, out ResourceLimit limit)
+    {
+        var buf = new byte[16];
+        if (!engine.CopyFromUser(ptr, buf))
+        {
+            limit = default;
+            return false;
+        }
+
+        limit = new ResourceLimit(ExpandRlimit64(BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(0, 8))),
+            ExpandRlimit64(BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(8, 8))));
+        return true;
+    }
+
+    private static bool WriteRlimit32(Engine engine, uint ptr, ResourceLimit limit)
+    {
+        var buf = new byte[8];
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0, 4), NarrowLegacyRlimit(limit.Soft));
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4, 4), NarrowLegacyRlimit(limit.Hard));
+        return engine.CopyToUser(ptr, buf);
+    }
+
+    private static bool WriteRlimit64(Engine engine, uint ptr, ResourceLimit limit)
+    {
+        var buf = new byte[16];
+        BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0, 8), NarrowRlimit64(limit.Soft));
+        BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(8, 8), NarrowRlimit64(limit.Hard));
+        return engine.CopyToUser(ptr, buf);
+    }
+
+    private static ulong ExpandLegacyRlimit(uint value)
+    {
+        return value == LinuxConstants.RLIM32_INFINITY ? LinuxConstants.RLIM64_INFINITY : value;
+    }
+
+    private static ulong ExpandRlimit64(ulong value)
+    {
+        return value == LinuxConstants.RLIM64_INFINITY ? LinuxConstants.RLIM64_INFINITY : value;
+    }
+
+    private static uint NarrowLegacyRlimit(ulong value)
+    {
+        return value == LinuxConstants.RLIM64_INFINITY || value >= LinuxConstants.RLIM32_INFINITY
+            ? LinuxConstants.RLIM32_INFINITY
+            : (uint)value;
+    }
+
+    private static ulong NarrowRlimit64(ulong value)
+    {
+        return value == LinuxConstants.RLIM64_INFINITY ? LinuxConstants.RLIM64_INFINITY : value;
     }
 }
