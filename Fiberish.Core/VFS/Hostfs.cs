@@ -2062,6 +2062,7 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     {
         if (Type == InodeType.File)
         {
+            RefreshCleanPageCacheFromHostIfNeeded();
             var mode = FileMode.Open;
             var access = FileAccess.Read;
             var share = FileShare.ReadWrite;
@@ -2100,6 +2101,33 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
                 linuxFile.PrivateData = handle;
             }
         }
+    }
+
+    private void RefreshCleanPageCacheFromHostIfNeeded()
+    {
+        if (HasDirtyPageCachePages())
+            return;
+        if (!TryGetBackingFileLength(out var hostLength))
+            return;
+
+        var cachedLength = base.Size;
+        if (cachedLength == hostLength && Mapping == null)
+            return;
+
+        if (Mapping != null)
+        {
+            // Only evict clean pages that are no longer mapped/pinned. Removing live
+            // direct-mapped pages can leave host backing ownership behind and break the
+            // next fault on the same host page.
+            foreach (var state in Mapping.SnapshotPageStates())
+            {
+                if (!state.Dirty)
+                    Mapping.TryEvictCleanPage(state.PageIndex);
+            }
+            Mapping.TruncateToSize((long)hostLength);
+        }
+
+        base.Size = hostLength;
     }
 
     public override void Release(LinuxFile linuxFile)
@@ -2178,6 +2206,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     {
         if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
         var append = honorAppend && ((linuxFile?.Flags ?? 0) & FileFlags.O_APPEND) != 0;
+        var cachedSizeBeforeWrite = Size;
+        ulong logicalEnd;
 
         if (linuxFile?.PrivateData is SafeFileHandle handle)
         {
@@ -2187,13 +2217,15 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
                 {
                     var writeOffset = RandomAccess.GetLength(handle);
                     RandomAccess.Write(handle, buffer, writeOffset);
-                    Size = (ulong)RandomAccess.GetLength(handle);
+                    logicalEnd = (ulong)(writeOffset + buffer.Length);
+                    Size = Math.Max(cachedSizeBeforeWrite, Math.Max(logicalEnd, (ulong)RandomAccess.GetLength(handle)));
                 }
             }
             else
             {
                 RandomAccess.Write(handle, buffer, offset);
-                Size = (ulong)RandomAccess.GetLength(handle);
+                logicalEnd = (ulong)(offset + buffer.Length);
+                Size = Math.Max(cachedSizeBeforeWrite, Math.Max(logicalEnd, (ulong)RandomAccess.GetLength(handle)));
             }
 
             CTime = DateTime.Now;
@@ -2210,13 +2242,16 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             {
                 var tempWriteOffset = RandomAccess.GetLength(tempHandle);
                 RandomAccess.Write(tempHandle, buffer, tempWriteOffset);
-                Size = (ulong)RandomAccess.GetLength(tempHandle);
+                logicalEnd = (ulong)(tempWriteOffset + buffer.Length);
+                Size = Math.Max(cachedSizeBeforeWrite,
+                    Math.Max(logicalEnd, (ulong)RandomAccess.GetLength(tempHandle)));
             }
         }
         else
         {
             RandomAccess.Write(tempHandle, buffer, offset);
-            Size = (ulong)RandomAccess.GetLength(tempHandle);
+            logicalEnd = (ulong)(offset + buffer.Length);
+            Size = Math.Max(cachedSizeBeforeWrite, Math.Max(logicalEnd, (ulong)RandomAccess.GetLength(tempHandle)));
         }
 
         CTime = DateTime.Now;

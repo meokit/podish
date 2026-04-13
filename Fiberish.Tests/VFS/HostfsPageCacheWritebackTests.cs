@@ -569,6 +569,47 @@ public class HostfsPageCacheWritebackTests
     }
 
     [Fact]
+    public void Reopen_MustInvalidateCleanCachedPagesAfterHostRewrite()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-reopen-refresh-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "hello");
+
+        LinuxFile? first = null;
+        LinuxFile? second = null;
+        try
+        {
+            var runtime = new TestRuntimeFactory(BufferedOnlyGeometry);
+            first = OpenHostFile(root, "data.bin", runtime.MemoryContext);
+            var inode = Assert.IsType<HostInode>(first.Dentry.Inode);
+
+            var warm = new byte[5];
+            Assert.Equal(5, inode.ReadToHost(null, first, warm, 0));
+            Assert.Equal("hello", System.Text.Encoding.ASCII.GetString(warm));
+
+            first.Close();
+            first = null;
+
+            File.WriteAllText(hostFile, "HELLO!!!");
+
+            second = new LinuxFile(inode.Dentries[0], FileFlags.O_RDONLY, null!);
+            second.Dentry.Inode!.Open(second);
+
+            var readBack = new byte[8];
+            var readRc = inode.ReadToHost(null, second, readBack, 0);
+            Assert.Equal(8, readRc);
+            Assert.Equal("HELLO!!!", System.Text.Encoding.ASCII.GetString(readBack));
+        }
+        finally
+        {
+            second?.Close();
+            first?.Close();
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void DirtyLogicalSize_Size_MustExposeGuestLengthBeforeFlush()
     {
         var root = Path.Combine(Path.GetTempPath(), "hostfs-dirty-size-" + Guid.NewGuid().ToString("N"));
@@ -607,6 +648,53 @@ public class HostfsPageCacheWritebackTests
             {
                 mapping.Release();
             }
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Close_MustFlushBufferedOutOfOrderWritesAcrossPageBoundaryWithoutShrinkingLogicalSize()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-out-of-order-cross-page-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, string.Empty);
+
+        try
+        {
+            var runtime = new TestRuntimeFactory(BufferedOnlyGeometry);
+            using var engine = runtime.CreateEngine();
+            var mm = runtime.CreateAddressSpace();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
+            loc.Dentry!.Inode!.Open(file);
+            var inode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
+            var fd = sm.AllocFD(file);
+
+            var tailOffset = LinuxConstants.PageSize - 32;
+            var tailWrite = new byte[64];
+            Array.Fill(tailWrite, (byte)'T');
+            var headWrite = "head"u8.ToArray();
+
+            Assert.Equal(tailWrite.Length, inode.WriteFromHost(null, file, tailWrite, tailOffset));
+            Assert.Equal((ulong)(tailOffset + tailWrite.Length), inode.Size);
+
+            Assert.Equal(headWrite.Length, inode.WriteFromHost(null, file, headWrite, 0));
+            Assert.Equal((ulong)(tailOffset + tailWrite.Length), inode.Size);
+
+            sm.FreeFD(fd);
+
+            var bytes = File.ReadAllBytes(hostFile);
+            Assert.Equal(tailOffset + tailWrite.Length, bytes.Length);
+            Assert.Equal(headWrite, bytes[..headWrite.Length]);
+            Assert.All(bytes.AsSpan(headWrite.Length, tailOffset - headWrite.Length).ToArray(), b => Assert.Equal(0, b));
+            Assert.Equal(tailWrite, bytes[tailOffset..(tailOffset + tailWrite.Length)]);
         }
         finally
         {
