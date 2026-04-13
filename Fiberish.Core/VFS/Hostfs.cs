@@ -2165,8 +2165,18 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
     private int BackendWrite(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
+        return BackendWriteCore(linuxFile, buffer, offset, honorAppend: true);
+    }
+
+    private int BackendWriteAtOffset(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        return BackendWriteCore(linuxFile, buffer, offset, honorAppend: false);
+    }
+
+    private int BackendWriteCore(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset, bool honorAppend)
+    {
         if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
-        var append = ((linuxFile?.Flags ?? 0) & FileFlags.O_APPEND) != 0;
+        var append = honorAppend && ((linuxFile?.Flags ?? 0) & FileFlags.O_APPEND) != 0;
 
         if (linuxFile?.PrivateData is SafeFileHandle handle)
         {
@@ -2304,7 +2314,7 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         SuperBlock.MemoryContext.AddressSpacePolicy.BeginAddressSpaceWriteback();
         try
         {
-            rc = BackendWrite(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+            rc = BackendWriteAtOffset(linuxFile, pageBuffer[..request.Length], request.FileOffset);
         }
         finally
         {
@@ -2373,7 +2383,7 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
                 SuperBlock.MemoryContext.AddressSpacePolicy.BeginAddressSpaceWriteback();
                 try
                 {
-                    rc = BackendWrite(linuxFile, pageData[..writeLen], fileOffset);
+                    rc = BackendWriteAtOffset(linuxFile, pageData[..writeLen], fileOffset);
                 }
                 finally
                 {

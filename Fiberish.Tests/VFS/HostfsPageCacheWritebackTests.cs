@@ -529,6 +529,46 @@ public class HostfsPageCacheWritebackTests
     }
 
     [Fact]
+    public void BufferedAppendWriteback_MustRespectPageOffsetsInsteadOfReappendingDirtyPages()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-append-writeback-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, string.Empty);
+
+        try
+        {
+            var runtime = new TestRuntimeFactory(BufferedOnlyGeometry);
+            using var engine = runtime.CreateEngine();
+            var mm = runtime.CreateAddressSpace();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_WRONLY | FileFlags.O_APPEND, loc.Mount!);
+            loc.Dentry!.Inode!.Open(file);
+            var fd = sm.AllocFD(file);
+            var inode = loc.Dentry.Inode!;
+
+            Assert.Equal(1, inode.WriteFromHost(null, file, "A"u8.ToArray(), (long)inode.Size));
+            Assert.Equal("A", File.ReadAllText(hostFile));
+
+            Assert.Equal(1, inode.WriteFromHost(null, file, "B"u8.ToArray(), (long)inode.Size));
+            Assert.Equal("AB", File.ReadAllText(hostFile));
+
+            Assert.Equal(1, inode.WriteFromHost(null, file, "C"u8.ToArray(), (long)inode.Size));
+            Assert.Equal("ABC", File.ReadAllText(hostFile));
+
+            sm.FreeFD(fd);
+            Assert.Equal("ABC", File.ReadAllText(hostFile));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void EvictUnusedInodes_MustWriteBackBufferedDirtyPagesBeforeDroppingHostfsPageCache()
     {
         var root = Path.Combine(Path.GetTempPath(), "hostfs-evict-write-buffered-" + Guid.NewGuid().ToString("N"));
