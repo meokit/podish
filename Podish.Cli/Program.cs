@@ -57,6 +57,10 @@ internal class Program
         var rootfsOption = new Option<string?>(
             new[] { "--rootfs" },
             "Use a local root filesystem path (Podman-compatible rootfs mode)");
+        var fsBackendOption = new Option<string>(
+            new[] { "--fs-backend" },
+            () => "overlay-silkfs",
+            "Filesystem backend for image mode (tmpfs|silkfs|overlay-tmpfs|overlay-silkfs)");
         var memoryOption = new Option<string?>(
             new[] { "--memory", "-m" },
             "Set container memory limit (e.g. 64M, 1G; minimum 32M)");
@@ -123,6 +127,7 @@ internal class Program
         runCommand.AddOption(straceOption);
         runCommand.AddOption(initOption);
         runCommand.AddOption(rootfsOption);
+        runCommand.AddOption(fsBackendOption);
         runCommand.AddOption(memoryOption);
         runCommand.AddOption(envOption);
         runCommand.AddOption(dnsOption);
@@ -146,6 +151,7 @@ internal class Program
             var strace = context.ParseResult.GetValueForOption(straceOption);
             var useInit = context.ParseResult.GetValueForOption(initOption);
             var rootfs = context.ParseResult.GetValueForOption(rootfsOption);
+            var fsBackendRaw = context.ParseResult.GetValueForOption(fsBackendOption) ?? "overlay-silkfs";
             var memoryRaw = context.ParseResult.GetValueForOption(memoryOption);
             var guestEnvs = context.ParseResult.GetValueForOption(envOption) ?? Array.Empty<string>();
             var dnsServers = context.ParseResult.GetValueForOption(dnsOption) ?? Array.Empty<string>();
@@ -161,6 +167,12 @@ internal class Program
             var waylandDesktopSizeRaw = context.ParseResult.GetValueForOption(waylandDesktopSizeOption) ?? "1024x768";
             var runArgs = context.ParseResult.GetValueForArgument(runArgsArgument) ?? Array.Empty<string>();
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
+            if (!TryParseFileSystemBackend(fsBackendRaw, useRootfs, out var fsBackend, out var fsBackendError))
+            {
+                Console.Error.WriteLine($"[Podish.Cli] invalid --fs-backend value: {fsBackendRaw}. {fsBackendError}");
+                context.ExitCode = 125;
+                return;
+            }
             string? image = null;
             string? exe = null;
             var exeArgs = Array.Empty<string>();
@@ -355,6 +367,7 @@ internal class Program
                 NetworkMode = networkMode,
                 Image = image,
                 Rootfs = rootfs,
+                FileSystemBackend = ToCliValue(fsBackend),
                 Exe = exe,
                 ExeArgs = exeArgs,
                 Volumes = volumes,
@@ -402,7 +415,7 @@ internal class Program
                 interactive && tty,
                 strace,
                 useInit,
-                !useRootfs,
+                fsBackend,
                 containersDir,
                 containerId,
                 containerName,
@@ -498,6 +511,13 @@ internal class Program
 
             var spec = metadata.Spec;
             var useRootfs = !string.IsNullOrWhiteSpace(spec.Rootfs);
+            if (!TryParseFileSystemBackend(spec.FileSystemBackend, useRootfs, out var fsBackend, out var fsBackendError))
+            {
+                Console.Error.WriteLine(
+                    $"[Podish.Cli] invalid stored fs backend for container {containerId}: {spec.FileSystemBackend}. {fsBackendError}");
+                context.ExitCode = 125;
+                return;
+            }
             var imageRef = metadata.Image ?? spec.Image ?? spec.Rootfs ?? "<unknown>";
             var rootfsPath = spec.Rootfs ?? spec.Image ?? string.Empty;
             var safeImageName = imageRef.Replace("/", "_").Replace(":", "_");
@@ -558,7 +578,7 @@ internal class Program
                 spec.Interactive && spec.Tty,
                 spec.Strace,
                 spec.Init,
-                !useRootfs,
+                fsBackend,
                 containersDir,
                 containerId,
                 metadata.Name,
@@ -1314,6 +1334,58 @@ internal class Program
         }
     }
 
+    private static bool TryParseFileSystemBackend(string? raw, bool useRootfs,
+        out ContainerFileSystemBackend backend, out string error)
+    {
+        var normalized = (raw ?? (useRootfs ? "hostfs" : "overlay-silkfs")).Trim().ToLowerInvariant();
+        backend = normalized switch
+        {
+            "" when useRootfs => ContainerFileSystemBackend.Hostfs,
+            "" => ContainerFileSystemBackend.OverlaySilkfs,
+            "hostfs" => ContainerFileSystemBackend.Hostfs,
+            "tmpfs" => ContainerFileSystemBackend.Tmpfs,
+            "silkfs" => ContainerFileSystemBackend.Silkfs,
+            "overlay-tmpfs" => ContainerFileSystemBackend.OverlayTmpfs,
+            "overlay-silkfs" => ContainerFileSystemBackend.OverlaySilkfs,
+            _ => ContainerFileSystemBackend.Hostfs
+        };
+
+        if (normalized.Length > 0 &&
+            normalized is not ("hostfs" or "tmpfs" or "silkfs" or "overlay-tmpfs" or "overlay-silkfs"))
+        {
+            error = "Use hostfs|tmpfs|silkfs|overlay-tmpfs|overlay-silkfs";
+            return false;
+        }
+
+        if (useRootfs && backend != ContainerFileSystemBackend.Hostfs)
+        {
+            error = "--rootfs currently only supports hostfs";
+            return false;
+        }
+
+        if (!useRootfs && backend == ContainerFileSystemBackend.Hostfs)
+        {
+            error = "hostfs requires --rootfs";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static string ToCliValue(ContainerFileSystemBackend backend)
+    {
+        return backend switch
+        {
+            ContainerFileSystemBackend.Hostfs => "hostfs",
+            ContainerFileSystemBackend.Tmpfs => "tmpfs",
+            ContainerFileSystemBackend.Silkfs => "silkfs",
+            ContainerFileSystemBackend.OverlayTmpfs => "overlay-tmpfs",
+            ContainerFileSystemBackend.OverlaySilkfs => "overlay-silkfs",
+            _ => throw new ArgumentOutOfRangeException(nameof(backend), backend, null)
+        };
+    }
+
     private static string? ResolveEngineLogFile(LogLevel logLevel, string? explicitLogFile, string logsDir)
     {
         if (!string.IsNullOrWhiteSpace(explicitLogFile))
@@ -1389,7 +1461,8 @@ internal class Program
     }
 
     private static Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
-        string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useEngineInit, bool useOverlay,
+        string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useEngineInit,
+        ContainerFileSystemBackend fsBackend,
         string containersDir,
         string containerId, string? containerName, string hostname, NetworkMode networkMode, string image,
         string containerDir, ContainerLogDriver logDriver,
@@ -1417,7 +1490,8 @@ internal class Program
                 UseTty = useTty,
                 Strace = strace,
                 UseEngineInit = useEngineInit,
-                UseOverlay = useOverlay,
+                UseOverlay = fsBackend is ContainerFileSystemBackend.OverlaySilkfs or ContainerFileSystemBackend.OverlayTmpfs,
+                FileSystemBackend = fsBackend,
                 ContainerId = containerId,
                 Hostname = hostname,
                 NetworkMode = networkMode,

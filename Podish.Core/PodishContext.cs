@@ -21,6 +21,7 @@ public sealed class PodishRunSpec
     public NetworkMode NetworkMode { get; init; } = NetworkMode.Host;
     public string? Image { get; init; }
     public string? Rootfs { get; init; }
+    public string? FileSystemBackend { get; init; }
     public string? Exe { get; init; }
     public string[] ExeArgs { get; init; } = Array.Empty<string>();
     public string[] Volumes { get; init; } = Array.Empty<string>();
@@ -487,6 +488,7 @@ public sealed class PodishContext : IDisposable
             NetworkMode = spec.NetworkMode,
             Image = spec.Image,
             Rootfs = rootfsName,
+            FileSystemBackend = "hostfs",
             Exe = spec.Exe,
             ExeArgs = spec.ExeArgs,
             Volumes = spec.Volumes,
@@ -575,6 +577,8 @@ public sealed class PodishContext : IDisposable
         {
             RootfsPath = rootfsPath,
             RootFileSystemFactory = rootFileSystemFactory,
+            FileSystemBackend = ParseContainerFileSystemBackend(spec.FileSystemBackend,
+                useRootfs || rootFileSystemFactory != null),
             Exe = spec.Exe ?? string.Empty,
             ExeArgs = spec.ExeArgs,
             Volumes = spec.Volumes,
@@ -635,6 +639,22 @@ public sealed class PodishContext : IDisposable
         {
             runtimeThread.Dispose();
         }
+    }
+
+    private static ContainerFileSystemBackend ParseContainerFileSystemBackend(string? raw, bool useRootfs)
+    {
+        var normalized = (raw ?? (useRootfs ? "hostfs" : "overlay-silkfs")).Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "" when useRootfs => ContainerFileSystemBackend.Hostfs,
+            "" => ContainerFileSystemBackend.OverlaySilkfs,
+            "hostfs" => ContainerFileSystemBackend.Hostfs,
+            "tmpfs" => ContainerFileSystemBackend.Tmpfs,
+            "silkfs" => ContainerFileSystemBackend.Silkfs,
+            "overlay-tmpfs" => ContainerFileSystemBackend.OverlayTmpfs,
+            "overlay-silkfs" => ContainerFileSystemBackend.OverlaySilkfs,
+            _ => throw new InvalidOperationException($"unsupported filesystem backend: {raw}")
+        };
     }
 
     public static bool TryParsePodmanLogLevel(string raw, out LogLevel level)

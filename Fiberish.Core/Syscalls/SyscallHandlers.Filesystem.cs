@@ -1200,6 +1200,9 @@ LocResolvedUtimens64:
             return newErr;
         }
 
+        if (oldName.IsDotOrDotDot || newName.IsDotOrDotDot)
+            return -(int)Errno.EINVAL;
+
         var oldLoc = oldStart.HasValue
             ? sm.PathWalker.PathWalk(oldPath.UnsafeBuffer, oldPath.Length, oldStart.Value, LookupFlags.None)
             : sm.PathWalker.PathWalk(oldPath.UnsafeBuffer, oldPath.Length, LookupFlags.None);

@@ -348,6 +348,11 @@ public abstract class IndexedMemoryInode : MappingBackedInode
 
     private int DoRename(ReadOnlySpan<byte> oldName, IndexedMemoryInode targetParent, ReadOnlySpan<byte> newName)
     {
+        var oldNameFs = FsName.FromBytes(oldName);
+        var newNameFs = FsName.FromBytes(newName);
+        if (oldNameFs.IsDotOrDotDot || newNameFs.IsDotOrDotDot)
+            return -(int)Errno.EINVAL;
+
         if (Dentries.Count == 0) return -(int)Errno.ENOENT;
         var oldPrimary = Dentries[0];
 
@@ -383,7 +388,14 @@ public abstract class IndexedMemoryInode : MappingBackedInode
                 if (ReferenceEquals(existingDentry.Inode, dentry.Inode))
                     return 0;
 
-                if (existingDentry.Inode!.Type == InodeType.Directory)
+                var sourceEntryIsDirectory = dentry.Inode.Type == InodeType.Directory;
+                var targetIsDirectory = existingDentry.Inode!.Type == InodeType.Directory;
+                if (sourceEntryIsDirectory && !targetIsDirectory)
+                    return -(int)Errno.ENOTDIR;
+                if (!sourceEntryIsDirectory && targetIsDirectory)
+                    return -(int)Errno.EISDIR;
+
+                if (targetIsDirectory)
                 {
                     if (existingDentry.Children.Count > 0)
                         return -(int)Errno.ENOTEMPTY;

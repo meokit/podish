@@ -23,12 +23,15 @@ internal static partial class Program
         var runRebuildOption = new Option<bool>("--rebuild-assets", "Rebuild cached guest assets");
         var runOutputJsonOption = new Option<string?>("--output-json", "Write a JSON summary to this path");
         var runMaxCasesOption = new Option<int?>("--max-cases", "Limit the number of discovered cases");
+        var runFsBackendOption = new Option<string>("--fs-backend", () => "overlay-silkfs",
+            "Filesystem backend (tmpfs|silkfs|overlay-tmpfs|overlay-silkfs)");
         runCommand.AddOption(runFilterOption);
         runCommand.AddOption(runJobsOption);
         runCommand.AddOption(runKeepWorkdirOption);
         runCommand.AddOption(runRebuildOption);
         runCommand.AddOption(runOutputJsonOption);
         runCommand.AddOption(runMaxCasesOption);
+        runCommand.AddOption(runFsBackendOption);
         runCommand.SetHandler(async context =>
         {
             try
@@ -40,7 +43,9 @@ internal static partial class Program
                     KeepWorkdir: context.ParseResult.GetValueForOption(runKeepWorkdirOption),
                     RebuildAssets: context.ParseResult.GetValueForOption(runRebuildOption),
                     OutputJson: context.ParseResult.GetValueForOption(runOutputJsonOption),
-                    MaxCases: context.ParseResult.GetValueForOption(runMaxCasesOption));
+                    MaxCases: context.ParseResult.GetValueForOption(runMaxCasesOption),
+                    FileSystemBackend: NormalizeFileSystemBackend(
+                        context.ParseResult.GetValueForOption(runFsBackendOption) ?? "overlay-silkfs"));
                 context.ExitCode = await RunAsync(repo, options);
             }
             catch (Exception ex)
@@ -136,6 +141,7 @@ internal static partial class Program
         Console.WriteLine($"[pjd] repo={repo.Root}");
         Console.WriteLine($"[pjd] cases={cases.Count}");
         Console.WriteLine($"[pjd] jobs={jobs}");
+        Console.WriteLine($"[pjd] fs-backend={options.FileSystemBackend}");
 
         var assetBuilder = new AssetBuilder(repo, snapshot);
         var assets = await assetBuilder.PrepareAsync(options.RebuildAssets);
@@ -144,7 +150,8 @@ internal static partial class Program
         var runDir = Path.Combine(repo.RunsRoot, DateTime.UtcNow.ToString("yyyyMMdd_HHmmss"));
         Directory.CreateDirectory(runDir);
 
-        var scheduler = new CaseScheduler(repo, assets, preparedImage, runDir, options.KeepWorkdir);
+        var scheduler = new CaseScheduler(repo, assets, preparedImage, runDir, options.KeepWorkdir,
+            options.FileSystemBackend);
         var results = await scheduler.RunAsync(cases, jobs);
 
         var summary = Summary.FromResults(results, runDir, assets.BinaryPath);
@@ -179,6 +186,20 @@ internal static partial class Program
         if (int.TryParse(raw, out var parsed) && parsed > 0)
             return parsed;
         throw new InvalidOperationException($"invalid --jobs value: {raw}");
+    }
+
+    private static string NormalizeFileSystemBackend(string raw)
+    {
+        var normalized = raw.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "tmpfs" => normalized,
+            "silkfs" => normalized,
+            "overlay-tmpfs" => normalized,
+            "overlay-silkfs" => normalized,
+            _ => throw new InvalidOperationException(
+                $"invalid --fs-backend value: {raw}. Use tmpfs|silkfs|overlay-tmpfs|overlay-silkfs")
+        };
     }
 
     private static async Task<string> EnsureTestImageAsync(RepoLayout repo, PreparedAssets assets, bool rebuild)
@@ -388,7 +409,8 @@ internal static partial class Program
         bool KeepWorkdir,
         bool RebuildAssets,
         string? OutputJson,
-        int? MaxCases);
+        int? MaxCases,
+        string FileSystemBackend);
 
     private sealed record RepoLayout(
         string Root,
@@ -691,14 +713,17 @@ internal static partial class Program
         private readonly string _imageOrRootfs;
         private readonly string _runDir;
         private readonly bool _keepWorkdir;
+        private readonly string _fileSystemBackend;
 
-        public CaseScheduler(RepoLayout repo, PreparedAssets assets, string imageOrRootfs, string runDir, bool keepWorkdir)
+        public CaseScheduler(RepoLayout repo, PreparedAssets assets, string imageOrRootfs, string runDir,
+            bool keepWorkdir, string fileSystemBackend)
         {
             _repo = repo;
             _assets = assets;
             _imageOrRootfs = imageOrRootfs;
             _runDir = runDir;
             _keepWorkdir = keepWorkdir;
+            _fileSystemBackend = fileSystemBackend;
         }
 
         public async Task<IReadOnlyList<CaseResult>> RunAsync(IReadOnlyList<UpstreamCase> cases, int jobs)
@@ -733,6 +758,8 @@ internal static partial class Program
                 "--rm",
                 "--network",
                 "host",
+                "--fs-backend",
+                _fileSystemBackend,
                 _imageOrRootfs,
                 "--",
                 "/bin/sh",
@@ -855,6 +882,7 @@ internal static partial class Program
             sb.AppendLine();
             sb.AppendLine($"- Repository: `{repo.Root}`");
             sb.AppendLine($"- Image: `{imageRef}`");
+            sb.AppendLine($"- Filesystem Backend: `{options.FileSystemBackend}`");
             sb.AppendLine($"- Guest Binary: `{BinaryPath}`");
             sb.AppendLine($"- Run Directory: `{RunDirectory}`");
             sb.AppendLine($"- Filter: `{options.Filter ?? "<none>"}`");

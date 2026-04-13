@@ -390,6 +390,25 @@ public sealed class ImageArchiveService
         ExportInternal(containerId, imageRef, upperStore, output);
     }
 
+    public void ExportImageRootToStream(string imageReferenceOrPath, Stream output)
+    {
+        if (string.IsNullOrWhiteSpace(imageReferenceOrPath))
+            throw new InvalidOperationException("image reference is required");
+        if (output == null || !output.CanWrite)
+            throw new InvalidOperationException("output stream is not writable");
+
+        var (rootDentry, exportMount, disposer) = OpenExportView(imageReferenceOrPath, upperStore: string.Empty);
+        try
+        {
+            using var writer = new TarWriter(output, TarEntryFormat.Pax, true);
+            WriteDentryTreeToTar(writer, rootDentry, exportMount, "");
+        }
+        finally
+        {
+            disposer.Dispose();
+        }
+    }
+
     private void ExportInternal(string containerId, string imageRef, string upperStore, Stream output)
     {
         _ = containerId;
@@ -492,7 +511,9 @@ public sealed class ImageArchiveService
         {
             if (inode.Type == InodeType.Directory)
             {
-                writer.WriteEntry(new PaxTarEntry(TarEntryType.Directory, relPath + "/"));
+                var dir = new PaxTarEntry(TarEntryType.Directory, relPath + "/");
+                ApplyTarMetadata(dir, inode);
+                writer.WriteEntry(dir);
             }
             else if (inode.Type == InodeType.Symlink)
             {
@@ -503,6 +524,7 @@ public sealed class ImageArchiveService
                 {
                     LinkName = linkTarget
                 };
+                ApplyTarMetadata(link, inode);
                 writer.WriteEntry(link);
                 return;
             }
@@ -513,6 +535,7 @@ public sealed class ImageArchiveService
                 {
                     DataStream = new MemoryStream(bytes, false)
                 };
+                ApplyTarMetadata(file, inode);
                 writer.WriteEntry(file);
                 return;
             }
@@ -538,6 +561,13 @@ public sealed class ImageArchiveService
             var childRel = string.IsNullOrEmpty(relPath) ? childName : relPath + "/" + childName;
             WriteDentryTreeToTar(writer, dentry, mount, childRel);
         }
+    }
+
+    private static void ApplyTarMetadata(PaxTarEntry entry, Inode inode)
+    {
+        entry.Mode = (UnixFileMode)(inode.Mode & 0x0FFF);
+        entry.Uid = inode.Uid;
+        entry.Gid = inode.Gid;
     }
 
     private static byte[] ReadAllInodeBytes(Dentry dentry, Mount mount)

@@ -10,12 +10,18 @@ internal static class RootfsArchiveLoader
 
     public static SuperBlock LoadTmpfsFromTar(Stream tarStream, DeviceNumberManager deviceNumbers, string sourceName)
     {
+        var fsType = new FileSystemType { Name = "tmpfs", Factory = devMgr => new Tmpfs(devMgr) };
+        return LoadFromTar(tarStream, deviceNumbers, fsType, sourceName);
+    }
+
+    public static SuperBlock LoadFromTar(Stream tarStream, DeviceNumberManager deviceNumbers, FileSystemType fsType,
+        string sourceName, object? data = null)
+    {
         if (tarStream == null) throw new ArgumentNullException(nameof(tarStream));
         if (!tarStream.CanRead) throw new ArgumentException("Tar stream must be readable.", nameof(tarStream));
 
-        var fsType = new FileSystemType { Name = "tmpfs", Factory = devMgr => new Tmpfs(devMgr) };
-        var sb = fsType.CreateFileSystem(deviceNumbers).ReadSuper(fsType, 0, sourceName, null);
-        var root = sb.Root ?? throw new InvalidOperationException("tmpfs root was not created.");
+        var sb = fsType.CreateFileSystem(deviceNumbers).ReadSuper(fsType, 0, sourceName, data);
+        var root = sb.Root ?? throw new InvalidOperationException($"{fsType.Name} root was not created.");
 
         using var archiveStream = OpenPossiblyCompressedTarStream(tarStream);
         var pendingHardLinks = new List<(string Path, string Target)>();

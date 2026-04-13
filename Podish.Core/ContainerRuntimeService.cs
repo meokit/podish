@@ -39,6 +39,7 @@ public sealed class ContainerRunRequest
     public bool UseTty { get; init; }
     public bool Strace { get; init; }
     public bool UseOverlay { get; init; }
+    public ContainerFileSystemBackend FileSystemBackend { get; init; } = ContainerFileSystemBackend.Hostfs;
     public required string ContainerId { get; init; }
     public required string Image { get; init; }
     public required string ContainerDir { get; init; }
@@ -58,6 +59,15 @@ public sealed class ContainerRunRequest
     public ushort? TerminalRows { get; init; }
     public ushort? TerminalCols { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
+}
+
+public enum ContainerFileSystemBackend
+{
+    Hostfs,
+    Tmpfs,
+    Silkfs,
+    OverlayTmpfs,
+    OverlaySilkfs
 }
 
 public sealed class ContainerRuntimeService
@@ -240,7 +250,12 @@ public sealed class ContainerRuntimeService
             }
 
             runtime.Syscalls.NetworkMode = effectiveNetworkMode;
-            if (request.UseOverlay)
+            var fsBackend = request.RootFileSystemFactory != null
+                ? ContainerFileSystemBackend.Hostfs
+                : request.FileSystemBackend == ContainerFileSystemBackend.Hostfs && request.UseOverlay
+                    ? ContainerFileSystemBackend.OverlaySilkfs
+                    : request.FileSystemBackend;
+            if (fsBackend is ContainerFileSystemBackend.OverlaySilkfs or ContainerFileSystemBackend.OverlayTmpfs)
             {
                 if (!TryCreateLayerLower(runtime.DeviceNumbers, request.RootfsPath, out var layerLowerSb,
                         out var layerProvider,
@@ -254,15 +269,9 @@ public sealed class ContainerRuntimeService
                 }
 
                 using var _ = layerProvider;
-                var silkUpperStore = Path.Combine(request.ContainerDir, "silk-upper");
-                Directory.CreateDirectory(silkUpperStore);
-                var silkType = FileSystemRegistry.Get("silkfs")
-                               ?? throw new InvalidOperationException("silkfs is not registered");
                 var overlayType = FileSystemRegistry.Get("overlay")
                                   ?? throw new InvalidOperationException("overlay is not registered");
-
-                var upperSb = silkType.CreateFileSystem(runtime.DeviceNumbers)
-                    .ReadSuper(silkType, 0, silkUpperStore, null);
+                var (upperSb, upperDirName) = CreateOverlayUpper(runtime, request, fsBackend);
                 var overlaySb = overlayType.CreateFileSystem(runtime.DeviceNumbers).ReadSuper(overlayType, 0,
                     "root_overlay",
                     new OverlayMountOptions
@@ -274,7 +283,7 @@ public sealed class ContainerRuntimeService
                 {
                     Source = "overlay",
                     FsType = "overlay",
-                    Options = "rw,relatime,lowerdir=/,upperdir=/silk-upper,workdir=/work"
+                    Options = $"rw,relatime,lowerdir=/,upperdir=/{upperDirName},workdir=/work"
                 });
                 runtime.Syscalls.MountStandardDev(ttyDiag);
                 runtime.Syscalls.MountStandardProc();
@@ -291,6 +300,12 @@ public sealed class ContainerRuntimeService
                 {
                     rootSb = request.RootFileSystemFactory(runtime.DeviceNumbers);
                     fsType = rootSb.Type?.Name ?? "tmpfs";
+                    source = request.RootfsPath;
+                }
+                else if (fsBackend is ContainerFileSystemBackend.Tmpfs or ContainerFileSystemBackend.Silkfs)
+                {
+                    rootSb = CreateMaterializedImageRoot(runtime, request, fsBackend);
+                    fsType = rootSb.Type?.Name ?? fsBackend.ToString().ToLowerInvariant();
                     source = request.RootfsPath;
                 }
                 else
@@ -632,6 +647,68 @@ public sealed class ContainerRuntimeService
 
             _logger.LogDebug("Container teardown finished containerId={ContainerId}", request.ContainerId);
         }
+    }
+
+    private static (SuperBlock Upper, string UpperDirName) CreateOverlayUpper(KernelRuntime runtime,
+        ContainerRunRequest request, ContainerFileSystemBackend backend)
+    {
+        return backend switch
+        {
+            ContainerFileSystemBackend.OverlaySilkfs => CreateOverlaySilkUpper(runtime, request),
+            ContainerFileSystemBackend.OverlayTmpfs => CreateOverlayTmpfsUpper(runtime),
+            _ => throw new InvalidOperationException($"unsupported overlay backend: {backend}")
+        };
+    }
+
+    private static (SuperBlock Upper, string UpperDirName) CreateOverlaySilkUpper(KernelRuntime runtime,
+        ContainerRunRequest request)
+    {
+        var silkUpperStore = Path.Combine(request.ContainerDir, "silk-upper");
+        Directory.CreateDirectory(silkUpperStore);
+        var silkType = FileSystemRegistry.Get("silkfs")
+                       ?? throw new InvalidOperationException("silkfs is not registered");
+        var upperSb = silkType.CreateFileSystem(runtime.DeviceNumbers).ReadSuper(silkType, 0, silkUpperStore, null);
+        return (upperSb, "silk-upper");
+    }
+
+    private static (SuperBlock Upper, string UpperDirName) CreateOverlayTmpfsUpper(KernelRuntime runtime)
+    {
+        var tmpfsType = FileSystemRegistry.Get("tmpfs")
+                        ?? throw new InvalidOperationException("tmpfs is not registered");
+        var upperSb = tmpfsType.CreateFileSystem(runtime.DeviceNumbers).ReadSuper(tmpfsType, 0, "tmpfs-upper", null);
+        return (upperSb, "tmpfs-upper");
+    }
+
+    private static SuperBlock CreateMaterializedImageRoot(KernelRuntime runtime, ContainerRunRequest request,
+        ContainerFileSystemBackend backend)
+    {
+        var archiveService = new ImageArchiveService(Directory.GetCurrentDirectory());
+        using var rootTar = new MemoryStream();
+        archiveService.ExportImageRootToStream(request.RootfsPath, rootTar);
+        rootTar.Position = 0;
+
+        return backend switch
+        {
+            ContainerFileSystemBackend.Tmpfs => MaterializeRootFromTar(runtime, rootTar, "tmpfs", "image-tmpfs-root"),
+            ContainerFileSystemBackend.Silkfs => MaterializeRootFromTar(runtime, rootTar, "silkfs",
+                PrepareSilkRootStore(request)),
+            _ => throw new InvalidOperationException($"unsupported materialized image backend: {backend}")
+        };
+    }
+
+    private static SuperBlock MaterializeRootFromTar(KernelRuntime runtime, Stream tarStream, string fsTypeName,
+        string sourceName)
+    {
+        var fsType = FileSystemRegistry.Get(fsTypeName)
+                     ?? throw new InvalidOperationException($"{fsTypeName} is not registered");
+        return RootfsArchiveLoader.LoadFromTar(tarStream, runtime.DeviceNumbers, fsType, sourceName);
+    }
+
+    private static string PrepareSilkRootStore(ContainerRunRequest request)
+    {
+        var silkRootStore = Path.Combine(request.ContainerDir, "silk-root");
+        Directory.CreateDirectory(silkRootStore);
+        return silkRootStore;
     }
 
     private bool TryCreateLayerLower(DeviceNumberManager devNumbers, string ociStoreDir, out SuperBlock? lowerSb,
