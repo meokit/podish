@@ -1359,6 +1359,12 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
     private bool TryGetBackingFileLength(out ulong hostLength)
     {
+        if (HostInodeIdentityResolver.TryReadUnixStat(HostPath, out var statData))
+        {
+            hostLength = statData.SizeBytes <= 0 ? 0 : (ulong)statData.SizeBytes;
+            return true;
+        }
+
         try
         {
             hostLength = (ulong)new FileInfo(HostPath).Length;
@@ -2117,12 +2123,7 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     private bool HasDirtyPageCachePages()
     {
         lock (_dirtyPageLock)
-        {
-            if (_dirtyPageIndexes.Count != 0)
-                return true;
-        }
-
-        return Mapping?.SnapshotPageStates().Any(static state => state.Dirty) == true;
+            return _dirtyPageIndexes.Count != 0;
     }
 
     internal bool FlushDirtyDataIfNeeded(LinuxFile? linuxFile)

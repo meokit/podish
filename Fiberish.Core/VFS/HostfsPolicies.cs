@@ -246,7 +246,8 @@ internal static partial class HostInodeIdentityResolver
             darwinStat.StNlink,
             darwinStat.StMode,
             darwinStat.StUid,
-            darwinStat.StGid);
+            darwinStat.StGid,
+            darwinStat.StSize);
         return true;
 #elif HOSTFS_WINDOWS
         return false;
@@ -256,14 +257,16 @@ internal static partial class HostInodeIdentityResolver
             if (RuntimeInformation.ProcessArchitecture == Architecture.X64)
             {
                 if (lstat_linux_x64(hostPath, out var st) != 0) return false;
-                statData = new HostUnixStatData(st.StDev, st.StIno, st.StNlink, st.StMode, st.StUid, st.StGid);
+                statData = new HostUnixStatData(st.StDev, st.StIno, st.StNlink, st.StMode, st.StUid, st.StGid,
+                    st.StSize);
                 return true;
             }
 
             if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
             {
                 if (lstat_linux_arm64(hostPath, out var st) != 0) return false;
-                statData = new HostUnixStatData(st.StDev, st.StIno, st.StNlink, st.StMode, st.StUid, st.StGid);
+                statData = new HostUnixStatData(st.StDev, st.StIno, st.StNlink, st.StMode, st.StUid, st.StGid,
+                    st.StSize);
                 return true;
             }
 
@@ -282,7 +285,8 @@ internal static partial class HostInodeIdentityResolver
             fallbackDarwinStat.StNlink,
             fallbackDarwinStat.StMode,
             fallbackDarwinStat.StUid,
-            fallbackDarwinStat.StGid);
+            fallbackDarwinStat.StGid,
+            fallbackDarwinStat.StSize);
         return true;
 #endif
     }
@@ -308,7 +312,8 @@ internal static partial class HostInodeIdentityResolver
         ulong LinkCount,
         uint Mode,
         uint Uid,
-        uint Gid);
+        uint Gid,
+        long SizeBytes);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct LinuxTimespec

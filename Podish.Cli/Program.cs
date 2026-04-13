@@ -57,9 +57,8 @@ internal class Program
         var rootfsOption = new Option<string?>(
             new[] { "--rootfs" },
             "Use a local root filesystem path (Podman-compatible rootfs mode)");
-        var fsBackendOption = new Option<string>(
+        var fsBackendOption = new Option<string?>(
             new[] { "--fs-backend" },
-            () => "overlay-silkfs",
             "Filesystem backend for image mode (tmpfs|silkfs|overlay-tmpfs|overlay-silkfs)");
         var memoryOption = new Option<string?>(
             new[] { "--memory", "-m" },
@@ -155,7 +154,7 @@ internal class Program
             var strace = context.ParseResult.GetValueForOption(straceOption);
             var useInit = context.ParseResult.GetValueForOption(initOption);
             var rootfs = context.ParseResult.GetValueForOption(rootfsOption);
-            var fsBackendRaw = context.ParseResult.GetValueForOption(fsBackendOption) ?? "overlay-silkfs";
+            var fsBackendRaw = context.ParseResult.GetValueForOption(fsBackendOption);
             var memoryRaw = context.ParseResult.GetValueForOption(memoryOption);
             var guestEnvs = context.ParseResult.GetValueForOption(envOption) ?? Array.Empty<string>();
             var requestedUser = context.ParseResult.GetValueForOption(userOption);

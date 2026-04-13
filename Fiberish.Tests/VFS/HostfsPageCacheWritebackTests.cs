@@ -569,6 +569,52 @@ public class HostfsPageCacheWritebackTests
     }
 
     [Fact]
+    public void DirtyLogicalSize_Size_MustExposeGuestLengthBeforeFlush()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-dirty-size-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "abcde");
+
+        try
+        {
+            var runtime = new TestRuntimeFactory(BufferedOnlyGeometry);
+            using var engine = runtime.CreateEngine();
+            var mm = runtime.CreateAddressSpace();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
+            loc.Dentry!.Inode!.Open(file);
+            var inode = Assert.IsType<HostInode>(loc.Dentry.Inode);
+            var mapping = inode.AcquireMappingRef();
+
+            try
+            {
+                var warm = new byte[5];
+                Assert.Equal(5, inode.ReadToHost(null, file, warm, 0));
+                Assert.NotEqual(IntPtr.Zero, mapping.GetPage(0));
+
+                inode.Size = 8;
+                inode.SetPageDirty(1);
+                mapping.MarkDirty(1);
+
+                Assert.Equal(8UL, inode.Size);
+                Assert.Equal(5L, new FileInfo(hostFile).Length);
+            }
+            finally
+            {
+                mapping.Release();
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void EvictUnusedInodes_MustWriteBackBufferedDirtyPagesBeforeDroppingHostfsPageCache()
     {
         var root = Path.Combine(Path.GetTempPath(), "hostfs-evict-write-buffered-" + Guid.NewGuid().ToString("N"));

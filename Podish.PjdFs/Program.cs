@@ -23,8 +23,8 @@ internal static partial class Program
         var runRebuildOption = new Option<bool>("--rebuild-assets", "Rebuild cached guest assets");
         var runOutputJsonOption = new Option<string?>("--output-json", "Write a JSON summary to this path");
         var runMaxCasesOption = new Option<int?>("--max-cases", "Limit the number of discovered cases");
-        var runFsBackendOption = new Option<string>("--fs-backend", () => "overlay-silkfs",
-            "Filesystem backend (tmpfs|silkfs|overlay-tmpfs|overlay-silkfs)");
+        var runFsBackendOption = new Option<string>("--fs-backend", () => "hostfs",
+            "Filesystem backend (tmpfs|hostfs|silkfs|overlay-tmpfs|overlay-silkfs)");
         runCommand.AddOption(runFilterOption);
         runCommand.AddOption(runJobsOption);
         runCommand.AddOption(runKeepWorkdirOption);

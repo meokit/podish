@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Fiberish.Memory;
 
@@ -185,7 +186,7 @@ internal sealed class OwnerRmapTracker
 {
     private readonly record struct OwnerRmapPageBucketKey(uint PageIndex, IntPtr HostPagePtr);
 
-    private sealed class OwnerRmapPageBucket
+    private struct OwnerRmapPageBucket
     {
         private const int SmallEntryThreshold = 4;
         private int _count;
@@ -489,69 +490,64 @@ internal sealed class OwnerRmapTracker
 
     private readonly Dictionary<OwnerRmapPageBucketKey, OwnerRmapPageBucket> _buckets = [];
 
-    private OwnerRmapPageBucket GetOrAddPageBucket(uint pageIndex, IntPtr hostPagePtr)
+    private ref OwnerRmapPageBucket GetOrAddPageBucketRef(uint pageIndex, IntPtr hostPagePtr)
     {
         var bucketKey = new OwnerRmapPageBucketKey(pageIndex, hostPagePtr);
-        if (_buckets.TryGetValue(bucketKey, out var existing))
-            return existing;
-
-        var created = new OwnerRmapPageBucket();
-        _buckets.Add(bucketKey, created);
-        return created;
-    }
-
-    private void RemovePageBucketIfEmpty(uint pageIndex, IntPtr hostPagePtr, OwnerRmapPageBucket pageBucket)
-    {
-        if (!pageBucket.IsEmpty)
-            return;
-
-        _buckets.Remove(new OwnerRmapPageBucketKey(pageIndex, hostPagePtr));
+        return ref CollectionsMarshal.GetValueRefOrAddDefault(_buckets, bucketKey, out _);
     }
 
     public void AddOrUpdate(uint pageIndex, IntPtr hostPagePtr, HostPageRmapRef entry, out HostPageRmapRef previous,
         out bool existed)
     {
-        var pageBucket = GetOrAddPageBucket(pageIndex, hostPagePtr);
+        ref var pageBucket = ref GetOrAddPageBucketRef(pageIndex, hostPagePtr);
         pageBucket.AddOrUpdate(entry, out previous, out existed);
     }
 
     public bool TryRemove(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey key, out HostPageRmapRef removed)
     {
-        if (!_buckets.TryGetValue(new OwnerRmapPageBucketKey(pageIndex, hostPagePtr), out var pageBucket) ||
-            !pageBucket.TryRemove(key, out removed))
+        var bucketKey = new OwnerRmapPageBucketKey(pageIndex, hostPagePtr);
+        ref var pageBucket = ref CollectionsMarshal.GetValueRefOrNullRef(_buckets, bucketKey);
+        if (Unsafe.IsNullRef(ref pageBucket) || !pageBucket.TryRemove(key, out removed))
         {
             removed = default;
             return false;
         }
 
-        RemovePageBucketIfEmpty(pageIndex, hostPagePtr, pageBucket);
+        if (pageBucket.IsEmpty)
+            _buckets.Remove(bucketKey);
         return true;
     }
 
     public bool Contains(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey key)
     {
-        return _buckets.TryGetValue(new OwnerRmapPageBucketKey(pageIndex, hostPagePtr), out var pageBucket) &&
-               pageBucket.Contains(key);
+        ref var pageBucket = ref CollectionsMarshal.GetValueRefOrNullRef(
+            _buckets,
+            new OwnerRmapPageBucketKey(pageIndex, hostPagePtr));
+        return !Unsafe.IsNullRef(ref pageBucket) && pageBucket.Contains(key);
     }
 
     public bool TryRebind(uint pageIndex, IntPtr hostPagePtr, HostPageRmapKey oldKey, HostPageRmapRef newEntry,
         out HostPageRmapRef previous)
     {
-        if (!_buckets.TryGetValue(new OwnerRmapPageBucketKey(pageIndex, hostPagePtr), out var pageBucket) ||
-            !pageBucket.TryRebind(oldKey, newEntry, out previous))
+        ref var pageBucket = ref CollectionsMarshal.GetValueRefOrNullRef(
+            _buckets,
+            new OwnerRmapPageBucketKey(pageIndex, hostPagePtr));
+        if (Unsafe.IsNullRef(ref pageBucket) || !pageBucket.TryRebind(oldKey, newEntry, out previous))
         {
             previous = default;
             return false;
         }
+
         return true;
     }
 
     public void CollectHits(uint pageIndex, IntPtr hostPagePtr, HostPageRef hostPageRef, List<RmapHit> output)
     {
-        if (!_buckets.TryGetValue(new OwnerRmapPageBucketKey(pageIndex, hostPagePtr), out var pageBucket))
-        {
+        ref var pageBucket = ref CollectionsMarshal.GetValueRefOrNullRef(
+            _buckets,
+            new OwnerRmapPageBucketKey(pageIndex, hostPagePtr));
+        if (Unsafe.IsNullRef(ref pageBucket))
             return;
-        }
 
         pageBucket.CollectHits(hostPageRef, output);
     }
@@ -559,8 +555,10 @@ internal sealed class OwnerRmapTracker
     public bool Visit<TState>(uint pageIndex, IntPtr hostPagePtr, HostPageRef hostPageRef, ref TState state,
         HostPageRmapVisitor<TState> visitor)
     {
-        if (!_buckets.TryGetValue(new OwnerRmapPageBucketKey(pageIndex, hostPagePtr), out var pageBucket) ||
-            pageBucket.IsEmpty)
+        ref var pageBucket = ref CollectionsMarshal.GetValueRefOrNullRef(
+            _buckets,
+            new OwnerRmapPageBucketKey(pageIndex, hostPagePtr));
+        if (Unsafe.IsNullRef(ref pageBucket) || pageBucket.IsEmpty)
         {
             return false;
         }
