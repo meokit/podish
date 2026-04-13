@@ -14,4 +14,5 @@ public sealed record OciStoredImage(
     string Tag,
     string ManifestDigest,
     string StoreDirectory,
-    IReadOnlyList<OciStoredLayer> Layers);
+    IReadOnlyList<OciStoredLayer> Layers,
+    string? ConfigUser = null);

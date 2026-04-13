@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Reflection;
+using Fiberish.Auth.Cred;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -166,6 +167,31 @@ public class FiberTaskCloneTests
         Assert.Equal((byte)0x22, probe[0]);
         Assert.True(child2.CPU.CopyFromUser(addr, probe));
         Assert.Equal((byte)0x33, probe[0]);
+    }
+
+    [Fact]
+    public async Task Fork_CopiesCredentialsAndClearsRootCapabilitiesAfterSetUid()
+    {
+        using var env = new TestEnv();
+        Assert.Equal(0, CredentialService.SetUid(env.Process, 1000));
+
+        var child = await env.Parent.Clone(0, 0, 0, 0, 0);
+
+        Assert.Equal(1000, child.Process.UID);
+        Assert.Equal(1000, child.Process.EUID);
+        Assert.Equal(1000, child.Process.FSUID);
+        Assert.False(child.Process.HasEffectiveCapability(Process.CapabilitySysAdmin));
+    }
+
+    [Fact]
+    public async Task Fork_PreservesSupplementaryGroups()
+    {
+        using var env = new TestEnv();
+        Assert.Equal(0, CredentialService.SetGroups(env.Process, [10, 20, 30]));
+
+        var child = await env.Parent.Clone(0, 0, 0, 0, 0);
+
+        Assert.Equal([10, 20, 30], child.Process.SupplementaryGroups);
     }
 
     private sealed class TestEnv : IDisposable

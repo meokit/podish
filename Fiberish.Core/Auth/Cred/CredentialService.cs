@@ -6,6 +6,46 @@ namespace Fiberish.Auth.Cred;
 
 public static class CredentialService
 {
+    public static void InitializeCredentials(Process process, int uid, int gid, IReadOnlyList<int>? supplementaryGroups = null)
+    {
+        var cred = new Cred
+        {
+            Ruid = uid,
+            Euid = uid,
+            Suid = uid,
+            Fsuid = uid,
+            Rgid = gid,
+            Egid = gid,
+            Sgid = gid,
+            Fsgid = gid,
+            Groups = new GroupInfo(supplementaryGroups),
+            Umask = process.Umask
+        };
+        Commit(process, cred);
+    }
+
+    public static void CopyCredentials(Process source, Process destination)
+    {
+        destination.UID = source.UID;
+        destination.EUID = source.EUID;
+        destination.SUID = source.SUID;
+        destination.FSUID = source.FSUID;
+
+        destination.GID = source.GID;
+        destination.EGID = source.EGID;
+        destination.SGID = source.SGID;
+        destination.FSGID = source.FSGID;
+
+        destination.SupplementaryGroups.Clear();
+        destination.SupplementaryGroups.AddRange(source.SupplementaryGroups);
+        destination.Umask = source.Umask;
+
+        Array.Copy(source.CapEffective, destination.CapEffective, destination.CapEffective.Length);
+        Array.Copy(source.CapPermitted, destination.CapPermitted, destination.CapPermitted.Length);
+        Array.Copy(source.CapInheritable, destination.CapInheritable, destination.CapInheritable.Length);
+        NormalizeCapabilityState(destination);
+    }
+
     public static Cred Get(Process process)
     {
         return new Cred
@@ -38,6 +78,17 @@ public static class CredentialService
         process.SupplementaryGroups.Clear();
         process.SupplementaryGroups.AddRange(cred.Groups.Groups);
         process.Umask = cred.Umask;
+        NormalizeCapabilityState(process);
+    }
+
+    public static void NormalizeCapabilityState(Process process)
+    {
+        Array.Clear(process.CapEffective, 0, process.CapEffective.Length);
+        Array.Clear(process.CapPermitted, 0, process.CapPermitted.Length);
+        Array.Clear(process.CapInheritable, 0, process.CapInheritable.Length);
+
+        if (process.EUID == 0)
+            process.SetCapability(Process.CapabilitySysAdmin, true, true, false);
     }
 
     public static int SetUid(Process process, int uid)
@@ -308,5 +359,6 @@ public static class CredentialService
         process.SGID = newEgid;
         process.FSUID = newEuid;
         process.FSGID = newEgid;
+        NormalizeCapabilityState(process);
     }
 }

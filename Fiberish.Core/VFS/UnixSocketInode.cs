@@ -272,14 +272,12 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
         var existing = sm.PathWalker.PathWalk(unixAddr.PathBytes, unixAddr.PathBytes.Length);
         if (existing.IsValid) return -(int)Errno.EADDRINUSE;
 
-        var uid = task.Process.EUID;
-        var gid = task.Process.EGID;
-        var mode = DacPolicy.ApplyUmask(Mode & 0x0FFF, task.Process.Umask);
+        var create = DacPolicy.ComputeCreationMetadata(task.Process, parent.Dentry!.Inode!, Mode & 0x0FFF, false);
         var socketDentry = new Dentry(name, null, parent.Dentry, parent.Dentry!.SuperBlock);
 
         try
         {
-            parent.Dentry.Inode!.Mknod(socketDentry, mode, uid, gid, InodeType.Socket, 0);
+            parent.Dentry.Inode!.Mknod(socketDentry, create.Mode, create.Uid, create.Gid, InodeType.Socket, 0);
         }
         catch (Exception)
         {

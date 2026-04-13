@@ -1,3 +1,4 @@
+using Fiberish.Auth.Cred;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Memory;
 using Fiberish.Syscalls;
@@ -27,7 +28,7 @@ public static class ProcessFactory
     public static FiberTask CreateInitProcess(KernelRuntime runtime, Dentry dentry, string guestPath, string[] args,
         string[] envs,
         KernelScheduler scheduler, TtyDiscipline? tty = null, Mount? mount = null, UTSNamespace? uts = null,
-        int parentPid = 0)
+        int parentPid = 0, Action<Process>? configureProcess = null)
     {
         var initPid = scheduler.AllocateTaskId();
         var proc = new Process(initPid, runtime.Memory, runtime.Syscalls, uts)
@@ -49,6 +50,7 @@ public static class ProcessFactory
             proc.ControllingTty = tty;
         }
 
+        configureProcess?.Invoke(proc);
         scheduler.RegisterProcess(proc);
         scheduler.SetInitPid(proc.TGID);
 
@@ -108,6 +110,10 @@ public static class ProcessFactory
             Name = name
         };
 
+        var parent = parentPid > 0 ? scheduler.GetProcess(parentPid) : null;
+        if (parent != null)
+            CredentialService.CopyCredentials(parent, proc);
+
         scheduler.RegisterProcess(proc);
         ProcFsManager.OnProcessStart(syscalls, proc);
 
@@ -120,7 +126,6 @@ public static class ProcessFactory
 
         if (parentPid > 0)
         {
-            var parent = scheduler.GetProcess(parentPid);
             if (parent != null && !parent.Children.Contains(proc.TGID))
                 parent.Children.Add(proc.TGID);
         }

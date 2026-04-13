@@ -21,6 +21,7 @@ namespace Podish.Core;
 [JsonSerializable(typeof(List<OciDescriptor>))]
 [JsonSerializable(typeof(OciManifest))]
 [JsonSerializable(typeof(OciImageConfig))]
+[JsonSerializable(typeof(OciImageRuntimeConfig))]
 [JsonSerializable(typeof(PublishedPortSpec))]
 [JsonSerializable(typeof(List<PublishedPortSpec>))]
 [JsonSerializable(typeof(TransportProtocol))]

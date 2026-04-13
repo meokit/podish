@@ -22,6 +22,7 @@ public sealed class PodishRunSpec
     public string? Image { get; init; }
     public string? Rootfs { get; init; }
     public string? FileSystemBackend { get; init; }
+    public string? User { get; init; }
     public string? Exe { get; init; }
     public string[] ExeArgs { get; init; } = Array.Empty<string>();
     public string[] Volumes { get; init; } = Array.Empty<string>();
@@ -489,6 +490,7 @@ public sealed class PodishContext : IDisposable
             Image = spec.Image,
             Rootfs = rootfsName,
             FileSystemBackend = "hostfs",
+            User = spec.User,
             Exe = spec.Exe,
             ExeArgs = spec.ExeArgs,
             Volumes = spec.Volumes,
@@ -577,6 +579,7 @@ public sealed class PodishContext : IDisposable
         {
             RootfsPath = rootfsPath,
             RootFileSystemFactory = rootFileSystemFactory,
+            RootfsMode = useRootfs,
             FileSystemBackend = ParseContainerFileSystemBackend(spec.FileSystemBackend,
                 useRootfs || rootFileSystemFactory != null),
             Exe = spec.Exe ?? string.Empty,
@@ -584,6 +587,7 @@ public sealed class PodishContext : IDisposable
             Volumes = spec.Volumes,
             GuestEnvs = spec.Env,
             DnsServers = spec.Dns,
+            User = spec.User,
             UseTty = spec.Interactive && spec.Tty,
             Strace = spec.Strace,
             UseOverlay = !useRootfs && rootFileSystemFactory == null,

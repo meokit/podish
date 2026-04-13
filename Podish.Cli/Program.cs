@@ -70,6 +70,9 @@ internal class Program
         {
             AllowMultipleArgumentsPerToken = false
         };
+        var userOption = new Option<string?>(
+            new[] { "--user", "-u" },
+            "Run the container process as USER[:GROUP] or UID[:GID]");
         var dnsOption = new Option<string[]>(
             new[] { "--dns" },
             "Set custom DNS servers")
@@ -130,6 +133,7 @@ internal class Program
         runCommand.AddOption(fsBackendOption);
         runCommand.AddOption(memoryOption);
         runCommand.AddOption(envOption);
+        runCommand.AddOption(userOption);
         runCommand.AddOption(dnsOption);
         runCommand.AddOption(containerLogDriverOption);
         runCommand.AddOption(containerNameOption);
@@ -154,6 +158,7 @@ internal class Program
             var fsBackendRaw = context.ParseResult.GetValueForOption(fsBackendOption) ?? "overlay-silkfs";
             var memoryRaw = context.ParseResult.GetValueForOption(memoryOption);
             var guestEnvs = context.ParseResult.GetValueForOption(envOption) ?? Array.Empty<string>();
+            var requestedUser = context.ParseResult.GetValueForOption(userOption);
             var dnsServers = context.ParseResult.GetValueForOption(dnsOption) ?? Array.Empty<string>();
             var containerLogDriverRaw = context.ParseResult.GetValueForOption(containerLogDriverOption);
             var containerName = context.ParseResult.GetValueForOption(containerNameOption);
@@ -372,6 +377,7 @@ internal class Program
                 ExeArgs = exeArgs,
                 Volumes = volumes,
                 Env = guestEnvs,
+                User = requestedUser,
                 Dns = dnsServers,
                 Interactive = interactive,
                 Tty = tty,
@@ -411,7 +417,9 @@ internal class Program
                 exeArgs,
                 volumes,
                 guestEnvs,
+                requestedUser,
                 dnsServers,
+                useRootfs,
                 interactive && tty,
                 strace,
                 useInit,
@@ -574,7 +582,9 @@ internal class Program
                 spec.ExeArgs,
                 spec.Volumes,
                 spec.Env,
+                spec.User,
                 spec.Dns,
+                !string.IsNullOrWhiteSpace(spec.Rootfs),
                 spec.Interactive && spec.Tty,
                 spec.Strace,
                 spec.Init,
@@ -1188,6 +1198,8 @@ internal class Program
             "--memory",
             "-e",
             "--env",
+            "-u",
+            "--user",
             "--dns",
             "--log-driver",
             "--rootfs",
@@ -1231,6 +1243,7 @@ internal class Program
                 token.StartsWith("--log-file=", StringComparison.Ordinal) ||
                 token.StartsWith("--volume=", StringComparison.Ordinal) ||
                 token.StartsWith("--env=", StringComparison.Ordinal) ||
+                token.StartsWith("--user=", StringComparison.Ordinal) ||
                 token.StartsWith("--dns=", StringComparison.Ordinal) ||
                 token.StartsWith("--log-driver=", StringComparison.Ordinal) ||
                 token.StartsWith("--name=", StringComparison.Ordinal) ||
@@ -1461,7 +1474,7 @@ internal class Program
     }
 
     private static Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
-        string[] guestEnvs, string[] dnsServers, bool useTty, bool strace, bool useEngineInit,
+        string[] guestEnvs, string? user, string[] dnsServers, bool rootfsMode, bool useTty, bool strace, bool useEngineInit,
         ContainerFileSystemBackend fsBackend,
         string containersDir,
         string containerId, string? containerName, string hostname, NetworkMode networkMode, string image,
@@ -1486,7 +1499,9 @@ internal class Program
                 ExeArgs = exeArgs,
                 Volumes = volumes,
                 GuestEnvs = guestEnvs,
+                User = user,
                 DnsServers = dnsServers,
+                RootfsMode = rootfsMode,
                 UseTty = useTty,
                 Strace = strace,
                 UseEngineInit = useEngineInit,

@@ -1,4 +1,5 @@
 using System.Text;
+using Fiberish.Auth.Permission;
 using Fiberish.Core.Utils;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Loader;
@@ -295,6 +296,8 @@ public class Process
 
         for (var depth = 0; depth < maxShebangDepth; depth++)
         {
+            EnsureExecutableAccess(dentry, guestPath);
+
             var headerBuf = new byte[256];
             var headerLen = 0;
             if (dentry.Inode != null)
@@ -343,6 +346,18 @@ public class Process
         }
 
         throw new InvalidDataException($"Shebang recursion too deep for '{guestPath}'.");
+    }
+
+    private void EnsureExecutableAccess(Dentry dentry, string guestPath)
+    {
+        if (dentry.Inode == null)
+            throw new FileNotFoundException($"Executable not found in VFS: {guestPath}");
+        if (dentry.Inode is HostInode hostInode)
+            hostInode.RefreshProjectedMetadata(EUID, EGID);
+
+        var accessRc = DacPolicy.CheckPathAccess(this, dentry.Inode, AccessMode.MayExec, true);
+        if (accessRc < 0)
+            throw new UnauthorizedAccessException($"Execute access denied for '{guestPath}'.");
     }
 
     internal void Exec(Dentry dentry, string guestPath, string[] args, string[] envs, Mount mount)

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using Fiberish.Auth.Cred;
+using Fiberish.Auth.Permission;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
@@ -537,6 +538,14 @@ public partial class SyscallManager
 
         var dentry = loc.Dentry!;
         var mount = loc.Mount!;
+        if (dentry.Inode == null)
+            return -(int)Errno.ENOENT;
+        if (dentry.Inode is HostInode hostInode)
+            hostInode.RefreshProjectedMetadata(task.Process.EUID, task.Process.EGID);
+
+        var execAccessRc = DacPolicy.CheckPathAccess(task.Process, dentry.Inode, AccessMode.MayExec, true);
+        if (execAccessRc < 0)
+            return execAccessRc;
 
         // ── Shebang (#!) detection ───────────────────────────────────────────────
         // Linux binfmt_script: if the file starts with "#!", parse interpreter path
@@ -587,6 +596,14 @@ public partial class SyscallManager
 
             var interpDentry = interpLoc.Dentry!;
             var interpMount = interpLoc.Mount!;
+            if (interpDentry.Inode == null)
+                return -(int)Errno.ENOENT;
+            if (interpDentry.Inode is HostInode interpHostInode)
+                interpHostInode.RefreshProjectedMetadata(task.Process.EUID, task.Process.EGID);
+
+            var interpAccessRc = DacPolicy.CheckPathAccess(task.Process, interpDentry.Inode, AccessMode.MayExec, true);
+            if (interpAccessRc < 0)
+                return interpAccessRc;
 
             // Read original args (must be done BEFORE clearing memory)
             List<string> origArgs = [];

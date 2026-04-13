@@ -7,9 +7,30 @@ namespace Fiberish.Auth.Permission;
 
 public static class DacPolicy
 {
+    public readonly record struct CreationMetadata(int Mode, int Uid, int Gid);
+
     public static int ApplyUmask(int requestedMode, int umask)
     {
         return requestedMode & 0xFFF & ~umask;
+    }
+
+    public static CreationMetadata ComputeCreationMetadata(Process? process, Inode parentDirectory, int requestedMode,
+        bool creatingDirectory)
+    {
+        const int S_ISGID = 0x400;
+
+        var uid = process?.FSUID ?? 0;
+        var gid = process?.FSGID ?? 0;
+        var mode = ApplyUmask(requestedMode, process?.Umask ?? 0);
+
+        if ((parentDirectory.Mode & S_ISGID) != 0)
+        {
+            gid = parentDirectory.Gid;
+            if (creatingDirectory)
+                mode |= S_ISGID;
+        }
+
+        return new CreationMetadata(mode, uid, gid);
     }
 
     public static int CheckPathAccess(Process process, Inode inode, AccessMode mode, bool useEffectiveIds)

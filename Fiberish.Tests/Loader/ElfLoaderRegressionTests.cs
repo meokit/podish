@@ -17,54 +17,60 @@ public class ElfLoaderRegressionTests
     [Fact]
     public void PtLoadTailZeroFill_RemainsZero_AfterNativeTearDown_AndRefault()
     {
-        var guestRoot = Path.Combine(Path.GetTempPath(), $"elf-tail-bss-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(guestRoot);
-        File.WriteAllBytes(Path.Combine(guestRoot, "tail-bss.elf"), BuildTailBssElfImage());
-
-        try
+        using var runtime = KernelRuntime.BootstrapBare(false);
+        var tmpfsType = new Fiberish.VFS.FileSystemType
         {
-            using var runtime = KernelRuntime.Bootstrap(guestRoot, false, false);
-            var scheduler = new KernelScheduler();
-            var (loc, resolvedGuestPath) = runtime.Syscalls.ResolvePath(GuestElfPath, true);
-            Assert.True(loc.IsValid);
-            Assert.NotNull(loc.Dentry);
-            Assert.NotNull(loc.Mount);
-
-            var task = ProcessFactory.CreateInitProcess(
-                runtime,
-                loc.Dentry!,
-                resolvedGuestPath,
-                [resolvedGuestPath],
-                [],
-                scheduler,
-                null,
-                loc.Mount);
-
-            var mm = task.Process.Mem;
-            var bssStart = SegmentVirtualAddress + SegmentFileSize;
-            var bssBytes = new byte[checked((int)(SegmentMemorySize - SegmentFileSize))];
-
-            Assert.True(runtime.Engine.CopyFromUser(bssStart, bssBytes));
-            Assert.All(bssBytes, static value => Assert.Equal((byte)0, value));
-
-            mm.TearDownNativeMappings(
-                runtime.Engine,
-                SegmentVirtualAddress,
-                LinuxConstants.PageSize,
-                false,
-                false,
-                true);
-
-            Assert.True(mm.HandleFault(bssStart, false, runtime.Engine));
-
-            Array.Fill(bssBytes, (byte)0x5A);
-            Assert.True(runtime.Engine.CopyFromUser(bssStart, bssBytes));
-            Assert.All(bssBytes, static value => Assert.Equal((byte)0, value));
-        }
-        finally
+            Name = "tmpfs",
+            Factory = static _ => new Fiberish.VFS.Tmpfs(),
+            FactoryWithContext = static (_, memoryContext) => new Fiberish.VFS.Tmpfs(memoryContext: memoryContext)
+        };
+        var rootSb = tmpfsType.CreateAnonymousFileSystem(runtime.MemoryContext).ReadSuper(tmpfsType, 0,
+            "elf-tail-bss-root", null);
+        runtime.Syscalls.MountRoot(rootSb, new Fiberish.Syscalls.SyscallManager.RootMountOptions
         {
-            Directory.Delete(guestRoot, true);
-        }
+            Source = "tmpfs",
+            FsType = "tmpfs",
+            Options = "rw"
+        });
+        runtime.Syscalls.WriteFileInDetachedMount(runtime.Syscalls.RootMount!, "tail-bss.elf", BuildTailBssElfImage(),
+            0x1ED);
+
+        var scheduler = new KernelScheduler();
+        var (loc, resolvedGuestPath) = runtime.Syscalls.ResolvePath(GuestElfPath, true);
+        Assert.True(loc.IsValid);
+        Assert.NotNull(loc.Dentry);
+        Assert.NotNull(loc.Mount);
+
+        var task = ProcessFactory.CreateInitProcess(
+            runtime,
+            loc.Dentry!,
+            resolvedGuestPath,
+            [resolvedGuestPath],
+            [],
+            scheduler,
+            null,
+            loc.Mount);
+
+        var mm = task.Process.Mem;
+        var bssStart = SegmentVirtualAddress + SegmentFileSize;
+        var bssBytes = new byte[checked((int)(SegmentMemorySize - SegmentFileSize))];
+
+        Assert.True(runtime.Engine.CopyFromUser(bssStart, bssBytes));
+        Assert.All(bssBytes, static value => Assert.Equal((byte)0, value));
+
+        mm.TearDownNativeMappings(
+            runtime.Engine,
+            SegmentVirtualAddress,
+            LinuxConstants.PageSize,
+            false,
+            false,
+            true);
+
+        Assert.True(mm.HandleFault(bssStart, false, runtime.Engine));
+
+        Array.Fill(bssBytes, (byte)0x5A);
+        Assert.True(runtime.Engine.CopyFromUser(bssStart, bssBytes));
+        Assert.All(bssBytes, static value => Assert.Equal((byte)0, value));
     }
 
     private static byte[] BuildTailBssElfImage()

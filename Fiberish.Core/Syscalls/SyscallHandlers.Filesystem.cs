@@ -150,13 +150,10 @@ public partial class SyscallManager
         var (parentLoc, name, err) = PathWalker.PathWalkForCreate(path.UnsafeBuffer, path.Length);
         if (err != 0) return err;
 
-        var t = engine.Owner as FiberTask;
-        var uid = t?.Process.EUID ?? 0;
-        var gid = t?.Process.EGID ?? 0;
-
         var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
-        var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
-        return parentLoc.Dentry.Inode!.Mkdir(dentry, finalMode, uid, gid);
+        var create = DacPolicy.ComputeCreationMetadata((engine.Owner as FiberTask)?.Process, parentLoc.Dentry.Inode!,
+            (int)mode, true);
+        return parentLoc.Dentry.Inode!.Mkdir(dentry, create.Mode, create.Uid, create.Gid);
     }
 
     private async ValueTask<int> SysTruncate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -341,13 +338,10 @@ public partial class SyscallManager
             PathWalker.PathWalkForCreate(path.UnsafeBuffer, path.Length, startLoc.IsValid ? startLoc : null);
         if (err != 0) return err;
 
-        var t = engine.Owner as FiberTask;
-        var uid = t?.Process.EUID ?? 0;
-        var gid = t?.Process.EGID ?? 0;
-
         var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
-        var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
-        return parentLoc.Dentry.Inode!.Mkdir(dentry, finalMode, uid, gid);
+        var create = DacPolicy.ComputeCreationMetadata((engine.Owner as FiberTask)?.Process, parentLoc.Dentry.Inode!,
+            (int)mode, true);
+        return parentLoc.Dentry.Inode!.Mkdir(dentry, create.Mode, create.Uid, create.Gid);
     }
 
     private async ValueTask<int> SysMknod(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -379,24 +373,25 @@ public partial class SyscallManager
         const int S_IFSOCK = 0xC000;
 
         var fileType = mode & S_IFMT;
-        var t = engine.Owner as FiberTask;
-        var uid = t?.Process.EUID ?? 0;
-        var gid = t?.Process.EGID ?? 0;
-        var finalMode = DacPolicy.ApplyUmask(mode & 0x0FFF, t?.Process.Umask ?? 0);
         var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
+        var create = DacPolicy.ComputeCreationMetadata((engine.Owner as FiberTask)?.Process, parentLoc.Dentry.Inode!,
+            mode & 0x0FFF, false);
 
         switch (fileType)
         {
             case S_IFREG:
-                return parentLoc.Dentry.Inode!.Create(dentry, finalMode, uid, gid);
+                return parentLoc.Dentry.Inode!.Create(dentry, create.Mode, create.Uid, create.Gid);
             case S_IFIFO:
-                return parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.Fifo, 0);
+                return parentLoc.Dentry.Inode!.Mknod(dentry, create.Mode, create.Uid, create.Gid, InodeType.Fifo, 0);
             case S_IFCHR:
-                return parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.CharDev, dev);
+                return parentLoc.Dentry.Inode!.Mknod(dentry, create.Mode, create.Uid, create.Gid, InodeType.CharDev,
+                    dev);
             case S_IFBLK:
-                return parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.BlockDev, dev);
+                return parentLoc.Dentry.Inode!.Mknod(dentry, create.Mode, create.Uid, create.Gid, InodeType.BlockDev,
+                    dev);
             case S_IFSOCK:
-                return parentLoc.Dentry.Inode!.Mknod(dentry, finalMode, uid, gid, InodeType.Socket, 0);
+                return parentLoc.Dentry.Inode!.Mknod(dentry, create.Mode, create.Uid, create.Gid, InodeType.Socket,
+                    0);
             default:
                 return -(int)Errno.EINVAL;
         }
@@ -2076,12 +2071,10 @@ LocResolvedUtimens64:
         var (parentLoc, name, err) = PathWalker.PathWalkForCreate(linkpath.UnsafeBuffer, linkpath.Length);
         if (err != 0) return err;
 
-        var t = engine.Owner as FiberTask;
-        var uid = t?.Process.EUID ?? 0;
-        var gid = t?.Process.EGID ?? 0;
-
         var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
-        return parentLoc.Dentry.Inode!.Symlink(dentry, target.ToArray(), uid, gid);
+        var create = DacPolicy.ComputeCreationMetadata((engine.Owner as FiberTask)?.Process, parentLoc.Dentry.Inode!,
+            0, false);
+        return parentLoc.Dentry.Inode!.Symlink(dentry, target.ToArray(), create.Uid, create.Gid);
     }
 
     private async ValueTask<int> SysReadlink(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -2186,12 +2179,10 @@ LocResolvedUtimens64:
         var (parentLoc, name, err) = PathWalker.PathWalkForCreate(linkpath.UnsafeBuffer, linkpath.Length, startAt);
         if (err != 0) return err;
 
-        var t = engine.Owner as FiberTask;
-        var uid = t?.Process.EUID ?? 0;
-        var gid = t?.Process.EGID ?? 0;
-
         var dentry2 = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
-        return parentLoc.Dentry.Inode!.Symlink(dentry2, target.ToArray(), uid, gid);
+        var create = DacPolicy.ComputeCreationMetadata((engine.Owner as FiberTask)?.Process, parentLoc.Dentry.Inode!,
+            0, false);
+        return parentLoc.Dentry.Inode!.Symlink(dentry2, target.ToArray(), create.Uid, create.Gid);
     }
 
     private async ValueTask<int> SysMount(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

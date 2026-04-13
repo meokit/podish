@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
+using Fiberish.Auth.Cred;
 using Fiberish.Core.Utils;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -1928,6 +1929,7 @@ public class FiberTask
                 createdProcess = newProc;
                 newProc.CopyImageFrom(Process);
                 newProc.CopyResourceLimitsFrom(Process);
+                CredentialService.CopyCredentials(Process, newProc);
 
                 // Inherit signal dispositions
                 foreach (var kv in Process.SignalActions) newProc.SignalActions[kv.Key] = kv.Value;

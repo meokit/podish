@@ -387,14 +387,10 @@ public partial class SyscallManager
 
             if (mount != null && mount.IsReadOnly) return -(int)Errno.EROFS;
 
-            var t = sm.CurrentTask;
-            var uid = t?.Process.EUID ?? 0;
-            var gid = t?.Process.EGID ?? 0;
-
             var tmpName = $".tmpfile.{Guid.NewGuid():N}";
             var anonDentry = new Dentry(FsName.FromString(tmpName), null, dentry, dentry.SuperBlock);
-            var finalMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
-            var createRc = dentry.Inode.Create(anonDentry, finalMode, uid, gid);
+            var create = DacPolicy.ComputeCreationMetadata(sm.CurrentTask?.Process, dentry.Inode, (int)mode, false);
+            var createRc = dentry.Inode.Create(anonDentry, create.Mode, create.Uid, create.Gid);
             if (createRc < 0)
                 return createRc;
 
@@ -476,13 +472,10 @@ public partial class SyscallManager
                 // Check if parent mount is read-only (for create operation)
                 if (parentMount != null && parentMount.IsReadOnly) return -(int)Errno.EROFS;
 
-                var t = sm.CurrentTask;
-                var uid = t?.Process.EUID ?? 0;
-                var gid = t?.Process.EGID ?? 0;
-
                 dentry = new Dentry(name, null, parentDentry, parentDentry.SuperBlock);
-                var createMode = DacPolicy.ApplyUmask((int)mode, t?.Process.Umask ?? 0);
-                var createRc2 = parentDentry.Inode.Create(dentry, createMode, uid, gid);
+                var create = DacPolicy.ComputeCreationMetadata(sm.CurrentTask?.Process, parentDentry.Inode,
+                    (int)mode, false);
+                var createRc2 = parentDentry.Inode.Create(dentry, create.Mode, create.Uid, create.Gid);
                 if (createRc2 < 0)
                     return createRc2;
                 createdHere = true;

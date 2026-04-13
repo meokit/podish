@@ -114,6 +114,32 @@ public class CredentialServiceTests
         Assert.Equal(1000, p.EUID);
     }
 
+    [Fact]
+    public void SetUid_DroppingFromRoot_ClearsCapabilities()
+    {
+        var p = new TestProcess(0, 0);
+
+        Assert.True(p.HasEffectiveCapability(Process.CapabilitySysAdmin));
+        Assert.Equal(0, CredentialService.SetUid(p, 1000));
+
+        Assert.False(p.HasEffectiveCapability(Process.CapabilitySysAdmin));
+        Assert.All(p.CapEffective, value => Assert.Equal(0u, value));
+        Assert.All(p.CapPermitted, value => Assert.Equal(0u, value));
+        Assert.All(p.CapInheritable, value => Assert.Equal(0u, value));
+    }
+
+    [Fact]
+    public void ApplyExecSetId_RestoringRoot_RebuildsMinimalCapabilitySet()
+    {
+        var p = new TestProcess(1000, 1000);
+        var inode = new TestInode(0, 0, 0x9ED);
+
+        CredentialService.ApplyExecSetIdOnExec(p, inode);
+
+        Assert.True(p.HasEffectiveCapability(Process.CapabilitySysAdmin));
+        Assert.Equal(0u, p.CapInheritable[0]);
+    }
+
     private class TestProcess : Process
     {
         public TestProcess(int uid, int gid) : base(1, new VMAManager(new MemoryRuntimeContext()), null!)
@@ -126,6 +152,7 @@ public class CredentialServiceTests
             SGID = gid;
             FSUID = uid;
             FSGID = gid;
+            CredentialService.NormalizeCapabilityState(this);
         }
     }
 

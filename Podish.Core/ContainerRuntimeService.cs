@@ -36,6 +36,8 @@ public sealed class ContainerRunRequest
     public string[] Volumes { get; init; } = Array.Empty<string>();
     public string[] GuestEnvs { get; init; } = Array.Empty<string>();
     public string[] DnsServers { get; init; } = Array.Empty<string>();
+    public string? User { get; init; }
+    public bool RootfsMode { get; init; }
     public bool UseTty { get; init; }
     public bool Strace { get; init; }
     public bool UseOverlay { get; init; }
@@ -411,11 +413,19 @@ public sealed class ContainerRuntimeService
 
             var fullArgs = new[] { actualExe }.Concat(request.ExeArgs).ToArray();
 
+            startupPhase = "resolve-user";
+            var requestedUser = string.IsNullOrWhiteSpace(request.User)
+                ? request.RootfsMode
+                    ? null
+                    : ContainerUserResolver.TryReadImageConfigUser(request.RootfsPath)
+                : request.User;
+            var resolvedCredentials = ContainerUserResolver.Resolve(runtime.Syscalls, requestedUser);
+
             var finalEnvs = new List<string>
             {
                 "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                "HOME=/root",
-                "USER=root"
+                $"HOME={resolvedCredentials.HomeDirectory}",
+                $"USER={resolvedCredentials.UserName}"
             };
             if (request.UseTty)
                 finalEnvs.Add("TERM=xterm");
@@ -454,7 +464,12 @@ public sealed class ContainerRuntimeService
             startupPhase = "load-init";
             var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs,
                 finalEnvs.ToArray(),
-                scheduler, ttyDiag, loc.Mount!, uts, engineInitProc?.TGID ?? 0);
+                scheduler, ttyDiag, loc.Mount!, uts, engineInitProc?.TGID ?? 0, proc =>
+                    Fiberish.Auth.Cred.CredentialService.InitializeCredentials(
+                        proc,
+                        resolvedCredentials.Uid,
+                        resolvedCredentials.Gid,
+                        resolvedCredentials.SupplementaryGroups));
             if (request.EnablePulseServer || request.EnableWaylandServer)
                 request.ConfigureVirtualDaemons?.Invoke(runtime, scheduler, uts, mainTask.Process.TGID);
             initProcessStarted = true;
@@ -536,6 +551,14 @@ public sealed class ContainerRuntimeService
             request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", request.ContainerId,
                 request.Image, 1, message));
             return 1;
+        }
+        catch (ContainerConfigurationException ex)
+        {
+            _logger.LogWarning(ex, "Container configuration failed during startup phase {Phase}", startupPhase);
+            Console.Error.WriteLine($"[Podish Config] {ex.Message}");
+            request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", request.ContainerId,
+                request.Image, 125, ex.Message));
+            return 125;
         }
         catch (Exception ex)
         {
