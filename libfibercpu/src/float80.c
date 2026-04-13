@@ -17,6 +17,7 @@
 #define SOFTFLOAT_FAST_INT64
 #endif
 
+#include "3rdparty/softfloat/platform.h"
 #include "3rdparty/softfloat/softfloat.h"
 
 #undef float16_t

@@ -1,5 +1,9 @@
-#include "internals.h"
+// clang-format off
+// `internals.h` depends on platform endianness macros from `platform.h`.
+// Keep this order stable even under automatic include sorting.
 #include "platform.h"
+#include "internals.h"
+// clang-format on
 #include "softfloat.h"
 #include "specialize.h"
 
