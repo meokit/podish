@@ -76,19 +76,6 @@ public sealed class AddressSpace
         return Pages.PeekVmPage(pageIndex);
     }
 
-    internal IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind,
-        Action<ResidentPageRecord>? onReleased, out bool inserted)
-    {
-        return Pages.InstallHostPageIfAbsent(pageIndex, ptr, hostPageKind, onReleased, out inserted);
-    }
-
-    internal IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, ref BackingPageHandle backingHandle,
-        HostPageKind hostPageKind, Action<ResidentPageRecord>? onReleased, out bool inserted)
-    {
-        return Pages.InstallHostPageIfAbsent(pageIndex, ptr, ref backingHandle, hostPageKind, onReleased,
-            out inserted);
-    }
-
     internal IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, ref BackingPageHandle backingHandle,
         HostPageKind hostPageKind, MappingBackedInode releaseOwner, InodePageRecord releaseRecord, out bool inserted)
     {

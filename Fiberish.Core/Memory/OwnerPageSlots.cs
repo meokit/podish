@@ -70,8 +70,7 @@ internal sealed class OwnerPageSlots
         }
     }
 
-    internal void InstallExistingHostPage(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind,
-        Action<ResidentPageRecord>? onReleased = null)
+    internal void InstallExistingHostPage(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind)
     {
         ResidentPageRecord? oldPage = null;
         var pageCountDelta = 0;
@@ -91,7 +90,7 @@ internal sealed class OwnerPageSlots
 
             var ownerBinding = _ownerBindingFactory(pageIndex);
             hostPage.BindOwnerRoot(ownerBinding);
-            _pages[pageIndex] = CreateVmPage(hostPage, hostPageKind, ownerBinding, onReleased);
+            _pages[pageIndex] = CreateVmPage(hostPage, releaseOwner: null, releaseRecord: null);
             Touch(_pages[pageIndex]);
             if (oldPage == null)
                 pageCountDelta = 1;
@@ -136,7 +135,7 @@ internal sealed class OwnerPageSlots
             hostPage = EnsureHostPageRegistered(ptr, hostPageKind, ref backingHandle);
             var ownerBinding = _ownerBindingFactory(pageIndex);
             hostPage.BindOwnerRoot(ownerBinding);
-            _pages[pageIndex] = CreateVmPage(hostPage, hostPageKind, ownerBinding);
+            _pages[pageIndex] = CreateVmPage(hostPage, releaseOwner: null, releaseRecord: null);
             Touch(_pages[pageIndex]);
             if (oldPage == null)
                 pageCountDelta = 1;
@@ -148,32 +147,18 @@ internal sealed class OwnerPageSlots
         _pageBindingChanged?.Invoke(pageIndex, oldPage?.Ptr ?? IntPtr.Zero, hostPage.Ptr);
     }
 
-    internal IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, HostPageKind hostPageKind,
-        Action<ResidentPageRecord>? onReleased, out bool inserted)
-    {
-        BackingPageHandle backingHandle = default;
-        return InstallHostPageIfAbsent(pageIndex, ptr, ref backingHandle, hostPageKind, onReleased, out inserted);
-    }
-
-    internal IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, ref BackingPageHandle backingHandle,
-        HostPageKind hostPageKind, Action<ResidentPageRecord>? onReleased, out bool inserted)
-    {
-        return InstallHostPageIfAbsent(pageIndex, ptr, ref backingHandle, hostPageKind, onReleased, null, null,
-            out inserted);
-    }
-
     internal IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, ref BackingPageHandle backingHandle,
         HostPageKind hostPageKind, MappingBackedInode releaseOwner, InodePageRecord releaseRecord, out bool inserted)
     {
         ArgumentNullException.ThrowIfNull(releaseOwner);
         ArgumentNullException.ThrowIfNull(releaseRecord);
-        return InstallHostPageIfAbsent(pageIndex, ptr, ref backingHandle, hostPageKind, null, releaseOwner,
-            releaseRecord, out inserted);
+        return InstallHostPageIfAbsentCore(pageIndex, ptr, ref backingHandle, hostPageKind, releaseOwner, releaseRecord,
+            out inserted);
     }
 
-    private IntPtr InstallHostPageIfAbsent(uint pageIndex, IntPtr ptr, ref BackingPageHandle backingHandle,
-        HostPageKind hostPageKind, Action<ResidentPageRecord>? onReleased, MappingBackedInode? releaseOwner,
-        InodePageRecord? releaseRecord, out bool inserted)
+    private IntPtr InstallHostPageIfAbsentCore(uint pageIndex, IntPtr ptr, ref BackingPageHandle backingHandle,
+        HostPageKind hostPageKind, MappingBackedInode? releaseOwner, InodePageRecord? releaseRecord,
+        out bool inserted)
     {
         var pageCountDelta = 0;
         ptr = ptr != IntPtr.Zero ? ptr : backingHandle.Pointer;
@@ -191,8 +176,7 @@ internal sealed class OwnerPageSlots
             hostPage = EnsureHostPageRegistered(ptr, hostPageKind, ref backingHandle);
             var ownerBinding = _ownerBindingFactory(pageIndex);
             hostPage.BindOwnerRoot(ownerBinding);
-            _pages[pageIndex] = CreateVmPage(hostPage, hostPageKind, ownerBinding, onReleased, releaseOwner,
-                releaseRecord);
+            _pages[pageIndex] = CreateVmPage(hostPage, releaseOwner, releaseRecord);
             Touch(_pages[pageIndex]);
             inserted = true;
             pageCountDelta = 1;
@@ -280,7 +264,7 @@ internal sealed class OwnerPageSlots
             hostPage = EnsureHostPageRegistered(ptr, hostPageKind, ref backingPageHandle);
             var ownerBinding = _ownerBindingFactory(pageIndex);
             hostPage.BindOwnerRoot(ownerBinding);
-            _pages[pageIndex] = CreateVmPage(hostPage, hostPageKind, ownerBinding);
+            _pages[pageIndex] = CreateVmPage(hostPage, releaseOwner: null, releaseRecord: null);
             Touch(_pages[pageIndex]);
             isNew = true;
             pageCountDelta = 1;
@@ -533,27 +517,20 @@ internal sealed class OwnerPageSlots
         if (notify)
             _pageBindingChanged?.Invoke(pageIndex, pageRecord.Ptr, IntPtr.Zero);
 
-        if (pageRecord.OnReleased != null)
-            pageRecord.OnReleased(pageRecord);
-        else if (pageRecord.MappingReleaseOwner != null && pageRecord.MappingReleaseRecord != null)
+        if (pageRecord.MappingReleaseOwner != null && pageRecord.MappingReleaseRecord != null)
             pageRecord.MappingReleaseOwner.ReleaseInstalledMappingPage(pageRecord.MappingReleaseRecord);
 
-        _memoryContext.HostPages.UnbindOwnerRoot(pageRecord.Ptr, pageRecord.OwnerBinding);
+        _memoryContext.HostPages.UnbindOwnerRoot(pageRecord.Ptr, _ownerBindingFactory(pageIndex));
         _memoryContext.HostPages.TryRemoveIfUnused(pageRecord.Ptr);
     }
 
-    private static ResidentPageRecord CreateVmPage(HostPageRef hostPage, HostPageKind hostPageKind,
-        HostPageOwnerBinding ownerBinding,
-        Action<ResidentPageRecord>? onReleased = null, MappingBackedInode? releaseOwner = null,
+    private static ResidentPageRecord CreateVmPage(HostPageRef hostPage, MappingBackedInode? releaseOwner = null,
         InodePageRecord? releaseRecord = null)
     {
         return new ResidentPageRecord
         {
             Ptr = hostPage.Ptr,
             HostPage = hostPage,
-            HostPageKind = hostPageKind,
-            OwnerBinding = ownerBinding,
-            OnReleased = onReleased,
             MappingReleaseOwner = releaseOwner,
             MappingReleaseRecord = releaseRecord
         };
@@ -586,9 +563,6 @@ internal readonly struct ResidentPageRecord
 {
     public required IntPtr Ptr { get; init; }
     public required HostPageRef HostPage { get; init; }
-    public required HostPageKind HostPageKind { get; init; }
-    public required HostPageOwnerBinding OwnerBinding { get; init; }
-    public Action<ResidentPageRecord>? OnReleased { get; init; }
     public MappingBackedInode? MappingReleaseOwner { get; init; }
     public InodePageRecord? MappingReleaseRecord { get; init; }
 
