@@ -218,6 +218,177 @@ def case_fpu_fstsw_ax():
     }
 
 @pytest.mark.fpu
+def case_fpu_fcom_nan_unordered():
+    """
+    fldz
+    fldz
+    fdivp st1, st0
+    fnclex
+    fldz
+    fxch st1
+    fcom st1
+    fnstsw ax
+    hlt
+    """
+    return {
+        'check_unicorn': False,
+        'expected_regs': {
+            'EAX': 0x7501
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_fistp_nan_dword():
+    """
+    fldz
+    fldz
+    fdivp st1, st0
+    fnclex
+    fistp dword [0x2000]
+    fnstsw ax
+    hlt
+    """
+    return {
+        'check_unicorn': False,
+        'expected_write': {
+            0x2000: 0x80000000
+        },
+        'expected_regs': {
+            'EAX': 0x0001
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_fistp_word_overflow():
+    """
+    fild dword [0x2100]
+    fistp word [0x2000]
+    fnstsw ax
+    hlt
+    """
+    return {
+        'check_unicorn': False,
+        'expected_read': {
+            0x2100: 0x00009C40
+        },
+        'expected_write': {
+            0x2000: 0x8000
+        },
+        'expected_regs': {
+            'EAX': 0x0001
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_fcomi_qnan_sets_ie():
+    """
+    mov dword [0x2200], 0x00000001
+    mov dword [0x2204], 0xC0000000
+    mov word [0x2208], 0x7FFF
+    fldz
+    fld tword [0x2200]
+    fcomi st1
+    fnstsw ax
+    hlt
+    """
+    return {
+        'check_unicorn': False,
+        'expected_regs': {
+            'EAX': 0x3001
+        },
+        'expected_eflags': 0x0045
+    }
+
+@pytest.mark.fpu
+def case_fpu_fucomi_qnan_keeps_ie_clear():
+    """
+    mov dword [0x2200], 0x00000001
+    mov dword [0x2204], 0xC0000000
+    mov word [0x2208], 0x7FFF
+    fldz
+    fld tword [0x2200]
+    fucomi st1
+    fnstsw ax
+    hlt
+    """
+    return {
+        'check_unicorn': False,
+        'expected_regs': {
+            'EAX': 0x3000
+        },
+        'expected_eflags': 0x0045
+    }
+
+@pytest.mark.fpu
+def case_fpu_fucomi_snan_sets_ie():
+    """
+    mov dword [0x2200], 0x00000001
+    mov dword [0x2204], 0x80000000
+    mov word [0x2208], 0x7FFF
+    fldz
+    fld tword [0x2200]
+    fucomi st1
+    fnstsw ax
+    hlt
+    """
+    return {
+        'check_unicorn': False,
+        'expected_regs': {
+            'EAX': 0x3001
+        },
+        'expected_eflags': 0x0045
+    }
+
+@pytest.mark.fpu
+def case_fpu_fbstp_nan_indefinite():
+    """
+    fldz
+    fldz
+    fdivp st1, st0
+    fnclex
+    fbstp tword [0x2600]
+    fnstsw ax
+    mov edx, eax
+    mov ebx, [0x2600]
+    mov ecx, [0x2604]
+    mov esi, [0x2608]
+    hlt
+    """
+    return {
+        'check_unicorn': False,
+        'expected_regs': {
+            'EBX': 0x00000000,
+            'ECX': 0xC0000000,
+            'ESI': 0x0000FFFF,
+            'EDX': 0x00000001
+        }
+    }
+
+@pytest.mark.fpu
+def case_fpu_fbld_indefinite_preserves_sentinel():
+    """
+    mov dword [0x2600], 0x00000000
+    mov dword [0x2604], 0xC0000000
+    mov word [0x2608], 0xFFFF
+    fbld tword [0x2600]
+    fstp tword [0x2610]
+    mov ebx, [0x2610]
+    mov ecx, [0x2614]
+    mov esi, [0x2618]
+    fnstsw ax
+    hlt
+    """
+    return {
+        'check_unicorn': False,
+        'expected_regs': {
+            'EAX': 0x0000,
+            'EBX': 0x00000000,
+            'ECX': 0xC0000000,
+            'ESI': 0x0000FFFF
+        }
+    }
+
+@pytest.mark.fpu
 def case_fpu_ftst():
     """
     fld1
@@ -308,22 +479,21 @@ def case_fpu_fyl2x():
 @pytest.mark.fpu
 def case_fpu_fclex():
     """
-    fldz
     fld1
-    fdivp st1, st0        ; 1.0 / 0.0 -> Divide by Zero Exception
-    fnstsw ax             ; Read status word, should have #Z flag set
-    fnclex                ; Clear exceptions
-    fnstsw ax             ; Read status word, #Z flag should be cleared
+    fdiv dword [0x2100]   ; 1.0 / 0.0 -> Divide by Zero Exception
+    fnstsw ax
+    fnclex
+    fnstsw ax
     hlt
     """
     return {
-        'expected_regs': {
-             # Usually FSW should have bit 2 (ZE) set before fclex, then cleared after fclex.
-             # We just check thatAX doesn't have ZE set. AX should be clean of exceptions.
+        'check_unicorn': False,
+        'expected_read': {
+            0x2100: 0x00000000
         },
-        'fsw_mask': 0xFFDF # Ignore PE
-        # Note: We don't check exact values because exception flags mechanism might be basic in softfloat, 
-        # but at least fclex shouldn't crash and BX should have lower byte=0.
+        'expected_regs': {
+            'EAX': 0x3800
+        },
     }
 
 @pytest.mark.fpu
@@ -396,6 +566,18 @@ def test_run_cmov():
 
 def test_run_fstsw():
     run_fpu_test(case_fpu_fstsw_ax)
+    run_fpu_test(case_fpu_fcom_nan_unordered)
+
+def test_run_fist_invalid():
+    run_fpu_test(case_fpu_fistp_nan_dword)
+    run_fpu_test(case_fpu_fistp_word_overflow)
+    run_fpu_test(case_fpu_fbstp_nan_indefinite)
+    run_fpu_test(case_fpu_fbld_indefinite_preserves_sentinel)
+
+def test_run_fcomi_invalid():
+    run_fpu_test(case_fpu_fcomi_qnan_sets_ie)
+    run_fpu_test(case_fpu_fucomi_qnan_keeps_ie_clear)
+    run_fpu_test(case_fpu_fucomi_snan_sets_ie)
 
 def test_run_transcendental():
     run_fpu_test(case_fpu_transcendental)
