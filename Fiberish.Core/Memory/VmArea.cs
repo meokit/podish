@@ -34,6 +34,7 @@ public class VmArea
     public LinuxFile? File => FileMapping?.File;
     public long Offset { get; set; }
     public ulong VmPgoff { get; set; }
+    public bool DontFork { get; set; }
 
     public string Name { get; set; } = string.Empty;
     public AddressSpace? VmMapping { get; set; }
@@ -167,6 +168,7 @@ public class VmArea
             FileMapping = clonedFileMapping,
             Offset = Offset,
             VmPgoff = VmPgoff,
+            DontFork = DontFork,
             Name = Name,
             VmMapping = VmMapping,
             VmAnonVma = privateObj,

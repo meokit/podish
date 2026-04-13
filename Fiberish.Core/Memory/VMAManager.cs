@@ -1072,6 +1072,7 @@ public class VMAManager
                 FileMapping = fileMapping,
                 Offset = offset,
                 VmPgoff = vmPgoff,
+                DontFork = false,
                 Name = name,
                 VmMapping = sharedObj,
                 VmAnonVma = privateObj
@@ -1091,14 +1092,30 @@ public class VMAManager
 
     public VMAManager Clone()
     {
+        return Clone(out _);
+    }
+
+    internal VMAManager Clone(out List<NativeRange> skippedDontForkRanges)
+    {
+        skippedDontForkRanges = [];
         var newMM = new VMAManager(MemoryContext);
         foreach (var vma in _vmas)
         {
+            if (vma.DontFork)
+            {
+                if (vma.Length != 0)
+                    skippedDontForkRanges.Add(new NativeRange(vma.Start, vma.Length));
+                continue;
+            }
+
             var cloned = vma.Clone();
             newMM._vmas.Add(cloned);
             newMM.TrackMappedInodeOnVmaAdded(cloned);
             newMM.RegisterVmAreaAttachments(cloned);
         }
+
+        if (skippedDontForkRanges.Count > 1)
+            MergeRangesInPlace(skippedDontForkRanges);
 
         foreach (var pageAddr in PageMapping.SnapshotMappedPages())
         {
@@ -1106,8 +1123,13 @@ public class VMAManager
 
             var clonedVma = newMM.FindVmArea(pageAddr);
             if (clonedVma == null)
+            {
+                if (FindVmArea(pageAddr)?.DontFork == true)
+                    continue;
+
                 throw new InvalidOperationException(
                     $"Clone external binding lost VMA context: page=0x{pageAddr:X8}, owner={binding.OwnerKind}");
+            }
 
             var pageIndex = clonedVma.GetPageIndex(pageAddr);
             MappedPageBinding clonedBinding;
@@ -1125,6 +1147,174 @@ public class VMAManager
         }
 
         return newMM;
+    }
+
+    public int MadviseForkInheritance(uint addr, uint len, bool dontFork)
+    {
+        if (len == 0) return 0;
+
+        uint end;
+        try
+        {
+            end = checked(addr + len);
+        }
+        catch (OverflowException)
+        {
+            return -(int)Errno.ENOMEM;
+        }
+
+        var vmas = FindVmAreasInRange(addr, end);
+        if (vmas.Count == 0) return -(int)Errno.ENOMEM;
+
+        vmas.Sort((a, b) => a.Start.CompareTo(b.Start));
+        var cursor = addr;
+        foreach (var vma in vmas)
+        {
+            if (vma.Start > cursor) return -(int)Errno.ENOMEM;
+            if (vma.End > cursor) cursor = vma.End;
+            if (cursor >= end) break;
+        }
+
+        if (cursor < end) return -(int)Errno.ENOMEM;
+
+        if (!TryGetVmAreaWindow(addr, end, out var startIndex, out var endIndexExclusive))
+            return 0;
+
+        var replacements = new List<VmArea>(endIndexExclusive - startIndex + 2);
+        List<VmArea>? addedVmas = null;
+
+        for (var i = startIndex; i < endIndexExclusive; i++)
+        {
+            var vma = _vmas[i];
+            var overlapStart = Math.Max(vma.Start, addr);
+            var overlapEnd = Math.Min(vma.End, end);
+            if (overlapStart >= overlapEnd)
+                continue;
+
+            var oldStart = vma.Start;
+            var oldEnd = vma.End;
+            var oldOffset = vma.Offset;
+            var oldDontFork = vma.DontFork;
+
+            if (overlapStart == oldStart && overlapEnd == oldEnd)
+            {
+                vma.DontFork = dontFork;
+                replacements.Add(vma);
+                continue;
+            }
+
+            var midDiff = (long)overlapStart - oldStart;
+            var originalFileMapping = vma.FileMapping;
+            var mid = new VmArea
+            {
+                Start = overlapStart,
+                End = overlapEnd,
+                Perms = vma.Perms,
+                Flags = vma.Flags,
+                FileMapping = null,
+                Offset = vma.File != null ? oldOffset + midDiff : 0,
+                VmPgoff = vma.GetPageIndex(overlapStart),
+                DontFork = dontFork,
+                Name = vma.Name,
+                VmMapping = vma.VmMapping,
+                VmAnonVma = ShareVmAnonVmaForSplit(vma),
+                SyntheticZeroStart = vma.SyntheticZeroStart,
+                SyntheticZeroEnd = vma.SyntheticZeroEnd
+            };
+            vma.VmMapping?.AddRef();
+            mid.TrimSyntheticZeroRangeToBounds();
+
+            var hasLeft = overlapStart > oldStart;
+            var hasRight = overlapEnd < oldEnd;
+            mid.FileMapping = hasLeft ? originalFileMapping?.AddRef() : originalFileMapping;
+
+            if (hasLeft)
+            {
+                vma.Start = oldStart;
+                vma.End = overlapStart;
+                vma.DontFork = oldDontFork;
+                vma.TrimSyntheticZeroRangeToBounds();
+            }
+
+            VmArea? right = null;
+            if (hasRight)
+            {
+                var rightDiff = (long)overlapEnd - oldStart;
+                right = new VmArea
+                {
+                    Start = overlapEnd,
+                    End = oldEnd,
+                    Perms = vma.Perms,
+                    Flags = vma.Flags,
+                    FileMapping = originalFileMapping?.AddRef(),
+                    Offset = vma.File != null ? oldOffset + rightDiff : 0,
+                    VmPgoff = vma.GetPageIndex(overlapEnd),
+                    DontFork = oldDontFork,
+                    Name = vma.Name,
+                    VmMapping = vma.VmMapping,
+                    VmAnonVma = ShareVmAnonVmaForSplit(vma),
+                    SyntheticZeroStart = vma.SyntheticZeroStart,
+                    SyntheticZeroEnd = vma.SyntheticZeroEnd
+                };
+                vma.VmMapping?.AddRef();
+                right.TrimSyntheticZeroRangeToBounds();
+            }
+
+            if (!hasLeft)
+            {
+                var oldPrivate = vma.VmAnonVma;
+                vma.Start = mid.Start;
+                vma.End = mid.End;
+                vma.Perms = mid.Perms;
+                vma.FileMapping = mid.FileMapping;
+                vma.Offset = mid.Offset;
+                vma.VmPgoff = mid.VmPgoff;
+                vma.DontFork = mid.DontFork;
+                vma.Name = mid.Name;
+                vma.VmMapping = mid.VmMapping;
+                vma.VmAnonVma = mid.VmAnonVma;
+                vma.SyntheticZeroStart = mid.SyntheticZeroStart;
+                vma.SyntheticZeroEnd = mid.SyntheticZeroEnd;
+                mid.VmAnonVma = null;
+                mid.FileMapping = null;
+                mid.VmMapping?.Release();
+                oldPrivate?.Release();
+
+                replacements.Add(vma);
+                if (right != null)
+                {
+                    replacements.Add(right);
+                    (addedVmas ??= []).Add(right);
+                }
+            }
+            else
+            {
+                replacements.Add(vma);
+                replacements.Add(mid);
+                (addedVmas ??= []).Add(mid);
+                if (right != null)
+                {
+                    replacements.Add(right);
+                    addedVmas.Add(right);
+                }
+            }
+
+            if (hasLeft)
+                RebindRmapRefsForVmaRange(vma, mid, overlapStart, overlapEnd, vma.Perms, vma.Perms);
+
+            if (right != null)
+                RebindRmapRefsForVmaRange(vma, right, overlapEnd, oldEnd, vma.Perms, vma.Perms);
+
+            ResetVmAreaAttachmentsForSplit(vma, hasLeft ? mid : right, hasLeft ? right : null);
+        }
+
+        ReplaceVmaWindow(startIndex, endIndexExclusive - startIndex, replacements);
+
+        if (addedVmas != null)
+            foreach (var vma in addedVmas)
+                TrackMappedInodeOnVmaAdded(vma);
+
+        return 0;
     }
 
     /// <summary>
@@ -1206,6 +1396,7 @@ public class VMAManager
                         VmMapping = vma.VmMapping,
                         VmAnonVma = ShareVmAnonVmaForSplit(vma),
                         VmPgoff = vma.GetPageIndex(tailStart),
+                        DontFork = vma.DontFork,
                         SyntheticZeroStart = vma.SyntheticZeroStart,
                         SyntheticZeroEnd = vma.SyntheticZeroEnd
                     };
@@ -1375,6 +1566,7 @@ public class VMAManager
                     Flags = vma.Flags,
                     FileMapping = null,
                     Offset = vma.File != null ? oldOffset + midDiff : 0,
+                    DontFork = vma.DontFork,
                     Name = vma.Name,
                     VmMapping = vma.VmMapping,
                     VmAnonVma = ShareVmAnonVmaForSplit(vma),
@@ -1411,6 +1603,7 @@ public class VMAManager
                         Flags = vma.Flags,
                         FileMapping = originalFileMapping?.AddRef(),
                         Offset = vma.File != null ? oldOffset + rightDiff : 0,
+                        DontFork = vma.DontFork,
                         Name = vma.Name,
                         VmMapping = vma.VmMapping,
                         VmAnonVma = ShareVmAnonVmaForSplit(vma),
@@ -1432,6 +1625,7 @@ public class VMAManager
                     vma.Perms = mid.Perms;
                     vma.FileMapping = mid.FileMapping;
                     vma.Offset = mid.Offset;
+                    vma.DontFork = mid.DontFork;
                     vma.Name = mid.Name;
                     vma.VmPgoff = mid.VmPgoff;
                     vma.VmMapping = mid.VmMapping;
@@ -2094,11 +2288,11 @@ public class VMAManager
         var pageStart = addr & LinuxConstants.PageMask;
         var pageIndex = GetVmaPageIndex(vma, pageStart);
 
+        var result = IsPrivateVma(vma)
+            ? ResolvePrivateFault(vma, pageStart, pageIndex, isWrite, engine)
+            : ResolveSharedMappingFault(vma, addr, pageStart, pageIndex, isWrite, engine);
 
-        if (IsPrivateVma(vma))
-            return ResolvePrivateFault(vma, pageStart, pageIndex, isWrite, engine);
-
-        return ResolveSharedMappingFault(vma, addr, pageStart, pageIndex, isWrite, engine);
+        return result;
     }
 
     public bool HandleFault(uint addr, bool isWrite, Engine engine)

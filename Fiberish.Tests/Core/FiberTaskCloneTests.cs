@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Reflection;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -107,6 +108,41 @@ public class FiberTaskCloneTests
     }
 
     [Fact]
+    public async Task Fork_DontForkMapping_IsOmittedFromChildAndNativeMmu()
+    {
+        using var env = new TestEnv();
+        const uint baseAddr = 0x00518000;
+        var len = (uint)(LinuxConstants.PageSize * 2);
+
+        Assert.Equal(baseAddr, env.Vma.Mmap(baseAddr, len, Protection.Read | Protection.Write,
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[dontfork]", env.Engine));
+        Assert.True(env.Vma.HandleFault(baseAddr, true, env.Engine));
+        Assert.True(env.Vma.HandleFault(baseAddr + LinuxConstants.PageSize, true, env.Engine));
+        Assert.True(env.Engine.CopyToUser(baseAddr, new byte[] { 0xA1 }));
+        Assert.True(env.Engine.CopyToUser(baseAddr + LinuxConstants.PageSize, new byte[] { 0xB2 }));
+
+        Assert.Equal(0, await env.Call("SysMadvise", baseAddr, LinuxConstants.PageSize, 10));
+
+        var parentVmas = env.Vma.VMAs
+            .Where(v => v.Start >= baseAddr && v.End <= baseAddr + len)
+            .OrderBy(v => v.Start)
+            .ToArray();
+        Assert.Equal(2, parentVmas.Length);
+        Assert.True(parentVmas[0].DontFork);
+        Assert.False(parentVmas[1].DontFork);
+
+        var child = await env.Parent.Clone(0, 0, 0, 0, 0);
+
+        Assert.Null(child.Process.Mem.FindVmArea(baseAddr));
+        Assert.False(child.CPU.HasMappedPage(baseAddr, LinuxConstants.PageSize));
+
+        var probe = new byte[1];
+        Assert.False(child.CPU.CopyFromUser(baseAddr, probe));
+        Assert.True(child.CPU.CopyFromUser(baseAddr + LinuxConstants.PageSize, probe));
+        Assert.Equal((byte)0xB2, probe[0]);
+    }
+
+    [Fact]
     public async Task Fork_SequentialChildren_WritingPrivateAnonymousPage_DoesNotCorruptParent()
     {
         using var env = new TestEnv();
@@ -160,6 +196,15 @@ public class FiberTaskCloneTests
         {
             foreach (var file in _files) file.Close();
             GC.KeepAlive(Parent);
+        }
+
+        public async ValueTask<int> Call(string methodName, uint a1 = 0, uint a2 = 0, uint a3 = 0, uint a4 = 0,
+            uint a5 = 0, uint a6 = 0)
+        {
+            var method = typeof(SyscallManager).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(method);
+            var task = (ValueTask<int>)method!.Invoke(SyscallManager, [Engine, a1, a2, a3, a4, a5, a6])!;
+            return await task;
         }
 
         public void MapUserPage(uint addr)

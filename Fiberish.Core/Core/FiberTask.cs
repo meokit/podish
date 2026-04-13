@@ -1866,6 +1866,7 @@ public class FiberTask
         Engine? newCpu = null;
         FiberTask? child = null;
         Process? createdProcess = null;
+        List<VMAManager.NativeRange>? skippedDontForkRanges = null;
         var linkedToParentChildren = false;
 
         try
@@ -1886,12 +1887,15 @@ public class FiberTask
             }
             else
             {
-                var newMem = cloneVm ? Process.Mem : Process.Mem.Clone();
+                var newMem = cloneVm ? Process.Mem : Process.Mem.Clone(out skippedDontForkRanges);
                 if (cloneVm) newMem.AddSharedRef();
 
                 if (!cloneVm)
                 {
                     newMem.RebuildExternalMappingsFromNative(newCpu, newMem.VMAs);
+                    if (skippedDontForkRanges != null)
+                        foreach (var range in skippedDontForkRanges)
+                            newCpu.MemUnmap(range.Start, range.Length);
 
                     foreach (var vma in Process.Mem.VMAs)
                     {

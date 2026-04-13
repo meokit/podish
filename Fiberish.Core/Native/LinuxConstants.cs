@@ -155,6 +155,10 @@ public static class LinuxConstants
     // Simulate a 2G/2G split: user mappings stay in the low 2 GiB.
     public const uint TaskSize32 = 0x80000000;
 
+    // madvise behaviors
+    public const uint MADV_DONTFORK = 10;
+    public const uint MADV_DOFORK = 11;
+
     // Auxv types
     public const uint AT_NULL = 0;
     public const uint AT_IGNORE = 1;

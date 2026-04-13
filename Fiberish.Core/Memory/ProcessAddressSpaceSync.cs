@@ -277,6 +277,14 @@ internal static class ProcessAddressSpaceSync
         return rc;
     }
 
+    internal static int MadviseForkInheritance(VMAManager vmaManager, Engine engine, uint addr, uint len,
+        bool dontFork, Process? process = null)
+    {
+        if (len == 0) return 0;
+        using var scope = EnterAddressSpaceScope(engine, process);
+        return vmaManager.MadviseForkInheritance(addr, len, dontFork);
+    }
+
     internal static void SyncEngineBeforeRun(VMAManager vmaManager, Engine engine, Process? process = null)
     {
         if (vmaManager == null) return;

@@ -154,7 +154,21 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysMadvise(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        return 0; // No-op
+        if (a2 == 0) return 0;
+        if ((a1 & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
+
+        var alignedLen = a2 > uint.MaxValue - LinuxConstants.PageOffsetMask
+            ? uint.MaxValue & LinuxConstants.PageMask
+            : (a2 + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
+
+        return a3 switch
+        {
+            LinuxConstants.MADV_DONTFORK => ProcessAddressSpaceSync.MadviseForkInheritance(Mem, engine, a1,
+                alignedLen, true),
+            LinuxConstants.MADV_DOFORK => ProcessAddressSpaceSync.MadviseForkInheritance(Mem, engine, a1,
+                alignedLen, false),
+            _ => 0
+        };
     }
 
     private async ValueTask<int> SysMsync(Engine engine, uint addr, uint len, uint flags, uint a4, uint a5,
@@ -328,6 +342,8 @@ public partial class SyscallManager
 
             _ = ProcessAddressSpaceSync.Mmap(sm.Mem, engine, targetAddr, length, sourceVma.Perms, flags,
                 clonedFile, offset, sourceVma.Name);
+            if (sourceVma.DontFork)
+                _ = ProcessAddressSpaceSync.MadviseForkInheritance(sm.Mem, engine, targetAddr, length, true);
             clonedFile = null; // ownership transferred to the new VmArea
             return 0;
         }

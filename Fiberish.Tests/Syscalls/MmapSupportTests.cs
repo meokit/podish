@@ -188,6 +188,53 @@ public class MmapSupportTests
     }
 
     [Fact]
+    public async Task Madvise_DontFork_PartialRange_SplitsVmaAndMarksSlice()
+    {
+        using var env = new TestEnv();
+        const uint baseAddr = 0x53100000;
+        var len = (uint)(LinuxConstants.PageSize * 3);
+
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, len,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+
+        Assert.Equal(0, await env.Call("SysMadvise", baseAddr + LinuxConstants.PageSize, LinuxConstants.PageSize, 10));
+
+        var vmas = env.Vma.VMAs
+            .Where(v => v.Start >= baseAddr && v.End <= baseAddr + len)
+            .OrderBy(v => v.Start)
+            .ToArray();
+        Assert.Equal(3, vmas.Length);
+        Assert.False(vmas[0].DontFork);
+        Assert.True(vmas[1].DontFork);
+        Assert.False(vmas[2].DontFork);
+    }
+
+    [Fact]
+    public async Task Madvise_Dofork_Subrange_ClearsInheritedForkSuppression()
+    {
+        using var env = new TestEnv();
+        const uint baseAddr = 0x53110000;
+        var len = (uint)(LinuxConstants.PageSize * 3);
+
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, len,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+
+        Assert.Equal(0, await env.Call("SysMadvise", baseAddr, len, 10));
+        Assert.Equal(0, await env.Call("SysMadvise", baseAddr + LinuxConstants.PageSize, LinuxConstants.PageSize, 11));
+
+        var vmas = env.Vma.VMAs
+            .Where(v => v.Start >= baseAddr && v.End <= baseAddr + len)
+            .OrderBy(v => v.Start)
+            .ToArray();
+        Assert.Equal(3, vmas.Length);
+        Assert.True(vmas[0].DontFork);
+        Assert.False(vmas[1].DontFork);
+        Assert.True(vmas[2].DontFork);
+    }
+
+    [Fact]
     public async Task Mprotect_DoesNotCaptureOrUnmapSharedDirtyPages()
     {
         using var env = new TestEnv();
