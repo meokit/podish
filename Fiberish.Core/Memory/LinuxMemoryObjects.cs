@@ -373,9 +373,9 @@ public sealed class AnonVma
         var clone = new AnonVma(_memoryContext, this);
         Pages.VisitPageStates(state =>
         {
-            var page = Pages.PeekVmPage(state.PageIndex)!;
+            var page = Pages.PeekVmPage(state.PageIndex)!.Value;
             clone.Pages.InstallExistingHostPage(state.PageIndex, page.Ptr, HostPageKind.Anon);
-            var clonedPage = clone.Pages.PeekVmPage(state.PageIndex)!;
+            var clonedPage = clone.Pages.PeekVmPage(state.PageIndex)!.Value;
             clonedPage.Dirty = page.Dirty;
             clonedPage.Uptodate = page.Uptodate;
             clonedPage.Writeback = page.Writeback;

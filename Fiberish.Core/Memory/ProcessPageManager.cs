@@ -8,7 +8,7 @@ public enum MappedPageOwnerKind
     AnonVma
 }
 
-internal sealed class MappedPageBinding
+internal readonly struct MappedPageBinding
 {
     public required IntPtr Ptr { get; init; }
     public required MappedPageOwnerKind OwnerKind { get; init; }

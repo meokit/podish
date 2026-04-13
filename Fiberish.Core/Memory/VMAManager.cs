@@ -1119,8 +1119,9 @@ public class VMAManager
 
         foreach (var pageAddr in PageMapping.SnapshotMappedPages())
         {
-            if (!PageMapping.TryGetBinding(pageAddr, out var binding) || binding == null) continue;
+            if (!PageMapping.TryGetBinding(pageAddr, out var bindingNullable) || !bindingNullable.HasValue) continue;
 
+            var binding = bindingNullable.Value;
             var clonedVma = newMM.FindVmArea(pageAddr);
             if (clonedVma == null)
             {
@@ -1145,7 +1146,6 @@ public class VMAManager
 
             _ = newMM.PageMapping.AddBinding(pageAddr, clonedBinding, out _);
         }
-
         return newMM;
     }
 
@@ -1803,8 +1803,8 @@ public class VMAManager
             {
                 if (!PageMapping.TryGetBinding(pageAddr, out var binding) ||
                     binding == null ||
-                    binding.OwnerKind != MappedPageOwnerKind.AddressSpace ||
-                    !ReferenceEquals(binding.Mapping, vma.VmMapping))
+                    binding.Value.OwnerKind != MappedPageOwnerKind.AddressSpace ||
+                    !ReferenceEquals(binding.Value.Mapping, vma.VmMapping))
                     continue;
             }
             else
@@ -2094,8 +2094,9 @@ public class VMAManager
         if (markDirty)
             anonVma.MarkDirty(pageIndex);
         UnmarkTbWp(pageStart);
+        var pageRecord = anonVma.PeekVmPage(pageIndex) ?? throw new InvalidOperationException("Page must exist after SetPage.");
         return EnsureExternalMapping(pageStart,
-            MappedPageBinding.FromAnonVmaPage(anonVma, pageIndex, anonVma.PeekVmPage(pageIndex)!),
+            MappedPageBinding.FromAnonVmaPage(anonVma, pageIndex, pageRecord),
             perms, engine);
     }
 
@@ -2135,9 +2136,10 @@ public class VMAManager
         if (ownerResidentCount <= 1)
         {
             privateObject.MarkDirty(pageIndex);
-            TbCoh.OnWriteFault(this, pageStart, privateObject.PeekVmPage(pageIndex)!.Ptr);
+            var pageRecord = privateObject.PeekVmPage(pageIndex) ?? throw new InvalidOperationException("Page must exist.");
+            TbCoh.OnWriteFault(this, pageStart, pageRecord.Ptr);
             return EnsureExternalMapping(pageStart,
-                MappedPageBinding.FromAnonVmaPage(privateObject, pageIndex, privateObject.PeekVmPage(pageIndex)!),
+                MappedPageBinding.FromAnonVmaPage(privateObject, pageIndex, pageRecord),
                 perms, engine);
         }
 

@@ -99,7 +99,7 @@ internal sealed class OwnerPageSlots
 
         ApplyPageCountDelta(pageCountDelta);
         if (oldPage != null)
-            ReleasePageOwnership(pageIndex, oldPage, false);
+            ReleasePageOwnership(pageIndex, oldPage.Value, false);
         _pageBindingChanged?.Invoke(pageIndex, oldPage?.Ptr ?? IntPtr.Zero, hostPage.Ptr);
     }
 
@@ -144,7 +144,7 @@ internal sealed class OwnerPageSlots
 
         ApplyPageCountDelta(pageCountDelta);
         if (oldPage != null)
-            ReleasePageOwnership(pageIndex, oldPage, false);
+            ReleasePageOwnership(pageIndex, oldPage.Value, false);
         _pageBindingChanged?.Invoke(pageIndex, oldPage?.Ptr ?? IntPtr.Zero, hostPage.Ptr);
     }
 
@@ -458,7 +458,7 @@ internal sealed class OwnerPageSlots
         }
 
         ApplyPageCountDelta(pageCountDelta);
-        ReleasePageOwnership(pageIndex, page, true);
+        ReleasePageOwnership(pageIndex, page.Value, true);
         return true;
     }
 
@@ -499,7 +499,7 @@ internal sealed class OwnerPageSlots
         lock (_lock)
         {
             if (!_pages.TryGetValue(pageIndex, out var existing)) return false;
-            if (!ReferenceEquals(existing, pageRecord)) return false;
+            if (existing.Ptr != pageRecord.Ptr) return false;
             _pages.Remove(pageIndex);
             pageCountDelta = -1;
         }
@@ -582,15 +582,15 @@ internal sealed class OwnerPageSlots
 
 }
 
-internal sealed class ResidentPageRecord
+internal readonly struct ResidentPageRecord
 {
-    public required IntPtr Ptr { get; set; }
-    public required HostPageRef HostPage { get; set; }
-    public required HostPageKind HostPageKind { get; set; }
-    public required HostPageOwnerBinding OwnerBinding { get; set; }
-    public Action<ResidentPageRecord>? OnReleased { get; set; }
-    public MappingBackedInode? MappingReleaseOwner { get; set; }
-    public InodePageRecord? MappingReleaseRecord { get; set; }
+    public required IntPtr Ptr { get; init; }
+    public required HostPageRef HostPage { get; init; }
+    public required HostPageKind HostPageKind { get; init; }
+    public required HostPageOwnerBinding OwnerBinding { get; init; }
+    public Action<ResidentPageRecord>? OnReleased { get; init; }
+    public MappingBackedInode? MappingReleaseOwner { get; init; }
+    public InodePageRecord? MappingReleaseRecord { get; init; }
 
     public bool Dirty
     {
