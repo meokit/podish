@@ -35,9 +35,13 @@ float80 f80_from_int(int64_t i);
 int64_t f80_to_int(float80 f);
 float80 f80_from_double(double d);
 double f80_to_double(float80 f);
+int16_t f80_to_int16_checked(float80 f, bool truncate, bool* invalid);
+int32_t f80_to_int32_checked(float80 f, bool truncate, bool* invalid);
+int64_t f80_to_int64_checked(float80 f, bool truncate, bool* invalid);
 
 // Classification
 bool f80_isnan(float80 f);
+bool f80_is_signaling_nan(float80 f);
 bool f80_isinf(float80 f);
 bool f80_iszero(float80 f);
 bool f80_isdenormal(float80 f);

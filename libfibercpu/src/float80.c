@@ -31,9 +31,29 @@ static THREAD_LOCAL int g_RoundingMode = 0;  // round_to_nearest
 #ifdef X86EMU_USE_SOFTFLOAT
 // Helper to cast between our float80 and SoftFloat's type.
 // Layout is guaranteed to be identical in LITTLEENDIAN mode.
-static inline soft_extFloat80_t to_soft(float80 f) { return *(soft_extFloat80_t*)&f; }
+static inline soft_extFloat80_t to_soft(float80 f) {
+    soft_extFloat80_t out;
+    memcpy(&out, &f, sizeof(out));
+    return out;
+}
 
-static inline float80 from_soft(soft_extFloat80_t f) { return *(float80*)&f; }
+static inline float80 from_soft(soft_extFloat80_t f) {
+    float80 out;
+    memcpy(&out, &f, sizeof(out));
+    return out;
+}
+
+static inline uint_fast8_t capture_softfloat_flags_begin(void) {
+    uint_fast8_t saved_flags = softfloat_exceptionFlags;
+    softfloat_exceptionFlags = 0;
+    return saved_flags;
+}
+
+static inline uint_fast8_t capture_softfloat_flags_end(uint_fast8_t saved_flags) {
+    uint_fast8_t op_flags = softfloat_exceptionFlags;
+    softfloat_exceptionFlags = saved_flags | op_flags;
+    return op_flags;
+}
 
 void f80_set_rounding_mode(enum f80_rounding_mode mode) {
     switch (mode) {
@@ -56,6 +76,25 @@ void f80_set_rounding_mode(enum f80_rounding_mode mode) {
     g_RoundingMode = (int)mode;
     // We could use fesetround() here but it might affect other things.
     // For now we just store it for f80_to_int / f80_round.
+}
+#endif
+
+#ifndef X86EMU_USE_SOFTFLOAT
+static double round_double_for_int_store(double d, bool truncate) {
+    if (truncate) return trunc(d);
+
+    switch (g_RoundingMode) {
+        case round_to_nearest:
+            return rint(d);
+        case round_down:
+            return floor(d);
+        case round_up:
+            return ceil(d);
+        case round_chop:
+            return trunc(d);
+        default:
+            return d;
+    }
 }
 #endif
 
@@ -139,7 +178,79 @@ double f80_to_double(float80 f) {
 }
 #endif
 
+int32_t f80_to_int32_checked(float80 f, bool truncate, bool* invalid) {
+#ifdef X86EMU_USE_SOFTFLOAT
+    uint_fast8_t saved_flags = capture_softfloat_flags_begin();
+    int_fast32_t value =
+        truncate ? extF80_to_i32_r_minMag(to_soft(f), true) : extF80_to_i32(to_soft(f), softfloat_roundingMode, true);
+    uint_fast8_t op_flags = capture_softfloat_flags_end(saved_flags);
+
+    if (invalid) *invalid = (op_flags & softfloat_flag_invalid) != 0;
+    return (int32_t)value;
+#else
+    double d = f80_to_double(f);
+    double rounded = round_double_for_int_store(d, truncate);
+
+    bool is_invalid =
+        !isfinite(d) || !isfinite(rounded) || (rounded < (double)INT32_MIN) || (rounded > (double)INT32_MAX);
+    if (invalid) *invalid = is_invalid;
+    return is_invalid ? INT32_MIN : (int32_t)rounded;
+#endif
+}
+
+int64_t f80_to_int64_checked(float80 f, bool truncate, bool* invalid) {
+#ifdef X86EMU_USE_SOFTFLOAT
+    uint_fast8_t saved_flags = capture_softfloat_flags_begin();
+    int_fast64_t value =
+        truncate ? extF80_to_i64_r_minMag(to_soft(f), true) : extF80_to_i64(to_soft(f), softfloat_roundingMode, true);
+    uint_fast8_t op_flags = capture_softfloat_flags_end(saved_flags);
+
+    if (invalid) *invalid = (op_flags & softfloat_flag_invalid) != 0;
+    return (int64_t)value;
+#else
+    double d = f80_to_double(f);
+    double rounded = round_double_for_int_store(d, truncate);
+
+    bool is_invalid =
+        !isfinite(d) || !isfinite(rounded) || (rounded < (double)INT64_MIN) || (rounded > (double)INT64_MAX);
+    if (invalid) *invalid = is_invalid;
+    return is_invalid ? INT64_MIN : (int64_t)rounded;
+#endif
+}
+
+int16_t f80_to_int16_checked(float80 f, bool truncate, bool* invalid) {
+#ifdef X86EMU_USE_SOFTFLOAT
+    bool wide_invalid = false;
+    int32_t wide = f80_to_int32_checked(f, truncate, &wide_invalid);
+    bool is_invalid = wide_invalid || (wide < INT16_MIN) || (wide > INT16_MAX);
+
+    if (!wide_invalid && is_invalid) {
+        softfloat_exceptionFlags |= softfloat_flag_invalid;
+    }
+
+    if (invalid) *invalid = is_invalid;
+    return is_invalid ? INT16_MIN : (int16_t)wide;
+#else
+    double d = f80_to_double(f);
+    double rounded = round_double_for_int_store(d, truncate);
+
+    bool is_invalid =
+        !isfinite(d) || !isfinite(rounded) || (rounded < (double)INT16_MIN) || (rounded > (double)INT16_MAX);
+    if (invalid) *invalid = is_invalid;
+    return is_invalid ? INT16_MIN : (int16_t)rounded;
+#endif
+}
+
 bool f80_isnan(float80 f) { return (f.signExp & 0x7FFF) == 0x7FFF && (f.signif & 0x7FFFFFFFFFFFFFFFUL) != 0; }
+
+bool f80_is_signaling_nan(float80 f) {
+#ifdef X86EMU_USE_SOFTFLOAT
+    return extF80_isSignalingNaN(to_soft(f));
+#else
+    return ((f.signExp & 0x7FFF) == 0x7FFF) && ((f.signif & UINT64_C(0x4000000000000000)) == 0) &&
+           ((f.signif & UINT64_C(0x3FFFFFFFFFFFFFFF)) != 0);
+#endif
+}
 
 bool f80_isinf(float80 f) { return (f.signExp & 0x7FFF) == 0x7FFF && (f.signif & 0x7FFFFFFFFFFFFFFFUL) == 0; }
 
