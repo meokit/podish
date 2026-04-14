@@ -34,6 +34,25 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
         return default;
     }
 
+    private static void PulseHandle(AsyncWaitQueue? handle, KernelScheduler? scheduler)
+    {
+        if (handle == null || scheduler == null)
+            return;
+
+        if (scheduler.IsSchedulerThread)
+        {
+            handle.Reset();
+            handle.Set();
+            return;
+        }
+
+        scheduler.ScheduleFromAnyThread(() =>
+        {
+            handle.Reset();
+            handle.Set();
+        });
+    }
+
     bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
         short events)
     {
@@ -88,8 +107,6 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
                 // We surface EAGAIN here so the generic VFS read path can call WaitForRead().
                 return -(int)Errno.EAGAIN;
 
-            var wasFull = _counter == MaxCounter;
-
             ulong val;
             if (_isSemaphore)
             {
@@ -106,8 +123,8 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
 
             if (_counter == 0)
                 _readHandle?.Reset();
-            if (wasFull)
-                _writeHandle?.Set();
+            // Linux eventfd_read() wakes POLLOUT pollers after every successful read.
+            PulseHandle(_writeHandle, _waitQueues?.Scheduler);
 
             return 8;
         }
@@ -130,10 +147,9 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
                 // Return EAGAIN so the generic VFS write path can wait for POLLOUT.
                 return -(int)Errno.EAGAIN;
 
-            var wasEmpty = _counter == 0;
             _counter += add;
-            if (wasEmpty)
-                _readHandle?.Set();
+            // Linux eventfd_write() wakes POLLIN pollers after every successful write.
+            PulseHandle(_readHandle, _waitQueues?.Scheduler);
             if (_counter == MaxCounter)
                 _writeHandle?.Reset();
             return 8;

@@ -20,19 +20,104 @@ internal sealed class EpollItem
     public IDisposable? WaitRegistration;
 }
 
-public class EpollInode : TmpfsInode
+public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWaitSource
 {
     private const int EpollEventSize = 12;
     private readonly Queue<EpollItem> _deferredEdgeRearms = new();
     private readonly List<EpollItem> _readyList = new();
+    private readonly KernelScheduler _scheduler;
     private readonly AsyncWaitQueue _waitQueue;
     private readonly Dictionary<LinuxFile, EpollItem> _watches = new();
 
     public EpollInode(ulong ino, SuperBlock sb, KernelScheduler scheduler) : base(ino, sb)
     {
+        _scheduler = scheduler;
         _waitQueue = new AsyncWaitQueue(scheduler);
         Type = InodeType.Fifo;
         Mode = 0x1A4; // pseudo device mode, like pipe
+    }
+
+    public override short Poll(LinuxFile linuxFile, short events)
+    {
+        const short POLLIN = 0x0001;
+
+        if ((events & POLLIN) == 0)
+            return 0;
+
+        RefreshDeferredEdgeRearms();
+        return _readyList.Count > 0 ? POLLIN : (short)0;
+    }
+
+    public override bool RegisterWait(LinuxFile linuxFile, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) == 0)
+            return false;
+
+        var readWatch = new QueueReadinessWatch(POLLIN, () => IsReadable(), _waitQueue, _waitQueue.Reset);
+        return QueueReadinessRegistration.Register(callback, _scheduler, events, readWatch);
+    }
+
+    public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) == 0)
+            return null;
+
+        var readWatch = new QueueReadinessWatch(POLLIN, () => IsReadable(), _waitQueue, _waitQueue.Reset);
+        return QueueReadinessRegistration.RegisterHandle(callback, _scheduler, events, readWatch);
+    }
+
+    public override IDisposable? RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) == 0)
+            return null;
+
+        var readWatch = new QueueReadinessWatch(POLLIN, () => IsReadable(), _waitQueue, _waitQueue.Reset);
+        return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, _scheduler, events, readWatch);
+    }
+
+    bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) == 0)
+            return false;
+
+        var scheduler = dispatcher.Scheduler;
+        if (scheduler == null)
+            return false;
+
+        var readWatch = new QueueReadinessWatch(POLLIN, () => IsReadable(), _waitQueue, _waitQueue.Reset);
+        return QueueReadinessRegistration.Register(callback, scheduler, events, readWatch);
+    }
+
+    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) == 0)
+            return null;
+
+        var scheduler = dispatcher.Scheduler;
+        if (scheduler == null)
+            return null;
+
+        var readWatch = new QueueReadinessWatch(POLLIN, () => IsReadable(), _waitQueue, _waitQueue.Reset);
+        return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch);
+    }
+
+    IDisposable? IDispatcherEdgeWaitSource.RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) == 0)
+            return null;
+
+        var scheduler = dispatcher.Scheduler;
+        if (scheduler == null)
+            return null;
+
+        var readWatch = new QueueReadinessWatch(POLLIN, () => IsReadable(), _waitQueue, _waitQueue.Reset);
+        return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, scheduler, events, readWatch);
     }
 
     public int Ctl(FiberTask task, int op, int fd, LinuxFile targetFile, uint events, ulong data)
@@ -139,7 +224,12 @@ public class EpollInode : TmpfsInode
                 CheckAndRegister(item);
         }
 
-        if (item.File.OpenedInode is IDispatcherWaitSource dispatcherWaitSource)
+        if ((item.Events & LinuxConstants.EPOLLET) != 0 &&
+            item.File.OpenedInode is IDispatcherEdgeWaitSource edgeWaitSource)
+            item.WaitRegistration = edgeWaitSource.RegisterEdgeTriggeredWaitHandle(item.File,
+                item.Dispatcher ?? throw new InvalidOperationException("Epoll host socket watch requires dispatcher."),
+                RePoll, watchEvents);
+        else if (item.File.OpenedInode is IDispatcherWaitSource dispatcherWaitSource)
             item.WaitRegistration = dispatcherWaitSource.RegisterWaitHandle(item.File,
                 item.Dispatcher ?? throw new InvalidOperationException("Epoll host socket watch requires dispatcher."),
                 RePoll, watchEvents);
@@ -232,6 +322,13 @@ public class EpollInode : TmpfsInode
 
         item.IsDeferredEdgeRearmQueued = true;
         _deferredEdgeRearms.Enqueue(item);
+    }
+
+    private bool IsReadable()
+    {
+        AssertSchedulerThread();
+        RefreshDeferredEdgeRearms();
+        return _readyList.Count > 0;
     }
 
 

@@ -243,7 +243,20 @@ internal static class QueueReadinessRegistration
             return;
 
         if (!watch.IsReady)
+        {
             watch.ResetIfStale();
+
+            // Edge-triggered epoll callers only reach this path after an earlier readiness check
+            // observed "not ready". If readiness flipped true before the waiter was linked, we
+            // must deliver that fresh edge immediately instead of waiting for a later toggle.
+            if (watch.IsReady)
+            {
+                ScheduleReadyCallback(callback, task, scheduler);
+                registrations ??= [];
+                registrations.Add(NoopWaitRegistration.Instance);
+                return;
+            }
+        }
 
         var registration = task != null
             ? watch.Queue.RegisterCancelableOnNextSignal(callback, task)

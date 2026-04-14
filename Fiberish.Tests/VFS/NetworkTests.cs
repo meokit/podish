@@ -101,6 +101,40 @@ public class NetworkTests
     }
 
     [Fact]
+    public async Task EpollInode_EventFdLevelTriggeredRead_RemainsReadableUntilDrain()
+    {
+        using var env = new TestEnv();
+        var epoll = new EpollInode(1, env.MemfdSuperBlock, env.Scheduler);
+        var eventFd = new EventFdInode(2, env.MemfdSuperBlock, env.Scheduler, 0, FileFlags.O_RDWR);
+        var file = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.MemfdSuperBlock),
+            FileFlags.O_RDWR | FileFlags.O_NONBLOCK, null!);
+
+        const ulong data = 0x11223344UL;
+        Assert.Equal(0, epoll.Ctl(env.Task, LinuxConstants.EPOLL_CTL_ADD, 8, file, LinuxConstants.EPOLLIN, data));
+
+        var writeBuf = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(writeBuf, 1);
+        Assert.Equal(8, eventFd.WriteFromHost(null, file, writeBuf, 0));
+        env.DrainEvents();
+
+        var result = await env.StartOnScheduler(async () =>
+        {
+            var firstBuffer = new byte[12];
+            var firstRc = await epoll.WaitAsync(env.Task, firstBuffer, 1, 0);
+
+            var secondBuffer = new byte[12];
+            var secondRc = await epoll.WaitAsync(env.Task, secondBuffer, 1, 0);
+
+            return (firstRc, firstBuffer, secondRc, secondBuffer);
+        }).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(1, result.firstRc);
+        AssertEpollEvent(result.firstBuffer, LinuxConstants.EPOLLIN, data);
+        Assert.Equal(1, result.secondRc);
+        AssertEpollEvent(result.secondBuffer, LinuxConstants.EPOLLIN, data);
+    }
+
+    [Fact]
     public async Task EpollInode_EventFdOneShot_FalseAlarmDoesNotDisarmWatch()
     {
         using var env = new TestEnv();
@@ -141,6 +175,49 @@ public class NetworkTests
         Assert.Equal(1, result.nextRc);
         Assert.Equal(0, result.afterRc);
         AssertEpollEvent(result.nextBuffer, LinuxConstants.EPOLLIN, data);
+    }
+
+    [Fact]
+    public async Task EpollInode_NestedEpollReadableEvent_WakesOuterEpoll()
+    {
+        using var env = new TestEnv();
+        var innerEpoll = new EpollInode(1, env.MemfdSuperBlock, env.Scheduler);
+        var outerEpoll = new EpollInode(2, env.MemfdSuperBlock, env.Scheduler);
+        var eventFd = new EventFdInode(3, env.MemfdSuperBlock, env.Scheduler, 0, FileFlags.O_RDWR);
+
+        var eventFile = new LinuxFile(new Dentry(FsName.FromString("eventfd"), eventFd, null, env.MemfdSuperBlock),
+            FileFlags.O_RDWR | FileFlags.O_NONBLOCK, null!);
+        var innerFile = new LinuxFile(new Dentry(FsName.FromString("epoll-inner"), innerEpoll, null, env.MemfdSuperBlock),
+            FileFlags.O_RDWR | FileFlags.O_NONBLOCK, null!);
+
+        const ulong innerData = 0x1122UL;
+        const ulong outerData = 0x3344UL;
+
+        Assert.Equal(0, innerEpoll.Ctl(env.Task, LinuxConstants.EPOLL_CTL_ADD, 8, eventFile,
+            LinuxConstants.EPOLLIN, innerData));
+        Assert.Equal(0, outerEpoll.Ctl(env.Task, LinuxConstants.EPOLL_CTL_ADD, 9, innerFile,
+            LinuxConstants.EPOLLIN, outerData));
+
+        var writeBuf = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(writeBuf, 1);
+        Assert.Equal(8, eventFd.WriteFromHost(null, eventFile, writeBuf, 0));
+        env.DrainEvents();
+
+        var result = await env.StartOnScheduler(async () =>
+        {
+            var outerBuffer = new byte[12];
+            var outerRc = await outerEpoll.WaitAsync(env.Task, outerBuffer, 1, 0);
+
+            var innerBuffer = new byte[12];
+            var innerRc = await innerEpoll.WaitAsync(env.Task, innerBuffer, 1, 0);
+
+            return (outerRc, innerRc, outerBuffer, innerBuffer);
+        }).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(1, result.outerRc);
+        Assert.Equal(1, result.innerRc);
+        AssertEpollEvent(result.outerBuffer, LinuxConstants.EPOLLIN, outerData);
+        AssertEpollEvent(result.innerBuffer, LinuxConstants.EPOLLIN, innerData);
     }
 
     [Fact]

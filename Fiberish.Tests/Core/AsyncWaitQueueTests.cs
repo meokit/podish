@@ -1,5 +1,6 @@
 using Fiberish.Core;
 using Fiberish.Native;
+using Fiberish.VFS;
 using Fiberish.X86.Native;
 using Xunit;
 
@@ -210,6 +211,62 @@ public class AsyncWaitQueueTests
 
             task.Exited = true;
             task.Status = FiberTaskStatus.Terminated;
+        }
+
+        task.Continuation = Entry;
+        scheduler.RegisterTask(task);
+        scheduler.Run(100);
+
+        Assert.Equal(1, fired);
+    }
+
+    [Fact]
+    public void QueueReadinessRegistration_OnNextSignal_RacedReadableState_MustScheduleImmediately()
+    {
+        var scheduler = new KernelScheduler();
+        var process = TestRuntimeFactory.CreateProcess(700);
+        scheduler.RegisterProcess(process);
+
+        var queue = new AsyncWaitQueue(scheduler);
+        var fired = 0;
+        var registered = false;
+        var firstProbe = true;
+        var task = new FiberTask(701, process, new MockEngine(), scheduler);
+
+        void Entry()
+        {
+            if (registered)
+                return;
+
+            registered = true;
+            var watch = new QueueReadinessWatch(
+                LinuxConstants.POLLIN,
+                () =>
+                {
+                    if (firstProbe)
+                    {
+                        firstProbe = false;
+                        queue.Signal();
+                        return false;
+                    }
+
+                    return true;
+                },
+                queue,
+                queue.Reset);
+
+            var registration = QueueReadinessRegistration.RegisterHandleOnNextSignal(
+                () =>
+                {
+                    fired++;
+                    task.Exited = true;
+                    task.Status = FiberTaskStatus.Terminated;
+                },
+                scheduler,
+                LinuxConstants.POLLIN,
+                watch);
+
+            Assert.NotNull(registration);
         }
 
         task.Continuation = Entry;
