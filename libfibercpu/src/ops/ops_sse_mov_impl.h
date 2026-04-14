@@ -284,6 +284,26 @@ FORCE_INLINE LogicFlow OpMovhps_Store(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+FORCE_INLINE LogicFlow OpMovhlps_Reg(LogicFuncParams) {
+    // 0F 12 /r with mod == 3: MOVHLPS xmm, xmm
+    uint8_t dst_reg = (op->modrm >> 3) & 7;
+    uint8_t src_reg = op->modrm & 7;
+    uint64_t* dst = (uint64_t*)&state->ctx.xmm[dst_reg];
+    const uint64_t* src = (const uint64_t*)&state->ctx.xmm[src_reg];
+    dst[0] = src[1];
+    return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpMovlhps_Reg(LogicFuncParams) {
+    // 0F 16 /r with mod == 3: MOVLHPS xmm, xmm
+    uint8_t dst_reg = (op->modrm >> 3) & 7;
+    uint8_t src_reg = op->modrm & 7;
+    uint64_t* dst = (uint64_t*)&state->ctx.xmm[dst_reg];
+    const uint64_t* src = (const uint64_t*)&state->ctx.xmm[src_reg];
+    dst[1] = src[0];
+    return LogicFlow::Continue;
+}
+
 FORCE_INLINE LogicFlow OpMovlpd_Load(LogicFuncParams) {
     // 66 0F 12: MOVLPD xmm, m64 (Load)
     uint32_t addr = ComputeLinearAddress(state, op);
@@ -458,6 +478,8 @@ FORCE_INLINE LogicFlow OpGroup_Mov12(LogicFuncParams) {
         return OpDup_Sse_Lo(LogicPassParams);
     } else if (op->prefixes.flags.repne) {  // F2: MOVDDUP
         return OpDup_Sse_Lo(LogicPassParams);
+    } else if ((op->modrm >> 6) == 3) {  // None + reg/reg: MOVHLPS
+        return OpMovhlps_Reg(LogicPassParams);
     } else {  // None: MOVLPS (Load)
         return OpMovlps_Load(LogicPassParams);
     }
@@ -476,6 +498,8 @@ FORCE_INLINE LogicFlow OpGroup_Mov16(LogicFuncParams) {
         return OpMovhpd_Load(LogicPassParams);
     } else if (op->prefixes.flags.rep) {  // F3: MOVSHDUP
         return OpDup_Sse_Hi(LogicPassParams);
+    } else if ((op->modrm >> 6) == 3) {  // None + reg/reg: MOVLHPS
+        return OpMovlhps_Reg(LogicPassParams);
     } else {  // None: MOVHPS (Load)
         return OpMovhps_Load(LogicPassParams);
     }
