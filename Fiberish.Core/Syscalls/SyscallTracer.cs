@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Buffers.Binary;
 using Fiberish.Native;
 using Microsoft.Extensions.Logging;
 
@@ -75,6 +76,35 @@ public static class SyscallTracer
                 var dirfd = (int)a1 == -100 ? "AT_FDCWD" : a1.ToString();
                 sb.Append($"{dirfd}, {ReadString(sys, a2)}, 0x{a3:X}, 0x{a4:X}");
                 break;
+            case X86SyscallNumbers.inotify_init1:
+                sb.Append($"0x{a1:X}");
+                break;
+            case X86SyscallNumbers.inotify_add_watch:
+                sb.Append($"{a1}, {ReadString(sys, a2)}, 0x{a3:X}");
+                break;
+            case X86SyscallNumbers.inotify_rm_watch:
+                sb.Append($"{a1}, {a2}");
+                break;
+            case X86SyscallNumbers.epoll_ctl:
+                sb.Append($"{a1}, {FormatEpollCtlOp((int)a2)}, {a3}");
+                if ((int)a2 == LinuxConstants.EPOLL_CTL_DEL)
+                {
+                    sb.Append(", NULL");
+                }
+                else
+                {
+                    sb.Append($", {ReadEpollCtlEvent(sys, a4)}");
+                }
+                break;
+            case X86SyscallNumbers.epoll_wait:
+                sb.Append($"{a1}, 0x{a2:X}, {a3}, {(int)a4}");
+                break;
+            case X86SyscallNumbers.epoll_pwait:
+                sb.Append($"{a1}, 0x{a2:X}, {a3}, {(int)a4}, 0x{a5:X}, {a6}");
+                break;
+            case X86SyscallNumbers.epoll_pwait2:
+                sb.Append($"{a1}, 0x{a2:X}, {a3}, 0x{a4:X}, 0x{a5:X}, {a6}");
+                break;
             case X86SyscallNumbers.statx:
                 // statx(dirfd, path, flags, mask, statxbuf)
                 var statxDirfd = (int)a1 == -100 ? "AT_FDCWD" : a1.ToString();
@@ -105,6 +135,10 @@ public static class SyscallTracer
 
             // For read, show the data read
             if (nr == X86SyscallNumbers.read && ret > 0) sb.Append($" {ReadStringOrBuffer(sys, a2, (uint)ret)}");
+            if ((nr == X86SyscallNumbers.epoll_wait ||
+                 nr == X86SyscallNumbers.epoll_pwait ||
+                 nr == X86SyscallNumbers.epoll_pwait2) && ret > 0)
+                sb.Append($" {ReadEpollWaitEvents(sys, a2, ret)}");
         }
 
         logger.LogTrace(sb.ToString());
@@ -633,5 +667,112 @@ public static class SyscallTracer
         {
             return $"0x{addr:X}";
         }
+    }
+
+    private static string ReadEpollCtlEvent(SyscallManager sys, uint addr)
+    {
+        if (!TryReadEpollEvent(sys, addr, out var events, out var data)) return $"0x{addr:X}";
+
+        return $"{{events={FormatEpollEvents(events)}, data=0x{data:X}}}";
+    }
+
+    private static string ReadEpollWaitEvents(SyscallManager sys, uint addr, int count)
+    {
+        if (addr == 0 || count <= 0) return "[]";
+
+        var eventCount = Math.Min(count, 8);
+        var parts = new List<string>(eventCount);
+        for (var index = 0; index < eventCount; index++)
+        {
+            var eventAddr = addr + (uint)(index * 12);
+            if (!TryReadEpollEvent(sys, eventAddr, out var events, out var data))
+            {
+                parts.Add($"{{addr=0x{eventAddr:X}}}");
+                continue;
+            }
+
+            parts.Add($"{{events={FormatEpollEvents(events)}, data=0x{data:X}}}");
+        }
+
+        if (count > eventCount) parts.Add($"... +{count - eventCount} more");
+        return $"[{string.Join(", ", parts)}]";
+    }
+
+    private static bool TryReadEpollEvent(SyscallManager sys, uint addr, out uint events, out ulong data)
+    {
+        events = 0;
+        data = 0;
+        if (addr == 0) return false;
+
+        try
+        {
+            Span<byte> buffer = stackalloc byte[12];
+            if (!sys.CurrentSyscallEngine.CopyFromUser(addr, buffer)) return false;
+
+            events = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(0, 4));
+            data = BinaryPrimitives.ReadUInt64LittleEndian(buffer.Slice(4, 8));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string FormatEpollCtlOp(int op)
+    {
+        return op switch
+        {
+            LinuxConstants.EPOLL_CTL_ADD => "ADD",
+            LinuxConstants.EPOLL_CTL_DEL => "DEL",
+            LinuxConstants.EPOLL_CTL_MOD => "MOD",
+            _ => op.ToString()
+        };
+    }
+
+    private static string FormatEpollEvents(uint events)
+    {
+        if (events == 0) return "0";
+
+        var flags = new List<string>();
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLIN, nameof(LinuxConstants.EPOLLIN));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLPRI, nameof(LinuxConstants.EPOLLPRI));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLOUT, nameof(LinuxConstants.EPOLLOUT));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLERR, nameof(LinuxConstants.EPOLLERR));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLHUP, nameof(LinuxConstants.EPOLLHUP));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLRDNORM, nameof(LinuxConstants.EPOLLRDNORM));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLRDBAND, nameof(LinuxConstants.EPOLLRDBAND));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLWRNORM, nameof(LinuxConstants.EPOLLWRNORM));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLWRBAND, nameof(LinuxConstants.EPOLLWRBAND));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLMSG, nameof(LinuxConstants.EPOLLMSG));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLRDHUP, nameof(LinuxConstants.EPOLLRDHUP));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLEXCLUSIVE, nameof(LinuxConstants.EPOLLEXCLUSIVE));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLWAKEUP, nameof(LinuxConstants.EPOLLWAKEUP));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLONESHOT, nameof(LinuxConstants.EPOLLONESHOT));
+        AppendEpollFlag(flags, events, LinuxConstants.EPOLLET, nameof(LinuxConstants.EPOLLET));
+
+        var remaining = events & ~(LinuxConstants.EPOLLIN |
+                                   LinuxConstants.EPOLLPRI |
+                                   LinuxConstants.EPOLLOUT |
+                                   LinuxConstants.EPOLLERR |
+                                   LinuxConstants.EPOLLHUP |
+                                   LinuxConstants.EPOLLRDNORM |
+                                   LinuxConstants.EPOLLRDBAND |
+                                   LinuxConstants.EPOLLWRNORM |
+                                   LinuxConstants.EPOLLWRBAND |
+                                   LinuxConstants.EPOLLMSG |
+                                   LinuxConstants.EPOLLRDHUP |
+                                   LinuxConstants.EPOLLEXCLUSIVE |
+                                   LinuxConstants.EPOLLWAKEUP |
+                                   LinuxConstants.EPOLLONESHOT |
+                                   LinuxConstants.EPOLLET);
+        if (remaining != 0) flags.Add($"0x{remaining:X}");
+
+        return string.Join("|", flags);
+    }
+
+    private static void AppendEpollFlag(List<string> flags, uint events, uint mask, string name)
+    {
+        if ((events & mask) != 0) flags.Add(name.Replace("LinuxConstants.", string.Empty));
     }
 }
