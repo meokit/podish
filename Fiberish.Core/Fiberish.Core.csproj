@@ -24,8 +24,8 @@
         <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
         <IsBrowserWasm Condition="'$(RuntimeIdentifier)' == 'browser-wasm' Or '$(FiberishForceBrowserWasm)' == 'true'">true</IsBrowserWasm>
         <RuntimeIdentifier Condition="'$(IsBrowserWasm)' == 'true' and '$(RuntimeIdentifier)' == ''">browser-wasm</RuntimeIdentifier>
-        <RuntimeIdentifiers Condition="'$(IsBrowserWasm)' == 'true' and '$(RuntimeIdentifiers)' == ''">browser-wasm</RuntimeIdentifiers>
-        <RuntimeIdentifiers Condition="'$(IsBrowserWasm)' == 'true' and '$(RuntimeIdentifiers)' != '' and !$(RuntimeIdentifiers.Contains('browser-wasm'))">$(RuntimeIdentifiers);browser-wasm</RuntimeIdentifiers>
+        <RuntimeIdentifiers Condition="'$(RuntimeIdentifiers)' == ''">browser-wasm</RuntimeIdentifiers>
+        <RuntimeIdentifiers Condition="'$(RuntimeIdentifiers)' != '' and !$(RuntimeIdentifiers.Contains('browser-wasm'))">$(RuntimeIdentifiers);browser-wasm</RuntimeIdentifiers>
         <DefineConstants Condition="'$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true'">$(DefineConstants);PODISH_STATIC_NATIVE</DefineConstants>
         <!-- Debug builds default this on so holder-lifecycle tests can assert transient exec/file mappings without paying the cost in Release. -->
         <EnableVfsFileHolderTracking Condition="'$(EnableVfsFileHolderTracking)' == '' and '$(Configuration)' == 'Debug'">true</EnableVfsFileHolderTracking>

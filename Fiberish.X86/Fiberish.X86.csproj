@@ -8,8 +8,8 @@
         <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
         <IsBrowserWasm Condition="'$(RuntimeIdentifier)' == 'browser-wasm' Or '$(FiberishForceBrowserWasm)' == 'true'">true</IsBrowserWasm>
         <RuntimeIdentifier Condition="'$(IsBrowserWasm)' == 'true' and '$(RuntimeIdentifier)' == ''">browser-wasm</RuntimeIdentifier>
-        <RuntimeIdentifiers Condition="'$(IsBrowserWasm)' == 'true' and '$(RuntimeIdentifiers)' == ''">browser-wasm</RuntimeIdentifiers>
-        <RuntimeIdentifiers Condition="'$(IsBrowserWasm)' == 'true' and '$(RuntimeIdentifiers)' != '' and !$(RuntimeIdentifiers.Contains('browser-wasm'))">$(RuntimeIdentifiers);browser-wasm</RuntimeIdentifiers>
+        <RuntimeIdentifiers Condition="'$(RuntimeIdentifiers)' == ''">browser-wasm</RuntimeIdentifiers>
+        <RuntimeIdentifiers Condition="'$(RuntimeIdentifiers)' != '' and !$(RuntimeIdentifiers.Contains('browser-wasm'))">$(RuntimeIdentifiers);browser-wasm</RuntimeIdentifiers>
         <DefineConstants Condition="'$(IsBrowserWasm)' == 'true'">$(DefineConstants);FIBERISH_BROWSER_WASM</DefineConstants>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' == 'true'">build_native/browser-wasm</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' != ''">build_native/$(RuntimeIdentifier)</NativeBuildDir>
