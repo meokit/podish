@@ -289,15 +289,12 @@ public partial class SyscallManager
         if (!TryResolveFutexKey(engine, uaddr, !isPrivate, true, out var waitKey, out var error))
             return error;
 
-        var waiter = Futex.PrepareWait(waitKey, bitsetMask);
-        var registration = Futex.CreateWaitRegistration(waitKey, waiter);
-
         var task = engine.Owner as FiberTask;
         if (task == null)
-        {
-            registration.Cancel();
             return -(int)Errno.EINVAL;
-        }
+
+        var waiter = Futex.PrepareWait(waitKey, bitsetMask);
+        var registration = Futex.CreateWaitRegistration(waitKey, waiter);
 
         // Linux FUTEX_WAIT compare-and-block must not lose a racing wake, so re-check after enqueue.
         if (!TryReadUserUInt32(engine, uaddr, out currentVal))
