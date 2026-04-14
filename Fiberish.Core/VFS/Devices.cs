@@ -5,7 +5,7 @@ using Fiberish.Native;
 
 namespace Fiberish.VFS;
 
-public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
+public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatcherEdgeWaitSource
 {
     private static long _nextPseudoConsoleIno = 0x100000;
     private readonly TtyDiscipline? _discipline;
@@ -36,6 +36,12 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         Action callback, short events)
     {
         return RegisterWaitHandleCore(callback, events, null, dispatcher);
+    }
+
+    IDisposable? IDispatcherEdgeWaitSource.RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile,
+        IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        return RegisterEdgeTriggeredWaitHandleCore(callback, events, null, dispatcher);
     }
 
     public bool RegisterWait(LinuxFile linuxFile, FiberTask task, Action callback, short events)
@@ -176,6 +182,11 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         return null;
     }
 
+    public override IDisposable? RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        return RegisterEdgeTriggeredWaitHandleCore(callback, events, null, null);
+    }
+
     private IDisposable? RegisterWaitHandleCore(Action callback, short events, FiberTask? task,
         IReadyDispatcher? dispatcher)
     {
@@ -217,6 +228,43 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
         return null;
     }
 
+    private IDisposable? RegisterEdgeTriggeredWaitHandleCore(Action callback, short events, FiberTask? task,
+        IReadyDispatcher? dispatcher)
+    {
+        if (_discipline == null)
+            return null;
+
+        if (_isInput)
+        {
+            const short POLLIN = 0x0001;
+            if ((events & POLLIN) != 0)
+            {
+                var readWatch =
+                    new QueueReadinessWatch(POLLIN, () => _discipline.IsReadReady, _discipline.DataAvailable,
+                        _discipline.DataAvailable.Reset);
+                if (task != null)
+                    return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, task, events, readWatch);
+                if (dispatcher?.Scheduler is { } scheduler)
+                    return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, scheduler, events,
+                        readWatch);
+                return null;
+            }
+        }
+        else
+        {
+            const short POLLOUT = 0x0004;
+            if ((events & POLLOUT) != 0)
+            {
+                var scheduler = task?.CommonKernel ?? dispatcher?.Scheduler;
+                return scheduler == null ? null : _discipline.RegisterWriteWait(callback, scheduler)
+                    ? NoopWaitRegistration.Instance
+                    : null;
+            }
+        }
+
+        return null;
+    }
+
     public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
     {
         if (_discipline != null)
@@ -231,7 +279,8 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource
     }
 }
 
-public sealed class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSource, IDispatcherWaitSource
+public sealed class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSource, IDispatcherWaitSource,
+    IDispatcherEdgeWaitSource
 {
     public ControllingTtyInode(SuperBlock sb)
     {
@@ -282,6 +331,26 @@ public sealed class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSourc
             var readWatch = new QueueReadinessWatch(POLLIN, () => tty.IsReadReady, tty.DataAvailable,
                 tty.DataAvailable.Reset);
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch);
+        }
+
+        return null;
+    }
+
+    IDisposable? IDispatcherEdgeWaitSource.RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile,
+        IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        if (ResolveDiscipline(null, linuxFile) is not { } tty)
+            return null;
+
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) != 0)
+        {
+            var scheduler = dispatcher.Scheduler;
+            if (scheduler == null)
+                return null;
+            var readWatch = new QueueReadinessWatch(POLLIN, () => tty.IsReadReady, tty.DataAvailable,
+                tty.DataAvailable.Reset);
+            return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, scheduler, events, readWatch);
         }
 
         return null;
@@ -381,6 +450,11 @@ public sealed class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSourc
     }
 
     public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        return null;
+    }
+
+    public override IDisposable? RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile, Action callback, short events)
     {
         return null;
     }

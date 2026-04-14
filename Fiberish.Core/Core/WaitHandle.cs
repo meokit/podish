@@ -113,15 +113,26 @@ public class AsyncWaitQueue
         return RegisterCancelable(continuation, null, null, scheduler);
     }
 
+    public IDisposable? RegisterCancelableOnNextSignal(Action continuation, FiberTask context,
+        FiberTask.WaitToken? token = null)
+    {
+        return RegisterCancelable(continuation, context, token, context.CommonKernel, wakeImmediatelyIfSignaled: false);
+    }
+
+    public IDisposable? RegisterCancelableOnNextSignal(Action continuation, KernelScheduler scheduler)
+    {
+        return RegisterCancelable(continuation, null, null, scheduler, wakeImmediatelyIfSignaled: false);
+    }
+
     private IDisposable? RegisterCancelable(Action continuation, FiberTask? context, FiberTask.WaitToken? token,
-        KernelScheduler scheduler)
+        KernelScheduler scheduler, bool wakeImmediatelyIfSignaled = true)
     {
         AssertSchedulerThread(scheduler);
         lock (_gate)
         {
             AssertSchedulerOwnership(scheduler);
 
-            if (_isSignaled)
+            if (_isSignaled && wakeImmediatelyIfSignaled)
             {
                 ScheduleContinuationWithWaitReason(scheduler, continuation, context, token);
                 return NoopRegistration.Instance;

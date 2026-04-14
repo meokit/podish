@@ -36,8 +36,8 @@ internal sealed record UnixSocketDebugDequeueResult(
     int FdCount,
     UnixSocketDebugState StateAfter);
 
-public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, ISocketEndpointOps, ISocketDataOps,
-    ISocketOptionOps
+public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatcherEdgeWaitSource,
+    ISocketEndpointOps, ISocketDataOps, ISocketOptionOps
 {
     // Backpressure: track queued bytes to limit memory usage
     private const int MaxSendBuffer = 262144; // 256KB
@@ -142,6 +142,22 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
                 _readWaitQueue.Reset);
             var writeWatch = BuildWriteWatch(events);
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch, writeWatch);
+        }
+    }
+
+    IDisposable? IDispatcherEdgeWaitSource.RegisterEdgeTriggeredWaitHandle(LinuxFile file,
+        IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException(
+                            "Unix socket readiness wait requires an explicit scheduler.");
+        using (EnterStateScope())
+        {
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady, _readWaitQueue,
+                _readWaitQueue.Reset);
+            var writeWatch = BuildWriteWatch(events);
+            return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, scheduler, events, readWatch,
+                writeWatch);
         }
     }
 
@@ -814,6 +830,18 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IS
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
     {
         return null;
+    }
+
+    public override IDisposable? RegisterEdgeTriggeredWaitHandle(LinuxFile file, Action callback, short events)
+    {
+        using (EnterStateScope())
+        {
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, IsReadReady, _readWaitQueue,
+                _readWaitQueue.Reset);
+            var writeWatch = BuildWriteWatch(events);
+            return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, _scheduler, events, readWatch,
+                writeWatch);
+        }
     }
 
     public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)

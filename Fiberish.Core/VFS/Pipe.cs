@@ -9,7 +9,7 @@ using WaitHandle = Fiberish.Core.AsyncWaitQueue;
 
 namespace Fiberish.VFS;
 
-public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
+public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatcherEdgeWaitSource
 {
     private const int BufferSize = 65536; // 64KB pipe buffer
     public const int PipeBuf = 4096;
@@ -90,6 +90,30 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
                 : default;
 
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch, writeWatch);
+        }
+    }
+
+    IDisposable? IDispatcherEdgeWaitSource.RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile,
+        IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        var scheduler = dispatcher.Scheduler;
+        if (scheduler == null)
+            return null;
+        const short POLLIN = 0x0001;
+        const short POLLOUT = 0x0004;
+        using (EnterStateScope())
+        {
+            if (_lifecycleClosed)
+                return null;
+
+            var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
+                _readHandle.Reset);
+            var writeWatch = !_readersClosed
+                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                : default;
+
+            return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, scheduler, events, readWatch,
+                writeWatch);
         }
     }
 
@@ -434,6 +458,26 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource
     public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
     {
         return null;
+    }
+
+    public override IDisposable? RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        const short POLLOUT = 0x0004;
+        using (EnterStateScope())
+        {
+            if (_lifecycleClosed)
+                return null;
+
+            var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
+                _readHandle.Reset);
+            var writeWatch = !_readersClosed
+                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                : default;
+
+            return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, _waitQueues.Scheduler, events,
+                readWatch, writeWatch);
+        }
     }
 
     public override void Release(LinuxFile linuxFile)

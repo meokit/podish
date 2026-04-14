@@ -27,6 +27,12 @@ internal interface IDispatcherWaitSource
     IDisposable? RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback, short events);
 }
 
+internal interface IDispatcherEdgeWaitSource
+{
+    IDisposable? RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
+        short events);
+}
+
 internal readonly struct QueueReadinessWatch
 {
     private readonly bool _isReadySnapshot;
@@ -110,6 +116,18 @@ internal static class QueueReadinessRegistration
         in QueueReadinessWatch first, in QueueReadinessWatch second = default)
     {
         return RegisterHandleCore(callback, events, null, scheduler, first, second);
+    }
+
+    public static IDisposable? RegisterHandleOnNextSignal(Action callback, FiberTask task, short events,
+        in QueueReadinessWatch first, in QueueReadinessWatch second = default)
+    {
+        return RegisterHandleOnNextSignalCore(callback, events, task, null, first, second);
+    }
+
+    public static IDisposable? RegisterHandleOnNextSignal(Action callback, KernelScheduler scheduler, short events,
+        in QueueReadinessWatch first, in QueueReadinessWatch second = default)
+    {
+        return RegisterHandleOnNextSignalCore(callback, events, null, scheduler, first, second);
     }
 
     private static short ComputeWatchRevents(short requestedEvents, in QueueReadinessWatch watch)
@@ -203,6 +221,39 @@ internal static class QueueReadinessRegistration
 
         (scheduler ?? throw new InvalidOperationException("Scheduler is required for wait registration."))
             .Schedule(callback);
+    }
+
+    private static IDisposable? RegisterHandleOnNextSignalCore(Action callback, short requestedEvents, FiberTask? task,
+        KernelScheduler? scheduler, in QueueReadinessWatch first, in QueueReadinessWatch second)
+    {
+        List<IDisposable>? registrations = null;
+        TryRegisterHandleOnNextSignal(callback, requestedEvents, task, scheduler, first, ref registrations);
+        TryRegisterHandleOnNextSignal(callback, requestedEvents, task, scheduler, second, ref registrations);
+        if (registrations == null || registrations.Count == 0)
+            return null;
+        if (registrations.Count == 1)
+            return registrations[0];
+        return new CompositeWaitRegistration(registrations);
+    }
+
+    private static void TryRegisterHandleOnNextSignal(Action callback, short requestedEvents, FiberTask? task,
+        KernelScheduler? scheduler, in QueueReadinessWatch watch, ref List<IDisposable>? registrations)
+    {
+        if (!watch.ShouldObserve(requestedEvents) || watch.Queue == null)
+            return;
+
+        if (!watch.IsReady)
+            watch.ResetIfStale();
+
+        var registration = task != null
+            ? watch.Queue.RegisterCancelableOnNextSignal(callback, task)
+            : watch.Queue.RegisterCancelableOnNextSignal(callback,
+                scheduler ?? throw new InvalidOperationException("Scheduler is required for wait registration."));
+        if (registration == null)
+            return;
+
+        registrations ??= [];
+        registrations.Add(registration);
     }
 
     private sealed class CompositeWaitRegistration : IDisposable
@@ -1506,6 +1557,15 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     public virtual IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
     {
         return RegisterWait(linuxFile, callback, events) ? NoopWaitRegistration.Instance : null;
+    }
+
+    /// <summary>
+    ///     Register a callback for the next readiness transition without immediately replaying the
+    ///     current ready state. This is used by edge-triggered epoll watches after a delivered event.
+    /// </summary>
+    public virtual IDisposable? RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        return RegisterWaitHandle(linuxFile, callback, events);
     }
 
 

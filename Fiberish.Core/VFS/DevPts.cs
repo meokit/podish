@@ -10,7 +10,7 @@ namespace Fiberish.VFS;
 /// <summary>
 ///     Inode for a PTY slave device in devpts (/dev/pts/N).
 /// </summary>
-public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
+public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatcherEdgeWaitSource
 {
     private readonly ILogger _logger;
 
@@ -48,6 +48,22 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
             var readWatch = new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.IsReadReady,
                 PtyPair.Slave.DataAvailable, PtyPair.Slave.DataAvailable.Reset);
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch);
+        }
+
+        return null;
+    }
+
+    IDisposable? IDispatcherEdgeWaitSource.RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile,
+        IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException("PTY slave wait requires an explicit scheduler.");
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) != 0)
+        {
+            var readWatch = new QueueReadinessWatch(POLLIN, () => PtyPair.Slave.IsReadReady,
+                PtyPair.Slave.DataAvailable, PtyPair.Slave.DataAvailable.Reset);
+            return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, scheduler, events, readWatch);
         }
 
         return null;
@@ -161,7 +177,7 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource
 /// <summary>
 ///     Inode for the PTY master multiplexer (/dev/ptmx).
 /// </summary>
-public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
+public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatcherEdgeWaitSource
 {
     private readonly ISignalBroadcaster _broadcaster;
     private readonly ILogger _logger;
@@ -201,6 +217,26 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource
                 new QueueReadinessWatch(POLLIN, () => pair.Master.HasDataAvailable, pair.Master.DataAvailable,
                     pair.Master.DataAvailable.Reset);
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch);
+        }
+
+        return null;
+    }
+
+    IDisposable? IDispatcherEdgeWaitSource.RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile,
+        IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        if (linuxFile.PrivateData is not PtyPair pair)
+            return null;
+
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException("PTY master wait requires an explicit scheduler.");
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) != 0)
+        {
+            var readWatch =
+                new QueueReadinessWatch(POLLIN, () => pair.Master.HasDataAvailable, pair.Master.DataAvailable,
+                    pair.Master.DataAvailable.Reset);
+            return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, scheduler, events, readWatch);
         }
 
         return null;

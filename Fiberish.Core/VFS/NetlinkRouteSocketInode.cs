@@ -8,10 +8,12 @@ using Fiberish.Syscalls;
 
 namespace Fiberish.VFS;
 
-public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource
+public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource,
+    IDispatcherEdgeWaitSource
 {
     private readonly AsyncWaitQueue _readWaitQueue;
     private readonly Queue<byte[]> _responses = new();
+    private readonly KernelScheduler _scheduler;
     private readonly Func<NetDeviceSetSnapshot> _snapshotProvider;
 
     public NetlinkRouteSocketInode(ulong ino, SuperBlock sb, KernelScheduler scheduler,
@@ -21,6 +23,7 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
         SuperBlock = sb;
         Type = InodeType.Socket;
         Mode = 0x1ED;
+        _scheduler = scheduler;
         _readWaitQueue = new AsyncWaitQueue(scheduler);
         _snapshotProvider = snapshotProvider;
     }
@@ -44,6 +47,22 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
             var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, () => _responses.Count > 0, _readWaitQueue,
                 _readWaitQueue.Reset);
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch);
+        }
+    }
+
+    IDisposable? IDispatcherEdgeWaitSource.RegisterEdgeTriggeredWaitHandle(LinuxFile file,
+        IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        if ((events & PollEvents.POLLIN) == 0)
+            return null;
+        var scheduler = dispatcher.Scheduler
+                        ?? throw new InvalidOperationException(
+                            "Netlink readiness wait requires an explicit scheduler.");
+        using (EnterStateScope())
+        {
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, () => _responses.Count > 0, _readWaitQueue,
+                _readWaitQueue.Reset);
+            return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, scheduler, events, readWatch);
         }
     }
 
@@ -156,6 +175,18 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
     public override IDisposable? RegisterWaitHandle(LinuxFile file, Action callback, short events)
     {
         return null;
+    }
+
+    public override IDisposable? RegisterEdgeTriggeredWaitHandle(LinuxFile file, Action callback, short events)
+    {
+        if ((events & PollEvents.POLLIN) == 0)
+            return null;
+        using (EnterStateScope())
+        {
+            var readWatch = new QueueReadinessWatch(PollEvents.POLLIN, () => _responses.Count > 0, _readWaitQueue,
+                _readWaitQueue.Reset);
+            return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, _scheduler, events, readWatch);
+        }
     }
 
     private static void BuildLinkDump(NetDeviceSetSnapshot snapshot, uint seq, List<byte[]> responses)

@@ -580,6 +580,56 @@ public class WaitSyscallTests
     }
 
     [Fact]
+    public async Task EpollPwait2_TtyEdgeTriggeredRead_RearmsAfterRead()
+    {
+        using var env = new TestEnv();
+        const uint eventsPtr = 0x1C000;
+        const uint epollEventPtr = 0x1D000;
+        const uint readBufPtr = 0x1E000;
+        env.MapUserPage(eventsPtr);
+        env.MapUserPage(epollEventPtr);
+        env.MapUserPage(readBufPtr);
+
+        var epfd = await Invoke(env, "SysEpollCreate1", 0, 0, 0, 0, 0, 0);
+        Assert.True(epfd >= 0);
+
+        var (fd, tty) = CreateTty(env, 1, 0);
+
+        var epollEvent = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(epollEvent.AsSpan(0, 4),
+            LinuxConstants.EPOLLIN | LinuxConstants.EPOLLET);
+        BinaryPrimitives.WriteUInt64LittleEndian(epollEvent.AsSpan(4, 8), 0x8877665544332211UL);
+        env.Write(epollEventPtr, epollEvent);
+
+        Assert.Equal(0, await Invoke(env, "SysEpollCtl", (uint)epfd, LinuxConstants.EPOLL_CTL_ADD, (uint)fd,
+            epollEventPtr, 0, 0));
+
+        var firstWait = env.StartOnScheduler(() => env.Invoke("SysEpollPwait2", (uint)epfd, eventsPtr, 1, 0, 0, 0));
+        Assert.False(firstWait.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.InvokeOnSchedulerAsync(() => tty.Input([(byte)'a']));
+
+        Assert.Equal(1, await firstWait.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(LinuxConstants.EPOLLIN,
+            BinaryPrimitives.ReadUInt32LittleEndian(env.Read(eventsPtr, 12).AsSpan(0, 4)));
+        Assert.Equal(1, await Invoke(env, "SysRead", (uint)fd, readBufPtr, 1, 0, 0, 0));
+        Assert.Equal((byte)'a', env.Read(readBufPtr, 1)[0]);
+
+        var secondWait = env.StartOnScheduler(() => env.Invoke("SysEpollPwait2", (uint)epfd, eventsPtr, 1, 0, 0, 0));
+        Assert.False(secondWait.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.InvokeOnSchedulerAsync(() => tty.Input([(byte)'b']));
+
+        Assert.Equal(1, await secondWait.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(LinuxConstants.EPOLLIN,
+            BinaryPrimitives.ReadUInt32LittleEndian(env.Read(eventsPtr, 12).AsSpan(0, 4)));
+        Assert.Equal(1, await Invoke(env, "SysRead", (uint)fd, readBufPtr, 1, 0, 0, 0));
+        Assert.Equal((byte)'b', env.Read(readBufPtr, 1)[0]);
+    }
+
+    [Fact]
     public async Task EpollCtl_EpollWakeup_IsAcceptedAsNoOpHint()
     {
         using var env = new TestEnv();

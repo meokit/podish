@@ -8,7 +8,7 @@ using WaitHandle = Fiberish.Core.AsyncWaitQueue;
 
 namespace Fiberish.Syscalls;
 
-public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource
+public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, IDispatcherEdgeWaitSource
 {
     private const ulong MaxCounter = ulong.MaxValue - 1;
     private readonly bool _isSemaphore;
@@ -50,6 +50,16 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource
                         ?? throw new InvalidOperationException("Eventfd readiness wait requires an explicit scheduler.");
         EnsureWaitQueues(scheduler);
         return RegisterWaitHandleCore(callback, scheduler, null, events);
+    }
+
+    IDisposable? IDispatcherEdgeWaitSource.RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile,
+        IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        var scheduler = dispatcher.Scheduler;
+        if (scheduler == null)
+            return null;
+        EnsureWaitQueues(scheduler);
+        return RegisterEdgeTriggeredWaitHandleCore(callback, scheduler, null, events);
     }
 
     bool ITaskWaitSource.RegisterWait(LinuxFile linuxFile, FiberTask task, Action callback, short events)
@@ -180,6 +190,22 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource
         }
     }
 
+    public override IDisposable? RegisterEdgeTriggeredWaitHandle(LinuxFile file, Action callback, short events)
+    {
+        using (EnterStateScope())
+        {
+            if (_lifecycleClosed || _waitQueues == null || _readHandle == null || _writeHandle == null)
+                return null;
+
+            var readWatch = new QueueReadinessWatch(LinuxConstants.POLLIN, () => _counter > 0, _readHandle,
+                _readHandle.Reset);
+            var writeWatch = new QueueReadinessWatch(LinuxConstants.POLLOUT, () => _counter < MaxCounter, _writeHandle,
+                _writeHandle.Reset);
+            return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, _waitQueues.Scheduler, events,
+                readWatch, writeWatch);
+        }
+    }
+
     public override async ValueTask<AwaitResult> WaitForRead(LinuxFile file, FiberTask task)
     {
         EnsureWaitQueues(task.CommonKernel);
@@ -282,6 +308,28 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource
                 return QueueReadinessRegistration.RegisterHandle(callback, task, events, readWatch, writeWatch);
 
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler!, events, readWatch, writeWatch);
+        }
+    }
+
+    private IDisposable? RegisterEdgeTriggeredWaitHandleCore(Action callback, KernelScheduler? scheduler, FiberTask? task,
+        short events)
+    {
+        using (EnterStateScope())
+        {
+            if (_lifecycleClosed || _waitQueues == null || _readHandle == null || _writeHandle == null)
+                return null;
+
+            var readWatch = new QueueReadinessWatch(LinuxConstants.POLLIN, () => _counter > 0, _readHandle,
+                _readHandle.Reset);
+            var writeWatch = new QueueReadinessWatch(LinuxConstants.POLLOUT, () => _counter < MaxCounter, _writeHandle,
+                _writeHandle.Reset);
+
+            if (task != null)
+                return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, task, events, readWatch,
+                    writeWatch);
+
+            return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, scheduler!, events, readWatch,
+                writeWatch);
         }
     }
 
@@ -458,6 +506,19 @@ public class TimerFdInode : TmpfsInode
                 callback();
                 return NoopWaitRegistration.Instance;
             }
+
+            _waiters.Add(callback);
+        }
+
+        return new CallbackRegistration(this, _waiters, callback);
+    }
+
+    public override IDisposable? RegisterEdgeTriggeredWaitHandle(LinuxFile file, Action callback, short events)
+    {
+        lock (_lock)
+        {
+            if ((events & LinuxConstants.POLLIN) == 0)
+                return null;
 
             _waiters.Add(callback);
         }

@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Fiberish.VFS;
 
-public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpointOps, ISocketDataOps,
+public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherEdgeWaitSource, ISocketEndpointOps, ISocketDataOps,
     ISocketUserBufferOps, ISocketOptionOps
 {
     private static readonly ILogger Logger = Logging.CreateLogger<HostSocketInode>();
@@ -68,6 +68,15 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, ISocketEndpo
     IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher,
         Action callback, short events)
     {
+        return RegisterWaitHandle(linuxFile, dispatcher, callback, events);
+    }
+
+    IDisposable? IDispatcherEdgeWaitSource.RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile,
+        IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        // Host socket probes already wait for the next readiness notification instead of
+        // synchronously replaying the current Poll() snapshot, so the normal dispatcher path
+        // matches epoll ET rearm semantics.
         return RegisterWaitHandle(linuxFile, dispatcher, callback, events);
     }
 

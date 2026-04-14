@@ -11,16 +11,19 @@ internal sealed class EpollItem
 {
     public ulong Data;
     public IReadyDispatcher? Dispatcher;
+    public bool IsDeferredEdgeRearmQueued;
     public uint Events;
     public int Fd;
     public LinuxFile File = null!;
     public bool IsReady;
+    public bool NeedsEdgeRearm;
     public IDisposable? WaitRegistration;
 }
 
 public class EpollInode : TmpfsInode
 {
     private const int EpollEventSize = 12;
+    private readonly Queue<EpollItem> _deferredEdgeRearms = new();
     private readonly List<EpollItem> _readyList = new();
     private readonly AsyncWaitQueue _waitQueue;
     private readonly Dictionary<LinuxFile, EpollItem> _watches = new();
@@ -51,7 +54,10 @@ public class EpollInode : TmpfsInode
         {
             if (!_watches.ContainsKey(targetFile)) return -(int)Errno.ENOENT;
             if (_watches.TryGetValue(targetFile, out var oldItem))
+            {
+                oldItem.NeedsEdgeRearm = false;
                 oldItem.WaitRegistration?.Dispose();
+            }
             _watches.Remove(targetFile);
             _readyList.RemoveAll(x => x.File == targetFile);
             if (_readyList.Count == 0)
@@ -63,6 +69,7 @@ public class EpollInode : TmpfsInode
             item.Events = events;
             item.Data = data;
             item.Dispatcher = dispatcher;
+            item.NeedsEdgeRearm = false;
             item.WaitRegistration?.Dispose();
             item.WaitRegistration = null;
 
@@ -101,6 +108,14 @@ public class EpollInode : TmpfsInode
         var mask = (short)(watchEvents | LinuxConstants.EPOLLERR |
                            LinuxConstants.EPOLLHUP);
 
+        if (item.NeedsEdgeRearm)
+        {
+            if ((currentEvents & mask) != 0)
+                return;
+
+            item.NeedsEdgeRearm = false;
+        }
+
         if ((currentEvents & mask) != 0)
         {
             if (!item.IsReady)
@@ -120,7 +135,7 @@ public class EpollInode : TmpfsInode
         void RePoll()
         {
             AssertSchedulerThread();
-            if (_watches.ContainsValue(item))
+            if (IsWatchRegistered(item))
                 CheckAndRegister(item);
         }
 
@@ -132,10 +147,98 @@ public class EpollInode : TmpfsInode
             item.WaitRegistration = item.File.OpenedInode.RegisterWaitHandle(item.File, RePoll, watchEvents);
     }
 
+    private void RefreshDeferredEdgeRearms()
+    {
+        AssertSchedulerThread();
+        var pendingCount = _deferredEdgeRearms.Count;
+        for (var i = 0; i < pendingCount; i++)
+        {
+            var item = _deferredEdgeRearms.Dequeue();
+            item.IsDeferredEdgeRearmQueued = false;
+
+            if (!item.NeedsEdgeRearm || item.IsReady || item.WaitRegistration != null)
+                continue;
+
+            if (!IsWatchRegistered(item))
+                continue;
+
+            if ((item.Events & 0xFFFF) == 0)
+            {
+                item.NeedsEdgeRearm = false;
+                continue;
+            }
+
+            CheckAndRegister(item);
+            if (item.NeedsEdgeRearm)
+                EnqueueDeferredEdgeRearm(item);
+        }
+    }
+
+    private void RearmEdgeTriggeredItem(EpollItem item)
+    {
+        AssertSchedulerThread();
+        item.WaitRegistration?.Dispose();
+        item.WaitRegistration = null;
+        item.NeedsEdgeRearm = false;
+
+        var watchEvents = (short)(item.Events & 0xFFFF);
+        if (watchEvents == 0)
+            return;
+
+        var openedInode = item.File.OpenedInode
+                          ?? throw new InvalidOperationException("Epoll watch target inode is unavailable.");
+
+        if (openedInode is IDispatcherEdgeWaitSource edgeWaitSource)
+        {
+            var dispatcher = item.Dispatcher
+                             ?? throw new InvalidOperationException(
+                                 "Epoll edge-triggered watch requires dispatcher.");
+            item.WaitRegistration = edgeWaitSource.RegisterEdgeTriggeredWaitHandle(item.File,
+                dispatcher,
+                RePollForEdge, watchEvents);
+            if (item.WaitRegistration != null)
+                return;
+        }
+        else
+        {
+            item.WaitRegistration = openedInode.RegisterEdgeTriggeredWaitHandle(item.File, RePollForEdge, watchEvents);
+            if (item.WaitRegistration != null)
+                return;
+        }
+
+        item.NeedsEdgeRearm = true;
+        EnqueueDeferredEdgeRearm(item);
+        return;
+
+        void RePollForEdge()
+        {
+            AssertSchedulerThread();
+            if (!IsWatchRegistered(item))
+                return;
+
+            CheckAndRegister(item);
+        }
+    }
+
+    private bool IsWatchRegistered(EpollItem item)
+    {
+        return _watches.TryGetValue(item.File, out var current) && ReferenceEquals(current, item);
+    }
+
+    private void EnqueueDeferredEdgeRearm(EpollItem item)
+    {
+        if (item.IsDeferredEdgeRearmQueued)
+            return;
+
+        item.IsDeferredEdgeRearmQueued = true;
+        _deferredEdgeRearms.Enqueue(item);
+    }
+
 
     public int TryHarvestNow(Span<byte> eventsBuffer, int maxEvents)
     {
         AssertSchedulerThread();
+        RefreshDeferredEdgeRearms();
         if (_readyList.Count > 0)
             return HarvestEvents(eventsBuffer, maxEvents);
         return 0;
@@ -153,13 +256,12 @@ public class EpollInode : TmpfsInode
         var count = Math.Min(_readyList.Count, maxEvents);
         EpollItem[]? reEvalItems = null;
         var reEvalCount = 0;
+        EpollItem[]? edgeRearmItems = null;
+        var edgeRearmCount = 0;
 
         var harvested = 0;
         try
         {
-            if (count > 0)
-                reEvalItems = ArrayPool<EpollItem>.Shared.Rent(count);
-
             for (var i = 0; i < count; i++)
             {
                 var item = _readyList[i];
@@ -176,8 +278,8 @@ public class EpollInode : TmpfsInode
                 {
                     // False alarm or event cleared before we harvested
                     item.IsReady = false;
-                    if ((item.Events & LinuxConstants.EPOLLONESHOT) == 0)
-                        reEvalItems![reEvalCount++] = item;
+                    if ((item.Events & 0xFFFF) != 0)
+                        AddScratchItem(ref reEvalItems, ref reEvalCount, count, item);
                     continue;
                 }
 
@@ -191,10 +293,12 @@ public class EpollInode : TmpfsInode
                 if ((item.Events & LinuxConstants.EPOLLONESHOT) != 0)
                     // Oneshot means it's disabled after triggering
                     item.Events &= ~(uint)0xFFFF; // Clear watch events, keep data
+                else if ((item.Events & LinuxConstants.EPOLLET) != 0)
+                    AddScratchItem(ref edgeRearmItems, ref edgeRearmCount, count, item);
                 else if ((item.Events & LinuxConstants.EPOLLET) == 0)
                     // Level-triggered: it should keep firing if data is still available.
                     // We'll re-evaluate it immediately after slicing the read queue.
-                    reEvalItems![reEvalCount++] = item;
+                    AddScratchItem(ref reEvalItems, ref reEvalCount, count, item);
             }
 
             _readyList.RemoveRange(0, count);
@@ -203,8 +307,15 @@ public class EpollInode : TmpfsInode
             for (var i = 0; i < reEvalCount; i++)
             {
                 var item = reEvalItems![i];
-                if (_watches.ContainsValue(item))
+                if (IsWatchRegistered(item))
                     CheckAndRegister(item);
+            }
+
+            for (var i = 0; i < edgeRearmCount; i++)
+            {
+                var item = edgeRearmItems![i];
+                if (IsWatchRegistered(item))
+                    RearmEdgeTriggeredItem(item);
             }
 
             if (_readyList.Count == 0)
@@ -215,7 +326,21 @@ public class EpollInode : TmpfsInode
         finally
         {
             if (reEvalItems != null)
-                ArrayPool<EpollItem>.Shared.Return(reEvalItems, clearArray: true);
+            {
+                Array.Clear(reEvalItems, 0, reEvalCount);
+                ArrayPool<EpollItem>.Shared.Return(reEvalItems, clearArray: false);
+            }
+            if (edgeRearmItems != null)
+            {
+                Array.Clear(edgeRearmItems, 0, edgeRearmCount);
+                ArrayPool<EpollItem>.Shared.Return(edgeRearmItems, clearArray: false);
+            }
+        }
+
+        static void AddScratchItem(ref EpollItem[]? items, ref int itemCount, int capacity, EpollItem item)
+        {
+            items ??= ArrayPool<EpollItem>.Shared.Rent(capacity);
+            items[itemCount++] = item;
         }
     }
 
@@ -351,6 +476,8 @@ public class EpollInode : TmpfsInode
             if (_completed) return;
             _queueWaitRegistration?.Dispose();
             _queueWaitRegistration = null;
+
+            _inode.RefreshDeferredEdgeRearms();
 
             if (_task.HasInterruptingPendingSignal())
             {
