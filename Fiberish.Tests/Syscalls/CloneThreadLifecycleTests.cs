@@ -12,6 +12,30 @@ namespace Fiberish.Tests.Syscalls;
 
 public class CloneThreadLifecycleTests
 {
+    private const int AllocationWarmupIterations = 16;
+    private const int AllocationMeasureIterations = 256;
+
+    private delegate ValueTask<int> SyscallInvoker(SyscallManager manager, Engine engine, uint a1, uint a2, uint a3,
+        uint a4, uint a5, uint a6);
+
+    private delegate bool ResolveFutexKeyInvoker(SyscallManager manager, Engine engine, uint uaddr, bool fshared,
+        out FutexKey key, out int error);
+
+    private static readonly SyscallInvoker SysFutexMethod =
+        (SyscallInvoker)typeof(SyscallManager)
+            .GetMethod("SysFutex", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .CreateDelegate(typeof(SyscallInvoker));
+
+    private static readonly ResolveFutexKeyInvoker ResolveFutexKeyMethod =
+        (ResolveFutexKeyInvoker)typeof(SyscallManager)
+            .GetMethod("TryResolveFutexKey",
+                BindingFlags.NonPublic | BindingFlags.Instance,
+                null,
+                [typeof(Engine), typeof(uint), typeof(bool), typeof(FutexKey).MakeByRefType(),
+                    typeof(int).MakeByRefType()],
+                null)!
+            .CreateDelegate(typeof(ResolveFutexKeyInvoker));
+
     [Fact]
     public async Task SysClone_UsesX86RawOrder_TlsFromA4_CtidFromA5()
     {
@@ -159,7 +183,7 @@ public class CloneThreadLifecycleTests
         var valueBuf = new byte[4];
         Assert.True(env.Engine.CopyFromUser(clearTidPtr, valueBuf));
         Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(valueBuf));
-        Assert.True(privateWaiter.Tcs.Task.IsCompleted);
+        Assert.True(privateWaiter.IsCompleted);
         GC.KeepAlive(sibling);
     }
 
@@ -179,8 +203,8 @@ public class CloneThreadLifecycleTests
         registration.Cancel();
 
         Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(key));
-        Assert.True(waiter.Tcs.Task.IsCompleted);
-        Assert.False(waiter.Tcs.Task.Result);
+        Assert.True(waiter.IsCompleted);
+        Assert.False(waiter.Result);
     }
 
     [Fact]
@@ -234,7 +258,7 @@ public class CloneThreadLifecycleTests
 
         env.Task.ExitRobustList();
 
-        Assert.True(waiter.Tcs.Task.IsCompleted);
+        Assert.True(waiter.IsCompleted);
 
         var valueBuf = new byte[4];
         Assert.True(env.Engine.CopyFromUser(futexAddr, valueBuf));
@@ -259,10 +283,10 @@ public class CloneThreadLifecycleTests
 
         var waiter = env.SyscallManager.Futex.PrepareWait(parentKey);
         Assert.Equal(0, env.SyscallManager.Futex.Wake(childKey, 1));
-        Assert.False(waiter.Tcs.Task.IsCompleted);
+        Assert.False(waiter.IsCompleted);
 
         Assert.Equal(1, env.SyscallManager.Futex.Wake(parentKey, 1));
-        Assert.True(waiter.Tcs.Task.IsCompleted);
+        Assert.True(waiter.IsCompleted);
     }
 
     [Fact]
@@ -285,14 +309,14 @@ public class CloneThreadLifecycleTests
         Assert.Equal(1, rc);
         Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(sourceKey));
         Assert.Equal(1, env.SyscallManager.Futex.GetWaiterCount(targetKey));
-        Assert.False(waiter.Tcs.Task.IsCompleted);
+        Assert.False(waiter.IsCompleted);
 
         registration.Cancel();
 
         Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(sourceKey));
         Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(targetKey));
-        Assert.True(waiter.Tcs.Task.IsCompleted);
-        Assert.False(waiter.Tcs.Task.Result);
+        Assert.True(waiter.IsCompleted);
+        Assert.False(waiter.Result);
     }
 
     [Fact]
@@ -315,10 +339,10 @@ public class CloneThreadLifecycleTests
         Assert.Equal(-(int)Errno.EAGAIN, rc);
         Assert.Equal(1, env.SyscallManager.Futex.GetWaiterCount(sourceKey));
         Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(targetKey));
-        Assert.False(waiter.Tcs.Task.IsCompleted);
+        Assert.False(waiter.IsCompleted);
 
         Assert.Equal(1, env.SyscallManager.Futex.Wake(sourceKey, 1));
-        Assert.True(waiter.Tcs.Task.IsCompleted);
+        Assert.True(waiter.IsCompleted);
     }
 
     [Fact]
@@ -368,9 +392,59 @@ public class CloneThreadLifecycleTests
             LinuxConstants.FUTEX_WAKE_BITSET | LinuxConstants.FUTEX_PRIVATE_FLAG, 2, 0, 0, 0b0001);
 
         Assert.Equal(1, rc);
-        Assert.True(waiterA.Tcs.Task.IsCompleted);
-        Assert.False(waiterB.Tcs.Task.IsCompleted);
+        Assert.True(waiterA.IsCompleted);
+        Assert.False(waiterB.IsCompleted);
         Assert.Equal(1, env.SyscallManager.Futex.GetWaiterCount(key));
+    }
+
+    [Fact]
+    public void FutexWake_WakesWaitersInFifoOrder()
+    {
+        using var env = new TestEnv(26901, 26901);
+        const uint futexAddr = 0x0064A000;
+        env.MapUserPage(futexAddr);
+
+        var key = ResolvePrivateKey(env.Vma, futexAddr);
+        var waiterA = env.SyscallManager.Futex.PrepareWait(key);
+        var waiterB = env.SyscallManager.Futex.PrepareWait(key);
+        var waiterC = env.SyscallManager.Futex.PrepareWait(key);
+
+        Assert.Equal(1, env.SyscallManager.Futex.Wake(key, 1));
+        Assert.True(waiterA.IsCompleted);
+        Assert.False(waiterB.IsCompleted);
+        Assert.False(waiterC.IsCompleted);
+
+        Assert.Equal(1, env.SyscallManager.Futex.Wake(key, 1));
+        Assert.True(waiterB.IsCompleted);
+        Assert.False(waiterC.IsCompleted);
+
+        Assert.Equal(1, env.SyscallManager.Futex.Wake(key, 1));
+        Assert.True(waiterC.IsCompleted);
+    }
+
+    [Fact]
+    public void FutexWakeBitset_UnmatchedWaitersKeepRelativeOrder()
+    {
+        using var env = new TestEnv(26902, 26902);
+        const uint futexAddr = 0x0064B000;
+        env.MapUserPage(futexAddr);
+
+        var key = ResolvePrivateKey(env.Vma, futexAddr);
+        var waiterA = env.SyscallManager.Futex.PrepareWait(key, 0b0010);
+        var waiterB = env.SyscallManager.Futex.PrepareWait(key, 0b0001);
+        var waiterC = env.SyscallManager.Futex.PrepareWait(key, 0b0010);
+
+        Assert.Equal(1, env.SyscallManager.Futex.Wake(key, 1, 0b0001));
+        Assert.False(waiterA.IsCompleted);
+        Assert.True(waiterB.IsCompleted);
+        Assert.False(waiterC.IsCompleted);
+
+        Assert.Equal(1, env.SyscallManager.Futex.Wake(key, 1, 0b0010));
+        Assert.True(waiterA.IsCompleted);
+        Assert.False(waiterC.IsCompleted);
+
+        Assert.Equal(1, env.SyscallManager.Futex.Wake(key, 1, 0b0010));
+        Assert.True(waiterC.IsCompleted);
     }
 
     [Fact]
@@ -393,8 +467,8 @@ public class CloneThreadLifecycleTests
             EncodeWakeOp(LinuxConstants.FUTEX_OP_ADD, 1, LinuxConstants.FUTEX_OP_CMP_EQ, 0));
 
         Assert.Equal(2, rc);
-        Assert.True(sourceWaiter.Tcs.Task.IsCompleted);
-        Assert.True(targetWaiter.Tcs.Task.IsCompleted);
+        Assert.True(sourceWaiter.IsCompleted);
+        Assert.True(targetWaiter.IsCompleted);
 
         var valueBuf = new byte[4];
         Assert.True(env.Engine.CopyFromUser(targetAddr, valueBuf));
@@ -425,6 +499,28 @@ public class CloneThreadLifecycleTests
             LinuxConstants.FUTEX_WAKE | LinuxConstants.FUTEX_PRIVATE_FLAG, 1);
 
         Assert.Equal(-(int)Errno.EINVAL, rc);
+    }
+
+    [Fact]
+    public void FutexLockPi_WithQueuedWaiters_KeepsWaitersBitSet()
+    {
+        using var env = new TestEnv(2696, 2696);
+        const uint futexAddr = 0x0064C000;
+        env.MapUserPage(futexAddr);
+        Assert.True(env.Engine.CopyToUser(futexAddr, BitConverter.GetBytes(0u)));
+
+        var key = ResolvePrivateKey(env.Vma, futexAddr);
+        var waiter = env.SyscallManager.Futex.PrepareWait(key);
+
+        var lockRc = InvokeSysFutex(env, futexAddr, LinuxConstants.FUTEX_LOCK_PI | LinuxConstants.FUTEX_PRIVATE_FLAG, 0);
+        Assert.Equal(0, lockRc);
+        Assert.Equal((uint)env.Task.TID | LinuxConstants.FUTEX_WAITERS, ReadUserUInt32(env.Engine, futexAddr));
+
+        var unlockRc = InvokeSysFutex(env, futexAddr,
+            LinuxConstants.FUTEX_UNLOCK_PI | LinuxConstants.FUTEX_PRIVATE_FLAG, 0);
+        Assert.Equal(0, unlockRc);
+        Assert.Equal(LinuxConstants.FUTEX_WAITERS, ReadUserUInt32(env.Engine, futexAddr));
+        Assert.True(waiter.IsCompleted);
     }
 
     [Fact]
@@ -487,7 +583,7 @@ public class CloneThreadLifecycleTests
 
         var waiter = env.SyscallManager.Futex.PrepareWait(parentKey);
         Assert.Equal(1, env.SyscallManager.Futex.Wake(childKey, 1));
-        Assert.True(waiter.Tcs.Task.IsCompleted);
+        Assert.True(waiter.IsCompleted);
 
         file2.Close();
     }
@@ -547,6 +643,134 @@ public class CloneThreadLifecycleTests
 
         Assert.Equal(0, error);
         Assert.Equal(ResolveSharedKey(env.Vma, futexAddr), resolved);
+    }
+
+    [Fact]
+    public void FutexManagerWake_HotPath_DoesNotAllocate()
+    {
+        using var env = new TestEnv(278, 278);
+        const uint futexAddr = 0x00643000;
+        env.MapUserPage(futexAddr);
+
+        var key = ResolvePrivateKey(env.Vma, futexAddr);
+        var total = AllocationWarmupIterations + AllocationMeasureIterations;
+        var waiters = new Waiter[total];
+        for (var i = 0; i < total; i++)
+            waiters[i] = env.SyscallManager.Futex.PrepareWait(key);
+
+        var index = 0;
+        AssertNoAllocation(() =>
+        {
+            if (env.SyscallManager.Futex.Wake(key, 1) != 1)
+                throw new InvalidOperationException();
+            if (!waiters[index].IsCompleted)
+                throw new InvalidOperationException();
+            index++;
+        });
+
+        Assert.Equal(total, index);
+        Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(key));
+    }
+
+    [Fact]
+    public void FutexManagerRequeue_HotPath_DoesNotAllocate()
+    {
+        using var env = new TestEnv(279, 279);
+        const uint sourceAddr = 0x00644000;
+        const uint targetAddr = 0x00645000;
+        env.MapUserPage(sourceAddr);
+        env.MapUserPage(targetAddr);
+
+        var sourceKey = ResolvePrivateKey(env.Vma, sourceAddr);
+        var targetKey = ResolvePrivateKey(env.Vma, targetAddr);
+        var total = AllocationWarmupIterations + AllocationMeasureIterations;
+
+        _ = env.SyscallManager.Futex.PrepareWait(targetKey);
+        for (var i = 0; i < total; i++)
+            _ = env.SyscallManager.Futex.PrepareWait(sourceKey);
+
+        AssertNoAllocation(() =>
+        {
+            if (env.SyscallManager.Futex.Requeue(sourceKey, targetKey, 1) != 1)
+                throw new InvalidOperationException();
+        });
+
+        Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(sourceKey));
+        Assert.Equal(total + 1, env.SyscallManager.Futex.GetWaiterCount(targetKey));
+    }
+
+    [Fact]
+    public void FutexManagerCancelWait_HotPath_DoesNotAllocate()
+    {
+        using var env = new TestEnv(280, 280);
+        const uint futexAddr = 0x00646000;
+        env.MapUserPage(futexAddr);
+
+        var key = ResolvePrivateKey(env.Vma, futexAddr);
+        var total = AllocationWarmupIterations + AllocationMeasureIterations;
+        var waiters = new Waiter[total];
+        for (var i = 0; i < total; i++)
+            waiters[i] = env.SyscallManager.Futex.PrepareWait(key);
+
+        var index = 0;
+        AssertNoAllocation(() =>
+        {
+            env.SyscallManager.Futex.CancelWait(key, waiters[index]);
+            index++;
+        });
+
+        Assert.Equal(total, index);
+        Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(key));
+        foreach (var waiter in waiters)
+        {
+            Assert.True(waiter.IsCompleted);
+            Assert.False(waiter.Result);
+        }
+    }
+
+    [Fact]
+    public void SysFutexWait_EagainFastPath_DoesNotAllocate()
+    {
+        using var env = new TestEnv(281, 281);
+        const uint futexAddr = 0x00647000;
+        env.MapUserPage(futexAddr);
+        Assert.True(env.Engine.CopyToUser(futexAddr, BitConverter.GetBytes(1u)));
+
+        AssertNoAllocation(() =>
+        {
+            var rc = InvokeSysFutex(env, futexAddr, LinuxConstants.FUTEX_WAIT | LinuxConstants.FUTEX_PRIVATE_FLAG, 0);
+            if (rc != -(int)Errno.EAGAIN)
+                throw new InvalidOperationException();
+        });
+    }
+
+    [Fact]
+    public void SysFutexWake_HotPath_DoesNotAllocate()
+    {
+        using var env = new TestEnv(282, 282);
+        const uint futexAddr = 0x00648000;
+        env.MapUserPage(futexAddr);
+
+        var key = ResolvePrivateKey(env.Vma, futexAddr);
+        var total = AllocationWarmupIterations + AllocationMeasureIterations;
+        var waiters = new Waiter[total];
+        for (var i = 0; i < total; i++)
+            waiters[i] = env.SyscallManager.Futex.PrepareWait(key);
+
+        var index = 0;
+        AssertNoAllocation(() =>
+        {
+            var rc = InvokeSysFutex(env, futexAddr, LinuxConstants.FUTEX_WAKE | LinuxConstants.FUTEX_PRIVATE_FLAG,
+                1);
+            if (rc != 1)
+                throw new InvalidOperationException();
+            if (!waiters[index].IsCompleted)
+                throw new InvalidOperationException();
+            index++;
+        });
+
+        Assert.Equal(total, index);
+        Assert.Equal(0, env.SyscallManager.Futex.GetWaiterCount(key));
     }
 
     [Fact]
@@ -698,20 +922,44 @@ public class CloneThreadLifecycleTests
 
     private static FutexKey ResolveKey(SyscallManager sm, Engine engine, uint uaddr, bool fshared, out int error)
     {
-        var method =
-            typeof(SyscallManager).GetMethod("TryResolveFutexKey", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.NotNull(method);
-
-        var args = new object?[] { engine, uaddr, fshared, null, 0 };
-        var ok = (bool)method!.Invoke(sm, args)!;
+        var ok = ResolveFutexKeyMethod(sm, engine, uaddr, fshared, out var key, out error);
         Assert.True(ok);
-        error = (int)args[4]!;
-        return (FutexKey)args[3]!;
+        return key;
     }
 
     private static uint EncodeWakeOp(int op, int opArg, int cmp, int cmpArg)
     {
         return (uint)(((op & 0xF) << 28) | ((cmp & 0xF) << 24) | ((opArg & 0xFFF) << 12) | (cmpArg & 0xFFF));
+    }
+
+    private static int InvokeSysFutex(TestEnv env, uint a1, uint a2, uint a3 = 0, uint a4 = 0, uint a5 = 0,
+        uint a6 = 0)
+    {
+        return SysFutexMethod(env.SyscallManager, env.Engine, a1, a2, a3, a4, a5, a6).GetAwaiter().GetResult();
+    }
+
+    private static uint ReadUserUInt32(Engine engine, uint addr)
+    {
+        var buf = new byte[4];
+        Assert.True(engine.CopyFromUser(addr, buf));
+        return BinaryPrimitives.ReadUInt32LittleEndian(buf);
+    }
+
+    private static void AssertNoAllocation(Action action)
+    {
+        for (var i = 0; i < AllocationWarmupIterations; i++)
+            action();
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < AllocationMeasureIterations; i++)
+            action();
+        var after = GC.GetAllocatedBytesForCurrentThread();
+
+        Assert.Equal(0, after - before);
     }
 
     private sealed class TestEnv : IDisposable

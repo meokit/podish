@@ -247,15 +247,15 @@ public partial class SyscallManager
         err = 0;
         if (timespecPtr == 0) return true;
 
-        var buf = new byte[8];
+        Span<byte> buf = stackalloc byte[8];
         if (!engine.CopyFromUser(timespecPtr, buf))
         {
             err = -(int)Errno.EFAULT;
             return false;
         }
 
-        var sec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
-        var nsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+        var sec = BinaryPrimitives.ReadInt32LittleEndian(buf[..4]);
+        var nsec = BinaryPrimitives.ReadInt32LittleEndian(buf[4..]);
         return TryConvertTimespecToTimeoutMs(sec, nsec, out timeoutMs, out err);
     }
 
@@ -265,15 +265,15 @@ public partial class SyscallManager
         err = 0;
         if (timespecPtr == 0) return true;
 
-        var buf = new byte[16];
+        Span<byte> buf = stackalloc byte[16];
         if (!engine.CopyFromUser(timespecPtr, buf))
         {
             err = -(int)Errno.EFAULT;
             return false;
         }
 
-        var sec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(0, 8));
-        var nsec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(8, 8));
+        var sec = BinaryPrimitives.ReadInt64LittleEndian(buf[..8]);
+        var nsec = BinaryPrimitives.ReadInt64LittleEndian(buf[8..]);
         return TryConvertTimespecToTimeoutMs(sec, nsec, out timeoutMs, out err);
     }
 

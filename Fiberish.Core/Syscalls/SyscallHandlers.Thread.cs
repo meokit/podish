@@ -129,12 +129,10 @@ public partial class SyscallManager
             if (wakeCount != 1 || requeueCount < 0 || uaddr2 == 0 || uaddr2 == uaddr) return -(int)Errno.EINVAL;
             if (ValidateFutexAddress(uaddr2) != 0) return -(int)Errno.EINVAL;
 
-            var currentBuf = new byte[4];
-            if (!engine.CopyFromUser(uaddr, currentBuf)) return -(int)Errno.EFAULT;
-            var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(currentBuf);
+            if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return -(int)Errno.EFAULT;
             if (currentVal != expected) return -(int)Errno.EAGAIN;
 
-            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var sourceKey, out var sourceError))
+            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, true, out var sourceKey, out var sourceError))
                 return sourceError;
             if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, out var targetKey, out var targetError))
                 return targetError;
@@ -153,12 +151,10 @@ public partial class SyscallManager
             if (ValidateFutexAddress(uaddr2) != 0) return -(int)Errno.EINVAL;
             if (wakeCount < 0 || requeueCount < 0 || uaddr2 == 0) return -(int)Errno.EINVAL;
 
-            var currentBuf = new byte[4];
-            if (!engine.CopyFromUser(uaddr, currentBuf)) return -(int)Errno.EFAULT;
-            var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(currentBuf);
+            if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return -(int)Errno.EFAULT;
             if (currentVal != expected) return -(int)Errno.EAGAIN;
 
-            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var sourceKey, out var sourceError))
+            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, true, out var sourceKey, out var sourceError))
                 return sourceError;
             if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, out var targetKey, out var targetError))
                 return targetError;
@@ -178,18 +174,14 @@ public partial class SyscallManager
 
             if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var sourceKey, out var sourceError))
                 return sourceError;
-            if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, out var targetKey, out var targetError))
+            if (!TryReadUserUInt32(engine, uaddr2, out var oldVal)) return -(int)Errno.EFAULT;
+            if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, true, out var targetKey, out var targetError))
                 return targetError;
-
-            var futexWord = new byte[4];
-            if (!engine.CopyFromUser(uaddr2, futexWord)) return -(int)Errno.EFAULT;
-            var oldVal = BinaryPrimitives.ReadUInt32LittleEndian(futexWord);
 
             if (!TryApplyWakeOp(a6, oldVal, out var newVal, out var wakeSecond, out var wakeOpErr))
                 return wakeOpErr;
 
-            BinaryPrimitives.WriteUInt32LittleEndian(futexWord, newVal);
-            if (!engine.CopyToUser(uaddr2, futexWord)) return -(int)Errno.EFAULT;
+            if (!TryWriteUserUInt32(engine, uaddr2, newVal)) return -(int)Errno.EFAULT;
 
             var woke = Futex.Wake(sourceKey, wakeCount);
             if (wakeSecond)
@@ -203,15 +195,11 @@ public partial class SyscallManager
             var task = engine.Owner as FiberTask;
             if (task == null) return -(int)Errno.EINVAL;
 
-            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var lockKey, out var error))
-                return error;
-
             while (true)
             {
-                var futexWord = new byte[4];
-                if (!engine.CopyFromUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
-
-                var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(futexWord);
+                if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return -(int)Errno.EFAULT;
+                if (!TryResolveFutexKey(engine, uaddr, !isPrivate, true, out var lockKey, out var error))
+                    return error;
                 var owner = currentVal & LinuxConstants.FUTEX_TID_MASK;
                 var hasWaiters = (currentVal & LinuxConstants.FUTEX_WAITERS) != 0;
 
@@ -220,12 +208,12 @@ public partial class SyscallManager
                     var queuedWaiters = Futex.GetWaiterCount(lockKey);
                     var nextVal = (uint)task.TID;
                     if (hasWaiters || queuedWaiters > 0) nextVal |= LinuxConstants.FUTEX_WAITERS;
-                    BinaryPrimitives.WriteUInt32LittleEndian(futexWord, nextVal);
-                    if (!engine.CopyToUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
+                    if (!TryWriteUserUInt32(engine, uaddr, nextVal)) return -(int)Errno.EFAULT;
 
-                    Logger.LogTrace("[SysFutex {Op}] TID={TID} acquired uaddr=0x{Uaddr:x} waiters={Waiters}",
-                        opCode == LinuxConstants.FUTEX_LOCK_PI ? "LOCK_PI" : "TRYLOCK_PI",
-                        task.TID, uaddr, queuedWaiters);
+                    if (Logger.IsEnabled(LogLevel.Trace))
+                        Logger.LogTrace("[SysFutex {Op}] TID={TID} acquired uaddr=0x{Uaddr:x} waiters={Waiters}",
+                            opCode == LinuxConstants.FUTEX_LOCK_PI ? "LOCK_PI" : "TRYLOCK_PI",
+                            task.TID, uaddr, queuedWaiters);
                     return 0;
                 }
 
@@ -234,16 +222,17 @@ public partial class SyscallManager
 
                 if (!hasWaiters)
                 {
-                    BinaryPrimitives.WriteUInt32LittleEndian(futexWord, currentVal | LinuxConstants.FUTEX_WAITERS);
-                    if (!engine.CopyToUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
+                    if (!TryWriteUserUInt32(engine, uaddr, currentVal | LinuxConstants.FUTEX_WAITERS))
+                        return -(int)Errno.EFAULT;
                 }
 
                 var waiter = Futex.PrepareWait(lockKey);
                 var registration = Futex.CreateWaitRegistration(lockKey, waiter);
 
-                Logger.LogTrace(
-                    "[SysFutex LOCK_PI] TID={TID} waiting uaddr=0x{Uaddr:x} owner={Owner} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset}",
-                    task.TID, uaddr, owner, isPrivate, lockKey.Kind, lockKey.PageValue, lockKey.OffsetWithinPage);
+                if (Logger.IsEnabled(LogLevel.Trace))
+                    Logger.LogTrace(
+                        "[SysFutex LOCK_PI] TID={TID} waiting uaddr=0x{Uaddr:x} owner={Owner} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset}",
+                        task.TID, uaddr, owner, isPrivate, lockKey.Kind, lockKey.PageValue, lockKey.OffsetWithinPage);
                 var result = await new FutexAwaitable(waiter, task, registration, null);
                 if (result == FutexWaitOutcome.Interrupted)
                 {
@@ -264,26 +253,23 @@ public partial class SyscallManager
             var task = engine.Owner as FiberTask;
             if (task == null) return -(int)Errno.EINVAL;
 
-            var futexWord = new byte[4];
-            if (!engine.CopyFromUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
-
-            var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(futexWord);
+            if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return -(int)Errno.EFAULT;
             var owner = currentVal & LinuxConstants.FUTEX_TID_MASK;
             if (owner != (uint)task.TID) return -(int)Errno.EPERM;
 
-            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var unlockKey, out var error))
+            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, true, out var unlockKey, out var error))
                 return error;
 
             var queuedWaiters = Futex.GetWaiterCount(unlockKey);
             var nextVal = queuedWaiters > 0 ? LinuxConstants.FUTEX_WAITERS : 0u;
-            BinaryPrimitives.WriteUInt32LittleEndian(futexWord, nextVal);
-            if (!engine.CopyToUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
+            if (!TryWriteUserUInt32(engine, uaddr, nextVal)) return -(int)Errno.EFAULT;
 
             var woke = Futex.Wake(unlockKey, 1);
 
-            Logger.LogTrace(
-                "[SysFutex UNLOCK_PI] TID={TID} released uaddr=0x{Uaddr:x} queuedWaiters={Waiters} woke={Woke}",
-                task.TID, uaddr, queuedWaiters, woke);
+            if (Logger.IsEnabled(LogLevel.Trace))
+                Logger.LogTrace(
+                    "[SysFutex UNLOCK_PI] TID={TID} released uaddr=0x{Uaddr:x} queuedWaiters={Waiters} woke={Woke}",
+                    task.TID, uaddr, queuedWaiters, woke);
             return 0;
         }
 
@@ -297,12 +283,10 @@ public partial class SyscallManager
         bool isPrivate,
         uint bitsetMask, string opName)
     {
-        var futexWord = new byte[4];
-        if (!engine.CopyFromUser(uaddr, futexWord)) return -(int)Errno.EFAULT;
-        var currentVal = BinaryPrimitives.ReadUInt32LittleEndian(futexWord);
+        if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return -(int)Errno.EFAULT;
         if (currentVal != expectedValue) return -(int)Errno.EAGAIN;
 
-        if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var waitKey, out var error))
+        if (!TryResolveFutexKey(engine, uaddr, !isPrivate, true, out var waitKey, out var error))
             return error;
 
         var waiter = Futex.PrepareWait(waitKey, bitsetMask);
@@ -316,13 +300,12 @@ public partial class SyscallManager
         }
 
         // Linux FUTEX_WAIT compare-and-block must not lose a racing wake, so re-check after enqueue.
-        if (!engine.CopyFromUser(uaddr, futexWord))
+        if (!TryReadUserUInt32(engine, uaddr, out currentVal))
         {
             registration.Cancel();
             return -(int)Errno.EFAULT;
         }
 
-        currentVal = BinaryPrimitives.ReadUInt32LittleEndian(futexWord);
         if (currentVal != expectedValue)
         {
             registration.Cancel();
@@ -335,14 +318,16 @@ public partial class SyscallManager
             return -(int)Errno.ETIMEDOUT;
         }
 
-        Logger.LogInformation(
-            "[SysFutex {Op}] TID={TID} uaddr=0x{Uaddr:x} val={Val} bitset=0x{Bitset:x8} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset} WakeReason={WR} PendingSig=0x{PS:x}",
-            opName, task.TID, uaddr, expectedValue, bitsetMask, isPrivate, waitKey.Kind, waitKey.PageValue,
-            waitKey.OffsetWithinPage, task.WakeReason, task.PendingSignals);
+        if (Logger.IsEnabled(LogLevel.Trace))
+            Logger.LogTrace(
+                "[SysFutex {Op}] TID={TID} uaddr=0x{Uaddr:x} val={Val} bitset=0x{Bitset:x8} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset} WakeReason={WR} PendingSig=0x{PS:x}",
+                opName, task.TID, uaddr, expectedValue, bitsetMask, isPrivate, waitKey.Kind, waitKey.PageValue,
+                waitKey.OffsetWithinPage, task.WakeReason, task.PendingSignals);
         var result = await new FutexAwaitable(waiter, task, registration, timeoutMs);
-        Logger.LogInformation(
-            "[SysFutex {Op}] TID={TID} awaiter result={Result} WakeReason={WR} PendingSig=0x{PS:x}",
-            opName, task.TID, result, task.WakeReason, task.PendingSignals);
+        if (Logger.IsEnabled(LogLevel.Trace))
+            Logger.LogTrace(
+                "[SysFutex {Op}] TID={TID} awaiter result={Result} WakeReason={WR} PendingSig=0x{PS:x}",
+                opName, task.TID, result, task.WakeReason, task.PendingSignals);
         if (result == FutexWaitOutcome.Interrupted)
         {
             Futex.CancelWait(waitKey, waiter);
@@ -409,15 +394,15 @@ public partial class SyscallManager
         err = 0;
         if (timespecPtr == 0) return true;
 
-        var buf = new byte[8];
+        Span<byte> buf = stackalloc byte[8];
         if (!engine.CopyFromUser(timespecPtr, buf))
         {
             err = -(int)Errno.EFAULT;
             return false;
         }
 
-        var sec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
-        var nsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
+        var sec = BinaryPrimitives.ReadInt32LittleEndian(buf[..4]);
+        var nsec = BinaryPrimitives.ReadInt32LittleEndian(buf[4..]);
         if (sec < 0 || nsec < 0 || nsec >= NSEC_PER_SEC)
         {
             err = -(int)Errno.EINVAL;
@@ -506,11 +491,52 @@ public partial class SyscallManager
         return (value & 0x800) != 0 ? value | unchecked((int)0xFFFFF000) : value;
     }
 
+    private static bool TryReadUserUInt32(Engine engine, uint uaddr, out uint value)
+    {
+        Span<byte> buf = stackalloc byte[4];
+        if (!engine.CopyFromUser(uaddr, buf))
+        {
+            value = 0;
+            return false;
+        }
+
+        value = BinaryPrimitives.ReadUInt32LittleEndian(buf);
+        return true;
+    }
+
+    private static bool TryWriteUserUInt32(Engine engine, uint uaddr, uint value)
+    {
+        Span<byte> buf = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(buf, value);
+        return engine.CopyToUser(uaddr, buf);
+    }
+
+    private static bool TryProbeUserAddress(Engine engine, uint uaddr)
+    {
+        Span<byte> buf = stackalloc byte[1];
+        return engine.CopyFromUser(uaddr, buf);
+    }
+
     private bool TryResolveFutexKey(Engine engine, uint uaddr, bool fshared, out FutexKey key, out int error)
     {
+        return TryResolveFutexKey(engine, uaddr, fshared, false, out key, out error);
+    }
+
+    private bool TryResolveFutexKey(Engine engine, uint uaddr, bool fshared, bool addressValidated,
+        out FutexKey key, out int error)
+    {
+        key = default;
+        error = 0;
+
+        if (!addressValidated && !TryProbeUserAddress(engine, uaddr))
+        {
+            error = -(int)Errno.EFAULT;
+            return false;
+        }
+
         if (fshared)
         {
-            if (TryResolveSharedFutexKey(engine, uaddr, out key, out error))
+            if (TryResolveSharedFutexKey(engine, uaddr, true, out key, out error))
                 return true;
 
             if (error == -(int)Errno.EINVAL)
@@ -519,46 +545,48 @@ public partial class SyscallManager
             // Linux allows non-private futex ops on private mappings too. When
             // the address is not actually backed by shared memory, fall back to
             // an mm-scoped private key instead of failing with EFAULT.
-            if (TryResolvePrivateFutexKey(engine, uaddr, out key))
-            {
-                error = 0;
-                return true;
-            }
-
-            return false;
-        }
-
-        if (TryResolvePrivateFutexKey(engine, uaddr, out key))
-        {
+            key = ResolvePrivateFutexKeyUnchecked(uaddr);
             error = 0;
             return true;
         }
 
-        error = -(int)Errno.EFAULT;
-        return false;
+        key = ResolvePrivateFutexKeyUnchecked(uaddr);
+        return true;
+    }
+
+    private FutexKey ResolvePrivateFutexKeyUnchecked(uint uaddr)
+    {
+        return FutexKey.Private(Mem, uaddr & LinuxConstants.PageMask,
+            (ushort)(uaddr & LinuxConstants.PageOffsetMask));
     }
 
     private bool TryResolvePrivateFutexKey(Engine engine, uint uaddr, out FutexKey key)
     {
         key = default;
-        if (!engine.CopyFromUser(uaddr, new byte[1]))
+        if (!TryProbeUserAddress(engine, uaddr))
             return false;
 
-        key = FutexKey.Private(Mem, uaddr & LinuxConstants.PageMask, (ushort)(uaddr & LinuxConstants.PageOffsetMask));
+        key = ResolvePrivateFutexKeyUnchecked(uaddr);
         return true;
     }
 
     private bool TryResolveSharedFutexKey(Engine engine, uint uaddr, out FutexKey key)
     {
-        return TryResolveSharedFutexKey(engine, uaddr, out key, out _);
+        return TryResolveSharedFutexKey(engine, uaddr, false, out key, out _);
     }
 
     private bool TryResolveSharedFutexKey(Engine engine, uint uaddr, out FutexKey key, out int error)
     {
+        return TryResolveSharedFutexKey(engine, uaddr, false, out key, out error);
+    }
+
+    private bool TryResolveSharedFutexKey(Engine engine, uint uaddr, bool addressValidated, out FutexKey key,
+        out int error)
+    {
         key = default;
         error = -(int)Errno.EFAULT;
 
-        if (!engine.CopyFromUser(uaddr, new byte[1]))
+        if (!addressValidated && !TryProbeUserAddress(engine, uaddr))
             return false;
 
         var vma = Mem.FindVmArea(uaddr);
@@ -600,7 +628,7 @@ public partial class SyscallManager
             _token = task.BeginWaitToken();
         }
 
-        public bool IsCompleted => _waiter.Tcs.Task.IsCompleted;
+        public bool IsCompleted => _waiter.IsCompleted;
 
         public void OnCompleted(Action continuation)
         {
@@ -613,10 +641,9 @@ public partial class SyscallManager
             if (!operation.TryAddRegistration(_registration))
                 return;
 
-            var handler = new FutexCompletionHandler(_task, _token, continuation, operation, _timeoutMs);
-            var waiterAwaiter = _waiter.Tcs.Task.GetAwaiter();
-            waiterAwaiter.OnCompleted(handler.OnWaitCompleted);
-            _task.ArmInterruptingSignalSafetyNet(_token, handler.OnSignal);
+            var handler = new FutexCompletionHandler(_waiter, _task, continuation, operation, _timeoutMs);
+            if (operation.IsActive)
+                _task.ArmInterruptingSignalSafetyNet(_token, handler.OnSignal);
         }
 
         public FutexWaitOutcome GetResult()
@@ -625,42 +652,31 @@ public partial class SyscallManager
             if (reason == WakeReason.Timer) return FutexWaitOutcome.TimedOut;
 
             if (reason != WakeReason.Event && reason != WakeReason.None)
-            {
-                _waiter.Tcs.TrySetResult(false);
                 return FutexWaitOutcome.Interrupted;
-            }
 
-            if (_waiter.Tcs.Task.IsCompleted && !_waiter.Tcs.Task.Result) return FutexWaitOutcome.Interrupted;
-
-            return FutexWaitOutcome.Completed;
+            return _waiter.Result ? FutexWaitOutcome.Completed : FutexWaitOutcome.Interrupted;
         }
 
         private sealed class FutexCompletionHandler
         {
             private readonly TaskAsyncOperationHandle _operation;
-            private readonly FiberTask _task;
             private readonly Timer? _timer;
-            private readonly FiberTask.WaitToken _token;
 
-            public FutexCompletionHandler(FiberTask task, FiberTask.WaitToken token, Action continuation,
+            public FutexCompletionHandler(Waiter waiter, FiberTask task, Action continuation,
                 TaskAsyncOperationHandle operation, int? timeoutMs)
             {
-                _task = task;
-                _token = token;
                 _operation = operation;
                 _operation.TryInitialize(continuation);
+                waiter.BindSuccessCallback(OnWaitCompleted);
                 if (timeoutMs.HasValue)
                 {
-                    _timer = _task.CommonKernel.ScheduleTimer(timeoutMs.Value, OnTimeout);
+                    _timer = task.CommonKernel.ScheduleTimer(timeoutMs.Value, OnTimeout);
                     _operation.TryAddRegistration(TaskAsyncRegistration.From(_timer));
                 }
             }
 
             public void OnWaitCompleted()
             {
-                if (_task.GetWaitReason(_token) == WakeReason.None)
-                    _task.TrySetWaitReason(_token, WakeReason.Event);
-
                 _operation.TryComplete(WakeReason.Event);
             }
 
@@ -755,13 +771,13 @@ public partial class SyscallManager
 
         if (targetTask == null) return -(int)Errno.ESRCH;
 
-        var headBuf = new byte[4];
+        Span<byte> headBuf = stackalloc byte[4];
         BinaryPrimitives.WriteUInt32LittleEndian(headBuf, targetTask.RobustListHead);
         if (!engine.CopyToUser(headPtr, headBuf)) return -(int)Errno.EFAULT;
 
         if (lenPtr != 0)
         {
-            var lenBuf = new byte[4];
+            Span<byte> lenBuf = stackalloc byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(lenBuf, targetTask.RobustListSize);
             if (!engine.CopyToUser(lenPtr, lenBuf)) return -(int)Errno.EFAULT;
         }
