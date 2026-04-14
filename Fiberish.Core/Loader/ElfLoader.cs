@@ -291,15 +291,15 @@ public class ElfLoader
                         ProcessAddressSpaceSync.Mmap(mm, engine, pageStart, fileMapLen, perms,
                             MapFlags.Private | MapFlags.Fixed, vfsFile, pageOffset, "ELF_LOAD");
 
-                        if (bssStart < fileMapEnd && bssEnd > bssStart)
-                            mm.FindVmArea(pageStart)?.SetSyntheticZeroRange(bssStart, Math.Min(fileMapEnd, bssEnd));
+                        if (bssStart < fileMapEnd)
+                            mm.FindVmArea(pageStart)?.SetSyntheticZeroRange(bssStart, fileMapEnd);
                     }
 
                     // Zero-fill the BSS portion on the last file page
                     // CopyToUser already triggers HandleFault via PageFaultResolver when needed
-                    if (bssStart < fileMapEnd && bssEnd > bssStart)
+                    if (bssStart < fileMapEnd)
                     {
-                        var zeroLen = (int)(Math.Min(fileMapEnd, bssEnd) - bssStart);
+                        var zeroLen = (int)(fileMapEnd - bssStart);
                         var zeroes = new byte[zeroLen];
                         if (!engine.CopyToUser(bssStart, zeroes))
                             Logger.LogWarning("ElfLoader: Failed to zero-fill BSS tail at 0x{Addr:x} (len {Len})",

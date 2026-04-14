@@ -73,6 +73,50 @@ public class ElfLoaderRegressionTests
         Assert.All(bssBytes, static value => Assert.Equal((byte)0, value));
     }
 
+    [Fact]
+    public void PtLoadPagePadding_AfterSegmentMemsz_IsAlsoZeroed()
+    {
+        using var runtime = KernelRuntime.BootstrapBare(false);
+        var tmpfsType = new Fiberish.VFS.FileSystemType
+        {
+            Name = "tmpfs",
+            Factory = static _ => new Fiberish.VFS.Tmpfs(),
+            FactoryWithContext = static (_, memoryContext) => new Fiberish.VFS.Tmpfs(memoryContext: memoryContext)
+        };
+        var rootSb = tmpfsType.CreateAnonymousFileSystem(runtime.MemoryContext).ReadSuper(tmpfsType, 0,
+            "elf-tail-padding-root", null);
+        runtime.Syscalls.MountRoot(rootSb, new Fiberish.Syscalls.SyscallManager.RootMountOptions
+        {
+            Source = "tmpfs",
+            FsType = "tmpfs",
+            Options = "rw"
+        });
+        runtime.Syscalls.WriteFileInDetachedMount(runtime.Syscalls.RootMount!, "tail-bss.elf", BuildTailBssElfImage(),
+            0x1ED);
+
+        var scheduler = new KernelScheduler();
+        var (loc, resolvedGuestPath) = runtime.Syscalls.ResolvePath(GuestElfPath, true);
+        Assert.True(loc.IsValid);
+        Assert.NotNull(loc.Dentry);
+        Assert.NotNull(loc.Mount);
+
+        _ = ProcessFactory.CreateInitProcess(
+            runtime,
+            loc.Dentry!,
+            resolvedGuestPath,
+            [resolvedGuestPath],
+            [],
+            scheduler,
+            null,
+            loc.Mount);
+
+        var paddingStart = SegmentVirtualAddress + SegmentMemorySize;
+        var paddingBytes = new byte[64];
+
+        Assert.True(runtime.Engine.CopyFromUser(paddingStart, paddingBytes));
+        Assert.All(paddingBytes, static value => Assert.Equal((byte)0, value));
+    }
+
     private static byte[] BuildTailBssElfImage()
     {
         var image = new byte[checked((int)(SegmentFileOffset + LinuxConstants.PageSize))];
