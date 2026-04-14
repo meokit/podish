@@ -235,6 +235,65 @@ public class MmapSupportTests
     }
 
     [Fact]
+    public async Task Madvise_DontNeed_AnonymousPrivate_DropsDiscardedPagesToZero()
+    {
+        using var env = new TestEnv();
+        const uint baseAddr = 0x53120000;
+        var len = (uint)(LinuxConstants.PageSize * 2);
+
+        Assert.Equal((int)baseAddr, await env.Call("SysMmap2", baseAddr, len,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+
+        Assert.True(env.Engine.CopyToUser(baseAddr, new byte[] { 0x41 }));
+        Assert.True(env.Engine.CopyToUser(baseAddr + LinuxConstants.PageSize, new byte[] { 0x42 }));
+
+        Assert.Equal(0, await env.Call("SysMadvise", baseAddr, LinuxConstants.PageSize, LinuxConstants.MADV_DONTNEED));
+
+        var probe = new byte[1];
+        Assert.True(env.Engine.CopyFromUser(baseAddr, probe));
+        Assert.Equal(0, probe[0]);
+        Assert.True(env.Engine.CopyFromUser(baseAddr + LinuxConstants.PageSize, probe));
+        Assert.Equal(0x42, probe[0]);
+    }
+
+    [Fact]
+    public async Task Madvise_DontNeed_PrivateFileMapping_DropsCowPageBackToBackingFile()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x12000);
+        env.MapUserPage(0x13000);
+        env.WriteCString(0x12000, "/private-dontneed");
+
+        Assert.Equal(0, await env.Call("SysMknodat", LinuxConstants.AT_FDCWD, 0x12000, 0x8000 | 0x1A4));
+        var fd = await env.Call("SysOpen", 0x12000, (uint)FileFlags.O_RDWR);
+        Assert.True(fd >= 0);
+
+        var filePage = new byte[LinuxConstants.PageSize];
+        Array.Fill(filePage, (byte)0x31);
+        Assert.True(env.Engine.CopyToUser(0x13000, filePage));
+        Assert.Equal(LinuxConstants.PageSize, await env.Call("SysWrite", (uint)fd, 0x13000, LinuxConstants.PageSize));
+
+        var mapped = await env.Call("SysMmap2", 0, LinuxConstants.PageSize, (uint)(Protection.Read | Protection.Write),
+            (uint)MapFlags.Private, (uint)fd);
+        Assert.True(mapped > 0);
+        var baseAddr = (uint)mapped;
+
+        Assert.True(env.Engine.CopyToUser(baseAddr, new byte[] { 0x5A }));
+
+        var probe = new byte[1];
+        Assert.True(env.Engine.CopyFromUser(baseAddr, probe));
+        Assert.Equal(0x5A, probe[0]);
+
+        Assert.Equal(0,
+            await env.Call("SysMadvise", baseAddr, LinuxConstants.PageSize, LinuxConstants.MADV_DONTNEED));
+
+        Assert.True(env.Engine.CopyFromUser(baseAddr, probe));
+        Assert.Equal(0x31, probe[0]);
+        Assert.Equal(0, await env.Call("SysClose", (uint)fd));
+    }
+
+    [Fact]
     public async Task Mprotect_DoesNotCaptureOrUnmapSharedDirtyPages()
     {
         using var env = new TestEnv();

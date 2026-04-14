@@ -163,6 +163,7 @@ public partial class SyscallManager
 
         return a3 switch
         {
+            LinuxConstants.MADV_DONTNEED => ProcessAddressSpaceSync.MadviseDontNeed(Mem, engine, a1, alignedLen),
             LinuxConstants.MADV_DONTFORK => ProcessAddressSpaceSync.MadviseForkInheritance(Mem, engine, a1,
                 alignedLen, true),
             LinuxConstants.MADV_DOFORK => ProcessAddressSpaceSync.MadviseForkInheritance(Mem, engine, a1,

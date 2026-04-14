@@ -1317,6 +1317,101 @@ public class VMAManager
         return 0;
     }
 
+    public int MadviseDontNeed(uint addr, uint len, Engine engine, out bool resetCodeCacheRange)
+    {
+        resetCodeCacheRange = false;
+        if (len == 0) return 0;
+
+        uint end;
+        try
+        {
+            end = checked(addr + len);
+        }
+        catch (OverflowException)
+        {
+            return -(int)Errno.ENOMEM;
+        }
+
+        var vmas = FindVmAreasInRange(addr, end);
+        if (vmas.Count == 0) return -(int)Errno.ENOMEM;
+
+        vmas.Sort((a, b) => a.Start.CompareTo(b.Start));
+        var cursor = addr;
+        foreach (var vma in vmas)
+        {
+            if (vma.Start > cursor) return -(int)Errno.ENOMEM;
+            if (vma.End > cursor) cursor = vma.End;
+            if (cursor >= end) break;
+        }
+
+        if (cursor < end) return -(int)Errno.ENOMEM;
+        if (!TryGetVmAreaWindow(addr, end, out var startIndex, out var endIndexExclusive))
+            return 0;
+
+        List<(AnonVma AnonVma, uint StartPageIndex, uint EndPageIndexExclusive)>? pendingObjectPageReleases = null;
+        HashSet<IntPtr>? tbCohHostPages = null;
+
+        for (var i = startIndex; i < endIndexExclusive; i++)
+        {
+            var vma = _vmas[i];
+            var overlapStart = Math.Max(vma.Start, addr);
+            var overlapEnd = Math.Min(vma.End, end);
+            if (overlapStart >= overlapEnd)
+                continue;
+
+            if ((vma.Perms & Protection.Exec) != 0)
+                resetCodeCacheRange = true;
+
+            var anonVma = vma.VmAnonVma;
+            if ((vma.Flags & MapFlags.Private) == 0 || anonVma == null)
+                continue;
+
+            var (startPageIndex, endPageIndexExclusive) = GetObjectPageRange(vma, overlapStart, overlapEnd);
+            if (startPageIndex >= endPageIndexExclusive)
+                continue;
+
+            for (var pageIndex = startPageIndex; pageIndex < endPageIndexExclusive; pageIndex++)
+            {
+                var privatePagePtr = anonVma.PeekPage(pageIndex);
+                if (privatePagePtr == IntPtr.Zero)
+                    continue;
+
+                (tbCohHostPages ??= new HashSet<IntPtr>()).Add(privatePagePtr);
+                var sharedPagePtr = vma.VmMapping?.PeekPage(pageIndex) ?? IntPtr.Zero;
+                if (sharedPagePtr != IntPtr.Zero)
+                    tbCohHostPages.Add(sharedPagePtr);
+            }
+
+            anonVma.AddRef();
+            (pendingObjectPageReleases ??= []).Add((anonVma, startPageIndex, endPageIndexExclusive));
+        }
+
+        var nativeMappingsTornDown = false;
+        try
+        {
+            TearDownNativeMappings(
+                engine,
+                addr,
+                len,
+                false,
+                resetCodeCacheRange,
+                true,
+                preserveOwnerBinding: pendingObjectPageReleases != null);
+            nativeMappingsTornDown = true;
+        }
+        finally
+        {
+            ReleasePendingObjectPages(pendingObjectPageReleases, nativeMappingsTornDown);
+        }
+
+        ClearTbWpRange(addr, len);
+        if (tbCohHostPages != null)
+            foreach (var hostPagePtr in tbCohHostPages)
+                TbCoh.ApplyWx(MemoryContext, hostPagePtr);
+
+        return 0;
+    }
+
     /// <summary>
     ///     Add a pre-constructed VmArea directly. Used by SysV SHM subsystem.
     /// </summary>

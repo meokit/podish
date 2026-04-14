@@ -285,6 +285,20 @@ internal static class ProcessAddressSpaceSync
         return vmaManager.MadviseForkInheritance(addr, len, dontFork);
     }
 
+    internal static int MadviseDontNeed(VMAManager vmaManager, Engine engine, uint addr, uint len,
+        Process? process = null)
+    {
+        if (len == 0) return 0;
+        using var scope = EnterAddressSpaceScope(engine, process);
+        using var snapshot = RentEngineSnapshot();
+        FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
+        SyncSharedMappingsForEngines(vmaManager, snapshot.Engines, addr, len);
+        var rc = vmaManager.MadviseDontNeed(addr, len, engine, out var resetCodeCacheRange);
+        if (rc == 0)
+            PublishInvalidation(vmaManager, engine, addr, len, resetCodeCacheRange);
+        return rc;
+    }
+
     internal static void SyncEngineBeforeRun(VMAManager vmaManager, Engine engine, Process? process = null)
     {
         if (vmaManager == null) return;

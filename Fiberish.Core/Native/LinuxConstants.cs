@@ -156,6 +156,7 @@ public static class LinuxConstants
     public const uint TaskSize32 = 0x80000000;
 
     // madvise behaviors
+    public const uint MADV_DONTNEED = 4;
     public const uint MADV_DONTFORK = 10;
     public const uint MADV_DOFORK = 11;
 
