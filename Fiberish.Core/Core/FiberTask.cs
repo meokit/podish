@@ -66,6 +66,7 @@ public class FiberTask
     private int _faultDiagnosticsDepth;
     private bool _hasDeferredSignalMaskRestore;
     private bool _hasPendingAsyncSyscallCompletion;
+    private int _interactiveBurstBudget;
     private long _nextWaitTokenId;
     private int _pageFaultDepth;
     private Exception? _pendingAsyncSyscallError;
@@ -184,6 +185,28 @@ public class FiberTask
 
     public bool OwnsCPU { get; set; } = true;
     public event Action<int>? SignalPosted;
+
+    internal bool HasInteractiveBurstBudget => Volatile.Read(ref _interactiveBurstBudget) > 0;
+
+    internal void SeedInteractiveBurst(int burstBudget)
+    {
+        if (burstBudget <= 0)
+            return;
+
+        if (_interactiveBurstBudget < burstBudget)
+            _interactiveBurstBudget = burstBudget;
+    }
+
+    internal void ConsumeInteractiveBurstDispatch()
+    {
+        if (_interactiveBurstBudget > 0)
+            _interactiveBurstBudget--;
+    }
+
+    internal void ClearInteractiveBurst()
+    {
+        _interactiveBurstBudget = 0;
+    }
 
     private TaskStateScope EnterTaskStateScope([CallerMemberName] string? caller = null)
     {
@@ -644,7 +667,11 @@ public class FiberTask
         SignalPosted?.Invoke(sig);
 
         var wokeActiveWait = false;
-        if (!isBlocked && !isIgnored) wokeActiveWait = TrySetActiveWaitReason(WakeReason.Signal);
+        if (!isBlocked && !isIgnored)
+        {
+            kernel?.NoteInteractiveWake(this);
+            wokeActiveWait = TrySetActiveWaitReason(WakeReason.Signal);
+        }
 
         if (!wokeActiveWait &&
             kernel != null &&
@@ -667,7 +694,11 @@ public class FiberTask
         SignalPosted?.Invoke(sig);
 
         var wokeActiveWait = false;
-        if (!isBlocked) wokeActiveWait = TrySetActiveWaitReason(WakeReason.Signal);
+        if (!isBlocked)
+        {
+            CommonKernel.NoteInteractiveWake(this);
+            wokeActiveWait = TrySetActiveWaitReason(WakeReason.Signal);
+        }
 
         if (!wokeActiveWait &&
             (Status == FiberTaskStatus.Waiting || Process.State == ProcessState.Stopped))
@@ -1539,6 +1570,7 @@ public class FiberTask
                 case EmuStatus.Running: // instruction quota exhausted
                     // Normal yield (quota or explicit sched_yield if implemented)
                     // Re-queue so other tasks get a turn
+                    ClearInteractiveBurst();
                     Status = FiberTaskStatus.Ready;
                     CommonKernel.Schedule(this);
                     break;

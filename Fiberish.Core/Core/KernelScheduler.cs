@@ -13,6 +13,11 @@ namespace Fiberish.Core;
 
 public class KernelScheduler
 {
+    private const int DefaultInstructionLimit = 10_000_000;
+    private const int InteractiveBurstBudget = 3;
+    private const int InteractiveInstructionLimit = 250_000;
+    private const int LatencySensitiveInstructionLimit = 1_000_000;
+    private const long ForegroundLatencyGraceMs = 50;
     private const int RunQueueDrainEventBudget = 64;
     private static readonly ILogger Logger = Logging.CreateLogger<KernelScheduler>();
     private readonly Stack<AsyncWaitQueue> _asyncWaitQueuePool = new();
@@ -27,10 +32,17 @@ public class KernelScheduler
             SingleReader = true,
             SingleWriter = false
         });
+    private readonly Channel<SchedulerWorkItem> _urgentEvents =
+        Channel.CreateUnbounded<SchedulerWorkItem>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false
+        });
 
     // Process Management
     private readonly Dictionary<int, Process> _processes = [];
 
+    private readonly Queue<FiberTask> _foregroundRunQueue = new();
     private readonly Queue<FiberTask> _runQueue = new();
     private readonly Stopwatch _sw = Stopwatch.StartNew();
     private readonly KernelSyncContext _synchronizationContext;
@@ -43,6 +55,7 @@ public class KernelScheduler
     private int _nextTaskId;
     private int _ownerThreadId;
 
+    private long _foregroundLatencyGraceUntilTick;
     private int _wakePending;
 
     public KernelScheduler()
@@ -418,7 +431,7 @@ public class KernelScheduler
                 Logger.LogWarning(
                     "Ready-queue token state drift detected for TID={Tid}: IsReadyQueued=true but task missing from run queue. Re-enqueuing.",
                     task.TID);
-                _runQueue.Enqueue(task);
+                EnqueueReadyTask(task);
                 AssertReadyQueueInvariant(task, "EnqueueTask.repair");
                 EnqueueWake();
                 return;
@@ -433,19 +446,81 @@ public class KernelScheduler
 
         task.IsReadyQueued = true;
         task.Status = FiberTaskStatus.Ready;
-        _runQueue.Enqueue(task);
+        EnqueueReadyTask(task);
         AssertReadyQueueInvariant(task, "EnqueueTask.new");
 
         EnqueueWake();
     }
 
+    private void EnqueueReadyTask(FiberTask task)
+    {
+        if (ShouldUseForegroundQueue(task))
+            _foregroundRunQueue.Enqueue(task);
+        else
+            _runQueue.Enqueue(task);
+    }
+
     private bool RunQueueContainsTask(FiberTask task)
     {
+        foreach (var queued in _foregroundRunQueue)
+            if (ReferenceEquals(queued, task))
+                return true;
+
         foreach (var queued in _runQueue)
             if (ReferenceEquals(queued, task))
                 return true;
 
         return false;
+    }
+
+    private static bool IsForegroundTask(FiberTask? task)
+    {
+        if (task?.Process.ControllingTty is not { } tty)
+            return false;
+
+        return tty.ForegroundPgrp > 0 && task.Process.PGID == tty.ForegroundPgrp;
+    }
+
+    private bool HasForegroundLatencyGrace
+    {
+        get
+        {
+            return Volatile.Read(ref _foregroundLatencyGraceUntilTick) > _timerSystem.CurrentTick;
+        }
+    }
+
+    private bool ShouldScheduleUrgent(FiberTask? task)
+    {
+        return task != null && IsForegroundTask(task) && (task.HasInteractiveBurstBudget || HasForegroundLatencyGrace);
+    }
+
+    private bool ShouldUseForegroundQueue(FiberTask task)
+    {
+        return IsForegroundTask(task) && (task.HasInteractiveBurstBudget || HasForegroundLatencyGrace);
+    }
+
+    private void ExtendForegroundLatencyGrace()
+    {
+        var currentTick = _timerSystem.CurrentTick;
+        var candidate = currentTick + ForegroundLatencyGraceMs;
+        var observed = Volatile.Read(ref _foregroundLatencyGraceUntilTick);
+        while (observed < candidate)
+        {
+            var previous = Interlocked.CompareExchange(ref _foregroundLatencyGraceUntilTick, candidate, observed);
+            if (previous == observed)
+                return;
+            observed = previous;
+        }
+    }
+
+    internal void NoteInteractiveWake(FiberTask task)
+    {
+        AssertSchedulerThread();
+        if (IsForegroundTask(task))
+        {
+            task.SeedInteractiveBurst(InteractiveBurstBudget);
+            ExtendForegroundLatencyGrace();
+        }
     }
 
     public void ScheduleLocal(FiberTask task)
@@ -462,7 +537,7 @@ public class KernelScheduler
             return;
         }
 
-        EnqueueWorkItem(SchedulerWorkItem.ResumeTask(task));
+        EnqueueWorkItem(SchedulerWorkItem.ResumeTask(task), ShouldScheduleUrgent(task));
     }
 
     public void Schedule(FiberTask task)
@@ -473,15 +548,18 @@ public class KernelScheduler
             ScheduleFromAnyThread(task);
     }
 
-    private void EnqueueWorkItem(SchedulerWorkItem item)
+    private void EnqueueWorkItem(SchedulerWorkItem item, bool urgent = false)
     {
-        _events.Writer.TryWrite(item);
+        if (urgent)
+            _urgentEvents.Writer.TryWrite(item);
+        else
+            _events.Writer.TryWrite(item);
         EnqueueWake();
     }
 
-    private void EnqueueContinuation(Action continuation, FiberTask? context)
+    private void EnqueueContinuation(Action continuation, FiberTask? context, bool urgent = false)
     {
-        EnqueueWorkItem(SchedulerWorkItem.IngressAction(continuation, context));
+        EnqueueWorkItem(SchedulerWorkItem.IngressAction(continuation, context), urgent);
     }
 
     public void ScheduleLocal(Action continuation, FiberTask? context = null)
@@ -493,6 +571,17 @@ public class KernelScheduler
     public void ScheduleFromAnyThread(Action continuation, FiberTask? context = null)
     {
         EnqueueWorkItem(SchedulerWorkItem.IngressAction(continuation, context));
+    }
+
+    internal void ScheduleLocal(Action continuation, FiberTask? context, bool urgent)
+    {
+        AssertSchedulerThread();
+        EnqueueContinuation(continuation, context, urgent);
+    }
+
+    internal void ScheduleFromAnyThread(Action continuation, FiberTask? context, bool urgent)
+    {
+        EnqueueWorkItem(SchedulerWorkItem.IngressAction(continuation, context), urgent);
     }
 
     internal void RunIngress(Action action, FiberTask? context = null)
@@ -515,6 +604,14 @@ public class KernelScheduler
             ScheduleFromAnyThread(continuation, context);
     }
 
+    internal void Schedule(Action continuation, FiberTask? context, bool urgent)
+    {
+        if (IsSchedulerThread)
+            ScheduleLocal(continuation, context, urgent);
+        else
+            ScheduleFromAnyThread(continuation, context, urgent);
+    }
+
     internal void Schedule(SchedulerWorkItem item)
     {
         // ResumeTask is just another way to request "make this task runnable". If we are already
@@ -531,15 +628,21 @@ public class KernelScheduler
         if (IsSchedulerThread)
         {
             if (task.TrySetWaitReason(token, reason, false))
+            {
+                NoteInteractiveWake(task);
                 ScheduleContinuation(continuation, task);
+            }
             return;
         }
 
         ScheduleFromAnyThread(() =>
         {
             if (task.TrySetWaitReason(token, reason, false))
+            {
+                NoteInteractiveWake(task);
                 ScheduleContinuation(continuation, task);
-        }, task);
+            }
+        }, task, IsForegroundTask(task));
     }
 
     internal void ScheduleContinuation(Action continuation, FiberTask task)
@@ -550,7 +653,7 @@ public class KernelScheduler
         // Wait/awaiter continuations are scheduler-thread callbacks associated with a task
         // context, not guest instruction slices. Run them through the ingress FIFO so they
         // preserve event order without mutating the task's runnable-slice state machine.
-        Schedule(continuation, task);
+        Schedule(continuation, task, ShouldScheduleUrgent(task));
     }
 
     internal void PostSynchronizationContext(SendOrPostCallback callback, object? state, FiberTask? context)
@@ -633,11 +736,11 @@ public class KernelScheduler
                 }
 
                 // 0. Process Continuations (High Priority)
-                var hadRunnableTasks = _runQueue.Count > 0;
+                var hadRunnableTasks = _foregroundRunQueue.Count > 0 || _runQueue.Count > 0;
                 var drainedEvents = DrainEventsWithBudget(hadRunnableTasks ? RunQueueDrainEventBudget : int.MaxValue);
 
                 // 1. Process Timers & Wait
-                if (_runQueue.Count == 0 && !drainedEvents)
+                if (_foregroundRunQueue.Count == 0 && _runQueue.Count == 0 && !drainedEvents)
                 {
                     // Check scheduler state - this will detect actual bugs
                     ValidateSchedulerState();
@@ -682,12 +785,16 @@ public class KernelScheduler
                 }
 
                 // 2. Run Task
-                if (TryDequeue(out var task) && task != null)
+                if (TryDequeueInternal(out var task, out var foregroundDispatch) && task != null)
                 {
                     // Stale queue entry: task may have transitioned to Waiting/Terminated
                     // after it was enqueued (e.g., async syscall path). Skip safely.
                     if (task.Status != FiberTaskStatus.Ready)
                         continue;
+
+                    var interactiveDispatch = foregroundDispatch || ShouldUseForegroundQueue(task);
+                    if (interactiveDispatch)
+                        task.ConsumeInteractiveBurstDispatch();
 
                     task.Status = FiberTaskStatus.Running;
 
@@ -699,7 +806,12 @@ public class KernelScheduler
                     SynchronizationContext.SetSynchronizationContext(GetSynchronizationContextFor(task));
                     try
                     {
-                        task.RunSlice();
+                        var instructionLimit = interactiveDispatch
+                            ? InteractiveInstructionLimit
+                            : HasForegroundLatencyGrace
+                                ? LatencySensitiveInstructionLimit
+                                : DefaultInstructionLimit;
+                        task.RunSlice(instructionLimit);
                     }
                     finally
                     {
@@ -733,15 +845,25 @@ public class KernelScheduler
     private bool DrainEventsWithBudget(int maxItems)
     {
         var drained = false;
+        drained |= DrainEventChannelWithBudget(_urgentEvents, int.MaxValue);
+        drained |= DrainEventChannelWithBudget(_events, maxItems);
+
+        if (drained && !_urgentEvents.Reader.TryPeek(out _) && !_events.Reader.TryPeek(out _))
+            _wakeEvent.Reset();
+        return drained;
+    }
+
+    private bool DrainEventChannelWithBudget(Channel<SchedulerWorkItem> channel, int maxItems)
+    {
+        var drained = false;
         var drainedCount = 0;
-        while (drainedCount < maxItems && _events.Reader.TryRead(out var item))
+        while (drainedCount < maxItems && channel.Reader.TryRead(out var item))
         {
             drained = true;
             drainedCount++;
             ExecuteEvent(item);
         }
 
-        if (drained && !_events.Reader.TryPeek(out _)) _wakeEvent.Reset();
         return drained;
     }
 
@@ -866,7 +988,7 @@ public class KernelScheduler
         var sb = new StringBuilder();
         sb.AppendLine($"KERNEL PANIC: {reason}");
         sb.AppendLine($"CurrentTick: {CurrentTick}");
-        sb.AppendLine($"RunQueue: {_runQueue.Count}");
+        sb.AppendLine($"RunQueue: {_foregroundRunQueue.Count + _runQueue.Count}");
 
         sb.AppendLine("Tasks:");
         foreach (var t in _tasks.Values)
@@ -918,10 +1040,18 @@ public class KernelScheduler
             }
     }
 
-    private bool TryDequeue(out FiberTask? task)
+    private bool TryDequeueInternal(out FiberTask? task, out bool foregroundDispatch)
     {
-        if (!_runQueue.TryDequeue(out task!))
-            return false;
+        if (_foregroundRunQueue.TryDequeue(out task!))
+        {
+            foregroundDispatch = true;
+        }
+        else
+        {
+            foregroundDispatch = false;
+            if (!_runQueue.TryDequeue(out task!))
+                return false;
+        }
 
         if (task != null)
             // Dequeue consumes the single queued wake token for this task. The task may still be
@@ -930,6 +1060,11 @@ public class KernelScheduler
             task.IsReadyQueued = false;
 
         return true;
+    }
+
+    private bool TryDequeue(out FiberTask? task)
+    {
+        return TryDequeueInternal(out task, out _);
     }
 
     [Conditional("DEBUG")]

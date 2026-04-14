@@ -1,5 +1,7 @@
 using System.Text;
 using Fiberish.Core;
+using Fiberish.Core.VFS.TTY;
+using Microsoft.Extensions.Logging.Abstractions;
 using Fiberish.X86.Native;
 using Xunit;
 
@@ -109,6 +111,160 @@ public class KernelSchedulerTests
             "TASK should run before the scheduler drains every ingress event.");
     }
 
+    [Fact]
+    public void ScheduleContinuation_ForegroundWake_RunsBeforeNormalIngress()
+    {
+        var kernel = new KernelScheduler();
+        var sb = new StringBuilder();
+        var task = CreateForegroundTask(kernel, 300, 301);
+
+        for (var i = 0; i < 4; i++)
+        {
+            var capture = i;
+            kernel.ScheduleFromAnyThread(() => sb.Append($"N{capture};"));
+        }
+
+        kernel.NoteInteractiveWake(task);
+        kernel.ScheduleContinuation(() => sb.Append("FG;"), task);
+
+        Assert.True(DrainSchedulerEvents(kernel));
+        Assert.StartsWith("FG;", sb.ToString());
+    }
+
+    [Fact]
+    public void Schedule_WhenForegroundTaskGetsFreshWake_DequeuesBeforeNormalReadyTask()
+    {
+        var kernel = new KernelScheduler();
+        var background = new FiberTask(401, CreateMockProcess(400), new MockEngine(), kernel);
+        var foreground = CreateForegroundTask(kernel, 410, 411);
+
+        Assert.NotNull(TryDequeueTask(kernel));
+        Assert.NotNull(TryDequeueTask(kernel));
+
+        background.Status = FiberTaskStatus.Waiting;
+        foreground.Status = FiberTaskStatus.Waiting;
+
+        kernel.Schedule(background);
+        kernel.NoteInteractiveWake(foreground);
+        kernel.Schedule(foreground);
+
+        Assert.Same(foreground, TryDequeueTask(kernel));
+        Assert.Same(background, TryDequeueTask(kernel));
+    }
+
+    [Fact]
+    public void AsyncWaitQueueSignal_ForegroundContext_RunsBeforeNormalIngress()
+    {
+        var kernel = new KernelScheduler();
+        var sb = new StringBuilder();
+        var task = CreateForegroundTask(kernel, 420, 421);
+        var queue = new AsyncWaitQueue(kernel);
+
+        for (var i = 0; i < 4; i++)
+        {
+            var capture = i;
+            kernel.ScheduleFromAnyThread(() => sb.Append($"N{capture};"));
+        }
+
+        using var reg = queue.RegisterCancelable(() => sb.Append("FG;"), task);
+        queue.Signal();
+
+        Assert.True(DrainSchedulerEvents(kernel));
+        Assert.StartsWith("FG;", sb.ToString());
+    }
+
+    [Fact]
+    public void Run_WhenForegroundGraceActive_BackgroundSliceIsCapped()
+    {
+        const ulong latencySensitiveInstructionLimit = 1_000_000;
+
+        var kernel = new KernelScheduler();
+        var backgroundEngine = new RecordingEngine();
+        var background = new FiberTask(501, CreateMockProcess(500), backgroundEngine, kernel);
+        var foreground = CreateForegroundTask(kernel, 510, 511);
+
+        Assert.NotNull(TryDequeueTask(kernel));
+        Assert.NotNull(TryDequeueTask(kernel));
+
+        background.Status = FiberTaskStatus.Waiting;
+        foreground.Status = FiberTaskStatus.Terminated;
+        foreground.Exited = true;
+
+        kernel.NoteInteractiveWake(foreground);
+        kernel.Schedule(background);
+        kernel.Run(100);
+
+        Assert.Equal(latencySensitiveInstructionLimit, backgroundEngine.LastMaxInsts);
+    }
+
+    private static FiberTask CreateForegroundTask(KernelScheduler kernel, int pid, int tid)
+    {
+        var process = TestRuntimeFactory.CreateProcess(pid);
+        kernel.RegisterProcess(process);
+        process.PGID = pid;
+        process.SID = pid;
+
+        var tty = new TtyDiscipline(new NoopTtyDriver(), new NoopSignalBroadcaster(), NullLogger.Instance, kernel)
+        {
+            ForegroundPgrp = pid,
+            SessionId = pid
+        };
+        process.ControllingTty = tty;
+
+        return new FiberTask(tid, process, new MockEngine(), kernel);
+    }
+
+    private static bool DrainSchedulerEvents(KernelScheduler scheduler)
+    {
+        var drainEvents =
+            typeof(KernelScheduler).GetMethod("DrainEvents", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(drainEvents);
+        return (bool)drainEvents!.Invoke(scheduler, null)!;
+    }
+
+    private static FiberTask? TryDequeueTask(KernelScheduler scheduler)
+    {
+        var method = typeof(KernelScheduler).GetMethod("TryDequeue",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+            null,
+            [typeof(FiberTask).MakeByRefType()],
+            null);
+        Assert.NotNull(method);
+        var args = new object?[] { null };
+        var dequeued = (bool)method!.Invoke(scheduler, args)!;
+        return dequeued ? Assert.IsType<FiberTask>(args[0]) : null;
+    }
+
+    private sealed class NoopSignalBroadcaster : ISignalBroadcaster
+    {
+        public void SignalProcessGroup(FiberTask? task, int pgid, int signal)
+        {
+        }
+
+        public void SignalForegroundTask(FiberTask? task, int signal)
+        {
+        }
+    }
+
+    private sealed class NoopTtyDriver : ITtyDriver
+    {
+        public bool CanWrite => true;
+
+        public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
+        {
+            return buffer.Length;
+        }
+
+        public void Flush()
+        {
+        }
+
+        public bool RegisterWriteWait(Action callback, KernelScheduler scheduler)
+        {
+            return false;
+        }
+    }
+
     private class MockEngine : Engine
     {
         public MockEngine() : base(true)
@@ -134,6 +290,18 @@ public class KernelSchedulerTests
 
         public override void RegWrite(Reg reg, uint val)
         {
+        }
+    }
+
+    private sealed class RecordingEngine : MockEngine
+    {
+        public ulong LastMaxInsts { get; private set; }
+
+        public override void Run(uint endEip = 0, ulong maxInsts = 0)
+        {
+            LastMaxInsts = maxInsts;
+            if (Owner is FiberTask task)
+                task.Exited = true;
         }
     }
 }

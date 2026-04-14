@@ -687,7 +687,7 @@ public class TtyDiscipline
             return;
         }
 
-        _scheduler.ScheduleFromAnyThread(ProcessPendingIngress);
+        _scheduler.ScheduleFromAnyThread(ProcessPendingIngress, null, true);
     }
 
     private void ProcessPendingIngress()
@@ -696,7 +696,7 @@ public class TtyDiscipline
         ProcessPendingInput();
 
         if (HasPendingInput && Interlocked.Exchange(ref _inputDispatchPending, 1) == 0)
-            _scheduler.ScheduleFromAnyThread(ProcessPendingIngress);
+            _scheduler.ScheduleFromAnyThread(ProcessPendingIngress, null, true);
     }
 
     private void HandleResize(ushort rows, ushort cols, FiberTask? task)

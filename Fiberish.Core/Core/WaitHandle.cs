@@ -153,7 +153,10 @@ public class AsyncWaitQueue
         if (context == null || token == null || token.Value.Owner == null)
         {
             if (context != null)
+            {
+                scheduler.NoteInteractiveWake(context);
                 scheduler.ScheduleContinuation(continuation, context);
+            }
             else
                 scheduler.Schedule(continuation, context);
             return;
