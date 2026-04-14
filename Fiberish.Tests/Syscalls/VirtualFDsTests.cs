@@ -149,6 +149,79 @@ public class VirtualFDsTests
     }
 
     [Fact]
+    public void InotifyInode_RemoveWatch_ReadReturnsIgnoredEvent()
+    {
+        using var env = new TestEnv();
+        var inode = new InotifyInode(0, env.MemfdSuperBlock);
+        var file = new LinuxFile(new Dentry(FsName.FromString("inotify"), inode, null, env.MemfdSuperBlock),
+            FileFlags.O_NONBLOCK, null!);
+
+        var wd = inode.AddWatch("/watched", LinuxConstants.IN_CREATE | LinuxConstants.IN_DELETE, true);
+        Assert.True(wd > 0);
+        Assert.Equal(0, inode.RemoveWatch(wd));
+
+        var buffer = new byte[16];
+        var rc = inode.ReadToHost(null, file, buffer, 0);
+        Assert.Equal(16, rc);
+        Assert.Equal(wd, BinaryPrimitives.ReadInt32LittleEndian(buffer.AsSpan(0, 4)));
+        Assert.Equal(LinuxConstants.IN_IGNORED, BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(4, 4)));
+        Assert.Equal(0U, BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(8, 4)));
+        Assert.Equal(0U, BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(12, 4)));
+    }
+
+    [Fact]
+    public async Task InotifyFd_RmWatch_WakesEpollAndReadReturnsIgnoredEvent()
+    {
+        using var env = new TestEnv();
+        const uint pathPtr = 0x20000;
+        const uint eventsPtr = 0x21000;
+        const uint epollEventPtr = 0x22000;
+        const uint readBufPtr = 0x23000;
+        env.MapUserPage(pathPtr);
+        env.MapUserPage(eventsPtr);
+        env.MapUserPage(epollEventPtr);
+        env.MapUserPage(readBufPtr);
+        env.Write(pathPtr, ".\0"u8);
+
+        var inotifyFd = await env.Invoke("SysInotifyInit1", LinuxConstants.IN_NONBLOCK, 0, 0, 0, 0, 0);
+        Assert.True(inotifyFd >= 0);
+
+        var wd = await env.Invoke("SysInotifyAddWatch", (uint)inotifyFd, pathPtr,
+            LinuxConstants.IN_CREATE | LinuxConstants.IN_DELETE | LinuxConstants.IN_ATTRIB, 0, 0, 0);
+        Assert.True(wd > 0);
+
+        var epfd = await env.Invoke("SysEpollCreate1", 0, 0, 0, 0, 0, 0);
+        Assert.True(epfd >= 0);
+
+        var epollEvent = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(epollEvent.AsSpan(0, 4), LinuxConstants.EPOLLIN);
+        BinaryPrimitives.WriteUInt64LittleEndian(epollEvent.AsSpan(4, 8), 0xCAFEBABEUL);
+        env.Write(epollEventPtr, epollEvent);
+
+        Assert.Equal(0, await env.Invoke("SysEpollCtl", (uint)epfd, LinuxConstants.EPOLL_CTL_ADD,
+            (uint)inotifyFd, epollEventPtr, 0, 0));
+
+        var inotify = Assert.IsType<InotifyInode>(env.SyscallManager.GetFD(inotifyFd)!.OpenedInode);
+        var wait = env.StartOnScheduler(
+            () => env.Invoke("SysEpollWait", (uint)epfd, eventsPtr, 1, unchecked((uint)-1), 0, 0));
+        Assert.False(wait.IsCompleted);
+
+        await env.WaitForBackgroundSchedulerAsync();
+        await env.InvokeOnSchedulerAsync(() => Assert.Equal(0, inotify.RemoveWatch(wd)));
+
+        Assert.Equal(1, await wait.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(LinuxConstants.EPOLLIN,
+            BinaryPrimitives.ReadUInt32LittleEndian(env.Read(eventsPtr, 12).AsSpan(0, 4)));
+        Assert.Equal(0xCAFEBABEUL,
+            BinaryPrimitives.ReadUInt64LittleEndian(env.Read(eventsPtr, 12).AsSpan(4, 8)));
+
+        Assert.Equal(16, await env.Invoke("SysRead", (uint)inotifyFd, readBufPtr, 16, 0, 0, 0));
+        var readBuf = env.Read(readBufPtr, 16);
+        Assert.Equal(wd, BinaryPrimitives.ReadInt32LittleEndian(readBuf.AsSpan(0, 4)));
+        Assert.Equal(LinuxConstants.IN_IGNORED, BinaryPrimitives.ReadUInt32LittleEndian(readBuf.AsSpan(4, 4)));
+    }
+
+    [Fact]
     public void EventFd_RegisterWaitHandle_AlreadyReadable_ShouldInvokeImmediately()
     {
         using var env = new TestEnv();
@@ -449,6 +522,11 @@ public class VirtualFDsTests
             var buffer = new byte[count];
             Assert.True(Engine.CopyFromUser(addr, buffer));
             return buffer;
+        }
+
+        public void Write(uint addr, ReadOnlySpan<byte> data)
+        {
+            Assert.True(Engine.CopyToUser(addr, data));
         }
 
         public void DrainEvents()

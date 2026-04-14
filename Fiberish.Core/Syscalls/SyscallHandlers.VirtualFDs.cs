@@ -7,6 +7,8 @@ namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
+    private static readonly FsName Inotify = FsName.FromString("anon_inode:[inotify]");
+
 #pragma warning disable CS1998 // Async method lacks await operators
     private async ValueTask<int> SysEventFd(Engine engine, uint initval, uint a2, uint a3, uint a4, uint a5,
         uint a6)
@@ -146,6 +148,65 @@ public partial class SyscallManager
         }
 
         return -(int)Errno.EINVAL;
+    }
+
+    private async ValueTask<int> SysInotifyInit(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        return await SysInotifyInit1(engine, 0, a2, a3, a4, a5, a6);
+    }
+
+    private async ValueTask<int> SysInotifyInit1(Engine engine, uint flags, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        if ((flags & ~(LinuxConstants.IN_NONBLOCK | LinuxConstants.IN_CLOEXEC)) != 0)
+            return -(int)Errno.EINVAL;
+
+        var eflags = FileFlags.O_RDONLY;
+        if ((flags & LinuxConstants.IN_NONBLOCK) != 0) eflags |= FileFlags.O_NONBLOCK;
+        if ((flags & LinuxConstants.IN_CLOEXEC) != 0) eflags |= FileFlags.O_CLOEXEC;
+
+        var inode = new InotifyInode(0, MemfdSuperBlock);
+        var dentry = new Dentry(Inotify, inode, null, MemfdSuperBlock);
+        var file = new LinuxFile(dentry, eflags, AnonMount);
+
+        return AllocFD(file);
+    }
+
+    private async ValueTask<int> SysInotifyAddWatch(Engine engine, uint fd, uint pathPtr, uint mask, uint a4,
+        uint a5, uint a6)
+    {
+        var file = GetFD((int)fd);
+        if (file == null) return -(int)Errno.EBADF;
+        if (file.OpenedInode is not InotifyInode inotify) return -(int)Errno.EINVAL;
+
+        var pathErr = ReadPathArgumentBytes(pathPtr, out var path);
+        if (pathErr != 0) return pathErr;
+        using var _ = path;
+
+        var lookupFlags = (mask & LinuxConstants.IN_DONT_FOLLOW) != 0
+            ? LookupFlags.None
+            : LookupFlags.FollowSymlink;
+        var lookup = PathWalker.PathWalkWithData(path.UnsafeBuffer, path.Length, null, lookupFlags);
+        if (lookup.HasError) return lookup.ErrorCode;
+
+        var loc = lookup.Path;
+        if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
+        if ((mask & LinuxConstants.IN_ONLYDIR) != 0 && loc.Dentry.Inode.Type != InodeType.Directory)
+            return -(int)Errno.ENOTDIR;
+
+        var pathKey = GetAbsolutePath(loc);
+        return inotify.AddWatch(pathKey, mask, loc.Dentry.Inode.Type == InodeType.Directory);
+    }
+
+    private async ValueTask<int> SysInotifyRmWatch(Engine engine, uint fd, uint wd, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        var file = GetFD((int)fd);
+        if (file == null) return -(int)Errno.EBADF;
+        if (file.OpenedInode is not InotifyInode inotify) return -(int)Errno.EINVAL;
+
+        return inotify.RemoveWatch((int)wd);
     }
 #pragma warning restore CS1998
 }

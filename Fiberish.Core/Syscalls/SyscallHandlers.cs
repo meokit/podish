@@ -688,6 +688,18 @@ public partial class SyscallManager
             case X86SyscallNumbers.signalfd4:
                 handled = true;
                 return SysSignalFd4(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.inotify_init:
+                handled = true;
+                return SysInotifyInit(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.inotify_add_watch:
+                handled = true;
+                return SysInotifyAddWatch(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.inotify_rm_watch:
+                handled = true;
+                return SysInotifyRmWatch(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.inotify_init1:
+                handled = true;
+                return SysInotifyInit1(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.fsync:
                 handled = true;
                 return SysFsync(engine, ebx, ecx, edx, esi, edi, ebp);
