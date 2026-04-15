@@ -182,10 +182,10 @@ final class PodishUiStore: ObservableObject {
 
         if matchingContainers.count == 1 {
             let name = matchingContainers[0].name
-            return "Used by container \(name)"
+            return "Used by workspace \(name)"
         }
 
-        return "Used by \(matchingContainers.count) containers"
+        return "Used by \(matchingContainers.count) workspaces"
     }
 
     func showNewContainer() {

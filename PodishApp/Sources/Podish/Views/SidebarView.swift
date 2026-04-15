@@ -32,7 +32,7 @@ struct SidebarView: View {
             Button {
                 store.showNewContainer()
             } label: {
-                Label("New Container", systemImage: "plus.rectangle.on.rectangle")
+                Label("New Workspace", systemImage: "plus.rectangle.on.rectangle")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.borderedProminent)
@@ -51,23 +51,23 @@ struct SidebarView: View {
 
     private var containerList: some View {
         List(selection: listSelectionBinding) {
-            Section("General") {
-                Label("Home", systemImage: "house")
+            Section("Overview") {
+                Label("Dashboard", systemImage: "house")
                     .tag(PodishSidebarDestination.home)
             }
 
             #if !os(macOS)
-            Section("Actions") {
+            Section("Quick Actions") {
                 Button {
                     store.showNewContainer()
                 } label: {
-                    Label("New Container", systemImage: "plus.rectangle.on.rectangle")
+                    Label("New Workspace", systemImage: "plus.rectangle.on.rectangle")
                 }
                 .buttonStyle(.plain)
             }
             #endif
 
-            Section("Running") {
+            Section("Active") {
                 ForEach(store.runningContainers) { container in
                     HStack(spacing: 8) {
                         ContainerRowView(container: container)
@@ -112,7 +112,7 @@ struct SidebarView: View {
                 }
             }
 
-            Section("Stopped") {
+            Section("Paused") {
                 ForEach(store.containers.filter { $0.state != .running }) { container in
                     HStack(spacing: 8) {
                         ContainerRowView(container: container)
@@ -159,14 +159,14 @@ struct SidebarView: View {
 
             if store.runningContainers.isEmpty {
                 Section {
-                    Text("No running containers")
+                    Text("No running workspaces")
                         .foregroundStyle(.secondary)
                 }
             }
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
-        .navigationTitle("Containers")
+        .navigationTitle("Workspaces")
         .background(Color.clear)
         .onChange(of: store.selectedContainerID) { newValue in
             guard case .container = selection else { return }

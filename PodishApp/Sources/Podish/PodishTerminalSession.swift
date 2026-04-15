@@ -244,7 +244,7 @@ final class PodishRuntimeActor: @unchecked Sendable {
                 if rc == 34 {
                     capacity *= 2
                     if capacity > 1_048_576 {
-                        throw PodishRuntimeError.native(code: rc, message: "container inspect payload too large")
+                        throw PodishRuntimeError.native(code: rc, message: "workspace inspect payload too large")
                     }
                     continue
                 }
@@ -287,7 +287,7 @@ final class PodishRuntimeActor: @unchecked Sendable {
                 if rc == 34 {
                     capacity *= 2
                     if capacity > 1_048_576 {
-                        throw PodishRuntimeError.native(code: rc, message: "container logs payload too large")
+                        throw PodishRuntimeError.native(code: rc, message: "workspace logs payload too large")
                     }
                     continue
                 }
@@ -491,7 +491,7 @@ final class PodishRuntimeActor: @unchecked Sendable {
                     do {
                         _ = try self.stopContainer(containerId: containerId, signal: 15, timeoutMs: stopTimeoutMs, state: &state)
                     } catch {
-                        self.emitLog(level: 4, message: "shutdown: stop container \(containerId) failed: \(error.localizedDescription)")
+                        self.emitLog(level: 4, message: "shutdown: stop workspace \(containerId) failed: \(error.localizedDescription)")
                     }
                 }
             }
@@ -753,7 +753,7 @@ final class PodishRuntimeActor: @unchecked Sendable {
             if rc == 34 {
                 capacity *= 2
                 if capacity > 1_048_576 {
-                    throw PodishRuntimeError.native(code: rc, message: "container list too large")
+                    throw PodishRuntimeError.native(code: rc, message: "workspace list too large")
                 }
                 continue
             }
@@ -785,7 +785,7 @@ final class PodishRuntimeActor: @unchecked Sendable {
             if rc == 34 {
                 capacity *= 2
                 if capacity > 1_048_576 {
-                    throw PodishRuntimeError.native(code: rc, message: "image list too large")
+                    throw PodishRuntimeError.native(code: rc, message: "environment list too large")
                 }
                 continue
             }
@@ -841,7 +841,7 @@ final class PodishRuntimeActor: @unchecked Sendable {
             throw PodishRuntimeError.native(code: rcCreate, message: lastError(state: state))
         }
         guard let outContainer else {
-            throw PodishRuntimeError.native(code: -1, message: "container handle nil")
+            throw PodishRuntimeError.native(code: -1, message: "workspace handle nil")
         }
         defer { pod_container_close(outContainer) }
 
@@ -858,7 +858,7 @@ final class PodishRuntimeActor: @unchecked Sendable {
             return running.containerId
         }
 
-        throw PodishRuntimeError.native(code: -1, message: "failed to resolve created container id")
+        throw PodishRuntimeError.native(code: -1, message: "failed to resolve created workspace id")
     }
 
     private func openContainer(containerId: String, state: WorkerState) throws -> UnsafeMutableRawPointer {
@@ -1204,7 +1204,7 @@ final class PodishTerminalSession: ObservableObject {
         let initialStatus = PodishImagePullStatus(
             imageReference: imageRef,
             phase: .resolving,
-            message: "Resolving image reference...",
+            message: "Resolving environment reference...",
             overallBytes: nil,
             overallTotalBytes: nil,
             layerBytes: nil,
@@ -1224,7 +1224,7 @@ final class PodishTerminalSession: ObservableObject {
                         let completedStatus = PodishImagePullStatus(
                             imageReference: imageRef,
                             phase: .completed,
-                            message: "Image pull finished.",
+                            message: "Environment added.",
                             overallBytes: nil,
                             overallTotalBytes: nil,
                             layerBytes: nil,

@@ -254,7 +254,7 @@ private struct IOSHomeView: View {
 
             Section {
                 if orderedContainers.isEmpty {
-                    IOSDashboardEmptyState(message: "No containers")
+                    IOSDashboardEmptyState(message: "No workspaces")
                         .listRowInsets(cardInsets)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -282,7 +282,7 @@ private struct IOSHomeView: View {
                     }
                 }
             } header: {
-                Text("Containers")
+                Text("Workspaces")
             }
         }
         .listStyle(.plain)
@@ -295,7 +295,7 @@ private struct IOSHomeView: View {
                 Button(action: onShowNewContainer) {
                     Image(systemName: "plus")
                 }
-                .accessibilityLabel("Create Container")
+                .accessibilityLabel("Create Workspace")
             }
         }
     }
@@ -330,8 +330,8 @@ private struct IOSDashboardSummaryBar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            IOSDashboardMetricPill(value: "\(runningCount)", title: "Running")
-            IOSDashboardMetricPill(value: "\(stoppedCount)", title: "Stopped")
+            IOSDashboardMetricPill(value: "\(runningCount)", title: "Active")
+            IOSDashboardMetricPill(value: "\(stoppedCount)", title: "Paused")
             IOSDashboardMetricPill(value: "\(totalCount)", title: "Total")
         }
     }
@@ -470,14 +470,14 @@ private struct HomeDashboardView: View {
             Text("Podish")
                 .font(.largeTitle.weight(.semibold))
 
-            Text("Create and manage containers")
+            Text("Launch and manage environments")
                 .font(.body)
                 .foregroundStyle(.secondary)
 
             Button {
                 onAddContainer()
             } label: {
-                Label("Add Container", systemImage: "plus.rectangle.on.rectangle")
+                Label("Add Workspace", systemImage: "plus.rectangle.on.rectangle")
                     .frame(minWidth: 200)
             }
             .buttonStyle(.borderedProminent)

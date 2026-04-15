@@ -2,8 +2,8 @@ import SwiftUI
 
 struct PodishContainer: Identifiable, Hashable {
     enum State: String {
-        case running = "Running"
-        case stopped = "Stopped"
+        case running = "Active"
+        case stopped = "Paused"
         case exited = "Exited"
 
         var color: Color {
@@ -161,9 +161,9 @@ enum PodishNetworkMode: String, CaseIterable, Identifiable, Sendable {
     var displayName: String {
         switch self {
         case .host:
-            return "Host"
+            return "Automatic"
         case .privateNet:
-            return "Private"
+            return "Managed"
         }
     }
 

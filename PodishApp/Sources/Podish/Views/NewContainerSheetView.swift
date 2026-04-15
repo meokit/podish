@@ -10,7 +10,7 @@ struct NewContainerSheetView: View {
         var displayName: String {
             switch self {
             case .host:
-                return "Host"
+                return "Automatic"
             case .custom:
                 return "Custom"
             }
@@ -47,7 +47,7 @@ struct NewContainerSheetView: View {
                 }
             }
             .padding()
-            .navigationTitle("New Container")
+            .navigationTitle("New Workspace")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -108,7 +108,7 @@ struct NewContainerSheetView: View {
 
     private var pullSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Pull Image")
+            Text("Add Environment")
                 .font(.headline)
 
             HStack(spacing: 8) {
@@ -116,7 +116,7 @@ struct NewContainerSheetView: View {
                     #if os(macOS)
                     .textFieldStyle(.roundedBorder)
                     #endif
-                Button("Pull") {
+                Button("Add") {
                     let trimmed = pullImageRef.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty else { return }
                     store.pullImage(trimmed)
@@ -134,20 +134,20 @@ struct NewContainerSheetView: View {
 
     private var imageListSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Images")
+            Text("Environments")
                 .font(.headline)
 
             if store.images.isEmpty {
                 if #available(iOS 17.0, macOS 14.0, *) {
-                    ContentUnavailableView("No Images", systemImage: "shippingbox", description: Text("Pull an image to continue."))
+                    ContentUnavailableView("No Environments", systemImage: "shippingbox", description: Text("Add an environment to continue."))
                 } else {
                     VStack(spacing: 8) {
                         Image(systemName: "shippingbox")
                             .font(.title2)
                             .foregroundStyle(.secondary)
-                        Text("No Images")
+                        Text("No Environments")
                             .font(.headline)
-                        Text("Pull an image to continue.")
+                        Text("Add an environment to continue.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -193,9 +193,9 @@ struct NewContainerSheetView: View {
 
     private var nameSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Container Name (Optional)")
+            Text("Workspace Name (Optional)")
                 .font(.headline)
-            TextField("my-container", text: $containerName)
+            TextField("my-workspace", text: $containerName)
                 #if os(macOS)
                 .textFieldStyle(.roundedBorder)
                 #endif
@@ -204,13 +204,13 @@ struct NewContainerSheetView: View {
 
     private var memorySection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Memory Limit (MB, optional)")
+            Text("Workspace Memory (MB, optional)")
                 .font(.headline)
             TextField("2048", text: $memoryLimitText)
                 #if os(macOS)
                 .textFieldStyle(.roundedBorder)
                 #endif
-            Text("Minimum \(PodishMemoryLimits.minimumMemoryQuotaMB) MB. Leave blank to use the default container limit.")
+            Text("Minimum \(PodishMemoryLimits.minimumMemoryQuotaMB) MB. Leave blank to use the default workspace limit.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -218,9 +218,9 @@ struct NewContainerSheetView: View {
 
     private var networkSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Network")
+            Text("Connection")
                 .font(.headline)
-            Picker("Network", selection: $networkMode) {
+            Picker("Connection", selection: $networkMode) {
                 ForEach(PodishNetworkMode.allCases) { mode in
                     Text(mode.displayName).tag(mode)
                 }
@@ -229,7 +229,7 @@ struct NewContainerSheetView: View {
 
             if networkMode == .privateNet {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Port Forwarding (hostPort:containerPort, one per line)")
+                    Text("Service Access (devicePort:workspacePort, one per line)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     TextEditor(text: $portMappingsText)
@@ -245,9 +245,9 @@ struct NewContainerSheetView: View {
 
     private var dnsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("DNS")
+            Text("Name Resolution")
                 .font(.headline)
-            Picker("DNS", selection: $dnsMode) {
+            Picker("Name Resolution", selection: $dnsMode) {
                 ForEach(DnsMode.allCases) { mode in
                     Text(mode.displayName).tag(mode)
                 }
@@ -255,8 +255,8 @@ struct NewContainerSheetView: View {
             .pickerStyle(.segmented)
 
             Text(dnsMode == .host
-                 ? "Use the host DNS configuration by default."
-                 : "Enter one DNS server per line. Commas and semicolons are also supported.")
+                 ? "Use the default name resolution settings."
+                 : "Enter one resolver per line. Commas and semicolons are also supported.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -332,13 +332,13 @@ struct NewContainerSheetView: View {
         case .resolving:
             return "Resolving \(status.imageReference)"
         case .downloading:
-            return "Pulling \(status.imageReference)"
+            return "Adding \(status.imageReference)"
         case .extracting:
             return "Preparing \(status.imageReference)"
         case .completed:
-            return "Pulled \(status.imageReference)"
+            return "Added \(status.imageReference)"
         case .failed:
-            return "Failed to pull \(status.imageReference)"
+            return "Failed to add \(status.imageReference)"
         }
     }
 
@@ -453,11 +453,11 @@ struct NewContainerSheetView: View {
             .filter { !$0.isEmpty }
 
         guard !servers.isEmpty else {
-            throw ParseError("Enter at least one DNS server, or switch DNS back to Host.")
+            throw ParseError("Enter at least one resolver, or switch Name Resolution back to Automatic.")
         }
 
         for server in servers where server.contains(where: { $0.isWhitespace }) {
-            throw ParseError("DNS server '\(server)' is invalid.")
+            throw ParseError("Resolver '\(server)' is invalid.")
         }
 
         return servers

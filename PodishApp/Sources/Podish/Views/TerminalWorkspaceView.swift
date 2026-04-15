@@ -101,7 +101,7 @@ private struct StartContainerOverlayButton: View {
         }
         .buttonStyle(.plain)
         .disabled(isStarting)
-        .accessibilityLabel(isStarting ? "Starting container" : "Start container")
+        .accessibilityLabel(isStarting ? "Starting workspace" : "Start workspace")
     }
 }
 

@@ -16,9 +16,9 @@ struct ContainerDetailsSheetView: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 12) {
                 Picker("Tab", selection: $selectedTab) {
-                    Text("Logs").tag(1)
-                    Text("Inspect").tag(2)
-                    Text("Mounts").tag(3)
+                    Text("Activity").tag(1)
+                    Text("Details").tag(2)
+                    Text("Storage").tag(3)
                 }
                 .pickerStyle(.segmented)
 
@@ -62,14 +62,14 @@ struct ContainerDetailsSheetView: View {
     private var logsView: some View {
         ScrollView {
             if isLoadingLogs && logs.isEmpty {
-                ProgressView("Loading logs…")
+                ProgressView("Loading activity…")
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else if let logsError {
                 Text(logsError)
                     .foregroundStyle(.red)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else if logs.isEmpty {
-                Text("No logs")
+                Text("No activity yet")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
@@ -85,7 +85,7 @@ struct ContainerDetailsSheetView: View {
     private var inspectView: some View {
         Group {
             if isLoadingInspect && inspect == nil {
-                ProgressView("Loading inspect…")
+                ProgressView("Loading details…")
             } else if let inspectError {
                 Text(inspectError)
                     .foregroundStyle(.red)
@@ -95,7 +95,7 @@ struct ContainerDetailsSheetView: View {
                     .font(.system(.body, design: .monospaced))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
-                Text("No inspect data")
+                Text("No details available")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -107,7 +107,7 @@ struct ContainerDetailsSheetView: View {
             if let inspect {
                 let volumes = inspect.spec.volumes
                 if volumes.isEmpty {
-                    Text("No explicit mounts")
+                    Text("No extra storage configured")
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 } else {
@@ -120,7 +120,7 @@ struct ContainerDetailsSheetView: View {
                     .foregroundStyle(.red)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
-                ProgressView("Loading mounts…")
+                ProgressView("Loading storage…")
             }
         }
     }
@@ -130,16 +130,16 @@ struct ContainerDetailsSheetView: View {
         let memoryLimit = inspect.spec.memoryQuotaBytes.map(Self.formatMemoryQuotaBytes) ?? "-"
         return """
         Name: \(inspect.name)
-        Container ID: \(inspect.containerId)
-        Image: \(inspect.image)
-        State: \(inspect.state)
-        Running: \(inspect.running ? "true" : "false")
-        Exit Code: \(inspect.exitCode.map(String.init) ?? "-")
-        Exe: \(inspect.spec.exe ?? "-")
-        Args: \(inspect.spec.exeArgs.joined(separator: " "))
-        Network Mode: \(inspect.spec.networkMode)
-        Memory Limit: \(memoryLimit)
-        Ports: \(ports.isEmpty ? "-" : ports.joined(separator: ", "))
+        Workspace ID: \(inspect.containerId)
+        Environment: \(inspect.image)
+        Status: \(inspect.state)
+        Active: \(inspect.running ? "true" : "false")
+        Last Exit Code: \(inspect.exitCode.map(String.init) ?? "-")
+        Launch Path: \(inspect.spec.exe ?? "-")
+        Launch Arguments: \(inspect.spec.exeArgs.joined(separator: " "))
+        Connection Mode: \(inspect.spec.networkMode)
+        Workspace Memory: \(memoryLimit)
+        Service Access: \(ports.isEmpty ? "-" : ports.joined(separator: ", "))
         """
     }
 
