@@ -276,6 +276,87 @@ public class AsyncWaitQueueTests
         Assert.Equal(1, fired);
     }
 
+    [Fact]
+    public void RegisterCancelableOnNextSignal_AlreadySignaled_WaitsForFreshSignal()
+    {
+        var scheduler = new KernelScheduler();
+        var process = TestRuntimeFactory.CreateProcess(800);
+        scheduler.RegisterProcess(process);
+
+        var queue = new AsyncWaitQueue(scheduler);
+        var fired = 0;
+        var task = new FiberTask(801, process, new MockEngine(), scheduler);
+
+        void Entry()
+        {
+            queue.Signal();
+
+            var registration = queue.RegisterCancelableOnNextSignal(() =>
+            {
+                fired++;
+                task.Exited = true;
+                task.Status = FiberTaskStatus.Terminated;
+            }, task);
+
+            Assert.NotNull(registration);
+            Assert.Equal(0, fired);
+
+            queue.Signal();
+        }
+
+        task.Continuation = Entry;
+        scheduler.RegisterTask(task);
+        scheduler.Run(100);
+
+        Assert.Equal(1, fired);
+    }
+
+    [Fact]
+    public void RegisterCancelableOnNextSignal_RepeatedSignalsWithoutReset_WakesEachGeneration()
+    {
+        var scheduler = new KernelScheduler();
+        var process = TestRuntimeFactory.CreateProcess(900);
+        scheduler.RegisterProcess(process);
+
+        var queue = new AsyncWaitQueue(scheduler);
+        var fired = 0;
+        var phase = 0;
+        var task = new FiberTask(901, process, new MockEngine(), scheduler);
+
+        void Entry()
+        {
+            if (phase == 0)
+            {
+                phase = 1;
+                var registration = queue.RegisterCancelableOnNextSignal(() =>
+                {
+                    fired++;
+                    phase = 2;
+
+                    var secondRegistration = queue.RegisterCancelableOnNextSignal(() =>
+                    {
+                        fired++;
+                        task.Exited = true;
+                        task.Status = FiberTaskStatus.Terminated;
+                    }, task);
+
+                    Assert.NotNull(secondRegistration);
+                    queue.Signal();
+                }, task);
+
+                Assert.NotNull(registration);
+                queue.Signal();
+            }
+        }
+
+        task.Continuation = Entry;
+        scheduler.RegisterTask(task);
+        scheduler.Run(100);
+
+        Assert.Equal(2, fired);
+        Assert.Equal(2, phase);
+    }
+
     private sealed class MockEngine : Engine
     {
         public MockEngine() : base(true)

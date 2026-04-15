@@ -41,14 +41,12 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
 
         if (scheduler.IsSchedulerThread)
         {
-            handle.Reset();
             handle.Set();
             return;
         }
 
         scheduler.ScheduleFromAnyThread(() =>
         {
-            handle.Reset();
             handle.Set();
         });
     }
@@ -123,7 +121,7 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
 
             if (_counter == 0)
                 _readHandle?.Reset();
-            // Linux eventfd_read() wakes POLLOUT pollers after every successful read.
+            // Linux eventfd wakes POLLOUT pollers after every successful read.
             PulseHandle(_writeHandle, _waitQueues?.Scheduler);
 
             return 8;
@@ -148,7 +146,7 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
                 return -(int)Errno.EAGAIN;
 
             _counter += add;
-            // Linux eventfd_write() wakes POLLIN pollers after every successful write.
+            // Linux eventfd wakes POLLIN pollers after every successful write.
             PulseHandle(_readHandle, _waitQueues?.Scheduler);
             if (_counter == MaxCounter)
                 _writeHandle?.Reset();

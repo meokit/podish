@@ -15,6 +15,7 @@ public class AsyncWaitQueue
 
     private bool _isSignaled;
     private long _nextWaiterId;
+    private long _signalSequence;
     private KernelScheduler? _ownerScheduler;
 
     public AsyncWaitQueue(KernelScheduler ownerScheduler)
@@ -38,16 +39,28 @@ public class AsyncWaitQueue
     {
         AssertSchedulerThread();
         List<WaiterEntry>? toWake = null;
+        long signalSequence;
         lock (_gate)
         {
-            if (_isSignaled) return;
             _isSignaled = true;
+            _signalSequence++;
+            signalSequence = _signalSequence;
             if (_waiters.Count == 0) return;
 
             toWake = _drainBuffer;
             toWake.Clear();
-            toWake.AddRange(_waiters);
-            _waiters.Clear();
+            for (var i = _waiters.Count - 1; i >= 0; i--)
+            {
+                var waiter = _waiters[i];
+                if (waiter.RequiredSignalSequence > signalSequence)
+                    continue;
+
+                toWake.Add(waiter);
+                _waiters.RemoveAt(i);
+            }
+
+            if (toWake.Count == 0)
+                return;
         }
 
         foreach (var waiter in toWake)
@@ -72,6 +85,7 @@ public class AsyncWaitQueue
         {
             _ownerScheduler = ownerScheduler;
             _isSignaled = false;
+            _signalSequence = 0;
             _waiters.Clear();
         }
     }
@@ -139,7 +153,8 @@ public class AsyncWaitQueue
             }
 
             var id = ++_nextWaiterId;
-            _waiters.Add(new WaiterEntry(id, continuation, context, token, scheduler));
+            var requiredSignalSequence = wakeImmediatelyIfSignaled ? 0 : _signalSequence + 1;
+            _waiters.Add(new WaiterEntry(id, continuation, context, token, scheduler, requiredSignalSequence));
             return new WaitRegistration(this, id);
         }
     }
@@ -222,19 +237,21 @@ public class AsyncWaitQueue
     private readonly struct WaiterEntry
     {
         public WaiterEntry(long id, Action continuation, FiberTask? context, FiberTask.WaitToken? token,
-            KernelScheduler scheduler)
+            KernelScheduler scheduler, long requiredSignalSequence)
         {
             Id = id;
             Continuation = continuation;
             Context = context;
             Token = token;
             Scheduler = scheduler;
+            RequiredSignalSequence = requiredSignalSequence;
         }
 
         public long Id { get; }
         public Action Continuation { get; }
         public FiberTask? Context { get; }
         public FiberTask.WaitToken? Token { get; }
+        public long RequiredSignalSequence { get; }
         public KernelScheduler Scheduler { get; }
 
         public void Schedule()
