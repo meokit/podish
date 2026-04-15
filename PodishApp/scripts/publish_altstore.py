@@ -14,11 +14,21 @@ PROJECT_DIR = "/Users/jiangyiheng/repos/x86emu/PodishApp"
 PROJECT_PATH = f"{PROJECT_DIR}/PodishApp.xcodeproj"
 SCHEME = "Podish"
 TEMP_DIR = "/Users/jiangyiheng/repos/x86emu/.tmp/publish_altstore"
+PUBLISH_AUTHOR_NAME = "GiantNeko"
+PUBLISH_AUTHOR_EMAIL = "giantneko@icloud.com"
 # ---------------------
 
-def run(cmd, cwd=None, check=True):
+def build_publish_env():
+    env = os.environ.copy()
+    env["GIT_AUTHOR_NAME"] = PUBLISH_AUTHOR_NAME
+    env["GIT_AUTHOR_EMAIL"] = PUBLISH_AUTHOR_EMAIL
+    env["GIT_COMMITTER_NAME"] = PUBLISH_AUTHOR_NAME
+    env["GIT_COMMITTER_EMAIL"] = PUBLISH_AUTHOR_EMAIL
+    return env
+
+def run(cmd, cwd=None, check=True, env=None):
     print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env)
     if check and result.returncode != 0:
         print(f"STDOUT: {result.stdout}")
         print(f"STDERR: {result.stderr}")
@@ -59,6 +69,7 @@ def get_git_tag():
 
 def main():
     check_requirements()
+    publish_env = build_publish_env()
     
     # 0. Get Version from Git Tag
     git_tag, version_num = get_git_tag()
@@ -184,8 +195,16 @@ def main():
             os.makedirs(altstore_repo_dir)
         run(["git", "init"], cwd=altstore_repo_dir)
         run(["git", "remote", "add", "origin", REPO_URL], cwd=altstore_repo_dir, check=False)
-        # Ensure we are on 'main'
-        run(["git", "checkout", "-b", "main"], cwd=altstore_repo_dir, check=False)
+    else:
+        run(["git", "fetch", "origin", "main"], cwd=altstore_repo_dir, check=False)
+
+    # Always rebuild the AltStore repo from a throwaway orphan branch and force-push it.
+    publish_branch = f"altstore-publish-{full_version}"
+    run(["git", "checkout", "--orphan", publish_branch], cwd=altstore_repo_dir, check=False)
+    run(["git", "rm", "-r", "-f", "--ignore-unmatch", "."], cwd=altstore_repo_dir, check=False)
+    run(["git", "clean", "-fdx"], cwd=altstore_repo_dir, check=False)
+    run(["git", "config", "user.name", PUBLISH_AUTHOR_NAME], cwd=altstore_repo_dir)
+    run(["git", "config", "user.email", PUBLISH_AUTHOR_EMAIL], cwd=altstore_repo_dir)
 
     # Copy icon if it exists in the main project
     main_icon = f"{PROJECT_DIR}/icon.png"
@@ -253,13 +272,27 @@ def main():
     # Initialize if git status fails or if it's a new repo
     run(["git", "add", "apps.json", "icon.png"], cwd=altstore_repo_dir, check=False)
     run(["git", "add", "apps.json", "icon.png"], cwd=altstore_repo_dir)
-    run(["git", "commit", "-m", f"Update to version {full_version}"], cwd=altstore_repo_dir, check=False)
-    run(["git", "push", "origin", "main"], cwd=altstore_repo_dir)
+    run(["git", "commit", "-m", f"Update to version {full_version}"], cwd=altstore_repo_dir, check=False, env=publish_env)
+    run(["git", "push", "--force", "origin", "HEAD:main"], cwd=altstore_repo_dir)
 
     # 6. GH Release
     print(f"Creating/Uploading to GitHub Release {tag}...")
     # Create release (will not error if exists due to check=False)
-    run(["gh", "release", "create", tag, "--repo", REPO_URL, "--title", f"Release {full_version}", "--notes", f"Automated release {full_version}"], check=False)
+    run(
+        [
+            "gh",
+            "release",
+            "create",
+            tag,
+            "--repo",
+            REPO_URL,
+            "--title",
+            f"Release {full_version}",
+            "--notes",
+            f"Automated release {full_version} by {PUBLISH_AUTHOR_NAME} <{PUBLISH_AUTHOR_EMAIL}>",
+        ],
+        check=False,
+    )
     # Upload IPA and JSON
     run(["gh", "release", "upload", tag, ipa_path, release_json_path, "--repo", REPO_URL, "--clobber"])
 
