@@ -51,7 +51,7 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
         });
     }
 
-    
+
     bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
         short events)
     {
@@ -186,8 +186,13 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
             if (_lifecycleClosed)
                 return null;
 
-            if (((events & LinuxConstants.POLLIN) != 0 && _counter > 0) ||
-                ((events & LinuxConstants.POLLOUT) != 0 && _counter < MaxCounter))
+            short immediateReady = 0;
+            if ((events & LinuxConstants.POLLIN) != 0 && _counter > 0)
+                immediateReady |= LinuxConstants.POLLIN;
+            if ((events & LinuxConstants.POLLOUT) != 0 && _counter < MaxCounter)
+                immediateReady |= LinuxConstants.POLLOUT;
+
+            if (immediateReady != 0)
             {
                 callback();
                 return NoopWaitRegistration.Instance;
