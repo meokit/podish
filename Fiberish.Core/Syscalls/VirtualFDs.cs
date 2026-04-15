@@ -51,13 +51,14 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
         });
     }
 
+    
     bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
         short events)
     {
         var scheduler = dispatcher.Scheduler
                         ?? throw new InvalidOperationException("Eventfd readiness wait requires an explicit scheduler.");
         EnsureWaitQueues(scheduler);
-        return RegisterWaitCore(callback, scheduler, null, events);
+        return RegisterWaitCore(linuxFile, callback, scheduler, null, events);
     }
 
     IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher,
@@ -66,7 +67,7 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
         var scheduler = dispatcher.Scheduler
                         ?? throw new InvalidOperationException("Eventfd readiness wait requires an explicit scheduler.");
         EnsureWaitQueues(scheduler);
-        return RegisterWaitHandleCore(callback, scheduler, null, events);
+        return RegisterWaitHandleCore(linuxFile, callback, scheduler, null, events);
     }
 
     IDisposable? IDispatcherEdgeWaitSource.RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile,
@@ -76,19 +77,19 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
         if (scheduler == null)
             return null;
         EnsureWaitQueues(scheduler);
-        return RegisterEdgeTriggeredWaitHandleCore(callback, scheduler, null, events);
+        return RegisterEdgeTriggeredWaitHandleCore(linuxFile, callback, scheduler, null, events);
     }
 
     bool ITaskWaitSource.RegisterWait(LinuxFile linuxFile, FiberTask task, Action callback, short events)
     {
         EnsureWaitQueues(task.CommonKernel);
-        return RegisterWaitCore(callback, null, task, events);
+        return RegisterWaitCore(linuxFile, callback, null, task, events);
     }
 
     IDisposable? ITaskWaitSource.RegisterWaitHandle(LinuxFile linuxFile, FiberTask task, Action callback, short events)
     {
         EnsureWaitQueues(task.CommonKernel);
-        return RegisterWaitHandleCore(callback, null, task, events);
+        return RegisterWaitHandleCore(linuxFile, callback, null, task, events);
     }
 
     protected internal override int ReadSpan(LinuxFile file, Span<byte> buffer, long offset)
@@ -280,7 +281,8 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
         base.OnEvictCache();
     }
 
-    private bool RegisterWaitCore(Action callback, KernelScheduler? scheduler, FiberTask? task, short events)
+    private bool RegisterWaitCore(LinuxFile? file, Action callback, KernelScheduler? scheduler, FiberTask? task,
+        short events)
     {
         using (EnterStateScope())
         {
@@ -302,8 +304,8 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
         }
     }
 
-    private IDisposable? RegisterWaitHandleCore(Action callback, KernelScheduler? scheduler, FiberTask? task,
-        short events)
+    private IDisposable? RegisterWaitHandleCore(LinuxFile? file, Action callback, KernelScheduler? scheduler,
+        FiberTask? task, short events)
     {
         using (EnterStateScope())
         {
@@ -325,8 +327,8 @@ public class EventFdInode : TmpfsInode, ITaskWaitSource, IDispatcherWaitSource, 
         }
     }
 
-    private IDisposable? RegisterEdgeTriggeredWaitHandleCore(Action callback, KernelScheduler? scheduler, FiberTask? task,
-        short events)
+    private IDisposable? RegisterEdgeTriggeredWaitHandleCore(LinuxFile? file, Action callback,
+        KernelScheduler? scheduler, FiberTask? task, short events)
     {
         using (EnterStateScope())
         {
