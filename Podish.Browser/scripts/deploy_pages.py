@@ -41,8 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--commit-hash", help="Optional commit hash to pass through to wrangler.")
     parser.add_argument(
         "--compatibility-date",
-        default=datetime.now(timezone.utc).date().isoformat(),
-        help="Wrangler compatibility date. Defaults to the current UTC date.",
+        help="Wrangler compatibility date. Defaults to the existing wrangler.jsonc value when present, otherwise the current UTC date.",
     )
     parser.add_argument("--wrangler-bin", default="wrangler", help="Wrangler executable to invoke.")
     parser.add_argument("--skip-upload", action="store_true", help="Skip uploading rootfs objects to R2.")
@@ -89,6 +88,10 @@ def main() -> None:
         if not cloudflare_dir.is_dir():
             raise SystemExit(f"Cloudflare directory not found: {cloudflare_dir}")
         staging_dir = cloudflare_dir / ".dist"
+        compatibility_date = resolve_compatibility_date(
+            cloudflare_dir=cloudflare_dir,
+            requested_compatibility_date=args.compatibility_date,
+        )
 
         print(f"Staging static Pages assets from {publish_dir}")
         stage_static_assets(publish_dir, staging_dir)
@@ -98,7 +101,7 @@ def main() -> None:
             cloudflare_dir=cloudflare_dir,
             project_name=args.project_name,
             bucket_name=args.r2_bucket,
-            compatibility_date=args.compatibility_date,
+            compatibility_date=compatibility_date,
             rootfs_prefix=r2_prefix,
         )
 
@@ -185,6 +188,24 @@ def write_headers_file(headers_path: Path) -> None:
 """,
         encoding="utf-8",
     )
+
+
+def resolve_compatibility_date(*, cloudflare_dir: Path, requested_compatibility_date: str | None) -> str:
+    if requested_compatibility_date:
+        return requested_compatibility_date
+
+    config_path = cloudflare_dir / "wrangler.jsonc"
+    if config_path.is_file():
+        try:
+            existing_config = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            existing_config = None
+        if isinstance(existing_config, dict):
+            existing_date = existing_config.get("compatibility_date")
+            if isinstance(existing_date, str) and existing_date:
+                return existing_date
+
+    return datetime.now(timezone.utc).date().isoformat()
 
 
 def write_wrangler_config(

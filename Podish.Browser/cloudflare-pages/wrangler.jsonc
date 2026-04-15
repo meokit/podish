@@ -1,7 +1,7 @@
 {
   "$schema": "../frontend/node_modules/wrangler/config-schema.json",
   "name": "podish",
-  "compatibility_date": "2026-04-05",
+  "compatibility_date": "2026-04-14",
   "pages_build_output_dir": "./.dist",
   "vars": {
     "ROOTFS_PREFIX": "rootfs"

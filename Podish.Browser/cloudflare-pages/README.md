@@ -32,8 +32,10 @@ The script stages a Pages-ready static directory, injects `_headers` for
 COOP/COEP, uploads `rootfs/` to R2, generates `wrangler.jsonc`, and runs
 `wrangler pages deploy`.
 
-The default compatibility date uses the current UTC date so it doesn't get
-rejected as "in the future" when your local time zone is ahead of UTC.
+By default, the deployment script reuses the existing `compatibility_date` from
+`wrangler.jsonc`. If the file does not exist yet, it falls back to the current
+UTC date so the value does not get rejected as "in the future" when your local
+time zone is ahead of UTC.
 
 ## Compression
 
