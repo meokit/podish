@@ -689,6 +689,12 @@ public class Engine : IDisposable
         return X86Native.IsDirty(State, addr) != 0;
     }
 
+    public virtual bool HasSlowWrite(uint addr)
+    {
+        AssertNotDisposed();
+        return X86Native.HasSlowWrite(State, addr) != 0;
+    }
+
     public unsafe int CollectMappedPages(uint addr, uint size, Span<X86Native.PageMapping> buffer)
     {
         EnsureAddressSpaceSynchronized();

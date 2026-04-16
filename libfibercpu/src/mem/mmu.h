@@ -31,7 +31,7 @@ struct PageTableChunk {
     // This guarantees cloned MMUs never "internalize" externally managed memory.
     PageTableChunk(const PageTableChunk& other) {
         for (size_t i = 0; i < 1024; ++i) {
-            permissions[i] = other.permissions[i];
+            permissions[i] = other.permissions[i] & ~Property::ForceWriteSlow;
 
             if (!other.pages[i]) {
                 pages[i] = nullptr;
@@ -119,6 +119,148 @@ struct BlockCacheKeyHash {
     }
 };
 
+struct HostPageSet {
+    static constexpr uint32_t InlineCapacity = 4;
+
+    union Storage {
+        std::array<uintptr_t, InlineCapacity> inline_pages;
+        uintptr_t* spill;
+
+        Storage() : inline_pages{} {}
+    } storage;
+
+    ankerl::unordered_dense::set<uintptr_t> spill_lookup;
+    uint32_t count = 0;
+    uint32_t capacity = InlineCapacity;
+
+    HostPageSet() = default;
+
+    HostPageSet(const HostPageSet& other) { copy_from(other); }
+
+    HostPageSet& operator=(const HostPageSet& other) {
+        if (this != &other) {
+            reset();
+            copy_from(other);
+        }
+        return *this;
+    }
+
+    HostPageSet(HostPageSet&& other) noexcept { move_from(std::move(other)); }
+
+    HostPageSet& operator=(HostPageSet&& other) noexcept {
+        if (this != &other) {
+            reset();
+            move_from(std::move(other));
+        }
+        return *this;
+    }
+
+    ~HostPageSet() { reset(); }
+
+    [[nodiscard]] bool empty() const { return count == 0; }
+
+    [[nodiscard]] uint32_t size() const { return count; }
+
+    [[nodiscard]] bool contains(uintptr_t page) const {
+        if (!is_inline()) return spill_lookup.contains(page);
+
+        const uintptr_t* pages = data();
+        for (uint32_t i = 0; i < count; ++i) {
+            if (pages[i] == page) return true;
+        }
+        return false;
+    }
+
+    bool push_unique(uintptr_t page) {
+        if (page == 0) return false;
+        if (!is_inline()) {
+            auto [_, inserted] = spill_lookup.emplace(page);
+            if (!inserted) return false;
+            push_back(page);
+            return true;
+        }
+
+        if (contains(page)) return false;
+        push_back(page);
+        return true;
+    }
+
+    [[nodiscard]] uintptr_t operator[](uint32_t index) const { return data()[index]; }
+
+    [[nodiscard]] const uintptr_t* begin() const { return data(); }
+    [[nodiscard]] const uintptr_t* end() const { return data() + count; }
+
+private:
+    [[nodiscard]] bool is_inline() const { return capacity == InlineCapacity; }
+
+    [[nodiscard]] uintptr_t* data() { return is_inline() ? storage.inline_pages.data() : storage.spill; }
+
+    [[nodiscard]] const uintptr_t* data() const { return is_inline() ? storage.inline_pages.data() : storage.spill; }
+
+    void push_back(uintptr_t page) {
+        if (count == capacity) grow();
+        data()[count++] = page;
+    }
+
+    void grow() {
+        const bool was_inline = is_inline();
+        const uint32_t new_capacity = capacity * 2;
+        const uintptr_t* old_pages = data();
+        auto* new_pages = new uintptr_t[new_capacity];
+        std::copy_n(old_pages, count, new_pages);
+        if (!was_inline) {
+            delete[] storage.spill;
+        }
+        storage.spill = new_pages;
+        capacity = new_capacity;
+        if (!was_inline) return;
+
+        spill_lookup.clear();
+        spill_lookup.reserve(new_capacity);
+        for (uint32_t i = 0; i < count; ++i) {
+            spill_lookup.emplace(new_pages[i]);
+        }
+    }
+
+    void reset() {
+        if (!is_inline()) delete[] storage.spill;
+        storage.inline_pages = {};
+        spill_lookup = {};
+        count = 0;
+        capacity = InlineCapacity;
+    }
+
+    void copy_from(const HostPageSet& other) {
+        count = other.count;
+        capacity = other.capacity;
+        if (other.is_inline()) {
+            storage.inline_pages = other.storage.inline_pages;
+            spill_lookup = {};
+            return;
+        }
+
+        spill_lookup = other.spill_lookup;
+        storage.spill = new uintptr_t[capacity];
+        std::copy_n(other.storage.spill, count, storage.spill);
+    }
+
+    void move_from(HostPageSet&& other) {
+        count = other.count;
+        capacity = other.capacity;
+        spill_lookup = std::move(other.spill_lookup);
+        if (other.is_inline()) {
+            storage.inline_pages = other.storage.inline_pages;
+        } else {
+            storage.spill = other.storage.spill;
+        }
+
+        other.storage.inline_pages = {};
+        other.spill_lookup = {};
+        other.count = 0;
+        other.capacity = InlineCapacity;
+    }
+};
+
 struct CodeCacheState {
     struct BlockHostPageRef {
         uintptr_t host_page_base = 0;
@@ -145,7 +287,12 @@ struct CodeCacheState {
 
     CodeCacheState() { InitializeInvalidBasicBlock(dummy_invalid_block); }
 
-    void ResetReachability() {
+    void ResetReachability(HostPageSet* affected_host_pages = nullptr) {
+        if (affected_host_pages) {
+            for (const auto& [host_page_base, _] : page_to_blocks) {
+                affected_host_pages->push_unique(host_page_base);
+            }
+        }
         for (auto& entry : block_entries) {
             if (entry.block != nullptr) {
                 entry.block->Invalidate();
@@ -170,7 +317,7 @@ struct CodeCacheState {
         return it == block_cache.end() ? nullptr : block_entries[it->second].block;
     }
 
-    void RegisterBlockHostPages(uint32_t block_index, const std::vector<uintptr_t>& host_page_bases) {
+    void RegisterBlockHostPages(uint32_t block_index, const HostPageSet& host_page_bases) {
         auto& entry = block_entries[block_index];
         entry.host_pages.resize(host_page_bases.size());
         for (uint32_t i = 0; i < host_page_bases.size(); ++i) {
@@ -182,10 +329,13 @@ struct CodeCacheState {
         }
     }
 
-    void RemoveBlockHostPagesByIndex(uint32_t block_index) {
+    void RemoveBlockHostPagesByIndex(uint32_t block_index, HostPageSet* affected_host_pages = nullptr) {
         auto& entry = block_entries[block_index];
         for (int32_t i = static_cast<int32_t>(entry.host_pages.size()) - 1; i >= 0; --i) {
             const auto host_page_ref = entry.host_pages[static_cast<size_t>(i)];
+            if (affected_host_pages) {
+                affected_host_pages->push_unique(host_page_ref.host_page_base);
+            }
             auto page_it = page_to_blocks.find(host_page_ref.host_page_base);
             if (page_it == page_to_blocks.end()) continue;
 
@@ -209,10 +359,10 @@ struct CodeCacheState {
         entry.host_pages.clear();
     }
 
-    void RemoveBlockHostPages(const BlockCacheKey& cache_key) {
+    void RemoveBlockHostPages(const BlockCacheKey& cache_key, HostPageSet* affected_host_pages = nullptr) {
         auto block_it = block_cache.find(cache_key);
         if (block_it == block_cache.end()) return;
-        RemoveBlockHostPagesByIndex(block_it->second);
+        RemoveBlockHostPagesByIndex(block_it->second, affected_host_pages);
     }
 
     void FixupMovedBlockIndex(uint32_t block_index) {
@@ -231,8 +381,8 @@ struct CodeCacheState {
         }
     }
 
-    BasicBlock* CacheDecodedBlock(const BlockCacheKey& cache_key, const std::vector<uintptr_t>& host_page_bases,
-                                  BasicBlock* block) {
+    BasicBlock* CacheDecodedBlock(const BlockCacheKey& cache_key, const HostPageSet& host_page_bases, BasicBlock* block,
+                                  HostPageSet* affected_host_pages = nullptr) {
         auto [it, inserted] = block_cache.try_emplace(cache_key, static_cast<uint32_t>(block_entries.size()));
         if (inserted) {
             block_entries.push_back(BlockCacheEntry{cache_key, block, {}});
@@ -240,18 +390,28 @@ struct CodeCacheState {
             auto& entry = block_entries[it->second];
             BasicBlock* existing = entry.block;
             if (existing != nullptr && existing->is_valid() && existing != block) {
+                if (affected_host_pages) {
+                    for (uintptr_t host_page_base : host_page_bases) {
+                        affected_host_pages->push_unique(host_page_base);
+                    }
+                }
                 return existing;
             }
 
             entry.block = block;
-            RemoveBlockHostPagesByIndex(it->second);
+            RemoveBlockHostPagesByIndex(it->second, affected_host_pages);
         }
 
         RegisterBlockHostPages(it->second, host_page_bases);
+        if (affected_host_pages) {
+            for (uintptr_t host_page_base : host_page_bases) {
+                affected_host_pages->push_unique(host_page_base);
+            }
+        }
         return block;
     }
 
-    void EraseBlock(const BlockCacheKey& cache_key) {
+    void EraseBlock(const BlockCacheKey& cache_key, HostPageSet* affected_host_pages = nullptr) {
         auto it = block_cache.find(cache_key);
         if (it == block_cache.end()) return;
 
@@ -261,7 +421,7 @@ struct CodeCacheState {
             entry.block->Invalidate();
         }
 
-        RemoveBlockHostPagesByIndex(block_index);
+        RemoveBlockHostPagesByIndex(block_index, affected_host_pages);
         block_cache.erase(it);
 
         const uint32_t last_index = static_cast<uint32_t>(block_entries.size() - 1);
@@ -278,23 +438,23 @@ struct CodeCacheState {
         block_entries.pop_back();
     }
 
-    void InvalidateHostPage(uintptr_t host_page_base) {
-        auto it = page_to_blocks.find(host_page_base);
-        if (it == page_to_blocks.end()) return;
+    void InvalidateHostPage(uintptr_t host_page_base, HostPageSet* affected_host_pages = nullptr) {
+        while (true) {
+            auto it = page_to_blocks.find(host_page_base);
+            if (it == page_to_blocks.end() || it->second.empty()) return;
 
-        const std::vector<PageBlockRef> block_refs = it->second;
-        for (const PageBlockRef& block_ref : block_refs) {
+            const PageBlockRef block_ref = it->second.back();
             auto& entry = block_entries[block_ref.block_index];
             if (entry.block != nullptr) {
                 entry.block->Invalidate();
             }
-            RemoveBlockHostPagesByIndex(block_ref.block_index);
+            RemoveBlockHostPagesByIndex(block_ref.block_index, affected_host_pages);
         }
     }
 
-    void InvalidateHostPages(const std::vector<uintptr_t>& host_page_bases) {
+    void InvalidateHostPages(const HostPageSet& host_page_bases, HostPageSet* affected_host_pages = nullptr) {
         for (uintptr_t host_page_base : host_page_bases) {
-            InvalidateHostPage(host_page_base);
+            InvalidateHostPage(host_page_base, affected_host_pages);
         }
     }
 
@@ -475,12 +635,10 @@ private:
     void* smc_opaque = nullptr;
 
 public:
-    // Invariant: any executable mapping must also force writes down the slow path.
-    // External writable aliases inherit ForceWriteSlow when they share a host page
-    // with any executable alias in the same MMU.
-    static Property normalize_mapping_perms(Property perms) {
-        return has_property(perms, Property::Exec) ? (perms | Property::ForceWriteSlow) : perms;
-    }
+    // ForceWriteSlow is a runtime-only SMC armed bit. Mapping calls must not
+    // persist or clone it; the MMU recomputes it from alias metadata and the
+    // live block cache.
+    static Property normalize_mapping_perms(Property perms) { return perms & ~Property::ForceWriteSlow; }
 
     static bool should_track_external_alias(Property perms, HostAddr page) {
         return page != nullptr && has_property(perms, Property::External);
@@ -509,7 +667,14 @@ public:
         if (has_property(perms, Property::Write)) state.write_count++;
     }
 
-    void refresh_force_write_slow_for_host_page(HostAddr page) {
+    [[nodiscard]] bool host_page_has_live_blocks(HostAddr page) const {
+        if (!core_ || page == nullptr) return false;
+
+        auto it = core_->code_cache.page_to_blocks.find(reinterpret_cast<uintptr_t>(page));
+        return it != core_->code_cache.page_to_blocks.end() && !it->second.empty();
+    }
+
+    void refresh_smc_armed_for_host_page(HostAddr page) {
         if (!core_ || page == nullptr) return;
 
         auto* dir = current_page_directory();
@@ -518,7 +683,7 @@ public:
         auto it = core_->external_aliases.find(reinterpret_cast<uintptr_t>(page));
         if (it == core_->external_aliases.end()) return;
 
-        const bool any_exec_alias = it->second.exec_count != 0;
+        const bool arm_write_slow = it->second.exec_count != 0 && host_page_has_live_blocks(page);
         // Keep the page-table bit as the single source of truth for write-fast-path
         // eligibility so read-path refill never needs to consult alias metadata.
         for (uint32_t guest_page : it->second.guest_pages) {
@@ -528,11 +693,16 @@ public:
             if (!chunk || chunk->pages[l2_idx] != page) continue;
 
             auto perms = chunk->permissions[l2_idx] & ~Property::ForceWriteSlow;
-            if (has_property(perms, Property::Exec) || (any_exec_alias && has_property(perms, Property::Write)))
-                perms = perms | Property::ForceWriteSlow;
+            if (arm_write_slow && has_property(perms, Property::Write)) perms = perms | Property::ForceWriteSlow;
 
             chunk->permissions[l2_idx] = perms;
             tlb.flush_page(guest_page);
+        }
+    }
+
+    void refresh_smc_armed_for_host_pages(const HostPageSet& host_page_bases) {
+        for (uintptr_t host_page_base : host_page_bases) {
+            refresh_smc_armed_for_host_page(reinterpret_cast<HostAddr>(host_page_base));
         }
     }
 
@@ -540,8 +710,8 @@ public:
                               Property new_perms) {
         remove_external_alias(guest_page, old_page, old_perms);
         add_external_alias(guest_page, new_page, new_perms);
-        refresh_force_write_slow_for_host_page(old_page);
-        refresh_force_write_slow_for_host_page(new_page);
+        refresh_smc_armed_for_host_page(old_page);
+        refresh_smc_armed_for_host_page(new_page);
     }
 
     [[nodiscard]] bool has_external_exec_alias(HostAddr page) const {
@@ -634,6 +804,8 @@ private:
                 auto* page = chunk->pages[l2_idx];
                 if (page == nullptr || !has_property(perms, Property::External)) continue;
 
+                chunk->permissions[l2_idx] = perms & ~Property::ForceWriteSlow;
+
                 const uint32_t guest_page = (l1_idx << 22) | (l2_idx << 12);
                 auto& state = core->external_aliases[reinterpret_cast<uintptr_t>(page)];
                 state.guest_pages.push_unique(guest_page);
@@ -642,10 +814,10 @@ private:
             }
         }
 
-        // Recompute ForceWriteSlow from the rebuilt alias graph so cloned MMUs
-        // preserve local SMC trapping when new aliases are introduced later.
+        // Recompute the runtime-only SMC armed bit from the rebuilt alias graph.
         for (const auto& [host_page_base, state] : core->external_aliases) {
-            const bool any_exec_alias = state.exec_count != 0;
+            const bool arm_write_slow =
+                state.exec_count != 0 && core->code_cache.page_to_blocks.contains(host_page_base);
             auto* page = reinterpret_cast<HostAddr>(host_page_base);
             for (uint32_t guest_page : state.guest_pages) {
                 const uint32_t l1_idx = guest_page >> 22;
@@ -654,8 +826,7 @@ private:
                 if (!chunk || chunk->pages[l2_idx] != page) continue;
 
                 auto perms = chunk->permissions[l2_idx] & ~Property::ForceWriteSlow;
-                if (has_property(perms, Property::Exec) || (any_exec_alias && has_property(perms, Property::Write)))
-                    perms = perms | Property::ForceWriteSlow;
+                if (arm_write_slow && has_property(perms, Property::Write)) perms = perms | Property::ForceWriteSlow;
                 chunk->permissions[l2_idx] = perms;
             }
         }
@@ -834,7 +1005,7 @@ public:
                     dst_chunk = std::make_unique<PageTableChunk>();
                 }
 
-                dst_chunk->permissions[l2] = perms;
+                dst_chunk->permissions[l2] = perms & ~Property::ForceWriteSlow;
                 if (src_chunk->pages[l2]) {
                     dst_chunk->pages[l2] = new std::byte[PAGE_SIZE];
                     std::memcpy(dst_chunk->pages[l2], src_chunk->pages[l2], PAGE_SIZE);
@@ -867,7 +1038,7 @@ public:
                     dst_chunk = std::make_unique<PageTableChunk>();
                 }
 
-                dst_chunk->permissions[l2] = perms;
+                dst_chunk->permissions[l2] = perms & ~Property::ForceWriteSlow;
                 if (!src_chunk->pages[l2]) continue;
 
                 if (has_property(perms, Property::External)) {
@@ -917,8 +1088,8 @@ public:
         return BlockCacheKey{*host_page_base, guest_eip};
     }
 
-    [[nodiscard]] std::vector<uintptr_t> collect_host_page_bases_for_guest_range(uint32_t addr, uint32_t size) const {
-        std::vector<uintptr_t> host_page_bases;
+    [[nodiscard]] HostPageSet collect_host_page_bases_for_guest_range(uint32_t addr, uint32_t size) const {
+        HostPageSet host_page_bases;
         if (size == 0) return host_page_bases;
 
         const uint64_t start_page = static_cast<uint64_t>(addr) & ~static_cast<uint64_t>(PAGE_MASK);
@@ -926,13 +1097,10 @@ public:
         const uint64_t end_page = last_addr & ~static_cast<uint64_t>(PAGE_MASK);
         for (uint64_t page = start_page;; page += PAGE_SIZE) {
             if (auto host_page_base = try_get_host_page_base(static_cast<uint32_t>(page))) {
-                host_page_bases.push_back(*host_page_base);
+                host_page_bases.push_unique(*host_page_base);
             }
             if (page == end_page) break;
         }
-
-        std::sort(host_page_bases.begin(), host_page_bases.end());
-        host_page_bases.erase(std::unique(host_page_bases.begin(), host_page_bases.end()), host_page_bases.end());
         return host_page_bases;
     }
 
@@ -977,21 +1145,27 @@ public:
         const uint32_t last_guest_addr =
             block && block->end_eip > cache_eip ? static_cast<uint32_t>(block->end_eip - 1) : cache_eip;
         auto host_page_bases = collect_host_page_bases_for_guest_range(cache_eip, last_guest_addr - cache_eip + 1);
-        block = code_cache().CacheDecodedBlock(*cache_key, host_page_bases, block);
+        HostPageSet affected_host_pages;
+        block = code_cache().CacheDecodedBlock(*cache_key, host_page_bases, block, &affected_host_pages);
         remember_block_lookup_cache(cache_key->host_page_base, cache_key->guest_eip, block);
+        refresh_smc_armed_for_host_pages(affected_host_pages);
         return block;
     }
 
     void reset_code_cache() {
         clear_block_lookup_cache();
-        code_cache().ResetReachability();
+        HostPageSet affected_host_pages;
+        code_cache().ResetReachability(&affected_host_pages);
+        refresh_smc_armed_for_host_pages(affected_host_pages);
     }
 
     void erase_cached_block(uint32_t guest_eip) {
         auto cache_key = make_block_cache_key(guest_eip);
         if (cache_key) {
             invalidate_block_lookup_cache_entry(cache_key->host_page_base, cache_key->guest_eip);
-            code_cache().EraseBlock(*cache_key);
+            HostPageSet affected_host_pages;
+            code_cache().EraseBlock(*cache_key, &affected_host_pages);
+            refresh_smc_armed_for_host_pages(affected_host_pages);
         }
     }
 
@@ -999,7 +1173,9 @@ public:
         auto host_page_base = try_get_host_page_base(guest_addr);
         if (host_page_base) {
             invalidate_block_lookup_cache_page(*host_page_base);
-            code_cache().InvalidateHostPage(*host_page_base);
+            HostPageSet affected_host_pages;
+            code_cache().InvalidateHostPage(*host_page_base, &affected_host_pages);
+            refresh_smc_armed_for_host_pages(affected_host_pages);
         }
     }
 
@@ -1008,22 +1184,32 @@ public:
         for (uintptr_t host_page_base : host_page_bases) {
             invalidate_block_lookup_cache_page(host_page_base);
         }
-        code_cache().InvalidateHostPages(host_page_bases);
+        HostPageSet affected_host_pages;
+        code_cache().InvalidateHostPages(host_page_bases, &affected_host_pages);
+        refresh_smc_armed_for_host_pages(affected_host_pages);
     }
 
-    void invalidate_code_cache_host_pages(const std::vector<uintptr_t>& host_page_bases) {
+    void invalidate_code_cache_host_pages(const HostPageSet& host_page_bases) {
         for (uintptr_t host_page_base : host_page_bases) {
             invalidate_block_lookup_cache_page(host_page_base);
         }
-        code_cache().InvalidateHostPages(host_page_bases);
+        HostPageSet affected_host_pages;
+        code_cache().InvalidateHostPages(host_page_bases, &affected_host_pages);
+        refresh_smc_armed_for_host_pages(affected_host_pages);
     }
 
     void invalidate_code_cache_host_pages(const uintptr_t* host_page_bases, size_t count) {
         if (!host_page_bases || count == 0) return;
+        HostPageSet requested_host_pages;
         for (size_t i = 0; i < count; ++i) {
+            if (host_page_bases[i] == 0) continue;
             invalidate_block_lookup_cache_page(host_page_bases[i]);
-            code_cache().InvalidateHostPage(host_page_bases[i]);
+            requested_host_pages.push_unique(host_page_bases[i]);
         }
+        if (requested_host_pages.empty()) return;
+        HostPageSet affected_host_pages;
+        code_cache().InvalidateHostPages(requested_host_pages, &affected_host_pages);
+        refresh_smc_armed_for_host_pages(affected_host_pages);
     }
 
     // Callback Setup
@@ -1201,7 +1387,7 @@ public:
                 // Clear permissions
                 chunk->permissions[l2_idx] = Property::None;
                 remove_external_alias(curr, old_page, old_perms);
-                refresh_force_write_slow_for_host_page(old_page);
+                refresh_smc_armed_for_host_page(old_page);
             }
         }
         tlb.flush();

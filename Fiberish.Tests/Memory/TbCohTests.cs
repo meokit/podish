@@ -4,6 +4,7 @@ using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
 using Fiberish.X86.Native;
+using System.Text.Json;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -126,6 +127,167 @@ public class TbCohTests
 
             Assert.True(engine.CopyToUser(rwAddr, DecEaxTwice()));
             RunPair(engine, mm, rxAddr, 10, 8);
+        }
+        finally
+        {
+            rwFile.Close();
+            rxFile.Close();
+        }
+    }
+
+    [Fact]
+    public void SameMmu_SharedFileRwRxAliases_StayDisarmedAfterFirstInvalidateUntilNextDecode()
+    {
+        var runtime = new MemoryRuntimeContext();
+        using var fixture = new TmpfsFileFixture(runtime, IncEaxTwice());
+        using var engine = new Engine(runtime);
+        var mm = new VMAManager(runtime);
+        mm.BindOrAssertAddressSpaceHandle(engine);
+        engine.PageFaultResolver =
+            (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+
+        var rwFile = fixture.Open();
+        var rxFile = fixture.Open();
+        try
+        {
+            const uint rwAddr = 0x48610000;
+            const uint rxAddr = 0x48710000;
+            Assert.Equal(rwAddr,
+                mm.Mmap(rwAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                    MapFlags.Shared | MapFlags.Fixed, rwFile, 0, "tbcoh-local-rw-disarm", engine));
+            Assert.Equal(rxAddr,
+                mm.Mmap(rxAddr, LinuxConstants.PageSize, Protection.Read | Protection.Exec,
+                    MapFlags.Shared | MapFlags.Fixed, rxFile, 0, "tbcoh-local-rx-disarm", engine));
+            Assert.True(mm.HandleFault(rwAddr, false, engine));
+            Assert.True(mm.HandleFault(rxAddr, false, engine));
+
+            RunPair(engine, mm, rxAddr, 10, 12);
+            Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+            Assert.True(engine.HasSlowWrite(rwAddr));
+
+            Assert.True(engine.CopyToUser(rwAddr, new byte[] { 0x48 }));
+            Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+            Assert.False(engine.HasSlowWrite(rwAddr));
+
+            Assert.True(engine.CopyToUser(rwAddr + 1, new byte[] { 0x48 }));
+            Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+            Assert.False(engine.HasSlowWrite(rwAddr));
+
+            RunPair(engine, mm, rxAddr, 10, 8);
+        }
+        finally
+        {
+            rwFile.Close();
+            rxFile.Close();
+        }
+    }
+
+    [Fact]
+    public void SameMmu_SharedFileRwRxAliases_RearmAfterDecode()
+    {
+        var runtime = new MemoryRuntimeContext();
+        using var fixture = new TmpfsFileFixture(runtime, IncEaxTwice());
+        using var engine = new Engine(runtime);
+        var mm = new VMAManager(runtime);
+        mm.BindOrAssertAddressSpaceHandle(engine);
+        engine.PageFaultResolver =
+            (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+
+        var rwFile = fixture.Open();
+        var rxFile = fixture.Open();
+        try
+        {
+            const uint rwAddr = 0x48620000;
+            const uint rxAddr = 0x48720000;
+            Assert.Equal(rwAddr,
+                mm.Mmap(rwAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                    MapFlags.Shared | MapFlags.Fixed, rwFile, 0, "tbcoh-local-rw-rearm", engine));
+            Assert.Equal(rxAddr,
+                mm.Mmap(rxAddr, LinuxConstants.PageSize, Protection.Read | Protection.Exec,
+                    MapFlags.Shared | MapFlags.Fixed, rxFile, 0, "tbcoh-local-rx-rearm", engine));
+            Assert.True(mm.HandleFault(rwAddr, false, engine));
+            Assert.True(mm.HandleFault(rxAddr, false, engine));
+
+            RunPair(engine, mm, rxAddr, 10, 12);
+            Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+            Assert.True(engine.HasSlowWrite(rwAddr));
+
+            Assert.True(engine.CopyToUser(rwAddr, new byte[] { 0x48 }));
+            Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+            Assert.False(engine.HasSlowWrite(rwAddr));
+
+            RunPair(engine, mm, rxAddr, 10, 10);
+            Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+            Assert.True(engine.HasSlowWrite(rwAddr));
+
+            Assert.True(engine.CopyToUser(rwAddr + 1, new byte[] { 0x48 }));
+            Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+            Assert.False(engine.HasSlowWrite(rwAddr));
+
+            RunPair(engine, mm, rxAddr, 10, 8);
+        }
+        finally
+        {
+            rwFile.Close();
+            rxFile.Close();
+        }
+    }
+
+    [Fact]
+    public void SameMmu_CrossPageBlock_DisarmsAllTouchedHostPagesUntilNextDecode()
+    {
+        var runtime = new MemoryRuntimeContext();
+        using var fixture = new TmpfsFileFixture(runtime, CrossPageIncEaxTwice());
+        using var engine = new Engine(runtime);
+        var mm = new VMAManager(runtime);
+        mm.BindOrAssertAddressSpaceHandle(engine);
+        engine.PageFaultResolver =
+            (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+
+        var rwFile = fixture.Open();
+        var rxFile = fixture.Open();
+        try
+        {
+            const uint rwAddr = 0x48630000;
+            const uint rxAddr = 0x48730000;
+            var codeAddr = rxAddr + LinuxConstants.PageSize - 1;
+            Assert.Equal(rwAddr,
+                mm.Mmap(rwAddr, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
+                    MapFlags.Shared | MapFlags.Fixed, rwFile, 0, "tbcoh-cross-rw", engine));
+            Assert.Equal(rxAddr,
+                mm.Mmap(rxAddr, LinuxConstants.PageSize * 2, Protection.Read | Protection.Exec,
+                    MapFlags.Shared | MapFlags.Fixed, rxFile, 0, "tbcoh-cross-rx", engine));
+            Assert.True(mm.HandleFault(rwAddr + LinuxConstants.PageSize - 1, false, engine));
+            Assert.True(mm.HandleFault(rwAddr + LinuxConstants.PageSize, false, engine));
+            Assert.True(mm.HandleFault(rxAddr + LinuxConstants.PageSize - 1, false, engine));
+            Assert.True(mm.HandleFault(rxAddr + LinuxConstants.PageSize, false, engine));
+
+            RunPair(engine, mm, codeAddr, 10, 12);
+            Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+            Assert.True(engine.HasSlowWrite(rwAddr));
+            Assert.True(engine.HasSlowWrite(rwAddr + LinuxConstants.PageSize));
+
+            Assert.True(engine.CopyToUser(rwAddr + LinuxConstants.PageSize - 1, new byte[] { 0x48 }));
+            Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+            Assert.False(engine.HasSlowWrite(rwAddr));
+            Assert.False(engine.HasSlowWrite(rwAddr + LinuxConstants.PageSize));
+
+            Assert.True(engine.CopyToUser(rwAddr + LinuxConstants.PageSize, new byte[] { 0x48 }));
+            Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+            Assert.False(engine.HasSlowWrite(rwAddr));
+            Assert.False(engine.HasSlowWrite(rwAddr + LinuxConstants.PageSize));
+
+            RunPair(engine, mm, codeAddr, 10, 8);
+            Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+            Assert.True(engine.HasSlowWrite(rwAddr));
+            Assert.True(engine.HasSlowWrite(rwAddr + LinuxConstants.PageSize));
+
+            Assert.True(engine.CopyToUser(rwAddr + LinuxConstants.PageSize, new byte[] { 0x90 }));
+            Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+            Assert.False(engine.HasSlowWrite(rwAddr));
+            Assert.False(engine.HasSlowWrite(rwAddr + LinuxConstants.PageSize));
+
+            RunPair(engine, mm, codeAddr, 10, 9);
         }
         finally
         {
@@ -549,6 +711,14 @@ public class TbCohTests
         return [0x48, 0x48];
     }
 
+    private static byte[] CrossPageIncEaxTwice()
+    {
+        var bytes = new byte[LinuxConstants.PageSize + 1];
+        bytes[LinuxConstants.PageSize - 1] = 0x40;
+        bytes[LinuxConstants.PageSize] = 0x40;
+        return bytes;
+    }
+
     private void RunPair(Engine engine, VMAManager mm, uint codeAddr, uint initialEax, uint expectedEax)
     {
         engine.RegWrite(Reg.EAX, initialEax);
@@ -580,6 +750,21 @@ public class TbCohTests
                 MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[tbcoh-user]", engine));
         Assert.True(mm.HandleFault(addr, true, engine));
     }
+
+    private static CodeCacheStats ReadCodeCacheStats(Engine engine)
+    {
+        var json = engine.DumpStats();
+        Assert.False(string.IsNullOrEmpty(json));
+
+        using var doc = JsonDocument.Parse(json!);
+        var root = doc.RootElement;
+        return new CodeCacheStats(
+            root.GetProperty("all_blocks_count").GetInt32(),
+            root.GetProperty("block_cache_size").GetInt32(),
+            root.GetProperty("page_to_blocks_size").GetInt32());
+    }
+
+    private readonly record struct CodeCacheStats(int AllBlocksCount, int BlockCacheSize, int PageToBlocksSize);
 
     private sealed class TmpfsFileFixture : IDisposable
     {

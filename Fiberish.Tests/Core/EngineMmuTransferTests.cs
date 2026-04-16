@@ -307,6 +307,179 @@ public class EngineMmuTransferTests
         Assert.Equal(sharedIdentity, parent.CurrentMmuIdentity);
     }
 
+    [Fact]
+    public void ForkedClone_ExternalMappingsStartDisarmedUntilChildDecodes()
+    {
+        var runtime = new MemoryRuntimeContext();
+        using var fixture = new TmpfsFileFixture(runtime, IncEaxTwice());
+        using var parentEngine = new Engine(runtime);
+        var parentMm = new VMAManager(runtime);
+        parentMm.BindOrAssertAddressSpaceHandle(parentEngine);
+        parentEngine.PageFaultResolver =
+            (addr, isWrite) => parentMm.HandleFaultDetailed(addr, isWrite, parentEngine) == FaultResult.Handled;
+
+        var rwFile = fixture.Open();
+        var rxFile = fixture.Open();
+        try
+        {
+            const uint rwAddr = 0x00410000;
+            const uint rxAddr = 0x00411000;
+            Assert.Equal(rwAddr,
+                parentMm.Mmap(rwAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                    MapFlags.Shared | MapFlags.Fixed, rwFile, 0, "forked-clone-rw", parentEngine));
+            Assert.Equal(rxAddr,
+                parentMm.Mmap(rxAddr, LinuxConstants.PageSize, Protection.Read | Protection.Exec,
+                    MapFlags.Shared | MapFlags.Fixed, rxFile, 0, "forked-clone-rx", parentEngine));
+            Assert.True(parentMm.HandleFault(rwAddr, false, parentEngine));
+            Assert.True(parentMm.HandleFault(rxAddr, false, parentEngine));
+
+            RunPair(parentEngine, rxAddr, 10, 12);
+            Assert.True(ReadCodeCacheStats(parentEngine).BlockCacheSize > 0);
+
+            using var childEngine = parentEngine.Clone(false);
+            var childMm = parentMm.Clone();
+            childMm.BindOrAssertAddressSpaceHandle(childEngine);
+            childMm.RebuildExternalMappingsFromNative(childEngine, childMm.VMAs);
+            childEngine.PageFaultResolver =
+                (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
+
+            Assert.Equal(0, ReadCodeCacheStats(childEngine).BlockCacheSize);
+            Assert.False(childEngine.HasSlowWrite(rwAddr));
+
+            Assert.True(childEngine.CopyToUser(rwAddr, DecEaxTwice()));
+            Assert.Equal(0, ReadCodeCacheStats(childEngine).BlockCacheSize);
+            Assert.False(childEngine.HasSlowWrite(rwAddr));
+
+            RunPair(childEngine, rxAddr, 10, 8);
+            Assert.True(ReadCodeCacheStats(childEngine).BlockCacheSize > 0);
+            Assert.True(childEngine.HasSlowWrite(rwAddr));
+
+            Assert.True(childEngine.CopyToUser(rwAddr, IncEaxTwice()));
+            Assert.Equal(0, ReadCodeCacheStats(childEngine).BlockCacheSize);
+            Assert.False(childEngine.HasSlowWrite(rwAddr));
+
+            RunPair(childEngine, rxAddr, 10, 12);
+        }
+        finally
+        {
+            rwFile.Close();
+            rxFile.Close();
+        }
+    }
+
+    [Fact]
+    public void ExternalAlias_ReprotectDroppingExec_DisarmsSlowWriteWithoutInvalidatingLiveBlocks()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var codePage = new UnmanagedPageFixture(IncEaxTwice());
+
+        const uint rwAddr = 0x00420000;
+        const uint rxAddr = 0x00421000;
+        MapExternalPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapExternalPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+
+        RunPair(engine, rxAddr, 10, 12);
+        Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+
+        engine.ReprotectMappedRange(rxAddr, LinuxConstants.PageSize, (byte)Protection.Read);
+
+        Assert.False(engine.HasSlowWrite(rwAddr));
+        Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+
+        Assert.True(engine.CopyToUser(rwAddr, DecEaxTwice()));
+        Assert.False(engine.HasSlowWrite(rwAddr));
+        Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+    }
+
+    [Fact]
+    public void ExternalAlias_UnmappingExecAlias_DisarmsSlowWriteWithoutInvalidatingLiveBlocks()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var codePage = new UnmanagedPageFixture(IncEaxTwice());
+
+        const uint rwAddr = 0x00422000;
+        const uint rxAddr = 0x00423000;
+        MapExternalPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapExternalPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+
+        RunPair(engine, rxAddr, 10, 12);
+        Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+
+        engine.MemUnmap(rxAddr, LinuxConstants.PageSize);
+
+        Assert.False(engine.HasSlowWrite(rwAddr));
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+
+        Assert.True(engine.CopyToUser(rwAddr, DecEaxTwice()));
+        Assert.False(engine.HasSlowWrite(rwAddr));
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+    }
+
+    [Fact]
+    public void ExternalAlias_RemapWritableAliasToDifferentHostPage_DisarmsOldExecCoupling()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var codePage = new UnmanagedPageFixture(IncEaxTwice());
+        using var replacementPage = new UnmanagedPageFixture([0x90, 0x90]);
+
+        const uint rwAddr = 0x00424000;
+        const uint rxAddr = 0x00425000;
+        MapExternalPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapExternalPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+
+        RunPair(engine, rxAddr, 10, 12);
+        Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+
+        MapExternalPage(engine, rwAddr, replacementPage.Pointer, Protection.Read | Protection.Write);
+
+        Assert.False(engine.HasSlowWrite(rwAddr));
+        Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+
+        Assert.True(engine.CopyToUser(rwAddr, new byte[] { 0xCC }));
+        Assert.False(engine.HasSlowWrite(rwAddr));
+        Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+
+        RunPair(engine, rxAddr, 10, 12);
+    }
+
+    [Fact]
+    public void CodeCacheInvalidation_SupportsHostPageSetSpillAndDedup()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var pages = new UnmanagedPageArrayFixture(6, static _ => IncEaxTwice());
+
+        const uint baseAddr = 0x00430000;
+        for (var i = 0; i < pages.Count; i++)
+        {
+            MapExternalPage(engine, baseAddr + (uint)(i * LinuxConstants.PageSize), pages[i], Protection.Read | Protection.Exec);
+            RunPair(engine, baseAddr + (uint)(i * LinuxConstants.PageSize), 10, 12);
+        }
+
+        Assert.Equal(pages.Count, ReadCodeCacheStats(engine).BlockCacheSize);
+
+        engine.ResetCodeCacheByRange(baseAddr, (uint)(pages.Count * LinuxConstants.PageSize));
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+
+        for (var i = 0; i < pages.Count; i++)
+            RunPair(engine, baseAddr + (uint)(i * LinuxConstants.PageSize), 10, 12);
+
+        Span<nint> hostPages = stackalloc nint[8];
+        for (var i = 0; i < pages.Count; i++)
+            hostPages[i] = pages[i];
+        hostPages[6] = pages[0];
+        hostPages[7] = pages[1];
+
+        engine.InvalidateCodeCacheHostPages(hostPages);
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+    }
+
     private static void InstallSimpleCode(Engine engine)
     {
         InstallSimpleCode(engine, CodeAddr);
@@ -345,6 +518,31 @@ public class EngineMmuTransferTests
         Assert.Equal(addr + (uint)SimpleCode.Length, engine.Eip);
     }
 
+    private static byte[] IncEaxTwice()
+    {
+        return [0x40, 0x40];
+    }
+
+    private static byte[] DecEaxTwice()
+    {
+        return [0x48, 0x48];
+    }
+
+    private static void MapExternalPage(Engine engine, uint addr, nint hostPage, Protection perms)
+    {
+        Assert.True(engine.MapManagedPage(addr, hostPage, (byte)perms));
+    }
+
+    private static void RunPair(Engine engine, uint codeAddr, uint initialEax, uint expectedEax)
+    {
+        engine.RegWrite(Reg.EAX, initialEax);
+        engine.Eip = codeAddr;
+        engine.Run(codeAddr + 2, 16);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(codeAddr + 2, engine.Eip);
+        Assert.Equal(expectedEax, engine.RegRead(Reg.EAX));
+    }
+
     private static CodeCacheStats ReadCodeCacheStats(Engine engine)
     {
         var json = engine.DumpStats();
@@ -359,6 +557,89 @@ public class EngineMmuTransferTests
     }
 
     private readonly record struct CodeCacheStats(int AllBlocksCount, int BlockCacheSize, int PageToBlocksSize);
+
+    private sealed class TmpfsFileFixture : IDisposable
+    {
+        private readonly SuperBlock _superBlock;
+        private readonly Dentry _root;
+
+        public TmpfsFileFixture(MemoryRuntimeContext memoryContext, byte[] contents)
+        {
+            var fsType = new FileSystemType
+            {
+                Name = "tmpfs",
+                Factory = static _ => new Tmpfs(),
+                FactoryWithContext = static (_, memoryContext) => new Tmpfs(memoryContext: memoryContext)
+            };
+            _superBlock = fsType.CreateAnonymousFileSystem(memoryContext).ReadSuper(fsType, 0, "tmp", null);
+            _root = _superBlock.Root;
+            Dentry = new Dentry(FsName.FromString("engine-mmu-transfer.bin"), null, _root, _superBlock);
+            _root.Inode!.Create(Dentry, 0x1B6, 0, 0);
+
+            var file = Open();
+            try
+            {
+                Assert.Equal(contents.Length, Dentry.Inode!.WriteFromHost(null, file, contents, 0));
+            }
+            finally
+            {
+                file.Close();
+            }
+        }
+
+        public Dentry Dentry { get; }
+
+        public LinuxFile Open()
+        {
+            return new LinuxFile(Dentry, FileFlags.O_RDWR, null!);
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class UnmanagedPageFixture : IDisposable
+    {
+        public UnmanagedPageFixture(byte[] contents)
+        {
+            Pointer = Marshal.AllocHGlobal(LinuxConstants.PageSize);
+            var buffer = new byte[LinuxConstants.PageSize];
+            Array.Copy(contents, buffer, Math.Min(contents.Length, buffer.Length));
+            Marshal.Copy(buffer, 0, Pointer, buffer.Length);
+        }
+
+        public nint Pointer { get; private set; }
+
+        public void Dispose()
+        {
+            if (Pointer == IntPtr.Zero) return;
+            Marshal.FreeHGlobal(Pointer);
+            Pointer = IntPtr.Zero;
+        }
+    }
+
+    private sealed class UnmanagedPageArrayFixture : IDisposable
+    {
+        private readonly UnmanagedPageFixture[] _pages;
+
+        public UnmanagedPageArrayFixture(int count, Func<int, byte[]> factory)
+        {
+            _pages = new UnmanagedPageFixture[count];
+            for (var i = 0; i < count; i++)
+                _pages[i] = new UnmanagedPageFixture(factory(i));
+        }
+
+        public int Count => _pages.Length;
+
+        public nint this[int index] => _pages[index].Pointer;
+
+        public void Dispose()
+        {
+            foreach (var page in _pages)
+                page.Dispose();
+        }
+    }
 
     private sealed class MappedPageFixture : IDisposable
     {

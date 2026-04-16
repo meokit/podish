@@ -171,6 +171,10 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial int IsDirty(IntPtr state, uint addr);
 
+    [LibraryImport(LibName, EntryPoint = "X86_MemHasSlowWrite")]
+    [SuppressGCTransition]
+    public static partial int HasSlowWrite(IntPtr state, uint addr);
+
     [LibraryImport(LibName, EntryPoint = "X86_ResolvePtrForRead")]
     [SuppressGCTransition]
     public static partial void* ResolvePtrForRead(IntPtr state, uint addr);

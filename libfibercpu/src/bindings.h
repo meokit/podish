@@ -76,6 +76,7 @@ void X86_ReprotectMappedRange(EmuState* state, uint32_t addr, uint32_t size, uin
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size);
 void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size);
 int X86_MemIsDirty(EmuState* state, uint32_t addr);
+int X86_MemHasSlowWrite(EmuState* state, uint32_t addr);
 // Returns physical address (pointer) if valid, or NULL if not mapped/no-perm
 void* X86_ResolvePtrForRead(EmuState* state, uint32_t addr);
 void* X86_ResolvePtrForWrite(EmuState* state, uint32_t addr);
