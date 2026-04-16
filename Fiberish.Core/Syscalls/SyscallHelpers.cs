@@ -425,7 +425,8 @@ public partial class SyscallManager
                 if (inode.Mapping == null) continue;
                 try
                 {
-                    _ = inode.WritePages(null, new WritePagesRequest(0, long.MaxValue, true));
+                    _ = inode.WritePages(null, new WritePagesRequest(0, long.MaxValue,
+                        PageWritebackMode.Durable));
                 }
                 catch (Exception ex)
                 {

@@ -902,7 +902,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (!hasDirtyPages)
             return;
 
-        _ = WritePages(linuxFile, new WritePagesRequest(0, long.MaxValue, true));
+        _ = WritePages(linuxFile, new WritePagesRequest(0, long.MaxValue, PageWritebackMode.Durable));
     }
 
     private bool HasDirtyPageAtOrAfter(long pageIndex)
@@ -1194,8 +1194,10 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         }
     }
 
-    public override bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex)
+    public override bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex,
+        PageWritebackMode mode = PageWritebackMode.Durable)
     {
+        _ = mode;
         lock (_mappedCacheLock)
         {
             if (_mappedPageCache?.TryFlushPage(pageIndex) != true)

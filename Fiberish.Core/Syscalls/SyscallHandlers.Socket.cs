@@ -243,6 +243,11 @@ public partial class SyscallManager
         return await SysAccept4(engine, a1, a2, a3, 0, 0, 0);
     }
 
+    private static int ValidateOptionalSockaddrPair(uint addrPtr, uint addrLenPtr)
+    {
+        return (addrPtr == 0) != (addrLenPtr == 0) ? -(int)Errno.EFAULT : 0;
+    }
+
     private async ValueTask<int> SysGetSockName(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
@@ -304,6 +309,9 @@ public partial class SyscallManager
         var addrPtr = a2;
         var addrLenPtr = a3;
         var flags = (int)a4;
+
+        var pairRc = ValidateOptionalSockaddrPair(addrPtr, addrLenPtr);
+        if (pairRc < 0) return pairRc;
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
@@ -403,6 +411,9 @@ public partial class SyscallManager
         var flags = (int)a4;
         var srcAddrPtr = a5;
         var addrLenPtr = a6;
+
+        var pairRc = ValidateOptionalSockaddrPair(srcAddrPtr, addrLenPtr);
+        if (pairRc < 0) return pairRc;
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;

@@ -1453,7 +1453,7 @@ public class VMAManager
                 // Full removal
                 if (addr <= vma.Start && end >= vma.End)
                 {
-                    SyncVmArea(vma, engine, vma.Start, vma.End);
+                    SyncVmArea(vma, engine, vma.Start, vma.End, PageWritebackMode.WritebackOnly);
                     CollectHostPagesForVmaRange(vma, vma.Start, vma.End, unmappedHostPages);
                     QueueUnmappedObjectPages(vma, vma.Start, vma.End, pendingObjectPageReleases ??= []);
                     UnregisterVmAreaAttachments(vma);
@@ -1466,7 +1466,7 @@ public class VMAManager
                 // Split (Middle removal)
                 if (addr > vma.Start && end < vma.End)
                 {
-                    SyncVmArea(vma, engine, addr, end);
+                    SyncVmArea(vma, engine, addr, end, PageWritebackMode.WritebackOnly);
                     CollectHostPagesForVmaRange(vma, addr, end, unmappedHostPages);
                     QueueUnmappedObjectPages(vma, addr, end, pendingObjectPageReleases ??= []);
                     UnregisterVmAreaAttachments(vma);
@@ -1511,7 +1511,7 @@ public class VMAManager
                 // Head removal
                 if (addr <= vma.Start && end < vma.End)
                 {
-                    SyncVmArea(vma, engine, vma.Start, end);
+                    SyncVmArea(vma, engine, vma.Start, end, PageWritebackMode.WritebackOnly);
                     CollectHostPagesForVmaRange(vma, vma.Start, end, unmappedHostPages);
                     QueueUnmappedObjectPages(vma, vma.Start, end, pendingObjectPageReleases ??= []);
                     UnregisterVmAreaAttachments(vma);
@@ -1530,7 +1530,7 @@ public class VMAManager
                 // Tail removal
                 if (addr > vma.Start && end >= vma.End)
                 {
-                    SyncVmArea(vma, engine, addr, vma.End);
+                    SyncVmArea(vma, engine, addr, vma.End, PageWritebackMode.WritebackOnly);
                     CollectHostPagesForVmaRange(vma, addr, vma.End, unmappedHostPages);
                     QueueUnmappedObjectPages(vma, addr, vma.End, pendingObjectPageReleases ??= []);
                     UnregisterVmAreaAttachments(vma);
@@ -2523,12 +2523,12 @@ public class VMAManager
 
     public static void SyncVmArea(VmArea vma, Engine engine)
     {
-        SyncVmArea(vma, engine, vma.Start, vma.End);
+        SyncVmArea(vma, engine, vma.Start, vma.End, PageWritebackMode.Durable);
     }
 
     public static void SyncVmArea(VmArea vma, IReadOnlyList<Engine> engines)
     {
-        SyncVmArea(vma, engines, vma.Start, vma.End);
+        SyncVmArea(vma, engines, vma.Start, vma.End, PageWritebackMode.Durable);
     }
 
     public void SyncMappedFile(LinuxFile file, IReadOnlyList<Engine> engines)
@@ -2567,10 +2567,22 @@ public class VMAManager
 
     public static void SyncVmArea(VmArea vma, Engine engine, uint rangeStart, uint rangeEnd)
     {
-        SyncVmArea(vma, [engine], rangeStart, rangeEnd);
+        SyncVmArea(vma, [engine], rangeStart, rangeEnd, PageWritebackMode.Durable);
     }
 
     public static void SyncVmArea(VmArea vma, IReadOnlyList<Engine> engines, uint rangeStart, uint rangeEnd)
+    {
+        SyncVmArea(vma, engines, rangeStart, rangeEnd, PageWritebackMode.Durable);
+    }
+
+    public static void SyncVmArea(VmArea vma, Engine engine, uint rangeStart, uint rangeEnd,
+        PageWritebackMode mode)
+    {
+        SyncVmArea(vma, [engine], rangeStart, rangeEnd, mode);
+    }
+
+    public static void SyncVmArea(VmArea vma, IReadOnlyList<Engine> engines, uint rangeStart, uint rangeEnd,
+        PageWritebackMode mode)
     {
         if (!TryGetSharedFileVmAreaState(vma, out _, out var inode, out var mapping))
             return;
@@ -2605,7 +2617,7 @@ public class VMAManager
             }
         }
 
-        _ = inode.SyncCachedPages(vma.File, mapping, new WritePagesRequest(startPageIndex, endPageIndex, true));
+        _ = inode.SyncCachedPages(vma.File, mapping, new WritePagesRequest(startPageIndex, endPageIndex, mode));
     }
 
     public void LogVmAreas()

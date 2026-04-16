@@ -305,7 +305,11 @@ public readonly record struct PageIoRequest(long PageIndex, long FileOffset, int
 
 public readonly record struct ReadaheadRequest(long StartPageIndex, int PageCount);
 
-public readonly record struct WritePagesRequest(long StartPageIndex, long EndPageIndex, bool Sync);
+public readonly record struct WritePagesRequest(long StartPageIndex, long EndPageIndex,
+    PageWritebackMode Mode = PageWritebackMode.Durable)
+{
+    public bool Sync => true;
+}
 
 public interface IPageCacheOps
 {
@@ -1510,10 +1514,12 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
         ReleaseMappedPageHandle(releaseToken);
     }
 
-    public virtual bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex)
+    public virtual bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex,
+        PageWritebackMode mode = PageWritebackMode.Durable)
     {
         _ = linuxFile;
         _ = pageIndex;
+        _ = mode;
         return false;
     }
 
@@ -1650,6 +1656,12 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
 
     public virtual void Sync(LinuxFile linuxFile)
     {
+    }
+
+    protected internal virtual int FlushWritebackToDurable(LinuxFile? linuxFile)
+    {
+        _ = linuxFile;
+        return 0;
     }
 
     // For directories, we need iteration. 
@@ -1822,6 +1834,13 @@ public abstract class MappingBackedInode : Inode
                 return rc;
         }
 
+        if (request.Mode == PageWritebackMode.Durable)
+        {
+            var flushRc = FlushWritebackToDurable(linuxFile);
+            if (flushRc < 0)
+                return flushRc;
+        }
+
         CompleteCachedPageSync(linuxFile, mapping, request.PageIndex, null);
         return 0;
     }
@@ -1840,10 +1859,17 @@ public abstract class MappingBackedInode : Inode
 
         foreach (var state in pageStates)
         {
-            var syncRequest = CreatePageSyncRequest(state.PageIndex);
+            var syncRequest = CreatePageSyncRequest(state.PageIndex, PageWritebackMode.WritebackOnly);
             var rc = SyncCachedPage(linuxFile, mapping, syncRequest);
             if (rc < 0)
                 return rc;
+        }
+
+        if (request.Mode == PageWritebackMode.Durable)
+        {
+            var flushRc = FlushWritebackToDurable(linuxFile);
+            if (flushRc < 0)
+                return flushRc;
         }
 
         return 0;
@@ -2026,7 +2052,7 @@ public abstract class MappingBackedInode : Inode
     {
         _ = mapping;
         _ = record;
-        return TryFlushMappedPage(linuxFile, request.PageIndex) ? 0 : -(int)Errno.EOPNOTSUPP;
+        return TryFlushMappedPage(linuxFile, request.PageIndex, request.Mode) ? 0 : -(int)Errno.EOPNOTSUPP;
     }
 
     internal virtual void CompleteCachedPageSync(LinuxFile? linuxFile, AddressSpace mapping, uint pageIndex,
@@ -2205,12 +2231,13 @@ public abstract class MappingBackedInode : Inode
         return true;
     }
 
-    private PageSyncRequest CreatePageSyncRequest(uint pageIndex)
+    private PageSyncRequest CreatePageSyncRequest(uint pageIndex,
+        PageWritebackMode mode = PageWritebackMode.Durable)
     {
         var fileOffset = (long)pageIndex * LinuxConstants.PageSize;
         var remaining = Math.Max(0, (long)Size - fileOffset);
         var length = (int)Math.Min(LinuxConstants.PageSize, remaining);
-        return new PageSyncRequest(pageIndex, fileOffset, length);
+        return new PageSyncRequest(pageIndex, fileOffset, length, mode);
     }
 
     private (IntPtr PagePtr, int Error) EnsurePageInCacheForWrite(

@@ -15,7 +15,14 @@ internal enum PageCacheAccessMode
     Write
 }
 
-internal readonly record struct PageSyncRequest(uint PageIndex, long FileOffset, int Length);
+public enum PageWritebackMode
+{
+    WritebackOnly,
+    Durable
+}
+
+internal readonly record struct PageSyncRequest(uint PageIndex, long FileOffset, int Length,
+    PageWritebackMode Mode = PageWritebackMode.Durable);
 
 internal sealed class InodePageRecord
 {

@@ -50,7 +50,7 @@ public class HostfsPageCacheWritebackTests
     }
 
     [Fact]
-    public void MapShared_Munmap_WritesBackBeforeUnmap()
+    public void MapShared_Munmap_WritebackOnlyFlushesHostMappedWindowBeforeUnmap()
     {
         var root = Path.Combine(Path.GetTempPath(), "hostfs-munmap-writeback-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -69,6 +69,40 @@ public class HostfsPageCacheWritebackTests
             Assert.True(mm.HandleFault(mapAddr, true, engine));
 
             Assert.True(engine.CopyToUser(mapAddr + 2, "XY"u8.ToArray()));
+
+            mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
+
+            Assert.Equal("woXYd", File.ReadAllText(hostFile));
+            file.Dentry.Inode!.Release(file);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void MapShared_Munmap_WritebackOnlyFlushesAllocatedPageCacheBeforeUnmap()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-munmap-buffered-writeback-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "world");
+
+        try
+        {
+            var runtime = new TestRuntimeFactory(BufferedOnlyGeometry);
+            using var engine = runtime.CreateEngine();
+            var mm = runtime.CreateAddressSpace();
+            var file = OpenHostFile(root, "data.bin", runtime.MemoryContext);
+
+            const uint mapAddr = 0x42100000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED", engine);
+            Assert.True(mm.HandleFault(mapAddr, true, engine));
+
+            Assert.True(engine.CopyToUser(mapAddr + 2, "XY"u8.ToArray()));
+            Assert.Equal("world", File.ReadAllText(hostFile));
 
             mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
 
@@ -168,7 +202,7 @@ public class HostfsPageCacheWritebackTests
     }
 
     [Fact]
-    public async Task MapShared_Munmap_WritesBackDirtyPagesFromPeerThreadEngine()
+    public async Task MapShared_Munmap_WritebackOnlyFlushesDirtyHostMappedPagesFromPeerThreadEngine()
     {
         var root = Path.Combine(Path.GetTempPath(), "hostfs-munmap-peer-thread-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);

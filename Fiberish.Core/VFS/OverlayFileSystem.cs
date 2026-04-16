@@ -1579,10 +1579,11 @@ public class OverlayInode : MappingBackedInode
         return source.TryAcquireMappedPageHandle(linuxFile, pageIndex, absoluteFileOffset, writable, out backingPageHandle);
     }
 
-    public override bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex)
+    public override bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex,
+        PageWritebackMode mode = PageWritebackMode.Durable)
     {
         var source = ResolveSourceForFile(linuxFile);
-        return source?.TryFlushMappedPage(linuxFile, pageIndex) == true;
+        return source?.TryFlushMappedPage(linuxFile, pageIndex, mode) == true;
     }
 
     internal override int SyncCachedPage(LinuxFile? linuxFile, AddressSpace mapping,

@@ -2133,7 +2133,6 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     public override void Release(LinuxFile linuxFile)
     {
         _ = FlushDirtyDataIfNeeded(linuxFile);
-        FlushHandleToDiskIfNeeded(linuxFile);
         if (linuxFile.PrivateData is SafeFileHandle handle)
         {
             Flock(linuxFile, LinuxConstants.LOCK_UN);
@@ -2144,8 +2143,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
     public override void Sync(LinuxFile linuxFile)
     {
-        _ = FlushDirtyDataIfNeeded(linuxFile);
-        FlushHandleToDiskIfNeeded(linuxFile);
+        _ = FlushDirtyDataIfNeeded(linuxFile, PageWritebackMode.Durable);
+        _ = FlushWritebackToDurable(linuxFile);
     }
 
     private bool HasDirtyPageCachePages()
@@ -2154,12 +2153,13 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             return _dirtyPageIndexes.Count != 0;
     }
 
-    internal bool FlushDirtyDataIfNeeded(LinuxFile? linuxFile)
+    internal bool FlushDirtyDataIfNeeded(LinuxFile? linuxFile,
+        PageWritebackMode mode = PageWritebackMode.WritebackOnly)
     {
         if (Type != InodeType.File || !HasDirtyPageCachePages())
             return true;
 
-        var rc = WritePages(linuxFile, new WritePagesRequest(0, long.MaxValue, true));
+        var rc = WritePages(linuxFile, new WritePagesRequest(0, long.MaxValue, mode));
         if (rc < 0)
             return false;
 
@@ -2170,6 +2170,12 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     {
         if (linuxFile?.PrivateData is SafeFileHandle handle)
             RandomAccess.FlushToDisk(handle);
+    }
+
+    protected internal override int FlushWritebackToDurable(LinuxFile? linuxFile)
+    {
+        FlushHandleToDiskIfNeeded(linuxFile);
+        return 0;
     }
 
     private int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
@@ -2266,7 +2272,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         {
             var startPage = offset / LinuxConstants.PageSize;
             var endPage = (offset + rc - 1) / LinuxConstants.PageSize;
-            var syncRc = WritePages(linuxFile, new WritePagesRequest(startPage, endPage, true));
+            var syncRc = WritePages(linuxFile, new WritePagesRequest(startPage, endPage,
+                PageWritebackMode.WritebackOnly));
             if (syncRc < 0)
                 return syncRc;
         }
@@ -2305,8 +2312,14 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         _ = record;
         lock (_mappedCacheLock)
         {
-            return _mappedPageCache?.TryFlushPage(request.PageIndex) == true ? 0 : -(int)Errno.EIO;
+            if (_mappedPageCache?.TryFlushPage(request.PageIndex) != true)
+                return -(int)Errno.EIO;
         }
+
+        if (request.Mode == PageWritebackMode.Durable)
+            return FlushWritebackToDurable(linuxFile);
+
+        return 0;
     }
 
     internal override void CompleteCachedPageSync(LinuxFile? linuxFile, AddressSpace mapping, uint pageIndex,
@@ -2365,7 +2378,6 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
         if (request.PageIndex >= 0 && request.PageIndex <= uint.MaxValue)
             Mapping?.ClearDirty((uint)request.PageIndex);
-        FlushHandleToDiskIfNeeded(linuxFile);
         return 0;
     }
 
@@ -2438,7 +2450,6 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
                 Mapping.ClearDirty((uint)pageIndex);
         }
 
-        FlushHandleToDiskIfNeeded(linuxFile);
         return 0;
     }
 
@@ -2512,7 +2523,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         }
     }
 
-    public override bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex)
+    public override bool TryFlushMappedPage(LinuxFile? linuxFile, long pageIndex,
+        PageWritebackMode mode = PageWritebackMode.Durable)
     {
         lock (_mappedCacheLock)
         {
@@ -2527,7 +2539,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
         if (pageIndex >= 0 && pageIndex <= uint.MaxValue)
             Mapping?.ClearDirty((uint)pageIndex);
-        FlushHandleToDiskIfNeeded(linuxFile);
+        if (mode == PageWritebackMode.Durable)
+            FlushHandleToDiskIfNeeded(linuxFile);
         return true;
     }
 

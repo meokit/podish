@@ -1429,9 +1429,6 @@ LocResolvedUtimens64:
     private async ValueTask<int> SysStatx(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
-        var pathErr = ReadPathArgumentBytes(a2, out var path, allowEmpty: true);
-        if (pathErr != 0) return pathErr;
-        using var pathLease = path;
         var flags = a3;
         var mask = a4;
         var statxAddr = a5;
@@ -1447,6 +1444,33 @@ LocResolvedUtimens64:
             syncFlags != LinuxConstants.AT_STATX_FORCE_SYNC &&
             syncFlags != LinuxConstants.AT_STATX_DONT_SYNC)
             return -(int)Errno.EINVAL;
+
+        if (a2 == 0)
+        {
+            if ((flags & LinuxConstants.AT_EMPTY_PATH) == 0)
+                return -(int)Errno.EFAULT;
+            if (dirfd == unchecked((int)LinuxConstants.AT_FDCWD))
+            {
+                if (!WriteStatx(engine, statxAddr, CurrentWorkingDirectory.Dentry!.Inode!, mask,
+                        CurrentWorkingDirectory.Mount))
+                    return -(int)Errno.EFAULT;
+
+                return 0;
+            }
+
+            var f = GetFD(dirfd);
+            if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
+            RefreshHostfsProjectionForCaller(this, f.OpenedInode);
+
+            if (!WriteStatx(engine, statxAddr, f.OpenedInode, mask, f.Mount))
+                return -(int)Errno.EFAULT;
+
+            return 0;
+        }
+
+        var pathErr = ReadPathArgumentBytes(a2, out var path, allowEmpty: true);
+        if (pathErr != 0) return pathErr;
+        using var pathLease = path;
 
         if (path.IsEmpty && (flags & LinuxConstants.AT_EMPTY_PATH) != 0)
         {
@@ -1629,7 +1653,8 @@ LocResolvedUtimens64:
         if (inode == null) return -(int)Errno.EBADF;
 
         ProcessAddressSpaceSync.SyncMappedFile(Mem, engine, file);
-        var writebackRc = inode.WritePages(file, new WritePagesRequest(0, long.MaxValue, true));
+        var writebackRc = inode.WritePages(file, new WritePagesRequest(0, long.MaxValue,
+            PageWritebackMode.Durable));
         if (writebackRc < 0 && writebackRc != -(int)Errno.EOPNOTSUPP && writebackRc != -(int)Errno.EROFS)
             return writebackRc;
         inode.Sync(file);

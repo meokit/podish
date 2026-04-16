@@ -192,6 +192,24 @@ public class StatNlinkSyscallTests
     }
 
     [Fact]
+    public async Task Statx_NullPathAndEmptyPath_OnAtFdcwd_ReportCurrentWorkingDirectoryMount()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x32000);
+
+        var rc = await env.Call("SysStatx", LinuxConstants.AT_FDCWD, 0,
+            LinuxConstants.AT_EMPTY_PATH | LinuxConstants.AT_STATX_DONT_SYNC,
+            LinuxConstants.STATX_MNT_ID,
+            0x32000);
+
+        Assert.Equal(0, rc);
+        var returnedMask = env.ReadUInt32(0x32000);
+        Assert.True((returnedMask & LinuxConstants.STATX_BASIC_STATS) == LinuxConstants.STATX_BASIC_STATS);
+        Assert.True((returnedMask & LinuxConstants.STATX_MNT_ID) != 0);
+        Assert.Equal((ulong)env.SyscallManager.RootMount!.Id, env.ReadUInt64(0x32000 + 0x90));
+    }
+
+    [Fact]
     public async Task Statx_InvalidSyncFlagsCombination_ReturnsEinval()
     {
         using var env = new TestEnv();

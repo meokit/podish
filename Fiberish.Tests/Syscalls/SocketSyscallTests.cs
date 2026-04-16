@@ -895,6 +895,87 @@ public class SocketSyscallTests
     }
 
     [Fact]
+    public async Task Socket_PrivateNetwork_Accept_HalfNullPeerAddress_ReturnsEfault()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        env.MapUserPage(0x41000);
+        env.MapUserPage(0x42000);
+        env.MapUserPage(0x43000);
+
+        WriteSockaddrIn(env, 0x41000, 0x7F000001u, 19110);
+        WriteSockaddrIn(env, 0x42000, 0x7F000001u, 19110);
+        env.WriteInt32(0x43000, 16);
+
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        var clientFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(serverFd >= 0 && clientFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)serverFd, 0x41000, 16));
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 1));
+        Assert.Equal(0, await CallSysConnect(env, (uint)clientFd, 0x42000, 16));
+
+        var rc = await CallSysAccept(env, (uint)serverFd, 0x41000, 0);
+
+        Assert.Equal(-(int)Errno.EFAULT, rc);
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_RecvFrom_HalfNullPeerAddress_ReturnsEfault()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        env.MapUserPage(0x44000);
+        env.MapUserPage(0x45000);
+        env.MapUserPage(0x46000);
+        env.MapUserPage(0x47000);
+        env.MapUserPage(0x48000);
+
+        WriteSockaddrIn(env, 0x44000, 0x7F000001u, 19120);
+        WriteSockaddrIn(env, 0x45000, 0x7F000001u, 19120);
+        env.WriteInt32(0x48000, 16);
+        env.WriteBytes(0x47000, Encoding.ASCII.GetBytes("ping"));
+
+        var receiverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        var senderFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        Assert.True(receiverFd >= 0 && senderFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)receiverFd, 0x44000, 16));
+        Assert.Equal(4, await CallSysSendTo(env, (uint)senderFd, 0x47000, 4, 0, 0x45000, 16));
+
+        var rc = await CallSysRecvFrom(env, (uint)receiverFd, 0x46000, 16, 0, 0x44000, 0);
+
+        Assert.Equal(-(int)Errno.EFAULT, rc);
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_RecvFrom_NullPeerAddressPair_IsAllowed()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        env.MapUserPage(0x49000);
+        env.MapUserPage(0x4A000);
+        env.MapUserPage(0x4B000);
+        env.MapUserPage(0x4C000);
+
+        WriteSockaddrIn(env, 0x49000, 0x7F000001u, 19130);
+        WriteSockaddrIn(env, 0x4A000, 0x7F000001u, 19130);
+        env.WriteBytes(0x4C000, Encoding.ASCII.GetBytes("pong"));
+
+        var receiverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        var senderFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        Assert.True(receiverFd >= 0 && senderFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)receiverFd, 0x49000, 16));
+        Assert.Equal(4, await CallSysSendTo(env, (uint)senderFd, 0x4C000, 4, 0, 0x4A000, 16));
+
+        var rc = await CallSysRecvFrom(env, (uint)receiverFd, 0x4B000, 16, 0, 0, 0);
+
+        Assert.Equal(4, rc);
+        Assert.Equal("pong", Encoding.ASCII.GetString(env.ReadBytes(0x4B000, 4)));
+    }
+
+    [Fact]
     public async Task Socket_PrivateNetwork_SendMsgRecvMsg_StreamPayload_Works()
     {
         using var env = new TestEnv();
