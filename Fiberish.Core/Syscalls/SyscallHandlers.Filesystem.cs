@@ -145,6 +145,8 @@ public partial class SyscallManager
         var pathErr = ReadPathArgumentBytes(a1, out var path);
         if (pathErr != 0) return pathErr;
         using var pathLease = path;
+        if (IsRootOnlyPath(path.UnsafeBuffer, path.Length))
+            return -(int)Errno.EEXIST;
         var mode = a2;
 
         var (parentLoc, name, err) = PathWalker.PathWalkForCreate(path.UnsafeBuffer, path.Length);
@@ -324,6 +326,8 @@ public partial class SyscallManager
         var pathErr = ReadPathArgumentBytes(a2, out var path);
         if (pathErr != 0) return pathErr;
         using var pathLease = path;
+        if (IsRootOnlyPath(path.UnsafeBuffer, path.Length))
+            return -(int)Errno.EEXIST;
         var mode = a3;
 
         PathLocation startLoc = default;
@@ -342,6 +346,18 @@ public partial class SyscallManager
         var create = DacPolicy.ComputeCreationMetadata((engine.Owner as FiberTask)?.Process, parentLoc.Dentry.Inode!,
             (int)mode, true);
         return parentLoc.Dentry.Inode!.Mkdir(dentry, create.Mode, create.Uid, create.Gid);
+    }
+
+    private static bool IsRootOnlyPath(byte[] pathBytes, int pathLength)
+    {
+        if (pathLength <= 0)
+            return false;
+
+        for (var i = 0; i < pathLength; i++)
+            if (pathBytes[i] != (byte)'/')
+                return false;
+
+        return true;
     }
 
     private async ValueTask<int> SysMknod(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1036,6 +1052,8 @@ LocResolvedUtimens64:
         var pathErr = ReadPathArgumentBytes(a2, out var path);
         if (pathErr != 0) return pathErr;
         using var pathLease = path;
+        var flags = a4;
+        if ((flags & ~LinuxConstants.AT_SYMLINK_NOFOLLOW) != 0) return -(int)Errno.EINVAL;
         PathLocation startLoc = default;
         if (dirfd != -100 && !path.IsAbsolute)
         {
@@ -1044,10 +1062,12 @@ LocResolvedUtimens64:
             startLoc = fdir.LivePath;
         }
 
+        var followLink = (flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) == 0;
         var lookup = PathWalker.PathWalkWithData(
             path.UnsafeBuffer,
             path.Length,
-            startLoc.IsValid ? startLoc : CurrentWorkingDirectory);
+            startLoc.IsValid ? startLoc : CurrentWorkingDirectory,
+            followLink ? LookupFlags.FollowSymlink : LookupFlags.None);
         if (lookup.HasError) return lookup.ErrorCode;
         var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
@@ -1113,8 +1133,8 @@ LocResolvedUtimens64:
     private async ValueTask<int> SysFchmodAt2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        // fchmodat2 currently supports the same behavior as fchmodat(2) with flags=0.
-        if (a4 != 0) return -(int)Errno.EINVAL;
+        // Support the Linux fchmodat2 flag subset currently exercised by tar.
+        if ((a4 & ~LinuxConstants.AT_SYMLINK_NOFOLLOW) != 0) return -(int)Errno.EINVAL;
         return await SysFchmodAt(engine, a1, a2, a3, a4, a5, a6);
     }
 
