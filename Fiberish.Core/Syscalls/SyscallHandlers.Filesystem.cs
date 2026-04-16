@@ -829,8 +829,12 @@ public partial class SyscallManager
         if ((flags & ~knownFlags) != 0) return -(int)Errno.EINVAL;
 
         PathLocation loc;
-        if ((flags & LinuxConstants.AT_EMPTY_PATH) != 0 && a2 == 0)
+        if (a2 == 0)
         {
+            if (dirfd == unchecked((int)LinuxConstants.AT_FDCWD))
+                return -(int)Errno.EFAULT;
+            if ((flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) != 0)
+                return -(int)Errno.EINVAL;
             var file = GetFD(dirfd);
             if (file == null) return -(int)Errno.EBADF;
             loc = file.LivePath;
@@ -842,9 +846,14 @@ public partial class SyscallManager
             using var pathLease = path;
             if ((flags & LinuxConstants.AT_EMPTY_PATH) != 0 && path.IsEmpty)
             {
-                var file = GetFD(dirfd);
-                if (file == null) return -(int)Errno.EBADF;
-                loc = file.LivePath;
+                if (dirfd == unchecked((int)LinuxConstants.AT_FDCWD))
+                    loc = CurrentWorkingDirectory;
+                else
+                {
+                    var file = GetFD(dirfd);
+                    if (file == null) return -(int)Errno.EBADF;
+                    loc = file.LivePath;
+                }
                 goto LocResolvedUtimens32;
             }
 
@@ -902,8 +911,12 @@ LocResolvedUtimens32:
         if ((flags & ~knownFlags) != 0) return -(int)Errno.EINVAL;
 
         PathLocation loc;
-        if ((flags & LinuxConstants.AT_EMPTY_PATH) != 0 && a2 == 0)
+        if (a2 == 0)
         {
+            if (dirfd == unchecked((int)LinuxConstants.AT_FDCWD))
+                return -(int)Errno.EFAULT;
+            if ((flags & LinuxConstants.AT_SYMLINK_NOFOLLOW) != 0)
+                return -(int)Errno.EINVAL;
             var file = GetFD(dirfd);
             if (file == null) return -(int)Errno.EBADF;
             loc = file.LivePath;
@@ -915,9 +928,14 @@ LocResolvedUtimens32:
             using var pathLease = path;
             if ((flags & LinuxConstants.AT_EMPTY_PATH) != 0 && path.IsEmpty)
             {
-                var file = GetFD(dirfd);
-                if (file == null) return -(int)Errno.EBADF;
-                loc = file.LivePath;
+                if (dirfd == unchecked((int)LinuxConstants.AT_FDCWD))
+                    loc = CurrentWorkingDirectory;
+                else
+                {
+                    var file = GetFD(dirfd);
+                    if (file == null) return -(int)Errno.EBADF;
+                    loc = file.LivePath;
+                }
                 goto LocResolvedUtimens64;
             }
 
