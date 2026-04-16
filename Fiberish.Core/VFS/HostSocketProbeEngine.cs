@@ -110,7 +110,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
         if ((events & PollEvents.POLLOUT) != 0)
         {
             regOut = RegisterWaiter(dispatcher, callback, PollEvents.POLLOUT);
-            if (IsNonBlockingConnectPending(file))
+            if (IsConnectPending(file))
                 ArmConnectProbe();
             else
                 ArmWriteProbe();
@@ -294,7 +294,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
 
         if ((events & PollEvents.POLLOUT) != 0)
         {
-            if (_socket.SocketType == SocketType.Stream && !_socket.Connected)
+            if (IsConnectPending(null))
                 ArmConnectProbe();
             else
                 ArmWriteProbe();
@@ -306,11 +306,11 @@ internal sealed class HostSocketProbeEngine : IDisposable
         return _socket.SocketType == SocketType.Stream && _socket.IsBound && !_socket.Connected;
     }
 
-    private bool IsNonBlockingConnectPending(LinuxFile file)
+    private bool IsConnectPending(LinuxFile? file)
     {
         return _socket.SocketType == SocketType.Stream &&
                !_socket.Connected &&
-               (file.Flags & FileFlags.O_NONBLOCK) != 0;
+               !IsListeningSocket();
     }
 
     private SocketAsyncEventArgs EnsureProbeArgs(ProbeKind kind)

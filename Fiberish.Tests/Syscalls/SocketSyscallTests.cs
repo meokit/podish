@@ -531,6 +531,35 @@ public class SocketSyscallTests
     }
 
     [Fact]
+    public async Task Socket_HostNetwork_ClosedPortConnect_DoesNotReportFalseSuccessOrEio()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x28000);
+        env.MapUserPage(0x29000);
+        env.MapUserPage(0x2A000);
+
+        int closedPort;
+        using (var probe = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp))
+        {
+            probe.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            closedPort = ((IPEndPoint)probe.LocalEndPoint!).Port;
+        }
+
+        WriteSockaddrIn(env, 0x28000, 0x7F000001u, (ushort)closedPort);
+
+        var fd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(fd >= 0);
+
+        var connectRc = await CallSysConnect(env, (uint)fd, 0x28000, 16);
+        Assert.NotEqual(0, connectRc);
+        Assert.Equal(-(int)Errno.ECONNREFUSED, connectRc);
+
+        env.WriteBytes(0x2A000, [0x42]);
+        var sendRc = await CallSysSend(env, (uint)fd, 0x2A000, 1);
+        Assert.Contains(sendRc, [-(int)Errno.EPIPE, -(int)Errno.ENOTCONN, -(int)Errno.ECONNREFUSED]);
+    }
+
+    [Fact]
     public async Task Socket_NetlinkRoute_CreatesNetlinkRouteInode()
     {
         using var env = new TestEnv();

@@ -412,7 +412,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
             try
             {
                 NativeSocket.Connect(endpoint);
-                return 0;
+                return await FinalizeConnectResultAsync(file, task);
             }
             catch (SocketException ex)
             {
@@ -433,10 +433,13 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
                     if (!ready)
                         return _sendTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
 
-                    var so = NativeSocket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
-                    if (so is not int soInt)
+                    var cachedErrno = ConsumeCachedSocketError();
+                    if (cachedErrno != 0)
+                        return -cachedErrno;
+
+                    var err = GetPendingSocketError();
+                    if (err == SocketError.SocketError)
                         return -(int)Errno.EIO;
-                    var err = (SocketError)soInt;
                     if (err == SocketError.Success || err == SocketError.IsConnected)
                         return 0;
                     if (err is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
@@ -451,6 +454,60 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
             {
                 return -(int)Errno.ENOTCONN;
             }
+    }
+
+    private async ValueTask<int> FinalizeConnectResultAsync(LinuxFile file, FiberTask task)
+    {
+        if (NativeSocket.SocketType != SocketType.Stream)
+            return 0;
+
+        while (true)
+        {
+            var err = GetPendingSocketError();
+            if (err == SocketError.SocketError)
+                return -(int)Errno.EIO;
+
+            if (NativeSocket.Connected && (err == SocketError.Success || err == SocketError.IsConnected))
+                return 0;
+
+            var pending = err is SocketError.Success or SocketError.WouldBlock or SocketError.IOPending
+                or SocketError.InProgress or SocketError.AlreadyInProgress;
+            if (!pending)
+                return MapSocketError(err);
+
+            if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                return -(int)Errno.EINPROGRESS;
+
+            var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
+            if (!ready)
+                return _sendTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
+
+            var cachedErrno = ConsumeCachedSocketError();
+            if (cachedErrno != 0)
+                return -cachedErrno;
+        }
+    }
+
+    private SocketError GetPendingSocketError()
+    {
+        try
+        {
+            var so = NativeSocket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
+            return so switch
+            {
+                int soInt => (SocketError)soInt,
+                SocketError err => err,
+                _ => SocketError.SocketError
+            };
+        }
+        catch (SocketException ex)
+        {
+            return ex.SocketErrorCode;
+        }
+        catch (ObjectDisposedException)
+        {
+            return SocketError.NotConnected;
+        }
     }
 
     public async ValueTask<AcceptedSocketResult> AcceptAsync(LinuxFile file, FiberTask task, int flags)
@@ -1083,6 +1140,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
             SocketError.WouldBlock => -(int)Errno.EAGAIN,
             SocketError.IOPending => -(int)Errno.EAGAIN,
             SocketError.Interrupted => -(int)Errno.EINTR,
+            SocketError.Shutdown => -(int)Errno.EPIPE,
             SocketError.InvalidArgument => -(int)Errno.EINVAL,
             SocketError.MessageSize => -(int)Errno.EMSGSIZE,
             SocketError.ProtocolNotSupported => -(int)Errno.EPROTONOSUPPORT,
