@@ -358,6 +358,50 @@ internal sealed class OwnerPageSlots
         }
     }
 
+    internal List<uint> GetDirtyPageIndicesInRangeOrdered(long startPageIndexInclusive, long endPageIndexInclusive)
+    {
+        if (endPageIndexInclusive < startPageIndexInclusive)
+            return [];
+
+        if (endPageIndexInclusive < 0 || startPageIndexInclusive > uint.MaxValue)
+            return [];
+
+        var startPageIndex = (uint)Math.Max(0L, startPageIndexInclusive);
+        var endPageIndex = (uint)Math.Min((long)uint.MaxValue, endPageIndexInclusive);
+
+        lock (_lock)
+        {
+            if (_pages.Count == 0)
+                return [];
+
+            var dirtyPageIndices = new List<uint>();
+            var rangePageCount = (ulong)endPageIndex - startPageIndex + 1;
+            if (rangePageCount <= (ulong)_pages.Count)
+            {
+                for (var pageIndex = startPageIndex;; pageIndex++)
+                {
+                    if (_pages.TryGetValue(pageIndex, out var entry) && entry.Dirty)
+                        dirtyPageIndices.Add(pageIndex);
+                    if (pageIndex == endPageIndex)
+                        break;
+                }
+                return dirtyPageIndices;
+            }
+
+            foreach (var (pageIndex, entry) in _pages)
+            {
+                if (pageIndex < startPageIndex || pageIndex > endPageIndex || !entry.Dirty)
+                    continue;
+                dirtyPageIndices.Add(pageIndex);
+            }
+
+            if (dirtyPageIndices.Count > 1)
+                dirtyPageIndices.Sort();
+
+            return dirtyPageIndices;
+        }
+    }
+
     public void VisitPageStates(Action<VmPageState> visitor)
     {
         ArgumentNullException.ThrowIfNull(visitor);

@@ -122,6 +122,11 @@ public sealed class AddressSpace
         return Pages.SnapshotPageStates();
     }
 
+    internal List<uint> GetDirtyPageIndicesInRangeOrdered(long startPageIndexInclusive, long endPageIndexInclusive)
+    {
+        return Pages.GetDirtyPageIndicesInRangeOrdered(startPageIndexInclusive, endPageIndexInclusive);
+    }
+
     internal void GetPageStats(out int totalPages, out int dirtyPages)
     {
         Pages.GetPageStats(out totalPages, out dirtyPages);

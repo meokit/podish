@@ -1664,6 +1664,12 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
         return 0;
     }
 
+    protected internal virtual ValueTask<int> FlushWritebackToDurableAsync(LinuxFile? linuxFile, FiberTask? task)
+    {
+        _ = task;
+        return ValueTask.FromResult(FlushWritebackToDurable(linuxFile));
+    }
+
     // For directories, we need iteration. 
     public virtual List<DirectoryEntry> GetEntries()
     {
@@ -1851,15 +1857,10 @@ public abstract class MappingBackedInode : Inode
         if (!request.Sync)
             return 0;
 
-        var pageStates = mapping.SnapshotPageStates()
-            .Where(state => state.Dirty && state.PageIndex >= request.StartPageIndex &&
-                            state.PageIndex <= request.EndPageIndex)
-            .OrderBy(state => state.PageIndex)
-            .ToList();
-
-        foreach (var state in pageStates)
+        var dirtyPageIndices = mapping.GetDirtyPageIndicesInRangeOrdered(request.StartPageIndex, request.EndPageIndex);
+        foreach (var pageIndex in dirtyPageIndices)
         {
-            var syncRequest = CreatePageSyncRequest(state.PageIndex, PageWritebackMode.WritebackOnly);
+            var syncRequest = CreatePageSyncRequest(pageIndex, PageWritebackMode.WritebackOnly);
             var rc = SyncCachedPage(linuxFile, mapping, syncRequest);
             if (rc < 0)
                 return rc;

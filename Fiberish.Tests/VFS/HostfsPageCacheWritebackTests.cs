@@ -14,6 +14,8 @@ public class HostfsPageCacheWritebackTests
     private readonly TestRuntimeFactory _runtime = new();
     private static readonly HostMemoryMapGeometry BufferedOnlyGeometry =
         new(LinuxConstants.PageSize, LinuxConstants.PageSize, LinuxConstants.PageSize, false, false);
+    private static readonly bool AsyncFsyncDebugEnabled =
+        Environment.GetEnvironmentVariable("FIBERISH_DEBUG_BLOCKING_HOST_OP") == "1";
 
     [Fact]
     public void MapShared_SyncVma_WritesBackPageCacheToHostFile()
@@ -293,6 +295,167 @@ public class HostfsPageCacheWritebackTests
         }
         finally
         {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task Fsync_AsyncDurableFlush_MustNotBlockUnrelatedSchedulerWork()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-fsync-async-yield-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "abcde");
+
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
+        var sm = new SyscallManager(engine, mm, 0);
+        sm.MountRootHostfs(root);
+        var scheduler = new KernelScheduler();
+        var process = new Process(5010, mm, sm);
+        scheduler.RegisterProcess(process);
+        var task = new FiberTask(5010, process, engine, scheduler);
+        scheduler.RegisterTask(task);
+        task.Status = FiberTaskStatus.Waiting;
+        task.ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
+        engine.Owner = task;
+
+        var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+        Assert.True(loc.IsValid);
+        var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
+        loc.Dentry!.Inode!.Open(file);
+        var fd = sm.AllocFD(file);
+
+        using var flushStarted = new ManualResetEventSlim(false);
+        using var flushRelease = new ManualResetEventSlim(false);
+        var fsyncTcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var otherWorkTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closeTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        HostInode.FlushToDiskOverrideForTests = _ =>
+        {
+            TraceAsyncFsyncTest("flush override entered");
+            flushStarted.Set();
+            flushRelease.Wait();
+            TraceAsyncFsyncTest("flush override released");
+            return 0;
+        };
+
+        TraceAsyncFsyncTest("starting scheduler thread");
+        var schedulerThread = Task.Run(() => scheduler.Run());
+        try
+        {
+            TraceAsyncFsyncTest("waiting for scheduler ready");
+            Assert.True(WaitForSchedulerReady(scheduler, task, TimeSpan.FromSeconds(1)));
+
+            TraceAsyncFsyncTest("queueing fsync action");
+            scheduler.ScheduleFromAnyThread(() =>
+                StartScheduledAction(() => CallSys(sm, engine, "SysFsync", (uint)fd), fsyncTcs), task);
+
+            Assert.True(flushStarted.Wait(1000), "FlushToDisk worker did not start in time.");
+            TraceAsyncFsyncTest("flush worker started; scheduling unrelated work");
+
+            scheduler.ScheduleFromAnyThread(() => otherWorkTcs.TrySetResult(), task);
+            Assert.True(await Task.WhenAny(otherWorkTcs.Task, Task.Delay(1000)) == otherWorkTcs.Task,
+                "Scheduler did not process unrelated work while fsync flush was blocked.");
+
+            TraceAsyncFsyncTest("releasing flush worker");
+            flushRelease.Set();
+            Assert.Equal(0, await fsyncTcs.Task);
+            TraceAsyncFsyncTest("fsync action completed");
+            Assert.Equal("abcde", File.ReadAllText(hostFile));
+
+            scheduler.ScheduleFromAnyThread(() =>
+            {
+                sm.FreeFD(fd);
+                closeTcs.TrySetResult();
+            }, task);
+            await closeTcs.Task;
+        }
+        finally
+        {
+            HostInode.FlushToDiskOverrideForTests = null;
+            flushRelease.Set();
+            await StopSchedulerAsync(scheduler, task, schedulerThread);
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task Fsync_AsyncDurableFlush_MustKeepHandleAliveWhenFdClosesMidFlush()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-fsync-async-handle-race-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "abcde");
+
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
+        var sm = new SyscallManager(engine, mm, 0);
+        sm.MountRootHostfs(root);
+        var scheduler = new KernelScheduler();
+        var process = new Process(5020, mm, sm);
+        scheduler.RegisterProcess(process);
+        var task = new FiberTask(5020, process, engine, scheduler);
+        scheduler.RegisterTask(task);
+        task.Status = FiberTaskStatus.Waiting;
+        task.ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
+        engine.Owner = task;
+
+        var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+        Assert.True(loc.IsValid);
+        var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
+        loc.Dentry!.Inode!.Open(file);
+        var fd = sm.AllocFD(file);
+
+        using var flushStarted = new ManualResetEventSlim(false);
+        using var flushRelease = new ManualResetEventSlim(false);
+        var fsyncTcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closeTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        HostInode.FlushToDiskOverrideForTests = _ =>
+        {
+            TraceAsyncFsyncTest("flush override entered");
+            flushStarted.Set();
+            flushRelease.Wait();
+            TraceAsyncFsyncTest("flush override released");
+            return 0;
+        };
+
+        TraceAsyncFsyncTest("starting scheduler thread");
+        var schedulerThread = Task.Run(() => scheduler.Run());
+        try
+        {
+            TraceAsyncFsyncTest("waiting for scheduler ready");
+            Assert.True(WaitForSchedulerReady(scheduler, task, TimeSpan.FromSeconds(1)));
+
+            TraceAsyncFsyncTest("queueing fsync action");
+            scheduler.ScheduleFromAnyThread(() =>
+                StartScheduledAction(() => CallSys(sm, engine, "SysFsync", (uint)fd), fsyncTcs), task);
+
+            Assert.True(flushStarted.Wait(1000), "FlushToDisk worker did not start in time.");
+            TraceAsyncFsyncTest("flush worker started; closing fd");
+
+            scheduler.ScheduleFromAnyThread(() =>
+            {
+                sm.FreeFD(fd);
+                closeTcs.TrySetResult();
+            }, task);
+            await closeTcs.Task;
+
+            TraceAsyncFsyncTest("releasing flush worker");
+            flushRelease.Set();
+            Assert.Equal(0, await fsyncTcs.Task);
+            TraceAsyncFsyncTest("fsync action completed");
+            Assert.Equal("abcde", File.ReadAllText(hostFile));
+        }
+        finally
+        {
+            HostInode.FlushToDiskOverrideForTests = null;
+            flushRelease.Set();
+            await StopSchedulerAsync(scheduler, task, schedulerThread);
             Directory.Delete(root, true);
         }
     }
@@ -900,5 +1063,86 @@ public class HostfsPageCacheWritebackTests
         Assert.NotNull(method);
         var task = (ValueTask<int>)method!.Invoke(sm, [engine, a1, a2, a3, a4, a5, a6])!;
         return await task;
+    }
+
+    private static void StartScheduledAction<T>(Func<ValueTask<T>> action, TaskCompletionSource<T> tcs)
+    {
+        TraceAsyncFsyncTest($"StartScheduledAction begin thread={Environment.CurrentManagedThreadId}");
+        ValueTask<T> pending;
+        try
+        {
+            pending = action();
+        }
+        catch (Exception ex)
+        {
+            TraceAsyncFsyncTest($"StartScheduledAction sync-throw {ex.GetType().Name}");
+            tcs.TrySetException(ex);
+            return;
+        }
+
+        if (pending.IsCompletedSuccessfully)
+        {
+            TraceAsyncFsyncTest("StartScheduledAction completed synchronously");
+            tcs.TrySetResult(pending.Result);
+            return;
+        }
+
+        TraceAsyncFsyncTest("StartScheduledAction awaiting asynchronously");
+        _ = CompleteScheduledActionAsync(pending, tcs);
+    }
+
+    private static async Task CompleteScheduledActionAsync<T>(ValueTask<T> pending, TaskCompletionSource<T> tcs)
+    {
+        try
+        {
+            TraceAsyncFsyncTest($"CompleteScheduledActionAsync awaiting thread={Environment.CurrentManagedThreadId}");
+            tcs.TrySetResult(await pending);
+            TraceAsyncFsyncTest("CompleteScheduledActionAsync completed");
+        }
+        catch (Exception ex)
+        {
+            TraceAsyncFsyncTest($"CompleteScheduledActionAsync throw {ex.GetType().Name}");
+            tcs.TrySetException(ex);
+        }
+    }
+
+    private static bool WaitForSchedulerReady(KernelScheduler scheduler, FiberTask task, TimeSpan timeout)
+    {
+        TraceAsyncFsyncTest("WaitForSchedulerReady enqueue");
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        scheduler.ScheduleFromAnyThread(() =>
+        {
+            TraceAsyncFsyncTest($"WaitForSchedulerReady callback thread={Environment.CurrentManagedThreadId}");
+            ready.TrySetResult();
+        }, task);
+        var ok = ready.Task.Wait(timeout);
+        TraceAsyncFsyncTest($"WaitForSchedulerReady done ok={ok}");
+        return ok;
+    }
+
+    private static async Task StopSchedulerAsync(KernelScheduler scheduler, FiberTask task, Task schedulerThread)
+    {
+        TraceAsyncFsyncTest("StopSchedulerAsync enqueue");
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        scheduler.ScheduleFromAnyThread(() =>
+        {
+            TraceAsyncFsyncTest($"StopSchedulerAsync callback thread={Environment.CurrentManagedThreadId}");
+            task.Exited = true;
+            task.Status = FiberTaskStatus.Terminated;
+            scheduler.Running = false;
+            stopped.TrySetResult();
+        }, task);
+        await stopped.Task;
+        TraceAsyncFsyncTest("StopSchedulerAsync waiting scheduler thread");
+        await schedulerThread;
+        TraceAsyncFsyncTest("StopSchedulerAsync completed");
+    }
+
+    private static void TraceAsyncFsyncTest(string message)
+    {
+        if (!AsyncFsyncDebugEnabled)
+            return;
+
+        Console.Error.WriteLine($"[HostfsAsyncFsyncTest {DateTime.UtcNow:O}] {message}");
     }
 }

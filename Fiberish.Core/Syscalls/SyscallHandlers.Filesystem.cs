@@ -1651,13 +1651,22 @@ LocResolvedUtimens64:
         if (file == null) return -(int)Errno.EBADF;
         var inode = file.OpenedInode;
         if (inode == null) return -(int)Errno.EBADF;
+        var task = engine.Owner as FiberTask;
 
+        BlockingHostOperationDebug.Trace(
+            $"SysFsync begin fd={(int)a1} inode={inode.Ino} tid={task?.TID} thread={Environment.CurrentManagedThreadId}");
         ProcessAddressSpaceSync.SyncMappedFile(Mem, engine, file);
         var writebackRc = inode.WritePages(file, new WritePagesRequest(0, long.MaxValue,
-            PageWritebackMode.Durable));
+            PageWritebackMode.WritebackOnly));
+        BlockingHostOperationDebug.Trace(
+            $"SysFsync after-writeback fd={(int)a1} inode={inode.Ino} tid={task?.TID} rc={writebackRc}");
         if (writebackRc < 0 && writebackRc != -(int)Errno.EOPNOTSUPP && writebackRc != -(int)Errno.EROFS)
             return writebackRc;
-        inode.Sync(file);
+        var durableRc = await inode.FlushWritebackToDurableAsync(file, task);
+        BlockingHostOperationDebug.Trace(
+            $"SysFsync after-durable fd={(int)a1} inode={inode.Ino} tid={task?.TID} rc={durableRc}");
+        if (durableRc < 0 && durableRc != -(int)Errno.EOPNOTSUPP && durableRc != -(int)Errno.EROFS)
+            return durableRc;
         return 0;
     }
 

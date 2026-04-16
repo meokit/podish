@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Microsoft.Win32.SafeHandles;
@@ -1357,6 +1358,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
     internal string? MetadataObjectId { get; set; }
 
+    internal static Func<SafeFileHandle, int>? FlushToDiskOverrideForTests { get; set; }
+
     private bool TryGetBackingFileLength(out ulong hostLength)
     {
         if (HostInodeIdentityResolver.TryReadUnixStat(HostPath, out var statData))
@@ -2169,13 +2172,105 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     private static void FlushHandleToDiskIfNeeded(LinuxFile? linuxFile)
     {
         if (linuxFile?.PrivateData is SafeFileHandle handle)
-            RandomAccess.FlushToDisk(handle);
+            FlushHandleToDisk(handle);
     }
 
     protected internal override int FlushWritebackToDurable(LinuxFile? linuxFile)
     {
         FlushHandleToDiskIfNeeded(linuxFile);
         return 0;
+    }
+
+    protected internal override async ValueTask<int> FlushWritebackToDurableAsync(LinuxFile? linuxFile,
+        FiberTask? task)
+    {
+        if (OperatingSystem.IsBrowser() || task == null || linuxFile?.PrivateData is not SafeFileHandle handle)
+            return await base.FlushWritebackToDurableAsync(linuxFile, task);
+
+        var schedulerThreadId = task.CommonKernel.OwnerThreadId;
+        if (schedulerThreadId == 0 || schedulerThreadId != Environment.CurrentManagedThreadId)
+        {
+            BlockingHostOperationDebug.Trace(
+                $"hostfs.FlushWritebackToDurableAsync fallback-sync inode={Ino} tid={task.TID} ownerThread={schedulerThreadId} currentThread={Environment.CurrentManagedThreadId}");
+            return await base.FlushWritebackToDurableAsync(linuxFile, task);
+        }
+
+        BlockingHostOperationDebug.Trace(
+            $"hostfs.FlushWritebackToDurableAsync begin inode={Ino} tid={task.TID} thread={Environment.CurrentManagedThreadId}");
+        var addRefSucceeded = false;
+        try
+        {
+            handle.DangerousAddRef(ref addRefSucceeded);
+            BlockingHostOperationDebug.Trace(
+                $"hostfs.FlushWritebackToDurableAsync addref inode={Ino} tid={task.TID} success={addRefSucceeded}");
+        }
+        catch (Exception ex)
+        {
+            BlockingHostOperationDebug.Trace(
+                $"hostfs.FlushWritebackToDurableAsync addref-failed inode={Ino} tid={task.TID} ex={ex.GetType().Name}");
+            return MapHostException(ex);
+        }
+
+        if (!addRefSucceeded)
+            return -(int)Errno.EIO;
+
+        var releasePending = 1;
+
+        void ReleaseHandleOnce()
+        {
+            if (Interlocked.Exchange(ref releasePending, 0) == 0)
+                return;
+            BlockingHostOperationDebug.Trace(
+                $"hostfs.FlushWritebackToDurableAsync release inode={Ino} tid={task.TID} thread={Environment.CurrentManagedThreadId}");
+            handle.DangerousRelease();
+        }
+
+        try
+        {
+            var rc = await new BlockingHostOperationAwaitable(task, "hostfs.FlushToDisk", () =>
+            {
+                try
+                {
+                    BlockingHostOperationDebug.Trace(
+                        $"hostfs.FlushWritebackToDurableAsync worker-flush-start inode={Ino} tid={task.TID} thread={Environment.CurrentManagedThreadId}");
+                    FlushHandleToDisk(handle);
+                    BlockingHostOperationDebug.Trace(
+                        $"hostfs.FlushWritebackToDurableAsync worker-flush-done inode={Ino} tid={task.TID} thread={Environment.CurrentManagedThreadId}");
+                    return 0;
+                }
+                catch (Exception ex)
+                {
+                    BlockingHostOperationDebug.Trace(
+                        $"hostfs.FlushWritebackToDurableAsync worker-flush-failed inode={Ino} tid={task.TID} ex={ex.GetType().Name}");
+                    return MapHostException(ex);
+                }
+                finally
+                {
+                    ReleaseHandleOnce();
+                }
+            });
+            BlockingHostOperationDebug.Trace(
+                $"hostfs.FlushWritebackToDurableAsync end inode={Ino} tid={task.TID} rc={rc} thread={Environment.CurrentManagedThreadId}");
+            return rc;
+        }
+        catch
+        {
+            ReleaseHandleOnce();
+            throw;
+        }
+    }
+
+    private static void FlushHandleToDisk(SafeFileHandle handle)
+    {
+        if (FlushToDiskOverrideForTests is { } hook)
+        {
+            var rc = hook(handle);
+            if (rc < 0)
+                throw new IOException($"FlushToDiskOverrideForTests failed with rc={rc}.");
+            return;
+        }
+
+        RandomAccess.FlushToDisk(handle);
     }
 
     private int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
