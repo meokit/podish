@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Fiberish.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.Native;
+using Fiberish.SilkFS;
 using Microsoft.Extensions.Logging;
 
 // needed for SyscallManager Access if required, but maybe not directly here yet
@@ -559,6 +560,19 @@ public class OverlayInode : MappingBackedInode
         if (UpperInode == null && LowerInode != null)
             return CopyUp(linuxFile);
         return 0;
+    }
+
+    internal int ResolveMetadataMutationTarget(out Inode? target)
+    {
+        var copyRc = EnsureWritableBacking(null);
+        if (copyRc < 0)
+        {
+            target = null;
+            return copyRc;
+        }
+
+        target = UpperInode ?? LowerInode ?? GetAnyOpenBackingInode();
+        return target != null ? 0 : -(int)Errno.EROFS;
     }
 
     private void BindFileBacking(LinuxFile linuxFile, Inode backing, string reason)
@@ -1487,6 +1501,18 @@ public class OverlayInode : MappingBackedInode
         }
 
         return UpperInode!.RemoveXAttr(name);
+    }
+
+    public override int UpdateTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
+    {
+        var resolveRc = ResolveMetadataMutationTarget(out var target);
+        if (resolveRc < 0)
+            return resolveRc;
+
+        var rc = target!.UpdateTimes(atime, mtime, ctime);
+        if (rc == 0 && target is SilkInode silkInode)
+            silkInode.PersistMetadataImmediately();
+        return rc;
     }
 
     protected internal override int ReadSpan(LinuxFile linuxFile, Span<byte> buffer, long offset)

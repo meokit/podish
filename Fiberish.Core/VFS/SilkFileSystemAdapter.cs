@@ -119,20 +119,14 @@ public sealed class SilkSuperBlock : IndexedMemorySuperBlock, IDentryCacheDroppe
 
         var loaded = new SilkInode((ulong)rec.Value.Ino, this, Repository)
         {
-            Type = SilkInode.MapInodeType(rec.Value.Kind),
-            Mode = rec.Value.Mode,
-            Uid = rec.Value.Uid,
-            Gid = rec.Value.Gid,
-            Rdev = (uint)rec.Value.Rdev,
-            Size = (ulong)Math.Max(0, rec.Value.Size)
+            Type = SilkInode.MapInodeType(rec.Value.Kind)
         };
+        loaded.RestorePersistedMetadata(rec.Value);
         var persistedNlink = (int)Math.Max(0, rec.Value.Nlink);
         if (rec.Value.Ino == SilkMetadataStore.RootInode && loaded.Type == InodeType.Directory && persistedNlink < 2)
             persistedNlink = 2;
         loaded.SetInitialLinkCount(persistedNlink, "SilkSuperBlock.GetOrLoadInode");
-        loaded.ATime = FromUnixNanoseconds(rec.Value.ATimeNs);
-        loaded.MTime = FromUnixNanoseconds(rec.Value.MTimeNs);
-        loaded.CTime = FromUnixNanoseconds(rec.Value.CTimeNs);
+        loaded.RestorePersistedTimestamps(rec.Value);
         loaded.LoadXAttrsFromMetadata(session);
         if (loaded.Type == InodeType.Symlink)
             loaded.LoadDataFromMetadata();
@@ -279,7 +273,16 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
     private readonly SilkRepository _repository;
     private List<DirectoryEntry>? _cachedEntries;
     private MappedFilePageCache? _mappedPageCache;
+    private DateTime _atime = DateTime.Now;
+    private DateTime _ctime = DateTime.Now;
     private int _metadataDirty;
+    private int _metadataMutationSuppressionDepth;
+    private int _mode;
+    private DateTime _mtime = DateTime.Now;
+    private uint _rdev;
+    private ulong _size;
+    private int _uid;
+    private int _gid;
 
     public SilkInode(ulong ino, IndexedMemorySuperBlock sb, SilkRepository repository) : base(ino, sb)
     {
@@ -290,6 +293,103 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         AddressSpacePolicy.AddressSpaceCacheClass.File;
 
     private static bool IsNamespaceMutationSuppressed => NamespaceMutationDepth.Value > 0;
+    private bool IsMetadataMutationTrackingSuppressed => _metadataMutationSuppressionDepth > 0;
+
+    public override int Mode
+    {
+        get => _mode;
+        set
+        {
+            if (_mode == value)
+                return;
+            _mode = value;
+            OnMetadataFieldChanged();
+        }
+    }
+
+    public override int Uid
+    {
+        get => _uid;
+        set
+        {
+            if (_uid == value)
+                return;
+            _uid = value;
+            OnMetadataFieldChanged();
+        }
+    }
+
+    public override int Gid
+    {
+        get => _gid;
+        set
+        {
+            if (_gid == value)
+                return;
+            _gid = value;
+            OnMetadataFieldChanged();
+        }
+    }
+
+    public override ulong Size
+    {
+        get => _size;
+        set
+        {
+            if (_size == value)
+                return;
+            _size = value;
+            OnMetadataFieldChanged();
+        }
+    }
+
+    public override DateTime MTime
+    {
+        get => _mtime;
+        set
+        {
+            if (_mtime == value)
+                return;
+            _mtime = value;
+            OnMetadataFieldChanged();
+        }
+    }
+
+    public override DateTime ATime
+    {
+        get => _atime;
+        set
+        {
+            if (_atime == value)
+                return;
+            _atime = value;
+            OnMetadataFieldChanged();
+        }
+    }
+
+    public override DateTime CTime
+    {
+        get => _ctime;
+        set
+        {
+            if (_ctime == value)
+                return;
+            _ctime = value;
+            OnMetadataFieldChanged();
+        }
+    }
+
+    public override uint Rdev
+    {
+        get => _rdev;
+        set
+        {
+            if (_rdev == value)
+                return;
+            _rdev = value;
+            OnMetadataFieldChanged();
+        }
+    }
 
     FilePageBackendDiagnostics IHostMappedCacheDropper.GetMappedCacheDiagnostics()
     {
@@ -344,9 +444,34 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         return new NamespaceMutationScope();
     }
 
+    private IDisposable SuppressMetadataMutationTracking()
+    {
+        return new MetadataMutationTrackingScope(this);
+    }
+
     private SilkSuperBlock.MetadataSessionLease EnterMetadataSessionScope(out SilkMetadataSession session)
     {
         return ((SilkSuperBlock)IndexedSb).AcquireMetadataSession(out session);
+    }
+
+    internal void RestorePersistedMetadata(SilkInodeRecord record)
+    {
+        using var suppression = SuppressMetadataMutationTracking();
+        Type = MapInodeType(record.Kind);
+        Mode = record.Mode;
+        Uid = record.Uid;
+        Gid = record.Gid;
+        Rdev = (uint)record.Rdev;
+        Size = (ulong)Math.Max(0, record.Size);
+        RestorePersistedTimestamps(record);
+    }
+
+    internal void RestorePersistedTimestamps(SilkInodeRecord record)
+    {
+        using var suppression = SuppressMetadataMutationTracking();
+        ATime = SilkSuperBlock.FromUnixNanoseconds(record.ATimeNs);
+        MTime = SilkSuperBlock.FromUnixNanoseconds(record.MTimeNs);
+        CTime = SilkSuperBlock.FromUnixNanoseconds(record.CTimeNs);
     }
 
     public void LoadXAttrsFromMetadata(SilkMetadataSession session)
@@ -394,6 +519,12 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         Volatile.Write(ref _metadataDirty, 1);
     }
 
+    private void OnMetadataFieldChanged()
+    {
+        if (!IsMetadataMutationTrackingSuppressed)
+            MarkMetadataDirty();
+    }
+
     private void FlushDirtyMetadataIfNeeded(SilkMetadataSession session)
     {
         if (Interlocked.Exchange(ref _metadataDirty, 0) == 0)
@@ -419,6 +550,11 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
     internal void FlushMetadataForShutdown(SilkMetadataSession session)
     {
         FlushDirtyMetadataIfNeeded(session);
+    }
+
+    internal void PersistMetadataImmediately()
+    {
+        FlushDirtyMetadataIfNeeded();
     }
 
     public override int UpdateTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
@@ -1283,6 +1419,22 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         public void Dispose()
         {
             NamespaceMutationDepth.Value = Math.Max(0, NamespaceMutationDepth.Value - 1);
+        }
+    }
+
+    private sealed class MetadataMutationTrackingScope : IDisposable
+    {
+        private readonly SilkInode _owner;
+
+        public MetadataMutationTrackingScope(SilkInode owner)
+        {
+            _owner = owner;
+            _owner._metadataMutationSuppressionDepth++;
+        }
+
+        public void Dispose()
+        {
+            _owner._metadataMutationSuppressionDepth = Math.Max(0, _owner._metadataMutationSuppressionDepth - 1);
         }
     }
 }

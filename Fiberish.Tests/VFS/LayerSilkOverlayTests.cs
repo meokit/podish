@@ -15,6 +15,14 @@ public class LayerSilkOverlayTests
 
     private static byte[] Utf8(string value) => Encoding.UTF8.GetBytes(value);
 
+    private static int ApplyModeChangeForTest(Inode inode, int mode)
+    {
+        var method = typeof(SyscallManager).GetMethod("ApplyModeChange",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+        return (int)method!.Invoke(null, [inode, mode, null])!;
+    }
+
     [Fact]
     public void Overlay_LayerfsLower_And_SilkfsUpper_Works()
     {
@@ -382,6 +390,68 @@ public class LayerSilkOverlayTests
                 rf.Close();
                 Assert.Equal(6, n);
                 Assert.Equal("abZZef", Encoding.UTF8.GetString(buf, 0, n));
+
+                sm.Close();
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
+    public void Overlay_ChmodLowerRegularFile_InSilkfsUpper_PersistsAcrossRemount()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-copyup-chmod-{Guid.NewGuid():N}");
+        try
+        {
+            var payload = Encoding.UTF8.GetBytes("#!/bin/sh\n");
+            var index = new LayerIndex();
+            index.AddEntry(new LayerIndexEntry("/bin", InodeType.Directory, 0x1ED));
+            index.AddEntry(new LayerIndexEntry(
+                "/bin/tool",
+                InodeType.File,
+                0x1A4,
+                Size: (ulong)payload.Length,
+                InlineData: payload));
+
+            using (var engine = _runtime.CreateEngine())
+            {
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
+                var layerType = FileSystemRegistry.Get("layerfs")!;
+                var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
+                    layerType,
+                    0,
+                    "test-lower",
+                    new LayerMountOptions { Index = index, ContentProvider = new InMemoryLayerContentProvider() });
+                sm.MountRootOverlayWithLower(lowerSb, "silkfs", silkRoot);
+
+                var fileLoc = sm.PathWalkWithFlags("/bin/tool", LookupFlags.FollowSymlink);
+                Assert.True(fileLoc.IsValid);
+                var overlayInode = Assert.IsType<OverlayInode>(fileLoc.Dentry!.Inode);
+                Assert.Null(overlayInode.UpperInode);
+                Assert.Equal(0, ApplyModeChangeForTest(overlayInode, 0x1ED));
+                Assert.NotNull(overlayInode.UpperInode);
+                Assert.Equal(0x1ED, overlayInode.Mode);
+
+                sm.Close();
+            }
+
+            using (var engine = _runtime.CreateEngine())
+            {
+                var sm = new SyscallManager(engine, _runtime.CreateAddressSpace(), 0);
+                var layerType = FileSystemRegistry.Get("layerfs")!;
+                var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(
+                    layerType,
+                    0,
+                    "test-lower",
+                    new LayerMountOptions { Index = index, ContentProvider = new InMemoryLayerContentProvider() });
+                sm.MountRootOverlayWithLower(lowerSb, "silkfs", silkRoot);
+
+                var fileLoc = sm.PathWalkWithFlags("/bin/tool", LookupFlags.FollowSymlink);
+                Assert.True(fileLoc.IsValid);
+                Assert.Equal(0x1ED, fileLoc.Dentry!.Inode!.Mode);
 
                 sm.Close();
             }

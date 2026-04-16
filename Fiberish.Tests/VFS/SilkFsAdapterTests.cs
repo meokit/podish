@@ -303,6 +303,88 @@ public class SilkFsAdapterTests
     }
 
     [Fact]
+    public void Silkfs_Reload_PersistsModeOnlyMetadataMutation()
+    {
+        var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-mode-store-{Guid.NewGuid():N}");
+
+        try
+        {
+            using (var engine = _runtime.CreateEngine())
+            {
+                var vma = _runtime.CreateAddressSpace();
+                var sm = new SyscallManager(engine, vma, 0);
+                var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootMount = new Mount(rootSb, rootSb.Root)
+                {
+                    Source = "tmpfs",
+                    FsType = "tmpfs",
+                    Options = "rw"
+                };
+                sm.InitializeRoot(rootSb.Root, rootMount);
+
+                var root = sm.Root.Dentry!;
+                if (root.Inode!.Lookup("mnt") == null)
+                {
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
+                    root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                    root.CacheChild(mntDentry, "test");
+                }
+
+                var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+                Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+                var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+                Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+                var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+
+                var file = new Dentry(StampTxt, null, loc.Dentry, loc.Dentry!.SuperBlock);
+                loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
+                file.Inode!.Mode = 0x1ED;
+
+                sm.Close();
+            }
+
+            using (var engine = _runtime.CreateEngine())
+            {
+                var vma = _runtime.CreateAddressSpace();
+                var sm = new SyscallManager(engine, vma, 0);
+                var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+                var rootSb = tmpfsType.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(tmpfsType, 0, "test-root", null);
+                var rootMount = new Mount(rootSb, rootSb.Root)
+                {
+                    Source = "tmpfs",
+                    FsType = "tmpfs",
+                    Options = "rw"
+                };
+                sm.InitializeRoot(rootSb.Root, rootMount);
+
+                var root = sm.Root.Dentry!;
+                if (root.Inode!.Lookup("mnt") == null)
+                {
+                    var mntDentry = new Dentry(Mnt, null, root, root.SuperBlock);
+                    root.Inode.Mkdir(mntDentry, 0x1FF, 0, 0);
+                    root.CacheChild(mntDentry, "test");
+                }
+
+                var fsCtx = sm.BuildFsContextFromLegacyMount("silkfs", silkRoot, 0, null);
+                Assert.Equal(0, sm.CreateDetachedMountFromFsContext(fsCtx, 0, out var mount));
+                var target = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
+                Assert.Equal(0, sm.AttachDetachedMount(mount!, target));
+
+                var fileLoc = sm.PathWalkWithFlags("/mnt/stamp.txt", LookupFlags.FollowSymlink);
+                Assert.True(fileLoc.IsValid);
+                Assert.Equal(0x1ED, fileLoc.Dentry!.Inode!.Mode);
+
+                sm.Close();
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+        }
+    }
+
+    [Fact]
     public void Silkfs_Remount_PreservesDirectoryNlinkAfterCrossParentRename()
     {
         var silkRoot = Path.Combine(Path.GetTempPath(), $"silkfs-store-{Guid.NewGuid():N}");

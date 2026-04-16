@@ -5,6 +5,7 @@ using Fiberish.Auth.Permission;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
+using Fiberish.SilkFS;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 
@@ -1816,34 +1817,62 @@ LocResolvedUtimens64:
 
     private static int ApplyOwnershipChange(Inode inode, int uid, int gid)
     {
-        var oldUid = inode.Uid;
-        var oldGid = inode.Gid;
+        var target = ResolveMetadataMutationTarget(inode, out var resolveRc);
+        if (resolveRc != 0)
+            return resolveRc;
+
+        var oldUid = target.Uid;
+        var oldGid = target.Gid;
         var newUid = uid == -1 ? oldUid : uid;
         var newGid = gid == -1 ? oldGid : gid;
 
-        if (inode is HostInode hostInode)
+        if (target is HostInode hostInode)
         {
             var rc = hostInode.SetProjectedOwnership(uid, gid);
             if (rc != 0) return rc;
-            inode.Mode = DacPolicy.ApplySetIdClearOnChown(inode, oldUid, oldGid, newUid, newGid);
+            target.Mode = DacPolicy.ApplySetIdClearOnChown(target, oldUid, oldGid, newUid, newGid);
             return 0;
         }
 
-        inode.Uid = newUid;
-        inode.Gid = newGid;
-        inode.Mode = DacPolicy.ApplySetIdClearOnChown(inode, oldUid, oldGid, newUid, newGid);
-        inode.CTime = DateTime.Now;
+        target.Uid = newUid;
+        target.Gid = newGid;
+        target.Mode = DacPolicy.ApplySetIdClearOnChown(target, oldUid, oldGid, newUid, newGid);
+        target.CTime = DateTime.Now;
+        PersistMetadataMutationIfNeeded(target);
         return 0;
     }
 
     private static int ApplyModeChange(Inode inode, int mode, Process? process = null)
     {
-        var normalizedMode = process == null ? mode & 0xFFF : DacPolicy.NormalizeChmodMode(process, inode, mode);
-        if (inode is HostInode hostInode) return hostInode.SetProjectedMode(normalizedMode);
+        var target = ResolveMetadataMutationTarget(inode, out var resolveRc);
+        if (resolveRc != 0)
+            return resolveRc;
 
-        inode.Mode = normalizedMode;
-        inode.CTime = DateTime.Now;
+        var normalizedMode = process == null ? mode & 0xFFF : DacPolicy.NormalizeChmodMode(process, target, mode);
+        if (target is HostInode hostInode) return hostInode.SetProjectedMode(normalizedMode);
+
+        target.Mode = normalizedMode;
+        target.CTime = DateTime.Now;
+        PersistMetadataMutationIfNeeded(target);
         return 0;
+    }
+
+    private static Inode ResolveMetadataMutationTarget(Inode inode, out int rc)
+    {
+        if (inode is OverlayInode overlayInode)
+        {
+            rc = overlayInode.ResolveMetadataMutationTarget(out var target);
+            return target!;
+        }
+
+        rc = 0;
+        return inode;
+    }
+
+    private static void PersistMetadataMutationIfNeeded(Inode inode)
+    {
+        if (inode is SilkInode silkInode)
+            silkInode.PersistMetadataImmediately();
     }
 
     private static void WriteStat64(Engine engine, uint addr, Inode inode)
