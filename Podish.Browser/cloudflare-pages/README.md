@@ -32,6 +32,17 @@ The script stages a Pages-ready static directory, injects `_headers` for
 COOP/COEP, uploads `rootfs/` to R2, generates `wrangler.jsonc`, and runs
 `wrangler pages deploy`.
 
+Static caching is split by file type:
+
+- Fingerprinted assets under `/assets/*` and hashed runtime payloads under
+  `/_framework/*.wasm`, `/_framework/*.wasm.br`,
+  `/_framework/dotnet.native*.js`, and `/_framework/dotnet.runtime*.js` are
+  served as long-lived immutable assets.
+- Stable entrypoints such as `/index.html`, `/_framework/dotnet.js`, and the
+  root-level helper modules (`/*.mjs`, `/*.js`) are served with
+  `no-cache, must-revalidate` so a new deploy does not strand browsers on an
+  old loader that points at removed hashed runtime files.
+
 By default, the deployment script reuses the existing `compatibility_date` from
 `wrangler.jsonc`. If the file does not exist yet, it falls back to the current
 UTC date so the value does not get rejected as "in the future" when your local

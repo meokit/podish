@@ -163,7 +163,19 @@ def write_headers_file(headers_path: Path) -> None:
   Cross-Origin-Embedder-Policy: require-corp
   Cross-Origin-Resource-Policy: same-origin
 
-/_framework/*
+/index.html
+  Cache-Control: no-cache, must-revalidate
+
+/_framework/dotnet.js
+  Cache-Control: no-cache, must-revalidate
+
+/_framework/dotnet.native*.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/_framework/dotnet.runtime*.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/_framework/*.wasm
   Cache-Control: public, max-age=31536000, immutable
 
 /_framework/*.wasm.br
@@ -175,15 +187,12 @@ def write_headers_file(headers_path: Path) -> None:
   Cache-Control: public, max-age=31536000, immutable
 
 /*.mjs
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: no-cache, must-revalidate
 
 /*.js
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: no-cache, must-revalidate
 
 /*.css
-  Cache-Control: public, max-age=31536000, immutable
-
-/*.wasm
   Cache-Control: public, max-age=31536000, immutable
 """,
         encoding="utf-8",
