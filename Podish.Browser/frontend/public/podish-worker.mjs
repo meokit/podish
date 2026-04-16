@@ -109,15 +109,7 @@ export async function waitForInterrupt(mask = 0xFFFFFFFF, timeoutMs = -1) {
 export function waitForInterruptSync(mask = 0xFFFFFFFF, timeoutMs = -1) {
     if (!interruptController)
         return 0;
-
-    const pending = interruptController.take(mask >>> 0);
-    if (pending)
-        return pending;
-
-    const i32 = new Int32Array(interruptController.buffer, 0, 2);
-    const seq = Atomics.load(i32, 0);
-    Atomics.wait(i32, 0, seq, timeoutMs < 0 ? undefined : timeoutMs);
-    return interruptController.take(mask >>> 0);
+    return interruptController.waitSync(mask >>> 0, timeoutMs);
 }
 
 export function pollInputPacketInto(ptr, maxBytes = SAB_PACKET_BUFFER_SIZE) {

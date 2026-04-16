@@ -9,6 +9,7 @@ import {
     onWorkerNetworkActivityChange,
     podishWorker,
     startSessionRunLoop,
+    wakeSessionRuntime,
     writeSessionInput,
     writeSessionResize
 } from './worker-client'
@@ -361,9 +362,22 @@ export default function App() {
             })
         }
 
+        const wakeRuntime = () => wakeSessionRuntime()
         const onResize = () => fitAddon.fit()
-        const onPointerDown = () => terminal.focus()
+        const onPointerDown = () => {
+            terminal.focus()
+            wakeRuntime()
+        }
+        const onWindowFocus = () => wakeRuntime()
+        const onPageShow = () => wakeRuntime()
+        const onVisibilityChange = () => {
+            if (globalThis.document?.visibilityState === 'visible')
+                wakeRuntime()
+        }
         globalThis.addEventListener('resize', onResize)
+        globalThis.addEventListener('focus', onWindowFocus)
+        globalThis.addEventListener('pageshow', onPageShow)
+        globalThis.document?.addEventListener('visibilitychange', onVisibilityChange)
         terminalRef.current?.addEventListener('pointerdown', onPointerDown)
 
         const onData = data => {
@@ -397,6 +411,9 @@ export default function App() {
 
         return () => {
             globalThis.removeEventListener('resize', onResize)
+            globalThis.removeEventListener('focus', onWindowFocus)
+            globalThis.removeEventListener('pageshow', onPageShow)
+            globalThis.document?.removeEventListener('visibilitychange', onVisibilityChange)
             terminalRef.current?.removeEventListener('pointerdown', onPointerDown)
             dataDisposable.dispose()
             resizeDisposable.dispose()

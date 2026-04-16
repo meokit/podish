@@ -14,6 +14,7 @@ import {
     IRQ_LOG_READY,
     IRQ_OUTPUT_DRAINED,
     IRQ_OUTPUT_READY,
+    IRQ_SCHEDULER_WAKE,
     IRQ_TIMER,
     IRQ_TIMER_CONTROL,
 } from '../public/interrupt-controller.mjs'
@@ -514,6 +515,10 @@ function createPodishWorkerClient() {
         return writeControl(Uint8Array.of(CONTROL_STOP_SESSION))
     }
 
+    function signalSchedulerWake() {
+        sabState.irq.signal(IRQ_SCHEDULER_WAKE)
+    }
+
     function startRunLoop() {
         worker.postMessage({type: 'run-session'})
     }
@@ -546,6 +551,7 @@ function createPodishWorkerClient() {
         writeInput,
         writeResize,
         stopSession,
+        signalSchedulerWake,
         startRunLoop,
         terminate() {
             worker.terminate()
@@ -585,6 +591,10 @@ export function onWorkerNetworkActivityChange(cb) {
 
 export function startSessionRunLoop() {
     podishWorker.startRunLoop()
+}
+
+export function wakeSessionRuntime() {
+    podishWorker.signalSchedulerWake()
 }
 
 export function stopSessionViaSab() {

@@ -6,9 +6,12 @@ export const IRQ_INPUT_READY = 1 << 0
 export const IRQ_OUTPUT_READY = 1 << 1
 export const IRQ_OUTPUT_DRAINED = 1 << 2
 export const IRQ_TIMER = 1 << 3
-export const IRQ_TIMER_CONTROL = 1 << 4
+export const IRQ_SCHEDULER_WAKE = 1 << 4
 export const IRQ_LOG_READY = 1 << 5
 export const IRQ_HTTP_RPC = 1 << 6
+export const IRQ_TIMER_CONTROL = 1 << 7
+
+const WAIT_SLICE_MS = 100
 
 export function createInterruptControllerStorage() {
     const buffer = new SharedArrayBuffer(IRQ_I32_COUNT * 4)
@@ -48,29 +51,71 @@ export function attachInterruptController(buffer) {
         return take(0xFFFFFFFF)
     }
 
-    async function wait(mask = 0xFFFFFFFF, timeoutMs = -1) {
-        const pending = take(mask)
-        if (pending)
-            return pending
+    function getRemainingTimeout(startedAt, timeoutMs) {
+        if (timeoutMs < 0)
+            return -1
 
-        const seq = Atomics.load(i32, IRQ_SEQ_INDEX)
-        if (typeof Atomics.waitAsync === 'function') {
-            const result = Atomics.waitAsync(i32, IRQ_SEQ_INDEX, seq)
-            if (result.async) {
-                if (timeoutMs < 0) {
-                    await result.value
-                } else {
-                    await Promise.race([
-                        result.value,
-                        new Promise(resolve => globalThis.setTimeout(resolve, timeoutMs)),
-                    ])
-                }
-            }
-        } else {
-            await new Promise(resolve => globalThis.setTimeout(resolve, timeoutMs < 0 ? 4 : timeoutMs))
+        const elapsed = Date.now() - startedAt
+        if (elapsed >= timeoutMs)
+            return 0
+        return timeoutMs - elapsed
+    }
+
+    function getWaitSliceMs(startedAt, timeoutMs) {
+        const remaining = getRemainingTimeout(startedAt, timeoutMs)
+        if (remaining < 0)
+            return WAIT_SLICE_MS
+        return Math.min(remaining, WAIT_SLICE_MS)
+    }
+
+    function waitSync(mask = 0xFFFFFFFF, timeoutMs = -1) {
+        const startedAt = timeoutMs >= 0 ? Date.now() : 0
+        while (true) {
+            const seq = Atomics.load(i32, IRQ_SEQ_INDEX)
+            const pending = take(mask)
+            if (pending)
+                return pending
+
+            const waitTimeoutMs = getWaitSliceMs(startedAt, timeoutMs)
+            if (waitTimeoutMs === 0)
+                return take(mask)
+
+            Atomics.wait(i32, IRQ_SEQ_INDEX, seq, waitTimeoutMs)
+
+            const matched = take(mask)
+            if (matched)
+                return matched
+            if (timeoutMs >= 0 && getRemainingTimeout(startedAt, timeoutMs) === 0)
+                return 0
         }
+    }
 
-        return take(mask)
+    async function wait(mask = 0xFFFFFFFF, timeoutMs = -1) {
+        const startedAt = timeoutMs >= 0 ? Date.now() : 0
+        while (true) {
+            const seq = Atomics.load(i32, IRQ_SEQ_INDEX)
+            const pending = take(mask)
+            if (pending)
+                return pending
+
+            const waitTimeoutMs = getWaitSliceMs(startedAt, timeoutMs)
+            if (waitTimeoutMs === 0)
+                return take(mask)
+
+            if (typeof Atomics.waitAsync === 'function') {
+                const result = Atomics.waitAsync(i32, IRQ_SEQ_INDEX, seq, waitTimeoutMs)
+                if (result.async)
+                    await result.value
+            } else {
+                await new Promise(resolve => globalThis.setTimeout(resolve, waitTimeoutMs))
+            }
+
+            const matched = take(mask)
+            if (matched)
+                return matched
+            if (timeoutMs >= 0 && getRemainingTimeout(startedAt, timeoutMs) === 0)
+                return 0
+        }
     }
 
     return {
@@ -78,6 +123,7 @@ export function attachInterruptController(buffer) {
         signal,
         take,
         consume,
+        waitSync,
         wait,
     }
 }
