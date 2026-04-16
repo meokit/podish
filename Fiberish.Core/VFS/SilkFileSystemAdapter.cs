@@ -909,7 +909,11 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
     {
         lock (_dirtyPageLock)
         {
-            return _dirtyPageIndexes.Any(i => i >= pageIndex);
+            foreach (var dirtyPageIndex in _dirtyPageIndexes)
+                if (dirtyPageIndex >= pageIndex)
+                    return true;
+
+            return false;
         }
     }
 
@@ -1002,9 +1006,13 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         List<long> toFlush;
         lock (_dirtyPageLock)
         {
-            toFlush = _dirtyPageIndexes
-                .Where(i => i >= request.StartPageIndex && i <= request.EndPageIndex)
-                .ToList();
+            toFlush = [];
+            foreach (var pageIndex in _dirtyPageIndexes)
+            {
+                if (pageIndex < request.StartPageIndex || pageIndex > request.EndPageIndex)
+                    continue;
+                toFlush.Add(pageIndex);
+            }
         }
 
         foreach (var pageIndex in toFlush)

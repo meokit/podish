@@ -2484,9 +2484,13 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         List<long> toFlush;
         lock (_dirtyPageLock)
         {
-            toFlush = _dirtyPageIndexes
-                .Where(i => i >= request.StartPageIndex && i <= request.EndPageIndex)
-                .ToList();
+            toFlush = [];
+            foreach (var pageIndex in _dirtyPageIndexes)
+            {
+                if (pageIndex < request.StartPageIndex || pageIndex > request.EndPageIndex)
+                    continue;
+                toFlush.Add(pageIndex);
+            }
         }
 
         foreach (var pageIndex in toFlush)
