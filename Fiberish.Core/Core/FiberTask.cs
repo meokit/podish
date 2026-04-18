@@ -1936,8 +1936,6 @@ public class FiberTask
                         var reprotectPerms = vma.Perms & ~Protection.Write;
                         Process.Mem.ReprotectNativeMappings(CPU, vma.Start, vma.Length, reprotectPerms,
                             false);
-                        ProcessAddressSpaceSync.PublishProtectionChange(Process.Mem, CPU, vma.Start, vma.Length,
-                            false);
                     }
 
                     foreach (var vma in newMem.VMAs)

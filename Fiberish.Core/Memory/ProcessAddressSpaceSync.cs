@@ -33,7 +33,7 @@ internal static class ProcessAddressSpaceSync
     {
         var state = engine.State;
         if (state == IntPtr.Zero) return;
-        engine.AddressSpaceMapSequenceSeen = addressSpace.CurrentMapSequence;
+        engine.AddressSpaceCodeCacheSequenceSeen = addressSpace.CurrentCodeCacheSequence;
 
         lock (AddressSpaceRegistryLock)
         {
@@ -169,8 +169,8 @@ internal static class ProcessAddressSpaceSync
             foreach (var engine in set)
             {
                 if (engine.State == IntPtr.Zero) continue;
-                if (engine.AddressSpaceMapSequenceSeen < min)
-                    min = engine.AddressSpaceMapSequenceSeen;
+                if (engine.AddressSpaceCodeCacheSequenceSeen < min)
+                    min = engine.AddressSpaceCodeCacheSequenceSeen;
             }
         }
 
@@ -248,7 +248,7 @@ internal static class ProcessAddressSpaceSync
         FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
         SyncSharedMappingsForEngines(vmaManager, snapshot.Engines, addr, len);
         vmaManager.Munmap(addr, len, engine);
-        PublishInvalidation(vmaManager, engine, addr, len, true);
+        PublishCodeCacheInvalidation(vmaManager, engine, addr, len);
     }
 
     internal static void Munmap(VMAManager vmaManager, Engine engine, uint addr, uint len, Process? process = null)
@@ -272,7 +272,8 @@ internal static class ProcessAddressSpaceSync
         if (rc == 0)
         {
             tbCohWorkSet?.Visit(hostPagePtr => TbCoh.ApplyWx(vmaManager.MemoryContext, hostPagePtr));
-            PublishInvalidation(vmaManager, engine, addr, len, resetCodeCacheRange);
+            if (resetCodeCacheRange)
+                PublishCodeCacheInvalidation(vmaManager, engine, addr, len);
         }
         return rc;
     }
@@ -295,7 +296,10 @@ internal static class ProcessAddressSpaceSync
         SyncSharedMappingsForEngines(vmaManager, snapshot.Engines, addr, len);
         var rc = vmaManager.MadviseDontNeed(addr, len, engine, out var resetCodeCacheRange);
         if (rc == 0)
-            PublishInvalidation(vmaManager, engine, addr, len, resetCodeCacheRange);
+        {
+            if (resetCodeCacheRange)
+                PublishCodeCacheInvalidation(vmaManager, engine, addr, len);
+        }
         return rc;
     }
 
@@ -303,19 +307,18 @@ internal static class ProcessAddressSpaceSync
     {
         if (vmaManager == null) return;
         using var scope = EnterAddressSpaceScope(engine, process);
+        vmaManager.ApplyPendingMetadataOnlyNativeRemaps(engine, invalidateCodeRanges: false);
         TbCoh.SyncWp(vmaManager, engine);
-        if (engine.AddressSpaceMapSequenceSeen >= vmaManager.CurrentMapSequence) return;
+        if (engine.AddressSpaceCodeCacheSequenceSeen >= vmaManager.CurrentCodeCacheSequence) return;
 
         var ranges = engine.AddressSpaceInvalidationScratch;
         ranges.Clear();
-        var currentSeq = vmaManager.CollectCodeCacheResetRangesSince(engine.AddressSpaceMapSequenceSeen, ranges);
-        if (engine.AddressSpaceMapSequenceSeen >= currentSeq) return;
+        var currentSeq = vmaManager.CollectCodeCacheResetRangesSince(engine.AddressSpaceCodeCacheSequenceSeen, ranges);
+        if (engine.AddressSpaceCodeCacheSequenceSeen >= currentSeq) return;
 
-        // The engine already shares the same MMU core, so we only need per-engine cache shootdown.
-        engine.FlushMmuTlbOnly();
         foreach (var range in ranges)
             engine.ResetCodeCacheByRange(range.Start, range.Length);
-        engine.AddressSpaceMapSequenceSeen = currentSeq;
+        engine.AddressSpaceCodeCacheSequenceSeen = currentSeq;
 
         var minSeen = GetMinSeenSequence(vmaManager);
         if (minSeen != long.MaxValue)
@@ -336,16 +339,7 @@ internal static class ProcessAddressSpaceSync
 
         var mapped = vmaManager.Mmap(addr, len, perms, flags, file, offset, name, engine, tbCohWorkSet);
         tbCohWorkSet?.Visit(hostPagePtr => TbCoh.ApplyWx(vmaManager.MemoryContext, hostPagePtr));
-        PublishInvalidation(vmaManager, engine, mapped, alignedLen, true);
         return mapped;
-    }
-
-    internal static void PublishMappingChange(VMAManager vmaManager, Engine engine, uint addr, uint len,
-        Process? process = null)
-    {
-        if (len == 0) return;
-        using var scope = EnterAddressSpaceScope(engine, process);
-        PublishInvalidation(vmaManager, engine, addr, len, true);
     }
 
     internal static void SyncSharedRange(VMAManager vmaManager, Engine engine, uint addr, uint len,
@@ -463,22 +457,12 @@ internal static class ProcessAddressSpaceSync
         vmaManager.SyncAllMappedSharedFiles(snapshot.Engines);
     }
 
-    internal static void PublishProtectionChange(VMAManager vmaManager, Engine engine, uint addr, uint len,
-        bool resetCodeCacheRange, Process? process = null)
+    private static void PublishCodeCacheInvalidation(VMAManager vmaManager, Engine engine, uint addr, uint len)
     {
         if (len == 0) return;
-        using var scope = EnterAddressSpaceScope(engine, process);
-        PublishInvalidation(vmaManager, engine, addr, len, resetCodeCacheRange);
-    }
-
-    private static void PublishInvalidation(VMAManager vmaManager, Engine engine, uint addr, uint len,
-        bool resetCodeCacheRange)
-    {
-        if (len == 0) return;
-        var sequence = vmaManager.BumpMapSequence();
-        if (resetCodeCacheRange)
-            vmaManager.RecordCodeCacheResetRange(sequence, addr, len);
-        engine.AddressSpaceMapSequenceSeen = sequence;
+        var sequence = vmaManager.BumpCodeCacheSequence();
+        vmaManager.RecordCodeCacheResetRange(sequence, addr, len);
+        engine.AddressSpaceCodeCacheSequenceSeen = sequence;
     }
 
     private sealed class EngineSnapshotBuffer

@@ -45,6 +45,23 @@ static bool FaultTraceEnabled() {
     return enabled;
 }
 
+static bool FatalSignalHandlerEnabled() {
+    static bool enabled = []() {
+        const char* disable_vars[] = {
+            "FIBERCPU_DISABLE_FATAL_SIGNAL_HANDLER",
+            "FIBERISH_DISABLE_FATAL_SIGNAL_HANDLER",
+        };
+        for (const char* name : disable_vars) {
+            const char* value = std::getenv(name);
+            if (value && value[0] != '\0' && std::strcmp(value, "0") != 0) {
+                return false;
+            }
+        }
+        return true;
+    }();
+    return enabled;
+}
+
 static int InternalFaultBridge(void* opaque, uint32_t addr, int is_write) {
     auto* state = static_cast<EmuState*>(opaque);
     state->fault_vector = 14;  // #PF
@@ -305,7 +322,7 @@ static bool g_SignalRegistered = false;
 // ----------------------------------------------------------------------------
 
 EmuState* X86_Create() {
-    if (!g_SignalRegistered) {
+    if (!g_SignalRegistered && FatalSignalHandlerEnabled()) {
 #if !defined(__EMSCRIPTEN__)
 #if !defined(_WIN32)
         RegisterFatalSignalHandler(SIGSEGV);
@@ -576,6 +593,10 @@ void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
 }
 
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size) {
+    if (!state || !data || size == 0) return;
+
+    state->mmu.sync_runtime_tlb_shootdowns();
+    [[maybe_unused]] auto runtime_tlb_batch = state->mmu.scoped_runtime_tlb_publish_batch();
     for (uint32_t i = 0; i < size; ++i) {
         // TODO: We need a way to notify the write is failed
         (void)state->mmu.write_no_utlb<uint8_t>(addr + i, data[i]);
@@ -583,6 +604,9 @@ void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t 
 }
 
 void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size) {
+    if (!state || !val || size == 0) return;
+
+    state->mmu.sync_runtime_tlb_shootdowns();
     for (uint32_t i = 0; i < size; ++i) {
         // TODO: We need a way to notify the read is failed
         auto res = state->mmu.read_no_utlb<uint8_t>(addr + i);
@@ -672,6 +696,8 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
     // Sync FPU state before starting
     f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
+    state->mmu.sync_runtime_tlb_shootdowns();
+    [[maybe_unused]] auto runtime_tlb_batch = state->mmu.scoped_runtime_tlb_publish_batch();
 
     while (state->status == EmuStatus::Running) {
         uint32_t eip = state->ctx.eip;
@@ -855,6 +881,16 @@ size_t X86_GetHandlerProfileStats(EmuState* state, X86_HandlerProfileEntry* buff
 #endif
 }
 
+size_t X86_DebugHostPageSetUniqueCount(const void* const* host_pages, size_t count) {
+    mem::HostPageSet unique_pages;
+    if (!host_pages || count == 0) return 0;
+
+    for (size_t i = 0; i < count; ++i) {
+        unique_pages.push_unique(reinterpret_cast<uintptr_t>(host_pages[i]));
+    }
+    return unique_pages.size();
+}
+
 void X86_EmuStop(EmuState* state) {
     if (state) state->status = EmuStatus::Stopped;
 }
@@ -877,6 +913,8 @@ int X86_Step(EmuState* state) {
 
     // Sync FPU state before starting
     f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
+    state->mmu.sync_runtime_tlb_shootdowns();
+    [[maybe_unused]] auto runtime_tlb_batch = state->mmu.scoped_runtime_tlb_publish_batch();
 
     uint8_t buf[16];
     for (int i = 0; i < 16; ++i) {
@@ -987,12 +1025,6 @@ int32_t X86_GetFaultVector(EmuState* state) {
 
 void X86_ResetAllCodeCache(EmuState* state) {
     if (state) state->mmu.reset_code_cache();
-}
-
-void X86_FlushMmuTlb(EmuState* state) {
-    if (state) {
-        state->mmu.flush_tlb_only();
-    }
 }
 
 void X86_ResetMemory(EmuState* state) {

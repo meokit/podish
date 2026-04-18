@@ -71,7 +71,7 @@ public class Engine : IDisposable
 
     public IntPtr State { get; private set; }
     internal GCHandle GcHandle => _gcHandle;
-    internal long AddressSpaceMapSequenceSeen { get; set; }
+    internal long AddressSpaceCodeCacheSequenceSeen { get; set; }
     internal nuint CurrentMmuIdentityInternal => _currentMmu.Identity;
     internal MmuHandle CurrentMmuInternal => _currentMmu.AddRefHandle();
     internal nuint CurrentMmuIdentity => CurrentMmuIdentityInternal;
@@ -726,12 +726,6 @@ public class Engine : IDisposable
         {
             X86Native.InvalidateCodeCacheHostPages(State, (IntPtr*)pHostPages, (nuint)hostPages.Length);
         }
-    }
-
-    public void FlushMmuTlbOnly()
-    {
-        AssertNotDisposed();
-        X86Native.FlushMmuTlb(State);
     }
 
     public void ReprotectMappedRange(uint addr, uint size, byte perms)

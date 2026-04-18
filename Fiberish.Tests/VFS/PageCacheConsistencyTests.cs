@@ -114,6 +114,170 @@ public class PageCacheConsistencyTests
     }
 
     [Fact]
+    public void Overlay_LayerfsPrivateMmap_CopyUp_PreservesCowAnonPage()
+    {
+        var overlaySb = CreateLayerLowerTmpfsUpperOverlay("hello");
+        var fileDentry = LookupOverlayFile(overlaySb, "/bin/app");
+        var overlayInode = Assert.IsType<OverlayInode>(fileDentry.Inode);
+        var mappedFile = new LinuxFile(fileDentry, FileFlags.O_RDWR, null!);
+        var writerFile = new LinuxFile(fileDentry, FileFlags.O_RDWR, null!);
+        Engine? engine = null;
+        VMAManager? mm = null;
+
+        try
+        {
+            engine = _runtime.CreateEngine();
+            mm = _runtime.CreateAddressSpace();
+            mm.BindOrAssertAddressSpaceHandle(engine);
+            ProcessAddressSpaceSync.RegisterEngineAddressSpace(mm, engine);
+            engine.PageFaultResolver = (addr, isWrite) => mm.HandleFault(addr, isWrite, engine);
+
+            const uint mapAddr = 0x4D100000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed, mappedFile, 0, "MAP_PRIVATE", engine);
+
+            var initial = new byte[5];
+            Assert.True(engine.CopyFromUser(mapAddr, initial));
+            Assert.Equal("hello", Encoding.ASCII.GetString(initial));
+
+            Assert.True(engine.CopyToUser(mapAddr + 1, "XY"u8.ToArray()));
+
+            var vma = mm.FindVmArea(mapAddr);
+            Assert.NotNull(vma);
+            var pageIndex = vma!.GetPageIndex(mapAddr);
+            var privatePage = vma.VmAnonVma!.GetPage(pageIndex);
+            Assert.NotEqual(IntPtr.Zero, privatePage);
+            Assert.True(mm.PageMapping.TryGet(mapAddr, out var mappedPtr));
+            Assert.Equal(privatePage, mappedPtr);
+
+            Assert.Equal(0, overlayInode.CopyUp(writerFile));
+
+            Assert.False(mm.PageMapping.TryGet(mapAddr, out _));
+            Assert.Equal(privatePage, vma.VmAnonVma!.GetPage(pageIndex));
+
+            var mapped = new byte[5];
+            Assert.True(engine.CopyFromUser(mapAddr, mapped));
+            Assert.Equal("hXYlo", Encoding.ASCII.GetString(mapped));
+            Assert.True(mm.PageMapping.TryGet(mapAddr, out var remappedPtr));
+            Assert.Equal(privatePage, remappedPtr);
+        }
+        finally
+        {
+            if (mm != null && engine != null)
+                ProcessAddressSpaceSync.UnregisterEngineAddressSpace(mm, engine);
+            engine?.Dispose();
+            writerFile.Close();
+            mappedFile.Close();
+        }
+    }
+
+    [Fact]
+    public void Overlay_CopyUp_MetadataOnlyFallback_TearsDownStalePagesOnNextFault()
+    {
+        var payload = new byte[LinuxConstants.PageSize * 2];
+        payload[0] = (byte)'A';
+        payload[LinuxConstants.PageSize] = (byte)'B';
+
+        var overlaySb = CreateTmpfsLowerTmpfsUpperOverlay("data.bin", payload);
+        var fileDentry = LookupOverlayFile(overlaySb, "/data.bin");
+        var overlayInode = Assert.IsType<OverlayInode>(fileDentry.Inode);
+        var mappedFile = new LinuxFile(fileDentry, FileFlags.O_RDWR, null!);
+        var writerFile = new LinuxFile(fileDentry, FileFlags.O_RDWR, null!);
+        LinuxFile? upperFile = null;
+
+        try
+        {
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
+            engine.PageFaultResolver = (addr, isWrite) => mm.HandleFault(addr, isWrite, engine);
+
+            const uint mapAddr = 0x4D200000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, "MAP_SHARED", engine);
+
+            var first = new byte[1];
+            Assert.True(engine.CopyFromUser(mapAddr, first));
+            Assert.Equal((byte)'A', first[0]);
+            Assert.True(mm.PageMapping.TryGet(mapAddr, out var staleFirstPage));
+
+            Assert.Equal(0, overlayInode.CopyUp(writerFile));
+            Assert.NotNull(overlayInode.UpperDentry);
+            upperFile = new LinuxFile(overlayInode.UpperDentry!, FileFlags.O_RDWR, null!);
+            Assert.Equal(1, overlayInode.UpperInode!.WriteFromHost(null, upperFile, "X"u8.ToArray(), 0));
+
+            var vma = mm.FindVmArea(mapAddr);
+            Assert.NotNull(vma);
+            Assert.Same(overlayInode.UpperInode.Mapping, vma!.VmMapping);
+            Assert.True(mm.PageMapping.TryGet(mapAddr, out var stillMappedFirstPage));
+            Assert.Equal(staleFirstPage, stillMappedFirstPage);
+
+            var second = new byte[1];
+            Assert.True(engine.CopyFromUser(mapAddr + LinuxConstants.PageSize, second));
+            Assert.Equal((byte)'B', second[0]);
+            Assert.False(mm.PageMapping.TryGet(mapAddr, out _));
+
+            Assert.True(engine.CopyFromUser(mapAddr, first));
+            Assert.Equal((byte)'X', first[0]);
+        }
+        finally
+        {
+            upperFile?.Close();
+            writerFile.Close();
+            mappedFile.Close();
+        }
+    }
+
+    [Fact]
+    public void Overlay_CopyUp_MetadataOnlyFallback_TearsDownStalePagesBeforeRun()
+    {
+        var payload = new byte[LinuxConstants.PageSize];
+        payload[0] = (byte)'A';
+
+        var overlaySb = CreateTmpfsLowerTmpfsUpperOverlay("data.bin", payload);
+        var fileDentry = LookupOverlayFile(overlaySb, "/data.bin");
+        var overlayInode = Assert.IsType<OverlayInode>(fileDentry.Inode);
+        var mappedFile = new LinuxFile(fileDentry, FileFlags.O_RDWR, null!);
+        var writerFile = new LinuxFile(fileDentry, FileFlags.O_RDWR, null!);
+        LinuxFile? upperFile = null;
+
+        try
+        {
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
+            engine.PageFaultResolver = (addr, isWrite) => mm.HandleFault(addr, isWrite, engine);
+
+            const uint mapAddr = 0x4D300000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, mappedFile, 0, "MAP_SHARED", engine);
+
+            var first = new byte[1];
+            Assert.True(engine.CopyFromUser(mapAddr, first));
+            Assert.Equal((byte)'A', first[0]);
+            Assert.True(mm.PageMapping.TryGet(mapAddr, out var staleFirstPage));
+
+            Assert.Equal(0, overlayInode.CopyUp(writerFile));
+            Assert.NotNull(overlayInode.UpperDentry);
+            upperFile = new LinuxFile(overlayInode.UpperDentry!, FileFlags.O_RDWR, null!);
+            Assert.Equal(1, overlayInode.UpperInode!.WriteFromHost(null, upperFile, "X"u8.ToArray(), 0));
+
+            Assert.True(mm.PageMapping.TryGet(mapAddr, out var stillMappedFirstPage));
+            Assert.Equal(staleFirstPage, stillMappedFirstPage);
+
+            ProcessAddressSpaceSync.SyncEngineBeforeRun(mm, engine);
+
+            Assert.False(mm.PageMapping.TryGet(mapAddr, out _));
+            Assert.True(engine.CopyFromUser(mapAddr, first));
+            Assert.Equal((byte)'X', first[0]);
+        }
+        finally
+        {
+            upperFile?.Close();
+            writerFile.Close();
+            mappedFile.Close();
+        }
+    }
+
+    [Fact]
     public void Hostfs_MapSharedDirtyPage_IsVisibleToRead_BeforeWriteback()
     {
         var root = Path.Combine(Path.GetTempPath(), "hostfs-pagecache-consistency-" + Guid.NewGuid().ToString("N"));
@@ -632,6 +796,34 @@ public class PageCacheConsistencyTests
             new LayerMountOptions { Index = index, ContentProvider = new InMemoryLayerContentProvider() });
 
         var tmpType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var upperSb = tmpType.CreateAnonymousFileSystem(_runtime.MemoryContext)
+            .ReadSuper(tmpType, 0, "test-tmpfs-upper", null);
+
+        var overlayFs = new OverlayFileSystem();
+        return (OverlaySuperBlock)overlayFs.ReadSuper(
+            new FileSystemType { Name = "overlay" },
+            0,
+            "test-overlay",
+            new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+    }
+
+    private OverlaySuperBlock CreateTmpfsLowerTmpfsUpperOverlay(string fileName, byte[] payload)
+    {
+        var tmpType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpType.CreateAnonymousFileSystem(_runtime.MemoryContext)
+            .ReadSuper(tmpType, 0, "test-tmpfs-lower", null);
+        var lowerFileDentry = new Dentry(FsName.FromString(fileName), null, lowerSb.Root, lowerSb);
+        lowerSb.Root.Inode!.Create(lowerFileDentry, 0x1A4, 0, 0);
+        var lowerFile = new LinuxFile(lowerFileDentry, FileFlags.O_RDWR, null!);
+        try
+        {
+            Assert.Equal(payload.Length, lowerFileDentry.Inode!.WriteFromHost(null, lowerFile, payload, 0));
+        }
+        finally
+        {
+            lowerFile.Close();
+        }
+
         var upperSb = tmpType.CreateAnonymousFileSystem(_runtime.MemoryContext)
             .ReadSuper(tmpType, 0, "test-tmpfs-upper", null);
 

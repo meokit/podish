@@ -114,7 +114,6 @@ void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook
 
 // Cache Control
 void X86_ResetAllCodeCache(EmuState* state);
-void X86_FlushMmuTlb(EmuState* state);
 void X86_ResetMemory(EmuState* state);
 void X86_ResetCodeCacheByRange(EmuState* state, uint32_t addr, uint32_t size);
 void X86_InvalidateCodeCacheHostPages(EmuState* state, const void* const* host_pages, size_t count);
@@ -189,6 +188,9 @@ typedef struct {
 
 size_t X86_GetHandlerProfileCount(EmuState* state);
 size_t X86_GetHandlerProfileStats(EmuState* state, X86_HandlerProfileEntry* buffer, size_t max_count);
+
+// Test-only helper for directly exercising HostPageSet spill/dedup behavior.
+size_t X86_DebugHostPageSetUniqueCount(const void* const* host_pages, size_t count);
 
 // Block Coverage
 // Returns pointer to internal BasicBlock structures

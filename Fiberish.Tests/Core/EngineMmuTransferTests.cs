@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Fiberish.Core;
@@ -142,6 +143,228 @@ public class EngineMmuTransferTests
         Assert.Equal(0, ReadCodeCacheStats(parent).BlockCacheSize);
         Assert.False(parent.HasMappedPage(CodeAddr, 1));
         Assert.False(child.HasMappedPage(CodeAddr, 1));
+    }
+
+    [Fact]
+    public void SyncEngineBeforeRun_ReplaysPendingCodeCacheInvalidation()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
+        mm.BindOrAssertAddressSpaceHandle(parent);
+        InstallSimpleCode(parent);
+        WarmSimpleCode(parent);
+
+        using var child = parent.Clone(true);
+        mm.BindOrAssertAddressSpaceHandle(child);
+
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(mm, parent);
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(mm, child);
+        Assert.True(ReadCodeCacheStats(parent).BlockCacheSize > 0);
+
+        var sequence = mm.BumpCodeCacheSequence();
+        mm.RecordCodeCacheResetRange(sequence, CodeAddr, (uint)SimpleCode.Length);
+        Assert.True(child.AddressSpaceCodeCacheSequenceSeen < sequence);
+
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(mm, child);
+
+        Assert.Equal(sequence, mm.CurrentCodeCacheSequence);
+        Assert.Equal(sequence, child.AddressSpaceCodeCacheSequenceSeen);
+        Assert.Equal(0, ReadCodeCacheStats(parent).BlockCacheSize);
+    }
+
+    [Fact]
+    public void SharedClone_SmcRearmFlushesSiblingWriteTlbBeforeRun()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
+        using var codePage = new UnmanagedPageFixture(IncEaxTwice());
+
+        const uint rwAddr = 0x00412000;
+        const uint rxAddr = 0x00413000;
+        const uint writerAddr = 0x00414000;
+        MapExternalPage(parent, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapExternalPage(parent, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+        InstallAbsoluteAlByteWriter(parent, writerAddr, rwAddr);
+
+        using var child = parent.Clone(true);
+        Assert.Equal(parent.CurrentMmuIdentity, child.CurrentMmuIdentity);
+
+        RunAbsoluteAlByteWriter(child, writerAddr, 0x40);
+        Assert.Equal(1, ReadCodeCacheStats(parent).BlockCacheSize);
+        Assert.False(child.HasSlowWrite(rwAddr));
+
+        RunPair(parent, rxAddr, 10, 12);
+        Assert.Equal(2, ReadCodeCacheStats(parent).BlockCacheSize);
+        Assert.True(child.HasSlowWrite(rwAddr));
+
+        RunAbsoluteAlByteWriter(child, writerAddr, 0x48);
+        Assert.Equal(1, ReadCodeCacheStats(parent).BlockCacheSize);
+        Assert.False(child.HasSlowWrite(rwAddr));
+
+        RunPair(parent, rxAddr, 10, 10);
+    }
+
+    [Fact]
+    public void SharedClone_SmcRearmFlushesSiblingWriteTlbBeforeStep()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
+        using var codePage = new UnmanagedPageFixture(IncEaxTwice());
+
+        const uint rwAddr = 0x00415000;
+        const uint rxAddr = 0x00416000;
+        const uint writerAddr = 0x00417000;
+        MapExternalPage(parent, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapExternalPage(parent, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+        InstallAbsoluteAlByteWriter(parent, writerAddr, rwAddr);
+
+        using var child = parent.Clone(true);
+        Assert.Equal(parent.CurrentMmuIdentity, child.CurrentMmuIdentity);
+
+        StepAbsoluteAlByteWriter(child, writerAddr, 0x40);
+        Assert.Equal(0, ReadCodeCacheStats(parent).BlockCacheSize);
+        Assert.False(child.HasSlowWrite(rwAddr));
+
+        RunPair(parent, rxAddr, 10, 12);
+        Assert.Equal(1, ReadCodeCacheStats(parent).BlockCacheSize);
+        Assert.True(child.HasSlowWrite(rwAddr));
+
+        StepAbsoluteAlByteWriter(child, writerAddr, 0x48);
+        Assert.Equal(0, ReadCodeCacheStats(parent).BlockCacheSize);
+        Assert.False(child.HasSlowWrite(rwAddr));
+
+        RunPair(parent, rxAddr, 10, 10);
+    }
+
+    [Fact]
+    public void SharedClone_FaultDrivenPrivateRemap_MustFlushSiblingReadTlb()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
+        mm.BindOrAssertAddressSpaceHandle(parent);
+        parent.FaultHandler =
+            (engine, addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+        parent.PageFaultResolver =
+            (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, parent) == FaultResult.Handled;
+
+        using var child = parent.Clone(true);
+        mm.BindOrAssertAddressSpaceHandle(child);
+        child.FaultHandler =
+            (engine, addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+        child.PageFaultResolver =
+            (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, child) == FaultResult.Handled;
+
+        const uint addr = 0x00419000;
+        Assert.Equal(addr,
+            mm.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "shared-remap-stale-read",
+                parent));
+
+        // Align both attachments to the current code-cache sequence first so the later SyncEngineBeforeRun call
+        // only observes the fault-driven remap, not the original mmap.
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(mm, parent);
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(mm, child);
+
+        var read = new byte[1];
+        Assert.True(parent.CopyFromUser(addr, read));
+        Assert.Equal(0, read[0]);
+        Assert.True(mm.PageMapping.TryGet(addr, out var zeroPage));
+        Assert.NotEqual(IntPtr.Zero, zeroPage);
+
+        var stableSeq = mm.CurrentCodeCacheSequence;
+        Assert.True(child.CopyToUser(addr, new[] { (byte)0x5A }));
+        Assert.Equal(stableSeq, mm.CurrentCodeCacheSequence);
+
+        var vma = Assert.Single(mm.VMAs);
+        var pageIndex = vma.GetPageIndex(addr);
+        var privatePage = vma.VmAnonVma!.GetPage(pageIndex);
+        Assert.NotEqual(IntPtr.Zero, privatePage);
+        Assert.NotEqual(zeroPage, privatePage);
+        Assert.True(mm.PageMapping.TryGet(addr, out var remappedPage));
+        Assert.Equal(privatePage, remappedPage);
+
+        // Today's managed pre-run sync keys off code-cache sequence. The fault-driven remap above never bumped it,
+        // so this remains a no-op and would leave the sibling's read TLB stale if native shootdown is missing.
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(mm, parent);
+
+        Assert.True(parent.CopyFromUser(addr, read));
+        Assert.Equal((byte)0x5A, read[0]);
+    }
+
+    [Fact]
+    public void SharedClone_FaultDrivenPrivateRemap_GuestRunMustFlushSiblingReadTlb()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
+        mm.BindOrAssertAddressSpaceHandle(parent);
+        parent.FaultHandler =
+            (engine, addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+        parent.PageFaultResolver =
+            (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, parent) == FaultResult.Handled;
+
+        using var child = parent.Clone(true);
+        mm.BindOrAssertAddressSpaceHandle(child);
+        child.FaultHandler =
+            (engine, addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+        child.PageFaultResolver =
+            (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, child) == FaultResult.Handled;
+
+        const uint dataAddr = 0x0041A000;
+        const uint readerAddr = 0x0041B000;
+        const uint writerAddr = 0x0041C000;
+        Assert.Equal(dataAddr,
+            mm.Mmap(dataAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "shared-remap-guest-run",
+                parent));
+        InstallAbsoluteAlByteReader(parent, readerAddr, dataAddr);
+        InstallAbsoluteAlByteWriter(parent, writerAddr, dataAddr);
+
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(mm, parent);
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(mm, child);
+
+        RunAbsoluteAlByteReader(parent, readerAddr, 0x00);
+        Assert.True(mm.PageMapping.TryGet(dataAddr, out var zeroPage));
+        Assert.NotEqual(IntPtr.Zero, zeroPage);
+
+        var stableSeq = mm.CurrentCodeCacheSequence;
+        RunAbsoluteAlByteWriter(child, writerAddr, 0x5A);
+        Assert.Equal(stableSeq, mm.CurrentCodeCacheSequence);
+
+        var vma = Assert.Single(mm.VMAs);
+        var pageIndex = vma.GetPageIndex(dataAddr);
+        var privatePage = vma.VmAnonVma!.GetPage(pageIndex);
+        Assert.NotEqual(IntPtr.Zero, privatePage);
+        Assert.NotEqual(zeroPage, privatePage);
+        Assert.True(mm.PageMapping.TryGet(dataAddr, out var remappedPage));
+        Assert.Equal(privatePage, remappedPage);
+
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(mm, parent);
+
+        RunAbsoluteAlByteReader(parent, readerAddr, 0x5A);
+    }
+
+    [Fact]
+    public void SamePageSelfModifyingRun_SecondPatchMustNotExecuteStaleTailBytes()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        const uint codeAddr = 0x00418000;
+        using var codePage = new UnmanagedPageFixture(TwoSamePagePatchesThenTail(codeAddr));
+
+        MapExternalPage(engine, codeAddr, codePage.Pointer, Protection.Read | Protection.Write | Protection.Exec);
+
+        engine.RegWrite(Reg.EAX, 0);
+        engine.Eip = codeAddr;
+        engine.Run(codeAddr + 16, 32);
+
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(codeAddr + 16, engine.Eip);
+        Assert.Equal((uint)0x42, engine.RegRead(Reg.EAX));
+        Assert.Equal((byte)0x40, (byte)Marshal.ReadByte(codePage.Pointer, 14));
+        Assert.Equal((byte)0x40, (byte)Marshal.ReadByte(codePage.Pointer, 15));
     }
 
     [Fact]
@@ -473,11 +696,24 @@ public class EngineMmuTransferTests
         Span<nint> hostPages = stackalloc nint[8];
         for (var i = 0; i < pages.Count; i++)
             hostPages[i] = pages[i];
-        hostPages[6] = pages[0];
-        hostPages[7] = pages[1];
+        hostPages[6] = pages[4];
+        hostPages[7] = pages[4];
 
         engine.InvalidateCodeCacheHostPages(hostPages);
         Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+    }
+
+    [Fact]
+    public void HostPageSet_DedupsFifthInsertedPageAfterSpill()
+    {
+        using var pages = new UnmanagedPageArrayFixture(5, static _ => IncEaxTwice());
+
+        Span<nint> hostPages = stackalloc nint[6];
+        for (var i = 0; i < pages.Count; i++)
+            hostPages[i] = pages[i];
+        hostPages[5] = pages[4];
+
+        Assert.Equal(5, X86Native.DebugHostPageSetUniqueCount(hostPages));
     }
 
     private static void InstallSimpleCode(Engine engine)
@@ -526,6 +762,74 @@ public class EngineMmuTransferTests
     private static byte[] DecEaxTwice()
     {
         return [0x48, 0x48];
+    }
+
+    private static byte[] TwoSamePagePatchesThenTail(uint addr)
+    {
+        byte[] code = new byte[16];
+        code[0] = 0xB0; // mov al, 0x40
+        code[1] = 0x40;
+        code[2] = 0xA2; // mov [moffs8], al
+        BinaryPrimitives.WriteUInt32LittleEndian(code.AsSpan(3, 4), addr + 14);
+        code[7] = 0xA2; // mov [moffs8], al
+        BinaryPrimitives.WriteUInt32LittleEndian(code.AsSpan(8, 4), addr + 15);
+        code[12] = 0x90; // nop
+        code[13] = 0x90; // nop
+        code[14] = 0x48; // dec eax, patched to inc eax
+        code[15] = 0x48; // dec eax, patched to inc eax
+        return code;
+    }
+
+    private static void InstallAbsoluteAlByteWriter(Engine engine, uint addr, uint targetAddr)
+    {
+        var perms = (byte)(Protection.Read | Protection.Write | Protection.Exec);
+        var page = engine.AllocatePage(addr, perms);
+        Assert.NotEqual(IntPtr.Zero, page);
+
+        Span<byte> code = stackalloc byte[5];
+        code[0] = 0xA2; // mov [moffs8], al
+        BinaryPrimitives.WriteUInt32LittleEndian(code[1..], targetAddr);
+        Assert.True(engine.CopyToUser(addr, code));
+    }
+
+    private static void InstallAbsoluteAlByteReader(Engine engine, uint addr, uint targetAddr)
+    {
+        var perms = (byte)(Protection.Read | Protection.Write | Protection.Exec);
+        var page = engine.AllocatePage(addr, perms);
+        Assert.NotEqual(IntPtr.Zero, page);
+
+        Span<byte> code = stackalloc byte[5];
+        code[0] = 0xA0; // mov al, [moffs8]
+        BinaryPrimitives.WriteUInt32LittleEndian(code[1..], targetAddr);
+        Assert.True(engine.CopyToUser(addr, code));
+    }
+
+    private static void RunAbsoluteAlByteWriter(Engine engine, uint addr, byte value)
+    {
+        engine.RegWrite(Reg.EAX, value);
+        engine.Eip = addr;
+        engine.Run(addr + 5, 16);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(addr + 5, engine.Eip);
+    }
+
+    private static void RunAbsoluteAlByteReader(Engine engine, uint addr, byte expectedValue)
+    {
+        engine.RegWrite(Reg.EAX, 0);
+        engine.Eip = addr;
+        engine.Run(addr + 5, 16);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(addr + 5, engine.Eip);
+        Assert.Equal((uint)expectedValue, engine.RegRead(Reg.EAX));
+    }
+
+    private static void StepAbsoluteAlByteWriter(Engine engine, uint addr, byte value)
+    {
+        engine.RegWrite(Reg.EAX, value);
+        engine.Eip = addr;
+        var stepResult = engine.Step();
+        Assert.NotEqual((int)EmuStatus.Fault, stepResult);
+        Assert.Equal(addr + 5, engine.Eip);
     }
 
     private static void MapExternalPage(Engine engine, uint addr, nint hostPage, Protection perms)

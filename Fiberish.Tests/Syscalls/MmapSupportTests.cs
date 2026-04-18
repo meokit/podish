@@ -63,6 +63,28 @@ public class MmapSupportTests
     }
 
     [Fact]
+    public async Task Mmap_AutoAllocation_PrefersHighestGap()
+    {
+        using var env = new TestEnv();
+        const uint highRegionStart = 0x70000000;
+        const uint highRegionLength = 0x10000000;
+        const uint midRegionStart = 0x50000000;
+        var mapLen = (uint)(LinuxConstants.PageSize * 2);
+
+        Assert.Equal((int)highRegionStart, await env.Call("SysMmap2", highRegionStart, highRegionLength,
+            (uint)Protection.Read,
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+        Assert.Equal((int)midRegionStart, await env.Call("SysMmap2", midRegionStart, LinuxConstants.PageSize,
+            (uint)Protection.Read,
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+
+        var mapped = await env.Call("SysMmap2", 0, mapLen, (uint)Protection.Read,
+            (uint)(MapFlags.Private | MapFlags.Anonymous));
+
+        Assert.Equal((int)(highRegionStart - mapLen), mapped);
+    }
+
+    [Fact]
     public async Task Mprotect_ReadOnly_RevokesWriteOnCleanMappedPage()
     {
         using var env = new TestEnv();

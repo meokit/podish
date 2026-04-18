@@ -181,6 +181,10 @@ struct HostPageSet {
         }
 
         if (contains(page)) return false;
+        if (count == capacity) {
+            grow();
+            spill_lookup.emplace(page);
+        }
         push_back(page);
         return true;
     }
@@ -602,7 +606,14 @@ struct MmuCore {
         uint32_t write_count = 0;
         GuestPageSet guest_pages;
     };
+    struct RuntimeTlbShootdownRing {
+        static constexpr size_t kCapacity = 1024;
+
+        std::array<uint32_t, kCapacity> guest_pages{};
+        uint64_t write_seq = 0;
+    };
     ankerl::unordered_dense::map<uintptr_t, ExternalAliasState> external_aliases;
+    RuntimeTlbShootdownRing runtime_tlb_shootdown_ring;
 };
 
 class Mmu {
@@ -621,6 +632,9 @@ private:
     static constexpr size_t kBlockLookupCacheSize = 128;
     static constexpr size_t kBlockLookupCacheMask = kBlockLookupCacheSize - 1;
     mutable std::array<BlockLookupCacheEntry, kBlockLookupCacheSize> block_lookup_cache{};
+    uint64_t runtime_tlb_read_seq = 0;
+    uint64_t runtime_tlb_publish_begin_seq = 0;
+    uint32_t runtime_tlb_publish_batch_depth = 0;
 
     // Callbacks
     FaultHandler fault_handler = nullptr;
@@ -635,6 +649,35 @@ private:
     void* smc_opaque = nullptr;
 
 public:
+    class RuntimeTlbPublishBatchScope {
+    public:
+        explicit RuntimeTlbPublishBatchScope(Mmu* mmu) : mmu_(mmu) {
+            if (mmu_ != nullptr) mmu_->begin_runtime_tlb_publish_batch();
+        }
+
+        RuntimeTlbPublishBatchScope(const RuntimeTlbPublishBatchScope&) = delete;
+        RuntimeTlbPublishBatchScope& operator=(const RuntimeTlbPublishBatchScope&) = delete;
+
+        RuntimeTlbPublishBatchScope(RuntimeTlbPublishBatchScope&& other) noexcept : mmu_(other.mmu_) {
+            other.mmu_ = nullptr;
+        }
+
+        RuntimeTlbPublishBatchScope& operator=(RuntimeTlbPublishBatchScope&& other) noexcept {
+            if (this == &other) return *this;
+            if (mmu_ != nullptr) mmu_->end_runtime_tlb_publish_batch();
+            mmu_ = other.mmu_;
+            other.mmu_ = nullptr;
+            return *this;
+        }
+
+        ~RuntimeTlbPublishBatchScope() {
+            if (mmu_ != nullptr) mmu_->end_runtime_tlb_publish_batch();
+        }
+
+    private:
+        Mmu* mmu_ = nullptr;
+    };
+
     // ForceWriteSlow is a runtime-only SMC armed bit. Mapping calls must not
     // persist or clone it; the MMU recomputes it from alias metadata and the
     // live block cache.
@@ -692,11 +735,16 @@ public:
             auto& chunk = dir->l1_directory[l1_idx];
             if (!chunk || chunk->pages[l2_idx] != page) continue;
 
-            auto perms = chunk->permissions[l2_idx] & ~Property::ForceWriteSlow;
-            if (arm_write_slow && has_property(perms, Property::Write)) perms = perms | Property::ForceWriteSlow;
+            const auto old_perms = chunk->permissions[l2_idx];
+            auto perms = old_perms & ~Property::ForceWriteSlow;
+            const bool is_write_alias = has_property(perms, Property::Write);
+            if (arm_write_slow && is_write_alias) perms = perms | Property::ForceWriteSlow;
 
+            if (old_perms == perms) continue;
             chunk->permissions[l2_idx] = perms;
+            if (!is_write_alias) continue;
             tlb.flush_page(guest_page);
+            publish_runtime_tlb_flush_deduped(guest_page);
         }
     }
 
@@ -712,13 +760,6 @@ public:
         add_external_alias(guest_page, new_page, new_perms);
         refresh_smc_armed_for_host_page(old_page);
         refresh_smc_armed_for_host_page(new_page);
-    }
-
-    [[nodiscard]] bool has_external_exec_alias(HostAddr page) const {
-        if (!core_ || page == nullptr) return false;
-
-        auto it = core_->external_aliases.find(reinterpret_cast<uintptr_t>(page));
-        return it != core_->external_aliases.end() && it->second.exec_count != 0;
     }
 
     [[nodiscard]] bool should_trap_external_alias_write(Property perms, HostAddr page) const {
@@ -852,6 +893,73 @@ private:
         }
     }
 
+    void reset_runtime_tlb_tracking() {
+        const uint64_t write_seq = core_ ? core_->runtime_tlb_shootdown_ring.write_seq : 0;
+        runtime_tlb_read_seq = write_seq;
+        runtime_tlb_publish_begin_seq = write_seq;
+        runtime_tlb_publish_batch_depth = 0;
+    }
+
+    void begin_runtime_tlb_publish_batch() {
+        if (runtime_tlb_publish_batch_depth++ == 0) {
+            runtime_tlb_publish_begin_seq = core_ ? core_->runtime_tlb_shootdown_ring.write_seq : 0;
+        }
+    }
+
+    void end_runtime_tlb_publish_batch() {
+        if (runtime_tlb_publish_batch_depth == 0) return;
+        runtime_tlb_publish_batch_depth--;
+        if (runtime_tlb_publish_batch_depth == 0) {
+            runtime_tlb_publish_begin_seq = core_ ? core_->runtime_tlb_shootdown_ring.write_seq : 0;
+        }
+    }
+
+    void publish_runtime_tlb_flush_deduped(uint32_t guest_page) {
+        if (!core_) return;
+
+        auto& ring = core_->runtime_tlb_shootdown_ring;
+        const uint64_t write_seq = ring.write_seq;
+        const uint64_t capacity = MmuCore::RuntimeTlbShootdownRing::kCapacity;
+        if (runtime_tlb_publish_batch_depth != 0) {
+            uint64_t window_begin = runtime_tlb_publish_begin_seq;
+            const uint64_t ring_begin = write_seq > capacity ? write_seq - capacity : 0;
+            if (window_begin < ring_begin) window_begin = ring_begin;
+
+            for (uint64_t seq = window_begin; seq < write_seq; ++seq) {
+                if (ring.guest_pages[seq % capacity] == guest_page) return;
+            }
+        }
+
+        ring.guest_pages[write_seq % capacity] = guest_page;
+        ring.write_seq = write_seq + 1;
+        runtime_tlb_read_seq = ring.write_seq;
+    }
+
+    void publish_runtime_tlb_flush_all() {
+        if (!core_) return;
+
+        auto& ring = core_->runtime_tlb_shootdown_ring;
+        ring.write_seq += MmuCore::RuntimeTlbShootdownRing::kCapacity + 1;
+        runtime_tlb_read_seq = ring.write_seq;
+        if (runtime_tlb_publish_batch_depth == 0) {
+            runtime_tlb_publish_begin_seq = ring.write_seq;
+        }
+    }
+
+    void publish_runtime_tlb_flush_range_or_all(uint32_t start, uint32_t end_addr) {
+        if (!core_ || end_addr <= start) return;
+
+        const uint64_t span_pages = (static_cast<uint64_t>(end_addr) - static_cast<uint64_t>(start)) / PAGE_SIZE;
+        if (span_pages > MmuCore::RuntimeTlbShootdownRing::kCapacity) {
+            publish_runtime_tlb_flush_all();
+            return;
+        }
+
+        for (uint32_t guest_page = start; guest_page < end_addr; guest_page += PAGE_SIZE) {
+            publish_runtime_tlb_flush_deduped(guest_page);
+        }
+    }
+
     void bind_core(MmuCore* core, bool add_ref) {
         if (core && add_ref) {
             retain_core(core);
@@ -863,9 +971,34 @@ private:
         release_core(old_core);
         tlb.flush();
         clear_block_lookup_cache();
+        reset_runtime_tlb_tracking();
     }
 
 public:
+    void sync_runtime_tlb_shootdowns() {
+        if (!core_) return;
+
+        const auto& ring = core_->runtime_tlb_shootdown_ring;
+        const uint64_t write_seq = ring.write_seq;
+        if (runtime_tlb_read_seq == write_seq) return;
+
+        const uint64_t capacity = MmuCore::RuntimeTlbShootdownRing::kCapacity;
+        if (write_seq - runtime_tlb_read_seq > capacity) {
+            tlb.flush();
+            runtime_tlb_read_seq = write_seq;
+            return;
+        }
+
+        for (uint64_t seq = runtime_tlb_read_seq; seq < write_seq; ++seq) {
+            tlb.flush_page(ring.guest_pages[seq % capacity]);
+        }
+        runtime_tlb_read_seq = write_seq;
+    }
+
+    [[nodiscard]] RuntimeTlbPublishBatchScope scoped_runtime_tlb_publish_batch() {
+        return RuntimeTlbPublishBatchScope(this);
+    }
+
     // Safe resolution without faulting
     [[nodiscard]] HostAddr resolve_safe_for_read(GuestAddr addr) {
         auto* dir = current_page_directory();
@@ -914,9 +1047,7 @@ public:
         auto* page_base = chunk->pages[l2_idx];
         if (!page_base) return nullptr;
 
-        if (has_property(current_perm, Property::ForceWriteSlow)) {
-            invalidate_code_cache_page(addr);
-        }
+        if (has_property(current_perm, Property::ForceWriteSlow)) invalidate_code_cache_page(addr);
 
         return page_base + offset;
     }
@@ -926,6 +1057,7 @@ public:
         core_ = create_core(std::make_unique<PageDirectory>());
         page_dir = core_->page_directory.get();
         clear_block_lookup_cache();
+        reset_runtime_tlb_tracking();
     }
 
     Mmu(const Mmu& other) {
@@ -933,6 +1065,7 @@ public:
         page_dir = core_ ? core_->page_directory.get() : nullptr;
         retain_core(core_);
         clear_block_lookup_cache();
+        reset_runtime_tlb_tracking();
     }
 
     Mmu(Mmu&& other) noexcept {
@@ -941,7 +1074,9 @@ public:
         other.core_ = nullptr;
         other.page_dir = nullptr;
         clear_block_lookup_cache();
+        reset_runtime_tlb_tracking();
         other.clear_block_lookup_cache();
+        other.reset_runtime_tlb_tracking();
     }
 
     Mmu& operator=(const Mmu& other) {
@@ -953,6 +1088,7 @@ public:
         release_core(old_core);
         tlb.flush();
         clear_block_lookup_cache();
+        reset_runtime_tlb_tracking();
         return *this;
     }
 
@@ -965,7 +1101,9 @@ public:
         other.page_dir = nullptr;
         tlb.flush();
         clear_block_lookup_cache();
+        reset_runtime_tlb_tracking();
         other.clear_block_lookup_cache();
+        other.reset_runtime_tlb_tracking();
         return *this;
     }
 
@@ -1139,6 +1277,7 @@ public:
     }
 
     [[nodiscard]] BasicBlock* cache_decoded_block(uint32_t cache_eip, BasicBlock* block) {
+        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto cache_key = make_block_cache_key(cache_eip);
         if (!cache_key) return block;
 
@@ -1153,6 +1292,7 @@ public:
     }
 
     void reset_code_cache() {
+        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         clear_block_lookup_cache();
         HostPageSet affected_host_pages;
         code_cache().ResetReachability(&affected_host_pages);
@@ -1160,6 +1300,7 @@ public:
     }
 
     void erase_cached_block(uint32_t guest_eip) {
+        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto cache_key = make_block_cache_key(guest_eip);
         if (cache_key) {
             invalidate_block_lookup_cache_entry(cache_key->host_page_base, cache_key->guest_eip);
@@ -1170,8 +1311,11 @@ public:
     }
 
     void invalidate_code_cache_page(uint32_t guest_addr) {
+        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto host_page_base = try_get_host_page_base(guest_addr);
         if (host_page_base) {
+            HostPageSet requested_host_pages;
+            requested_host_pages.push_unique(*host_page_base);
             invalidate_block_lookup_cache_page(*host_page_base);
             HostPageSet affected_host_pages;
             code_cache().InvalidateHostPage(*host_page_base, &affected_host_pages);
@@ -1180,6 +1324,7 @@ public:
     }
 
     void invalidate_code_cache_range(uint32_t addr, uint32_t size) {
+        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto host_page_bases = collect_host_page_bases_for_guest_range(addr, size);
         for (uintptr_t host_page_base : host_page_bases) {
             invalidate_block_lookup_cache_page(host_page_base);
@@ -1190,6 +1335,7 @@ public:
     }
 
     void invalidate_code_cache_host_pages(const HostPageSet& host_page_bases) {
+        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         for (uintptr_t host_page_base : host_page_bases) {
             invalidate_block_lookup_cache_page(host_page_base);
         }
@@ -1199,6 +1345,7 @@ public:
     }
 
     void invalidate_code_cache_host_pages(const uintptr_t* host_page_bases, size_t count) {
+        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         if (!host_page_bases || count == 0) return;
         HostPageSet requested_host_pages;
         for (size_t i = 0; i < count; ++i) {
@@ -1242,6 +1389,7 @@ public:
 
     // API: mmap
     void mmap(GuestAddr addr, uint32_t size, uint8_t perms_raw) {
+        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto* dir = current_page_directory();
         Property perms = normalize_mapping_perms(static_cast<Property>(perms_raw));
         uint32_t start = addr & ~PAGE_MASK;
@@ -1270,9 +1418,11 @@ public:
             }
         }
         tlb.flush();
+        publish_runtime_tlb_flush_range_or_all(start, end_addr);
     }
 
     void reprotect_mapped_range(GuestAddr addr, uint32_t size, uint8_t perms_raw) {
+        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto* dir = current_page_directory();
         if (!dir || size == 0) return;
 
@@ -1301,12 +1451,14 @@ public:
         }
 
         tlb.flush();
+        publish_runtime_tlb_flush_range_or_all(start, end_addr);
     }
 
     // API: allocate_page - Allocate a single page and return host pointer
     // Sets permissions and allocates memory in one call
     // Returns the host address of the allocated page, or nullptr on failure
     [[nodiscard]] HostAddr allocate_page(GuestAddr addr, uint8_t perms_raw) {
+        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto* dir = current_page_directory();
         Property perms = normalize_mapping_perms(static_cast<Property>(perms_raw));
         uint32_t page_addr = addr & ~PAGE_MASK;
@@ -1327,6 +1479,7 @@ public:
 
         chunk->permissions[l2_idx] = normalize_mapping_perms(perms);
         tlb.flush_page(page_addr);
+        publish_runtime_tlb_flush_deduped(page_addr);
 
         return chunk->pages[l2_idx];
     }
@@ -1336,6 +1489,7 @@ public:
     // For mmap passthrough, shared memory, etc.
     // Returns true on success
     bool map_external_page(GuestAddr addr, HostAddr external_page, uint8_t perms_raw) {
+        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto* dir = current_page_directory();
         Property perms = normalize_mapping_perms(static_cast<Property>(perms_raw));
         uint32_t page_addr = addr & ~PAGE_MASK;
@@ -1361,12 +1515,14 @@ public:
         chunk->permissions[l2_idx] = normalize_mapping_perms(perms | Property::External);  // Mark as external
         remap_external_alias(page_addr, old_page, old_perms, external_page, chunk->permissions[l2_idx]);
         tlb.flush_page(page_addr);
+        publish_runtime_tlb_flush_deduped(page_addr);
 
         return true;
     }
 
     // API: munmap - Clear pages and permissions
     void munmap(GuestAddr addr, uint32_t size) {
+        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto* dir = current_page_directory();
         uint32_t start = addr & ~PAGE_MASK;
         uint32_t end_addr = (addr + size + PAGE_MASK) & ~PAGE_MASK;
@@ -1391,12 +1547,14 @@ public:
             }
         }
         tlb.flush();
+        publish_runtime_tlb_flush_range_or_all(start, end_addr);
     }
 
     // API: reset_memory - Replace page directory contents with a fresh empty one.
     // Used during execve to clear all native pages before loading the new binary.
     // Keep core identity stable so C# MMU handles remain valid.
     void reset_memory() {
+        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         if (!core_) {
             bind_core(CreateEmptyCore(), false);
             return;
@@ -1406,6 +1564,7 @@ public:
         core_->code_cache.ResetReachability();
         core_->external_aliases.clear();
         tlb.flush();
+        publish_runtime_tlb_flush_all();
     }
 
     [[nodiscard]] uintptr_t page_directory_identity() const { return core_ ? core_->identity : 0; }

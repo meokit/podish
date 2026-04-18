@@ -13,7 +13,7 @@ namespace Fiberish.Syscalls;
 public partial class SyscallManager
 {
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
-    private async ValueTask<int> SysFutex(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysFutex(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var uaddr = a1;
         var op = (int)a2;
@@ -23,8 +23,8 @@ public partial class SyscallManager
         var isPrivate = (op & LinuxConstants.FUTEX_PRIVATE_FLAG) != 0;
         var useClockRealtime = (op & LinuxConstants.FUTEX_CLOCK_REALTIME) != 0;
 
-        if (ValidateFutexAddress(uaddr) != 0) return -(int)Errno.EINVAL;
-        if (useClockRealtime && !SupportsFutexClockRealtime(opCode)) return -(int)Errno.ENOSYS;
+        if (ValidateFutexAddress(uaddr) != 0) return new ValueTask<int>(-(int)Errno.EINVAL);
+        if (useClockRealtime && !SupportsFutexClockRealtime(opCode)) return new ValueTask<int>(-(int)Errno.ENOSYS);
 
         if (opCode == 0) // WAIT
         {
@@ -32,12 +32,12 @@ public partial class SyscallManager
             if (a4 != 0)
             {
                 if (!TryReadTimespec32TimeoutMs(engine, a4, out var parsedTimeout, out var timeoutErr))
-                    return timeoutErr;
+                    return new ValueTask<int>(timeoutErr);
 
                 timeoutMs = parsedTimeout;
             }
 
-            return await FutexWait(engine, uaddr, val, timeoutMs, isPrivate, LinuxConstants.FUTEX_BITSET_MATCH_ANY,
+            return FutexWait(engine, uaddr, val, timeoutMs, isPrivate, LinuxConstants.FUTEX_BITSET_MATCH_ANY,
                 "WAIT");
         }
 
@@ -45,14 +45,14 @@ public partial class SyscallManager
         {
             var count = (int)val;
             if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var wakeKey, out var error))
-                return error;
+                return new ValueTask<int>(error);
 
-            return Futex.Wake(wakeKey, count);
+            return new ValueTask<int>(Futex.Wake(wakeKey, count));
         }
 
         if (opCode == LinuxConstants.FUTEX_WAIT_BITSET)
         {
-            if (a6 == 0) return -(int)Errno.EINVAL;
+            if (a6 == 0) return new ValueTask<int>(-(int)Errno.EINVAL);
 
             int? timeoutMs = null;
             if (a4 != 0)
@@ -60,32 +60,32 @@ public partial class SyscallManager
                 if (!TryReadAbsoluteTimespec32TimeoutMs(engine, a4,
                         useClockRealtime ? LinuxConstants.CLOCK_REALTIME : LinuxConstants.CLOCK_MONOTONIC,
                         out var parsedTimeout, out var timeoutErr))
-                    return timeoutErr;
+                    return new ValueTask<int>(timeoutErr);
 
                 timeoutMs = parsedTimeout;
             }
 
-            return await FutexWait(engine, uaddr, val, timeoutMs, isPrivate, a6, "WAIT_BITSET");
+            return FutexWait(engine, uaddr, val, timeoutMs, isPrivate, a6, "WAIT_BITSET");
         }
 
         if (opCode == LinuxConstants.FUTEX_WAKE_BITSET)
         {
-            if (a6 == 0) return -(int)Errno.EINVAL;
+            if (a6 == 0) return new ValueTask<int>(-(int)Errno.EINVAL);
 
             var count = (int)val;
             if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var wakeKey, out var error))
-                return error;
+                return new ValueTask<int>(error);
 
-            return Futex.Wake(wakeKey, count, a6);
+            return new ValueTask<int>(Futex.Wake(wakeKey, count, a6));
         }
 
         if (opCode == LinuxConstants.FUTEX_WAIT_REQUEUE_PI)
         {
             var uaddr2 = a5;
-            if (uaddr2 == 0 || uaddr2 == uaddr) return -(int)Errno.EINVAL;
-            if (ValidateFutexAddress(uaddr2) != 0) return -(int)Errno.EINVAL;
+            if (uaddr2 == 0 || uaddr2 == uaddr) return new ValueTask<int>(-(int)Errno.EINVAL);
+            if (ValidateFutexAddress(uaddr2) != 0) return new ValueTask<int>(-(int)Errno.EINVAL);
             if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, out _, out var targetError))
-                return targetError;
+                return new ValueTask<int>(targetError);
 
             int? timeoutMs = null;
             if (a4 != 0)
@@ -93,12 +93,12 @@ public partial class SyscallManager
                 if (!TryReadAbsoluteTimespec32TimeoutMs(engine, a4,
                         useClockRealtime ? LinuxConstants.CLOCK_REALTIME : LinuxConstants.CLOCK_MONOTONIC,
                         out var parsedTimeout, out var timeoutErr))
-                    return timeoutErr;
+                    return new ValueTask<int>(timeoutErr);
 
                 timeoutMs = parsedTimeout;
             }
 
-            return await FutexWait(engine, uaddr, val, timeoutMs, isPrivate, LinuxConstants.FUTEX_BITSET_MATCH_ANY,
+            return FutexWait(engine, uaddr, val, timeoutMs, isPrivate, LinuxConstants.FUTEX_BITSET_MATCH_ANY,
                 "WAIT_REQUEUE_PI");
         }
 
@@ -108,15 +108,15 @@ public partial class SyscallManager
             var requeueCount = (int)a4;
             var uaddr2 = a5;
 
-            if (ValidateFutexAddress(uaddr2) != 0) return -(int)Errno.EINVAL;
-            if (wakeCount < 0 || requeueCount < 0 || uaddr2 == 0) return -(int)Errno.EINVAL;
+            if (ValidateFutexAddress(uaddr2) != 0) return new ValueTask<int>(-(int)Errno.EINVAL);
+            if (wakeCount < 0 || requeueCount < 0 || uaddr2 == 0) return new ValueTask<int>(-(int)Errno.EINVAL);
             if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var sourceKey, out var sourceError))
-                return sourceError;
+                return new ValueTask<int>(sourceError);
             if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, out var targetKey, out var targetError))
-                return targetError;
+                return new ValueTask<int>(targetError);
 
             var woke = Futex.Wake(sourceKey, wakeCount);
-            return woke + Futex.Requeue(sourceKey, targetKey, requeueCount);
+            return new ValueTask<int>(woke + Futex.Requeue(sourceKey, targetKey, requeueCount));
         }
 
         if (opCode == LinuxConstants.FUTEX_CMP_REQUEUE_PI)
@@ -126,19 +126,20 @@ public partial class SyscallManager
             var uaddr2 = a5;
             var expected = a6;
 
-            if (wakeCount != 1 || requeueCount < 0 || uaddr2 == 0 || uaddr2 == uaddr) return -(int)Errno.EINVAL;
-            if (ValidateFutexAddress(uaddr2) != 0) return -(int)Errno.EINVAL;
+            if (wakeCount != 1 || requeueCount < 0 || uaddr2 == 0 || uaddr2 == uaddr)
+                return new ValueTask<int>(-(int)Errno.EINVAL);
+            if (ValidateFutexAddress(uaddr2) != 0) return new ValueTask<int>(-(int)Errno.EINVAL);
 
-            if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return -(int)Errno.EFAULT;
-            if (currentVal != expected) return -(int)Errno.EAGAIN;
+            if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return new ValueTask<int>(-(int)Errno.EFAULT);
+            if (currentVal != expected) return new ValueTask<int>(-(int)Errno.EAGAIN);
 
             if (!TryResolveFutexKey(engine, uaddr, !isPrivate, true, out var sourceKey, out var sourceError))
-                return sourceError;
+                return new ValueTask<int>(sourceError);
             if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, out var targetKey, out var targetError))
-                return targetError;
+                return new ValueTask<int>(targetError);
 
             var woke = Futex.Wake(sourceKey, wakeCount);
-            return woke + Futex.Requeue(sourceKey, targetKey, requeueCount);
+            return new ValueTask<int>(woke + Futex.Requeue(sourceKey, targetKey, requeueCount));
         }
 
         if (opCode == LinuxConstants.FUTEX_CMP_REQUEUE)
@@ -148,19 +149,19 @@ public partial class SyscallManager
             var uaddr2 = a5;
             var expected = a6;
 
-            if (ValidateFutexAddress(uaddr2) != 0) return -(int)Errno.EINVAL;
-            if (wakeCount < 0 || requeueCount < 0 || uaddr2 == 0) return -(int)Errno.EINVAL;
+            if (ValidateFutexAddress(uaddr2) != 0) return new ValueTask<int>(-(int)Errno.EINVAL);
+            if (wakeCount < 0 || requeueCount < 0 || uaddr2 == 0) return new ValueTask<int>(-(int)Errno.EINVAL);
 
-            if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return -(int)Errno.EFAULT;
-            if (currentVal != expected) return -(int)Errno.EAGAIN;
+            if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return new ValueTask<int>(-(int)Errno.EFAULT);
+            if (currentVal != expected) return new ValueTask<int>(-(int)Errno.EAGAIN);
 
             if (!TryResolveFutexKey(engine, uaddr, !isPrivate, true, out var sourceKey, out var sourceError))
-                return sourceError;
+                return new ValueTask<int>(sourceError);
             if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, out var targetKey, out var targetError))
-                return targetError;
+                return new ValueTask<int>(targetError);
 
             var woke = Futex.Wake(sourceKey, wakeCount);
-            return woke + Futex.Requeue(sourceKey, targetKey, requeueCount);
+            return new ValueTask<int>(woke + Futex.Requeue(sourceKey, targetKey, requeueCount));
         }
 
         if (opCode == LinuxConstants.FUTEX_WAKE_OP)
@@ -169,100 +170,49 @@ public partial class SyscallManager
             var wakeCount2 = (int)a4;
             var uaddr2 = a5;
 
-            if (ValidateFutexAddress(uaddr2) != 0) return -(int)Errno.EINVAL;
-            if (wakeCount < 0 || wakeCount2 < 0 || uaddr2 == 0) return -(int)Errno.EINVAL;
+            if (ValidateFutexAddress(uaddr2) != 0) return new ValueTask<int>(-(int)Errno.EINVAL);
+            if (wakeCount < 0 || wakeCount2 < 0 || uaddr2 == 0) return new ValueTask<int>(-(int)Errno.EINVAL);
 
             if (!TryResolveFutexKey(engine, uaddr, !isPrivate, out var sourceKey, out var sourceError))
-                return sourceError;
-            if (!TryReadUserUInt32(engine, uaddr2, out var oldVal)) return -(int)Errno.EFAULT;
+                return new ValueTask<int>(sourceError);
+            if (!TryReadUserUInt32(engine, uaddr2, out var oldVal)) return new ValueTask<int>(-(int)Errno.EFAULT);
             if (!TryResolveFutexKey(engine, uaddr2, !isPrivate, true, out var targetKey, out var targetError))
-                return targetError;
+                return new ValueTask<int>(targetError);
 
             if (!TryApplyWakeOp(a6, oldVal, out var newVal, out var wakeSecond, out var wakeOpErr))
-                return wakeOpErr;
+                return new ValueTask<int>(wakeOpErr);
 
-            if (!TryWriteUserUInt32(engine, uaddr2, newVal)) return -(int)Errno.EFAULT;
+            if (!TryWriteUserUInt32(engine, uaddr2, newVal)) return new ValueTask<int>(-(int)Errno.EFAULT);
 
             var woke = Futex.Wake(sourceKey, wakeCount);
             if (wakeSecond)
                 woke += Futex.Wake(targetKey, wakeCount2);
 
-            return woke;
+            return new ValueTask<int>(woke);
         }
 
         if (opCode is LinuxConstants.FUTEX_LOCK_PI or LinuxConstants.FUTEX_TRYLOCK_PI)
         {
             var task = engine.Owner as FiberTask;
-            if (task == null) return -(int)Errno.EINVAL;
-
-            while (true)
-            {
-                if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return -(int)Errno.EFAULT;
-                if (!TryResolveFutexKey(engine, uaddr, !isPrivate, true, out var lockKey, out var error))
-                    return error;
-                var owner = currentVal & LinuxConstants.FUTEX_TID_MASK;
-                var hasWaiters = (currentVal & LinuxConstants.FUTEX_WAITERS) != 0;
-
-                if (owner == 0)
-                {
-                    var queuedWaiters = Futex.GetWaiterCount(lockKey);
-                    var nextVal = (uint)task.TID;
-                    if (hasWaiters || queuedWaiters > 0) nextVal |= LinuxConstants.FUTEX_WAITERS;
-                    if (!TryWriteUserUInt32(engine, uaddr, nextVal)) return -(int)Errno.EFAULT;
-
-                    if (Logger.IsEnabled(LogLevel.Trace))
-                        Logger.LogTrace("[SysFutex {Op}] TID={TID} acquired uaddr=0x{Uaddr:x} waiters={Waiters}",
-                            opCode == LinuxConstants.FUTEX_LOCK_PI ? "LOCK_PI" : "TRYLOCK_PI",
-                            task.TID, uaddr, queuedWaiters);
-                    return 0;
-                }
-
-                if (owner == (uint)task.TID) return -(int)Errno.EDEADLK;
-                if (opCode == LinuxConstants.FUTEX_TRYLOCK_PI) return -(int)Errno.EBUSY;
-
-                if (!hasWaiters)
-                {
-                    if (!TryWriteUserUInt32(engine, uaddr, currentVal | LinuxConstants.FUTEX_WAITERS))
-                        return -(int)Errno.EFAULT;
-                }
-
-                var waiter = Futex.PrepareWait(lockKey);
-                var registration = Futex.CreateWaitRegistration(lockKey, waiter);
-
-                if (Logger.IsEnabled(LogLevel.Trace))
-                    Logger.LogTrace(
-                        "[SysFutex LOCK_PI] TID={TID} waiting uaddr=0x{Uaddr:x} owner={Owner} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset}",
-                        task.TID, uaddr, owner, isPrivate, lockKey.Kind, lockKey.PageValue, lockKey.OffsetWithinPage);
-                var result = await new FutexAwaitable(waiter, task, registration, null);
-                if (result == FutexWaitOutcome.Interrupted)
-                {
-                    Futex.CancelWait(lockKey, waiter);
-                    return -(int)Errno.ERESTARTSYS;
-                }
-
-                if (result == FutexWaitOutcome.TimedOut)
-                {
-                    Futex.CancelWait(lockKey, waiter);
-                    return -(int)Errno.ETIMEDOUT;
-                }
-            }
+            if (task == null) return new ValueTask<int>(-(int)Errno.EINVAL);
+            return FutexLockPi(engine, uaddr, isPrivate, opCode, task);
         }
 
         if (opCode == LinuxConstants.FUTEX_UNLOCK_PI)
         {
             var task = engine.Owner as FiberTask;
-            if (task == null) return -(int)Errno.EINVAL;
+            if (task == null) return new ValueTask<int>(-(int)Errno.EINVAL);
 
-            if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return -(int)Errno.EFAULT;
+            if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return new ValueTask<int>(-(int)Errno.EFAULT);
             var owner = currentVal & LinuxConstants.FUTEX_TID_MASK;
-            if (owner != (uint)task.TID) return -(int)Errno.EPERM;
+            if (owner != (uint)task.TID) return new ValueTask<int>(-(int)Errno.EPERM);
 
             if (!TryResolveFutexKey(engine, uaddr, !isPrivate, true, out var unlockKey, out var error))
-                return error;
+                return new ValueTask<int>(error);
 
             var queuedWaiters = Futex.GetWaiterCount(unlockKey);
             var nextVal = queuedWaiters > 0 ? LinuxConstants.FUTEX_WAITERS : 0u;
-            if (!TryWriteUserUInt32(engine, uaddr, nextVal)) return -(int)Errno.EFAULT;
+            if (!TryWriteUserUInt32(engine, uaddr, nextVal)) return new ValueTask<int>(-(int)Errno.EFAULT);
 
             var woke = Futex.Wake(unlockKey, 1);
 
@@ -270,28 +220,28 @@ public partial class SyscallManager
                 Logger.LogTrace(
                     "[SysFutex UNLOCK_PI] TID={TID} released uaddr=0x{Uaddr:x} queuedWaiters={Waiters} woke={Woke}",
                     task.TID, uaddr, queuedWaiters, woke);
-            return 0;
+            return new ValueTask<int>(0);
         }
 
         if (opCode == LinuxConstants.FUTEX_FD)
-            return -(int)Errno.ENOSYS;
+            return new ValueTask<int>(-(int)Errno.ENOSYS);
 
-        return -(int)Errno.ENOSYS;
+        return new ValueTask<int>(-(int)Errno.ENOSYS);
     }
 
-    private async ValueTask<int> FutexWait(Engine engine, uint uaddr, uint expectedValue, int? timeoutMs,
+    private ValueTask<int> FutexWait(Engine engine, uint uaddr, uint expectedValue, int? timeoutMs,
         bool isPrivate,
         uint bitsetMask, string opName)
     {
-        if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return -(int)Errno.EFAULT;
-        if (currentVal != expectedValue) return -(int)Errno.EAGAIN;
+        if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return new ValueTask<int>(-(int)Errno.EFAULT);
+        if (currentVal != expectedValue) return new ValueTask<int>(-(int)Errno.EAGAIN);
 
         if (!TryResolveFutexKey(engine, uaddr, !isPrivate, true, out var waitKey, out var error))
-            return error;
+            return new ValueTask<int>(error);
 
         var task = engine.Owner as FiberTask;
         if (task == null)
-            return -(int)Errno.EINVAL;
+            return new ValueTask<int>(-(int)Errno.EINVAL);
 
         var waiter = Futex.PrepareWait(waitKey, bitsetMask);
         var registration = Futex.CreateWaitRegistration(waitKey, waiter);
@@ -300,21 +250,29 @@ public partial class SyscallManager
         if (!TryReadUserUInt32(engine, uaddr, out currentVal))
         {
             registration.Cancel();
-            return -(int)Errno.EFAULT;
+            return new ValueTask<int>(-(int)Errno.EFAULT);
         }
 
         if (currentVal != expectedValue)
         {
             registration.Cancel();
-            return -(int)Errno.EAGAIN;
+            return new ValueTask<int>(-(int)Errno.EAGAIN);
         }
 
         if (timeoutMs == 0)
         {
             registration.Cancel();
-            return -(int)Errno.ETIMEDOUT;
+            return new ValueTask<int>(-(int)Errno.ETIMEDOUT);
         }
 
+        return AwaitFutexWait(task, waitKey, waiter, registration, timeoutMs, opName, uaddr, expectedValue,
+            bitsetMask, isPrivate);
+    }
+
+    private async ValueTask<int> AwaitFutexWait(FiberTask task, FutexKey waitKey, Waiter waiter,
+        ITaskAsyncRegistration registration, int? timeoutMs, string opName, uint uaddr, uint expectedValue,
+        uint bitsetMask, bool isPrivate)
+    {
         if (Logger.IsEnabled(LogLevel.Trace))
             Logger.LogTrace(
                 "[SysFutex {Op}] TID={TID} uaddr=0x{Uaddr:x} val={Val} bitset=0x{Bitset:x8} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset} WakeReason={WR} PendingSig=0x{PS:x}",
@@ -338,6 +296,61 @@ public partial class SyscallManager
         }
 
         return 0;
+    }
+
+    private async ValueTask<int> FutexLockPi(Engine engine, uint uaddr, bool isPrivate, int opCode, FiberTask task)
+    {
+        while (true)
+        {
+            if (!TryReadUserUInt32(engine, uaddr, out var currentVal)) return -(int)Errno.EFAULT;
+            if (!TryResolveFutexKey(engine, uaddr, !isPrivate, true, out var lockKey, out var error))
+                return error;
+            var owner = currentVal & LinuxConstants.FUTEX_TID_MASK;
+            var hasWaiters = (currentVal & LinuxConstants.FUTEX_WAITERS) != 0;
+
+            if (owner == 0)
+            {
+                var queuedWaiters = Futex.GetWaiterCount(lockKey);
+                var nextVal = (uint)task.TID;
+                if (hasWaiters || queuedWaiters > 0) nextVal |= LinuxConstants.FUTEX_WAITERS;
+                if (!TryWriteUserUInt32(engine, uaddr, nextVal)) return -(int)Errno.EFAULT;
+
+                if (Logger.IsEnabled(LogLevel.Trace))
+                    Logger.LogTrace("[SysFutex {Op}] TID={TID} acquired uaddr=0x{Uaddr:x} waiters={Waiters}",
+                        opCode == LinuxConstants.FUTEX_LOCK_PI ? "LOCK_PI" : "TRYLOCK_PI",
+                        task.TID, uaddr, queuedWaiters);
+                return 0;
+            }
+
+            if (owner == (uint)task.TID) return -(int)Errno.EDEADLK;
+            if (opCode == LinuxConstants.FUTEX_TRYLOCK_PI) return -(int)Errno.EBUSY;
+
+            if (!hasWaiters)
+            {
+                if (!TryWriteUserUInt32(engine, uaddr, currentVal | LinuxConstants.FUTEX_WAITERS))
+                    return -(int)Errno.EFAULT;
+            }
+
+            var waiter = Futex.PrepareWait(lockKey);
+            var registration = Futex.CreateWaitRegistration(lockKey, waiter);
+
+            if (Logger.IsEnabled(LogLevel.Trace))
+                Logger.LogTrace(
+                    "[SysFutex LOCK_PI] TID={TID} waiting uaddr=0x{Uaddr:x} owner={Owner} isPrivate={IsPrivate} key={KeyKind}:{PageValue:x}:{Offset}",
+                    task.TID, uaddr, owner, isPrivate, lockKey.Kind, lockKey.PageValue, lockKey.OffsetWithinPage);
+            var result = await new FutexAwaitable(waiter, task, registration, null);
+            if (result == FutexWaitOutcome.Interrupted)
+            {
+                Futex.CancelWait(lockKey, waiter);
+                return -(int)Errno.ERESTARTSYS;
+            }
+
+            if (result == FutexWaitOutcome.TimedOut)
+            {
+                Futex.CancelWait(lockKey, waiter);
+                return -(int)Errno.ETIMEDOUT;
+            }
+        }
     }
 
     private readonly struct FutexAwaitable

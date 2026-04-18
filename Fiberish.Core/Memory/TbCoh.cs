@@ -136,7 +136,7 @@ internal static class TbCoh
 
         foreach (var (targetMm, pages) in invByMm)
         {
-            var sequence = targetMm.BumpMapSequence();
+            var sequence = targetMm.BumpCodeCacheSequence();
             foreach (var guestPage in pages)
                 targetMm.RecordCodeCacheResetRange(sequence, guestPage, LinuxConstants.PageSize);
         }

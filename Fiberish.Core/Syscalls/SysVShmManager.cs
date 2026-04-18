@@ -243,8 +243,6 @@ public class SysVShmManager
 
             // Add VmArea to manager
             vmaManager.AddVma(vma);
-            ProcessAddressSpaceSync.PublishMappingChange(vmaManager, engine, attachAddr, segment.Size, ownerProcess);
-
             // Record attachment
             var attach = new SysVShmAttach
             {
@@ -457,30 +455,7 @@ public class SysVShmManager
 
     private uint FindFreeRegion(VMAManager vmaManager, uint size)
     {
-        if (size == 0 || size > LinuxConstants.TaskSize32)
-            return 0;
-
-        // Start from a reasonable address
-        var addr = 0x10000000u; // 256 MB
-        while (addr < LinuxConstants.TaskSize32)
-        {
-            if (!TryComputeRangeEnd(addr, size, out var end))
-                return 0;
-            var hasOverlap = false;
-            var maxEnd = addr;
-            vmaManager.VisitVmAreasInRange(addr, end, vma =>
-            {
-                hasOverlap = true;
-                if (vma.End > maxEnd)
-                    maxEnd = vma.End;
-            });
-            if (!hasOverlap)
-                return addr;
-
-            addr = (maxEnd + LinuxConstants.PageSize - 1) & ~(uint)(LinuxConstants.PageSize - 1);
-        }
-
-        return 0; // No free region found
+        return vmaManager.FindFreeRegion(size);
     }
 
     private void DropAttachmentsInRange(VMAManager vmaManager, uint start, uint end, int lpid)

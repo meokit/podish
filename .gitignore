@@ -1,6 +1,7 @@
 build/
 build_native/
 .build/
+.bench/
 .fiberish_meta/
 .tmp/
 *.o

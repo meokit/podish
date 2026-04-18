@@ -248,7 +248,6 @@ public partial class SyscallManager
             if (oldAddr == oldVma.Start && oldAddr + oldLenAligned == oldVma.End)
             {
                 oldVma.End = oldAddr + newLenAligned;
-                ProcessAddressSpaceSync.PublishMappingChange(Mem, engine, growStart, growLen);
                 return (int)oldAddr;
             }
 

@@ -208,7 +208,7 @@ public class TruncateMmapLifecycleTests
                 Assert.Equal(0, inode.Truncate(LinuxConstants.PageSize));
                 ProcessAddressSpaceSync.NotifyInodeTruncated(mm, engine, inode, LinuxConstants.PageSize, process);
 
-                Assert.True(peerEngine.AddressSpaceMapSequenceSeen < mm.CurrentMapSequence);
+                Assert.True(peerEngine.AddressSpaceCodeCacheSequenceSeen < mm.CurrentCodeCacheSequence);
 
                 FaultResult? lastFault = null;
                 peerEngine.PageFaultResolver = (addr, isWrite) =>

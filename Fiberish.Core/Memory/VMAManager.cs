@@ -25,11 +25,12 @@ public class VMAManager
     private readonly Dictionary<Inode, int> _mappedInodeRefCounts = [];
 
     private readonly List<CodeCacheResetEntry> _pendingCodeCacheResets = [];
+    private readonly List<NativeRange> _pendingMetadataOnlyNativeRemaps = [];
     private readonly HashSet<uint> _tbWpPages = [];
     private readonly List<VmArea> _vmas = [];
     private int _futexKeyRefCount = 1;
     private VmArea? _lastFaultVma;
-    private long _mapSequence;
+    private long _codeCacheSequence;
     private int _sharedRefCount = 1;
 
     public VMAManager(MemoryRuntimeContext memoryContext)
@@ -45,7 +46,8 @@ public class VMAManager
 
     internal nuint AddressSpaceIdentity => AddressSpaceHandle?.Identity ?? 0;
 
-    public long CurrentMapSequence => Interlocked.Read(ref _mapSequence);
+    internal long CurrentCodeCacheSequence => Interlocked.Read(ref _codeCacheSequence);
+    public long CurrentMapSequence => CurrentCodeCacheSequence;
 
     public IReadOnlyList<VmArea> VMAs => _vmas;
 
@@ -71,9 +73,9 @@ public class VMAManager
         Interlocked.Exchange(ref _futexKeyRefCount, 0);
     }
 
-    internal long BumpMapSequence()
+    internal long BumpCodeCacheSequence()
     {
-        return Interlocked.Increment(ref _mapSequence);
+        return Interlocked.Increment(ref _codeCacheSequence);
     }
 
     internal void RecordCodeCacheResetRange(long sequence, uint addr, uint len)
@@ -90,7 +92,7 @@ public class VMAManager
     internal long CollectCodeCacheResetRangesSince(long seenSequence, List<NativeRange> output)
     {
         output.Clear();
-        var current = CurrentMapSequence;
+        var current = CurrentCodeCacheSequence;
         if (seenSequence >= current) return current;
 
         foreach (var entry in _pendingCodeCacheResets)
@@ -238,7 +240,7 @@ public class VMAManager
         return ResolveCurrentFileBacking(file) as MappingBackedInode;
     }
 
-    private bool SyncFileBackedVmaMapping(VmArea vma)
+    private bool SyncFileBackedVmaMapping(VmArea vma, Engine engine)
     {
         var backingInode = ResolveCurrentFileMappingBacking(vma.File);
         if (backingInode == null)
@@ -251,10 +253,18 @@ public class VMAManager
             return false;
         }
 
+        BindOrAssertAddressSpaceHandle(engine);
         vma.VmMapping?.RemoveRmapAttachments(vma);
         vma.VmMapping?.Release();
         vma.VmMapping = resolvedMapping;
         RegisterVmAreaMappingAttachment(vma);
+        if (vma.Length == 0)
+            return true;
+
+        var sequence = BumpCodeCacheSequence();
+        RecordCodeCacheResetRange(sequence, vma.Start, vma.Length);
+        TearDownNativeMappings(engine, vma.Start, vma.Length, false, true, true, preserveOwnerBinding: true);
+        engine.AddressSpaceCodeCacheSequenceSeen = sequence;
         return true;
     }
 
@@ -723,6 +733,78 @@ public class VMAManager
             ranges.RemoveRange(writeIndex + 1, ranges.Count - (writeIndex + 1));
     }
 
+    private static Engine? GetPrimarySharedMmuEngine(IReadOnlyList<Engine> engines, string caller)
+    {
+        if (engines.Count == 0)
+            return null;
+
+        var primary = engines[0];
+        foreach (var engine in engines)
+            if (engine.CurrentMmuIdentityInternal != primary.CurrentMmuIdentityInternal)
+                throw new InvalidOperationException(
+                    $"{caller} requires all engines in the same address space to share one MMU core.");
+
+        return primary;
+    }
+
+    private void RecordPendingMetadataOnlyNativeRemaps(IEnumerable<NativeRange> ranges)
+    {
+        foreach (var range in ranges)
+        {
+            if (range.Length == 0)
+                continue;
+            _pendingMetadataOnlyNativeRemaps.Add(range);
+        }
+
+        MergeRangesInPlace(_pendingMetadataOnlyNativeRemaps);
+    }
+
+    private bool TryTakePendingMetadataOnlyNativeRemap(uint guestPageStart, out NativeRange range)
+    {
+        for (var i = 0; i < _pendingMetadataOnlyNativeRemaps.Count; i++)
+        {
+            var candidate = _pendingMetadataOnlyNativeRemaps[i];
+            var candidateEnd = (ulong)candidate.Start + candidate.Length;
+            if (guestPageStart < candidate.Start || (ulong)guestPageStart >= candidateEnd)
+                continue;
+
+            range = candidate;
+            _pendingMetadataOnlyNativeRemaps.RemoveAt(i);
+            return true;
+        }
+
+        range = default;
+        return false;
+    }
+
+    private void ApplyPendingMetadataOnlyNativeRemap(uint guestPageStart, Engine engine)
+    {
+        if (!TryTakePendingMetadataOnlyNativeRemap(guestPageStart, out var range))
+            return;
+
+        BindOrAssertAddressSpaceHandle(engine);
+        TearDownNativeMappings(engine, range.Start, range.Length, false, true, true, preserveOwnerBinding: true);
+    }
+
+    internal void ApplyPendingMetadataOnlyNativeRemaps(Engine engine, bool invalidateCodeRanges)
+    {
+        if (_pendingMetadataOnlyNativeRemaps.Count == 0)
+            return;
+
+        BindOrAssertAddressSpaceHandle(engine);
+        foreach (var range in _pendingMetadataOnlyNativeRemaps)
+            TearDownNativeMappings(
+                engine,
+                range.Start,
+                range.Length,
+                false,
+                invalidateCodeRanges,
+                true,
+                preserveOwnerBinding: true);
+
+        _pendingMetadataOnlyNativeRemaps.Clear();
+    }
+
     public void TearDownNativeMappings(Engine engine, uint addr, uint len, bool captureDirtySharedPages,
         bool invalidateCodeRange, bool releaseExternalPages, bool preserveOwnerBinding = false)
     {
@@ -865,7 +947,7 @@ public class VMAManager
         if (ranges.Count == 0)
             return;
 
-        var sequence = BumpMapSequence();
+        var sequence = BumpCodeCacheSequence();
         foreach (var range in ranges)
             RecordCodeCacheResetRange(sequence, range.Start, range.Length);
 
@@ -876,7 +958,7 @@ public class VMAManager
         {
             foreach (var range in ranges)
                 engine.ResetCodeCacheByRange(range.Start, range.Length);
-            engine.AddressSpaceMapSequenceSeen = sequence;
+            engine.AddressSpaceCodeCacheSequenceSeen = sequence;
         }
     }
 
@@ -891,7 +973,7 @@ public class VMAManager
         if (ranges.Count == 0)
             return;
 
-        var sequence = BumpMapSequence();
+        var sequence = BumpCodeCacheSequence();
         foreach (var range in ranges)
             RecordCodeCacheResetRange(sequence, range.Start, range.Length);
 
@@ -902,11 +984,7 @@ public class VMAManager
             return;
         }
 
-        var primary = engines[0];
-        foreach (var engine in engines)
-            if (engine.CurrentMmuIdentityInternal != primary.CurrentMmuIdentityInternal)
-                throw new InvalidOperationException(
-                    "OnFileTruncate requires all engines in the same address space to share one MMU core.");
+        var primary = GetPrimarySharedMmuEngine(engines, nameof(OnFileTruncate))!;
 
         foreach (var range in ranges)
             TearDownNativeMappings(
@@ -917,7 +995,7 @@ public class VMAManager
                 true,
                 true);
 
-        primary.AddressSpaceMapSequenceSeen = sequence;
+        primary.AddressSpaceCodeCacheSequenceSeen = sequence;
 
         foreach (var range in ranges)
             AssertExternalPagesReleasedForRange(range.Start, range.Length, "OnFileTruncate");
@@ -955,16 +1033,16 @@ public class VMAManager
 
         if (ranges.Count == 0) return;
         MergeRangesInPlace(ranges);
-        var sequence = BumpMapSequence();
+        var sequence = BumpCodeCacheSequence();
         foreach (var range in ranges)
             RecordCodeCacheResetRange(sequence, range.Start, range.Length);
 
         if (engines.Count > 0)
         {
-            var primary = engines[0];
+            var primary = GetPrimarySharedMmuEngine(engines, nameof(UnmapMappingRange))!;
             foreach (var range in ranges)
                 TearDownNativeMappings(primary, range.Start, range.Length, false, true, true);
-            primary.AddressSpaceMapSequenceSeen = sequence;
+            primary.AddressSpaceCodeCacheSequenceSeen = sequence;
         }
     }
 
@@ -1810,6 +1888,7 @@ public class VMAManager
             TrackMappedInodeOnVmaRemoved(vma);
 
         _mappedInodeRefCounts.Clear();
+        _pendingMetadataOnlyNativeRemaps.Clear();
         _vmas.Clear();
     }
 
@@ -1830,46 +1909,44 @@ public class VMAManager
 
     internal uint FindFreeRegion(uint size)
     {
-        var baseAddr = LinuxConstants.MinMmapAddr;
-
-        // Optimize: Because _vmas is sorted by Start, we can just walk _vmas 
-        // and jump baseAddr to vma.End whenever there's a collision.
-        foreach (var vma in _vmas)
-        {
-            uint endAddr;
-            try
-            {
-                endAddr = checked(baseAddr + size);
-            }
-            catch (OverflowException)
-            {
-                return 0; // Out of memory space
-            }
-
-            if (endAddr > LinuxConstants.TaskSize32)
-                return 0;
-
-            if (baseAddr < vma.End && endAddr > vma.Start)
-                // Collision! We can't put it here.
-                // The next possible spot is right after this colliding VmArea.
-                baseAddr = (vma.End + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask; // Ensure page alignment
-        }
-
-        // Final check against absolute top limit after loop
-        uint finalEnd;
-        try
-        {
-            finalEnd = checked(baseAddr + size);
-        }
-        catch (OverflowException)
-        {
-            return 0;
-        }
-
-        if (finalEnd > LinuxConstants.TaskSize32)
+        if (size == 0)
             return 0;
 
-        return baseAddr;
+        // Prefer high addresses for auto-selected mappings so brk growth and low-address
+        // reservations keep a larger contiguous window. This matches Node/V8 workloads
+        // better than the old low-address first-fit policy.
+        var gapEnd = LinuxConstants.TaskSize32;
+        for (var i = _vmas.Count - 1; i >= 0; i--)
+        {
+            var vma = _vmas[i];
+            if (TryFitRegionBelow(gapEnd, vma.End, size, out var candidate))
+                return candidate;
+
+            gapEnd = vma.Start;
+        }
+
+        return TryFitRegionBelow(gapEnd, LinuxConstants.MinMmapAddr, size, out var lowestCandidate)
+            ? lowestCandidate
+            : 0;
+    }
+
+    private static bool TryFitRegionBelow(uint gapEnd, uint gapStart, uint size, out uint candidateStart)
+    {
+        candidateStart = 0;
+        if (gapEnd <= gapStart)
+            return false;
+
+        var available = (ulong)gapEnd - gapStart;
+        if (available < size)
+            return false;
+
+        var candidate = gapEnd - size;
+        candidate &= LinuxConstants.PageMask;
+        if (candidate < gapStart)
+            return false;
+
+        candidateStart = candidate;
+        return true;
     }
 
     internal int DropMappedCleanRecoverablePagesForPressure(Engine engine, int maxPages)
@@ -2380,9 +2457,10 @@ public class VMAManager
         }
 
         if (vma.IsFileBacked)
-            SyncFileBackedVmaMapping(vma);
+            SyncFileBackedVmaMapping(vma, engine);
 
         var pageStart = addr & LinuxConstants.PageMask;
+        ApplyPendingMetadataOnlyNativeRemap(pageStart, engine);
         var pageIndex = GetVmaPageIndex(vma, pageStart);
 
         var result = IsPrivateVma(vma)
@@ -2428,17 +2506,20 @@ public class VMAManager
             return;
 
         MergeRangesInPlace(invalidatedRanges);
-        var sequence = BumpMapSequence();
+        var sequence = BumpCodeCacheSequence();
         foreach (var range in invalidatedRanges)
             RecordCodeCacheResetRange(sequence, range.Start, range.Length);
 
         if (engines.Count == 0)
+        {
+            RecordPendingMetadataOnlyNativeRemaps(invalidatedRanges);
             return;
+        }
 
-        var primary = engines[0];
+        var primary = GetPrimarySharedMmuEngine(engines, nameof(MigrateOverlayMappings))!;
         foreach (var range in invalidatedRanges)
-            TearDownNativeMappings(primary, range.Start, range.Length, false, true, true);
-        primary.AddressSpaceMapSequenceSeen = sequence;
+            TearDownNativeMappings(primary, range.Start, range.Length, false, true, true, preserveOwnerBinding: true);
+        primary.AddressSpaceCodeCacheSequenceSeen = sequence;
     }
 
     internal bool PrefaultRange(uint addr, uint len, Engine engine, bool writeIntent)

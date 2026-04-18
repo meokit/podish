@@ -210,10 +210,6 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_ResetAllCodeCache")]
     public static partial void ResetAllCodeCache(IntPtr state);
 
-    [LibraryImport(LibName, EntryPoint = "X86_FlushMmuTlb")]
-    [SuppressGCTransition]
-    public static partial void FlushMmuTlb(IntPtr state);
-
     [LibraryImport(LibName, EntryPoint = "X86_ResetMemory")]
     public static partial void ResetMemory(IntPtr state);
 
@@ -241,6 +237,16 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_GetHandlerProfileStats")]
     [SuppressGCTransition]
     public static partial nuint GetHandlerProfileStats(IntPtr state, HandlerProfileEntry* buffer, nuint maxCount);
+
+    [LibraryImport(LibName, EntryPoint = "X86_DebugHostPageSetUniqueCount")]
+    [SuppressGCTransition]
+    private static partial nuint DebugHostPageSetUniqueCountNative(IntPtr* hostPages, nuint count);
+
+    internal static int DebugHostPageSetUniqueCount(ReadOnlySpan<nint> hostPages)
+    {
+        fixed (nint* pHostPages = hostPages)
+            return (int)DebugHostPageSetUniqueCountNative((IntPtr*)pHostPages, (nuint)hostPages.Length);
+    }
 
     [LibraryImport(LibName, EntryPoint = "X86_GetBlockStats")]
     [SuppressGCTransition]
