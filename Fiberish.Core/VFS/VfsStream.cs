@@ -9,11 +9,18 @@ namespace Fiberish.VFS;
 public class VfsStream : Stream
 {
     private readonly LinuxFile _file;
+    private readonly FileMutationContext _mutationContext;
     private long _position;
 
     public VfsStream(LinuxFile file)
+        : this(file, default)
+    {
+    }
+
+    public VfsStream(LinuxFile file, FileMutationContext mutationContext)
     {
         _file = file;
+        _mutationContext = mutationContext;
         _position = file.Position;
     }
 
@@ -65,7 +72,13 @@ public class VfsStream : Stream
 
     public override void SetLength(long value)
     {
-        _file.OpenedInode?.Truncate(value);
+        if (!_mutationContext.HasLiveAddressSpace &&
+            _file.OpenedInode is MappingBackedInode mappingBackedInode &&
+            value < (long)mappingBackedInode.Size &&
+            mappingBackedInode.SnapshotMappedAddressSpaces().Length > 0)
+            throw new InvalidOperationException("VfsStream.SetLength requires FileMutationContext for live mapped shrink operations.");
+
+        _file.OpenedInode?.Truncate(value, _mutationContext);
     }
 
     public override void Write(byte[] buffer, int offset, int count)

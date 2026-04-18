@@ -1,3 +1,4 @@
+using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 
@@ -237,10 +238,10 @@ public class TmpfsInode : IndexedMemoryInode
         }
     }
 
-    public override int Truncate(long size)
+    protected override int TruncateCore(long size)
     {
         if (Type != InodeType.File)
-            return base.Truncate(size);
+            return base.TruncateCore(size);
         if (size < 0)
             return -(int)Errno.EINVAL;
 
@@ -257,7 +258,7 @@ public class TmpfsInode : IndexedMemoryInode
 
             try
             {
-                var rc = base.Truncate(size);
+                var rc = base.TruncateCore(size);
                 if (rc < 0)
                     TmpfsSb.ReleaseDataBytes(growth);
                 return rc;
@@ -270,7 +271,7 @@ public class TmpfsInode : IndexedMemoryInode
         }
 
         var shrink = oldSize - size;
-        var result = base.Truncate(size);
+        var result = base.TruncateCore(size);
         if (result == 0 && shrink > 0)
             TmpfsSb.ReleaseDataBytes(shrink);
         return result;

@@ -32,6 +32,8 @@ public class VmArea
     public MapFlags Flags { get; set; }
     public VmaFileMapping? FileMapping { get; set; }
     public LinuxFile? File => FileMapping?.File;
+    public Inode? LogicalInode => FileMapping?.LogicalInode;
+    public MappingBackedInode? BackingInode => FileMapping?.BackingInode;
     public long Offset { get; set; }
     public ulong VmPgoff { get; set; }
     public bool DontFork { get; set; }
@@ -81,7 +83,7 @@ public class VmArea
     {
         if (!IsFileBacked) return 0;
 
-        var inodeSize = (long)(File?.OpenedInode?.Size ?? 0);
+        var inodeSize = (long)(LogicalInode?.Size ?? 0);
         var remaining = inodeSize - Offset;
         if (remaining <= 0) return 0;
         return Math.Min(remaining, Length);
@@ -182,12 +184,21 @@ public sealed class VmaFileMapping
 {
     private int _refCount = 1;
 
-    public VmaFileMapping(LinuxFile file)
+    public VmaFileMapping(LinuxFile file, Inode? logicalInode = null, MappingBackedInode? backingInode = null)
     {
         File = file;
+        LogicalInode = logicalInode ?? file.OpenedInode;
+        BackingInode = backingInode ?? ResolveInitialBackingInode(file);
     }
 
     public LinuxFile File { get; }
+    public Inode? LogicalInode { get; }
+    public MappingBackedInode? BackingInode { get; private set; }
+
+    public void SetBackingInode(MappingBackedInode? backingInode)
+    {
+        BackingInode = backingInode;
+    }
 
     public VmaFileMapping AddRef()
     {
@@ -206,5 +217,13 @@ public sealed class VmaFileMapping
         }
 
         VfsDebugTrace.FailInvariant($"VmaFileMapping refcount underflow file={File.Dentry.Name}");
+    }
+
+    private static MappingBackedInode? ResolveInitialBackingInode(LinuxFile file)
+    {
+        if (file.OpenedInode is OverlayInode overlayInode)
+            return overlayInode.ResolveMmapSource(file) as MappingBackedInode ?? file.OpenedInode as MappingBackedInode;
+
+        return file.OpenedInode as MappingBackedInode;
     }
 }

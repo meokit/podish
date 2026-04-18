@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Fiberish.Core;
 using Fiberish.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -1663,6 +1664,36 @@ public class OverlayInode : MappingBackedInode
         var res = CopyUp(null);
         if (res < 0) return res;
         return UpperInode!.Truncate(size);
+    }
+
+    protected internal override int TruncateWithContextCore(long length, in FileMutationContext context)
+    {
+        var previousSize = (long)Size;
+        if (UpperInode != null)
+        {
+            var rc = UpperInode.Truncate(length, context);
+            if (rc < 0)
+                return rc;
+            if (length < previousSize)
+                ProcessAddressSpaceSync.NotifyInodeTruncated(this, length, context);
+            return rc;
+        }
+
+        if (LowerInode == null)
+        {
+            var detachedBacking = GetAnyOpenBackingInode();
+            var rc = detachedBacking?.Truncate(length, context) ?? -(int)Errno.EROFS;
+            if (rc == 0 && length < previousSize)
+                ProcessAddressSpaceSync.NotifyInodeTruncated(this, length, context);
+            return rc;
+        }
+
+        var res = CopyUp(null);
+        if (res < 0) return res;
+        var truncateRc = UpperInode!.Truncate(length, context);
+        if (truncateRc == 0 && length < previousSize)
+            ProcessAddressSpaceSync.NotifyInodeTruncated(this, length, context);
+        return truncateRc;
     }
 
     public override List<DirectoryEntry> GetEntries()

@@ -241,6 +241,158 @@ public class HostMappedPageCacheGeometryTests
         }
     }
 
+    [Fact]
+    public void Hostfs_ReadOnlyTailPage_ExternalShrink_DropsResidentWindowWithoutHostClear()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"hostfs-tail-shrink-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "tail.bin");
+        File.WriteAllBytes(hostFile, CreateFilledBuffer(LinuxConstants.PageSize + 123, (byte)'t'));
+
+        try
+        {
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/tail.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+            const uint mapAddr = 0x47400000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize * 2, Protection.Read, MapFlags.Shared | MapFlags.Fixed, file, 0,
+                "MAP_SHARED_TAIL_RO", engine);
+
+            var tailPageAddr = mapAddr + LinuxConstants.PageSize;
+            Assert.True(mm.HandleFault(tailPageAddr, false, engine));
+
+            var hostInode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
+            Assert.Equal(1, hostInode.GetMappedPageCacheDiagnostics().GuestPageCount);
+            Assert.True(mm.PageMapping.TryGet(tailPageAddr, out _));
+
+            using (var handle = File.OpenHandle(hostFile, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+                RandomAccess.SetLength(handle, LinuxConstants.PageSize + 17);
+
+            using (var reopen = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!))
+                loc.Dentry!.Inode!.Open(reopen);
+
+            var diagnostics = hostInode.GetMappedPageCacheDiagnostics();
+            Assert.Equal(0, diagnostics.GuestPageCount);
+            Assert.False(mm.PageMapping.TryGet(tailPageAddr, out _));
+            Assert.Equal(FaultResult.Handled, mm.HandleFaultDetailed(tailPageAddr, false, engine));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Hostfs_ReadOnlyTailPage_ExplicitTruncate_InvalidatesPageAndRefaultsZeroTail()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"hostfs-tail-explicit-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "tail.bin");
+        File.WriteAllBytes(hostFile, CreateFilledBuffer(LinuxConstants.PageSize + 123, (byte)'u'));
+
+        try
+        {
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/tail.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+            const uint mapAddr = 0x47480000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize * 2, Protection.Read, MapFlags.Shared | MapFlags.Fixed, file, 0,
+                "MAP_SHARED_TAIL_EXPLICIT_RO", engine);
+
+            var tailPageAddr = mapAddr + LinuxConstants.PageSize;
+            Assert.True(mm.HandleFault(tailPageAddr, false, engine));
+
+            var hostInode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
+            Assert.Equal(1, hostInode.GetMappedPageCacheDiagnostics().GuestPageCount);
+            Assert.True(mm.PageMapping.TryGet(tailPageAddr, out _));
+
+            Assert.Equal(0,
+                loc.Dentry!.Inode!.Truncate(LinuxConstants.PageSize + 17, new FileMutationContext(mm, engine)));
+
+            Assert.Equal(0, hostInode.GetMappedPageCacheDiagnostics().GuestPageCount);
+            Assert.False(mm.PageMapping.TryGet(tailPageAddr, out _));
+            Assert.Equal(FaultResult.Handled, mm.HandleFaultDetailed(tailPageAddr, false, engine));
+
+            var prefix = new byte[1];
+            var tail = new byte[32];
+            Assert.True(engine.CopyFromUser(tailPageAddr, prefix));
+            Assert.True(engine.CopyFromUser(tailPageAddr + 17, tail));
+            Assert.Equal((byte)'u', prefix[0]);
+            Assert.All(tail, b => Assert.Equal((byte)0, b));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Hostfs_ExternalShrink_PageWhollyBeyondNewEof_FaultsAsBusError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"hostfs-beyond-eof-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllBytes(hostFile, CreateFilledBuffer(LinuxConstants.PageSize * 2, (byte)'b'));
+
+        try
+        {
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+
+            var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+            const uint mapAddr = 0x47500000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize * 2, Protection.Read, MapFlags.Shared | MapFlags.Fixed, file, 0,
+                "MAP_SHARED_SHRINK", engine);
+
+            var secondPageAddr = mapAddr + LinuxConstants.PageSize;
+            Assert.True(mm.HandleFault(secondPageAddr, false, engine));
+            Assert.True(mm.PageMapping.TryGet(secondPageAddr, out _));
+
+            using (var handle = File.OpenHandle(hostFile, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+                RandomAccess.SetLength(handle, 123);
+
+            using (var reopen = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!))
+                loc.Dentry!.Inode!.Open(reopen);
+
+            Assert.False(mm.PageMapping.TryGet(secondPageAddr, out _));
+            Assert.Equal(FaultResult.BusError, mm.HandleFaultDetailed(secondPageAddr, false, engine));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    private static byte[] CreateFilledBuffer(int length, byte value)
+    {
+        var buffer = new byte[length];
+        Array.Fill(buffer, value);
+        return buffer;
+    }
+
     private static SyscallManager CreateTmpfsRoot(Engine engine, VMAManager mm)
     {
         var sm = new SyscallManager(engine, mm, 0);

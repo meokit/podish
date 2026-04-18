@@ -1,3 +1,4 @@
+using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.SilkFS;
@@ -1257,12 +1258,12 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         }
     }
 
-    public override int Truncate(long size)
+    protected override int TruncateCore(long size)
     {
         int rc;
         if (Type == InodeType.Symlink)
         {
-            rc = base.Truncate(size);
+            rc = base.TruncateCore(size);
             if (rc == 0)
                 PersistSymlinkData();
             return rc;
@@ -1270,20 +1271,11 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
 
         if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
         if (size < 0) return -(int)Errno.EINVAL;
+        var oldSize = (long)Size;
 
         using (var handle = _repository.OpenLiveInodeHandle((long)Ino, FileMode.OpenOrCreate, FileAccess.ReadWrite))
         {
             RandomAccess.SetLength(handle, size);
-        }
-
-        if (Mapping != null)
-        {
-            Mapping.TruncateToSize(size);
-            var firstDroppedPage = (size + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
-            lock (_dirtyPageLock)
-            {
-                _dirtyPageIndexes.RemoveWhere(i => i >= firstDroppedPage);
-            }
         }
 
         Size = (ulong)size;
@@ -1292,15 +1284,28 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         rc = 0;
         if (rc == 0)
         {
-            lock (_mappedCacheLock)
-            {
-                _mappedPageCache?.Truncate(size);
-            }
-
             MarkMetadataDirty();
         }
 
         return rc;
+    }
+
+    protected override void RetireHostMappedWindowsBeforeFileShrink(long newSize)
+    {
+        lock (_mappedCacheLock)
+        {
+            _mappedPageCache?.Truncate(newSize);
+        }
+    }
+
+    protected override void OnFileShrinkReconciled(long previousSize, long newSize)
+    {
+        _ = previousSize;
+        var firstDroppedPage = (newSize + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
+        lock (_dirtyPageLock)
+        {
+            _dirtyPageIndexes.RemoveWhere(i => i >= firstDroppedPage);
+        }
     }
 
     public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,

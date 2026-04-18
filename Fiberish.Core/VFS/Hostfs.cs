@@ -1397,6 +1397,12 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         set => base.Size = value;
     }
 
+    protected override long CachedSizeForShrinkCoordinator
+    {
+        get => checked((long)base.Size);
+        set => base.Size = (ulong)value;
+    }
+
     public override DateTime MTime
     {
         get
@@ -2113,24 +2119,16 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (!TryGetBackingFileLength(out var hostLength))
             return;
 
-        var cachedLength = base.Size;
-        if (cachedLength == hostLength && Mapping == null)
-            return;
-
-        if (Mapping != null)
+        if (Mapping is { PageCount: > 0 })
         {
-            // Only evict clean pages that are no longer mapped/pinned. Removing live
-            // direct-mapped pages can leave host backing ownership behind and break the
-            // next fault on the same host page.
-            foreach (var state in Mapping.SnapshotPageStates())
-            {
-                if (!state.Dirty)
-                    Mapping.TryEvictCleanPage(state.PageIndex);
-            }
-            Mapping.TruncateToSize((long)hostLength);
+            // Hostfs backing can change outside the guest between close/reopen cycles. Drop clean file-cache
+            // pages and guest mappings so the next access refaults from the current host contents instead of
+            // reusing stale zero-filled tail pages.
+            UnmapMappingRange(0, long.MaxValue, true);
+            InvalidateInodePages2Range(0, uint.MaxValue);
         }
 
-        base.Size = hostLength;
+        ObserveBackingSizeChange((long)hostLength, default);
     }
 
     public override void Release(LinuxFile linuxFile)
@@ -2564,28 +2562,36 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
     public override int Truncate(long size)
     {
+        return TruncateCore(size);
+    }
+
+    private int TruncateCore(long size)
+    {
         if (size < 0) return -(int)Errno.EINVAL;
         using var handle = File.OpenHandle(ResolveHostPath(), FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
         RandomAccess.SetLength(handle, size);
-        lock (_mappedCacheLock)
-        {
-            _mappedPageCache?.Truncate(size);
-        }
-
-        if (Mapping != null)
-        {
-            Mapping.TruncateToSize(size);
-            var firstDroppedPage = (size + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
-            lock (_dirtyPageLock)
-            {
-                _dirtyPageIndexes.RemoveWhere(i => i >= firstDroppedPage);
-            }
-        }
-
         Size = (ulong)size;
         MTime = DateTime.Now;
         CTime = MTime;
         return 0;
+    }
+
+    protected override void RetireHostMappedWindowsBeforeFileShrink(long newSize)
+    {
+        lock (_mappedCacheLock)
+        {
+            _mappedPageCache?.Truncate(newSize);
+        }
+    }
+
+    protected override void OnFileShrinkReconciled(long previousSize, long newSize)
+    {
+        _ = previousSize;
+        var firstDroppedPage = (newSize + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
+        lock (_dirtyPageLock)
+        {
+            _dirtyPageIndexes.RemoveWhere(i => i >= firstDroppedPage);
+        }
     }
 
     public override bool TryAcquireMappedPageHandle(LinuxFile? linuxFile, long pageIndex, long absoluteFileOffset,

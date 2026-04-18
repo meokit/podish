@@ -201,10 +201,7 @@ public partial class SyscallManager
         // TODO: Permission Check
 
         var inode = loc.Dentry.Inode;
-        var rc = inode.Truncate(length);
-        if (rc == 0)
-            ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, engine, inode, length);
-        return new ValueTask<int>(rc);
+        return new ValueTask<int>(inode.Truncate(length, sm.CreateFileMutationContext(engine)));
     }
 
     private async ValueTask<int> SysFtruncate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -217,10 +214,7 @@ public partial class SyscallManager
         if (f.OpenedInode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
         if ((f.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EINVAL;
 
-        var rc = f.OpenedInode.Truncate(length);
-        if (rc == 0)
-            ProcessAddressSpaceSync.NotifyInodeTruncated(Mem, engine, f.OpenedInode, length);
-        return rc;
+        return f.OpenedInode.Truncate(length, CreateFileMutationContext(engine));
     }
 
     private async ValueTask<int> SysFtruncate64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -234,10 +228,7 @@ public partial class SyscallManager
         if (f.OpenedInode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
         if ((f.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EINVAL;
 
-        var rc = f.OpenedInode.Truncate(length);
-        if (rc == 0)
-            ProcessAddressSpaceSync.NotifyInodeTruncated(Mem, engine, f.OpenedInode, length);
-        return rc;
+        return f.OpenedInode.Truncate(length, CreateFileMutationContext(engine));
     }
 
     private async ValueTask<int> SysFallocate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -277,10 +268,7 @@ public partial class SyscallManager
         if (endOffset <= (long)file.OpenedInode.Size)
             return 0;
 
-        var rc = file.OpenedInode.Truncate(endOffset);
-        if (rc == 0)
-            ProcessAddressSpaceSync.NotifyInodeTruncated(Mem, engine, file.OpenedInode, endOffset);
-        return rc;
+        return file.OpenedInode.Truncate(endOffset, CreateFileMutationContext(engine));
     }
 
     private async ValueTask<int> SysRmdir(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

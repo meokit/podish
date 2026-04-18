@@ -1,4 +1,5 @@
 using System.Text;
+using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 
@@ -776,10 +777,26 @@ public abstract class IndexedMemoryInode : MappingBackedInode
         return 0;
     }
 
+    protected override void OnFileShrinkReconciled(long previousSize, long newSize)
+    {
+        _ = previousSize;
+        var firstDroppedPage = (newSize + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
+        lock (Lock)
+        {
+            DirtyPageIndexes.RemoveWhere(i => i >= firstDroppedPage);
+        }
+    }
+
     public override int Truncate(long size)
+    {
+        return TruncateCore(size);
+    }
+
+    protected virtual int TruncateCore(long size)
     {
         if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
         if (size < 0) return -(int)Errno.EINVAL;
+        var now = DateTime.Now;
 
         lock (Lock)
         {
@@ -787,20 +804,13 @@ public abstract class IndexedMemoryInode : MappingBackedInode
             {
                 Array.Resize(ref SymlinkData, (int)size);
                 Size = (ulong)size;
-                MTime = DateTime.Now;
+                MTime = now;
                 CTime = MTime;
                 return 0;
             }
 
-            if (Mapping != null)
-            {
-                Mapping.TruncateToSize(size);
-                var firstDroppedPage = (size + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
-                DirtyPageIndexes.RemoveWhere(i => i >= firstDroppedPage);
-            }
-
             Size = (ulong)size;
-            MTime = DateTime.Now;
+            MTime = now;
             CTime = MTime;
         }
 

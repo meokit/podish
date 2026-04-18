@@ -33,6 +33,12 @@ internal interface IDispatcherEdgeWaitSource
         short events);
 }
 
+public readonly record struct FileMutationContext(VMAManager? AddressSpace = null, Engine? Engine = null,
+    Core.Process? Process = null)
+{
+    public bool HasLiveAddressSpace => AddressSpace != null && Engine != null;
+}
+
 internal readonly struct QueueReadinessWatch
 {
     private readonly bool _isReadySnapshot;
@@ -1127,6 +1133,17 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
         return -(int)Errno.ENOSYS;
     }
 
+    public int Truncate(long length, in FileMutationContext context)
+    {
+        return TruncateWithContextCore(length, context);
+    }
+
+    protected internal virtual int TruncateWithContextCore(long length, in FileMutationContext context)
+    {
+        _ = context;
+        return Truncate(length);
+    }
+
     public virtual int Mkdir(Dentry dentry, int mode, int uid, int gid)
     {
         return -(int)Errno.EOPNOTSUPP;
@@ -1709,6 +1726,12 @@ public abstract class MappingBackedInode : Inode
         _ => null
     };
 
+    protected virtual long CachedSizeForShrinkCoordinator
+    {
+        get => checked((long)Size);
+        set => Size = (ulong)value;
+    }
+
     public override int WritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer,
         bool sync)
     {
@@ -1781,6 +1804,44 @@ public abstract class MappingBackedInode : Inode
         return mapping;
     }
 
+    protected internal override int TruncateWithContextCore(long length, in FileMutationContext context)
+    {
+        var previousSize = CachedSizeForShrinkCoordinator;
+        var rc = Truncate(length);
+        if (rc == 0)
+            FinalizeExplicitSizeChange(previousSize, length, context);
+        return rc;
+    }
+
+    protected void FinalizeExplicitSizeChange(long previousSize, long newSize, in FileMutationContext context)
+    {
+        if (newSize < 0)
+            newSize = 0;
+
+        if (newSize < previousSize)
+        {
+            ReconcileShrink(previousSize, newSize, context);
+            return;
+        }
+
+        CachedSizeForShrinkCoordinator = newSize;
+    }
+
+    internal void ObserveBackingSizeChange(long newSize, in FileMutationContext context)
+    {
+        if (newSize < 0)
+            newSize = 0;
+
+        var previousCachedSize = CachedSizeForShrinkCoordinator;
+        if (newSize < previousCachedSize)
+        {
+            ReconcileShrink(previousCachedSize, newSize, context);
+            return;
+        }
+
+        CachedSizeForShrinkCoordinator = newSize;
+    }
+
     private void ReleaseMappingOwnerRef()
     {
         AddressSpace? mapping;
@@ -1791,6 +1852,49 @@ public abstract class MappingBackedInode : Inode
         }
 
         mapping?.Release();
+    }
+
+    protected virtual void RetireHostMappedWindowsBeforeFileShrink(long newSize)
+    {
+        _ = newSize;
+    }
+
+    protected virtual void RetireResidentHostMappedTailPageBeforeFileShrink(long newSize)
+    {
+        if (newSize <= 0)
+            return;
+
+        var tailBytes = (int)(newSize % LinuxConstants.PageSize);
+        if (tailBytes == 0)
+            return;
+
+        var keepPageIndex = (uint)(newSize / LinuxConstants.PageSize);
+        if (!TryGetMappingPageRecord(keepPageIndex, out var record) ||
+            record.BackingKind != FilePageBackingKind.HostMappedWindow)
+            return;
+
+        var removedResidentPages = Mapping?.RemovePagesInRange(keepPageIndex, keepPageIndex + 1) ?? 0;
+        if (removedResidentPages > 0 && !TryGetMappingPageRecord(keepPageIndex, out _))
+            return;
+
+        if (removedResidentPages == 0 || TryGetMappingPageRecord(keepPageIndex, out record))
+            ReleaseInstalledMappingPage(record);
+    }
+
+    protected virtual void OnFileShrinkReconciled(long previousSize, long newSize)
+    {
+        _ = previousSize;
+        _ = newSize;
+    }
+
+    private void ReconcileShrink(long previousSize, long newSize, in FileMutationContext context)
+    {
+        CachedSizeForShrinkCoordinator = newSize;
+        RetireHostMappedWindowsBeforeFileShrink(newSize);
+        ProcessAddressSpaceSync.NotifyInodeTruncated(this, newSize, context);
+        RetireResidentHostMappedTailPageBeforeFileShrink(newSize);
+        Mapping?.TruncateToSize(newSize);
+        OnFileShrinkReconciled(previousSize, newSize);
     }
 
     internal virtual void OnMappingPageReleased(uint pageIndex, InodePageRecord record)

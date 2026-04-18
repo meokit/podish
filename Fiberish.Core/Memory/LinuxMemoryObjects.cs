@@ -431,6 +431,11 @@ public sealed class AnonVma
         Pages.TruncateToSize(size);
     }
 
+    internal void TruncateFilePrivatePagesToSize(long size)
+    {
+        Pages.TruncateToSize(size);
+    }
+
     internal void AddRmapAttachment(VMAManager mm, VmArea vma, uint startPageIndex, uint endPageIndexExclusive,
         TbCohWorkSet? tbCohWorkSet = null)
     {

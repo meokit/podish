@@ -807,6 +807,179 @@ public class HostfsPageCacheWritebackTests
     }
 
     [Fact]
+    public void Reopen_MustInvalidateCleanMappedTailPageAfterShrinkAndHostRegrow()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-reopen-tail-refresh-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        var initial = new byte[LinuxConstants.PageSize + 123];
+        Array.Fill(initial, (byte)'x');
+        File.WriteAllBytes(hostFile, initial);
+
+        try
+        {
+            var runtime = new TestRuntimeFactory(BufferedOnlyGeometry);
+            using var engine = runtime.CreateEngine();
+            var mm = runtime.CreateAddressSpace();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+
+            using var mappedFile = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+            const uint mapAddr = 0x47600000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize * 2, Protection.Read,
+                MapFlags.Private | MapFlags.Fixed, mappedFile, 0, "MAP_PRIVATE_TAIL_REOPEN", engine);
+
+            var tailPageAddr = mapAddr + LinuxConstants.PageSize;
+            Assert.Equal(FaultResult.Handled, mm.HandleFaultDetailed(tailPageAddr, false, engine));
+            Assert.True(mm.PageMapping.TryGet(tailPageAddr, out _));
+
+            var inode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
+            var initialTail = new byte[32];
+            Assert.True(engine.CopyFromUser(tailPageAddr + 17, initialTail));
+            Assert.All(initialTail, b => Assert.Equal((byte)'x', b));
+
+            Assert.Equal(0, inode.Truncate(LinuxConstants.PageSize + 17, new FileMutationContext(mm, engine)));
+            Assert.True(mm.PageMapping.TryGet(tailPageAddr, out _));
+
+            var zeroTail = new byte[32];
+            Assert.True(engine.CopyFromUser(tailPageAddr + 17, zeroTail));
+            Assert.All(zeroTail, b => Assert.Equal((byte)0, b));
+
+            var regrown = new byte[LinuxConstants.PageSize + 123];
+            Array.Fill(regrown, (byte)'y');
+            File.WriteAllBytes(hostFile, regrown);
+
+            using var reopen = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+            Assert.False(mm.PageMapping.TryGet(tailPageAddr, out _));
+            Assert.Equal(FaultResult.Handled, mm.HandleFaultDetailed(tailPageAddr, false, engine));
+
+            var refreshedTail = new byte[32];
+            Assert.True(engine.CopyFromUser(tailPageAddr + 17, refreshedTail));
+            Assert.All(refreshedTail, b => Assert.Equal((byte)'y', b));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Reopen_RepeatedTailShrinkRegrowCycles_MustNotAccumulateHostMappedWindows()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-reopen-tail-pressure-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        WriteFilledFile(hostFile, LinuxConstants.PageSize + 123, (byte)'a');
+
+        try
+        {
+            var runtime = new TestRuntimeFactory();
+            using var engine = runtime.CreateEngine();
+            var mm = runtime.CreateAddressSpace();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+
+            var inode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
+            const uint mapAddr = 0x47640000;
+            const int iterations = 64;
+
+            for (var i = 0; i < iterations; i++)
+            {
+                var fill = (byte)('a' + (i % 26));
+                WriteFilledFile(hostFile, LinuxConstants.PageSize + 123, fill);
+
+                var mappedFile = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+                mm.Mmap(mapAddr, LinuxConstants.PageSize * 2, Protection.Read,
+                    MapFlags.Private | MapFlags.Fixed, mappedFile, 0, "MAP_PRIVATE_TAIL_PRESSURE", engine);
+
+                var tailPageAddr = mapAddr + LinuxConstants.PageSize;
+                Assert.Equal(FaultResult.Handled, mm.HandleFaultDetailed(tailPageAddr, false, engine));
+                Assert.True(mm.PageMapping.TryGet(tailPageAddr, out _));
+
+                Assert.Equal(0, inode.Truncate(LinuxConstants.PageSize + 17, new FileMutationContext(mm, engine)));
+                mm.Munmap(mapAddr, LinuxConstants.PageSize * 2, engine);
+
+                WriteFilledFile(hostFile, LinuxConstants.PageSize + 123, (byte)(fill + 1));
+
+                using var reopen = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+
+                var diagnostics = inode.GetMappedPageCacheDiagnostics();
+                Assert.Equal(0, diagnostics.WindowCount);
+                Assert.Equal(0, diagnostics.WindowBytes);
+                Assert.Equal(0, diagnostics.GuestPageCount);
+
+                var memoryStats = sm.MemoryContext.CaptureMemoryStats(sm);
+                Assert.Equal(0, memoryStats.HostMappedWindowCount);
+                Assert.Equal(0, memoryStats.HostMappedWindowBytes);
+                Assert.Equal(0, memoryStats.HostMappedGuestPageCount);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Reopen_TailShrinkRegrowCycle_MustReleasePageCacheHostRefs()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-reopen-tail-hostrefs-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        WriteFilledFile(hostFile, LinuxConstants.PageSize + 123, (byte)'m');
+
+        try
+        {
+            var runtime = new TestRuntimeFactory();
+            using var engine = runtime.CreateEngine();
+            var mm = runtime.CreateAddressSpace();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+
+            var inode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
+            const uint mapAddr = 0x47680000;
+            var mappedFile = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+            mm.Mmap(mapAddr, LinuxConstants.PageSize * 2, Protection.Read,
+                MapFlags.Private | MapFlags.Fixed, mappedFile, 0, "MAP_PRIVATE_TAIL_HOSTREFS", engine);
+
+            var tailPageAddr = mapAddr + LinuxConstants.PageSize;
+            Assert.Equal(FaultResult.Handled, mm.HandleFaultDetailed(tailPageAddr, false, engine));
+            Assert.True(mm.PageMapping.TryGet(tailPageAddr, out _));
+
+            var warmStats = runtime.MemoryContext.CaptureHostPageRefStats().PageCache;
+            Assert.True(warmStats.PageCount > 0);
+            Assert.True(warmStats.TotalRefCount > 0);
+
+            Assert.Equal(0, inode.Truncate(LinuxConstants.PageSize + 17, new FileMutationContext(mm, engine)));
+            mm.Munmap(mapAddr, LinuxConstants.PageSize * 2, engine);
+            WriteFilledFile(hostFile, LinuxConstants.PageSize + 123, (byte)'n');
+
+            using var reopen = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+
+            AssertNoPageCacheHostRefs(runtime.MemoryContext);
+            Assert.Equal(0, inode.GetMappedPageCacheDiagnostics().GuestPageCount);
+            Assert.Equal(0, inode.GetMappedPageCacheDiagnostics().WindowCount);
+            Assert.Equal(0, sm.MemoryContext.CaptureMemoryStats(sm).HostMappedWindowCount);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void DirtyLogicalSize_Size_MustExposeGuestLengthBeforeFlush()
     {
         var root = Path.Combine(Path.GetTempPath(), "hostfs-dirty-size-" + Guid.NewGuid().ToString("N"));
@@ -1054,6 +1227,25 @@ public class HostfsPageCacheWritebackTests
         var file = new LinuxFile(dentry!, FileFlags.O_RDWR, null!);
         dentry!.Inode!.Open(file);
         return file;
+    }
+
+    private static void WriteFilledFile(string path, int length, byte fill)
+    {
+        var content = new byte[length];
+        Array.Fill(content, fill);
+        File.WriteAllBytes(path, content);
+    }
+
+    private static void AssertNoPageCacheHostRefs(MemoryRuntimeContext memoryContext)
+    {
+        var stats = memoryContext.CaptureHostPageRefStats().PageCache;
+        Assert.Equal(0, stats.PageCount);
+        Assert.Equal(0, stats.OwnerResidentRefCount);
+        Assert.Equal(0, stats.MapRefCount);
+        Assert.Equal(0, stats.PinRefCount);
+        Assert.Equal(0, stats.TotalRefCount);
+        Assert.Equal(0, stats.OwnerRootPageCount);
+        Assert.Equal(0, stats.BackedPageCount);
     }
 
     private static async ValueTask<int> CallSys(SyscallManager sm, Engine engine, string methodName, uint a1 = 0,

@@ -192,6 +192,16 @@ public partial class SyscallManager
     public PathLocation Root => _sharedFsState.Root;
     public PathLocation CurrentWorkingDirectory => _sharedFsState.CurrentWorkingDirectory;
 
+    internal FileMutationContext CreateFileMutationContext(Engine? engine = null, Process? process = null)
+    {
+        var activeEngine = engine ?? CurrentSyscallEngine;
+        if (activeEngine == null)
+            return default;
+
+        var activeProcess = process ?? (activeEngine.Owner as FiberTask)?.Process;
+        return new FileMutationContext(Mem, activeEngine, activeProcess);
+    }
+
     // For chroot tracking, we keep a PathLocation to the process root.
     public PathLocation ProcessRoot => _sharedFsState.ProcessRoot;
     public Dentry DevShmRoot { get; set; } = null!;
@@ -722,6 +732,23 @@ public partial class SyscallManager
         return detachedMount;
     }
 
+    private void RewriteFileFromStart(LinuxFile file, ReadOnlySpan<byte> content, string targetDescription)
+    {
+        var truncateRc = file.OpenedInode!.Truncate(0, CreateFileMutationContext());
+        if (truncateRc < 0)
+            throw new IOException($"Failed to truncate {targetDescription}: rc={truncateRc}");
+
+        if (content.IsEmpty)
+            return;
+
+        var writeRc = file.OpenedInode.WriteFromHost(null, file, content, 0);
+        if (writeRc < 0)
+            throw new IOException($"Failed to write {targetDescription}: rc={writeRc}");
+        if (writeRc != content.Length)
+            throw new IOException(
+                $"Short write while writing {targetDescription}: expected={content.Length} actual={writeRc}");
+    }
+
     public void WriteFileInDetachedMount(Mount sourceMount, string relativePath, ReadOnlySpan<byte> content,
         int mode = 0x1A4)
     {
@@ -743,19 +770,7 @@ public partial class SyscallManager
         var file = new LinuxFile(loc.Dentry, FileFlags.O_WRONLY, sourceMount);
         try
         {
-            var truncateRc = file.OpenedInode!.Truncate(0);
-            if (truncateRc < 0)
-                throw new IOException($"Failed to truncate detached mount file {relativePath}: rc={truncateRc}");
-
-            if (!content.IsEmpty)
-            {
-                var writeRc = file.OpenedInode.WriteFromHost(null, file, content, 0);
-                if (writeRc < 0)
-                    throw new IOException($"Failed to write detached mount file {relativePath}: rc={writeRc}");
-                if (writeRc != content.Length)
-                    throw new IOException(
-                        $"Short write while writing detached mount file {relativePath}: expected={content.Length} actual={writeRc}");
-            }
+            RewriteFileFromStart(file, content, $"detached mount file {relativePath}");
         }
         finally
         {
@@ -766,8 +781,10 @@ public partial class SyscallManager
     public void BindMountSubtree(Mount sourceMount, string relativePath, string guestPath, bool readOnly = false)
     {
         relativePath = relativePath.Trim('/');
-        var srcLoc = PathWalkWithFlags(relativePath, new PathLocation(sourceMount.Root, sourceMount),
-            LookupFlags.FollowSymlink);
+        var srcLoc = string.IsNullOrEmpty(relativePath)
+            ? new PathLocation(sourceMount.Root, sourceMount)
+            : PathWalkWithFlags(relativePath, new PathLocation(sourceMount.Root, sourceMount),
+                LookupFlags.FollowSymlink);
         if (!srcLoc.IsValid || srcLoc.Dentry?.Inode == null)
             throw new FileNotFoundException("Detached mount source path not found", relativePath);
 
@@ -821,19 +838,7 @@ public partial class SyscallManager
         var file = new LinuxFile(loc.Dentry, FileFlags.O_WRONLY, loc.Mount);
         try
         {
-            var truncateRc = file.OpenedInode!.Truncate(0);
-            if (truncateRc < 0)
-                throw new IOException($"Failed to truncate guest file {guestPath}: rc={truncateRc}");
-
-            if (!content.IsEmpty)
-            {
-                var writeRc = file.OpenedInode.WriteFromHost(null, file, content, 0);
-                if (writeRc < 0)
-                    throw new IOException($"Failed to write guest file {guestPath}: rc={writeRc}");
-                if (writeRc != content.Length)
-                    throw new IOException(
-                        $"Short write while writing guest file {guestPath}: expected={content.Length} actual={writeRc}");
-            }
+            RewriteFileFromStart(file, content, $"guest file {guestPath}");
         }
         finally
         {

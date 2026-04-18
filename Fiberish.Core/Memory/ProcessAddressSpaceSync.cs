@@ -403,23 +403,41 @@ internal static class ProcessAddressSpaceSync
         }
     }
 
-    internal static void NotifyInodeTruncated(VMAManager vmaManager, Engine engine, Inode inode, long newSize,
-        Process? process = null)
+    internal static void NotifyInodeTruncated(Inode inode, long newSize)
     {
-        using var scope = EnterAddressSpaceScope(engine, process);
+        NotifyInodeTruncated(inode, newSize, default);
+    }
+
+    internal static void NotifyInodeTruncated(Inode inode, long newSize, in FileMutationContext context)
+    {
+        if (context.HasLiveAddressSpace)
+        {
+            using var scope = EnterAddressSpaceScope(context.Engine!, context.Process);
+            NotifyInodeTruncatedCore(inode, newSize, context.AddressSpace, context.Engine);
+            return;
+        }
+
+        NotifyInodeTruncatedCore(inode, newSize, null, null);
+    }
+
+    private static void NotifyInodeTruncatedCore(Inode inode, long newSize, VMAManager? fallbackAddressSpace,
+        Engine? fallbackEngine)
+    {
         var targets = inode.SnapshotMappedAddressSpaces();
         if (targets.Length == 0)
         {
+            if (fallbackAddressSpace == null || fallbackEngine == null)
+                return;
             using var snapshot = RentEngineSnapshot();
-            FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
-            if (snapshot.Engines.Count == 0) snapshot.Engines.Add(engine);
-            vmaManager.OnFileTruncate(inode, newSize, snapshot.Engines);
+            FillAddressSpaceEngineSnapshot(fallbackAddressSpace, snapshot.Engines, snapshot.SeenStates, fallbackEngine);
+            if (snapshot.Engines.Count == 0) snapshot.Engines.Add(fallbackEngine);
+            fallbackAddressSpace.OnFileTruncate(inode, newSize, snapshot.Engines);
             return;
         }
 
         foreach (var target in targets)
         {
-            var fallback = ReferenceEquals(target, vmaManager) ? engine : null;
+            var fallback = ReferenceEquals(target, fallbackAddressSpace) ? fallbackEngine : null;
             using var snapshot = RentEngineSnapshot();
             FillAddressSpaceEngineSnapshot(target, snapshot.Engines, snapshot.SeenStates, fallback);
             target.OnFileTruncate(inode, newSize, snapshot.Engines.Count == 0 ? [] : snapshot.Engines);

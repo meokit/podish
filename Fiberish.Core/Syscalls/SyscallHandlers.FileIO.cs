@@ -349,7 +349,7 @@ public partial class SyscallManager
     private static int ImplOpen(SyscallManager sm, byte[] pathBytes, int pathLength, uint flags, uint mode,
         PathLocation startLoc = default)
     {
-        Logger.LogInformation("[Open] Path='{Path}' Flags={Flags} Mode={Mode}",
+        Logger.LogTrace("[Open] Path='{Path}' Flags={Flags} Mode={Mode}",
             FsEncoding.DecodeUtf8Lossy(pathBytes.AsSpan(0, pathLength)), flags, mode);
         const uint O_TMPFILE_MASK = 0x400000;
         var createdHere = false;
@@ -536,9 +536,8 @@ public partial class SyscallManager
                 (flags & (uint)FileFlags.O_TRUNC) != 0 &&
                 dentry?.Inode?.Type == InodeType.File)
             {
-                var truncateRc = dentry.Inode.Truncate(0);
+                var truncateRc = dentry.Inode.Truncate(0, sm.CreateFileMutationContext(sm.CurrentSyscallEngine));
                 if (truncateRc < 0) return truncateRc;
-                ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, sm.CurrentSyscallEngine, dentry.Inode, 0);
                 flags &= ~(uint)FileFlags.O_TRUNC;
             }
 
@@ -699,6 +698,7 @@ public partial class SyscallManager
             return -(int)Errno.EINVAL;
 
         var writeStartOffset = offset == -1 ? f.Position : offset;
+        var sizeBeforeWrite = (long)f.OpenedInode.Size;
         var iovList = new ArraySegment<Iovec>(iovs, 0, iovCnt);
         var rc = await f.OpenedInode.WriteV(engine, f, task, iovList, offset, flags);
 
@@ -706,9 +706,10 @@ public partial class SyscallManager
         {
             ProcessAddressSpaceSync.NotifyFileContentChanged(sm.Mem, engine, inode, writeStartOffset, rc);
 
-            // Truncation check happens natively on writing but if we need ProcessAddressSpaceSync.NotifyInodeTruncated:
             var sizeAfterWrite = (long)inode.Size;
-            ProcessAddressSpaceSync.NotifyInodeTruncated(sm.Mem, engine, inode, sizeAfterWrite);
+            if (sizeAfterWrite < sizeBeforeWrite)
+                ProcessAddressSpaceSync.NotifyInodeTruncated(inode, sizeAfterWrite,
+                    sm.CreateFileMutationContext(engine));
         }
 
         return rc;

@@ -224,25 +224,39 @@ public class VMAManager
 
     private static Inode? ResolveMappedInode(VmArea vma)
     {
-        return vma.File?.OpenedInode;
+        return vma.LogicalInode;
     }
 
-    private static Inode? ResolveCurrentFileBacking(LinuxFile? file)
+    private static MappingBackedInode? ResolveInitialFileMappingBacking(LinuxFile? file)
     {
-        if (file?.OpenedInode is OverlayInode overlayInode)
-            return overlayInode.ResolveMmapSource(file) ?? file.OpenedInode;
-
-        return file?.OpenedInode;
+        return file?.OpenedInode switch
+        {
+            OverlayInode overlayInode => overlayInode.ResolveMmapSource(file) as MappingBackedInode ??
+                                         file.OpenedInode as MappingBackedInode,
+            MappingBackedInode mappingBackedInode => mappingBackedInode,
+            _ => null
+        };
     }
 
-    private static MappingBackedInode? ResolveCurrentFileMappingBacking(LinuxFile? file)
+    private static MappingBackedInode? ResolveCurrentFileMappingBacking(VmaFileMapping? fileMapping)
     {
-        return ResolveCurrentFileBacking(file) as MappingBackedInode;
+        if (fileMapping == null)
+            return null;
+
+        if (fileMapping.LogicalInode is OverlayInode overlayInode)
+        {
+            var backingInode = overlayInode.ResolveMmapSource(fileMapping.File) as MappingBackedInode ??
+                               fileMapping.BackingInode;
+            fileMapping.SetBackingInode(backingInode);
+            return backingInode;
+        }
+
+        return fileMapping.BackingInode;
     }
 
     private bool SyncFileBackedVmaMapping(VmArea vma, Engine engine)
     {
-        var backingInode = ResolveCurrentFileMappingBacking(vma.File);
+        var backingInode = ResolveCurrentFileMappingBacking(vma.FileMapping);
         if (backingInode == null)
             return false;
 
@@ -541,7 +555,7 @@ public class VMAManager
         if ((vma.Flags & MapFlags.Shared) == 0)
             return;
 
-        if (vma.File?.OpenedInode != null)
+        if (vma.LogicalInode != null)
             return;
 
         VfsDebugTrace.FailInvariant(
@@ -860,25 +874,38 @@ public class VMAManager
         }
     }
 
-    private List<NativeRange> ApplyFileTruncateMetadata(Inode inode, long newSize)
+    private readonly record struct FileTruncateMetadata(List<NativeRange> Ranges, List<AnonVma> PrivateObjects);
+
+    private FileTruncateMetadata CollectFileTruncateMetadata(Inode inode, long newSize)
     {
         if (newSize < 0) newSize = 0;
 
         var ranges = new List<NativeRange>();
-        var touchedVmMappings = new HashSet<AddressSpace>();
         var touchedVmAnonVmas = new HashSet<AnonVma>();
         foreach (var vma in _vmas)
         {
-            if (!ReferenceEquals(vma.File?.OpenedInode, inode)) continue;
+            if (!ReferenceEquals(vma.LogicalInode, inode)) continue;
 
             var validBytes = newSize > vma.Offset ? newSize - vma.Offset : 0;
             if (validBytes > vma.Length) validBytes = vma.Length;
-            if (TryGetVmMapping(vma, out var mapping))
-                touchedVmMappings.Add(mapping);
+
+            if (validBytes >= vma.Length) continue;
             if (vma.VmAnonVma != null)
                 touchedVmAnonVmas.Add(vma.VmAnonVma);
 
-            if (validBytes >= vma.Length) continue;
+            if (validBytes > 0 &&
+                (validBytes & LinuxConstants.PageOffsetMask) != 0 &&
+                ResolveCurrentFileMappingBacking(vma.FileMapping) is { } mappingInode)
+            {
+                var tailPageStart = vma.Start + (uint)(validBytes / LinuxConstants.PageSize * LinuxConstants.PageSize);
+                var tailPageIndex = vma.GetPageIndex(tailPageStart);
+                var needsTailInvalidation = !IsPrivateVma(vma) ||
+                                            (vma.VmAnonVma?.PeekPage(tailPageIndex) ?? IntPtr.Zero) == IntPtr.Zero;
+                if (needsTailInvalidation &&
+                    mappingInode.TryGetMappingPageRecord(tailPageIndex, out var tailRecord) &&
+                    tailRecord.BackingKind == FilePageBackingKind.HostMappedWindow)
+                    ranges.Add(new NativeRange(tailPageStart, LinuxConstants.PageSize));
+            }
 
             var tearDownFrom = validBytes <= 0
                 ? vma.Start
@@ -888,13 +915,8 @@ public class VMAManager
                 ranges.Add(new NativeRange(tearDownFrom, vma.End - tearDownFrom));
         }
 
-        foreach (var sharedObject in touchedVmMappings)
-            sharedObject.TruncateToSize(newSize);
-        foreach (var privateObject in touchedVmAnonVmas)
-            privateObject.TruncateToSize(newSize);
-
         MergeRangesInPlace(ranges);
-        return ranges;
+        return new FileTruncateMetadata(ranges, [.. touchedVmAnonVmas]);
     }
 
     private List<NativeRange> CollectExecutableFileContentRanges(Inode inode, long start, long len)
@@ -915,7 +937,7 @@ public class VMAManager
         foreach (var vma in _vmas)
         {
             if ((vma.Perms & Protection.Exec) == 0) continue;
-            if (!ReferenceEquals(ResolveCurrentFileBacking(vma.File), inode)) continue;
+            if (!ReferenceEquals(vma.LogicalInode, inode)) continue;
 
             var mappingStart = vma.Offset;
             long mappingEnd;
@@ -969,9 +991,15 @@ public class VMAManager
 
     public void OnFileTruncate(Inode inode, long newSize, IReadOnlyList<Engine> engines)
     {
-        var ranges = ApplyFileTruncateMetadata(inode, newSize);
+        var metadata = CollectFileTruncateMetadata(inode, newSize);
+        var ranges = metadata.Ranges;
+
         if (ranges.Count == 0)
+        {
+            foreach (var privateObject in metadata.PrivateObjects)
+                privateObject.TruncateFilePrivatePagesToSize(newSize);
             return;
+        }
 
         var sequence = BumpCodeCacheSequence();
         foreach (var range in ranges)
@@ -979,26 +1007,29 @@ public class VMAManager
 
         if (engines.Count == 0)
         {
+            RecordPendingMetadataOnlyNativeRemaps(ranges);
+        }
+        else
+        {
+            var primary = GetPrimarySharedMmuEngine(engines, nameof(OnFileTruncate))!;
+
             foreach (var range in ranges)
-                AssertExternalPagesReleasedForRange(range.Start, range.Length, "OnFileTruncate.no-engines");
-            return;
+                TearDownNativeMappings(
+                    primary,
+                    range.Start,
+                    range.Length,
+                    false,
+                    true,
+                    true);
+
+            primary.AddressSpaceCodeCacheSequenceSeen = sequence;
+
+            foreach (var range in ranges)
+                AssertExternalPagesReleasedForRange(range.Start, range.Length, "OnFileTruncate");
         }
 
-        var primary = GetPrimarySharedMmuEngine(engines, nameof(OnFileTruncate))!;
-
-        foreach (var range in ranges)
-            TearDownNativeMappings(
-                primary,
-                range.Start,
-                range.Length,
-                false,
-                true,
-                true);
-
-        primary.AddressSpaceCodeCacheSequenceSeen = sequence;
-
-        foreach (var range in ranges)
-            AssertExternalPagesReleasedForRange(range.Start, range.Length, "OnFileTruncate");
+        foreach (var privateObject in metadata.PrivateObjects)
+            privateObject.TruncateFilePrivatePagesToSize(newSize);
     }
 
     public void UnmapMappingRange(Inode inode, long start, long len, bool evenCows, IReadOnlyList<Engine> engines)
@@ -1017,7 +1048,7 @@ public class VMAManager
         var ranges = new List<NativeRange>();
         foreach (var vma in _vmas)
         {
-            if (!ReferenceEquals(vma.File?.OpenedInode, inode)) continue;
+            if (!ReferenceEquals(vma.LogicalInode, inode)) continue;
             if (!evenCows && (vma.Flags & MapFlags.Private) != 0) continue;
 
             var mappingStart = vma.Offset;
@@ -1037,13 +1068,16 @@ public class VMAManager
         foreach (var range in ranges)
             RecordCodeCacheResetRange(sequence, range.Start, range.Length);
 
-        if (engines.Count > 0)
+        if (engines.Count == 0)
         {
-            var primary = GetPrimarySharedMmuEngine(engines, nameof(UnmapMappingRange))!;
-            foreach (var range in ranges)
-                TearDownNativeMappings(primary, range.Start, range.Length, false, true, true);
-            primary.AddressSpaceCodeCacheSequenceSeen = sequence;
+            RecordPendingMetadataOnlyNativeRemaps(ranges);
+            return;
         }
+
+        var primary = GetPrimarySharedMmuEngine(engines, nameof(UnmapMappingRange))!;
+        foreach (var range in ranges)
+            TearDownNativeMappings(primary, range.Start, range.Length, false, true, true);
+        primary.AddressSpaceCodeCacheSequenceSeen = sequence;
     }
 
     public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, LinuxFile? file, long offset,
@@ -1118,8 +1152,9 @@ public class VMAManager
                     // Linux models MAP_SHARED|MAP_ANONYMOUS with an internal shmem/tmpfs backing object.
                     anonymousSharedFile = MemoryContext.CreateSharedAnonymousMappingFile(len);
                     file = anonymousSharedFile;
-                    sharedObj = ResolveCurrentFileMappingBacking(file)!.AcquireMappingRef();
-                    fileMapping = new VmaFileMapping(file);
+                    var backingInode = ResolveInitialFileMappingBacking(file)!;
+                    sharedObj = backingInode.AcquireMappingRef();
+                    fileMapping = new VmaFileMapping(file, file.OpenedInode, backingInode);
                 }
                 else if (isPrivate)
                 {
@@ -1129,16 +1164,18 @@ public class VMAManager
             else if (isShared)
             {
                 // MAP_SHARED file: share the inode's global page cache
-                sharedObj = ResolveCurrentFileMappingBacking(file)!.AcquireMappingRef();
+                var backingInode = ResolveInitialFileMappingBacking(file)!;
+                sharedObj = backingInode.AcquireMappingRef();
                 vmPgoff = (ulong)(offset / LinuxConstants.PageSize);
-                fileMapping = new VmaFileMapping(file);
+                fileMapping = new VmaFileMapping(file, file.OpenedInode, backingInode);
             }
             else
             {
                 // MAP_PRIVATE file: clean reads come from inode mapping, private COW pages are created lazily.
-                sharedObj = ResolveCurrentFileMappingBacking(file)!.AcquireMappingRef();
+                var backingInode = ResolveInitialFileMappingBacking(file)!;
+                sharedObj = backingInode.AcquireMappingRef();
                 vmPgoff = (ulong)(offset / LinuxConstants.PageSize);
-                fileMapping = new VmaFileMapping(file);
+                fileMapping = new VmaFileMapping(file, file.OpenedInode, backingInode);
             }
 
             var vma = new VmArea
@@ -2171,14 +2208,14 @@ public class VMAManager
         if (vmaRelativeOffset >= vma.GetFileBackingLength())
             return FaultResult.BusError;
 
-        if (preferWritableMappedPage && vma.File?.OpenedInode is OverlayInode overlayInode)
+        if (preferWritableMappedPage && vma.LogicalInode is OverlayInode overlayInode)
         {
             var copyRc = overlayInode.CopyUp(null);
             if (copyRc < 0)
                 return FaultResult.Segv;
         }
 
-        var inode = ResolveCurrentFileMappingBacking(vma.File);
+        var inode = ResolveCurrentFileMappingBacking(vma.FileMapping);
         if (inode == null)
             return FaultResult.Segv;
 
@@ -2485,12 +2522,13 @@ public class VMAManager
 
         foreach (var vma in _vmas)
         {
-            if (!ReferenceEquals(vma.File?.OpenedInode, overlayInode))
+            if (!ReferenceEquals(vma.LogicalInode, overlayInode))
                 continue;
 
             var replacementMapping = replacementInode.AcquireMappingRef();
             if (ReferenceEquals(vma.VmMapping, replacementMapping))
             {
+                vma.FileMapping?.SetBackingInode(replacementInode);
                 replacementMapping.Release();
                 continue;
             }
@@ -2498,6 +2536,7 @@ public class VMAManager
             vma.VmMapping?.RemoveRmapAttachments(vma);
             vma.VmMapping?.Release();
             vma.VmMapping = replacementMapping;
+            vma.FileMapping?.SetBackingInode(replacementInode);
             RegisterVmAreaMappingAttachment(vma);
             invalidatedRanges.Add(new NativeRange(vma.Start, vma.Length));
         }
@@ -2540,7 +2579,7 @@ public class VMAManager
 
     private static bool IsSharedFileVmArea(VmArea vma)
     {
-        return (vma.Flags & MapFlags.Shared) != 0 && vma.File?.OpenedInode != null;
+        return (vma.Flags & MapFlags.Shared) != 0 && vma.LogicalInode != null;
     }
 
     private static bool TryGetSharedFileVmAreaState(VmArea vma, out LinuxFile file, out MappingBackedInode inode,
@@ -2553,7 +2592,7 @@ public class VMAManager
             return false;
 
         file = vma.File!;
-        var mappedInode = file.OpenedInode as MappingBackedInode;
+        var mappedInode = ResolveCurrentFileMappingBacking(vma.FileMapping);
         if (mappedInode == null)
             return false;
         inode = mappedInode;
@@ -2566,9 +2605,9 @@ public class VMAManager
         var snapshot = _vmas.ToArray();
         foreach (var vma in snapshot)
         {
-            if (!TryGetSharedFileVmAreaState(vma, out _, out var openedInode, out _))
+            if (!TryGetSharedFileVmAreaState(vma, out _, out _, out _))
                 continue;
-            if (inode != null && !ReferenceEquals(openedInode, inode))
+            if (inode != null && !ReferenceEquals(vma.LogicalInode, inode))
                 continue;
             yield return vma;
         }
