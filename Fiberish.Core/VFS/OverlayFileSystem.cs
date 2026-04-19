@@ -588,9 +588,31 @@ public class OverlayInode : MappingBackedInode
 
         var refKind = GetBackingRefKind(linuxFile);
         backing.AcquireRef(refKind, reason);
-        VfsFileHolderTracking.Register(backing, linuxFile, reason);
-        backing.Open(linuxFile);
-        _openBackingByFile[linuxFile] = backing;
+        var holderRegistered = false;
+        try
+        {
+            VfsFileHolderTracking.Register(backing, linuxFile, reason);
+            holderRegistered = true;
+            backing.Open(linuxFile);
+            _openBackingByFile[linuxFile] = backing;
+        }
+        catch
+        {
+            try
+            {
+                backing.Release(linuxFile);
+            }
+            catch
+            {
+                // Preserve the original bind failure; cleanup is best-effort.
+            }
+
+            linuxFile.PrivateData = null;
+            if (holderRegistered)
+                VfsFileHolderTracking.Unregister(backing, linuxFile);
+            backing.ReleaseRef(refKind, $"{reason}.failed");
+            throw;
+        }
     }
 
     private void UnbindFileBacking(LinuxFile linuxFile, string reason)
@@ -729,10 +751,7 @@ public class OverlayInode : MappingBackedInode
                 {
                     LinuxFile? copyFile = null;
                     if (linuxFile == null && LowerDentry != null)
-                    {
                         copyFile = new LinuxFile(LowerDentry, FileFlags.O_RDONLY, null!);
-                        lowerInode.Open(copyFile);
-                    }
 
                     var buf = new byte[4096];
                     long pos = 0;

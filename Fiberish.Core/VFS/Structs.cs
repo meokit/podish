@@ -3017,10 +3017,37 @@ public class LinuxFile : IDisposable
         DebugOrigin = string.Empty;
 #endif
         Dentry.Get("LinuxFile.ctor");
-        VfsFileHolderTracking.Register(OpenedInode, this, $"LinuxFile.ctor/{referenceKind}");
         var refKind = referenceKind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
-        OpenedInode?.AcquireRef(refKind, "LinuxFile.ctor");
-        OpenedInode?.Open(this);
+        var holderRegistered = false;
+        var inodeRefAcquired = false;
+        try
+        {
+            VfsFileHolderTracking.Register(OpenedInode, this, $"LinuxFile.ctor/{referenceKind}");
+            holderRegistered = true;
+            OpenedInode?.AcquireRef(refKind, "LinuxFile.ctor");
+            inodeRefAcquired = OpenedInode != null;
+            OpenedInode?.Open(this);
+        }
+        catch
+        {
+            try
+            {
+                OpenedInode?.Release(this);
+            }
+            catch
+            {
+                // Preserve the original open failure; cleanup is best-effort.
+            }
+
+            if (inodeRefAcquired)
+                OpenedInode!.ReleaseRef(refKind, "LinuxFile.ctor.failed");
+
+            if (holderRegistered)
+                VfsFileHolderTracking.Unregister(OpenedInode, this);
+
+            Dentry.Put("LinuxFile.ctor.failed");
+            throw;
+        }
         // Note: Mount reference is managed by caller if provided
     }
 

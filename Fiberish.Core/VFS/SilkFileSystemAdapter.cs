@@ -760,6 +760,18 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         UpsertInodeMetadata(tx, inode);
     }
 
+    private void BestEffortRollbackCreatedEntry(Dentry dentry)
+    {
+        try
+        {
+            _ = base.Unlink(dentry.Name.Bytes);
+        }
+        catch
+        {
+            // Preserve the original create/open failure; rollback is best-effort.
+        }
+    }
+
     public override int Create(Dentry dentry, int mode, int uid, int gid)
     {
         using var metadataScope = EnterMetadataSessionScope(out var session);
@@ -767,18 +779,27 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (rc < 0)
             return rc;
 
-        session.ExecuteTransaction(tx =>
+        try
         {
-            UpsertInodeMetadata(tx, dentry.Inode!);
-            tx.UpsertDentry((long)Ino, dentry.Name.Bytes, (long)dentry.Inode!.Ino);
-            tx.ClearWhiteout((long)Ino, dentry.Name.Bytes);
-        });
-        if (dentry.Inode is SilkInode child)
+            if (dentry.Inode is SilkInode child)
+            {
+                if (child.Type == InodeType.Symlink)
+                    child.PersistSymlinkData();
+                else if (child.Type == InodeType.File)
+                    child.EnsureRegularFileBackingExists();
+            }
+
+            session.ExecuteTransaction(tx =>
+            {
+                UpsertInodeMetadata(tx, dentry.Inode!);
+                tx.UpsertDentry((long)Ino, dentry.Name.Bytes, (long)dentry.Inode!.Ino);
+                tx.ClearWhiteout((long)Ino, dentry.Name.Bytes);
+            });
+        }
+        catch
         {
-            if (child.Type == InodeType.Symlink)
-                child.PersistSymlinkData();
-            else if (child.Type == InodeType.File)
-                child.EnsureRegularFileBackingExists();
+            BestEffortRollbackCreatedEntry(dentry);
+            throw;
         }
 
         InvalidateEntriesCache();
@@ -835,14 +856,24 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (rc < 0)
             return rc;
 
-        session.ExecuteTransaction(tx =>
+        try
         {
-            UpsertInodeMetadata(tx, dentry.Inode!);
-            tx.UpsertDentry((long)Ino, dentry.Name.Bytes, (long)dentry.Inode!.Ino);
-            tx.ClearWhiteout((long)Ino, dentry.Name.Bytes);
-        });
-        if (dentry.Inode is SilkInode child)
-            child.PersistSymlinkData();
+            if (dentry.Inode is SilkInode child)
+                child.PersistSymlinkData();
+
+            session.ExecuteTransaction(tx =>
+            {
+                UpsertInodeMetadata(tx, dentry.Inode!);
+                tx.UpsertDentry((long)Ino, dentry.Name.Bytes, (long)dentry.Inode!.Ino);
+                tx.ClearWhiteout((long)Ino, dentry.Name.Bytes);
+            });
+        }
+        catch
+        {
+            BestEffortRollbackCreatedEntry(dentry);
+            throw;
+        }
+
         InvalidateEntriesCache();
         return 0;
     }
