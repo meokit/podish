@@ -336,6 +336,7 @@ export default function App() {
         terminal.writeln('')
         terminal.writeln('\x1b[38;5;244m x86 Linux in your browser — powered by WebAssembly\x1b[0m')
         terminal.writeln('\x1b[38;5;244m GitHub: https://github.com/GiantNeko/PodishWasm\x1b[0m')
+        terminal.writeln('\x1b[38;5;244m Third-party licenses: \x1b[4m\x1b]8;;https://ThirdPartyNotices\x1b\\THIRD_PARTY_NOTICES.md\x1b]8;;\x1b[0m')
         terminal.writeln('')
 
         xtermRef.current = terminal
