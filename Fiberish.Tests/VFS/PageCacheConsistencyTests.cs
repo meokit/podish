@@ -278,6 +278,42 @@ public class PageCacheConsistencyTests
     }
 
     [Fact]
+    public void Overlay_UpperOnlyExecMapping_DirectUpperNotification_BumpsCodeCacheSequence()
+    {
+        var overlaySb = CreateTmpfsUpperOnlyOverlay("app.bin", "hello"u8.ToArray());
+        var fileDentry = LookupOverlayFile(overlaySb, "/app.bin");
+        var overlayInode = Assert.IsType<OverlayInode>(fileDentry.Inode);
+        var file = new LinuxFile(fileDentry, FileFlags.O_RDONLY, null!);
+
+        try
+        {
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
+            engine.PageFaultResolver = (addr, isWrite) => mm.HandleFault(addr, isWrite, engine);
+
+            const uint mapAddr = 0x4D400000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Exec,
+                MapFlags.Shared | MapFlags.Fixed, file, 0, "MAP_SHARED_EXEC", engine);
+            Assert.True(mm.HandleFault(mapAddr, false, engine));
+
+            var vma = mm.FindVmArea(mapAddr);
+            Assert.NotNull(vma);
+            Assert.NotNull(overlayInode.UpperInode);
+            Assert.Same(overlayInode.UpperInode!.Mapping, vma!.VmMapping);
+
+            var before = mm.CurrentMapSequence;
+            ProcessAddressSpaceSync.NotifyFileContentChanged(mm, engine, overlayInode.UpperInode!, 0, 1);
+
+            Assert.True(mm.CurrentMapSequence > before);
+            Assert.Equal(mm.CurrentMapSequence, engine.AddressSpaceCodeCacheSequenceSeen);
+        }
+        finally
+        {
+            file.Close();
+        }
+    }
+
+    [Fact]
     public void Hostfs_MapSharedDirtyPage_IsVisibleToRead_BeforeWriteback()
     {
         var root = Path.Combine(Path.GetTempPath(), "hostfs-pagecache-consistency-" + Guid.NewGuid().ToString("N"));
@@ -826,6 +862,33 @@ public class PageCacheConsistencyTests
 
         var upperSb = tmpType.CreateAnonymousFileSystem(_runtime.MemoryContext)
             .ReadSuper(tmpType, 0, "test-tmpfs-upper", null);
+
+        var overlayFs = new OverlayFileSystem();
+        return (OverlaySuperBlock)overlayFs.ReadSuper(
+            new FileSystemType { Name = "overlay" },
+            0,
+            "test-overlay",
+            new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+    }
+
+    private OverlaySuperBlock CreateTmpfsUpperOnlyOverlay(string fileName, byte[] payload)
+    {
+        var tmpType = new FileSystemType { Name = "tmpfs", Factory = static _ => new Tmpfs() };
+        var lowerSb = tmpType.CreateAnonymousFileSystem(_runtime.MemoryContext)
+            .ReadSuper(tmpType, 0, "test-tmpfs-lower-empty", null);
+        var upperSb = tmpType.CreateAnonymousFileSystem(_runtime.MemoryContext)
+            .ReadSuper(tmpType, 0, "test-tmpfs-upper", null);
+        var upperFileDentry = new Dentry(FsName.FromString(fileName), null, upperSb.Root, upperSb);
+        upperSb.Root.Inode!.Create(upperFileDentry, 0x1A4, 0, 0);
+        var upperFile = new LinuxFile(upperFileDentry, FileFlags.O_RDWR, null!);
+        try
+        {
+            Assert.Equal(payload.Length, upperFileDentry.Inode!.WriteFromHost(null, upperFile, payload, 0));
+        }
+        finally
+        {
+            upperFile.Close();
+        }
 
         var overlayFs = new OverlayFileSystem();
         return (OverlaySuperBlock)overlayFs.ReadSuper(

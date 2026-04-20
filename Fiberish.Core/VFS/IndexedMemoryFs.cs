@@ -789,7 +789,20 @@ public abstract class IndexedMemoryInode : MappingBackedInode
 
     public override int Truncate(long size)
     {
-        return TruncateCore(size);
+        var previousSize = CachedSizeForShrinkCoordinator;
+        var rc = TruncateCore(size);
+        if (rc == 0)
+            FinalizeExplicitSizeChange(previousSize, size, default);
+        return rc;
+    }
+
+    protected internal override int TruncateWithContextCore(long length, in FileMutationContext context)
+    {
+        var previousSize = CachedSizeForShrinkCoordinator;
+        var rc = TruncateCore(length);
+        if (rc == 0)
+            FinalizeExplicitSizeChange(previousSize, length, context);
+        return rc;
     }
 
     protected virtual int TruncateCore(long size)
