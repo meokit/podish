@@ -1303,11 +1303,16 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     private readonly Lock _xattrLock = new();
     private string _hostPath;
     private MappedFilePageCache? _mappedPageCache;
+    private bool _hasObservedBackingSnapshot;
+    private long _observedBackingLength;
+    private DateTime _observedBackingWriteTimeUtc;
     private DateTime? _projectedATime;
     private DateTime? _projectedCTime;
     private DateTime? _projectedMTime;
 
     private FsNameMap<byte[]>? _xattrs;
+
+    private readonly record struct BackingSnapshot(long Length, DateTime LastWriteTimeUtc);
 
     public HostInode(ulong ino, SuperBlock sb, string hostPath, InodeType type, int? initialLinkCount = null)
     {
@@ -1319,6 +1324,11 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         var isDir = type == InodeType.Directory;
         Mode = isDir ? 0x1FF : 0x1B6; // 777 or 666
         SetInitialLinkCount(Math.Max(0, initialLinkCount ?? ComputeInitialLinkCount()), "HostInode.ctor");
+        if (type == InodeType.File && TryCaptureBackingSnapshot(out var initialSnapshot))
+        {
+            RecordObservedBackingSnapshot(initialSnapshot);
+            base.Size = (ulong)initialSnapshot.Length;
+        }
     }
 
     public string HostPath
@@ -1377,6 +1387,65 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         {
             hostLength = 0;
             return false;
+        }
+    }
+
+    private bool TryGetMappedBackingFileLength(LinuxFile? linuxFile, out long hostLength)
+    {
+        hostLength = 0;
+        try
+        {
+            if (linuxFile?.PrivateData is SafeFileHandle handle)
+            {
+                hostLength = RandomAccess.GetLength(handle);
+                return hostLength > 0;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+
+        if (!TryGetBackingFileLength(out var fallbackLength))
+            return false;
+
+        hostLength = checked((long)fallbackLength);
+        return hostLength > 0;
+    }
+
+    private bool TryCaptureBackingSnapshot(out BackingSnapshot snapshot)
+    {
+        snapshot = default;
+        if (!TryGetBackingFileLength(out var hostLength))
+            return false;
+
+        try
+        {
+            snapshot = new BackingSnapshot(checked((long)hostLength), File.GetLastWriteTimeUtc(HostPath));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool IsObservedBackingSnapshotCurrent(in BackingSnapshot snapshot)
+    {
+        lock (Lock)
+        {
+            return _hasObservedBackingSnapshot &&
+                   _observedBackingLength == snapshot.Length &&
+                   _observedBackingWriteTimeUtc == snapshot.LastWriteTimeUtc;
+        }
+    }
+
+    private void RecordObservedBackingSnapshot(in BackingSnapshot snapshot)
+    {
+        lock (Lock)
+        {
+            _hasObservedBackingSnapshot = true;
+            _observedBackingLength = snapshot.Length;
+            _observedBackingWriteTimeUtc = snapshot.LastWriteTimeUtc;
         }
     }
 
@@ -2109,6 +2178,12 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
                 var handle = File.OpenHandle(openPath, mode, FileAccess.Read, share);
                 linuxFile.PrivateData = handle;
             }
+
+            if (TryCaptureBackingSnapshot(out var openSnapshot))
+            {
+                ObserveBackingSizeChange(openSnapshot.Length, default);
+                RecordObservedBackingSnapshot(openSnapshot);
+            }
         }
     }
 
@@ -2116,8 +2191,16 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     {
         if (HasDirtyPageCachePages())
             return;
-        if (!TryGetBackingFileLength(out var hostLength))
+
+        if (!TryCaptureBackingSnapshot(out var backingSnapshot))
             return;
+
+        if (IsObservedBackingSnapshotCurrent(backingSnapshot))
+        {
+            ObserveBackingSizeChange(backingSnapshot.Length, default);
+            RecordObservedBackingSnapshot(backingSnapshot);
+            return;
+        }
 
         if (Mapping is { PageCount: > 0 })
         {
@@ -2128,7 +2211,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             InvalidateInodePages2Range(0, uint.MaxValue);
         }
 
-        ObserveBackingSizeChange((long)hostLength, default);
+        ObserveBackingSizeChange(backingSnapshot.Length, default);
+        RecordObservedBackingSnapshot(backingSnapshot);
     }
 
     public override void Release(LinuxFile linuxFile)
@@ -2328,6 +2412,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             }
 
             CTime = DateTime.Now;
+            if (TryCaptureBackingSnapshot(out var writeSnapshot))
+                RecordObservedBackingSnapshot(writeSnapshot);
             return buffer.Length;
         }
 
@@ -2354,6 +2440,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         }
 
         CTime = DateTime.Now;
+        if (TryCaptureBackingSnapshot(out var fallbackWriteSnapshot))
+            RecordObservedBackingSnapshot(fallbackWriteSnapshot);
         return buffer.Length;
     }
 
@@ -2573,6 +2661,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         Size = (ulong)size;
         MTime = DateTime.Now;
         CTime = MTime;
+        if (TryCaptureBackingSnapshot(out var truncateSnapshot))
+            RecordObservedBackingSnapshot(truncateSnapshot);
         return 0;
     }
 
@@ -2601,6 +2691,7 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (Type != InodeType.File) return false;
         if (absoluteFileOffset < 0) return false;
         if ((absoluteFileOffset & LinuxConstants.PageOffsetMask) != 0) return false;
+        if (!TryGetMappedBackingFileLength(linuxFile, out var mappedLength)) return false;
 
         lock (_mappedCacheLock)
         {
@@ -2608,8 +2699,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
                 ResolveHostPath(linuxFile),
                 SuperBlock.MemoryContext.HostMemoryMapGeometry);
             if (!_mappedPageCache.TryAcquirePageLease(
-                    absoluteFileOffset / LinuxConstants.PageSize,
-                    (long)Size,
+                    pageIndex,
+                    mappedLength,
                     writable,
                     out var pointer,
                     out var releaseToken))
@@ -2646,6 +2737,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             Mapping?.ClearDirty((uint)pageIndex);
         if (mode == PageWritebackMode.Durable)
             FlushHandleToDiskIfNeeded(linuxFile);
+        if (TryCaptureBackingSnapshot(out var flushSnapshot))
+            RecordObservedBackingSnapshot(flushSnapshot);
         return true;
     }
 

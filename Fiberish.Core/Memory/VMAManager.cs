@@ -222,11 +222,6 @@ public class VMAManager
         return true;
     }
 
-    private static Inode? ResolveMappedInode(VmArea vma)
-    {
-        return vma.LogicalInode;
-    }
-
     private static MappingBackedInode? ResolveInitialFileMappingBacking(LinuxFile? file)
     {
         return file?.OpenedInode switch
@@ -254,11 +249,28 @@ public class VMAManager
         return fileMapping.BackingInode;
     }
 
+    private static void ResolveMappedVmaInodes(VmArea vma, out Inode? logicalInode, out MappingBackedInode? backingInode)
+    {
+        logicalInode = vma.LogicalInode;
+        backingInode = ResolveCurrentFileMappingBacking(vma.FileMapping);
+        if (ReferenceEquals(logicalInode, backingInode))
+            backingInode = null;
+    }
+
+    private static bool VmaReferencesInode(VmArea vma, Inode inode)
+    {
+        ResolveMappedVmaInodes(vma, out var logicalInode, out var backingInode);
+        return ReferenceEquals(logicalInode, inode) || ReferenceEquals(backingInode, inode);
+    }
+
     private bool SyncFileBackedVmaMapping(VmArea vma, Engine engine)
     {
+        var previousBacking = vma.BackingInode;
         var backingInode = ResolveCurrentFileMappingBacking(vma.FileMapping);
         if (backingInode == null)
             return false;
+
+        UpdateTrackedMappedBackingInode(vma, previousBacking, backingInode);
 
         var resolvedMapping = backingInode.AcquireMappingRef();
         if (ReferenceEquals(vma.VmMapping, resolvedMapping))
@@ -493,10 +505,8 @@ public class VMAManager
             $"Failed to resolve managed page binding for VMA '{vma.Name}' pageIndex={pageIndex} ptr={pagePtr}.");
     }
 
-    private void TrackMappedInodeOnVmaAdded(VmArea vma)
+    private void AddMappedInodeRef(Inode inode)
     {
-        var inode = ResolveMappedInode(vma);
-        if (inode == null) return;
         if (_mappedInodeRefCounts.TryGetValue(inode, out var existing))
         {
             _mappedInodeRefCounts[inode] = existing + 1;
@@ -507,10 +517,8 @@ public class VMAManager
         inode.RegisterMappedAddressSpace(this);
     }
 
-    private void TrackMappedInodeOnVmaRemoved(VmArea vma)
+    private void RemoveMappedInodeRef(Inode inode)
     {
-        var inode = ResolveMappedInode(vma);
-        if (inode == null) return;
         if (!_mappedInodeRefCounts.TryGetValue(inode, out var existing))
             return;
 
@@ -522,6 +530,37 @@ public class VMAManager
         }
 
         _mappedInodeRefCounts[inode] = existing - 1;
+    }
+
+    private void TrackMappedInodeOnVmaAdded(VmArea vma)
+    {
+        ResolveMappedVmaInodes(vma, out var logicalInode, out var backingInode);
+        if (logicalInode != null)
+            AddMappedInodeRef(logicalInode);
+        if (backingInode != null)
+            AddMappedInodeRef(backingInode);
+    }
+
+    private void TrackMappedInodeOnVmaRemoved(VmArea vma)
+    {
+        ResolveMappedVmaInodes(vma, out var logicalInode, out var backingInode);
+        if (backingInode != null)
+            RemoveMappedInodeRef(backingInode);
+        if (logicalInode != null)
+            RemoveMappedInodeRef(logicalInode);
+    }
+
+    private void UpdateTrackedMappedBackingInode(VmArea vma, MappingBackedInode? previousBacking,
+        MappingBackedInode? nextBacking)
+    {
+        if (ReferenceEquals(previousBacking, nextBacking))
+            return;
+
+        var logicalInode = vma.LogicalInode;
+        if (previousBacking != null && !ReferenceEquals(previousBacking, logicalInode))
+            RemoveMappedInodeRef(previousBacking);
+        if (nextBacking != null && !ReferenceEquals(nextBacking, logicalInode))
+            AddMappedInodeRef(nextBacking);
     }
 
     private void InsertVmaSorted(VmArea vma)
@@ -884,7 +923,7 @@ public class VMAManager
         var touchedVmAnonVmas = new HashSet<AnonVma>();
         foreach (var vma in _vmas)
         {
-            if (!ReferenceEquals(vma.LogicalInode, inode)) continue;
+            if (!VmaReferencesInode(vma, inode)) continue;
 
             var validBytes = newSize > vma.Offset ? newSize - vma.Offset : 0;
             if (validBytes > vma.Length) validBytes = vma.Length;
@@ -937,7 +976,7 @@ public class VMAManager
         foreach (var vma in _vmas)
         {
             if ((vma.Perms & Protection.Exec) == 0) continue;
-            if (!ReferenceEquals(vma.LogicalInode, inode)) continue;
+            if (!VmaReferencesInode(vma, inode)) continue;
 
             var mappingStart = vma.Offset;
             long mappingEnd;
@@ -1048,7 +1087,7 @@ public class VMAManager
         var ranges = new List<NativeRange>();
         foreach (var vma in _vmas)
         {
-            if (!ReferenceEquals(vma.LogicalInode, inode)) continue;
+            if (!VmaReferencesInode(vma, inode)) continue;
             if (!evenCows && (vma.Flags & MapFlags.Private) != 0) continue;
 
             var mappingStart = vma.Offset;
@@ -2525,10 +2564,12 @@ public class VMAManager
             if (!ReferenceEquals(vma.LogicalInode, overlayInode))
                 continue;
 
+            var previousBacking = vma.BackingInode;
             var replacementMapping = replacementInode.AcquireMappingRef();
             if (ReferenceEquals(vma.VmMapping, replacementMapping))
             {
                 vma.FileMapping?.SetBackingInode(replacementInode);
+                UpdateTrackedMappedBackingInode(vma, previousBacking, replacementInode);
                 replacementMapping.Release();
                 continue;
             }
@@ -2537,6 +2578,7 @@ public class VMAManager
             vma.VmMapping?.Release();
             vma.VmMapping = replacementMapping;
             vma.FileMapping?.SetBackingInode(replacementInode);
+            UpdateTrackedMappedBackingInode(vma, previousBacking, replacementInode);
             RegisterVmAreaMappingAttachment(vma);
             invalidatedRanges.Add(new NativeRange(vma.Start, vma.Length));
         }
@@ -2607,7 +2649,7 @@ public class VMAManager
         {
             if (!TryGetSharedFileVmAreaState(vma, out _, out _, out _))
                 continue;
-            if (inode != null && !ReferenceEquals(vma.LogicalInode, inode))
+            if (inode != null && !VmaReferencesInode(vma, inode))
                 continue;
             yield return vma;
         }

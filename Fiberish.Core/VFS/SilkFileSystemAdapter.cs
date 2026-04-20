@@ -1346,6 +1346,7 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
         if (Type != InodeType.File && Type != InodeType.Symlink) return false;
         if (absoluteFileOffset < 0) return false;
         if ((absoluteFileOffset & LinuxConstants.PageOffsetMask) != 0) return false;
+        if (!TryGetLiveBackingFileLength(linuxFile, out var backingLength)) return false;
 
         lock (_mappedCacheLock)
         {
@@ -1354,8 +1355,8 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
                 livePath,
                 SuperBlock.MemoryContext.HostMemoryMapGeometry);
             if (!_mappedPageCache.TryAcquirePageLease(
-                    absoluteFileOffset / LinuxConstants.PageSize,
-                    (long)Size,
+                    pageIndex,
+                    backingLength,
                     writable,
                     out var pointer,
                     out var releaseToken))
@@ -1443,6 +1444,32 @@ public sealed class SilkInode : IndexedMemoryInode, IHostMappedCacheDropper
     {
         if (Type == InodeType.File)
             FlushDirtyMetadataIfNeeded();
+    }
+
+    private bool TryGetLiveBackingFileLength(LinuxFile? linuxFile, out long backingLength)
+    {
+        backingLength = 0;
+        if (Type != InodeType.File && Type != InodeType.Symlink)
+            return false;
+
+        SafeFileHandle? tempHandle = null;
+        try
+        {
+            var handle = linuxFile?.PrivateData as SafeFileHandle;
+            if (handle == null)
+                tempHandle = handle = _repository.OpenLiveInodeHandle((long)Ino, FileMode.Open, FileAccess.Read);
+
+            backingLength = RandomAccess.GetLength(handle);
+            return backingLength > 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+        finally
+        {
+            tempHandle?.Dispose();
+        }
     }
 
     private sealed class NamespaceMutationScope : IDisposable

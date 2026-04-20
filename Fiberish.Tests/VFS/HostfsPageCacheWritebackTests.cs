@@ -807,6 +807,145 @@ public class HostfsPageCacheWritebackTests
     }
 
     [Fact]
+    public void Reopen_SameLengthHostRewrite_MustInvalidateCleanCachedPages()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-reopen-refresh-same-length-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "hello");
+
+        LinuxFile? first = null;
+        LinuxFile? second = null;
+        try
+        {
+            var runtime = new TestRuntimeFactory(BufferedOnlyGeometry);
+            first = OpenHostFile(root, "data.bin", runtime.MemoryContext);
+            var inode = Assert.IsType<HostInode>(first.Dentry.Inode);
+
+            var warm = new byte[5];
+            Assert.Equal(5, inode.ReadToHost(null, first, warm, 0));
+            Assert.Equal("hello", System.Text.Encoding.ASCII.GetString(warm));
+
+            first.Close();
+            first = null;
+
+            File.WriteAllText(hostFile, "HELLO");
+
+            second = new LinuxFile(inode.Dentries[0], FileFlags.O_RDONLY, null!);
+            second.Dentry.Inode!.Open(second);
+
+            var readBack = new byte[5];
+            var readRc = inode.ReadToHost(null, second, readBack, 0);
+            Assert.Equal(5, readRc);
+            Assert.Equal("HELLO", System.Text.Encoding.ASCII.GetString(readBack));
+        }
+        finally
+        {
+            second?.Close();
+            first?.Close();
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Reopen_UnchangedHostBacking_MustNotTearDownLivePrivateExecutableMapping()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-reopen-live-private-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        WriteFilledFile(hostFile, LinuxConstants.PageSize, (byte)'e');
+
+        try
+        {
+            var runtime = new TestRuntimeFactory(BufferedOnlyGeometry);
+            using var engine = runtime.CreateEngine();
+            var mm = runtime.CreateAddressSpace();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+
+            using var mappedFile = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+            const uint mapAddr = 0x47580000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Exec,
+                MapFlags.Private | MapFlags.Fixed, mappedFile, 0, "MAP_PRIVATE_EXEC_REOPEN", engine);
+
+            Assert.Equal(FaultResult.Handled, mm.HandleFaultDetailed(mapAddr, false, engine));
+            Assert.True(mm.PageMapping.TryGet(mapAddr, out _));
+
+            var inode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
+            var diagnosticsBeforeReopen = inode.GetMappedPageCacheDiagnostics();
+            var inodePagesBeforeReopen = inode.Mapping?.PageCount ?? 0;
+            Assert.True(inodePagesBeforeReopen > 0);
+
+            using var reopen = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+
+            var diagnosticsAfterReopen = inode.GetMappedPageCacheDiagnostics();
+            var mappingStillResident = mm.PageMapping.TryGet(mapAddr, out _);
+            var inodePagesAfterReopen = inode.Mapping?.PageCount ?? 0;
+
+            Assert.True(mappingStillResident,
+                $"Reopen dropped a live MAP_PRIVATE executable mapping even though the host file length did not change. " +
+                $"inodePagesBefore={inodePagesBeforeReopen} inodePagesAfter={inodePagesAfterReopen} " +
+                $"guestPagesBefore={diagnosticsBeforeReopen.GuestPageCount} guestPagesAfter={diagnosticsAfterReopen.GuestPageCount} " +
+                $"windowsBefore={diagnosticsBeforeReopen.WindowCount} windowsAfter={diagnosticsAfterReopen.WindowCount}");
+
+            Assert.True(inodePagesAfterReopen > 0,
+                "Reopening an unchanged host file should not drop the clean page-cache pages backing the live executable mapping.");
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Reopen_UnchangedHostBacking_ExplicitRefaultCanRebuildPrivateExecutableMapping()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-reopen-live-private-refault-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        WriteFilledFile(hostFile, LinuxConstants.PageSize, (byte)'r');
+
+        try
+        {
+            var runtime = new TestRuntimeFactory(BufferedOnlyGeometry);
+            using var engine = runtime.CreateEngine();
+            var mm = runtime.CreateAddressSpace();
+            var sm = new SyscallManager(engine, mm, 0);
+            sm.MountRootHostfs(root);
+            var loc = sm.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc.IsValid);
+
+            using var mappedFile = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+            const uint mapAddr = 0x47590000;
+            mm.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Exec,
+                MapFlags.Private | MapFlags.Fixed, mappedFile, 0, "MAP_PRIVATE_EXEC_REOPEN_REFAULT", engine);
+
+            Assert.Equal(FaultResult.Handled, mm.HandleFaultDetailed(mapAddr, false, engine));
+            Assert.True(mm.PageMapping.TryGet(mapAddr, out _));
+
+            var inode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
+            using var reopen = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+
+            inode.UnmapMappingRange(0, long.MaxValue, true);
+            inode.InvalidateInodePages2Range(0, uint.MaxValue);
+
+            Assert.False(mm.PageMapping.TryGet(mapAddr, out _));
+            Assert.Equal(FaultResult.Handled, mm.HandleFaultDetailed(mapAddr, false, engine));
+            Assert.True(mm.PageMapping.TryGet(mapAddr, out _));
+
+            var probe = new byte[8];
+            Assert.True(engine.CopyFromUser(mapAddr, probe));
+            Assert.All(probe, b => Assert.Equal((byte)'r', b));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void Reopen_MustInvalidateCleanMappedTailPageAfterShrinkAndHostRegrow()
     {
         var root = Path.Combine(Path.GetTempPath(), "hostfs-reopen-tail-refresh-" + Guid.NewGuid().ToString("N"));
