@@ -189,9 +189,9 @@ public class HostMappedPageCacheGeometryTests
     }
 
     [Fact]
-    public void Hostfs_OnUnix_PartialTailPage_UsesDirectMap()
+    public void Hostfs_PartialTailPage_UsesDirectMap()
     {
-        if (OperatingSystem.IsWindows())
+        if (!_runtime.MemoryContext.HostMemoryMapGeometry.SupportsDirectMappedTailPage)
             return;
 
         var root = Path.Combine(Path.GetTempPath(), $"hostfs-tail-{Guid.NewGuid():N}");
@@ -244,7 +244,7 @@ public class HostMappedPageCacheGeometryTests
     [Fact]
     public void Hostfs_ReadOnlyTailPage_ExternalShrink_DropsResidentWindowWithoutHostClear()
     {
-        if (OperatingSystem.IsWindows())
+        if (!_runtime.MemoryContext.HostMemoryMapGeometry.SupportsDirectMappedTailPage)
             return;
 
         var root = Path.Combine(Path.GetTempPath(), $"hostfs-tail-shrink-{Guid.NewGuid():N}");
@@ -293,7 +293,7 @@ public class HostMappedPageCacheGeometryTests
     [Fact]
     public void Hostfs_ReadOnlyTailPage_ExplicitTruncate_InvalidatesPageAndRefaultsZeroTail()
     {
-        if (OperatingSystem.IsWindows())
+        if (!_runtime.MemoryContext.HostMemoryMapGeometry.SupportsDirectMappedTailPage)
             return;
 
         var root = Path.Combine(Path.GetTempPath(), $"hostfs-tail-explicit-{Guid.NewGuid():N}");
@@ -345,7 +345,7 @@ public class HostMappedPageCacheGeometryTests
     [Fact]
     public void Hostfs_ExternalShrink_PageWhollyBeyondNewEof_FaultsAsBusError()
     {
-        if (OperatingSystem.IsWindows())
+        if (!_runtime.MemoryContext.HostMemoryMapGeometry.SupportsDirectMappedTailPage)
             return;
 
         var root = Path.Combine(Path.GetTempPath(), $"hostfs-beyond-eof-{Guid.NewGuid():N}");

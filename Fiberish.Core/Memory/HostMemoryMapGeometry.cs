@@ -24,13 +24,15 @@ public readonly partial record struct HostMemoryMapGeometry(
         {
             GetSystemInfo(out var systemInfo);
             var hostPageSize = checked((int)systemInfo.dwPageSize);
-            var granularity = checked((int)systemInfo.dwAllocationGranularity);
+            var granularity = NormalizeAllocationGranularity(
+                checked((int)systemInfo.dwAllocationGranularity),
+                guestPageSize);
             return new HostMemoryMapGeometry(
                 guestPageSize,
                 hostPageSize > 0 ? hostPageSize : guestPageSize,
-                granularity > 0 ? granularity : guestPageSize,
+                granularity,
                 true,
-                false);
+                true);
         }
 
         var unixPageSize = Environment.SystemPageSize;
@@ -40,7 +42,7 @@ public readonly partial record struct HostMemoryMapGeometry(
         return new HostMemoryMapGeometry(
             guestPageSize,
             unixPageSize,
-            unixPageSize,
+            NormalizeAllocationGranularity(unixPageSize, guestPageSize),
             true,
             true);
     }
@@ -54,6 +56,14 @@ public readonly partial record struct HostMemoryMapGeometry(
             false,
             false);
     }
+
+    private static int NormalizeAllocationGranularity(int granularity, int fallback)
+    {
+        var normalized = granularity > 0 ? granularity : fallback;
+        return Math.Max(normalized, PreferredMappedWindowSize);
+    }
+
+    private const int PreferredMappedWindowSize = 2 * 1024 * 1024;
 
     [LibraryImport("kernel32.dll")]
     private static partial void GetSystemInfo(out SYSTEM_INFO lpSystemInfo);
