@@ -18,7 +18,7 @@ internal sealed class SilkSqliteConnection : IDisposable
                 ? raw.sqlite3_errmsg(db).utf8_to_string()
                 : $"SQLite error {rc}";
             if (db != null && !db.IsInvalid)
-                raw.sqlite3_close_v2(db);
+                db.Dispose();
             throw new InvalidOperationException($"Failed to open SilkFS metadata db '{path}': {message} (rc={rc}).");
         }
 
@@ -42,7 +42,7 @@ internal sealed class SilkSqliteConnection : IDisposable
             throw new InvalidOperationException("SQLite prepared statement was unexpectedly null.");
         if (!IsIgnorableTail(tail))
         {
-            raw.sqlite3_finalize(stmt);
+            stmt.Dispose();
             throw new InvalidOperationException("SQLite SQL contains unexpected trailing text.");
         }
 
@@ -92,7 +92,7 @@ internal sealed class SilkSqliteConnection : IDisposable
         _db = null;
         _disposed = true;
         if (db != null && !db.IsInvalid)
-            raw.sqlite3_close_v2(db);
+            db.Dispose();
     }
 
     private Exception CreateException(int rc, sqlite3_stmt? stmt)
@@ -305,7 +305,7 @@ internal sealed class SilkSqliteStatement : IDisposable
                 ArrayPool<byte>.Shared.Return(buffer, clearArray: false);
         }
 
-        raw.sqlite3_finalize(_stmt);
+        _stmt.Dispose();
         _disposed = true;
     }
 
