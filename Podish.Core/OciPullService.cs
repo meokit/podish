@@ -258,7 +258,7 @@ public class OciPullService
                 var token = await GetAuthTokenAsync(registry, repository);
                 var manifestStr = await GetManifestAsync(registry, repository, tag, token);
                 using var manifestDoc = JsonDocument.Parse(manifestStr);
-                var (layers, manifestDigest, configUser) =
+                var (layers, manifestDigest, runtimeConfig) =
                     await ResolveImageLayersAsync(registry, repository, token, manifestDoc, manifestStr);
                 var overallTotalBytes = layers.Sum(layer => Math.Max(0, layer.Size));
                 var overallCompletedBytes = 0L;
@@ -349,7 +349,11 @@ public class OciPullService
                     manifestDigest,
                     OciStorePath.RelativeStoreDirectory,
                     storedLayers,
-                    configUser);
+                    runtimeConfig?.User,
+                    runtimeConfig?.Entrypoint,
+                    runtimeConfig?.Cmd,
+                    runtimeConfig?.Env,
+                    runtimeConfig?.WorkingDir);
                 await File.WriteAllTextAsync(Path.Combine(storeDirectory, "image.json"),
                     JsonSerializer.Serialize(image, PodishJsonContext.Default.OciStoredImage));
 
@@ -482,7 +486,7 @@ public class OciPullService
         return await response.Content.ReadAsStringAsync();
     }
 
-    private async Task<string?> VerifyArchitectureAndReadConfigUserAsync(string registry, string repository,
+    private async Task<OciStoredImageRuntimeConfig?> VerifyArchitectureAndReadRuntimeConfigAsync(string registry, string repository,
         string digest, string? token)
     {
         var blobUrl = $"https://{registry}/v2/{repository}/blobs/{digest}";
@@ -501,7 +505,15 @@ public class OciPullService
             throw new NotSupportedException(
                 $"Image architecture is '{arch}', but Podish.Cli emulator requires '386' (32-bit x86).");
 
-        return string.IsNullOrWhiteSpace(config?.Config?.User) ? null : config.Config.User;
+        if (config?.Config == null)
+            return null;
+
+        return new OciStoredImageRuntimeConfig(
+            string.IsNullOrWhiteSpace(config.Config.User) ? null : config.Config.User,
+            config.Config.Entrypoint,
+            config.Config.Cmd,
+            config.Config.Env,
+            string.IsNullOrWhiteSpace(config.Config.WorkingDir) ? null : config.Config.WorkingDir);
     }
 
     private async Task DownloadAndExtractLayerAsync(string registry, string repository, string digest, string? token,
@@ -629,7 +641,7 @@ public class OciPullService
             PullProgressMarker + JsonSerializer.Serialize(payload, PodishJsonContext.Default.ImagePullProgressMessage));
     }
 
-    private async Task<(List<LayerDescriptor> Layers, string ManifestDigest, string? ConfigUser)> ResolveImageLayersAsync(
+    private async Task<(List<LayerDescriptor> Layers, string ManifestDigest, OciStoredImageRuntimeConfig? RuntimeConfig)> ResolveImageLayersAsync(
         string registry,
         string repository,
         string? token,
@@ -664,10 +676,10 @@ public class OciPullService
             using var resolvedDoc = JsonDocument.Parse(resolvedManifest);
             manifest = resolvedDoc.RootElement;
             manifestDigest = targetDigest;
-            string? configUser = null;
+            OciStoredImageRuntimeConfig? runtimeConfig = null;
             var resolvedConfigDigest = manifest.GetProperty("config").GetProperty("digest").GetString();
             if (!string.IsNullOrEmpty(resolvedConfigDigest))
-                configUser = await VerifyArchitectureAndReadConfigUserAsync(registry, repository, resolvedConfigDigest,
+                runtimeConfig = await VerifyArchitectureAndReadRuntimeConfigAsync(registry, repository, resolvedConfigDigest,
                     token);
 
             var resolvedLayers = manifest
@@ -678,13 +690,13 @@ public class OciPullService
                     x.GetProperty("mediaType").GetString()!,
                     x.GetProperty("size").GetInt64()))
                 .ToList();
-            return (resolvedLayers, manifestDigest, configUser);
+            return (resolvedLayers, manifestDigest, runtimeConfig);
         }
 
         var configDigest = manifest.GetProperty("config").GetProperty("digest").GetString();
-        string? configUserFinal = null;
+        OciStoredImageRuntimeConfig? runtimeConfigFinal = null;
         if (!string.IsNullOrEmpty(configDigest))
-            configUserFinal = await VerifyArchitectureAndReadConfigUserAsync(registry, repository, configDigest, token);
+            runtimeConfigFinal = await VerifyArchitectureAndReadRuntimeConfigAsync(registry, repository, configDigest, token);
 
         var layers = manifest
             .GetProperty("layers")
@@ -694,7 +706,7 @@ public class OciPullService
                 x.GetProperty("mediaType").GetString()!,
                 x.GetProperty("size").GetInt64()))
             .ToList();
-        return (layers, manifestDigest, configUserFinal);
+        return (layers, manifestDigest, runtimeConfigFinal);
     }
 
     private static (string Registry, string Repository, string Tag) ParseImageReference(string imageReference)

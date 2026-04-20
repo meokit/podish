@@ -137,6 +137,7 @@ struct ContainerDetailsSheetView: View {
         Last Exit Code: \(inspect.exitCode.map(String.init) ?? "-")
         Launch Path: \(inspect.spec.exe ?? "-")
         Launch Arguments: \(inspect.spec.exeArgs.joined(separator: " "))
+        Working Directory: \(inspect.spec.workingDir ?? "-")
         Connection Mode: \(inspect.spec.networkMode)
         Workspace Memory: \(memoryLimit)
         Service Access: \(ports.isEmpty ? "-" : ports.joined(separator: ", "))

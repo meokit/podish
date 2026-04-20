@@ -308,10 +308,26 @@ internal sealed class NativeContext : IDisposable
         if (!IsNameAvailableUnsafe(spec.Name, null))
             return (null, "container name already exists", PodishNativeApi.PodEbusy);
 
+        PodishRunSpec effectiveSpec;
+        try
+        {
+            var rootfsPath = ContainerLaunchSpecResolver.ResolveExistingRootfsPath(Context.OciStoreImagesDir, spec);
+            effectiveSpec = ContainerLaunchSpecResolver.ResolveEffectiveSpec(spec, rootfsPath,
+                ContainerLaunchSpecResolver.IsRootfsMode(spec));
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            return (null, ex.Message, PodishNativeApi.PodEnoent);
+        }
+        catch (Exception ex)
+        {
+            return (null, ex.Message, PodishNativeApi.PodEinval);
+        }
+
         var container = new NativeContainer
         {
             Owner = this,
-            Spec = spec
+            Spec = effectiveSpec
         };
         container.InitializeMetadata();
         _containersById[container.ContainerId] = container;
@@ -451,7 +467,7 @@ internal sealed class NativeContainer
     }
 
     public required NativeContext Owner { get; init; }
-    public required PodishRunSpec Spec { get; init; }
+    public required PodishRunSpec Spec { get; internal set; }
 
     public string ContainerId { get; }
 
@@ -537,7 +553,17 @@ internal sealed class NativeContainer
             if (current is { IsCompleted: false })
                 return;
 
-            var session = await Owner.Context.StartAsync(Spec, ContainerId);
+            if (ContainerLaunchSpecResolver.NeedsLegacyNormalization(Spec))
+            {
+                var rootfsPath = ContainerLaunchSpecResolver.ResolveExistingRootfsPath(Owner.Context.OciStoreImagesDir, Spec);
+                lock (_gate)
+                {
+                    Spec = ContainerLaunchSpecResolver.ResolveEffectiveSpec(Spec, rootfsPath, false);
+                    PersistMetadataLocked("created");
+                }
+            }
+
+            var session = await Owner.Context.StartResolvedAsync(Spec, ContainerId);
             lock (_gate)
             {
                 _session = session;

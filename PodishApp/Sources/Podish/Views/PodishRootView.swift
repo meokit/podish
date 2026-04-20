@@ -196,14 +196,16 @@ struct PodishRootView: View {
         store.onRemoveContainer = { containerId in
             session.removeContainer(containerId)
         }
-        store.onCreateContainer = { imageRef, name, networkMode, dnsServers, portMappings, memoryQuotaBytes in
+        store.onCreateContainer = { imageRef, name, networkMode, dnsServers, portMappings, memoryQuotaBytes, customExecutable, customArguments in
             session.createContainer(
                 from: imageRef,
                 name: name,
                 networkMode: networkMode,
                 dnsServers: dnsServers,
                 portMappings: portMappings,
-                memoryQuotaBytes: memoryQuotaBytes
+                memoryQuotaBytes: memoryQuotaBytes,
+                customExecutable: customExecutable,
+                customArguments: customArguments
             )
         }
         store.onPullImage = { imageRef in

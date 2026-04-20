@@ -33,6 +33,7 @@ public sealed class ContainerRunRequest
     public NetworkMode NetworkMode { get; init; } = NetworkMode.Host;
     public string Exe { get; init; } = string.Empty;
     public string[] ExeArgs { get; init; } = Array.Empty<string>();
+    public string? WorkingDir { get; init; }
     public string[] Volumes { get; init; } = Array.Empty<string>();
     public string[] GuestEnvs { get; init; } = Array.Empty<string>();
     public string[] DnsServers { get; init; } = Array.Empty<string>();
@@ -198,7 +199,9 @@ public sealed class ContainerRuntimeService
         var effectiveNetworkMode = OperatingSystem.IsBrowser() && request.NetworkMode == NetworkMode.Private
             ? NetworkMode.Host
             : request.NetworkMode;
-        var actualExe = string.IsNullOrEmpty(request.Exe) ? "/bin/sh" : request.Exe;
+        var actualExe = string.IsNullOrEmpty(request.Exe)
+            ? ContainerLaunchSpecResolver.DefaultShellPath
+            : request.Exe;
         var initProcessStarted = false;
         var startupPhase = "bootstrap";
         try
@@ -421,31 +424,34 @@ public sealed class ContainerRuntimeService
                 : request.User;
             var resolvedCredentials = ContainerUserResolver.Resolve(runtime.Syscalls, requestedUser);
 
-            var finalEnvs = new List<string>
+            var baseEnvs = new List<string>
             {
-                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                $"PATH={ContainerLaunchSpecResolver.DefaultPathValue}",
                 $"HOME={resolvedCredentials.HomeDirectory}",
                 $"USER={resolvedCredentials.UserName}"
             };
             if (request.UseTty)
-                finalEnvs.Add("TERM=xterm");
-            foreach (var env in request.GuestEnvs)
-                finalEnvs.Add(env);
+                baseEnvs.Add("TERM=xterm");
+
+            var autoEnvs = new List<string>();
             if (request.EnablePulseServer)
             {
-                finalEnvs.Add(
+                autoEnvs.Add(
                     $"{ContainerRunRequest.PulseServerEnvVar}=unix:{ContainerRunRequest.PulseServerSocketPath}");
-                finalEnvs.Add($"{ContainerRunRequest.PulseRuntimePathEnvVar}=/run/pulse");
+                autoEnvs.Add($"{ContainerRunRequest.PulseRuntimePathEnvVar}=/run/pulse");
             }
 
             if (request.EnableWaylandServer)
             {
-                finalEnvs.Add($"{ContainerRunRequest.WaylandDisplayEnvVar}=wayland-0");
-                finalEnvs.Add($"{ContainerRunRequest.XdgRuntimeDirEnvVar}=/run");
+                autoEnvs.Add($"{ContainerRunRequest.WaylandDisplayEnvVar}=wayland-0");
+                autoEnvs.Add($"{ContainerRunRequest.XdgRuntimeDirEnvVar}=/run");
             }
 
+            var finalEnvs = ContainerLaunchSpecResolver.MergeEnvironmentEntries(baseEnvs, request.GuestEnvs, autoEnvs);
+
             startupPhase = "resolve-init";
-            var (loc, guestPathResolved) = runtime.Syscalls.ResolvePath(actualExe, true);
+            var workingDirectory = ResolveInitialWorkingDirectory(runtime, request.WorkingDir);
+            var (loc, guestPathResolved) = ResolveExecutablePath(runtime, actualExe, finalEnvs, request.WorkingDir);
             if (!loc.IsValid) throw new FileNotFoundException($"Could not find executable in VFS: {actualExe}");
 
             var uts = new UTSNamespace
@@ -463,13 +469,14 @@ public sealed class ContainerRuntimeService
 
             startupPhase = "load-init";
             var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs,
-                finalEnvs.ToArray(),
+                finalEnvs,
                 scheduler, ttyDiag, loc.Mount!, uts, engineInitProc?.TGID ?? 0, proc =>
                     Fiberish.Auth.Cred.CredentialService.InitializeCredentials(
                         proc,
                         resolvedCredentials.Uid,
                         resolvedCredentials.Gid,
-                        resolvedCredentials.SupplementaryGroups));
+                        resolvedCredentials.SupplementaryGroups),
+                workingDirectory);
             if (request.EnablePulseServer || request.EnableWaylandServer)
                 request.ConfigureVirtualDaemons?.Invoke(runtime, scheduler, uts, mainTask.Process.TGID);
             initProcessStarted = true;
@@ -732,6 +739,49 @@ public sealed class ContainerRuntimeService
         var silkRootStore = Path.Combine(request.ContainerDir, "silk-root");
         Directory.CreateDirectory(silkRootStore);
         return silkRootStore;
+    }
+
+    private static PathLocation? ResolveInitialWorkingDirectory(KernelRuntime runtime, string? configuredWorkingDir)
+    {
+        if (string.IsNullOrWhiteSpace(configuredWorkingDir))
+            return null;
+
+        var normalized = ContainerLaunchSpecResolver.NormalizeGuestAbsolutePath(configuredWorkingDir);
+        var (loc, guestPath) = runtime.Syscalls.ResolvePath(normalized, false);
+        if (!loc.IsValid || loc.Dentry?.Inode == null)
+            throw new ContainerConfigurationException($"working directory '{guestPath}' was not found.");
+        if (loc.Dentry.Inode.Type != InodeType.Directory)
+            throw new ContainerConfigurationException($"working directory '{guestPath}' is not a directory.");
+        return loc;
+    }
+
+    private static (PathLocation loc, string guestPath) ResolveExecutablePath(
+        KernelRuntime runtime,
+        string actualExe,
+        IReadOnlyList<string> finalEnvs,
+        string? workingDir)
+    {
+        if (actualExe.Contains('/'))
+            return runtime.Syscalls.ResolvePath(actualExe, true);
+
+        var baseDirectory = string.IsNullOrWhiteSpace(workingDir)
+            ? "/"
+            : ContainerLaunchSpecResolver.NormalizeGuestAbsolutePath(workingDir);
+        var pathValue = ContainerLaunchSpecResolver.TryGetEnvironmentValue(finalEnvs, "PATH")
+                        ?? ContainerLaunchSpecResolver.DefaultPathValue;
+
+        foreach (var pathSegment in pathValue.Split(':'))
+        {
+            var searchDirectory = string.IsNullOrEmpty(pathSegment)
+                ? baseDirectory
+                : ContainerLaunchSpecResolver.CombineGuestPath(baseDirectory, pathSegment);
+            var candidate = ContainerLaunchSpecResolver.CombineGuestPath(searchDirectory, actualExe);
+            var resolved = runtime.Syscalls.ResolvePath(candidate, false);
+            if (resolved.loc.IsValid)
+                return resolved;
+        }
+
+        return (PathLocation.None, actualExe);
     }
 
     private bool TryCreateLayerLower(DeviceNumberManager devNumbers, string ociStoreDir, out SuperBlock? lowerSb,

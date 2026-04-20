@@ -25,6 +25,7 @@ public sealed class PodishRunSpec
     public string? User { get; init; }
     public string? Exe { get; init; }
     public string[] ExeArgs { get; init; } = Array.Empty<string>();
+    public string? WorkingDir { get; init; }
     public string[] Volumes { get; init; } = Array.Empty<string>();
     public string[] Env { get; init; } = Array.Empty<string>();
     public string[] Dns { get; init; } = Array.Empty<string>();
@@ -493,6 +494,7 @@ public sealed class PodishContext : IDisposable
             User = spec.User,
             Exe = spec.Exe,
             ExeArgs = spec.ExeArgs,
+            WorkingDir = spec.WorkingDir,
             Volumes = spec.Volumes,
             Env = spec.Env,
             Dns = spec.Dns,
@@ -522,7 +524,8 @@ public sealed class PodishContext : IDisposable
     private async Task<PodishContainerSession> StartInternalAsync(PodishRunSpec spec, bool attachTerminalBridge,
         string? containerIdOverride = null,
         Func<DeviceNumberManager, SuperBlock>? rootFileSystemFactory = null,
-        string? rootFileSystemSource = null)
+        string? rootFileSystemSource = null,
+        bool specAlreadyResolved = false)
     {
         var useRootfs = !string.IsNullOrWhiteSpace(spec.Rootfs) || rootFileSystemFactory != null;
         if (!ContainerLogDriverParser.TryParse(spec.LogDriver, out var containerLogDriver))
@@ -561,6 +564,10 @@ public sealed class PodishContext : IDisposable
             image = rootfsPath;
         }
 
+        var effectiveSpec = specAlreadyResolved
+            ? spec
+            : ContainerLaunchSpecResolver.ResolveEffectiveSpec(spec, rootfsPath, useRootfs);
+
         var containerId = string.IsNullOrWhiteSpace(containerIdOverride)
             ? Guid.NewGuid().ToString("N")[..12]
             : containerIdOverride!;
@@ -572,28 +579,29 @@ public sealed class PodishContext : IDisposable
         eventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-create", containerId, imageRef));
 
         var bridge = attachTerminalBridge && spec.Interactive && spec.Tty ? new PodishTerminalBridge() : null;
-        if (bridge != null && spec.TerminalRows.HasValue && spec.TerminalCols.HasValue)
-            bridge.Resize(spec.TerminalRows.Value, spec.TerminalCols.Value);
+        if (bridge != null && effectiveSpec.TerminalRows.HasValue && effectiveSpec.TerminalCols.HasValue)
+            bridge.Resize(effectiveSpec.TerminalRows.Value, effectiveSpec.TerminalCols.Value);
         var processController = new ContainerProcessController();
         var request = new ContainerRunRequest
         {
             RootfsPath = rootfsPath,
             RootFileSystemFactory = rootFileSystemFactory,
             RootfsMode = useRootfs,
-            FileSystemBackend = ParseContainerFileSystemBackend(spec.FileSystemBackend,
+            FileSystemBackend = ParseContainerFileSystemBackend(effectiveSpec.FileSystemBackend,
                 useRootfs || rootFileSystemFactory != null),
-            Exe = spec.Exe ?? string.Empty,
-            ExeArgs = spec.ExeArgs,
-            Volumes = spec.Volumes,
-            GuestEnvs = spec.Env,
-            DnsServers = spec.Dns,
-            User = spec.User,
-            UseTty = spec.Interactive && spec.Tty,
-            Strace = spec.Strace,
+            Exe = effectiveSpec.Exe ?? string.Empty,
+            ExeArgs = effectiveSpec.ExeArgs,
+            WorkingDir = effectiveSpec.WorkingDir,
+            Volumes = effectiveSpec.Volumes,
+            GuestEnvs = effectiveSpec.Env,
+            DnsServers = effectiveSpec.Dns,
+            User = effectiveSpec.User,
+            UseTty = effectiveSpec.Interactive && effectiveSpec.Tty,
+            Strace = effectiveSpec.Strace,
             UseOverlay = !useRootfs && rootFileSystemFactory == null,
-            NetworkMode = spec.NetworkMode,
-            Hostname = spec.Hostname ?? spec.Name ?? containerId,
-            ContainerName = spec.Name,
+            NetworkMode = effectiveSpec.NetworkMode,
+            Hostname = effectiveSpec.Hostname ?? effectiveSpec.Name ?? containerId,
+            ContainerName = effectiveSpec.Name,
             ContainerId = containerId,
             Image = imageRef,
             ContainerDir = containerDir,
@@ -602,15 +610,15 @@ public sealed class PodishContext : IDisposable
             TerminalBridge = bridge,
             ProcessController = processController,
             EnableHostConsoleInput = !attachTerminalBridge,
-            PublishedPorts = spec.PublishedPorts,
-            UseEngineInit = spec.Init,
-            MemoryQuotaBytes = spec.MemoryQuotaBytes,
-            EnablePulseServer = spec.PulseServer,
-            EnableWaylandServer = spec.WaylandServer,
-            WaylandDesktopWidth = spec.WaylandDesktopWidth,
-            WaylandDesktopHeight = spec.WaylandDesktopHeight,
-            TerminalRows = spec.TerminalRows,
-            TerminalCols = spec.TerminalCols
+            PublishedPorts = effectiveSpec.PublishedPorts,
+            UseEngineInit = effectiveSpec.Init,
+            MemoryQuotaBytes = effectiveSpec.MemoryQuotaBytes,
+            EnablePulseServer = effectiveSpec.PulseServer,
+            EnableWaylandServer = effectiveSpec.WaylandServer,
+            WaylandDesktopWidth = effectiveSpec.WaylandDesktopWidth,
+            WaylandDesktopHeight = effectiveSpec.WaylandDesktopHeight,
+            TerminalRows = effectiveSpec.TerminalRows,
+            TerminalCols = effectiveSpec.TerminalCols
         };
         if (OperatingSystem.IsBrowser())
             return new PodishContainerSession(containerId, imageRef, () => RunInCurrentThreadAsync(request), bridge,
@@ -618,6 +626,12 @@ public sealed class PodishContext : IDisposable
 
         var runTask = RunInDedicatedRuntimeThreadAsync(request);
         return new PodishContainerSession(containerId, imageRef, runTask, bridge, processController);
+    }
+
+    public async Task<PodishContainerSession> StartResolvedAsync(PodishRunSpec spec, string? containerIdOverride = null)
+    {
+        using var _ = Logging.BeginScope(LoggerFactory);
+        return await StartInternalAsync(spec, true, containerIdOverride, specAlreadyResolved: true);
     }
 
     private Task<int> RunInCurrentThreadAsync(ContainerRunRequest request)

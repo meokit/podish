@@ -364,7 +364,9 @@ final class PodishRuntimeActor: @unchecked Sendable {
         networkMode: PodishNetworkMode,
         dnsServers: [String],
         portMappings: [PodishPortMapping],
-        memoryQuotaBytes: Int64?
+        memoryQuotaBytes: Int64?,
+        customExecutable: String?,
+        customArguments: [String]
     ) async throws -> String {
         try await perform { [self] state in
             try self.ensureContext(state: &state)
@@ -375,6 +377,8 @@ final class PodishRuntimeActor: @unchecked Sendable {
                 dnsServers: dnsServers,
                 portMappings: portMappings,
                 memoryQuotaBytes: memoryQuotaBytes,
+                customExecutable: customExecutable,
+                customArguments: customArguments,
                 state: &state
             )
         }
@@ -801,6 +805,8 @@ final class PodishRuntimeActor: @unchecked Sendable {
         dnsServers: [String],
         portMappings: [PodishPortMapping],
         memoryQuotaBytes: Int64?,
+        customExecutable: String?,
+        customArguments: [String],
         state: inout WorkerState
     ) throws -> String {
         guard let c = state.ctx else { throw PodishRuntimeError.native(code: -1, message: "context nil") }
@@ -818,8 +824,8 @@ final class PodishRuntimeActor: @unchecked Sendable {
             networkMode: networkMode.nativeValue,
             image: imageRef,
             rootfs: nil,
-            exe: "/bin/ash",
-            exeArgs: ["-i"],
+            exe: customExecutable,
+            exeArgs: customArguments,
             volumes: [],
             env: [],
             dns: dnsServers,
@@ -1278,7 +1284,9 @@ final class PodishTerminalSession: ObservableObject {
         networkMode: PodishNetworkMode,
         dnsServers: [String],
         portMappings: [PodishPortMapping],
-        memoryQuotaBytes: Int64?
+        memoryQuotaBytes: Int64?,
+        customExecutable: String?,
+        customArguments: [String]
     ) {
         Task {
             do {
@@ -1289,7 +1297,9 @@ final class PodishTerminalSession: ObservableObject {
                     networkMode: networkMode,
                     dnsServers: dnsServers,
                     portMappings: portMappings,
-                    memoryQuotaBytes: memoryQuotaBytes
+                    memoryQuotaBytes: memoryQuotaBytes,
+                    customExecutable: customExecutable,
+                    customArguments: customArguments
                 )
                 let containers = try await runtime.refreshContainers()
                 let keepCurrentActive = previousActiveId != nil

@@ -355,15 +355,7 @@ internal class Program
                 }
             }
 
-            Logger.LogInformation("Running image/rootfs: {Image}", imageRef);
-            if (!string.IsNullOrEmpty(exe))
-            {
-                Logger.LogInformation("Executing: {Exe} {Args}", exe, string.Join(" ", exeArgs));
-                Logger.LogInformation("Env: {Envs}", string.Join(", ", guestEnvs));
-            }
-
-            var now = DateTimeOffset.UtcNow;
-            var spec = new PodishRunSpec
+            var rawSpec = new PodishRunSpec
             {
                 Name = containerName,
                 Hostname = hostname,
@@ -390,6 +382,23 @@ internal class Program
                 LogDriver = containerLogDriver.ToCliValue(),
                 PublishedPorts = publishedPorts
             };
+            PodishRunSpec spec;
+            try
+            {
+                spec = ContainerLaunchSpecResolver.ResolveEffectiveSpec(rawSpec, rootfsPath, useRootfs);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[Podish.Cli] invalid container launch configuration: {ex.Message}");
+                context.ExitCode = 125;
+                return;
+            }
+
+            Logger.LogInformation("Running image/rootfs: {Image}", imageRef);
+            Logger.LogInformation("Executing: {Exe} {Args}", spec.Exe, string.Join(" ", spec.ExeArgs));
+            Logger.LogInformation("Env: {Envs}", string.Join(", ", spec.Env));
+
+            var now = DateTimeOffset.UtcNow;
             var metadata = new PodishContainerMetadata
             {
                 ContainerId = containerId,
@@ -412,32 +421,33 @@ internal class Program
 
             var exitCode = await RunContainer(
                 rootfsPath,
-                exe ?? string.Empty,
-                exeArgs,
-                volumes,
-                guestEnvs,
-                requestedUser,
-                dnsServers,
+                spec.Exe ?? string.Empty,
+                spec.ExeArgs,
+                spec.WorkingDir,
+                spec.Volumes,
+                spec.Env,
+                spec.User,
+                spec.Dns,
                 useRootfs,
-                interactive && tty,
-                strace,
-                useInit,
+                spec.Interactive && spec.Tty,
+                spec.Strace,
+                spec.Init,
                 fsBackend,
                 containersDir,
                 containerId,
                 containerName,
                 hostname,
-                networkMode,
+                spec.NetworkMode,
                 imageRef,
                 containerDir,
                 containerLogDriver,
                 eventStore,
-                publishedPorts,
+                spec.PublishedPorts,
                 guestStatsExportDir,
-                memoryQuotaBytes,
-                enablePulseServer,
-                enableWaylandServer,
-                waylandDesktopSize);
+                spec.MemoryQuotaBytes,
+                spec.PulseServer,
+                spec.WaylandServer,
+                new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight));
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -591,6 +601,21 @@ internal class Program
                 return;
             }
 
+            if (!hasEntrypointOverride && ContainerLaunchSpecResolver.NeedsLegacyNormalization(spec))
+            {
+                try
+                {
+                    spec = ContainerLaunchSpecResolver.ResolveEffectiveSpec(spec, rootfsPath, useRootfs);
+                    metadata.Spec = spec;
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[Podish.Cli] invalid container launch configuration: {ex.Message}");
+                    context.ExitCode = 125;
+                    return;
+                }
+            }
+
             Logger.LogInformation("Starting existing container {ContainerId}", containerId);
             if (hasEntrypointOverride)
             {
@@ -605,6 +630,7 @@ internal class Program
                 rootfsPath,
                 exeOverride ?? spec.Exe ?? string.Empty,
                 hasEntrypointOverride ? exeArgsOverride : spec.ExeArgs,
+                spec.WorkingDir,
                 spec.Volumes,
                 spec.Env,
                 spec.User,
@@ -1498,7 +1524,7 @@ internal class Program
         return containerId;
     }
 
-    private static Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string[] volumes,
+    private static Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string? workingDir, string[] volumes,
         string[] guestEnvs, string? user, string[] dnsServers, bool rootfsMode, bool useTty, bool strace, bool useEngineInit,
         ContainerFileSystemBackend fsBackend,
         string containersDir,
@@ -1522,6 +1548,7 @@ internal class Program
                 ContainerName = containerName,
                 Exe = exe,
                 ExeArgs = exeArgs,
+                WorkingDir = workingDir,
                 Volumes = volumes,
                 GuestEnvs = guestEnvs,
                 User = user,

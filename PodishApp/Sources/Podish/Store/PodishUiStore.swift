@@ -18,7 +18,7 @@ final class PodishUiStore: ObservableObject {
     var onStopContainer: ((String) -> Void)?
     var onRemoveContainer: ((String) -> Void)?
     var onAttachContainer: ((String) -> Void)?
-    var onCreateContainer: ((String, String?, PodishNetworkMode, [String], [PodishPortMapping], Int64?) -> Void)?
+    var onCreateContainer: ((String, String?, PodishNetworkMode, [String], [PodishPortMapping], Int64?, String?, [String]) -> Void)?
     var onPullImage: ((String) -> Void)?
     var onRemoveImage: ((String) -> Void)?
     var onShowNewContainer: (() -> Void)?
@@ -155,9 +155,12 @@ final class PodishUiStore: ObservableObject {
         networkMode: PodishNetworkMode,
         dnsServers: [String],
         portMappings: [PodishPortMapping],
-        memoryQuotaBytes: Int64?
+        memoryQuotaBytes: Int64?,
+        customExecutable: String?,
+        customArguments: [String]
     ) {
-        onCreateContainer?(imageRef, name, networkMode, dnsServers, portMappings, memoryQuotaBytes)
+        onCreateContainer?(imageRef, name, networkMode, dnsServers, portMappings, memoryQuotaBytes,
+                           customExecutable, customArguments)
     }
 
     func pullImage(_ imageRef: String) {

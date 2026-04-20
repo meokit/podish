@@ -28,7 +28,7 @@ public static class ProcessFactory
     public static FiberTask CreateInitProcess(KernelRuntime runtime, Dentry dentry, string guestPath, string[] args,
         string[] envs,
         KernelScheduler scheduler, TtyDiscipline? tty = null, Mount? mount = null, UTSNamespace? uts = null,
-        int parentPid = 0, Action<Process>? configureProcess = null)
+        int parentPid = 0, Action<Process>? configureProcess = null, PathLocation? initialWorkingDirectory = null)
     {
         var initPid = scheduler.AllocateTaskId();
         var proc = new Process(initPid, runtime.Memory, runtime.Syscalls, uts)
@@ -53,6 +53,9 @@ public static class ProcessFactory
         configureProcess?.Invoke(proc);
         scheduler.RegisterProcess(proc);
         scheduler.SetInitPid(proc.TGID);
+
+        if (initialWorkingDirectory is { IsValid: true } cwd)
+            proc.Syscalls.UpdateCurrentWorkingDirectory(cwd, "ProcessFactory.CreateInitProcess");
 
         FiberTask? mainTask = null;
         try

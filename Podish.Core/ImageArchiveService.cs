@@ -121,7 +121,12 @@ public sealed class ImageArchiveService
                     "linux",
                     new OciRootFs("layers", diffIds),
                     diffIds.Select(_ => new OciHistory("fiberpod save")).ToList(),
-                    new OciImageRuntimeConfig(storedImage.ConfigUser));
+                    new OciImageRuntimeConfig(
+                        storedImage.ConfigUser,
+                        storedImage.ConfigEntrypoint,
+                        storedImage.ConfigCmd,
+                        storedImage.ConfigEnv,
+                        storedImage.ConfigWorkingDir));
                 var configBytes = JsonSerializer.SerializeToUtf8Bytes(config, PodishJsonContext.Default.OciImageConfig);
                 var configHex = Sha256Hex(configBytes);
                 var configDigest = "sha256:" + configHex;
@@ -194,7 +199,7 @@ public sealed class ImageArchiveService
             var manifest =
                 JsonSerializer.Deserialize(File.ReadAllText(manifestBlobPath), PodishJsonContext.Default.OciManifest)
                 ?? throw new InvalidOperationException($"invalid manifest blob {manifestDesc.Digest}");
-            var configUser = ReadConfigUserFromBlob(extractedRoot, manifest.Config);
+            var runtimeConfig = ReadRuntimeConfigFromBlob(extractedRoot, manifest.Config);
 
             var safeName = ToSafeImageName(refName);
             var storeDir = Path.Combine(_ociImagesDir, safeName);
@@ -255,7 +260,11 @@ public sealed class ImageArchiveService
                 manifestDesc.Digest,
                 OciStorePath.RelativeStoreDirectory,
                 layers,
-                configUser);
+                runtimeConfig?.User,
+                runtimeConfig?.Entrypoint,
+                runtimeConfig?.Cmd,
+                runtimeConfig?.Env,
+                runtimeConfig?.WorkingDir);
             File.WriteAllText(Path.Combine(storeDir, "image.json"),
                 JsonSerializer.Serialize(stored, PodishJsonContext.Default.OciStoredImage));
             loaded.Add(refName);
@@ -264,7 +273,7 @@ public sealed class ImageArchiveService
         return loaded;
     }
 
-    private static string? ReadConfigUserFromBlob(string extractedRoot, OciDescriptor configDescriptor)
+    private static OciStoredImageRuntimeConfig? ReadRuntimeConfigFromBlob(string extractedRoot, OciDescriptor configDescriptor)
     {
         var configPath = OciBlobPath(extractedRoot, configDescriptor.Digest);
         if (!File.Exists(configPath))
@@ -273,7 +282,15 @@ public sealed class ImageArchiveService
         try
         {
             var config = JsonSerializer.Deserialize(File.ReadAllText(configPath), PodishJsonContext.Default.OciImageConfig);
-            return string.IsNullOrWhiteSpace(config?.Config?.User) ? null : config.Config.User;
+            if (config?.Config == null)
+                return null;
+
+            return new OciStoredImageRuntimeConfig(
+                string.IsNullOrWhiteSpace(config.Config.User) ? null : config.Config.User,
+                config.Config.Entrypoint,
+                config.Config.Cmd,
+                config.Config.Env,
+                string.IsNullOrWhiteSpace(config.Config.WorkingDir) ? null : config.Config.WorkingDir);
         }
         catch
         {
@@ -1026,7 +1043,13 @@ internal sealed record OciImageConfig(
     [property: JsonPropertyName("config")] OciImageRuntimeConfig? Config = null);
 
 internal sealed record OciImageRuntimeConfig(
-    [property: JsonPropertyName("User")] string? User);
+    [property: JsonPropertyName("User")] string? User,
+    [property: JsonPropertyName("Entrypoint")]
+    string[]? Entrypoint = null,
+    [property: JsonPropertyName("Cmd")] string[]? Cmd = null,
+    [property: JsonPropertyName("Env")] string[]? Env = null,
+    [property: JsonPropertyName("WorkingDir")]
+    string? WorkingDir = null);
 
 internal sealed record OciRootFs(
     [property: JsonPropertyName("type")] string Type,

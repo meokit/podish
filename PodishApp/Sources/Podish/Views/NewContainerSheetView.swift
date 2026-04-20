@@ -17,6 +17,22 @@ struct NewContainerSheetView: View {
         }
     }
 
+    private enum LaunchMode: String, CaseIterable, Identifiable {
+        case ociDefault
+        case custom
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .ociDefault:
+                return "OCI Default"
+            case .custom:
+                return "Custom Entry"
+            }
+        }
+    }
+
     @ObservedObject var store: PodishUiStore
     @Environment(\.dismiss) private var dismiss
 
@@ -26,8 +42,11 @@ struct NewContainerSheetView: View {
     @State private var memoryLimitText = "\(PodishMemoryLimits.defaultMemoryQuotaMB)"
     @State private var networkMode: PodishNetworkMode = .host
     @State private var dnsMode: DnsMode = .host
+    @State private var launchMode: LaunchMode = .ociDefault
     @State private var dnsServersText = ""
     @State private var portMappingsText = ""
+    @State private var customExecutable = ""
+    @State private var customArgumentsText = ""
     @State private var createError: String?
 
     var body: some View {
@@ -35,6 +54,7 @@ struct NewContainerSheetView: View {
             VStack(spacing: 12) {
                 pullSection
                 nameSection
+                launchSection
                 memorySection
                 networkSection
                 dnsSection
@@ -64,10 +84,13 @@ struct NewContainerSheetView: View {
                             let mappings: [PodishPortMapping]
                             let dnsServers: [String]
                             let memoryQuotaBytes: Int64?
+                            let customLaunchExecutable: String?
+                            let customLaunchArguments: [String]
                             do {
                                 mappings = try parsePortMappings()
                                 dnsServers = try parseDnsServers()
                                 memoryQuotaBytes = try parseMemoryQuotaBytes()
+                                (customLaunchExecutable, customLaunchArguments) = try parseLaunchConfiguration()
                             } catch {
                                 createError = error.localizedDescription
                                 return
@@ -80,7 +103,9 @@ struct NewContainerSheetView: View {
                                 networkMode: networkMode,
                                 dnsServers: dnsServers,
                                 portMappings: mappings,
-                                memoryQuotaBytes: memoryQuotaBytes
+                                memoryQuotaBytes: memoryQuotaBytes,
+                                customExecutable: customLaunchExecutable,
+                                customArguments: customLaunchArguments
                             )
                             dismiss()
                         }
@@ -213,6 +238,41 @@ struct NewContainerSheetView: View {
             Text("Minimum \(PodishMemoryLimits.minimumMemoryQuotaMB) MB. Leave blank to use the default workspace limit.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var launchSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Launch")
+                .font(.headline)
+            Picker("Launch", selection: $launchMode) {
+                ForEach(LaunchMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text(launchMode == .ociDefault
+                 ? "Use the image's OCI Entrypoint/Cmd."
+                 : "Override the image command with a custom executable and one argument per line.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if launchMode == .custom {
+                TextField("/bin/sh", text: $customExecutable)
+                    #if os(macOS)
+                    .textFieldStyle(.roundedBorder)
+                    #endif
+                TextEditor(text: $customArgumentsText)
+                    .frame(minHeight: 90)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(.secondary.opacity(0.25), lineWidth: 1)
+                    )
+                Text("Arguments are passed literally, one per line.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -461,6 +521,22 @@ struct NewContainerSheetView: View {
         }
 
         return servers
+    }
+
+    private func parseLaunchConfiguration() throws -> (String?, [String]) {
+        guard launchMode == .custom else {
+            return (nil, [])
+        }
+
+        let executable = customExecutable.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !executable.isEmpty else {
+            throw ParseError("Executable is required when using Custom Entry.")
+        }
+
+        let arguments = customArgumentsText
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+        return (executable, arguments)
     }
 
     private struct ParseError: LocalizedError {

@@ -113,6 +113,7 @@ struct NativeRunSpec: Decodable, Hashable, Sendable {
     let rootfs: String?
     let exe: String?
     let exeArgs: [String]
+    let workingDir: String?
     let volumes: [String]
     let env: [String]
     let dns: [String]
