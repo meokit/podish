@@ -3,7 +3,7 @@
 This software is released under a **Dual-Licensing** model:
 
 ### 1. Open Source Track (Non-Commercial)
-For individual, educational, and non-commercial open-source use, this software is licensed under the **GNU General Public License v3.0 (GPLv3)**. See the `licenses/GPT-3.0.txt` file for the full text.
+For individual, educational, and non-commercial open-source use, this software is licensed under the **GNU General Public License v3.0 (GPLv3)**. See the `licenses/GPL-3.0.txt` file for the full text.
 *Note: Any derivative works or distributions under this track must also be open-sourced under GPLv3.*
 
 ### 2. Commercial Track (Proprietary)
