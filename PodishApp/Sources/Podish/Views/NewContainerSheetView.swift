@@ -26,9 +26,9 @@ struct NewContainerSheetView: View {
         var displayName: String {
             switch self {
             case .ociDefault:
-                return "OCI Default"
+                return "Default"
             case .custom:
-                return "Custom Entry"
+                return "Custom"
             }
         }
     }
@@ -51,7 +51,7 @@ struct NewContainerSheetView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 12) {
                 pullSection
                 nameSection
                 launchSection
@@ -67,6 +67,8 @@ struct NewContainerSheetView: View {
                 }
             }
             .padding()
+            .frame(maxWidth: formContentWidth, maxHeight: .infinity, alignment: .topLeading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .navigationTitle("New Workspace")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -128,6 +130,14 @@ struct NewContainerSheetView: View {
         }
         #if os(macOS)
         .frame(minWidth: 560, minHeight: 420)
+        #endif
+    }
+
+    private var formContentWidth: CGFloat? {
+        #if os(macOS)
+        return 520
+        #else
+        return nil
         #endif
     }
 
@@ -251,6 +261,7 @@ struct NewContainerSheetView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
 
             Text(launchMode == .ociDefault
                  ? "Use the image's OCI Entrypoint/Cmd."
@@ -286,6 +297,7 @@ struct NewContainerSheetView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
 
             if networkMode == .privateNet {
                 VStack(alignment: .leading, spacing: 6) {
@@ -313,6 +325,7 @@ struct NewContainerSheetView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
 
             Text(dnsMode == .host
                  ? "Use the default name resolution settings."
