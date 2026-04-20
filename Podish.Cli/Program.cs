@@ -458,14 +458,36 @@ internal class Program
         // --- Start Command ---
         var startCommand = new Command("start", "Start an existing container by name or ID");
         var startContainerArgument = new Argument<string>("container", "Container name or ID");
+        var startStraceOption = new Option<bool>(
+            new[] { "--strace", "-s" },
+            "Enable syscall tracing (strace-like logs)");
+        var startArgsArgument = new Argument<string[]>(
+            "exe-args",
+            () => Array.Empty<string>(),
+            "Override the container entrypoint (exe [args...])")
+        {
+            Arity = ArgumentArity.ZeroOrMore
+        };
         startCommand.AddArgument(startContainerArgument);
+        startCommand.AddOption(startStraceOption);
         startCommand.AddOption(guestStatsExportDirOption);
+        startCommand.AddArgument(startArgsArgument);
         startCommand.SetHandler(async context =>
         {
             var containerId = context.ParseResult.GetValueForArgument(startContainerArgument);
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
             var guestStatsExportDir = context.ParseResult.GetValueForOption(guestStatsExportDirOption);
+            var startStrace = context.ParseResult.GetValueForOption(startStraceOption);
+            var startArgs = context.ParseResult.GetValueForArgument(startArgsArgument) ?? Array.Empty<string>();
+            var hasEntrypointOverride = startArgs.Length > 0;
+            string? exeOverride = null;
+            string[] exeArgsOverride = Array.Empty<string>();
+            if (hasEntrypointOverride)
+            {
+                exeOverride = startArgs[0];
+                exeArgsOverride = startArgs.Skip(1).ToArray();
+            }
 
             var fiberpodDir = Path.Combine(Directory.GetCurrentDirectory(), ".fiberpod");
             var imagesDir = Path.Combine(fiberpodDir, "images");
@@ -570,6 +592,10 @@ internal class Program
             }
 
             Logger.LogInformation("Starting existing container {ContainerId}", containerId);
+            if (hasEntrypointOverride)
+            {
+                Logger.LogInformation("Overriding entrypoint: {Exe} {Args}", exeOverride, string.Join(" ", exeArgsOverride));
+            }
             metadata.State = "running";
             metadata.Running = true;
             metadata.ExitCode = null;
@@ -577,15 +603,15 @@ internal class Program
             PodishContainerMetadataStore.Write(containersDir, metadata);
             var exitCode = await RunContainer(
                 rootfsPath,
-                spec.Exe ?? string.Empty,
-                spec.ExeArgs,
+                exeOverride ?? spec.Exe ?? string.Empty,
+                hasEntrypointOverride ? exeArgsOverride : spec.ExeArgs,
                 spec.Volumes,
                 spec.Env,
                 spec.User,
                 spec.Dns,
                 !string.IsNullOrWhiteSpace(spec.Rootfs),
                 spec.Interactive && spec.Tty,
-                spec.Strace,
+                startStrace || spec.Strace,
                 spec.Init,
                 fsBackend,
                 containersDir,
