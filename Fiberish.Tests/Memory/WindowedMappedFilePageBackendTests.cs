@@ -155,11 +155,8 @@ public class WindowedMappedFilePageBackendTests
     }
 
     [Fact]
-    public void PartialTailPage_OnUnix_UsesDirectMappedWindow()
+    public void PartialTailPage_UsesDirectMappedWindow()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var path = Path.Combine(Path.GetTempPath(), $"mapped-backend-tail-{Guid.NewGuid():N}.bin");
         var fileSize = LinuxConstants.PageSize + 123;
         File.WriteAllBytes(path, BuildFile(fileSize, (byte)'t'));
@@ -187,6 +184,48 @@ public class WindowedMappedFilePageBackendTests
         {
             if (File.Exists(path)) File.Delete(path);
         }
+    }
+
+    [Fact]
+    public void TryGetPageFlushRange_UsesSingleGuestPageWhenHostPageMatches()
+    {
+        Assert.True(WindowedMappedFilePageBackend.TryGetPageFlushRange(
+            2 * 1024 * 1024,
+            LinuxConstants.PageSize,
+            LinuxConstants.PageSize,
+            out var flushOffset,
+            out var flushLength));
+
+        Assert.Equal(LinuxConstants.PageSize, flushOffset);
+        Assert.Equal(LinuxConstants.PageSize, flushLength);
+    }
+
+    [Fact]
+    public void TryGetPageFlushRange_AlignsToHostPageBoundary()
+    {
+        Assert.True(WindowedMappedFilePageBackend.TryGetPageFlushRange(
+            2 * 1024 * 1024,
+            LinuxConstants.PageSize,
+            LinuxConstants.PageSize * 4,
+            out var flushOffset,
+            out var flushLength));
+
+        Assert.Equal(0, flushOffset);
+        Assert.Equal(LinuxConstants.PageSize * 2, flushLength);
+    }
+
+    [Fact]
+    public void TryGetPageFlushRange_ClipsTailPageToMappedBytes()
+    {
+        Assert.True(WindowedMappedFilePageBackend.TryGetPageFlushRange(
+            LinuxConstants.PageSize + 123,
+            LinuxConstants.PageSize,
+            LinuxConstants.PageSize,
+            out var flushOffset,
+            out var flushLength));
+
+        Assert.Equal(LinuxConstants.PageSize, flushOffset);
+        Assert.Equal(123, flushLength);
     }
 
     private static byte[] BuildPage(byte fill)
