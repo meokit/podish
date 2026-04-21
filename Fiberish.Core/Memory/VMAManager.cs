@@ -41,6 +41,7 @@ public class VMAManager
     }
 
     public ProcessPageManager PageMapping { get; }
+    public GuestAddressSpaceLayout? Layout { get; set; }
     internal ProcessAddressSpaceHandle? AddressSpaceHandle { get; private set; }
     internal MemoryRuntimeContext MemoryContext { get; }
 
@@ -1157,7 +1158,8 @@ public class VMAManager
             throw new OutOfMemoryException("Mapping range overflow");
         }
 
-        if (end > LinuxConstants.TaskSize32)
+        var taskSize = Layout?.TaskSize ?? LinuxConstants.TaskSize32;
+        if (end > taskSize)
             throw new OutOfMemoryException("Mapping exceeds user task address space");
 
         if (CheckOverlap(addr, end))
@@ -1253,6 +1255,7 @@ public class VMAManager
     {
         skippedDontForkRanges = [];
         var newMM = new VMAManager(MemoryContext);
+        newMM.Layout = Layout?.Clone();
         foreach (var vma in _vmas)
         {
             if (vma.DontFork)
@@ -1369,6 +1372,8 @@ public class VMAManager
                 Offset = vma.File != null ? oldOffset + midDiff : 0,
                 VmPgoff = vma.GetPageIndex(overlapStart),
                 DontFork = dontFork,
+                GrowDownLimit = vma.GrowDownLimit,
+                GrowDownGuardGap = vma.GrowDownGuardGap,
                 Name = vma.Name,
                 VmMapping = vma.VmMapping,
                 VmAnonVma = ShareVmAnonVmaForSplit(vma),
@@ -1404,6 +1409,8 @@ public class VMAManager
                     Offset = vma.File != null ? oldOffset + rightDiff : 0,
                     VmPgoff = vma.GetPageIndex(overlapEnd),
                     DontFork = oldDontFork,
+                    GrowDownLimit = vma.GrowDownLimit,
+                    GrowDownGuardGap = vma.GrowDownGuardGap,
                     Name = vma.Name,
                     VmMapping = vma.VmMapping,
                     VmAnonVma = ShareVmAnonVmaForSplit(vma),
@@ -1424,6 +1431,8 @@ public class VMAManager
                 vma.Offset = mid.Offset;
                 vma.VmPgoff = mid.VmPgoff;
                 vma.DontFork = mid.DontFork;
+                vma.GrowDownLimit = mid.GrowDownLimit;
+                vma.GrowDownGuardGap = mid.GrowDownGuardGap;
                 vma.Name = mid.Name;
                 vma.VmMapping = mid.VmMapping;
                 vma.VmAnonVma = mid.VmAnonVma;
@@ -1646,6 +1655,8 @@ public class VMAManager
                         VmAnonVma = ShareVmAnonVmaForSplit(vma),
                         VmPgoff = vma.GetPageIndex(tailStart),
                         DontFork = vma.DontFork,
+                        GrowDownLimit = vma.GrowDownLimit,
+                        GrowDownGuardGap = vma.GrowDownGuardGap,
                         SyntheticZeroStart = vma.SyntheticZeroStart,
                         SyntheticZeroEnd = vma.SyntheticZeroEnd
                     };
@@ -1816,6 +1827,8 @@ public class VMAManager
                     FileMapping = null,
                     Offset = vma.File != null ? oldOffset + midDiff : 0,
                     DontFork = vma.DontFork,
+                    GrowDownLimit = vma.GrowDownLimit,
+                    GrowDownGuardGap = vma.GrowDownGuardGap,
                     Name = vma.Name,
                     VmMapping = vma.VmMapping,
                     VmAnonVma = ShareVmAnonVmaForSplit(vma),
@@ -1853,6 +1866,8 @@ public class VMAManager
                         FileMapping = originalFileMapping?.AddRef(),
                         Offset = vma.File != null ? oldOffset + rightDiff : 0,
                         DontFork = vma.DontFork,
+                        GrowDownLimit = vma.GrowDownLimit,
+                        GrowDownGuardGap = vma.GrowDownGuardGap,
                         Name = vma.Name,
                         VmMapping = vma.VmMapping,
                         VmAnonVma = ShareVmAnonVmaForSplit(vma),
@@ -1875,6 +1890,8 @@ public class VMAManager
                     vma.FileMapping = mid.FileMapping;
                     vma.Offset = mid.Offset;
                     vma.DontFork = mid.DontFork;
+                    vma.GrowDownLimit = mid.GrowDownLimit;
+                    vma.GrowDownGuardGap = mid.GrowDownGuardGap;
                     vma.Name = mid.Name;
                     vma.VmPgoff = mid.VmPgoff;
                     vma.VmMapping = mid.VmMapping;
@@ -1991,10 +2008,14 @@ public class VMAManager
         // Prefer high addresses for auto-selected mappings so brk growth and low-address
         // reservations keep a larger contiguous window. This matches Node/V8 workloads
         // better than the old low-address first-fit policy.
-        var gapEnd = LinuxConstants.TaskSize32;
+        // Start from MmapBase to leave space for stack gap and fixed mappings.
+        var gapEnd = Layout?.MmapBase ?? LinuxConstants.TaskSize32;
         for (var i = _vmas.Count - 1; i >= 0; i--)
         {
             var vma = _vmas[i];
+            if (vma.Start >= gapEnd)
+                continue;
+
             if (TryFitRegionBelow(gapEnd, vma.End, size, out var candidate))
                 return candidate;
 
@@ -2525,7 +2546,7 @@ public class VMAManager
 
     public FaultResult HandleFaultDetailed(uint addr, bool isWrite, Engine engine)
     {
-        var vma = FindVmArea(addr);
+        var vma = FindVmArea(addr) ?? TryExpandGrowDownVma(addr);
         if (vma == null)
         {
             Logger.LogWarning("No VmArea found for address 0x{Addr:x}", addr);
@@ -2544,6 +2565,41 @@ public class VMAManager
             : ResolveSharedMappingFault(vma, addr, pageStart, pageIndex, isWrite, engine);
 
         return result;
+    }
+
+    private VmArea? TryExpandGrowDownVma(uint addr)
+    {
+        var pageStart = addr & LinuxConstants.PageMask;
+        for (var i = 0; i < _vmas.Count; i++)
+        {
+            var candidate = _vmas[i];
+            if (pageStart >= candidate.Start)
+                continue;
+
+            if ((candidate.Flags & MapFlags.GrowDown) == 0)
+                return null;
+
+            if (candidate.GrowDownLimit != 0 && pageStart < candidate.GrowDownLimit)
+                return null;
+
+            var guardStart = LinuxConstants.MinMmapAddr;
+            if (i > 0)
+                guardStart = _vmas[i - 1].End + LinuxConstants.PageSize;
+
+            if (pageStart < guardStart)
+                return null;
+
+            var growPages = (candidate.Start - pageStart) / LinuxConstants.PageSize;
+            if (growPages > candidate.VmPgoff)
+                return null;
+
+            candidate.Start = pageStart;
+            candidate.VmPgoff -= growPages;
+            _lastFaultVma = candidate;
+            return candidate;
+        }
+
+        return null;
     }
 
     public bool HandleFault(uint addr, bool isWrite, Engine engine)

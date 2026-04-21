@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Buffers.Binary;
-using System.Security.Cryptography;
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Diagnostics;
@@ -19,16 +18,15 @@ public class LoaderResult
     public uint SP { get; set; }
     public byte[] InitialStack { get; set; } = [];
     public uint BrkAddr { get; set; }
+    public GuestAddressSpaceLayout Layout { get; set; } = null!;
 }
 
 public class ElfLoader
 {
-    public const uint StackTop = LinuxConstants.TaskSize32;
-    public const uint StackSize = 0x800000;
     private static readonly ILogger Logger = Logging.CreateLogger<ElfLoader>();
 
     public static LoaderResult Load(Dentry dentry, string guestPath, SyscallManager sys, string[] args,
-        string[] envs, Mount mount)
+        string[] envs, Mount mount, GuestAddressSpaceLayout layout)
     {
         var mm = sys.Mem;
         var engine = sys.CurrentSyscallEngine;
@@ -38,7 +36,7 @@ public class ElfLoader
         using var stream = new VfsStream(mainFile);
         var elf = Elf32Reader.Read(stream);
 
-        var loadBase = elf.FileType == ElfFileType.Executable ? 0u : 0x40000000;
+        var loadBase = elf.FileType == ElfFileType.Executable ? 0u : layout.PieBase;
         Logger.LogDebug("ElfLoader: {Filename} FileType={Type}, selected loadBase=0x{LoadBase:x}", guestPath,
             elf.FileType, loadBase);
 
@@ -64,7 +62,7 @@ public class ElfLoader
             var interpElf = Elf32Reader.Read(interpStream);
 
             if (interpElf.FileType == ElfFileType.Dynamic)
-                interpBase = 0x56555000; // Load ld.so at a distinct base
+                interpBase = layout.InterpreterBaseHint;
             else
                 throw new NotSupportedException($"Unsupported interpreter type: {interpElf.FileType}");
 
@@ -74,31 +72,7 @@ public class ElfLoader
             interpEntry = interpInfo.EntryPoint;
         }
 
-        // Setup Stack
-        var stackStart = StackTop - StackSize;
-        ProcessAddressSpaceSync.Mmap(mm, engine, stackStart, StackSize, Protection.Read | Protection.Write,
-            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "STACK");
-
-        var salt = "fiberish-salt-2024"u8;
-        var randBytes = new byte[16];
-        var guestPathByteCount = Encoding.ASCII.GetByteCount(guestPath);
-        var hashInputLen = salt.Length + guestPathByteCount;
-        byte[]? rentedHashInput = null;
-        var hashInput = hashInputLen <= 256
-            ? stackalloc byte[hashInputLen]
-            : (rentedHashInput = ArrayPool<byte>.Shared.Rent(hashInputLen)).AsSpan(0, hashInputLen);
-        try
-        {
-            salt.CopyTo(hashInput);
-            Encoding.ASCII.GetBytes(guestPath, hashInput[salt.Length..]);
-            var fullHash = SHA256.HashData(hashInput);
-            fullHash.AsSpan(0, randBytes.Length).CopyTo(randBytes);
-        }
-        finally
-        {
-            if (rentedHashInput != null)
-                ArrayPool<byte>.Shared.Return(rentedHashInput);
-        }
+        var randBytes = layout.AuxRandomBytes;
 
         static uint GetAsciiStringSize(string value)
         {
@@ -115,10 +89,10 @@ public class ElfLoader
         var totalWords = 1 + args.Length + 1 + envs.Length + 1 + AuxEntryCount * 2;
         var totalSize = totalWords * 4;
 
-        var initialTargetSp = StackTop - variableDataSize - (uint)totalSize;
+        var initialTargetSp = layout.InitialStackTop - variableDataSize - (uint)totalSize;
         var finalSp = initialTargetSp & ~0xFu;
-        var stackData = new byte[StackTop - finalSp];
-        var sp = StackTop;
+        var stackData = new byte[layout.InitialStackTop - finalSp];
+        var sp = layout.InitialStackTop;
 
         uint PushBytes(ReadOnlySpan<byte> bytes)
         {
@@ -196,6 +170,24 @@ public class ElfLoader
 
         PushUint32((uint)args.Length);
 
+        var stackMapStart = finalSp & LinuxConstants.PageMask;
+        if (stackMapStart < layout.StackLowerBound)
+            throw new InvalidOperationException(
+                $"Initial stack exceeds RLIMIT-derived range: start=0x{stackMapStart:x}, lower=0x{layout.StackLowerBound:x}");
+
+        var stackMapLen = layout.InitialStackTop - stackMapStart;
+        ProcessAddressSpaceSync.Mmap(mm, engine, stackMapStart, stackMapLen, Protection.Read | Protection.Write,
+            MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous | MapFlags.GrowDown | MapFlags.Stack,
+            null, 0, "STACK");
+
+        var stackVma = mm.FindVmArea(sp);
+        if (stackVma == null)
+            throw new InvalidOperationException("Initial stack VMA missing after mmap.");
+
+        stackVma.GrowDownLimit = layout.StackLowerBound;
+        stackVma.GrowDownGuardGap = layout.StackGuardGap;
+        stackVma.VmPgoff = (stackVma.Start - layout.StackLowerBound) / LinuxConstants.PageSize;
+
         sys.CurrentSyscallEngine.ResetAllCodeCache();
 
         // If there's an interpreter, start execution at interpreter's entry point; 
@@ -207,7 +199,8 @@ public class ElfLoader
             Entry = entryPoint,
             SP = sp,
             InitialStack = stackData.AsSpan((int)(sp - finalSp)).ToArray(),
-            BrkAddr = mainInfo.BrkAddr
+            BrkAddr = mainInfo.BrkAddr,
+            Layout = layout
         };
         Logger.LogInformation(
             "ElfLoader Entry=0x{Entry:x} SP=0x{SP:x} Brk=0x{Brk:x} InitialStackLen={StackLen} InterpBase=0x{InterpBase:x}",

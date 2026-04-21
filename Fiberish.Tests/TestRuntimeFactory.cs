@@ -11,6 +11,11 @@ internal sealed class TestRuntimeFactory
     {
     }
 
+    public TestRuntimeFactory(ulong deterministicAslrSeed)
+        : this(CreateDeterministicMemoryContext(deterministicAslrSeed))
+    {
+    }
+
     public TestRuntimeFactory(HostMemoryMapGeometry hostMemoryMapGeometry)
         : this(new MemoryRuntimeContext(hostMemoryMapGeometry))
     {
@@ -23,6 +28,14 @@ internal sealed class TestRuntimeFactory
     }
 
     public MemoryRuntimeContext MemoryContext { get; }
+
+    public static MemoryRuntimeContext CreateDeterministicMemoryContext(ulong deterministicAslrSeed)
+    {
+        return new MemoryRuntimeContext
+        {
+            DeterministicAslrSeed = deterministicAslrSeed
+        };
+    }
 
     public Engine CreateEngine()
     {

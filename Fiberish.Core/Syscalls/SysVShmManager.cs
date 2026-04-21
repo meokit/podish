@@ -196,7 +196,8 @@ public class SysVShmManager
                 return -(int)Errno.EINVAL;
         }
 
-        if (!TryComputeRangeEnd(attachAddr, segment.Size, out var attachEnd))
+        var taskSize = vmaManager.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
+        if (!TryComputeRangeEnd(attachAddr, segment.Size, taskSize, out var attachEnd))
             return -(int)Errno.EINVAL;
 
         // Check for overlapping VMAs unless SHM_REMAP is specified
@@ -465,7 +466,8 @@ public class SysVShmManager
             var attach = _attaches[i];
             if (!ReferenceEquals(attach.AddressSpace, vmaManager)) continue;
             if (!_segmentsByShmid.TryGetValue(attach.Shmid, out var segment)) continue;
-            if (!TryComputeRangeEnd(attach.BaseAddr, segment.Size, out var attachEnd)) continue;
+            var taskSize = vmaManager.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
+            if (!TryComputeRangeEnd(attach.BaseAddr, segment.Size, taskSize, out var attachEnd)) continue;
             if (attach.BaseAddr >= end || attachEnd <= start) continue;
 
             _attaches.RemoveAt(i);
@@ -478,12 +480,12 @@ public class SysVShmManager
         }
     }
 
-    private static bool TryComputeRangeEnd(uint start, uint size, out uint end)
+    private static bool TryComputeRangeEnd(uint start, uint size, uint taskSize, out uint end)
     {
         end = 0;
         if (size == 0) return false;
         var end64 = (ulong)start + size;
-        if (end64 > LinuxConstants.TaskSize32) return false;
+        if (end64 > taskSize) return false;
         end = (uint)end64;
         return end > start;
     }

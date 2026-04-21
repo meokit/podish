@@ -825,7 +825,7 @@ public class CloneThreadLifecycleTests
         var rc = await CallSys(env.SyscallManager, env.Engine, "SysMmap2", addr, LinuxConstants.PageSize,
             (uint)(Protection.Read | Protection.Write),
             (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed));
-        Assert.Equal((int)addr, rc);
+        Assert.Equal(addr, (uint)rc);
 
         Assert.True(peer.CPU.CopyFromUser(addr, valueBuf));
         Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(valueBuf));
@@ -857,7 +857,7 @@ public class CloneThreadLifecycleTests
         Assert.Equal(0xDEADBEEFu, BinaryPrimitives.ReadUInt32LittleEndian(valueBuf));
 
         var rc = await CallSys(env.SyscallManager, peer.CPU, "SysMremap", addr, twoPages, LinuxConstants.PageSize);
-        Assert.Equal((int)addr, rc);
+        Assert.Equal(addr, (uint)rc);
 
         Assert.Equal(IntPtr.Zero, env.Engine.GetPhysicalAddressSafe(addr + LinuxConstants.PageSize, false));
         Assert.Equal(IntPtr.Zero, peer.CPU.GetPhysicalAddressSafe(addr + LinuxConstants.PageSize, false));
@@ -886,7 +886,7 @@ public class CloneThreadLifecycleTests
 
         var attachRc = env.SyscallManager.SysVShm.ShmAt(shmid, addr, LinuxConstants.SHM_REMAP, env.Process.TGID,
             env.Vma, env.Engine, env.Process);
-        Assert.Equal(addr, attachRc);
+        Assert.Equal(addr, (uint)attachRc);
 
         ProcessAddressSpaceSync.SyncEngineBeforeRun(env.Vma, peer.CPU, env.Process);
         Assert.True(peer.CPU.CopyFromUser(addr, valueBuf));

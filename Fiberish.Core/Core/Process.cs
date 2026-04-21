@@ -264,7 +264,13 @@ public class Process
         var resolved = ResolveExecutableImage(dentry, guestPath, args, mount);
         UpdateProcessImage(resolved.GuestPath, resolved.Args);
 
-        var res = ElfLoader.Load(resolved.Dentry, resolved.GuestPath, Syscalls, resolved.Args, envs, resolved.Mount);
+        var stackLimit = ResourceLimits[LinuxConstants.RLIMIT_STACK];
+        var randBytes = Mem.MemoryContext.CreateExecRandomBytes(32, resolved.GuestPath);
+        var layout = GuestAddressSpaceLayout.CreateCompat32(stackLimit, randBytes);
+        Syscalls.Mem.Layout = layout;
+        Syscalls.SetupVDSO();
+
+        var res = ElfLoader.Load(resolved.Dentry, resolved.GuestPath, Syscalls, resolved.Args, envs, resolved.Mount, layout);
         Syscalls.BrkAddr = res.BrkAddr;
 
         // Setup CPU State
@@ -396,10 +402,7 @@ public class Process
         // Dispositions explicitly set to SIG_IGN stay ignored.
         ResetSignalDispositionsForExec();
 
-        // 2. Re-setup vDSO (Important! execve clears memory map including vDSO)
-        Syscalls.SetupVDSO();
-
-        // 3. Load Executable
+        // 2. Load Executable
         // LoadExecutable handles ELF loading, stack setup and CPU state reset
         LoadExecutable(dentry, guestPath, args, envs, mount);
     }

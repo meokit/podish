@@ -13,9 +13,12 @@ public partial class SyscallManager
     private async ValueTask<int> SysBrk(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var newBrk = a1;
+        var taskSize = Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
         if (newBrk == 0) return (int)BrkAddr;
 
         if (newBrk < BrkBase)
+            return (int)BrkAddr;
+        if (newBrk > taskSize)
             return (int)BrkAddr;
 
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine);

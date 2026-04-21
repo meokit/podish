@@ -37,6 +37,8 @@ public class VmArea
     public long Offset { get; set; }
     public ulong VmPgoff { get; set; }
     public bool DontFork { get; set; }
+    public uint GrowDownLimit { get; set; }
+    public uint GrowDownGuardGap { get; set; }
 
     public string Name { get; set; } = string.Empty;
     public AddressSpace? VmMapping { get; set; }
@@ -171,6 +173,8 @@ public class VmArea
             Offset = Offset,
             VmPgoff = VmPgoff,
             DontFork = DontFork,
+            GrowDownLimit = GrowDownLimit,
+            GrowDownGuardGap = GrowDownGuardGap,
             Name = Name,
             VmMapping = VmMapping,
             VmAnonVma = privateObj,

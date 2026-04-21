@@ -152,8 +152,8 @@ public static class LinuxConstants
 
     public const uint MinMmapAddr = 0x10000;
 
-    // Simulate a 2G/2G split: user mappings stay in the low 2 GiB.
-    public const uint TaskSize32 = 0x80000000;
+    // x86_64 compat 32-bit layout: user address space top (task_size=0xffffe000)
+    public const uint TaskSize32 = 0xffffe000;
 
     // madvise behaviors
     public const uint MADV_DONTNEED = 4;

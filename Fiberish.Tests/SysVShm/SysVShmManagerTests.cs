@@ -16,7 +16,7 @@ public class SysVShmManagerTests
         var shmid1 = ctx.Manager.ShmGet(0x1234, 4096, LinuxConstants.IPC_CREAT | 0x1FF, 1000, 1000, 2000);
         var shmid2 = ctx.Manager.ShmGet(0x1234, 4096, LinuxConstants.IPC_CREAT | 0x1FF, 1000, 1000, 2000);
 
-        Assert.True(shmid1 > 0);
+        Assert.True((uint)shmid1 < 0xFFFFF000u);
         Assert.Equal(shmid1, shmid2);
     }
 
@@ -63,7 +63,7 @@ public class SysVShmManagerTests
         Assert.Equal(addr, ret1);
 
         var ret2 = ctx.Manager.ShmAt(shmid2, addr, 0, 2000, ctx.Vma, ctx.Engine);
-        Assert.Equal(-(int)Errno.EINVAL, (int)ret2);
+        Assert.Equal(-(long)Errno.EINVAL, ret2);
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class SysVShmManagerTests
         // Shared VM (CLONE_VM-style): peer process should be able to detach by address space.
         var detachRet = manager.ShmDt(addr, 3102, p2.Vma, p2.Engine, p2.Process);
         Assert.Equal(0, detachRet);
-        Assert.Equal(-(int)Errno.EINVAL, manager.ShmDt(addr, 3101, p1.Vma, p1.Engine, p1.Process));
+        Assert.Equal(-(long)Errno.EINVAL, manager.ShmDt(addr, 3101, p1.Vma, p1.Engine, p1.Process));
     }
 
     [Fact]
@@ -203,7 +203,7 @@ public class SysVShmManagerTests
         Assert.True(shmid > 0);
 
         var ret = ctx.Manager.ShmAt(shmid, 0, LinuxConstants.SHM_REMAP, 2000, ctx.Vma, ctx.Engine, ctx.Process);
-        Assert.Equal(-(int)Errno.EINVAL, (int)ret);
+        Assert.Equal(-(long)Errno.EINVAL, ret);
     }
 
     [Fact]
@@ -222,7 +222,7 @@ public class SysVShmManagerTests
 
         // Only the new mapping should remain attached.
         Assert.Equal(0, ctx.Manager.ShmDt(addr, 3001, ctx.Vma, ctx.Engine, ctx.Process));
-        Assert.Equal(-(int)Errno.EINVAL, ctx.Manager.ShmDt(addr, 3001, ctx.Vma, ctx.Engine, ctx.Process));
+        Assert.Equal(-(long)Errno.EINVAL, ctx.Manager.ShmDt(addr, 3001, ctx.Vma, ctx.Engine, ctx.Process));
     }
 
     [Fact]
@@ -236,6 +236,45 @@ public class SysVShmManagerTests
         var addr = LinuxConstants.TaskSize32 - LinuxConstants.PageSize;
         var ret = ctx.Manager.ShmAt(shmid, addr, 0, 3001, ctx.Vma, ctx.Engine, ctx.Process);
         Assert.Equal(-(int)Errno.EINVAL, (int)ret);
+    }
+
+    [Fact]
+    public void ShmAt_UsesLayoutTaskSizeUpperBound()
+    {
+        using var ctx = new TestContext();
+        ctx.Vma.Layout = CreateLayoutWithTaskSize(0x20000000);
+
+        var shmid = ctx.Manager.ShmGet(LinuxConstants.IPC_PRIVATE, LinuxConstants.PageSize * 2, 0x1FF, 0, 0, 3001);
+        Assert.True(shmid > 0);
+
+        var ret = ctx.Manager.ShmAt(shmid, 0x1ffff000, 0, 3001, ctx.Vma, ctx.Engine, ctx.Process);
+        Assert.Equal(-(int)Errno.EINVAL, (int)ret);
+    }
+
+    private static GuestAddressSpaceLayout CreateLayoutWithTaskSize(uint taskSize)
+    {
+        var baseLayout = GuestAddressSpaceLayout.CreateCompat32(
+            new ResourceLimit(LinuxConstants.RLIM64_INFINITY, LinuxConstants.RLIM64_INFINITY),
+            Enumerable.Range(0, 32).Select(i => (byte)(i * 5 + 1)).ToArray());
+        var stackTopMax = taskSize - LinuxConstants.PageSize * 2;
+        var initialStackTop = stackTopMax - LinuxConstants.PageSize * 4;
+        var mmapBase = taskSize - 0x02000000;
+        return new GuestAddressSpaceLayout
+        {
+            TaskSize = taskSize,
+            StackTopMax = stackTopMax,
+            InitialStackTop = initialStackTop,
+            StackLowerBound = initialStackTop - 0x00100000,
+            MmapBase = mmapBase,
+            LegacyMmapBase = Math.Min(baseLayout.LegacyMmapBase, mmapBase - LinuxConstants.PageSize),
+            PieBase = Math.Min(baseLayout.PieBase, mmapBase - 0x00400000),
+            InterpreterBaseHint = Math.Min(baseLayout.InterpreterBaseHint, mmapBase - 0x00200000),
+            VdsoBaseHint = taskSize - LinuxConstants.PageSize,
+            StackRandomOffset = 0,
+            MmapRandomOffset = 0,
+            StackGuardGap = baseLayout.StackGuardGap,
+            AuxRandomBytes = baseLayout.AuxRandomBytes.ToArray()
+        };
     }
 
     private sealed class TestContext : IDisposable

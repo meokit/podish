@@ -477,8 +477,12 @@ public partial class SyscallManager
 
     internal void SetupVDSO()
     {
+        if (SigReturnAddr != 0)
+            ProcessAddressSpaceSync.Munmap(Mem, CurrentSyscallEngine, SigReturnAddr & LinuxConstants.PageMask,
+                LinuxConstants.PageSize);
+
         // Map vDSO page writable for setup first, then reprotect it RX after the trampolines are installed.
-        uint vdsoAddr = 0x7FFF0000;
+        var vdsoAddr = Mem.Layout?.VdsoBaseHint ?? (LinuxConstants.TaskSize32 - LinuxConstants.PageSize);
         ProcessAddressSpaceSync.Mmap(Mem, CurrentSyscallEngine, vdsoAddr, 4096, Protection.Read | Protection.Write,
             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[vdso]");
 

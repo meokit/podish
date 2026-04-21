@@ -1331,7 +1331,7 @@ public class OpenTruncateSyscallTests
             (uint)(Protection.Read | Protection.Write),
             (uint)(MapFlags.Shared | MapFlags.Fixed),
             (uint)fd);
-        Assert.Equal((int)mapAddr, mmapRc);
+        Assert.Equal(mapAddr, (uint)mmapRc);
 
         Assert.Equal(FaultResult.BusError,
             env.Vma.HandleFaultDetailed(mapAddr + LinuxConstants.PageSize, true, env.Engine));

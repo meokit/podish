@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Reflection;
 using System.Text;
 using Fiberish.Core;
@@ -172,6 +173,76 @@ public class ExecveErrorMappingTests
         {
             Directory.Delete(root, true);
         }
+    }
+
+    [Fact]
+    public async Task SysExecve_AfterPrlimitStack_MapsGrowDownStackAndCpuWriteExpandsIt()
+    {
+        const ulong stackSoftLimitBytes = 64UL * 1024;
+        const ulong stackHardLimitBytes = 8UL * 1024 * 1024;
+        using var env = ExecveEnv.Create(9212, 0x1122_3344_5566_7788);
+
+        const uint limitPtr = 0x61102000;
+        MapUserPage(env.Process.Mem, env.Engine, limitPtr);
+        WriteRlimit64(env.Engine, limitPtr, stackSoftLimitBytes, stackHardLimitBytes);
+
+        Assert.Equal(0, await Call(env.Syscalls, "SysPrlimit64", 0,
+            unchecked((uint)LinuxConstants.RLIMIT_STACK), limitPtr, 0, 0, 0));
+        Assert.Equal(0, await env.ExecHelloStatic());
+
+        var layout = Assert.IsType<GuestAddressSpaceLayout>(env.Process.Mem.Layout);
+        var stackVma = env.StackVma;
+        Assert.Equal((uint)stackSoftLimitBytes, layout.InitialStackTop - layout.StackLowerBound);
+        Assert.Equal(layout.StackLowerBound, stackVma.GrowDownLimit);
+        Assert.True((stackVma.Flags & MapFlags.GrowDown) != 0);
+        Assert.True((stackVma.Flags & MapFlags.Stack) != 0);
+
+        var growAddr = stackVma.Start - LinuxConstants.PageSize;
+        var payload = new byte[] { 0x5A };
+        Assert.True(env.Engine.CopyToUser(growAddr, payload));
+        Assert.Equal(growAddr, stackVma.Start);
+
+        Assert.Equal([0x5A], ReadBytes(env.Engine, growAddr, 1));
+    }
+
+    [Fact]
+    public async Task SysExecve_AfterExec_AutoMmapRespectsCompatMmapBaseGap()
+    {
+        using var env = ExecveEnv.Create(9213, 0x2233_4455_6677_8899);
+
+        Assert.Equal(0, await env.ExecHelloStatic());
+
+        var layout = Assert.IsType<GuestAddressSpaceLayout>(env.Process.Mem.Layout);
+        var stackVma = env.StackVma;
+        var mapped = AssertGuestAddressSuccess(await Call(env.Syscalls, "SysMmap2", 0, LinuxConstants.PageSize,
+            (uint)Protection.Read,
+            (uint)(MapFlags.Private | MapFlags.Anonymous), 0, 0));
+
+        Assert.True(layout.MmapBase < stackVma.Start,
+            $"mmap_base=0x{layout.MmapBase:x8} stack_start=0x{stackVma.Start:x8}");
+        Assert.True(mapped + LinuxConstants.PageSize <= layout.MmapBase,
+            $"mapped=0x{mapped:x8} mmap_base=0x{layout.MmapBase:x8}");
+    }
+
+    [Fact]
+    public async Task SysExecve_GrowDownWriteBlockedByLowerFixedMappingPreservesGuardPage()
+    {
+        using var env = ExecveEnv.Create(9214, 0x3344_5566_7788_99aa);
+
+        Assert.Equal(0, await env.ExecHelloStatic());
+
+        var stackVma = env.StackVma;
+        var originalStart = stackVma.Start;
+        var blockerAddr = originalStart - LinuxConstants.PageSize * 2;
+        var blocker = AssertGuestAddressSuccess(await Call(env.Syscalls, "SysMmap2", blockerAddr,
+            LinuxConstants.PageSize, (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed), 0, 0));
+        Assert.Equal(blockerAddr, blocker);
+
+        var blockedAddr = originalStart - LinuxConstants.PageSize;
+        Assert.False(env.Engine.CopyToUser(blockedAddr, [0x33]));
+        Assert.Equal(FaultResult.Segv, env.Process.Mem.HandleFaultDetailed(blockedAddr, true, env.Engine));
+        Assert.Equal(originalStart, stackVma.Start);
     }
 
     [Fact]
@@ -462,6 +533,21 @@ public class ExecveErrorMappingTests
         return bytes;
     }
 
+    private static void WriteRlimit64(Engine engine, uint addr, ulong soft, ulong hard)
+    {
+        var bytes = new byte[16];
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(0, 8), soft);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(8, 8), hard);
+        Assert.True(engine.CopyToUser(addr, bytes));
+    }
+
+    private static uint AssertGuestAddressSuccess(int rc)
+    {
+        var raw = unchecked((uint)rc);
+        Assert.True(raw < 0xFFFFF000u, $"expected guest address result, got rc={rc} raw=0x{raw:x8}");
+        return raw;
+    }
+
     private static async ValueTask<int> Call(SyscallManager sm, string methodName, uint a1 = 0, uint a2 = 0,
         uint a3 = 0, uint a4 = 0, uint a5 = 0, uint a6 = 0)
     {
@@ -508,5 +594,62 @@ public class ExecveErrorMappingTests
 #pragma warning disable CA1416
         File.SetUnixFileMode(path, (UnixFileMode)mode);
 #pragma warning restore CA1416
+    }
+
+    private sealed class ExecveEnv : IDisposable
+    {
+        private readonly uint _pathAddr = 0x61100000;
+
+        private ExecveEnv(TestRuntimeFactory runtime, Engine engine, VMAManager mm, SyscallManager syscalls,
+            KernelScheduler scheduler, Process process, FiberTask task)
+        {
+            Runtime = runtime;
+            Engine = engine;
+            Memory = mm;
+            Syscalls = syscalls;
+            Scheduler = scheduler;
+            Process = process;
+            Task = task;
+        }
+
+        public TestRuntimeFactory Runtime { get; }
+        public Engine Engine { get; }
+        public VMAManager Memory { get; }
+        public SyscallManager Syscalls { get; }
+        public KernelScheduler Scheduler { get; }
+        public Process Process { get; }
+        public FiberTask Task { get; }
+        public VmArea StackVma => Assert.Single(Process.Mem.VMAs.Where(v => v.Name == "STACK"));
+
+        public void Dispose()
+        {
+            Syscalls.Close();
+            Engine.Dispose();
+        }
+
+        public async ValueTask<int> ExecHelloStatic()
+        {
+            MapUserPage(Process.Mem, Engine, _pathAddr);
+            WriteCString(Engine, _pathAddr, "/hello_static");
+            return await Call(Syscalls, "SysExecve", _pathAddr);
+        }
+
+        public static ExecveEnv Create(int pid, ulong deterministicAslrSeed)
+        {
+            var runtime = new TestRuntimeFactory(deterministicAslrSeed);
+            var engine = runtime.CreateEngine();
+            var mm = runtime.CreateAddressSpace();
+            var syscalls = new SyscallManager(engine, mm, 0);
+            syscalls.MountRootHostfs(ResolveGuestRootForHelloStatic());
+            syscalls.MountStandardProc();
+
+            var scheduler = new KernelScheduler();
+            var process = new Process(pid, mm, syscalls);
+            scheduler.RegisterProcess(process);
+            var task = new FiberTask(process.TGID, process, engine, scheduler);
+            engine.Owner = task;
+
+            return new ExecveEnv(runtime, engine, mm, syscalls, scheduler, process, task);
+        }
     }
 }

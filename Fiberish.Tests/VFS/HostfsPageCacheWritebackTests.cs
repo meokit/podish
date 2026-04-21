@@ -1336,7 +1336,7 @@ public class HostfsPageCacheWritebackTests
                 (uint)(Protection.Read | Protection.Write),
                 (uint)(MapFlags.Shared | MapFlags.Fixed),
                 (uint)fd);
-            Assert.Equal((int)mapAddr, mmapRc);
+            Assert.Equal(mapAddr, (uint)mmapRc);
             Assert.Equal(refBeforeMmap + 1, inode.RefCount);
 
             sm.FreeFD(fd);

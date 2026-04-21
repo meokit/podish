@@ -166,7 +166,7 @@ public class ConcurrencyIsolationTests
                 })
             };
 
-            var spec = new PodishRunSpec { Name = "dup-name" };
+            var spec = new PodishRunSpec { Name = "dup-name", Rootfs = root };
             var results = new (NativeContainer? Container, string? Error, int Code)[8];
 
             Parallel.For(0, results.Length, i => { results[i] = ctx.CreateContainer(spec); });
@@ -203,7 +203,7 @@ public class ConcurrencyIsolationTests
                        })
                    })
             {
-                var created = writerCtx.CreateContainer(new PodishRunSpec { Name = "to-open" });
+                var created = writerCtx.CreateContainer(new PodishRunSpec { Name = "to-open", Rootfs = root });
                 Assert.NotNull(created.Container);
                 Assert.Equal(PodishNativeApi.PodOk, created.Code);
                 containerId = created.Container!.ContainerId;
@@ -254,7 +254,7 @@ public class ConcurrencyIsolationTests
                 })
             };
 
-            var created = ctx.CreateContainer(new PodishRunSpec { Name = "to-remove" });
+            var created = ctx.CreateContainer(new PodishRunSpec { Name = "to-remove", Rootfs = root });
             Assert.NotNull(created.Container);
             Assert.Equal(PodishNativeApi.PodOk, created.Code);
 

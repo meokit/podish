@@ -1,4 +1,7 @@
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
@@ -8,6 +11,7 @@ namespace Fiberish.Memory;
 public sealed class MemoryRuntimeContext : IDisposable
 {
     private readonly Lock _shmGate = new();
+    private long _aslrSequence;
     private bool _disposed;
     private long _nextSharedAnonymousBackingId;
     private SuperBlock? _shmSuperBlock;
@@ -32,6 +36,7 @@ public sealed class MemoryRuntimeContext : IDisposable
     internal HostPageManager HostPages { get; }
     public AddressSpacePolicy AddressSpacePolicy { get; }
     public MemoryPressureCoordinator MemoryPressure { get; }
+    public ulong? DeterministicAslrSeed { get; set; }
 
     public long MemoryQuotaBytes
     {
@@ -67,6 +72,50 @@ public sealed class MemoryRuntimeContext : IDisposable
     public MemoryStatsSnapshot CaptureMemoryStats(SyscallManager? sm = null)
     {
         return MemoryStatsSnapshot.CreateForRuntime(this, sm);
+    }
+
+    internal byte[] CreateExecRandomBytes(int length, string? tag = null)
+    {
+        if (length <= 0)
+            throw new ArgumentOutOfRangeException(nameof(length));
+
+        var buffer = new byte[length];
+        FillExecRandomBytes(buffer, tag);
+        return buffer;
+    }
+
+    internal void FillExecRandomBytes(Span<byte> buffer, string? tag = null)
+    {
+        if (buffer.Length == 0)
+            return;
+
+        if (DeterministicAslrSeed is not { } seed)
+        {
+            RandomNumberGenerator.Fill(buffer);
+            return;
+        }
+
+        var sequence = (ulong)Interlocked.Increment(ref _aslrSequence);
+        var tagBytes = string.IsNullOrEmpty(tag) ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(tag);
+        Span<byte> header = stackalloc byte[24];
+        BinaryPrimitives.WriteUInt64LittleEndian(header[..8], seed);
+        BinaryPrimitives.WriteUInt64LittleEndian(header[8..16], sequence);
+
+        var written = 0;
+        uint blockCounter = 0;
+        while (written < buffer.Length)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(header[16..20], blockCounter++);
+            BinaryPrimitives.WriteUInt32LittleEndian(header[20..24], (uint)tagBytes.Length);
+            var hashInput = new byte[header.Length + tagBytes.Length];
+            header.CopyTo(hashInput);
+            if (tagBytes.Length != 0)
+                tagBytes.CopyTo(hashInput.AsSpan(header.Length));
+            var hash = SHA256.HashData(hashInput);
+            var toCopy = Math.Min(hash.Length, buffer.Length - written);
+            hash.AsSpan(0, toCopy).CopyTo(buffer[written..]);
+            written += toCopy;
+        }
     }
 
     public HostPageRefStatsSnapshot CaptureHostPageRefStats()
