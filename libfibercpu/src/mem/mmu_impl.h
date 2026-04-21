@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include "../logger.h"
 #include "../state.h"  // Ensure EmuState is defined
 #include "mmu.h"
 
@@ -19,6 +20,41 @@ static FORCE_INLINE bool ShouldInterceptExecWriteForSmc(EmuState* state, GuestAd
 inline EmuState* Mmu::get_state() {
     const intptr_t offset = reinterpret_cast<intptr_t>(&(static_cast<EmuState*>(nullptr)->mmu));
     return reinterpret_cast<EmuState*>(reinterpret_cast<char*>(this) - offset);
+}
+
+inline void Mmu::on_code_cache_hard_reset() {
+    clear_block_lookup_cache();
+    seen_code_cache_generation_ = core_ ? core_->code_cache.generation : 0;
+    if (auto* state = get_state()) {
+        state->last_block = invalid_code_block();
+    }
+}
+
+inline void* Mmu::allocate_block_bytes(size_t size, uint32_t guest_eip) {
+    sync_code_cache_generation();
+
+    auto& cache = code_cache();
+    if (cache.ShouldFlushForAllocation(size)) {
+        const size_t bytes_before_flush = cache.requested_block_bytes;
+        const size_t valid_blocks_before_flush = cache.CountValidBlocks();
+        const size_t total_blocks_before_flush = cache.all_blocks.size();
+        const uint64_t next_flush_count = cache.flush_count + 1;
+        const uintptr_t mmu_identity = core_ ? core_->identity : 0;
+
+        LogMsgState(get_state(), LogWarning,
+                    "[CodeCacheBudgetFlush] mmu=0x%zx budget=%zu bytes_before=%zu alloc=%zu valid_blocks=%zu "
+                    "all_blocks=%zu flush_count=%llu guest_eip=0x%08x",
+                    static_cast<size_t>(mmu_identity), cache.block_budget_bytes, bytes_before_flush, size,
+                    valid_blocks_before_flush, total_blocks_before_flush,
+                    static_cast<unsigned long long>(next_flush_count), guest_eip);
+
+        cache.HardResetReleaseAll(1, 1);
+        on_code_cache_hard_reset();
+    }
+
+    void* block_mem = cache.block_pool.allocate(size);
+    cache.NoteAllocatedBlockBytes(size);
+    return block_mem;
 }
 
 // Signal Fault

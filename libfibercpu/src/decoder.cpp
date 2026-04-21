@@ -785,12 +785,12 @@ finalize:
     }
 
     size_t alloc_size = BasicBlock::CalculateSize(slot_count);
-    void* mem = state->mmu.allocate_block_bytes(alloc_size);
+    void* mem = state->mmu.allocate_block_bytes(alloc_size, start_eip);
     BasicBlock* block = new (mem) BasicBlock;
     state->mmu.remember_allocated_block(block);
 
-    assert((start_eip & BasicBlock::kInvalidStartEipBit) == 0 && "BasicBlock start_eip must stay in low 2G");
     block->set_start_eip(start_eip);
+    block->set_valid(true);
     block->end_eip = end_eip;
     block->set_inst_count(inst_count);
     block->slot_count = slot_count;
@@ -815,10 +815,10 @@ finalize:
 
 void BasicBlock::Invalidate() {
     if (!is_valid()) return;
-    chain.start_eip = start_eip() | kInvalidStartEipBit;
-    // No unlinking needed because OpExitBlock checks start_eip's invalid bit.
+    set_valid(false);
+    // No unlinking needed because chained exits validate the cached block header on dispatch.
 }
 
-void BasicBlock::Revalidate() { chain.start_eip = canonical_start_eip(); }
+void BasicBlock::Revalidate() { set_valid(true); }
 
 }  // namespace fiberish

@@ -4,10 +4,12 @@
 #endif
 #include <unistd.h>
 #include <algorithm>
+#include <array>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include "decoder.h"
 #include "dispatch.h"
 #include "hooks.h"
@@ -121,6 +123,13 @@ static BasicBlock* CacheDecodedBlock(EmuState* state, uint32_t cache_eip, BasicB
     return state->mmu.cache_decoded_block(cache_eip, block);
 }
 
+static BasicBlock* DecodeAndCacheBlockWithoutConcat(EmuState* state, uint32_t eip, uint32_t end_eip,
+                                                    BasicBlock* cached_block = nullptr) {
+    BasicBlock* block = DecodeBlock(state, eip, end_eip, 0, cached_block);
+    if (!block) return nullptr;
+    return CacheDecodedBlock(state, eip, block);
+}
+
 static BasicBlock* LookupOrDecodeBlockConcatSuccessor(EmuState* state, uint32_t eip, uint32_t end_eip) {
     BasicBlock* cached_block = state->mmu.lookup_cached_block(eip);
     if (cached_block && cached_block->is_valid()) return cached_block;
@@ -165,34 +174,44 @@ static bool CanBlockConcatWithSuccessor(const BasicBlock* a, const BasicBlock* b
 }
 
 static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
+    constexpr uint32_t kMaxConcatSlotCount = 65;
     const uint32_t concat_inst_count = a->inst_count() - 1 + b->inst_count();
     const uint32_t concat_slot_count = concat_inst_count + 1;
-    void* mem = state->mmu.allocate_block_bytes(BasicBlock::CalculateSize(concat_slot_count));
+    std::array<DecodedOp, kMaxConcatSlotCount> staged_ops{};
+    const uint32_t start_eip = a->start_eip();
+    const uint32_t end_eip = b->end_eip;
+    const uint32_t branch_target_eip = b->branch_target_eip;
+    const uint32_t fallthrough_eip = b->fallthrough_eip;
+    const BlockTerminalKind terminal_kind = b->terminal_kind();
+
+    const DecodedOp* a_ops = a->FirstOp();
+    const DecodedOp* b_ops = b->FirstOp();
+    uint32_t out = 0;
+    for (uint32_t i = 0; i + 1 < a->inst_count(); ++i) {
+        staged_ops[out++] = a_ops[i];
+    }
+    for (uint32_t i = 0; i < b->inst_count(); ++i) {
+        staged_ops[out++] = b_ops[i];
+    }
+    staged_ops[out] = *b->Sentinel();
+
+    void* mem = state->mmu.allocate_block_bytes(BasicBlock::CalculateSize(concat_slot_count), start_eip);
     BasicBlock* concat = new (mem) BasicBlock;
     state->mmu.remember_allocated_block(concat);
 
-    concat->set_start_eip(a->start_eip());
-    concat->end_eip = b->end_eip;
+    concat->set_start_eip(start_eip);
+    concat->set_valid(true);
+    concat->end_eip = end_eip;
     concat->set_inst_count(concat_inst_count);
     concat->slot_count = concat_slot_count;
     concat->sentinel_slot_index = concat_inst_count;
-    concat->branch_target_eip = b->branch_target_eip;
-    concat->fallthrough_eip = b->fallthrough_eip;
-    concat->set_terminal_kind(b->terminal_kind());
+    concat->branch_target_eip = branch_target_eip;
+    concat->fallthrough_eip = fallthrough_eip;
+    concat->set_terminal_kind(terminal_kind);
     concat->exec_count = 0;
 
     DecodedOp* dst = concat->FirstOp();
-    const DecodedOp* a_ops = a->FirstOp();
-    const DecodedOp* b_ops = b->FirstOp();
-
-    uint32_t out = 0;
-    for (uint32_t i = 0; i + 1 < a->inst_count(); ++i) {
-        dst[out++] = a_ops[i];
-    }
-    for (uint32_t i = 0; i < b->inst_count(); ++i) {
-        dst[out++] = b_ops[i];
-    }
-    dst[out] = *b->Sentinel();
+    std::copy_n(staged_ops.data(), concat_slot_count, dst);
 
     ApplySuperOpcodesToBlockOps(dst, concat_inst_count);
     concat->entry = concat->FirstOp()->handler;
@@ -200,34 +219,44 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
 }
 
 static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
+    constexpr uint32_t kMaxConcatSlotCount = 65;
     const uint32_t concat_inst_count = a->inst_count() + b->inst_count();
     const uint32_t concat_slot_count = concat_inst_count + 1;
-    void* mem = state->mmu.allocate_block_bytes(BasicBlock::CalculateSize(concat_slot_count));
+    std::array<DecodedOp, kMaxConcatSlotCount> staged_ops{};
+    const uint32_t start_eip = a->start_eip();
+    const uint32_t end_eip = b->end_eip;
+    const uint32_t branch_target_eip = b->branch_target_eip;
+    const uint32_t fallthrough_eip = b->fallthrough_eip;
+    const BlockTerminalKind terminal_kind = b->terminal_kind();
+
+    const DecodedOp* a_ops = a->FirstOp();
+    const DecodedOp* b_ops = b->FirstOp();
+    uint32_t out = 0;
+    for (uint32_t i = 0; i < a->inst_count(); ++i) {
+        staged_ops[out++] = a_ops[i];
+    }
+    for (uint32_t i = 0; i < b->inst_count(); ++i) {
+        staged_ops[out++] = b_ops[i];
+    }
+    staged_ops[out] = *b->Sentinel();
+
+    void* mem = state->mmu.allocate_block_bytes(BasicBlock::CalculateSize(concat_slot_count), start_eip);
     BasicBlock* concat = new (mem) BasicBlock;
     state->mmu.remember_allocated_block(concat);
 
-    concat->set_start_eip(a->start_eip());
-    concat->end_eip = b->end_eip;
+    concat->set_start_eip(start_eip);
+    concat->set_valid(true);
+    concat->end_eip = end_eip;
     concat->set_inst_count(concat_inst_count);
     concat->slot_count = concat_slot_count;
     concat->sentinel_slot_index = concat_inst_count;
-    concat->branch_target_eip = b->branch_target_eip;
-    concat->fallthrough_eip = b->fallthrough_eip;
-    concat->set_terminal_kind(b->terminal_kind());
+    concat->branch_target_eip = branch_target_eip;
+    concat->fallthrough_eip = fallthrough_eip;
+    concat->set_terminal_kind(terminal_kind);
     concat->exec_count = 0;
 
     DecodedOp* dst = concat->FirstOp();
-    const DecodedOp* a_ops = a->FirstOp();
-    const DecodedOp* b_ops = b->FirstOp();
-
-    uint32_t out = 0;
-    for (uint32_t i = 0; i < a->inst_count(); ++i) {
-        dst[out++] = a_ops[i];
-    }
-    for (uint32_t i = 0; i < b->inst_count(); ++i) {
-        dst[out++] = b_ops[i];
-    }
-    dst[out] = *b->Sentinel();
+    std::copy_n(staged_ops.data(), concat_slot_count, dst);
 
     ApplySuperOpcodesToBlockOps(dst, concat_inst_count);
     concat->entry = concat->FirstOp()->handler;
@@ -262,10 +291,15 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
         return CacheDecodedBlock(state, eip, new_block);
     }
 
+    const uint64_t new_block_generation = state->mmu.code_cache().generation;
     BasicBlock* successor_block = LookupOrDecodeBlockConcatSuccessor(state, successor_eip, end_eip);
     if (!successor_block) {
         state->block_stats.block_concat_reject_target_missing++;
         return CacheDecodedBlock(state, eip, new_block);
+    }
+    if (state->mmu.code_cache().generation != new_block_generation) {
+        // Successor decode flushed the shared code cache, so the original candidate may already be freed.
+        return DecodeAndCacheBlockWithoutConcat(state, eip, end_eip, state->mmu.lookup_cached_block(eip));
     }
 
     if (!CanBlockConcatWithSuccessor(new_block, successor_block, is_direct_jmp, &state->block_stats)) {
@@ -1049,6 +1083,15 @@ void X86_InvalidateCodeCacheHostPages(EmuState* state, const void* const* host_p
     state->mmu.invalidate_code_cache_host_pages(page_bases);
 }
 
+void X86_SetCodeCacheBudgetBytes(EmuState* state, uint64_t bytes) {
+    if (!state) return;
+
+    const size_t requested_bytes = bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())
+                                       ? std::numeric_limits<size_t>::max()
+                                       : static_cast<size_t>(bytes);
+    state->mmu.set_code_cache_budget_bytes(requested_bytes);
+}
+
 void X86_SetTscFrequency(EmuState* state, uint64_t freq) {
     if (state) state->tsc_frequency = freq;
 }
@@ -1096,22 +1139,31 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
     const auto& code_cache = state->mmu.code_cache();
 #ifdef ENABLE_TLB_STATS
     auto& s = state->mmu.stats;
-    int n = snprintf(buffer, buffer_size,
-                     "{\"l1_read_hits\":%llu,\"l1_write_hits\":%llu,"
-                     "\"l2_read_hits\":%llu,\"l2_write_hits\":%llu,"
-                     "\"read_misses\":%llu,\"write_misses\":%llu,"
-                     "\"total_reads\":%llu,\"total_writes\":%llu,"
-                     "\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu}",
-                     (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits,
-                     (unsigned long long)s.l2_read_hits, (unsigned long long)s.l2_write_hits,
-                     (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
-                     (unsigned long long)s.total_reads, (unsigned long long)s.total_writes,
-                     code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size());
+    int n = snprintf(
+        buffer, buffer_size,
+        "{\"l1_read_hits\":%llu,\"l1_write_hits\":%llu,"
+        "\"l2_read_hits\":%llu,\"l2_write_hits\":%llu,"
+        "\"read_misses\":%llu,\"write_misses\":%llu,"
+        "\"total_reads\":%llu,\"total_writes\":%llu,"
+        "\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu,"
+        "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
+        "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu}",
+        (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits, (unsigned long long)s.l2_read_hits,
+        (unsigned long long)s.l2_write_hits, (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
+        (unsigned long long)s.total_reads, (unsigned long long)s.total_writes, code_cache.all_blocks.size(),
+        code_cache.CountValidBlocks(), code_cache.page_to_blocks.size(),
+        (unsigned long long)code_cache.requested_block_bytes, (unsigned long long)code_cache.block_budget_bytes,
+        (unsigned long long)code_cache.flush_count, (unsigned long long)code_cache.generation);
     return n;
 #else
     return snprintf(buffer, buffer_size,
-                    "{\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu}",
-                    code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size());
+                    "{\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu,"
+                    "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
+                    "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu}",
+                    code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size(),
+                    (unsigned long long)code_cache.requested_block_bytes,
+                    (unsigned long long)code_cache.block_budget_bytes, (unsigned long long)code_cache.flush_count,
+                    (unsigned long long)code_cache.generation);
 #endif
 }
 

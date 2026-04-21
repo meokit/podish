@@ -117,6 +117,7 @@ void X86_ResetAllCodeCache(EmuState* state);
 void X86_ResetMemory(EmuState* state);
 void X86_ResetCodeCacheByRange(EmuState* state, uint32_t addr, uint32_t size);
 void X86_InvalidateCodeCacheHostPages(EmuState* state, const void* const* host_pages, size_t count);
+void X86_SetCodeCacheBudgetBytes(EmuState* state, uint64_t bytes);
 
 // Diagnostics
 int32_t X86_GetFaultVector(EmuState* state);

@@ -280,7 +280,8 @@ FORCE_INLINE void SetCachedTarget(OpT* op, BasicBlock* block) {
 struct BasicBlockChainPrefix {
     uint64_t start_eip : 32;
     uint64_t inst_count : 8;
-    uint64_t reserved : 24;
+    uint64_t valid : 1;
+    uint64_t reserved : 23;
 };
 
 struct alignas(16) BasicBlock {
@@ -315,17 +316,16 @@ struct alignas(16) BasicBlock {
     BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(terminal_kind_raw); }
     void set_terminal_kind(BlockTerminalKind kind) { terminal_kind_raw = static_cast<uint8_t>(kind); }
 
-    static constexpr uint32_t kInvalidStartEipBit = 0x80000000u;
-
     uint32_t start_eip() const { return static_cast<uint32_t>(chain.start_eip); }
     void set_start_eip(uint32_t start_eip) { chain.start_eip = start_eip; }
-    bool is_valid() const { return (start_eip() & kInvalidStartEipBit) == 0; }
-    uint32_t canonical_start_eip() const { return start_eip() & ~kInvalidStartEipBit; }
+    bool is_valid() const { return chain.valid != 0; }
+    void set_valid(bool valid) { chain.valid = valid ? 1u : 0u; }
+    uint32_t canonical_start_eip() const { return start_eip(); }
 
     uint32_t inst_count() const { return chain.inst_count; }
     void set_inst_count(uint32_t count) { chain.inst_count = static_cast<uint8_t>(count); }
 
-    bool MatchesChainTarget(uint32_t target_eip) const { return start_eip() == target_eip; }
+    bool MatchesChainTarget(uint32_t target_eip) const { return is_valid() && start_eip() == target_eip; }
 
     // Mark block as invalid
     void Invalidate();

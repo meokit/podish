@@ -219,6 +219,9 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_InvalidateCodeCacheHostPages")]
     public static partial void InvalidateCodeCacheHostPages(IntPtr state, IntPtr* hostPages, nuint count);
 
+    [LibraryImport(LibName, EntryPoint = "X86_SetCodeCacheBudgetBytes")]
+    internal static partial void SetCodeCacheBudgetBytes(IntPtr state, ulong bytes);
+
     [LibraryImport(LibName, EntryPoint = "X86_ReprotectMappedRange")]
     [SuppressGCTransition]
     public static partial void ReprotectMappedRange(IntPtr state, uint addr, uint size, byte perms);
@@ -319,6 +322,18 @@ public unsafe partial class X86Native
             get => (byte)((packed >> 32) & 0xFF);
             set => packed = (packed & 0xFFFFFFFF00FFFFFF) | (((ulong)value & 0xFF) << 32);
         }
+
+        public bool valid
+        {
+            get => ((packed >> 40) & 0x1) != 0;
+            set
+            {
+                if (value)
+                    packed |= 1UL << 40;
+                else
+                    packed &= ~(1UL << 40);
+            }
+        }
     }
 
     [StructLayout(LayoutKind.Sequential, Size = 48)]
@@ -348,7 +363,7 @@ public unsafe partial class X86Native
             set => chain.inst_count = value;
         }
 
-        public bool is_valid => (start_eip & 0x80000000u) == 0;
+        public bool is_valid => chain.valid;
     }
 
     [StructLayout(LayoutKind.Sequential)]

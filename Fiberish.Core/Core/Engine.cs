@@ -750,12 +750,18 @@ public class Engine : IDisposable
         X86Native.ResetMemory(State);
     }
 
+    internal void SetCodeCacheBudgetBytesForTesting(ulong bytes)
+    {
+        AssertNotDisposed();
+        X86Native.SetCodeCacheBudgetBytes(State, bytes);
+    }
+
     public unsafe string? DumpStats()
     {
-        var buf = new byte[1024];
+        var buf = new byte[2048];
         fixed (byte* p = buf)
         {
-            var n = X86Native.DumpStats(State, p, 1024);
+            var n = X86Native.DumpStats(State, p, (nuint)buf.Length);
             if (n < 0) return null;
             return Encoding.UTF8.GetString(buf, 0, n);
         }

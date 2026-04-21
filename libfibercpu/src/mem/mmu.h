@@ -6,6 +6,7 @@
 #include <iostream>
 #include <memory>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <vector>
 #include "../common.h"
@@ -85,7 +86,8 @@ struct PageDirectory {
 };
 
 inline void InitializeInvalidBasicBlock(BasicBlock& block) {
-    block.set_start_eip(BasicBlock::kInvalidStartEipBit);
+    block.set_start_eip(0);
+    block.set_valid(false);
     block.end_eip = 0;
     block.set_inst_count(0);
     block.slot_count = 0;
@@ -266,6 +268,8 @@ private:
 };
 
 struct CodeCacheState {
+    static constexpr size_t kDefaultBlockBudgetBytes = 64ull * 1024ull * 1024ull;
+
     struct BlockHostPageRef {
         uintptr_t host_page_base = 0;
         uint32_t page_slot = 0;
@@ -288,15 +292,14 @@ struct CodeCacheState {
     std::vector<BasicBlock*> all_blocks;
     BasicBlock dummy_invalid_block;
     ankerl::unordered_dense::map<uintptr_t, std::vector<PageBlockRef>> page_to_blocks;
+    size_t requested_block_bytes = 0;
+    size_t block_budget_bytes = kDefaultBlockBudgetBytes;
+    uint64_t flush_count = 0;
+    uint64_t generation = 0;
 
     CodeCacheState() { InitializeInvalidBasicBlock(dummy_invalid_block); }
 
-    void ResetReachability(HostPageSet* affected_host_pages = nullptr) {
-        if (affected_host_pages) {
-            for (const auto& [host_page_base, _] : page_to_blocks) {
-                affected_host_pages->push_unique(host_page_base);
-            }
-        }
+    void InvalidateAll() {
         for (auto& entry : block_entries) {
             if (entry.block != nullptr) {
                 entry.block->Invalidate();
@@ -305,6 +308,37 @@ struct CodeCacheState {
         block_cache.clear();
         block_entries.clear();
         page_to_blocks.clear();
+    }
+
+    void ResetReachability() { InvalidateAll(); }
+
+    void HardResetReleaseAll(uint64_t generation_increment = 1, uint64_t flush_count_increment = 0) {
+        const size_t preserved_budget_bytes = block_budget_bytes;
+        const uint64_t next_flush_count = flush_count + flush_count_increment;
+        const uint64_t next_generation = generation + generation_increment;
+
+        this->~CodeCacheState();
+        new (this) CodeCacheState();
+        block_budget_bytes = preserved_budget_bytes;
+        flush_count = next_flush_count;
+        generation = next_generation;
+    }
+
+    void SetBlockBudgetBytes(size_t bytes) { block_budget_bytes = bytes == 0 ? kDefaultBlockBudgetBytes : bytes; }
+
+    [[nodiscard]] bool ShouldFlushForAllocation(size_t alloc_size) const {
+        if (block_budget_bytes == 0 || requested_block_bytes == 0) return false;
+        return alloc_size > std::numeric_limits<size_t>::max() - requested_block_bytes ||
+               requested_block_bytes + alloc_size > block_budget_bytes;
+    }
+
+    void NoteAllocatedBlockBytes(size_t alloc_size) {
+        if (alloc_size > std::numeric_limits<size_t>::max() - requested_block_bytes) {
+            requested_block_bytes = std::numeric_limits<size_t>::max();
+            return;
+        }
+
+        requested_block_bytes += alloc_size;
     }
 
     void RememberAllocatedBlock(BasicBlock* block) {
@@ -632,6 +666,7 @@ private:
     static constexpr size_t kBlockLookupCacheSize = 128;
     static constexpr size_t kBlockLookupCacheMask = kBlockLookupCacheSize - 1;
     mutable std::array<BlockLookupCacheEntry, kBlockLookupCacheSize> block_lookup_cache{};
+    mutable uint64_t seen_code_cache_generation_ = 0;
     uint64_t runtime_tlb_read_seq = 0;
     uint64_t runtime_tlb_publish_begin_seq = 0;
     uint32_t runtime_tlb_publish_batch_depth = 0;
@@ -754,6 +789,18 @@ public:
         }
     }
 
+    void refresh_smc_armed_for_requested_and_affected_host_pages(const HostPageSet& requested_host_pages,
+                                                                 const HostPageSet& affected_host_pages) {
+        for (uintptr_t host_page_base : requested_host_pages) {
+            refresh_smc_armed_for_host_page(reinterpret_cast<HostAddr>(host_page_base));
+        }
+
+        for (uintptr_t host_page_base : affected_host_pages) {
+            if (requested_host_pages.contains(host_page_base)) continue;
+            refresh_smc_armed_for_host_page(reinterpret_cast<HostAddr>(host_page_base));
+        }
+    }
+
     void remap_external_alias(GuestAddr guest_page, HostAddr old_page, Property old_perms, HostAddr new_page,
                               Property new_perms) {
         remove_external_alias(guest_page, old_page, old_perms);
@@ -787,6 +834,15 @@ private:
         }
     }
 
+    void sync_code_cache_generation() const {
+        const uint64_t current_generation = core_ ? core_->code_cache.generation : 0;
+        if (seen_code_cache_generation_ == current_generation) return;
+        clear_block_lookup_cache();
+        seen_code_cache_generation_ = current_generation;
+    }
+
+    void on_code_cache_hard_reset();
+
     void invalidate_block_lookup_cache_entry(uintptr_t host_page_base, uint32_t guest_eip) const {
         auto& entry = block_lookup_cache[block_lookup_cache_slot(host_page_base, guest_eip)];
         if (entry.host_page_base == host_page_base && entry.guest_eip == guest_eip) {
@@ -804,11 +860,13 @@ private:
 
     void remember_block_lookup_cache(uintptr_t host_page_base, uint32_t guest_eip, BasicBlock* block) const {
         if (block == nullptr) return;
+        sync_code_cache_generation();
         block_lookup_cache[block_lookup_cache_slot(host_page_base, guest_eip)] =
             BlockLookupCacheEntry{host_page_base, guest_eip, block};
     }
 
     BasicBlock* try_lookup_block_cache(uintptr_t host_page_base, uint32_t guest_eip) const {
+        sync_code_cache_generation();
         const auto& entry = block_lookup_cache[block_lookup_cache_slot(host_page_base, guest_eip)];
         if (entry.host_page_base != host_page_base || entry.guest_eip != guest_eip) return nullptr;
         return entry.block;
@@ -971,6 +1029,7 @@ private:
         release_core(old_core);
         tlb.flush();
         clear_block_lookup_cache();
+        seen_code_cache_generation_ = core_ ? core_->code_cache.generation : 0;
         reset_runtime_tlb_tracking();
     }
 
@@ -1057,6 +1116,7 @@ public:
         core_ = create_core(std::make_unique<PageDirectory>());
         page_dir = core_->page_directory.get();
         clear_block_lookup_cache();
+        seen_code_cache_generation_ = core_->code_cache.generation;
         reset_runtime_tlb_tracking();
     }
 
@@ -1065,6 +1125,7 @@ public:
         page_dir = core_ ? core_->page_directory.get() : nullptr;
         retain_core(core_);
         clear_block_lookup_cache();
+        seen_code_cache_generation_ = core_ ? core_->code_cache.generation : 0;
         reset_runtime_tlb_tracking();
     }
 
@@ -1074,8 +1135,10 @@ public:
         other.core_ = nullptr;
         other.page_dir = nullptr;
         clear_block_lookup_cache();
+        seen_code_cache_generation_ = core_ ? core_->code_cache.generation : 0;
         reset_runtime_tlb_tracking();
         other.clear_block_lookup_cache();
+        other.seen_code_cache_generation_ = 0;
         other.reset_runtime_tlb_tracking();
     }
 
@@ -1088,6 +1151,7 @@ public:
         release_core(old_core);
         tlb.flush();
         clear_block_lookup_cache();
+        seen_code_cache_generation_ = core_ ? core_->code_cache.generation : 0;
         reset_runtime_tlb_tracking();
         return *this;
     }
@@ -1101,8 +1165,10 @@ public:
         other.page_dir = nullptr;
         tlb.flush();
         clear_block_lookup_cache();
+        seen_code_cache_generation_ = core_ ? core_->code_cache.generation : 0;
         reset_runtime_tlb_tracking();
         other.clear_block_lookup_cache();
+        other.seen_code_cache_generation_ = 0;
         other.reset_runtime_tlb_tracking();
         return *this;
     }
@@ -1246,11 +1312,12 @@ public:
 
     [[nodiscard]] const BasicBlock* invalid_code_block() const { return &code_cache().dummy_invalid_block; }
 
-    [[nodiscard]] void* allocate_block_bytes(size_t size) { return code_cache().block_pool.allocate(size); }
+    [[nodiscard]] void* allocate_block_bytes(size_t size, uint32_t guest_eip);
 
     void remember_allocated_block(BasicBlock* block) { code_cache().RememberAllocatedBlock(block); }
 
     [[nodiscard]] BasicBlock* lookup_cached_block(uint32_t eip) {
+        sync_code_cache_generation();
         auto host_page_base = try_get_host_page_base(eip);
         if (!host_page_base) return nullptr;
 
@@ -1264,6 +1331,7 @@ public:
     }
 
     [[nodiscard]] const BasicBlock* lookup_cached_block(uint32_t eip) const {
+        sync_code_cache_generation();
         auto host_page_base = try_get_host_page_base(eip);
         if (!host_page_base) return nullptr;
 
@@ -1277,6 +1345,7 @@ public:
     }
 
     [[nodiscard]] BasicBlock* cache_decoded_block(uint32_t cache_eip, BasicBlock* block) {
+        sync_code_cache_generation();
         [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto cache_key = make_block_cache_key(cache_eip);
         if (!cache_key) return block;
@@ -1294,9 +1363,8 @@ public:
     void reset_code_cache() {
         [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         clear_block_lookup_cache();
-        HostPageSet affected_host_pages;
-        code_cache().ResetReachability(&affected_host_pages);
-        refresh_smc_armed_for_host_pages(affected_host_pages);
+        code_cache().HardResetReleaseAll(1, 0);
+        on_code_cache_hard_reset();
     }
 
     void erase_cached_block(uint32_t guest_eip) {
@@ -1319,7 +1387,7 @@ public:
             invalidate_block_lookup_cache_page(*host_page_base);
             HostPageSet affected_host_pages;
             code_cache().InvalidateHostPage(*host_page_base, &affected_host_pages);
-            refresh_smc_armed_for_host_pages(affected_host_pages);
+            refresh_smc_armed_for_requested_and_affected_host_pages(requested_host_pages, affected_host_pages);
         }
     }
 
@@ -1331,7 +1399,7 @@ public:
         }
         HostPageSet affected_host_pages;
         code_cache().InvalidateHostPages(host_page_bases, &affected_host_pages);
-        refresh_smc_armed_for_host_pages(affected_host_pages);
+        refresh_smc_armed_for_requested_and_affected_host_pages(host_page_bases, affected_host_pages);
     }
 
     void invalidate_code_cache_host_pages(const HostPageSet& host_page_bases) {
@@ -1341,7 +1409,7 @@ public:
         }
         HostPageSet affected_host_pages;
         code_cache().InvalidateHostPages(host_page_bases, &affected_host_pages);
-        refresh_smc_armed_for_host_pages(affected_host_pages);
+        refresh_smc_armed_for_requested_and_affected_host_pages(host_page_bases, affected_host_pages);
     }
 
     void invalidate_code_cache_host_pages(const uintptr_t* host_page_bases, size_t count) {
@@ -1356,7 +1424,7 @@ public:
         if (requested_host_pages.empty()) return;
         HostPageSet affected_host_pages;
         code_cache().InvalidateHostPages(requested_host_pages, &affected_host_pages);
-        refresh_smc_armed_for_host_pages(affected_host_pages);
+        refresh_smc_armed_for_requested_and_affected_host_pages(requested_host_pages, affected_host_pages);
     }
 
     // Callback Setup
@@ -1561,11 +1629,14 @@ public:
         }
         core_->page_directory = std::make_unique<PageDirectory>();
         page_dir = core_->page_directory.get();
-        core_->code_cache.ResetReachability();
+        core_->code_cache.HardResetReleaseAll(1, 0);
+        on_code_cache_hard_reset();
         core_->external_aliases.clear();
         tlb.flush();
         publish_runtime_tlb_flush_all();
     }
+
+    void set_code_cache_budget_bytes(size_t bytes) { code_cache().SetBlockBudgetBytes(bytes); }
 
     [[nodiscard]] uintptr_t page_directory_identity() const { return core_ ? core_->identity : 0; }
 
