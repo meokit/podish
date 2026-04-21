@@ -74,6 +74,7 @@ public class OverlaySuperBlock : SuperBlock
     private readonly object _flockSync = new();
     private readonly Dictionary<OverlayNodeStateKey, OverlayNodeState> _nodeStates = new();
     private readonly HashSet<InodeKey> _opaqueDirs = new();
+    private readonly List<SuperBlock> _ownedBackings = [];
     private readonly Dictionary<InodeKey, FsNameSet> _whiteouts = new();
 
     public OverlaySuperBlock(FileSystemType type, IReadOnlyList<SuperBlock> lowers, SuperBlock upper,
@@ -87,6 +88,9 @@ public class OverlaySuperBlock : SuperBlock
         LowerSB = lowers[0];
         UpperSB = upper;
         WhiteoutCodec = new HybridWhiteoutCodec();
+        TrackBacking(upper);
+        foreach (var lower in lowers)
+            TrackBacking(lower);
     }
 
     public IReadOnlyList<SuperBlock> LowerSBs { get; }
@@ -254,6 +258,29 @@ public class OverlaySuperBlock : SuperBlock
         var state = new OverlayFileLockState();
         _flocks[fileKey] = state;
         return state;
+    }
+
+    protected override void Shutdown()
+    {
+        try
+        {
+            base.Shutdown();
+        }
+        finally
+        {
+            foreach (var backing in _ownedBackings)
+                backing.Put();
+            _ownedBackings.Clear();
+        }
+    }
+
+    private void TrackBacking(SuperBlock backing)
+    {
+        if (_ownedBackings.Contains(backing))
+            return;
+
+        backing.Get();
+        _ownedBackings.Add(backing);
     }
 
     private sealed class OverlayFileLockState

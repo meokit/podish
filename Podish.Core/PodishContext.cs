@@ -41,6 +41,7 @@ public sealed class PodishRunSpec
     public string LogDriver { get; init; } = "json-file";
     public ushort? TerminalRows { get; init; }
     public ushort? TerminalCols { get; init; }
+    internal Action<SuperBlock>? TestSuperBlockObserver { get; init; }
     public IReadOnlyList<PublishedPortSpec> PublishedPorts { get; init; } = Array.Empty<PublishedPortSpec>();
 }
 
@@ -618,7 +619,8 @@ public sealed class PodishContext : IDisposable
             WaylandDesktopWidth = effectiveSpec.WaylandDesktopWidth,
             WaylandDesktopHeight = effectiveSpec.WaylandDesktopHeight,
             TerminalRows = effectiveSpec.TerminalRows,
-            TerminalCols = effectiveSpec.TerminalCols
+            TerminalCols = effectiveSpec.TerminalCols,
+            TestSuperBlockObserver = effectiveSpec.TestSuperBlockObserver
         };
         if (OperatingSystem.IsBrowser())
             return new PodishContainerSession(containerId, imageRef, () => RunInCurrentThreadAsync(request), bridge,

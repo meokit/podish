@@ -218,7 +218,8 @@ public static class ContainerLaunchSpecResolver
             TerminalRows = spec.TerminalRows,
             TerminalCols = spec.TerminalCols,
             PublishedPorts = spec.PublishedPorts,
-            WorkingDir = workingDir ?? spec.WorkingDir
+            WorkingDir = workingDir ?? spec.WorkingDir,
+            TestSuperBlockObserver = spec.TestSuperBlockObserver
         };
     }
 

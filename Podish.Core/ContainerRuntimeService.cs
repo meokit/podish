@@ -62,6 +62,7 @@ public sealed class ContainerRunRequest
     public ushort? TerminalRows { get; init; }
     public ushort? TerminalCols { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
+    internal Action<SuperBlock>? TestSuperBlockObserver { get; init; }
 }
 
 public enum ContainerFileSystemBackend
@@ -277,6 +278,7 @@ public sealed class ContainerRuntimeService
                 var overlayType = FileSystemRegistry.Get("overlay")
                                   ?? throw new InvalidOperationException("overlay is not registered");
                 var (upperSb, upperDirName) = CreateOverlayUpper(runtime, request, fsBackend);
+                request.TestSuperBlockObserver?.Invoke(upperSb);
                 var overlaySb = overlayType.CreateFileSystem(runtime.DeviceNumbers).ReadSuper(overlayType, 0,
                     "root_overlay",
                     new OverlayMountOptions
@@ -323,6 +325,7 @@ public sealed class ContainerRuntimeService
                     source = request.RootfsPath;
                 }
 
+                request.TestSuperBlockObserver?.Invoke(rootSb);
                 runtime.Syscalls.MountRoot(rootSb, new SyscallManager.RootMountOptions
                 {
                     Source = source,
@@ -524,8 +527,6 @@ public sealed class ContainerRuntimeService
                 request.ContainerId, mainTask.Exited);
 
             TryExportGuestStats(runtime, request);
-            runtime.Engine.Dispose();
-            runtime.Dispose();
 
             if (!mainTask.Exited)
             {
@@ -624,14 +625,13 @@ public sealed class ContainerRuntimeService
 
             try
             {
-                _logger.LogTrace("Container teardown closing guest file descriptors containerId={ContainerId}",
+                _logger.LogTrace("Container teardown closing guest syscall managers containerId={ContainerId}",
                     request.ContainerId);
-                foreach (var process in scheduler.GetProcessesSnapshot())
-                    process.Syscalls.CloseAllFileDescriptors();
+                CloseProcessSyscalls(scheduler);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to close all guest file descriptors during container teardown");
+                _logger.LogWarning(ex, "Failed to close guest syscall managers during container teardown");
             }
 
             if (processExitHandler != null)
@@ -675,8 +675,26 @@ public sealed class ContainerRuntimeService
             networkBackend?.Dispose();
             _portForwardManager?.Dispose();
 
+            if (runtime != null)
+            {
+                try
+                {
+                    runtime.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to dispose kernel runtime during container teardown");
+                }
+            }
+
             _logger.LogDebug("Container teardown finished containerId={ContainerId}", request.ContainerId);
         }
+    }
+
+    private static void CloseProcessSyscalls(KernelScheduler scheduler)
+    {
+        foreach (var process in scheduler.GetProcessesSnapshot())
+            process.Syscalls.Close();
     }
 
     private static (SuperBlock Upper, string UpperDirName) CreateOverlayUpper(KernelRuntime runtime,
