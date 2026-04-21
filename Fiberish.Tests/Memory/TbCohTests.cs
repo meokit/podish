@@ -761,10 +761,15 @@ public class TbCohTests
         return new CodeCacheStats(
             root.GetProperty("all_blocks_count").GetInt32(),
             root.GetProperty("block_cache_size").GetInt32(),
-            root.GetProperty("page_to_blocks_size").GetInt32());
+            root.GetProperty("page_to_blocks_size").GetInt32(),
+            root.GetProperty("code_cache_bytes_requested").GetUInt64(),
+            root.GetProperty("code_cache_limit_bytes").GetUInt64(),
+            root.GetProperty("code_cache_flush_count").GetUInt64(),
+            root.GetProperty("code_cache_generation").GetUInt64());
     }
 
-    private readonly record struct CodeCacheStats(int AllBlocksCount, int BlockCacheSize, int PageToBlocksSize);
+    private readonly record struct CodeCacheStats(int AllBlocksCount, int BlockCacheSize, int PageToBlocksSize,
+        ulong CodeCacheBytesRequested, ulong CodeCacheLimitBytes, ulong CodeCacheFlushCount, ulong CodeCacheGeneration);
 
     private sealed class TmpfsFileFixture : IDisposable
     {

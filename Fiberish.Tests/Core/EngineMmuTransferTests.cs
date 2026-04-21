@@ -14,6 +14,7 @@ public class EngineMmuTransferTests
 {
     private const uint CodeAddr = 0x00401000;
     private const uint CrossPageCodeAddr = CodeAddr + LinuxConstants.PageSize - 1;
+    private const uint BudgetTestCodeBaseAddr = 0x00500000;
     private static readonly byte[] SimpleCode = [0x90, 0x90];
 
     [Fact]
@@ -97,8 +98,13 @@ public class EngineMmuTransferTests
 
         child.ResetAllCodeCache();
 
-        Assert.Equal(0, ReadCodeCacheStats(parent).BlockCacheSize);
-        Assert.Equal(0, ReadCodeCacheStats(child).BlockCacheSize);
+        var parentStats = ReadCodeCacheStats(parent);
+        var childStats = ReadCodeCacheStats(child);
+        Assert.Equal(0, parentStats.BlockCacheSize);
+        Assert.Equal(0, childStats.BlockCacheSize);
+        Assert.Equal(0, parentStats.AllBlocksCount);
+        Assert.Equal(0ul, parentStats.CodeCacheBytesRequested);
+        Assert.Equal(parentStats.CodeCacheGeneration, childStats.CodeCacheGeneration);
     }
 
     [Fact]
@@ -121,6 +127,239 @@ public class EngineMmuTransferTests
         WarmSimpleCode(parent);
 
         Assert.True(ReadCodeCacheStats(parent).BlockCacheSize > 0);
+    }
+
+    [Fact]
+    public void ExternalAlias_ResetAllCodeCache_SelfHealsOnFirstWrite()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var codePage = new UnmanagedPageFixture(IncEaxTwice());
+
+        const uint rwAddr = 0x00408000;
+        const uint rxAddr = 0x00409000;
+        MapExternalPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapExternalPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+
+        RunPair(engine, rxAddr, 10, 12);
+        Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+
+        engine.ResetAllCodeCache();
+
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+
+        Assert.True(engine.CopyToUser(rwAddr, DecEaxTwice()));
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+        Assert.False(engine.HasSlowWrite(rwAddr));
+
+        Assert.True(engine.CopyToUser(rwAddr, IncEaxTwice()));
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+        Assert.False(engine.HasSlowWrite(rwAddr));
+
+        RunPair(engine, rxAddr, 10, 12);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+    }
+
+    [Fact]
+    public void ExternalAlias_ResetAllCodeCache_CrossPageWriteSelfHealsAllTouchedPages()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var codePages = new UnmanagedPageArrayFixture(2, static i => CrossPageIncEaxTwicePage(i));
+
+        const uint rwAddr = 0x0040A000;
+        const uint rxAddr = 0x0040C000;
+        var codeAddr = rxAddr + LinuxConstants.PageSize - 1;
+        for (var i = 0; i < codePages.Count; i++)
+        {
+            var pageAddr = (uint)(i * LinuxConstants.PageSize);
+            MapExternalPage(engine, rwAddr + pageAddr, codePages[i], Protection.Read | Protection.Write);
+            MapExternalPage(engine, rxAddr + pageAddr, codePages[i], Protection.Read | Protection.Exec);
+        }
+
+        RunPair(engine, codeAddr, 10, 12);
+        Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+        Assert.True(engine.HasSlowWrite(rwAddr + LinuxConstants.PageSize));
+
+        engine.ResetAllCodeCache();
+
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+        Assert.True(engine.HasSlowWrite(rwAddr + LinuxConstants.PageSize));
+
+        Assert.True(engine.CopyToUser(rwAddr + LinuxConstants.PageSize - 1, new byte[] { 0x48, 0x48 }));
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+        Assert.False(engine.HasSlowWrite(rwAddr));
+        Assert.False(engine.HasSlowWrite(rwAddr + LinuxConstants.PageSize));
+
+        RunPair(engine, codeAddr, 10, 8);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+        Assert.True(engine.HasSlowWrite(rwAddr + LinuxConstants.PageSize));
+    }
+
+    [Fact]
+    public void CodeCacheBudgetFlush_LogsWarning_AndResetsRequestedBytes()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var warnings = new List<string>();
+        engine.LogHandler = (_, level, message) =>
+        {
+            if (level >= 3 && message.Contains("CodeCacheBudgetFlush", StringComparison.Ordinal))
+                warnings.Add(message);
+        };
+
+        engine.SetCodeCacheBudgetBytesForTesting(256);
+        WarmUniqueSimpleBlocks(engine, BudgetTestCodeBaseAddr, 16);
+
+        var stats = ReadCodeCacheStats(engine);
+        Assert.True(stats.CodeCacheFlushCount > 0);
+        Assert.True(stats.CodeCacheBytesRequested > 0);
+        Assert.True(stats.CodeCacheBytesRequested <= stats.CodeCacheLimitBytes,
+            $"requested={stats.CodeCacheBytesRequested} limit={stats.CodeCacheLimitBytes}");
+        Assert.NotEmpty(warnings);
+        Assert.Contains("budget=256", warnings[0], StringComparison.Ordinal);
+        Assert.Contains("guest_eip=", warnings[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExternalAlias_CodeCacheBudgetFlush_SelfHealsOnFirstWrite()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var codePage = new UnmanagedPageFixture(IncEaxTwice());
+
+        const uint rwAddr = 0x0040E000;
+        const uint rxAddr = 0x0040F000;
+        MapExternalPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapExternalPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+
+        RunPair(engine, rxAddr, 10, 12);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+
+        engine.SetCodeCacheBudgetBytesForTesting(256);
+        WarmUniqueSimpleBlocks(engine, BudgetTestCodeBaseAddr, 16);
+
+        Assert.True(ReadCodeCacheStats(engine).CodeCacheFlushCount > 0);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+
+        engine.SetCodeCacheBudgetBytesForTesting(0);
+
+        Assert.True(engine.CopyToUser(rwAddr, DecEaxTwice()));
+        Assert.False(engine.HasSlowWrite(rwAddr));
+
+        Assert.True(engine.CopyToUser(rwAddr, IncEaxTwice()));
+        Assert.False(engine.HasSlowWrite(rwAddr));
+
+        RunPair(engine, rxAddr, 10, 12);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+    }
+
+    [Fact]
+    public void SharedClone_CodeCacheBudgetFlush_ClearsSiblingLookupCacheAndRehydrates()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
+        parent.SetCodeCacheBudgetBytesForTesting(256);
+        InstallSimpleCode(parent);
+        WarmSimpleCode(parent);
+
+        using var child = parent.Clone(true);
+        WarmSimpleCode(parent);
+        var generationBeforeFlush = ReadCodeCacheStats(parent).CodeCacheGeneration;
+
+        WarmUniqueSimpleBlocks(child, BudgetTestCodeBaseAddr, 16);
+
+        var afterFlushStats = ReadCodeCacheStats(parent);
+        Assert.True(afterFlushStats.CodeCacheFlushCount > 0);
+        Assert.True(afterFlushStats.CodeCacheGeneration > generationBeforeFlush);
+
+        WarmSimpleCode(parent);
+
+        var rehydratedStats = ReadCodeCacheStats(parent);
+        Assert.True(rehydratedStats.BlockCacheSize > 0);
+        Assert.Equal(rehydratedStats.CodeCacheGeneration, ReadCodeCacheStats(child).CodeCacheGeneration);
+    }
+
+    [Fact]
+    public void ExternalAlias_ResetAllCodeCache_ExplicitInvalidationSelfHealsRequestedPages()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var codePage = new UnmanagedPageFixture(IncEaxTwice());
+
+        const uint rwAddr = 0x00430000;
+        const uint rxAddr = 0x00431000;
+        MapExternalPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapExternalPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+
+        RunPair(engine, rxAddr, 10, 12);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+
+        engine.ResetAllCodeCache();
+        Assert.True(engine.HasSlowWrite(rwAddr));
+
+        engine.ResetCodeCacheByRange(rwAddr, 1);
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+        Assert.False(engine.HasSlowWrite(rwAddr));
+
+        RunPair(engine, rxAddr, 10, 12);
+        Assert.True(engine.HasSlowWrite(rwAddr));
+
+        engine.ResetAllCodeCache();
+        Assert.True(engine.HasSlowWrite(rwAddr));
+
+        Span<nint> hostPages = stackalloc nint[1];
+        hostPages[0] = codePage.Pointer;
+        engine.InvalidateCodeCacheHostPages(hostPages);
+
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+        Assert.False(engine.HasSlowWrite(rwAddr));
+    }
+
+    [Fact]
+    public void CodeCacheBudgetFlush_ConcatSuccessorDecodeRestartStillRuns()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        InstallConcatDirectJmpCode(engine, BudgetTestCodeBaseAddr);
+        engine.SetCodeCacheBudgetBytesForTesting(200);
+
+        engine.Eip = BudgetTestCodeBaseAddr;
+        engine.Run(BudgetTestCodeBaseAddr + 6, 32);
+
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(BudgetTestCodeBaseAddr + 6, engine.Eip);
+        Assert.True(ReadCodeCacheStats(engine).CodeCacheFlushCount > 0);
+    }
+
+    [Fact]
+    public void CodeCacheBudgetFlush_DirectJmpConcatFlushStillBuildsReusableBlock()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        InstallConcatDirectJmpCode(engine, BudgetTestCodeBaseAddr);
+        engine.SetCodeCacheBudgetBytesForTesting(320);
+
+        engine.Eip = BudgetTestCodeBaseAddr;
+        engine.Run(BudgetTestCodeBaseAddr + 6, 32);
+
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(BudgetTestCodeBaseAddr + 6, engine.Eip);
+
+        var afterFirstRun = ReadCodeCacheStats(engine);
+        Assert.True(afterFirstRun.CodeCacheFlushCount > 0);
+        Assert.True(afterFirstRun.BlockCacheSize > 0);
+
+        engine.Eip = BudgetTestCodeBaseAddr;
+        engine.Run(BudgetTestCodeBaseAddr + 6, 32);
+
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(BudgetTestCodeBaseAddr + 6, engine.Eip);
+        Assert.Equal(afterFirstRun.CodeCacheFlushCount, ReadCodeCacheStats(engine).CodeCacheFlushCount);
     }
 
     [Fact]
@@ -489,7 +728,10 @@ public class EngineMmuTransferTests
         using var child = parent.Clone(true);
         child.ResetMemory();
 
-        Assert.Equal(0, ReadCodeCacheStats(parent).BlockCacheSize);
+        var stats = ReadCodeCacheStats(parent);
+        Assert.Equal(0, stats.BlockCacheSize);
+        Assert.Equal(0, stats.AllBlocksCount);
+        Assert.Equal(0ul, stats.CodeCacheBytesRequested);
         Assert.False(parent.HasMappedPage(CodeAddr, 1));
         Assert.False(child.HasMappedPage(CodeAddr, 1));
     }
@@ -729,6 +971,15 @@ public class EngineMmuTransferTests
         Marshal.Copy(SimpleCode, 0, page, SimpleCode.Length);
     }
 
+    private static void InstallConcatDirectJmpCode(Engine engine, uint addr)
+    {
+        var perms = (byte)(Protection.Read | Protection.Write | Protection.Exec);
+        var page = engine.AllocatePage(addr, perms);
+        Assert.NotEqual(IntPtr.Zero, page);
+        byte[] code = [0xEB, 0x02, 0x90, 0x90, 0x40, 0x40];
+        Marshal.Copy(code, 0, page, code.Length);
+    }
+
     private static void InstallCrossPageCode(Engine engine)
     {
         var perms = (byte)(Protection.Read | Protection.Write | Protection.Exec);
@@ -754,6 +1005,16 @@ public class EngineMmuTransferTests
         Assert.Equal(addr + (uint)SimpleCode.Length, engine.Eip);
     }
 
+    private static void WarmUniqueSimpleBlocks(Engine engine, uint baseAddr, int count)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            var addr = baseAddr + (uint)(i * LinuxConstants.PageSize);
+            InstallSimpleCode(engine, addr);
+            WarmSimpleCode(engine, addr);
+        }
+    }
+
     private static byte[] IncEaxTwice()
     {
         return [0x40, 0x40];
@@ -762,6 +1023,16 @@ public class EngineMmuTransferTests
     private static byte[] DecEaxTwice()
     {
         return [0x48, 0x48];
+    }
+
+    private static byte[] CrossPageIncEaxTwicePage(int pageIndex)
+    {
+        var bytes = new byte[LinuxConstants.PageSize];
+        if (pageIndex == 0)
+            bytes[LinuxConstants.PageSize - 1] = 0x40;
+        else if (pageIndex == 1)
+            bytes[0] = 0x40;
+        return bytes;
     }
 
     private static byte[] TwoSamePagePatchesThenTail(uint addr)
@@ -857,10 +1128,15 @@ public class EngineMmuTransferTests
         return new CodeCacheStats(
             root.GetProperty("all_blocks_count").GetInt32(),
             root.GetProperty("block_cache_size").GetInt32(),
-            root.GetProperty("page_to_blocks_size").GetInt32());
+            root.GetProperty("page_to_blocks_size").GetInt32(),
+            root.GetProperty("code_cache_bytes_requested").GetUInt64(),
+            root.GetProperty("code_cache_limit_bytes").GetUInt64(),
+            root.GetProperty("code_cache_flush_count").GetUInt64(),
+            root.GetProperty("code_cache_generation").GetUInt64());
     }
 
-    private readonly record struct CodeCacheStats(int AllBlocksCount, int BlockCacheSize, int PageToBlocksSize);
+    private readonly record struct CodeCacheStats(int AllBlocksCount, int BlockCacheSize, int PageToBlocksSize,
+        ulong CodeCacheBytesRequested, ulong CodeCacheLimitBytes, ulong CodeCacheFlushCount, ulong CodeCacheGeneration);
 
     private sealed class TmpfsFileFixture : IDisposable
     {
