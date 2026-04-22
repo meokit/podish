@@ -208,6 +208,8 @@ public class KernelScheduler
 
     private void ReleaseDetachedTask(FiberTask task)
     {
+        task.EndGuestCpuAccounting();
+        task.Process.AccumulateExitedThreadCpuTime(task.SnapshotThreadCpuTime());
         task.CancelAsyncSyscallForRetirement();
         task.BeginTaskRetirement();
         task.Process.Syscalls?.UnregisterEngine(task.CPU);
@@ -372,6 +374,7 @@ public class KernelScheduler
         if (!_processes.TryGetValue(InitPid, out initProc)) return false;
         _processes.Remove(process.TGID);
 
+        initProc!.AccumulateChildrenCpuTime(process.GetReapedCpuTimeSnapshot());
         initProc!.Children.Remove(process.TGID);
 
         process.State = ProcessState.Dead;

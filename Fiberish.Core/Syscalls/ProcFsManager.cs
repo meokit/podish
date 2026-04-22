@@ -88,8 +88,15 @@ public static class ProcFsManager
             tpgid = process.ControllingTty.ForegroundPgrp;
         }
 
+        var selfCpu = process.GetSelfCpuTimeSnapshot();
+        var childrenCpu = process.GetChildrenCpuTimeSnapshot();
+        var utime = SyscallManager.NanosecondsToUserClockTicks(selfCpu.UserNs);
+        var stime = SyscallManager.NanosecondsToUserClockTicks(selfCpu.SystemNs);
+        var cutime = SyscallManager.NanosecondsToUserClockTicks(childrenCpu.UserNs);
+        var cstime = SyscallManager.NanosecondsToUserClockTicks(childrenCpu.SystemNs);
+
         return
-            $"{process.TGID} ({process.Comm}) {stateChar} {process.PPID} {process.PGID} {process.SID} {ttyNr} {tpgid} 0 0 0 0 0 0 0 0 0 0 0 {process.Threads.Count} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
+            $"{process.TGID} ({process.Comm}) {stateChar} {process.PPID} {process.PGID} {process.SID} {ttyNr} {tpgid} 0 0 0 0 0 {utime} {stime} {cutime} {cstime} 0 0 {process.Threads.Count} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
     }
 
     public static string GenerateMounts(SyscallManager? sm)

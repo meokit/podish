@@ -15,8 +15,8 @@ namespace Fiberish.Syscalls;
 
 public partial class SyscallManager
 {
-    private const long VirtualCpuHz = 1_000_000_000L; // Assume a fixed 1 GHz virtual CPU.
-    private const int UserHz = 100; // Linux i386 userspace clock ticks per second for times().
+    private const long NanosecondsPerSecond = 1_000_000_000L;
+    internal const int UserHz = 100; // Linux i386 userspace clock ticks per second for times().
     private const int SysInfo32Size = 64;
     private const int Rusage32Size = 72;
     private const int RusageSelf = 0;
@@ -37,25 +37,8 @@ public partial class SyscallManager
         LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED |
         LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE;
 
-    private static readonly long VirtualCpuStartTimestamp = Stopwatch.GetTimestamp();
     private static readonly long SysinfoUptimeStartTimestamp = Stopwatch.GetTimestamp();
-
-    private static long GetVirtualCpuCycles()
-    {
-        var elapsed = Stopwatch.GetTimestamp() - VirtualCpuStartTimestamp;
-        if (elapsed <= 0) return 0;
-        // Avoid 64-bit overflow: (elapsed * 1e9) can overflow quickly on high-frequency timers.
-        var q = elapsed / Stopwatch.Frequency;
-        var r = elapsed % Stopwatch.Frequency;
-        return q * VirtualCpuHz + r * VirtualCpuHz / Stopwatch.Frequency;
-    }
-
-    private static int GetTimesClockTicks()
-    {
-        var cycles = GetVirtualCpuCycles();
-        var ticks = cycles / (VirtualCpuHz / UserHz);
-        return unchecked((int)ticks);
-    }
+    private static readonly long TimesStartTimestamp = Stopwatch.GetTimestamp();
 
     private static int GetSysinfoUptimeSeconds()
     {
@@ -64,6 +47,12 @@ public partial class SyscallManager
         var seconds = elapsed / Stopwatch.Frequency;
         if (seconds > int.MaxValue) return int.MaxValue;
         return (int)seconds;
+    }
+
+    private static int GetElapsedTimesClockTicks()
+    {
+        var elapsed = Stopwatch.GetTimestamp() - TimesStartTimestamp;
+        return ClampClockTicksToInt(NanosecondsToUserClockTicks(FiberTask.ConvertStopwatchTicksToNanoseconds(elapsed)));
     }
 
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
@@ -78,17 +67,24 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysTimes(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var ticks = GetTimesClockTicks();
+        var task = engine.Owner as FiberTask;
+        var self = task?.Process.GetSelfCpuTimeSnapshot() ?? default;
+        var children = task?.Process.GetChildrenCpuTimeSnapshot() ?? default;
+        var selfUserTicks = ClampClockTicksToInt(NanosecondsToUserClockTicks(self.UserNs));
+        var selfSystemTicks = ClampClockTicksToInt(NanosecondsToUserClockTicks(self.SystemNs));
+        var childrenUserTicks = ClampClockTicksToInt(NanosecondsToUserClockTicks(children.UserNs));
+        var childrenSystemTicks = ClampClockTicksToInt(NanosecondsToUserClockTicks(children.SystemNs));
+        var ticks = GetElapsedTimesClockTicks();
 
         // struct tms on i386:
         // long tms_utime;  long tms_stime;  long tms_cutime;  long tms_cstime;
         if (a1 != 0)
         {
             var tms = new byte[16];
-            BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(0, 4), ticks);
-            BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(4, 4), 0);
-            BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(8, 4), 0);
-            BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(12, 4), 0);
+            BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(0, 4), selfUserTicks);
+            BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(4, 4), selfSystemTicks);
+            BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(8, 4), childrenUserTicks);
+            BinaryPrimitives.WriteInt32LittleEndian(tms.AsSpan(12, 4), childrenSystemTicks);
             if (!engine.CopyToUser(a1, tms)) return -(int)Errno.EFAULT;
         }
 
@@ -100,27 +96,30 @@ public partial class SyscallManager
         var who = unchecked((int)a1);
         var usagePtr = a2;
 
-        long userUsec;
-        long systemUsec;
+        CpuTimeSnapshot snapshot;
 
         switch (who)
         {
             case RusageSelf:
+                if (engine.Owner is not FiberTask selfTask)
+                    return -(int)Errno.EPERM;
+                snapshot = selfTask.Process.GetSelfCpuTimeSnapshot();
+                break;
             case RusageThread:
-                // We do not maintain precise per-task accounting yet, so expose the emulator's
-                // virtual CPU clock as user time and keep system time at zero.
-                userUsec = GetVirtualCpuCycles() / 1_000L;
-                systemUsec = 0;
+                if (engine.Owner is not FiberTask threadTask)
+                    return -(int)Errno.EPERM;
+                snapshot = threadTask.SnapshotThreadCpuTime();
                 break;
             case RusageChildren:
-                userUsec = 0;
-                systemUsec = 0;
+                if (engine.Owner is not FiberTask childTask)
+                    return -(int)Errno.EPERM;
+                snapshot = childTask.Process.GetChildrenCpuTimeSnapshot();
                 break;
             default:
                 return -(int)Errno.EINVAL;
         }
 
-        if (!WriteRusage32(engine, usagePtr, userUsec, systemUsec))
+        if (!WriteRusage32(engine, usagePtr, snapshot))
             return -(int)Errno.EFAULT;
 
         return 0;
@@ -442,7 +441,7 @@ public partial class SyscallManager
         var clockId = (int)a1;
         var tsPtr = a2;
 
-        if (!TryGetClockTime(clockId, out var secs, out var nsecs))
+        if (!TryGetClockTime(engine, clockId, out var secs, out var nsecs))
             return -(int)Errno.EINVAL;
 
         var buf = new byte[8];
@@ -474,7 +473,7 @@ public partial class SyscallManager
         var clockId = (int)a1;
         var tsPtr = a2;
 
-        if (!TryGetClockTime(clockId, out var secs, out var nsecs))
+        if (!TryGetClockTime(engine, clockId, out var secs, out var nsecs))
             return -(int)Errno.EINVAL;
 
         var buf = new byte[16];
@@ -598,7 +597,7 @@ public partial class SyscallManager
         return secs * 1_000_000_000L + rem * 1_000_000_000L / freq;
     }
 
-    private static bool TryGetClockTime(int clockId, out long secs, out long nsecs)
+    private static bool TryGetClockTime(Engine engine, int clockId, out long secs, out long nsecs)
     {
         switch (clockId)
         {
@@ -624,11 +623,23 @@ public partial class SyscallManager
                 return true;
             }
             case LinuxConstants.CLOCK_PROCESS_CPUTIME_ID:
+                if (engine.Owner is not FiberTask processTask)
+                {
+                    secs = 0;
+                    nsecs = 0;
+                    return false;
+                }
+
+                return TrySplitCpuTime(processTask.Process.GetSelfCpuTimeSnapshot(), out secs, out nsecs);
             case LinuxConstants.CLOCK_THREAD_CPUTIME_ID:
-                // We don't maintain per-process or per-thread CPU accounting yet.
-                secs = 0;
-                nsecs = 0;
-                return false;
+                if (engine.Owner is not FiberTask threadTask)
+                {
+                    secs = 0;
+                    nsecs = 0;
+                    return false;
+                }
+
+                return TrySplitCpuTime(threadTask.SnapshotThreadCpuTime(), out secs, out nsecs);
             default:
                 secs = 0;
                 nsecs = 0;
@@ -650,8 +661,8 @@ public partial class SyscallManager
                 return true;
             case LinuxConstants.CLOCK_PROCESS_CPUTIME_ID:
             case LinuxConstants.CLOCK_THREAD_CPUTIME_ID:
-                resolutionNs = 0;
-                return false;
+                resolutionNs = GetCpuClockResolutionNs();
+                return true;
             default:
                 resolutionNs = 0;
                 return false;
@@ -666,13 +677,15 @@ public partial class SyscallManager
         return engine.CopyToUser(ptr, buf);
     }
 
-    private static bool WriteRusage32(Engine engine, uint ptr, long userUsec, long systemUsec, int maxRssKiB = 0)
+    private static bool WriteRusage32(Engine engine, uint ptr, CpuTimeSnapshot snapshot, int maxRssKiB = 0)
     {
         if (ptr == 0) return false;
 
         Span<byte> buf = stackalloc byte[Rusage32Size];
         buf.Clear();
 
+        var userUsec = snapshot.UserNs / 1_000L;
+        var systemUsec = snapshot.SystemNs / 1_000L;
         BinaryPrimitives.WriteInt32LittleEndian(buf.Slice(0, 4), (int)(userUsec / 1_000_000L));
         BinaryPrimitives.WriteInt32LittleEndian(buf.Slice(4, 4), (int)(userUsec % 1_000_000L));
         BinaryPrimitives.WriteInt32LittleEndian(buf.Slice(8, 4), (int)(systemUsec / 1_000_000L));
@@ -685,9 +698,52 @@ public partial class SyscallManager
     private static bool WriteTimespec64(Engine engine, uint ptr, long totalNs)
     {
         var buf = new byte[16];
-        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), totalNs / 1_000_000_000L);
-        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8, 8), totalNs % 1_000_000_000L);
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), totalNs / NanosecondsPerSecond);
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8, 8), totalNs % NanosecondsPerSecond);
         return engine.CopyToUser(ptr, buf);
+    }
+
+    internal static long NanosecondsToUserClockTicks(long totalNs)
+    {
+        if (totalNs <= 0)
+            return 0;
+
+        var wholeSeconds = totalNs / NanosecondsPerSecond;
+        var remainingNs = totalNs % NanosecondsPerSecond;
+        return wholeSeconds * UserHz + remainingNs * UserHz / NanosecondsPerSecond;
+    }
+
+    private static int ClampClockTicksToInt(long clockTicks)
+    {
+        if (clockTicks <= int.MinValue)
+            return int.MinValue;
+        if (clockTicks >= int.MaxValue)
+            return int.MaxValue;
+        return (int)clockTicks;
+    }
+
+    private static bool TrySplitCpuTime(CpuTimeSnapshot snapshot, out long secs, out long nsecs)
+    {
+        var totalNs = snapshot.UserNs + snapshot.SystemNs;
+        if (totalNs < 0)
+        {
+            secs = 0;
+            nsecs = 0;
+            return false;
+        }
+
+        secs = totalNs / NanosecondsPerSecond;
+        nsecs = totalNs % NanosecondsPerSecond;
+        return true;
+    }
+
+    private static long GetCpuClockResolutionNs()
+    {
+        var ticksPerSecond = Stopwatch.Frequency;
+        if (ticksPerSecond <= 0)
+            return 1;
+
+        return Math.Max(1L, (NanosecondsPerSecond + ticksPerSecond - 1) / ticksPerSecond);
     }
 
     private async ValueTask<int> SysNice(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Reflection;
+using System.Threading;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -54,6 +55,94 @@ public class GetRusageSyscallTests
         var rc = await env.Invoke("SysGetRusage", 1234, usagePtr, 0, 0, 0, 0);
 
         Assert.Equal(-(int)Errno.EINVAL, rc);
+    }
+
+    [Fact]
+    public async Task SysGetRusage_Thread_IncludesActiveGuestSlice()
+    {
+        using var env = new TestEnv();
+        const uint usagePtr = 0x13000;
+        env.MapUserPage(usagePtr);
+
+        env.Task.BeginGuestCpuAccounting();
+        Thread.Sleep(10);
+
+        try
+        {
+            var rc = await env.Invoke("SysGetRusage", unchecked((uint)1), usagePtr, 0, 0, 0, 0);
+
+            Assert.Equal(0, rc);
+            Assert.True(env.ReadInt32(usagePtr) > 0 || env.ReadInt32(usagePtr + 4) > 0);
+        }
+        finally
+        {
+            env.Task.EndGuestCpuAccounting();
+        }
+    }
+
+    [Fact]
+    public async Task SysGetRusage_SelfAndChildren_UseProcessAccounting()
+    {
+        using var env = new TestEnv();
+        const uint selfUsagePtr = 0x14000;
+        const uint childrenUsagePtr = 0x15000;
+        env.MapUserPage(selfUsagePtr);
+        env.MapUserPage(childrenUsagePtr);
+
+        env.Task.AddCpuTime(11_000_000);
+        env.Process.AccumulateExitedThreadCpuTime(new CpuTimeSnapshot(7_000_000, 0));
+        env.Process.AccumulateChildrenCpuTime(new CpuTimeSnapshot(5_000_000, 0));
+
+        Assert.Equal(0, await env.Invoke("SysGetRusage", unchecked((uint)RusageSelf), selfUsagePtr, 0, 0, 0, 0));
+        Assert.Equal(0,
+            await env.Invoke("SysGetRusage", unchecked((uint)RusageChildren), childrenUsagePtr, 0, 0, 0, 0));
+
+        Assert.Equal(0, env.ReadInt32(selfUsagePtr));
+        Assert.Equal(18_000, env.ReadInt32(selfUsagePtr + 4));
+        Assert.Equal(0, env.ReadInt32(childrenUsagePtr));
+        Assert.Equal(5_000, env.ReadInt32(childrenUsagePtr + 4));
+    }
+
+    [Fact]
+    public async Task SysTimes_UsesSelfAndChildrenTicks()
+    {
+        using var env = new TestEnv();
+        const uint tmsPtr = 0x16000;
+        env.MapUserPage(tmsPtr);
+
+        env.Task.AddCpuTime(50_000_000);
+        env.Process.AccumulateExitedThreadCpuTime(new CpuTimeSnapshot(20_000_000, 0));
+        env.Process.AccumulateChildrenCpuTime(new CpuTimeSnapshot(30_000_000, 0));
+
+        var rc = await env.Invoke("SysTimes", tmsPtr, 0, 0, 0, 0, 0);
+
+        Assert.True(rc >= 0);
+        Assert.Equal(7, env.ReadInt32(tmsPtr));
+        Assert.Equal(0, env.ReadInt32(tmsPtr + 4));
+        Assert.Equal(3, env.ReadInt32(tmsPtr + 8));
+        Assert.Equal(0, env.ReadInt32(tmsPtr + 12));
+    }
+
+    [Fact]
+    public async Task SysClockGetTime64_CpuClocks_UseThreadAndProcessAccounting()
+    {
+        using var env = new TestEnv();
+        const uint processTsPtr = 0x17000;
+        const uint threadTsPtr = 0x18000;
+        env.MapUserPage(processTsPtr);
+        env.MapUserPage(threadTsPtr);
+
+        env.Task.AddCpuTime(25_000_000);
+        env.Process.AccumulateExitedThreadCpuTime(new CpuTimeSnapshot(15_000_000, 0));
+
+        Assert.Equal(0,
+            await env.Invoke("SysClockGetTime64", LinuxConstants.CLOCK_PROCESS_CPUTIME_ID, processTsPtr, 0, 0, 0,
+                0));
+        Assert.Equal(0,
+            await env.Invoke("SysClockGetTime64", LinuxConstants.CLOCK_THREAD_CPUTIME_ID, threadTsPtr, 0, 0, 0, 0));
+
+        Assert.Equal(40_000_000L, env.ReadInt64(processTsPtr + 8));
+        Assert.Equal(25_000_000L, env.ReadInt64(threadTsPtr + 8));
     }
 
     private sealed class TestEnv : IDisposable
@@ -122,6 +211,13 @@ public class GetRusageSyscallTests
             var buf = new byte[4];
             Assert.True(Engine.CopyFromUser(addr, buf));
             return BinaryPrimitives.ReadInt32LittleEndian(buf);
+        }
+
+        public long ReadInt64(uint addr)
+        {
+            var buf = new byte[8];
+            Assert.True(Engine.CopyFromUser(addr, buf));
+            return BinaryPrimitives.ReadInt64LittleEndian(buf);
         }
     }
 }

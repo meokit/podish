@@ -36,6 +36,14 @@ public enum ProcessKind
 
 public readonly record struct ResourceLimit(ulong Soft, ulong Hard);
 
+public readonly record struct CpuTimeSnapshot(long UserNs, long SystemNs)
+{
+    public static CpuTimeSnapshot operator +(CpuTimeSnapshot left, CpuTimeSnapshot right)
+    {
+        return new CpuTimeSnapshot(left.UserNs + right.UserNs, left.SystemNs + right.SystemNs);
+    }
+}
+
 public class UTSNamespace
 {
     public string SysName { get; set; } = "Linux";
@@ -158,6 +166,16 @@ public class Process
     public Dictionary<int, SigAction> SignalActions { get; } = [];
     public ulong PendingProcessSignals { get; set; }
     public Locked<List<SigInfo>> PendingProcessSignalQueue { get; } = new(new List<SigInfo>());
+    public long ExitedThreadsUserCpuTimeNs { get; private set; }
+    public long ExitedThreadsSystemCpuTimeNs { get; private set; }
+    public long ChildrenUserCpuTimeNs { get; private set; }
+    public long ChildrenSystemCpuTimeNs { get; private set; }
+
+    private bool HasFrozenCpuTimeSnapshot { get; set; }
+    private long FrozenUserCpuTimeNs { get; set; }
+    private long FrozenSystemCpuTimeNs { get; set; }
+    private long FrozenChildrenUserCpuTimeNs { get; set; }
+    private long FrozenChildrenSystemCpuTimeNs { get; set; }
 
     internal void BindScheduler(KernelScheduler scheduler)
     {
@@ -223,6 +241,59 @@ public class Process
     {
         PendingProcessSignals = 0;
         PendingProcessSignalQueue.Lock(q => q.Clear());
+    }
+
+    public CpuTimeSnapshot GetSelfCpuTimeSnapshot()
+    {
+        if (HasFrozenCpuTimeSnapshot)
+            return new CpuTimeSnapshot(FrozenUserCpuTimeNs, FrozenSystemCpuTimeNs);
+
+        return GetLiveSelfCpuTimeSnapshot();
+    }
+
+    public CpuTimeSnapshot GetChildrenCpuTimeSnapshot()
+    {
+        return HasFrozenCpuTimeSnapshot
+            ? new CpuTimeSnapshot(FrozenChildrenUserCpuTimeNs, FrozenChildrenSystemCpuTimeNs)
+            : new CpuTimeSnapshot(ChildrenUserCpuTimeNs, ChildrenSystemCpuTimeNs);
+    }
+
+    public CpuTimeSnapshot GetReapedCpuTimeSnapshot()
+    {
+        return GetSelfCpuTimeSnapshot() + GetChildrenCpuTimeSnapshot();
+    }
+
+    internal void AccumulateExitedThreadCpuTime(CpuTimeSnapshot snapshot)
+    {
+        ExitedThreadsUserCpuTimeNs += snapshot.UserNs;
+        ExitedThreadsSystemCpuTimeNs += snapshot.SystemNs;
+    }
+
+    internal void AccumulateChildrenCpuTime(CpuTimeSnapshot snapshot)
+    {
+        ChildrenUserCpuTimeNs += snapshot.UserNs;
+        ChildrenSystemCpuTimeNs += snapshot.SystemNs;
+    }
+
+    internal void FreezeCpuTimeSnapshot()
+    {
+        if (HasFrozenCpuTimeSnapshot)
+            return;
+
+        var self = GetLiveSelfCpuTimeSnapshot();
+        FrozenUserCpuTimeNs = self.UserNs;
+        FrozenSystemCpuTimeNs = self.SystemNs;
+        FrozenChildrenUserCpuTimeNs = ChildrenUserCpuTimeNs;
+        FrozenChildrenSystemCpuTimeNs = ChildrenSystemCpuTimeNs;
+        HasFrozenCpuTimeSnapshot = true;
+    }
+
+    private CpuTimeSnapshot GetLiveSelfCpuTimeSnapshot()
+    {
+        var snapshot = new CpuTimeSnapshot(ExitedThreadsUserCpuTimeNs, ExitedThreadsSystemCpuTimeNs);
+        foreach (var task in Threads)
+            snapshot += task.SnapshotThreadCpuTime();
+        return snapshot;
     }
 
     public void SetCapability(int capability, bool effective, bool permitted, bool inheritable)

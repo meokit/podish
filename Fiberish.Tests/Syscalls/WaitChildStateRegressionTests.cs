@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Reflection;
 using Fiberish.Core;
 using Fiberish.Memory;
@@ -162,6 +163,50 @@ public class WaitChildStateRegressionTests
         Assert.Equal(-(int)Errno.ERESTARTSYS, await pending);
     }
 
+    [Fact]
+    public async Task Wait4_Wnowait_PreservesChildUsageUntilRealReap()
+    {
+        using var env = new WaitEnv();
+        const uint rusagePtr = 0x10000;
+        env.MapParentUserPage(rusagePtr);
+
+        env.Child.AccumulateExitedThreadCpuTime(new CpuTimeSnapshot(30_000_000, 0));
+        env.Child.AccumulateChildrenCpuTime(new CpuTimeSnapshot(12_000_000, 0));
+        env.Child.State = ProcessState.Zombie;
+        env.Child.ExitStatus = 17;
+        env.Child.FreezeCpuTimeSnapshot();
+
+        var rc = await InvokeSys(env.ParentSys, env.ParentEngine, "SysWait4", (uint)env.Child.TGID, 0, 0x01000000,
+            rusagePtr, 0, 0);
+        Assert.Equal(env.Child.TGID, rc);
+        Assert.Equal(30_000, env.ReadParentInt32(rusagePtr + 4));
+        Assert.Equal(0, env.Parent.ChildrenUserCpuTimeNs);
+
+        rc = await InvokeSys(env.ParentSys, env.ParentEngine, "SysWait4", (uint)env.Child.TGID, 0, 0, rusagePtr, 0, 0);
+        Assert.Equal(env.Child.TGID, rc);
+        Assert.Equal(42_000_000L, env.Parent.ChildrenUserCpuTimeNs);
+    }
+
+    [Fact]
+    public async Task WaitId_WritesChildRusage()
+    {
+        using var env = new WaitEnv();
+        const uint rusagePtr = 0x11000;
+        env.MapParentUserPage(rusagePtr);
+
+        env.Child.AccumulateExitedThreadCpuTime(new CpuTimeSnapshot(15_000_000, 0));
+        env.Child.State = ProcessState.Zombie;
+        env.Child.ExitStatus = 19;
+        env.Child.FreezeCpuTimeSnapshot();
+
+        var rc = await InvokeSys(env.ParentSys, env.ParentEngine, "SysWaitId", (uint)IdType.P_PID,
+            (uint)env.Child.TGID, 0, 4, rusagePtr, 0);
+
+        Assert.Equal(0, rc);
+        Assert.Equal(15_000, env.ReadParentInt32(rusagePtr + 4));
+        Assert.Equal(15_000_000L, env.Parent.ChildrenUserCpuTimeNs);
+    }
+
     private static ValueTask<int> InvokeSys(SyscallManager sm, Engine engine, string methodName, uint a1, uint a2,
         uint a3, uint a4, uint a5, uint a6)
     {
@@ -229,6 +274,20 @@ public class WaitChildStateRegressionTests
         public bool DrainEvents()
         {
             return (bool)DrainEventsMethod.Invoke(Scheduler, null)!;
+        }
+
+        public void MapParentUserPage(uint addr)
+        {
+            ParentMem.Mmap(addr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[test]", ParentEngine);
+            Assert.True(ParentMem.HandleFault(addr, true, ParentEngine));
+        }
+
+        public int ReadParentInt32(uint addr)
+        {
+            Span<byte> buffer = stackalloc byte[4];
+            Assert.True(ParentEngine.CopyFromUser(addr, buffer));
+            return BinaryPrimitives.ReadInt32LittleEndian(buffer);
         }
     }
 }

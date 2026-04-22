@@ -290,16 +290,25 @@ public class WaitSyscallTests
     }
 
     [Fact]
-    public async Task ClockGetTime64_CpuAccountingClocks_ReturnEinval()
+    public async Task ClockGetTime64_CpuAccountingClocks_ReturnAccountingSnapshots()
     {
         using var env = new TestEnv();
         const uint tsPtr = 0x44000;
         env.MapUserPage(tsPtr);
+        env.Task.AddCpuTime(9_000_000);
+        env.Process.AccumulateExitedThreadCpuTime(new CpuTimeSnapshot(4_000_000, 0));
 
-        Assert.Equal(-(int)Errno.EINVAL,
+        Assert.Equal(0,
             await env.Invoke("SysClockGetTime64", LinuxConstants.CLOCK_PROCESS_CPUTIME_ID, tsPtr, 0, 0, 0, 0));
-        Assert.Equal(-(int)Errno.EINVAL,
+        var processTs = env.Read(tsPtr, 16);
+        Assert.Equal(0L, BinaryPrimitives.ReadInt64LittleEndian(processTs.AsSpan(0, 8)));
+        Assert.Equal(13_000_000L, BinaryPrimitives.ReadInt64LittleEndian(processTs.AsSpan(8, 8)));
+
+        Assert.Equal(0,
             await env.Invoke("SysClockGetTime64", LinuxConstants.CLOCK_THREAD_CPUTIME_ID, tsPtr, 0, 0, 0, 0));
+        var threadTs = env.Read(tsPtr, 16);
+        Assert.Equal(0L, BinaryPrimitives.ReadInt64LittleEndian(threadTs.AsSpan(0, 8)));
+        Assert.Equal(9_000_000L, BinaryPrimitives.ReadInt64LittleEndian(threadTs.AsSpan(8, 8)));
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Fiberish.Auth.Cred;
 using Fiberish.Core.Utils;
@@ -73,6 +74,7 @@ public class FiberTask
     private int _pendingAsyncSyscallResult;
 
     private bool _pendingFaultFromInterrupt;
+    private long _runningGuestCpuSinceTimestamp;
     private long _signalWaitId;
     private SignalWaitKind _signalWaitKind;
     private ulong _signalWaitMask;
@@ -136,6 +138,10 @@ public class FiberTask
     public bool Exited { get; set; }
 
     public int ExitStatus { get; set; }
+
+    public long UserCpuTimeNs { get; private set; }
+
+    public long SystemCpuTimeNs { get; private set; }
 
     public uint ChildClearTidPtr { get; set; }
 
@@ -206,6 +212,56 @@ public class FiberTask
     internal void ClearInteractiveBurst()
     {
         _interactiveBurstBudget = 0;
+    }
+
+    internal void AddCpuTime(long userCpuTimeNs, long systemCpuTimeNs = 0)
+    {
+        UserCpuTimeNs += userCpuTimeNs;
+        SystemCpuTimeNs += systemCpuTimeNs;
+    }
+
+    internal CpuTimeSnapshot SnapshotThreadCpuTime()
+    {
+        var userCpuTimeNs = UserCpuTimeNs;
+        if (_runningGuestCpuSinceTimestamp != 0)
+        {
+            var elapsedTicks = Stopwatch.GetTimestamp() - _runningGuestCpuSinceTimestamp;
+            if (elapsedTicks > 0)
+                userCpuTimeNs += ConvertStopwatchTicksToNanoseconds(elapsedTicks);
+        }
+
+        return new CpuTimeSnapshot(userCpuTimeNs, SystemCpuTimeNs);
+    }
+
+    internal void BeginGuestCpuAccounting()
+    {
+        if (_runningGuestCpuSinceTimestamp != 0)
+            return;
+
+        _runningGuestCpuSinceTimestamp = Stopwatch.GetTimestamp();
+    }
+
+    internal void EndGuestCpuAccounting()
+    {
+        var startedAt = _runningGuestCpuSinceTimestamp;
+        if (startedAt == 0)
+            return;
+
+        var elapsedTicks = Stopwatch.GetTimestamp() - startedAt;
+        if (elapsedTicks > 0)
+            UserCpuTimeNs += ConvertStopwatchTicksToNanoseconds(elapsedTicks);
+
+        _runningGuestCpuSinceTimestamp = 0;
+    }
+
+    internal static long ConvertStopwatchTicksToNanoseconds(long elapsedTicks)
+    {
+        if (elapsedTicks <= 0)
+            return 0;
+
+        var wholeSeconds = elapsedTicks / Stopwatch.Frequency;
+        var remainderTicks = elapsedTicks % Stopwatch.Frequency;
+        return wholeSeconds * 1_000_000_000L + remainderTicks * 1_000_000_000L / Stopwatch.Frequency;
     }
 
     private TaskStateScope EnterTaskStateScope([CallerMemberName] string? caller = null)
@@ -1519,7 +1575,15 @@ public class FiberTask
             if (Process.Syscalls?.Strace == true)
                 Logger.LogTrace("[RunSlice] Enter Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
 
-            CPU.Run(maxInsts: (ulong)instructionLimit);
+            BeginGuestCpuAccounting();
+            try
+            {
+                CPU.Run(maxInsts: (ulong)instructionLimit);
+            }
+            finally
+            {
+                EndGuestCpuAccounting();
+            }
 
             if (Process.Syscalls?.Strace == true)
                 Logger.LogTrace("[RunSlice] Exit Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));

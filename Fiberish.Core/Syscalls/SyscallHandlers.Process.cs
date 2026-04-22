@@ -194,9 +194,13 @@ public partial class SyscallManager
                             if (!engine.CopyToUser(statusPtr, stBuf)) return -(int)Errno.EFAULT;
                         }
 
+                        if (rusagePtr != 0 && !WriteRusage32(engine, rusagePtr, childProc.GetSelfCpuTimeSnapshot()))
+                            return -(int)Errno.EFAULT;
+
                         // Reap only if WNOWAIT is not set
                         if (!noReap)
                         {
+                            currentProc.AccumulateChildrenCpuTime(childProc.GetReapedCpuTimeSnapshot());
                             currentProc.Children.Remove(childPid);
                             childProc.State = ProcessState.Dead;
                             kernel.UnregisterProcess(childPid);
@@ -299,8 +303,12 @@ public partial class SyscallManager
                             if (!WriteSigInfo(engine, infop, info)) return -(int)Errno.EFAULT;
                         }
 
+                        if (rusagePtr != 0 && !WriteRusage32(engine, rusagePtr, childProc.GetSelfCpuTimeSnapshot()))
+                            return -(int)Errno.EFAULT;
+
                         if (!wnowait)
                         {
+                            currentProc.AccumulateChildrenCpuTime(childProc.GetReapedCpuTimeSnapshot());
                             currentProc.Children.Remove(childPid);
 
                             childProc.State = ProcessState.Dead;
@@ -470,6 +478,7 @@ public partial class SyscallManager
 
             if (ShouldAutoReapExitedChild(parentProc))
             {
+                parentProc!.AccumulateChildrenCpuTime(task.Process.GetReapedCpuTimeSnapshot());
                 _ = parentProc!.Children.Remove(task.Process.TGID);
                 task.Process.State = ProcessState.Dead;
                 task.CommonKernel.UnregisterProcess(task.Process.TGID);
@@ -489,6 +498,7 @@ public partial class SyscallManager
         task.Process.CoreDumped = coreDumped;
         task.Process.HasWaitableStop = false;
         task.Process.HasWaitableContinue = false;
+        task.Process.FreezeCpuTimeSnapshot();
 
         if (task.Process.TGID == task.CommonKernel.InitPid)
         {

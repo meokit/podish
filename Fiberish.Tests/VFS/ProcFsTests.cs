@@ -132,6 +132,41 @@ public class ProcFsTests
     }
 
     [Fact]
+    public void ProcPidStat_ShouldReflectCpuAccountingFields()
+    {
+        using var ctx = new ProcTestContext();
+
+        var process = TestRuntimeFactory.CreateProcess(4343);
+        process.PPID = 1;
+        process.PGID = 4343;
+        process.SID = 4343;
+        process.State = ProcessState.Running;
+        process.AccumulateExitedThreadCpuTime(new CpuTimeSnapshot(70_000_000, 0));
+        process.AccumulateChildrenCpuTime(new CpuTimeSnapshot(30_000_000, 0));
+        ctx.Scheduler.RegisterProcess(process);
+
+        var fs = new ProcFileSystem();
+        var sb = (ProcSuperBlock)fs.ReadSuper(new FileSystemType { Name = "proc" }, 0, "proc", ctx.SyscallManager);
+        var mount = new Mount(sb, sb.Root)
+        {
+            Source = "proc",
+            FsType = "proc",
+            Options = "rw,relatime"
+        };
+
+        var pidDir = Lookup(ctx.Task, sb.Root, "4343");
+        Assert.NotNull(pidDir);
+
+        var statText = ReadAll(ctx.Task, Lookup(ctx.Task, pidDir!, "stat")!, mount);
+        var fields = statText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Equal("7", fields[13]);
+        Assert.Equal("0", fields[14]);
+        Assert.Equal("3", fields[15]);
+        Assert.Equal("0", fields[16]);
+    }
+
+    [Fact]
     public void ProcSystemFiles_ShouldExposeStatUptimeLoadavgAndSysctl()
     {
         using var ctx = new ProcTestContext();
