@@ -1,0 +1,987 @@
+using System.Text;
+using Fiberish.Core;
+using Fiberish.Memory;
+using Fiberish.Native;
+
+namespace Fiberish.VFS;
+
+/// <summary>
+///     Shared superblock implementation for in-memory directory index based filesystems.
+/// </summary>
+public abstract class IndexedMemorySuperBlock : SuperBlock
+{
+    protected ulong _nextIno = 1;
+    private readonly Dictionary<ulong, FsNameMap<Dentry>> _dentriesByParent = [];
+
+    protected IndexedMemorySuperBlock(FileSystemType type, DeviceNumberManager devManager, MemoryRuntimeContext memoryContext)
+        : base(devManager, memoryContext)
+    {
+        Type = type;
+    }
+
+    protected abstract IndexedMemoryInode CreateIndexedInode(ulong ino);
+
+    public override Inode AllocInode()
+    {
+        lock (Lock)
+        {
+            var inode = CreateIndexedInode(_nextIno++);
+            TrackInode(inode);
+            return inode;
+        }
+    }
+
+    public override void WriteInode(Inode inode)
+    {
+    }
+
+    protected override void Shutdown()
+    {
+        base.Shutdown();
+        _dentriesByParent.Clear();
+    }
+
+    public bool ContainsDentry(ulong parentIno, ReadOnlySpan<byte> name)
+    {
+        lock (Lock)
+        {
+            return _dentriesByParent.TryGetValue(parentIno, out var names) && names.TryGetValue(name, out _);
+        }
+    }
+
+    public bool TryGetDentry(ulong parentIno, ReadOnlySpan<byte> name, out Dentry dentry)
+    {
+        lock (Lock)
+        {
+            if (_dentriesByParent.TryGetValue(parentIno, out var names) && names.TryGetValue(name, out dentry))
+                return true;
+        }
+
+        dentry = null!;
+        return false;
+    }
+
+    public void SetDentry(ulong parentIno, Dentry dentry)
+    {
+        lock (Lock)
+        {
+            if (!_dentriesByParent.TryGetValue(parentIno, out var names))
+            {
+                names = new FsNameMap<Dentry>();
+                _dentriesByParent[parentIno] = names;
+            }
+
+            names.Set(dentry.Name, dentry);
+        }
+    }
+
+    public bool RemoveDentry(ulong parentIno, ReadOnlySpan<byte> name, out Dentry? removed)
+    {
+        lock (Lock)
+        {
+            if (_dentriesByParent.TryGetValue(parentIno, out var names) && names.Remove(name, out removed))
+            {
+                if (names.Count == 0)
+                    _dentriesByParent.Remove(parentIno);
+                return true;
+            }
+        }
+
+        removed = null;
+        return false;
+    }
+}
+
+/// <summary>
+///     Shared inode implementation for indexed in-memory filesystems.
+/// </summary>
+public abstract class IndexedMemoryInode : MappingBackedInode
+{
+    private static readonly FsName DotName = FsName.FromString(".");
+    private static readonly FsName DotDotName = FsName.FromString("..");
+    private readonly object _flockGate = new();
+    private readonly HashSet<LinuxFile> _sharedHolders = [];
+    protected readonly FsNameSet ChildNames = new();
+    protected readonly HashSet<long> DirtyPageIndexes = [];
+    protected readonly FsNameMap<byte[]> XAttrs = new();
+    private LinuxFile? _exclusiveHolder;
+    private int _lockType; // 0: None, 1: Shared, 2: Exclusive
+    protected byte[]? SymlinkData;
+
+    protected IndexedMemoryInode(ulong ino, IndexedMemorySuperBlock sb)
+    {
+        Ino = ino;
+        SuperBlock = sb;
+        MTime = ATime = CTime = DateTime.Now;
+    }
+
+    protected virtual AddressSpacePolicy.AddressSpaceCacheClass CacheClass =>
+        AddressSpacePolicy.AddressSpaceCacheClass.Shmem;
+
+    protected override AddressSpaceKind MappingKind =>
+        CacheClass == AddressSpacePolicy.AddressSpaceCacheClass.Shmem
+            ? AddressSpaceKind.Shmem
+            : AddressSpaceKind.File;
+
+    protected override AddressSpacePolicy.AddressSpaceCacheClass? MappingCacheClass => CacheClass;
+
+    protected virtual bool PinNamespaceDentries => false;
+
+    protected IndexedMemorySuperBlock IndexedSb => (IndexedMemorySuperBlock)SuperBlock;
+
+    public override bool SupportsMmap => Type == InodeType.File;
+
+    private void TouchDirectoryMutationTimestamps()
+    {
+        var now = DateTime.Now;
+        MTime = now;
+        CTime = now;
+    }
+
+    private void AttachNamespaceChild(Dentry parentDentry, Dentry childDentry, string reason)
+    {
+        var alreadyCached =
+            parentDentry.TryGetCachedChild(childDentry.Name, out var existing) &&
+            ReferenceEquals(existing, childDentry);
+        parentDentry.CacheChild(childDentry, reason);
+        if (!PinNamespaceDentries || alreadyCached) return;
+        childDentry.Get($"{reason}.namespace-pin");
+    }
+
+    private bool DetachNamespaceChild(Dentry parentDentry, ReadOnlySpan<byte> name, string reason, out Dentry? removed)
+    {
+        if (!parentDentry.TryUncacheChild(name, reason, out removed))
+            return false;
+        if (!PinNamespaceDentries || removed == null) return true;
+        removed.Put($"{reason}.namespace-unpin");
+        return true;
+    }
+
+    /// <summary>
+    ///     Register an externally-created dentry as a child of this directory inode.
+    /// </summary>
+    public void RegisterChild(Dentry parentDentry, FsName name, Dentry childDentry)
+    {
+        lock (Lock)
+        {
+            IndexedSb.SetDentry(Ino, childDentry);
+            AttachNamespaceChild(parentDentry, childDentry, "IndexedMemoryInode.RegisterChild");
+            ChildNames.Add(name);
+        }
+    }
+
+    public override Dentry? Lookup(ReadOnlySpan<byte> name)
+    {
+        lock (Lock)
+        {
+            if (Dentries.Count == 0) return null;
+            var primaryDentry = Dentries[0];
+
+            if (IndexedSb.TryGetDentry(Ino, name, out var dentry))
+            {
+                AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Lookup");
+                return dentry;
+            }
+
+            return null;
+        }
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return Lookup(FsEncoding.EncodeUtf8(name));
+    }
+
+    public override int Create(Dentry dentry, int mode, int uid, int gid)
+    {
+        lock (Lock)
+        {
+            if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+
+            var primaryDentry = Dentries[0];
+            if (IndexedSb.ContainsDentry(Ino, dentry.Name.Bytes)) return -(int)Errno.EEXIST;
+
+            var inode = (IndexedMemoryInode)IndexedSb.AllocInode();
+            inode.Type = InodeType.File;
+            inode.Mode = mode;
+            inode.Uid = uid;
+            inode.Gid = gid;
+            inode.SetInitialLinkCount(1, "IndexedMemoryInode.Create");
+
+            dentry.Instantiate(inode);
+
+            IndexedSb.SetDentry(Ino, dentry);
+            AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Create");
+            ChildNames.Add(dentry.Name);
+            TouchDirectoryMutationTimestamps();
+
+            return 0;
+        }
+    }
+
+    public override int Mkdir(Dentry dentry, int mode, int uid, int gid)
+    {
+        lock (Lock)
+        {
+            if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+
+            var primaryDentry = Dentries[0];
+            if (IndexedSb.ContainsDentry(Ino, dentry.Name.Bytes)) return -(int)Errno.EEXIST;
+
+            var inode = (IndexedMemoryInode)IndexedSb.AllocInode();
+            inode.Type = InodeType.Directory;
+            inode.Mode = mode;
+            inode.Uid = uid;
+            inode.Gid = gid;
+            NamespaceOps.OnDirectoryCreated(this, inode, "IndexedMemoryInode.Mkdir");
+
+            dentry.Instantiate(inode);
+
+            IndexedSb.SetDentry(Ino, dentry);
+            AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Mkdir");
+            ChildNames.Add(dentry.Name);
+            TouchDirectoryMutationTimestamps();
+
+            return 0;
+        }
+    }
+
+    public override int Unlink(ReadOnlySpan<byte> name)
+    {
+        lock (Lock)
+        {
+            if (Dentries.Count == 0) return 0;
+            var primaryDentry = Dentries[0];
+            if (!IndexedSb.TryGetDentry(Ino, name, out var dentry))
+                return -(int)Errno.ENOENT;
+
+            if (dentry.Inode?.Type == InodeType.Directory)
+                return -(int)Errno.EISDIR;
+
+            _ = IndexedSb.RemoveDentry(Ino, name, out _);
+            _ = DetachNamespaceChild(primaryDentry, name, "IndexedMemoryInode.Unlink", out _);
+            var unlinkedInode = dentry.Inode;
+            if (unlinkedInode != null)
+            {
+                NamespaceOps.OnEntryRemoved(unlinkedInode, "IndexedMemoryInode.Unlink");
+                if (!unlinkedInode.HasActiveRuntimeRefs)
+                    dentry.UnbindInode("IndexedMemoryInode.Unlink");
+            }
+
+            ChildNames.Remove(name);
+            TouchDirectoryMutationTimestamps();
+            return 0;
+        }
+    }
+
+    public override int Unlink(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return Unlink(FsEncoding.EncodeUtf8(name));
+    }
+
+    public override int Rmdir(ReadOnlySpan<byte> name)
+    {
+        lock (Lock)
+        {
+            if (Dentries.Count == 0) return 0;
+            var primaryDentry = Dentries[0];
+            if (!IndexedSb.TryGetDentry(Ino, name, out var dentry))
+                return -(int)Errno.ENOENT;
+
+            if (dentry.Inode?.Type != InodeType.Directory)
+                return -(int)Errno.ENOTDIR;
+
+            if (dentry.Children.Count > 0)
+                return -(int)Errno.ENOTEMPTY;
+
+            _ = IndexedSb.RemoveDentry(Ino, name, out _);
+            _ = DetachNamespaceChild(primaryDentry, name, "IndexedMemoryInode.Rmdir", out _);
+            var removedInode = dentry.Inode;
+            if (removedInode != null)
+            {
+                NamespaceOps.OnDirectoryRemoved(this, removedInode, "IndexedMemoryInode.Rmdir");
+                dentry.UnbindInode("IndexedMemoryInode.Rmdir");
+            }
+
+            ChildNames.Remove(name);
+            TouchDirectoryMutationTimestamps();
+            return 0;
+        }
+    }
+
+    public override int Rmdir(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return Rmdir(FsEncoding.EncodeUtf8(name));
+    }
+
+    public override int Rename(ReadOnlySpan<byte> oldName, Inode newParent, ReadOnlySpan<byte> newName)
+    {
+        var targetParent = (IndexedMemoryInode)newParent;
+        Inode first = this;
+        Inode second = targetParent;
+        if (first.Ino > second.Ino)
+        {
+            first = targetParent;
+            second = this;
+        }
+
+        lock (first.Lock)
+        {
+            if (first != second)
+                lock (second.Lock)
+                {
+                    return DoRename(oldName, targetParent, newName);
+                }
+
+            return DoRename(oldName, targetParent, newName);
+        }
+    }
+
+    public override int Rename(string oldName, Inode newParent, string newName)
+    {
+        ArgumentNullException.ThrowIfNull(oldName);
+        ArgumentNullException.ThrowIfNull(newName);
+        return Rename(FsEncoding.EncodeUtf8(oldName), newParent, FsEncoding.EncodeUtf8(newName));
+    }
+
+    private int DoRename(ReadOnlySpan<byte> oldName, IndexedMemoryInode targetParent, ReadOnlySpan<byte> newName)
+    {
+        var oldNameFs = FsName.FromBytes(oldName);
+        var newNameFs = FsName.FromBytes(newName);
+        if (oldNameFs.IsDotOrDotDot || newNameFs.IsDotOrDotDot)
+            return -(int)Errno.EINVAL;
+
+        if (Dentries.Count == 0) return -(int)Errno.ENOENT;
+        var oldPrimary = Dentries[0];
+
+        if (targetParent.Dentries.Count == 0) return -(int)Errno.ENOENT;
+        var newPrimary = targetParent.Dentries[0];
+
+        lock (Lock)
+        {
+            if (!oldPrimary.Children.TryGetValue(oldName, out var dentry))
+            {
+                foreach (var parentDentry in Dentries)
+                    if (parentDentry.Children.TryGetValue(oldName, out dentry))
+                        break;
+
+                if (dentry == null && !IndexedSb.TryGetDentry(Ino, oldName, out dentry))
+                    return -(int)Errno.ENOENT;
+            }
+
+            if (dentry.Inode!.Type == InodeType.Directory)
+            {
+                var curr = newPrimary;
+                while (curr != null)
+                {
+                    if (curr == dentry)
+                        return -(int)Errno.EINVAL;
+                    if (curr == curr.Parent) break;
+                    curr = curr.Parent;
+                }
+            }
+
+            if (IndexedSb.TryGetDentry(targetParent.Ino, newName, out var existingDentry))
+            {
+                if (ReferenceEquals(existingDentry.Inode, dentry.Inode))
+                    return 0;
+
+                var sourceEntryIsDirectory = dentry.Inode.Type == InodeType.Directory;
+                var targetIsDirectory = existingDentry.Inode!.Type == InodeType.Directory;
+                if (sourceEntryIsDirectory && !targetIsDirectory)
+                    return -(int)Errno.ENOTDIR;
+                if (!sourceEntryIsDirectory && targetIsDirectory)
+                    return -(int)Errno.EISDIR;
+
+                if (targetIsDirectory)
+                {
+                    if (existingDentry.Children.Count > 0)
+                        return -(int)Errno.ENOTEMPTY;
+                    var rmdirRc = targetParent.Rmdir(newName);
+                    if (rmdirRc < 0)
+                        return rmdirRc;
+                }
+                else
+                {
+                    var unlinkRc = targetParent.Unlink(newName);
+                    if (unlinkRc < 0)
+                        return unlinkRc;
+                }
+            }
+
+            var sourceIsDirectory = dentry.Inode.Type == InodeType.Directory;
+            var movedAcrossParents = sourceIsDirectory && !ReferenceEquals(this, targetParent);
+
+            _ = IndexedSb.RemoveDentry(Ino, oldName, out _);
+
+            _ = DetachNamespaceChild(oldPrimary, oldName, "IndexedMemoryInode.Rename.old-parent", out _);
+            ChildNames.Remove(oldName);
+
+            dentry.Parent = newPrimary;
+            dentry.Name = FsName.FromBytes(newName);
+            IndexedSb.SetDentry(targetParent.Ino, dentry);
+
+            AttachNamespaceChild(newPrimary, dentry, "IndexedMemoryInode.Rename.new-parent");
+            targetParent.ChildNames.Add(dentry.Name);
+            TouchDirectoryMutationTimestamps();
+            targetParent.TouchDirectoryMutationTimestamps();
+
+            if (movedAcrossParents)
+                NamespaceOps.OnDirectoryMovedAcrossParents(this, targetParent, "IndexedMemoryInode.Rename");
+
+            return 0;
+        }
+    }
+
+    public override int Link(Dentry dentry, Inode oldInode)
+    {
+        lock (Lock)
+        {
+            if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+
+            var primaryDentry = Dentries[0];
+            if (IndexedSb.ContainsDentry(Ino, dentry.Name.Bytes)) return -(int)Errno.EEXIST;
+
+            dentry.Instantiate(oldInode);
+            NamespaceOps.OnLinkAdded(oldInode, "IndexedMemoryInode.Link");
+
+            IndexedSb.SetDentry(Ino, dentry);
+            AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Link");
+            ChildNames.Add(dentry.Name);
+            TouchDirectoryMutationTimestamps();
+            return 0;
+        }
+    }
+
+    public override int Symlink(Dentry dentry, byte[] target, int uid, int gid)
+    {
+        lock (Lock)
+        {
+            if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+
+            var primaryDentry = Dentries[0];
+            if (IndexedSb.ContainsDentry(Ino, dentry.Name.Bytes)) return -(int)Errno.EEXIST;
+
+            var inode = (IndexedMemoryInode)IndexedSb.AllocInode();
+            inode.Type = InodeType.Symlink;
+            inode.Mode = 0x1FF;
+            inode.Uid = uid;
+            inode.Gid = gid;
+            inode.SymlinkData = target.ToArray();
+            inode.Size = (ulong)inode.SymlinkData.Length;
+            inode.SetInitialLinkCount(1, "IndexedMemoryInode.Symlink");
+
+            dentry.Instantiate(inode);
+
+            IndexedSb.SetDentry(Ino, dentry);
+            AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Symlink");
+            ChildNames.Add(dentry.Name);
+            TouchDirectoryMutationTimestamps();
+
+            return 0;
+        }
+    }
+
+    public override int Symlink(Dentry dentry, string target, int uid, int gid)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return Symlink(dentry, FsEncoding.EncodeUtf8(target), uid, gid);
+    }
+
+    public override int Mknod(Dentry dentry, int mode, int uid, int gid, InodeType type, uint rdev)
+    {
+        lock (Lock)
+        {
+            if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+            if (type != InodeType.CharDev && type != InodeType.BlockDev && type != InodeType.Fifo &&
+                type != InodeType.Socket)
+                return -(int)Errno.EINVAL;
+
+            var primaryDentry = Dentries[0];
+            if (IndexedSb.ContainsDentry(Ino, dentry.Name.Bytes)) return -(int)Errno.EEXIST;
+
+            var inode = (IndexedMemoryInode)IndexedSb.AllocInode();
+            inode.Type = type;
+            inode.Mode = mode;
+            inode.Uid = uid;
+            inode.Gid = gid;
+            inode.Rdev = rdev;
+            inode.SetInitialLinkCount(1, "IndexedMemoryInode.Mknod");
+
+            dentry.Instantiate(inode);
+
+            IndexedSb.SetDentry(Ino, dentry);
+            AttachNamespaceChild(primaryDentry, dentry, "IndexedMemoryInode.Mknod");
+            ChildNames.Add(dentry.Name);
+            TouchDirectoryMutationTimestamps();
+            return 0;
+        }
+    }
+
+    public override int Readlink(out byte[]? target)
+    {
+        lock (Lock)
+        {
+            if (Type != InodeType.Symlink || SymlinkData == null)
+            {
+                target = null;
+                return -(int)Errno.EINVAL;
+            }
+
+            target = SymlinkData;
+            return 0;
+        }
+    }
+
+    protected virtual int ReadFromPageCache(LinuxFile? linuxFile, Span<byte> buffer, long offset)
+    {
+        lock (Lock)
+        {
+            if (Type == InodeType.Directory) return 0;
+            if (Type == InodeType.Symlink)
+            {
+                if (SymlinkData == null || offset >= SymlinkData.Length) return 0;
+                var n = Math.Min(buffer.Length, SymlinkData.Length - (int)offset);
+                SymlinkData.AsSpan((int)offset, n).CopyTo(buffer);
+                return n;
+            }
+
+            if (offset < 0) return -(int)Errno.EINVAL;
+            var fileSize = (long)Size;
+            if (offset >= fileSize) return 0;
+
+            var count = Math.Min(buffer.Length, (int)(fileSize - offset));
+            var pageCache = Mapping;
+            if (pageCache == null)
+            {
+                buffer[..count].Clear();
+                return count;
+            }
+
+            ReadFromPageCacheLocked(pageCache, offset, buffer[..count]);
+            return count;
+        }
+    }
+
+    // Keep the old hook for derived in-memory filesystems that still customize storage reads.
+    protected internal override int BackendRead(LinuxFile? linuxFile, Span<byte> buffer, long offset)
+    {
+        return ReadFromPageCache(linuxFile, buffer, offset);
+    }
+
+    public override int ReadToHost(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer,
+        long offset)
+    {
+        _ = task;
+        return ReadFromPageCache(linuxFile, buffer, offset);
+    }
+
+    public override ReadableSegmentEnumerator GetReadableSegments(LinuxFile? linuxFile, long offset, int length)
+    {
+        if (offset < 0 || length < 0)
+            return ReadableSegmentEnumerator.Failed;
+        if (length == 0)
+            return ReadableSegmentEnumerator.Empty;
+
+        lock (Lock)
+        {
+            if (Type != InodeType.File)
+                return ReadableSegmentEnumerator.Failed;
+
+            var fileSize = (long)Size;
+            if (offset > fileSize || length > fileSize - offset)
+                return ReadableSegmentEnumerator.Failed;
+
+            var pageCache = Mapping;
+            if (pageCache == null)
+                return ReadableSegmentEnumerator.Failed;
+
+            return new ReadableSegmentEnumerator(this, linuxFile, pageCache, offset, length, fileSize);
+        }
+    }
+
+    public override int Flock(LinuxFile linuxFile, int operation)
+    {
+        var nonBlock = (operation & LinuxConstants.LOCK_NB) != 0;
+        var op = operation & ~LinuxConstants.LOCK_NB;
+
+        lock (_flockGate)
+        {
+            while (true)
+            {
+                if (op == LinuxConstants.LOCK_UN)
+                {
+                    if (_exclusiveHolder == linuxFile) _exclusiveHolder = null;
+                    _sharedHolders.Remove(linuxFile);
+                    if (_exclusiveHolder == null && _sharedHolders.Count == 0) _lockType = 0;
+                    Monitor.PulseAll(_flockGate);
+                    return 0;
+                }
+
+                var canAcquire = false;
+                if (op == LinuxConstants.LOCK_SH)
+                {
+                    if (_exclusiveHolder == null || _exclusiveHolder == linuxFile) canAcquire = true;
+                }
+                else if (op == LinuxConstants.LOCK_EX)
+                {
+                    if (_lockType == 0) canAcquire = true;
+                    else if (_exclusiveHolder == linuxFile) canAcquire = true;
+                    else if (_sharedHolders.Count == 1 && _sharedHolders.Contains(linuxFile) &&
+                             _exclusiveHolder == null)
+                        canAcquire = true;
+                }
+
+                if (canAcquire)
+                {
+                    if (op == LinuxConstants.LOCK_SH)
+                    {
+                        if (_exclusiveHolder == linuxFile) _exclusiveHolder = null;
+                        _sharedHolders.Add(linuxFile);
+                        _lockType = 1;
+                    }
+                    else
+                    {
+                        _sharedHolders.Remove(linuxFile);
+                        _exclusiveHolder = linuxFile;
+                        _lockType = 2;
+                    }
+
+                    return 0;
+                }
+
+                if (nonBlock) return -(int)Errno.EAGAIN;
+                Monitor.Wait(_flockGate);
+            }
+        }
+    }
+
+    protected virtual int WriteToPageCache(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        lock (Lock)
+        {
+            if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
+            if (Type == InodeType.Symlink) return -(int)Errno.EINVAL;
+            if (offset < 0) return -(int)Errno.EINVAL;
+
+            var pageCache = EnsurePageCacheLocked();
+            var consumed = 0;
+            while (consumed < buffer.Length)
+            {
+                var absolute = offset + consumed;
+                var pageIndex = (uint)(absolute / LinuxConstants.PageSize);
+                var pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
+                var chunk = Math.Min(buffer.Length - consumed, LinuxConstants.PageSize - pageOffset);
+                var pageFileOffset = (long)pageIndex * LinuxConstants.PageSize;
+                var pageReadLen = 0;
+                var fullPageWrite = pageOffset == 0 && chunk == LinuxConstants.PageSize;
+                if (!fullPageWrite && pageFileOffset < (long)Size)
+                    pageReadLen = (int)Math.Min(LinuxConstants.PageSize, (long)Size - pageFileOffset);
+
+                var pagePtr = AcquireMappingPage(linuxFile, pageIndex, pageFileOffset, PageCacheAccessMode.Write,
+                    pageReadLen, false);
+                if (pagePtr == IntPtr.Zero)
+                    throw new OutOfMemoryException("Failed to allocate indexed page cache page");
+
+                unsafe
+                {
+                    fixed (byte* src = &buffer[consumed])
+                    {
+                        var dst = (byte*)pagePtr + pageOffset;
+                        Buffer.MemoryCopy(src, dst, chunk, chunk);
+                    }
+                }
+
+                consumed += chunk;
+            }
+
+            MarkDirtyRangeLocked(pageCache, offset, buffer.Length);
+            var end = offset + buffer.Length;
+            if (end > (long)Size) Size = (ulong)end;
+            var now = DateTime.Now;
+            MTime = now;
+            CTime = now;
+            return buffer.Length;
+        }
+    }
+
+    // Keep the old hook for derived in-memory filesystems that still customize storage writes.
+    protected internal override int BackendWrite(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    {
+        return WriteToPageCache(linuxFile, buffer, offset);
+    }
+
+    public override int WriteFromHost(FiberTask? task, LinuxFile linuxFile,
+        ReadOnlySpan<byte> buffer, long offset)
+    {
+        _ = task;
+        return WriteToPageCache(linuxFile, buffer, offset);
+    }
+
+    protected override int AopsReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
+    {
+        if (request.Length < 0 || request.Length > pageBuffer.Length)
+            return -(int)Errno.EINVAL;
+        pageBuffer.Clear();
+        if (request.Length == 0) return 0;
+        var rc = ReadFromPageCache(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        return rc < 0 ? rc : 0;
+    }
+
+    protected override int AopsReadahead(LinuxFile? linuxFile, ReadaheadRequest request)
+    {
+        return 0;
+    }
+
+    protected override int AopsWritePage(LinuxFile? linuxFile, PageIoRequest request, ReadOnlySpan<byte> pageBuffer,
+        bool sync)
+    {
+        if (request.Length < 0 || request.Length > pageBuffer.Length)
+            return -(int)Errno.EINVAL;
+        if (request.Length == 0)
+        {
+            lock (Lock)
+            {
+                DirtyPageIndexes.Remove(request.PageIndex);
+            }
+
+            return 0;
+        }
+
+        var rc = WriteToPageCache(linuxFile, pageBuffer[..request.Length], request.FileOffset);
+        if (rc < 0) return rc;
+        lock (Lock)
+        {
+            DirtyPageIndexes.Remove(request.PageIndex);
+        }
+
+        return 0;
+    }
+
+    protected override int AopsWritePages(LinuxFile? linuxFile, WritePagesRequest request)
+    {
+        if (!request.Sync) return 0;
+        lock (Lock)
+        {
+            DirtyPageIndexes.RemoveWhere(i => i >= request.StartPageIndex && i <= request.EndPageIndex);
+        }
+
+        return 0;
+    }
+
+    protected override int AopsSetPageDirty(long pageIndex)
+    {
+        lock (Lock)
+        {
+            DirtyPageIndexes.Add(pageIndex);
+        }
+
+        return 0;
+    }
+
+    protected override void OnFileShrinkReconciled(long previousSize, long newSize)
+    {
+        _ = previousSize;
+        var firstDroppedPage = (newSize + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
+        lock (Lock)
+        {
+            DirtyPageIndexes.RemoveWhere(i => i >= firstDroppedPage);
+        }
+    }
+
+    public override int Truncate(long size)
+    {
+        var previousSize = CachedSizeForShrinkCoordinator;
+        var rc = TruncateCore(size);
+        if (rc == 0)
+            FinalizeExplicitSizeChange(previousSize, size, default);
+        return rc;
+    }
+
+    protected internal override int TruncateWithContextCore(long length, in FileMutationContext context)
+    {
+        var previousSize = CachedSizeForShrinkCoordinator;
+        var rc = TruncateCore(length);
+        if (rc == 0)
+            FinalizeExplicitSizeChange(previousSize, length, context);
+        return rc;
+    }
+
+    protected virtual int TruncateCore(long size)
+    {
+        if (Type == InodeType.Directory) return -(int)Errno.EISDIR;
+        if (size < 0) return -(int)Errno.EINVAL;
+        var now = DateTime.Now;
+
+        lock (Lock)
+        {
+            if (Type == InodeType.Symlink)
+            {
+                Array.Resize(ref SymlinkData, (int)size);
+                Size = (ulong)size;
+                MTime = now;
+                CTime = now;
+                return 0;
+            }
+
+            Size = (ulong)size;
+            MTime = now;
+            CTime = now;
+        }
+
+        return 0;
+    }
+
+    public override int SetXAttr(ReadOnlySpan<byte> name, ReadOnlySpan<byte> value, int flags)
+    {
+        const int XATTR_CREATE = 1;
+        const int XATTR_REPLACE = 2;
+
+        lock (Lock)
+        {
+            var exists = XAttrs.TryGetValue(name, out _);
+            if ((flags & XATTR_CREATE) != 0 && exists) return -(int)Errno.EEXIST;
+            if ((flags & XATTR_REPLACE) != 0 && !exists) return -(int)Errno.ENODATA;
+            XAttrs.Set(FsName.FromBytes(name), value.ToArray());
+            return 0;
+        }
+    }
+
+    public override int SetXAttr(string name, ReadOnlySpan<byte> value, int flags)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return SetXAttr(FsEncoding.EncodeUtf8(name), value, flags);
+    }
+
+    public override int GetXAttr(ReadOnlySpan<byte> name, Span<byte> value)
+    {
+        lock (Lock)
+        {
+            if (!XAttrs.TryGetValue(name, out var data)) return -(int)Errno.ENODATA;
+            if (value.Length == 0) return data.Length;
+            if (value.Length < data.Length) return -(int)Errno.ERANGE;
+            data.CopyTo(value);
+            return data.Length;
+        }
+    }
+
+    public override int GetXAttr(string name, Span<byte> value)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return GetXAttr(FsEncoding.EncodeUtf8(name), value);
+    }
+
+    public override int ListXAttr(Span<byte> list)
+    {
+        lock (Lock)
+        {
+            var names = XAttrs.Select(static kv => kv.Key).OrderBy(static k => k, FsName.BytewiseComparer).ToArray();
+            var required = 0;
+            foreach (var n in names) required += n.Length + 1;
+            if (list.Length == 0) return required;
+            if (list.Length < required) return -(int)Errno.ERANGE;
+
+            var off = 0;
+            foreach (var n in names)
+            {
+                n.Bytes.CopyTo(list[off..]);
+                off += n.Length;
+                list[off++] = 0;
+            }
+
+            return required;
+        }
+    }
+
+    public override int RemoveXAttr(ReadOnlySpan<byte> name)
+    {
+        lock (Lock)
+        {
+            if (!XAttrs.Remove(name)) return -(int)Errno.ENODATA;
+            return 0;
+        }
+    }
+
+    public override int RemoveXAttr(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return RemoveXAttr(FsEncoding.EncodeUtf8(name));
+    }
+
+    public override List<DirectoryEntry> GetEntries()
+    {
+        var list = new List<DirectoryEntry>();
+        if (Type != InodeType.Directory) return list;
+        if (Dentries.Count == 0) return list;
+
+        list.Add(new DirectoryEntry { Name = DotName, Ino = Ino, Type = InodeType.Directory });
+        list.Add(new DirectoryEntry { Name = DotDotName, Ino = Ino, Type = InodeType.Directory });
+
+        foreach (var name in ChildNames)
+            if (IndexedSb.TryGetDentry(Ino, name.Bytes, out var dentry))
+                list.Add(new DirectoryEntry { Name = name, Ino = dentry.Inode!.Ino, Type = dentry.Inode.Type });
+
+        return list;
+    }
+
+    protected override void OnEvictCache()
+    {
+        if (Type == InodeType.Symlink) SymlinkData = null;
+        ChildNames.Clear();
+        base.OnEvictCache();
+    }
+
+    public override void Release(LinuxFile linuxFile)
+    {
+        Flock(linuxFile, LinuxConstants.LOCK_UN);
+
+        base.Release(linuxFile);
+    }
+
+    protected AddressSpace EnsurePageCacheLocked()
+    {
+         return EnsureMapping() ??
+             throw new InvalidOperationException("Indexed file inode requires a mapping.");
+    }
+
+    protected static void ReadFromPageCacheLocked(AddressSpace pageCache, long offset, Span<byte> destination)
+    {
+        var copied = 0;
+        while (copied < destination.Length)
+        {
+            var absolute = offset + copied;
+            var pageIndex = (uint)(absolute / LinuxConstants.PageSize);
+            var pageOffset = (int)(absolute & LinuxConstants.PageOffsetMask);
+            var chunk = Math.Min(destination.Length - copied, LinuxConstants.PageSize - pageOffset);
+            var pagePtr = pageCache.GetPage(pageIndex);
+            if (pagePtr == IntPtr.Zero)
+                destination.Slice(copied, chunk).Clear();
+            else
+                unsafe
+                {
+                    var src = (byte*)pagePtr + pageOffset;
+                    fixed (byte* dst = &destination[copied])
+                    {
+                        Buffer.MemoryCopy(src, dst, chunk, chunk);
+                    }
+                }
+
+            copied += chunk;
+        }
+    }
+
+    protected void MarkDirtyRangeLocked(AddressSpace pageCache, long offset, int length)
+    {
+        if (length <= 0) return;
+        var startPage = (uint)(offset / LinuxConstants.PageSize);
+        var endPage = (uint)((offset + length - 1) / LinuxConstants.PageSize);
+        for (var page = startPage; page <= endPage; page++)
+        {
+            pageCache.MarkDirty(page);
+            DirtyPageIndexes.Add(page);
+        }
+    }
+}

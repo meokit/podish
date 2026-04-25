@@ -1,0 +1,256 @@
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+
+@theme {
+    --font-sans: 'Inter', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+}
+
+:root {
+    color-scheme: dark;
+}
+
+html,
+body,
+#root {
+    margin: 0;
+    min-height: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+body {
+    font-family: var(--font-sans);
+    color: var(--theme-fg);
+    background: var(--theme-bg);
+}
+
+.glass {
+    background: color-mix(in srgb, var(--theme-surface-1) 82%, transparent);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--theme-border);
+}
+
+.glass-panel {
+    background: color-mix(in srgb, var(--theme-surface-2) 86%, transparent);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--theme-border);
+}
+
+.text-theme-primary {
+    color: var(--theme-fg);
+}
+
+.text-theme-muted {
+    color: var(--theme-text-muted);
+}
+
+.text-theme-subtle {
+    color: var(--theme-text-subtle);
+}
+
+.text-theme-accent {
+    color: var(--theme-accent-alt);
+}
+
+.text-theme-accent-soft {
+    color: color-mix(in srgb, var(--theme-accent-alt) 74%, var(--theme-fg));
+}
+
+.border-theme {
+    border-color: var(--theme-border);
+}
+
+.border-theme-strong {
+    border-color: var(--theme-border-strong);
+}
+
+.app-wordmark {
+    background-image: linear-gradient(90deg, var(--theme-accent-alt), var(--ansi-magenta));
+}
+
+.import-link {
+    color: color-mix(in srgb, var(--theme-fg) 70%, var(--theme-bg));
+    text-decoration-color: color-mix(in srgb, var(--theme-fg) 30%, var(--theme-bg));
+}
+
+.import-link:hover {
+    color: var(--theme-fg);
+    text-decoration-color: color-mix(in srgb, var(--theme-fg) 65%, var(--theme-bg));
+}
+
+.modal-overlay {
+    background: var(--theme-overlay);
+}
+
+.modal-dismiss {
+    border: 1px solid var(--theme-border);
+    color: var(--theme-text-muted);
+}
+
+.modal-dismiss:hover {
+    border-color: var(--theme-border-strong);
+    color: var(--theme-fg);
+}
+
+.file-dropzone {
+    border-color: color-mix(in srgb, var(--theme-fg) 18%, var(--theme-bg));
+    background: color-mix(in srgb, var(--theme-surface-1) 72%, transparent);
+}
+
+.file-dropzone:hover {
+    border-color: color-mix(in srgb, var(--theme-accent-alt) 54%, var(--theme-bg));
+    background: color-mix(in srgb, var(--theme-surface-2) 84%, transparent);
+}
+
+.file-dropzone-disabled {
+    border-color: color-mix(in srgb, var(--theme-fg) 10%, var(--theme-bg));
+    background: color-mix(in srgb, var(--theme-surface-1) 56%, transparent);
+}
+
+.button-secondary {
+    border: 1px solid var(--theme-border);
+    color: color-mix(in srgb, var(--theme-fg) 82%, var(--theme-bg));
+    background: color-mix(in srgb, var(--theme-surface-2) 74%, transparent);
+}
+
+.button-secondary:hover {
+    border-color: var(--theme-border-strong);
+    color: var(--theme-fg);
+    background: color-mix(in srgb, var(--theme-surface-3) 84%, transparent);
+}
+
+.button-primary {
+    color: white;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--theme-accent-alt) 72%, white), var(--theme-accent));
+    box-shadow: 0 16px 40px color-mix(in srgb, var(--theme-accent) 30%, transparent);
+}
+
+.button-primary:hover {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--theme-accent-alt) 84%, white), color-mix(in srgb, var(--theme-accent) 88%, white));
+}
+
+.status-badge {
+    color: var(--theme-fg);
+    border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.status-idle {
+    background: color-mix(in srgb, var(--ansi-brightBlack) 38%, transparent);
+}
+
+.status-downloading {
+    background: color-mix(in srgb, var(--theme-warning) 24%, transparent);
+}
+
+.status-booting {
+    background: color-mix(in srgb, var(--theme-accent) 24%, transparent);
+}
+
+.status-running {
+    background: color-mix(in srgb, var(--theme-success) 24%, transparent);
+}
+
+.status-stopped,
+.status-error {
+    background: color-mix(in srgb, var(--theme-danger) 24%, transparent);
+}
+
+.status-dot-idle {
+    background: var(--ansi-brightBlack);
+}
+
+.status-dot-downloading {
+    background: var(--theme-warning);
+}
+
+.status-dot-booting {
+    background: var(--theme-accent-alt);
+}
+
+.status-dot-running {
+    background: var(--theme-success);
+}
+
+.status-badge-network {
+    background: color-mix(in srgb, var(--theme-warning) 32%, transparent);
+    border-color: color-mix(in srgb, var(--theme-warning) 48%, transparent);
+    box-shadow: 0 0 20px color-mix(in srgb, var(--theme-warning) 30%, transparent);
+}
+
+.status-dot-network {
+    background: color-mix(in srgb, var(--theme-warning) 88%, white);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--theme-warning) 85%, transparent),
+    0 0 26px color-mix(in srgb, var(--theme-warning) 45%, transparent);
+}
+
+.status-dot-stopped,
+.status-dot-error {
+    background: var(--theme-danger);
+}
+
+.app-shell {
+    width: 100%;
+}
+
+.terminal-shell {
+    border: 1px solid var(--theme-border);
+    background: var(--theme-bg);
+}
+
+.terminal-container,
+.terminal-container .xterm {
+    background: var(--theme-bg) !important;
+    height: 100%;
+}
+
+.terminal-container .xterm-screen,
+.terminal-container .xterm-helpers,
+.terminal-container .xterm-helper-textarea,
+.terminal-container .xterm-viewport {
+    background: var(--theme-bg) !important;
+    border-radius: 0 0 0.75rem 0.75rem;
+}
+
+@keyframes glow {
+    0% {
+        box-shadow: 0 0 5px var(--theme-shadow), 0 0 20px color-mix(in srgb, var(--theme-accent) 10%, transparent);
+    }
+    100% {
+        box-shadow: 0 0 10px var(--theme-shadow-strong), 0 0 40px color-mix(in srgb, var(--theme-accent-alt) 18%, transparent);
+    }
+}
+
+.animate-glow {
+    animation: glow 2s ease-in-out infinite alternate;
+}
+
+@keyframes pulse-slow {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.7;
+    }
+}
+
+.animate-pulse-slow {
+    animation: pulse-slow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@media (max-width: 639px) {
+    .terminal-shell {
+        border-left: 0;
+        border-right: 0;
+        border-bottom: 0;
+    }
+
+    .terminal-container .xterm-screen,
+    .terminal-container .xterm-helpers,
+    .terminal-container .xterm-helper-textarea,
+    .terminal-container .xterm-viewport {
+        border-radius: 0;
+    }
+}

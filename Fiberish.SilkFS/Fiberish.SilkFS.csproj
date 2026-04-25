@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="SQLitePCLRaw.core" Version="2.1.6"/>
+        <PackageReference Include="SQLitePCLRaw.provider.sqlite3" Version="2.1.6"/>
+    </ItemGroup>
+
+</Project>

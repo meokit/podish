@@ -1,0 +1,16 @@
+FROM docker.io/i386/alpine:latest
+
+ARG COREMARK_REPO=https://github.com/eembc/coremark.git
+ARG COREMARK_REF=main
+ARG COREMARK_ITERATIONS=3000
+
+RUN apk add --no-cache ca-certificates git gcc musl-dev make gzip
+RUN git clone --depth 1 --branch "${COREMARK_REF}" "${COREMARK_REPO}" /coremark && \
+    make -C /coremark \
+        PORT_DIR=linux \
+        ITERATIONS="${COREMARK_ITERATIONS}" \
+        XCFLAGS="-O3 -DPERFORMANCE_RUN=1" \
+        REBUILD=1 \
+        compile
+
+WORKDIR /coremark

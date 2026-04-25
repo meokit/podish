@@ -1,0 +1,2696 @@
+using System.Buffers.Binary;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using Fiberish.Auth.Cred;
+using Fiberish.Core.Utils;
+using Fiberish.Memory;
+using Fiberish.Native;
+using Fiberish.Syscalls;
+using Fiberish.VFS;
+using Fiberish.X86.Native;
+using Microsoft.Extensions.Logging;
+
+namespace Fiberish.Core;
+
+public enum FiberTaskStatus
+{
+    Ready,
+    Running,
+    Waiting,
+    Zombie,
+    Terminated
+}
+
+public enum AwaitResult
+{
+    Completed,
+    Interrupted
+}
+
+public enum TaskExecutionMode
+{
+    RunningGuest,
+    HostService,
+    WaitingAsyncSyscall,
+    WaitingContinuation,
+    Stopped,
+    Terminated
+}
+
+public enum WakeReason
+{
+    None,
+    Signal,
+    Timer,
+    IO,
+    Event
+}
+
+internal enum PendingSignalTarget
+{
+    Thread,
+    Process
+}
+
+public partial class FiberTask
+{
+    private const int FaultStackWordCount = 8;
+    private const int FaultBacktraceMaxFrames = 16;
+    private static int _tidCounter;
+    private readonly Lock _asyncSyscallCompletionGate = new();
+    private readonly Lock _waitStateGate = new();
+    private Action? _activeWaitContinuation;
+    private long _activeWaitId;
+    private WakeReason _activeWaitReason;
+    private ulong _deferredSignalMaskRestore;
+    private int _engineDisposed;
+    private int _faultDiagnosticsDepth;
+    private bool _hasDeferredSignalMaskRestore;
+    private bool _hasPendingAsyncSyscallCompletion;
+    private int _interactiveBurstBudget;
+    private long _nextWaitTokenId;
+    private int _pageFaultDepth;
+    private Exception? _pendingAsyncSyscallError;
+    private int _pendingAsyncSyscallResult;
+
+    private bool _pendingFaultFromInterrupt;
+    private long _runningGuestCpuSinceTimestamp;
+    private long _signalWaitId;
+    private SignalWaitKind _signalWaitKind;
+    private ulong _signalWaitMask;
+    private KernelSyncContext? _synchronizationContext;
+
+    public uint SyscallArg1;
+    public uint SyscallArg2;
+    public uint SyscallArg3;
+
+    // Saved Syscall Arguments for Async Tracing
+    public uint SyscallNr;
+
+    public FiberTask(int tid, Process process, Engine cpu, KernelScheduler kernel)
+    {
+        TID = tid;
+        PID = process.TGID;
+        Process = process;
+        CommonKernel = kernel;
+        kernel.AssertSchedulerThread();
+        Process.BindScheduler(kernel);
+        Process.Threads.Add(this);
+        Process.Syscalls?.PtyManager.BindScheduler(kernel);
+
+        CPU = cpu;
+        Process.Mem?.AddressSpaceHandle?.AttachEngine(CPU);
+        CPU.Owner = this;
+        AsyncScope = new FiberTaskAsyncScope(this);
+
+        Logger = kernel.LoggerFactory.CreateLogger($"Fiberish.Task.{TID}");
+        CPU.LogHandler = EngineLogHandler;
+
+        kernel.RegisterTask(this);
+
+        CPU.PageFaultResolver = HandlePageFault;
+
+        CPU.InterruptHandler = HandleInterrupt;
+        CPU.FaultHandler = HandleNativeFault;
+    }
+
+    public int TID { get; }
+    public int PID { get; }
+    public Engine CPU { get; }
+    public KernelScheduler CommonKernel { get; }
+    public Action? Continuation { get; set; }
+    internal bool IsReadyQueued { get; set; }
+    internal FiberTaskAsyncScope AsyncScope { get; }
+    public bool IsRetiring => AsyncScope.IsClosing;
+
+    public FiberTaskStatus Status { get; set; } = FiberTaskStatus.Ready;
+
+    public Process Process { get; }
+
+    // Signal System
+    public ulong SignalMask { get; set; }
+    public ulong PendingSignals { get; set; } // Thread-directed bitmask - Access should be synchronized
+    public Locked<List<SigInfo>> PendingSignalQueue { get; } = new(new List<SigInfo>());
+    public uint AltStackSp { get; set; }
+    public uint AltStackSize { get; set; }
+    public int AltStackFlags { get; set; }
+
+    public bool Exited { get; set; }
+
+    public int ExitStatus { get; set; }
+
+    public long UserCpuTimeNs { get; private set; }
+
+    public long SystemCpuTimeNs { get; private set; }
+
+    public uint ChildClearTidPtr { get; set; }
+
+    public uint RobustListHead { get; set; }
+    public uint RobustListSize { get; set; }
+
+    // vfork support: parent awaits this event; child signals it on exec/exit
+    public AsyncWaitQueue? VforkDoneEvent { get; set; }
+
+    // vfork support: reference to the parent task that is blocked waiting for us
+    public FiberTask? VforkParent { get; set; }
+
+    public TaskExecutionMode ExecutionMode { get; set; } = TaskExecutionMode.RunningGuest;
+
+    // Compatibility shim: now backed by current active wait token only.
+    public WakeReason WakeReason
+    {
+        get
+        {
+            lock (_waitStateGate)
+            {
+                return _activeWaitReason;
+            }
+        }
+        set
+        {
+            lock (_waitStateGate)
+            {
+                if (_activeWaitId != 0) _activeWaitReason = value;
+            }
+        }
+    }
+
+    // Signal that interrupted the current blocking syscall (if any)
+    // Used by syscall handlers to determine SA_RESTART behavior
+    public int? InterruptingSignal { get; private set; }
+
+    // Syscall restart support (SA_RESTART)
+    // Stores the EIP of the syscall instruction for potential restart
+    public uint SyscallEip { get; set; }
+
+    public ILogger Logger { get; }
+
+    // Blocking Syscall Support
+    public ValueTask<int>? PendingSyscall { get; set; }
+    public Timer? BlockingTimer { get; set; }
+
+    public bool OwnsCPU { get; set; } = true;
+    public event Action<int>? SignalPosted;
+
+    internal bool HasInteractiveBurstBudget => Volatile.Read(ref _interactiveBurstBudget) > 0;
+
+    internal void SeedInteractiveBurst(int burstBudget)
+    {
+        if (burstBudget <= 0)
+            return;
+
+        if (_interactiveBurstBudget < burstBudget)
+            _interactiveBurstBudget = burstBudget;
+    }
+
+    internal void ConsumeInteractiveBurstDispatch()
+    {
+        if (_interactiveBurstBudget > 0)
+            _interactiveBurstBudget--;
+    }
+
+    internal void ClearInteractiveBurst()
+    {
+        _interactiveBurstBudget = 0;
+    }
+
+    internal void AddCpuTime(long userCpuTimeNs, long systemCpuTimeNs = 0)
+    {
+        UserCpuTimeNs += userCpuTimeNs;
+        SystemCpuTimeNs += systemCpuTimeNs;
+    }
+
+    internal CpuTimeSnapshot SnapshotThreadCpuTime()
+    {
+        var userCpuTimeNs = UserCpuTimeNs;
+        if (_runningGuestCpuSinceTimestamp != 0)
+        {
+            var elapsedTicks = Stopwatch.GetTimestamp() - _runningGuestCpuSinceTimestamp;
+            if (elapsedTicks > 0)
+                userCpuTimeNs += ConvertStopwatchTicksToNanoseconds(elapsedTicks);
+        }
+
+        return new CpuTimeSnapshot(userCpuTimeNs, SystemCpuTimeNs);
+    }
+
+    internal void BeginGuestCpuAccounting()
+    {
+        if (_runningGuestCpuSinceTimestamp != 0)
+            return;
+
+        _runningGuestCpuSinceTimestamp = Stopwatch.GetTimestamp();
+    }
+
+    internal void EndGuestCpuAccounting()
+    {
+        var startedAt = _runningGuestCpuSinceTimestamp;
+        if (startedAt == 0)
+            return;
+
+        var elapsedTicks = Stopwatch.GetTimestamp() - startedAt;
+        if (elapsedTicks > 0)
+            UserCpuTimeNs += ConvertStopwatchTicksToNanoseconds(elapsedTicks);
+
+        _runningGuestCpuSinceTimestamp = 0;
+    }
+
+    internal static long ConvertStopwatchTicksToNanoseconds(long elapsedTicks)
+    {
+        if (elapsedTicks <= 0)
+            return 0;
+
+        var wholeSeconds = elapsedTicks / Stopwatch.Frequency;
+        var remainderTicks = elapsedTicks % Stopwatch.Frequency;
+        return wholeSeconds * 1_000_000_000L + remainderTicks * 1_000_000_000L / Stopwatch.Frequency;
+    }
+
+    private TaskStateScope EnterTaskStateScope([CallerMemberName] string? caller = null)
+    {
+        CommonKernel.AssertSchedulerThread(caller);
+        return default;
+    }
+
+    public WaitToken BeginWaitToken()
+    {
+        lock (_waitStateGate)
+        {
+            var waitId = ++_nextWaitTokenId;
+            _activeWaitId = waitId;
+            _activeWaitReason = WakeReason.None;
+            _activeWaitContinuation = null;
+            return new WaitToken(this, waitId);
+        }
+    }
+
+    public WaitToken BeginWait()
+    {
+        return BeginWaitToken();
+    }
+
+    internal bool TryEnterAsyncOperation(WaitToken? token, out TaskAsyncOperationHandle? operation)
+    {
+        return AsyncScope.TryEnter(token, out operation);
+    }
+
+    public void BeginTaskRetirement()
+    {
+        AsyncScope.Close();
+    }
+
+    internal void CancelAsyncSyscallForRetirement()
+    {
+        PendingSyscall = null;
+        InterruptingSignal = null;
+        Continuation = null;
+        _hasPendingAsyncSyscallCompletion = false;
+        _pendingAsyncSyscallError = null;
+        _pendingAsyncSyscallResult = 0;
+        _handlingAsyncSyscall = false;
+    }
+
+    public bool TryFinalizeTaskRetirement()
+    {
+        if (!AsyncScope.TryFinalizeTaskRetirement())
+            return false;
+        if (PendingSyscall != null || _handlingAsyncSyscall || Continuation != null)
+            throw new InvalidOperationException(
+                $"Task TID={TID} finalized retirement too early: pendingSyscall={PendingSyscall != null}, " +
+                $"handlingAsyncSyscall={_handlingAsyncSyscall}, continuation={Continuation != null}, " +
+                $"status={Status}, mode={ExecutionMode}, exited={Exited}");
+        if (Interlocked.Exchange(ref _engineDisposed, 1) != 0)
+            return false;
+        if (OwnsCPU)
+        {
+            if (CommonKernel.Runtime?.EnableGuestStatsCollection == true)
+                CommonKernel.Runtime.RetiredEngines.Enqueue(CPU);
+            else
+                CPU.Dispose();
+        }
+
+        return true;
+    }
+
+    internal KernelSyncContext GetOrCreateSynchronizationContext()
+    {
+        return _synchronizationContext ??= new KernelSyncContext(CommonKernel, this);
+    }
+
+    public bool TrySetWaitReason(WaitToken token, WakeReason reason)
+    {
+        return TrySetWaitReason(token, reason, true);
+    }
+
+    internal bool TrySetWaitReason(WaitToken token, WakeReason reason, bool scheduleStoredContinuation)
+    {
+        Action? continuationToRun = null;
+        lock (_waitStateGate)
+        {
+            if (!token.Matches(this, _activeWaitId)) return false;
+            if (_activeWaitReason != WakeReason.None) return false;
+
+            _activeWaitReason = reason;
+            if (_activeWaitContinuation != null)
+            {
+                continuationToRun = _activeWaitContinuation;
+                _activeWaitContinuation = null;
+            }
+        }
+
+        if (scheduleStoredContinuation && continuationToRun != null)
+            CommonKernel?.ScheduleContinuation(continuationToRun, this);
+
+        return true;
+    }
+
+    public bool TrySetWaitReason(WaitToken? token, WakeReason reason)
+    {
+        return token.HasValue && TrySetWaitReason(token.Value, reason);
+    }
+
+    public bool TrySetActiveWaitReason(WakeReason reason)
+    {
+        Action? continuationToRun = null;
+        lock (_waitStateGate)
+        {
+            if (_activeWaitId == 0) return false;
+            if (_activeWaitReason != WakeReason.None) return false;
+
+            _activeWaitReason = reason;
+            if (_activeWaitContinuation != null)
+            {
+                continuationToRun = _activeWaitContinuation;
+                _activeWaitContinuation = null;
+            }
+        }
+
+        if (continuationToRun != null) CommonKernel?.ScheduleContinuation(continuationToRun, this);
+
+        return true;
+    }
+
+    private void SetWaitContinuation(WaitToken token, Action continuation)
+    {
+        Action? runNow = null;
+        lock (_waitStateGate)
+        {
+            if (token.Matches(this, _activeWaitId))
+            {
+                if (_activeWaitReason != WakeReason.None)
+                    // Already completed or interrupted, run immediately
+                    runNow = continuation;
+                else
+                    // Still waiting
+                    _activeWaitContinuation = continuation;
+            }
+            else
+            {
+                // Token already inactive/completed
+                runNow = continuation;
+            }
+        }
+
+        if (runNow != null) CommonKernel?.ScheduleContinuation(runNow, this);
+    }
+
+    /// <summary>
+    ///     Call this at the END of every awaiter's OnCompleted(), AFTER all wait registrations
+    ///     (RegisterWait, timer, TCS ContinueWith, etc.) are in place.
+    ///     It atomically registers <paramref name="wakeAction" /> as the signal-interruptible
+    ///     continuation for this token, then re-checks whether a signal arrived in the window
+    ///     between the start of the syscall and the registration. If a signal is already pending,
+    ///     it immediately sets the WakeReason and schedules the action — no race possible.
+    ///     This replaces the ad-hoc "HasUnblockedPendingSignal pre-check" pattern that every
+    ///     awaiter previously duplicated with a TOCTOU vulnerability.
+    /// </summary>
+    public void ArmSignalSafetyNet(WaitToken token, Action wakeAction)
+    {
+        SetWaitContinuation(token, wakeAction);
+        // Re-check in case a signal arrived before BeginWaitToken was called
+        // (e.g. SIGWINCH sent by TTY driver during syscall entry, or SIGPIPE).
+        // TrySetWaitReason is idempotent — if the token was already woken it's a no-op.
+        if (HasUnblockedPendingSignal())
+            TrySetWaitReason(token, WakeReason.Signal);
+    }
+
+    public void ArmInterruptingSignalSafetyNet(WaitToken token, Action wakeAction)
+    {
+        SetWaitContinuation(token, wakeAction);
+        if (HasInterruptingPendingSignal())
+            TrySetWaitReason(token, WakeReason.Signal);
+    }
+
+    public void ArmSignalSafetyNet(WaitToken? token, Action wakeAction)
+    {
+        if (!token.HasValue)
+        {
+            Continuation = wakeAction;
+            CommonKernel?.Schedule(this);
+            return;
+        }
+
+        ArmSignalSafetyNet(token.Value, wakeAction);
+    }
+
+    public void ArmInterruptingSignalSafetyNet(WaitToken? token, Action wakeAction)
+    {
+        if (!token.HasValue)
+        {
+            Continuation = wakeAction;
+            CommonKernel?.Schedule(this);
+            return;
+        }
+
+        ArmInterruptingSignalSafetyNet(token.Value, wakeAction);
+    }
+
+    public WakeReason GetWaitReason(WaitToken token)
+    {
+        lock (_waitStateGate)
+        {
+            return token.Matches(this, _activeWaitId) ? _activeWaitReason : WakeReason.None;
+        }
+    }
+
+    public WakeReason GetWaitReason(WaitToken? token)
+    {
+        return token.HasValue ? GetWaitReason(token.Value) : WakeReason.None;
+    }
+
+    public WakeReason CompleteWaitToken(WaitToken token)
+    {
+        lock (_waitStateGate)
+        {
+            if (!token.Matches(this, _activeWaitId)) return WakeReason.None;
+            if (_signalWaitId == _activeWaitId)
+            {
+                _signalWaitId = 0;
+                _signalWaitMask = 0;
+                _signalWaitKind = SignalWaitKind.None;
+            }
+
+            var reason = _activeWaitReason;
+            _activeWaitContinuation = null;
+            _activeWaitReason = WakeReason.None;
+            _activeWaitId = 0;
+            return reason;
+        }
+    }
+
+    public WakeReason CompleteWaitToken(WaitToken? token)
+    {
+        return token.HasValue ? CompleteWaitToken(token.Value) : WakeReason.None;
+    }
+
+    public WakeReason CompleteWait(WaitToken token)
+    {
+        return CompleteWaitToken(token);
+    }
+
+    internal void RegisterSignalWait(WaitToken token, ulong waitSet, SignalWaitKind kind)
+    {
+        lock (_waitStateGate)
+        {
+            if (!token.Matches(this, _activeWaitId))
+                return;
+
+            _signalWaitId = _activeWaitId;
+            _signalWaitMask = waitSet;
+            _signalWaitKind = kind;
+        }
+    }
+
+    internal bool PrefersSignalWake(int signal)
+    {
+        if (signal < 1 || signal > 64)
+            return false;
+
+        lock (_waitStateGate)
+        {
+            if (_signalWaitId == 0 || _signalWaitId != _activeWaitId)
+                return false;
+
+            return _signalWaitKind switch
+            {
+                SignalWaitKind.WaitSet => (_signalWaitMask & (1UL << (signal - 1))) != 0,
+                SignalWaitKind.Interrupting => !IsSignalIgnoredOrBlocked(signal),
+                _ => false
+            };
+        }
+    }
+
+
+    public static int NextTID()
+    {
+        return Interlocked.Increment(ref _tidCounter);
+    }
+
+    private void EngineLogHandler(Engine engine, int level, string msg)
+    {
+        Logger.Log((LogLevel)level, "[Native] {Message}", msg);
+    }
+
+    private bool HandlePageFault(uint addr, bool isWrite)
+    {
+        var depth = Interlocked.Increment(ref _pageFaultDepth);
+        try
+        {
+            if (depth > 1)
+            {
+                // Avoid recursive fault diagnostics causing stack overflow.
+                Logger.LogWarning(
+                    "Re-entrant page fault at 0x{Addr:X} ({Mode}); delivering SIGSEGV with minimal diagnostics.",
+                    addr, isWrite ? "Write" : "Read");
+                PostSignal((int)Signal.SIGSEGV);
+                _pendingFaultFromInterrupt = true;
+                CPU.Yield();
+                return true;
+            }
+
+            var faultResult = Process.Mem.HandleFaultDetailed(addr, isWrite, CPU);
+            if (faultResult == FaultResult.Handled)
+                return true;
+            if (faultResult == FaultResult.Oom)
+            {
+                Logger.LogError(
+                    "Page Fault at 0x{Addr:X} ({Mode}) failed due to OOM. Simulating OOM killer with SIGKILL.",
+                    addr, isWrite ? "Write" : "Read");
+                TerminateBySignal((int)Signal.SIGKILL, false);
+                _pendingFaultFromInterrupt = true;
+                CPU.Yield();
+                return true;
+            }
+
+            var fatalSignal = faultResult == FaultResult.BusError ? Signal.SIGBUS : Signal.SIGSEGV;
+            Logger.LogInformation("Page Fault at 0x{Addr:X} ({Mode}) could not be resolved. Posting {Signal}.",
+                addr, isWrite ? "Write" : "Read", fatalSignal);
+            Logger.LogInformation("Segment bases: FS=0x{Fs:X} GS=0x{Gs:X}",
+                CPU.GetSegBase(Seg.FS), CPU.GetSegBase(Seg.GS));
+
+            LogGuestExecutionDiagnostics($"page fault at 0x{addr:X8} ({(isWrite ? "write" : "read")})", addr);
+            Process.Mem.LogVmAreas();
+
+            // Deliver fatal signal and yield
+            PostSignalInfo(new SigInfo
+            {
+                Signo = (int)fatalSignal,
+                Code = faultResult == FaultResult.BusError ? 2 : 1
+            });
+            _pendingFaultFromInterrupt = true;
+            CPU.Yield();
+            return true; // Return true to C++ so it stops with Yield status instead of Fault status
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _pageFaultDepth);
+        }
+    }
+
+    private bool HandleInterrupt(Engine engine, uint vector)
+    {
+        FiberTaskLog.HandleInterruptVector(Logger, vector);
+
+        // 0x80 is Syscall
+        if (vector == 0x80) return Process.Syscalls.Handle(engine, vector);
+
+        // #DE (Divide Error) and #UD (Invalid Opcode)
+        if (vector == 0 || vector == 6)
+        {
+            FiberTaskLog.HandleInterruptFaultYield(Logger, vector);
+            _pendingFaultFromInterrupt = true;
+            engine.Yield();
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool HandleNativeFault(Engine engine, uint addr, bool isWrite)
+    {
+        return HandlePageFault(addr, isWrite);
+    }
+
+    // RegisterBlockingSyscall removed
+
+    public void PostSignal(int sig)
+    {
+        PostSignalInfo(new SigInfo { Signo = sig, Code = 0 /* SI_USER */, Pid = Process.TGID, Uid = 0 });
+    }
+
+    public void PostSignalInfo(SigInfo info)
+    {
+        var kernel = CommonKernel;
+        if (kernel != null && !kernel.IsSchedulerThread)
+        {
+            kernel.PostSignalInfoFromAnyThread(this, info);
+            return;
+        }
+
+        PostSignalInfoCore(info);
+    }
+
+    /// <summary>
+    ///     Core signal enqueue logic. Must run on scheduler thread.
+    /// </summary>
+    internal void PostSignalInfoCore(SigInfo info)
+    {
+        var kernel = CommonKernel;
+        kernel?.AssertSchedulerThread();
+        var sig = info.Signo;
+        if (sig < 1 || sig > 64) return;
+
+        Logger.LogInformation("[PostSignalInfo] Posting signal {Sig}", sig);
+
+        var mask = 1UL << (sig - 1);
+        var isIgnored = false;
+        var isBlocked = false;
+        using (EnterTaskStateScope())
+        {
+            if (sig != 9 && sig != 19)
+            {
+                if (Process.SignalActions.TryGetValue(sig, out var action))
+                {
+                    if (action.Handler == 1) isIgnored = true; // SIG_IGN
+                }
+                else
+                {
+                    if (GetDefaultSignalAction(sig) == DefaultSignalAction.Ignore) isIgnored = true;
+                }
+            }
+
+            // Immediately discard ignored signals if they shouldn't trigger wakeups
+            if (isIgnored)
+            {
+                Logger.LogDebug("[PostSignalInfo] Signal {Sig} is ignored. Discarding.", sig);
+                return;
+            }
+
+            Logger.LogDebug("[PostSignalInfo] Setting PendingSignals to {1} from {2}", PendingSignals | mask,
+                PendingSignals);
+            PendingSignals |= mask;
+
+            PendingSignalQueue.Lock(q =>
+            {
+                if (sig < 32)
+                {
+                    var found = false;
+                    foreach (var s in q)
+                        if (s.Signo == sig)
+                        {
+                            found = true;
+                            break;
+                        }
+
+                    if (!found) q.Add(info);
+                }
+                else
+                {
+                    q.Add(info);
+                }
+            });
+            // Check if we should interrupt syscall (inside lock for atomicity with PendingSignals)
+            // SIGKILL(9) and SIGSTOP(19) cannot be blocked
+            isBlocked = (SignalMask & mask) != 0;
+            if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP) isBlocked = false;
+
+            if (!isBlocked)
+                InterruptingSignal = sig;
+            else
+                Logger.LogDebug(
+                    "[PostSignal] Signal {Sig} received but currently masked by SignalMask (0x{Mask:X}). Added to pending.",
+                    sig, SignalMask);
+        }
+
+        SignalPosted?.Invoke(sig);
+
+        var wokeActiveWait = false;
+        if (!isBlocked && !isIgnored)
+        {
+            kernel?.NoteInteractiveWake(this);
+            wokeActiveWait = TrySetActiveWaitReason(WakeReason.Signal);
+        }
+
+        if (!wokeActiveWait &&
+            kernel != null &&
+            (Status == FiberTaskStatus.Waiting || Process.State == ProcessState.Stopped))
+            kernel.Schedule(this);
+    }
+
+    internal void NotifyPendingSignal(int sig)
+    {
+        var mask = 1UL << (sig - 1);
+        var isBlocked = false;
+
+        using (EnterTaskStateScope())
+        {
+            isBlocked = (SignalMask & mask) != 0;
+            if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP) isBlocked = false;
+            if (!isBlocked) InterruptingSignal = sig;
+        }
+
+        SignalPosted?.Invoke(sig);
+
+        var wokeActiveWait = false;
+        if (!isBlocked)
+        {
+            CommonKernel.NoteInteractiveWake(this);
+            wokeActiveWait = TrySetActiveWaitReason(WakeReason.Signal);
+        }
+
+        if (!wokeActiveWait &&
+            (Status == FiberTaskStatus.Waiting || Process.State == ProcessState.Stopped))
+            CommonKernel.Schedule(this);
+    }
+
+    private void ProcessPendingSignals()
+    {
+        using var scope = EnterTaskStateScope();
+        if ((PendingSignals | Process.PendingProcessSignals) == 0) return;
+
+        for (var i = 1; i <= 64; i++)
+        {
+            var mask = 1UL << (i - 1);
+            SigAction action = default;
+            var hasAction = false;
+            ulong oldMask = 0;
+            PendingSignalTarget pendingTarget = default;
+
+            SigInfo dequeuedInfo = default;
+
+            using (EnterTaskStateScope())
+            {
+                if (((PendingSignals | Process.PendingProcessSignals) & mask) == 0) continue;
+
+                // Check blocked
+                if ((SignalMask & mask) != 0 && i != 9 && i != 19)
+                {
+                    Logger.LogDebug(
+                        "[CheckPendingSignals] Signal {Sig} is currently blocked by SignalMask (0x{Mask:X})", i,
+                        SignalMask);
+                    continue;
+                }
+
+                // POP SIGNAL
+                var target = ResolvePendingTargetUnsafe(i);
+                if (!target.HasValue) continue;
+
+                pendingTarget = target.Value;
+                var nullableInfo = pendingTarget == PendingSignalTarget.Thread
+                    ? DequeueSignalUnsafe(i)
+                    : Process.DequeueProcessSignalUnsafe(i);
+                if (nullableInfo.HasValue)
+                {
+                    dequeuedInfo = nullableInfo.Value;
+                }
+                else
+                {
+                    // Fallback if queue desynced
+                    dequeuedInfo = new SigInfo { Signo = i, Code = 0 };
+                    if (pendingTarget == PendingSignalTarget.Thread)
+                        PendingSignals &= ~mask;
+                    else
+                        Process.PendingProcessSignals &= ~mask;
+                }
+
+                oldMask = SignalMask;
+                hasAction = Process.SignalActions.TryGetValue(i, out action);
+
+                // ATOMIC MASKING: Apply mask before delivering to guest.
+                // This prevents reentrancy if another signal arrives during stack setup,
+                // while still honoring SA_RESETHAND one-shot semantics.
+                if (hasAction)
+                    ApplySignalHandlerEntryStateUnsafe(i, action, mask, "ProcessPendingSignals");
+            }
+
+            DeliverSignal(i, action, hasAction, oldMask, dequeuedInfo);
+            break; // Only one per slice
+        }
+    }
+
+    private void ApplySignalHandlerEntryStateUnsafe(int sig, SigAction action, ulong signalBit, string source)
+    {
+        if (action.Handler <= 1) return;
+
+        if ((action.Flags & LinuxConstants.SA_RESETHAND) != 0)
+        {
+            Process.SignalActions.Remove(sig);
+            Logger.LogDebug("[{Source}] Reset disposition for signal {Sig} to SIG_DFL due to SA_RESETHAND",
+                source, sig);
+        }
+
+        var handlerMask = action.Mask;
+        var autoBlockSelf = (action.Flags & (LinuxConstants.SA_NODEFER | LinuxConstants.SA_RESETHAND)) == 0;
+        if (autoBlockSelf)
+            handlerMask |= signalBit;
+
+        Logger.LogDebug("[{Source}] Setting SignalMask to {Mask} from {SignalMask}",
+            source, SignalMask, SignalMask | handlerMask);
+        SignalMask |= handlerMask;
+    }
+
+    public bool HasUnblockedPendingSignal()
+    {
+        using var scope = EnterTaskStateScope();
+        // SIGKILL (9) and SIGSTOP (19) are never blocked
+        var pending = PendingSignals | Process.PendingProcessSignals;
+        var unblocked = pending & ~SignalMask;
+        var hasUnmaskable = (pending & (1UL << 8)) != 0 || (pending & (1UL << 18)) != 0;
+        return unblocked != 0 || hasUnmaskable;
+    }
+
+    public bool HasInterruptingPendingSignal()
+    {
+        using var scope = EnterTaskStateScope();
+        var pending = PendingSignals | Process.PendingProcessSignals;
+        var unblocked = pending & ~SignalMask;
+
+        // SIGKILL/SIGSTOP are unmaskable.
+        var unmaskable = (1UL << ((int)Signal.SIGKILL - 1)) | (1UL << ((int)Signal.SIGSTOP - 1));
+        unblocked |= pending & unmaskable;
+
+        if (unblocked == 0) return false;
+
+        for (var sig = 1; sig <= 64; sig++)
+        {
+            var mask = 1UL << (sig - 1);
+            if ((unblocked & mask) == 0) continue;
+
+            if (Process.SignalActions.TryGetValue(sig, out var action))
+            {
+                if (action.Handler == 1) continue; // SIG_IGN
+                if (action.Handler == 0 && IsDefaultIgnoredSignal(sig)) continue;
+                return true;
+            }
+
+            if (!IsDefaultIgnoredSignal(sig)) return true;
+        }
+
+        return false;
+    }
+
+    public ulong GetVisiblePendingSignals()
+    {
+        using var scope = EnterTaskStateScope();
+        return PendingSignals | Process.PendingProcessSignals;
+    }
+
+    public void DeferSignalMaskRestore(ulong oldMask)
+    {
+        _hasDeferredSignalMaskRestore = true;
+        _deferredSignalMaskRestore = oldMask;
+    }
+
+    public void RestoreDeferredSignalMaskIfAny()
+    {
+        if (!_hasDeferredSignalMaskRestore) return;
+
+        SignalMask = _deferredSignalMaskRestore;
+        _deferredSignalMaskRestore = 0;
+        _hasDeferredSignalMaskRestore = false;
+    }
+
+    public bool IsSignalIgnoredOrBlocked(int sig)
+    {
+        if (sig < 1 || sig > 64) return false;
+        // SIGKILL(9) and SIGSTOP(19) cannot be caught, blocked, or ignored
+        if (sig == 9 || sig == 19) return false;
+
+        var mask = 1UL << (sig - 1);
+        using (EnterTaskStateScope())
+        {
+            if ((SignalMask & mask) != 0) return true; // Blocked
+            if (Process.SignalActions.TryGetValue(sig, out var action))
+            {
+                if (action.Handler == 1) // SIG_IGN
+                    return true;
+            }
+            else
+            {
+                if (GetDefaultSignalAction(sig) == DefaultSignalAction.Ignore)
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsDefaultIgnoredSignal(int sig)
+    {
+        return sig == (int)Signal.SIGCHLD ||
+               sig == (int)Signal.SIGURG ||
+               sig == (int)Signal.SIGWINCH;
+    }
+
+    /// <summary>
+    ///     Must be called within task state scope to maintain atomic mask sync.
+    /// </summary>
+    public SigInfo? DequeueSignalUnsafe(int sig)
+    {
+        return PendingSignalQueue.Lock(list =>
+        {
+            for (var i = 0; i < list.Count; i++)
+                if (list[i].Signo == sig)
+                {
+                    var info = list[i];
+                    list.RemoveAt(i);
+
+                    // Update PendingSignals mask if no more RT signals of this type
+                    if (sig >= 32)
+                    {
+                        var stillPending = false;
+                        foreach (var s in list)
+                            if (s.Signo == sig)
+                            {
+                                stillPending = true;
+                                break;
+                            }
+
+                        if (!stillPending) PendingSignals &= ~(1UL << (sig - 1));
+                    }
+                    else
+                    {
+                        PendingSignals &= ~(1UL << (sig - 1));
+                    }
+
+                    return (SigInfo?)info;
+                }
+
+            return null;
+        });
+    }
+
+    internal PendingSignalTarget? ResolvePendingTargetUnsafe(int sig)
+    {
+        var mask = 1UL << (sig - 1);
+        if ((PendingSignals & mask) != 0) return PendingSignalTarget.Thread;
+        if ((Process.PendingProcessSignals & mask) != 0) return PendingSignalTarget.Process;
+        return null;
+    }
+
+    public bool HasVisiblePendingSignalForSignalfd(ulong signalfdMask)
+    {
+        using var scope = EnterTaskStateScope();
+        var visible = PendingSignals | Process.PendingProcessSignals;
+        var eligible = visible & signalfdMask;
+        eligible &= ~((1UL << ((int)Signal.SIGKILL - 1)) | (1UL << ((int)Signal.SIGSTOP - 1)));
+        eligible &= ~((1UL << ((int)Signal.SIGBUS - 1)) |
+                      (1UL << ((int)Signal.SIGFPE - 1)) |
+                      (1UL << ((int)Signal.SIGILL - 1)) |
+                      (1UL << ((int)Signal.SIGSEGV - 1)));
+        return eligible != 0;
+    }
+
+    public bool TryTakeVisibleSignalForSignalfd(ulong signalfdMask, out SigInfo info)
+    {
+        using var scope = EnterTaskStateScope();
+        for (var sig = 1; sig <= 64; sig++)
+        {
+            var mask = 1UL << (sig - 1);
+            if ((signalfdMask & mask) == 0) continue;
+            if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP) continue;
+            if (IsSynchronousOnlySignal(sig)) continue;
+
+            var target = ResolvePendingTargetUnsafe(sig);
+            if (!target.HasValue) continue;
+
+            var dequeued = target == PendingSignalTarget.Thread
+                ? DequeueSignalUnsafe(sig)
+                : Process.DequeueProcessSignalUnsafe(sig);
+            if (!dequeued.HasValue) continue;
+
+            info = dequeued.Value;
+            return true;
+        }
+
+        info = default;
+        return false;
+    }
+
+    // Prepare stack frame for signal handler
+    private void DeliverSignal(int sig, SigAction action, bool hasAction, ulong oldMask, SigInfo info)
+    {
+        Logger.LogInformation("[DeliverSignal] Delivering Signal {Sig}, EIP=0x{Eip:X}, ESP=0x{Esp:X}", sig, CPU.Eip,
+            CPU.RegRead(Reg.ESP));
+
+        // 1. Check if ignored
+        if (hasAction)
+        {
+            if (action.Handler == 1) // SIG_IGN
+            {
+                Logger.LogInformation("[DeliverSignal] Signal {Sig} is ignored (SIG_IGN)", sig);
+                return;
+            }
+
+            if (action.Handler == 0) // SIG_DFL
+            {
+                ApplyDefaultSignalAction(sig, GetDefaultSignalAction(sig));
+                return;
+            }
+
+            // 2. Setup frame for handler
+            Logger.LogInformation("[DeliverSignal] Setting up signal frame for signal {Sig}, handler=0x{Handler:X}",
+                sig, action.Handler);
+
+            // Push SigContext/StackFrame
+            var sp = CPU.RegRead(Reg.ESP);
+
+            // Check altstack
+            if ((AltStackFlags & 1) == 0 && AltStackSp != 0 && (action.Flags & 0x08000000) != 0) // ONSTACK
+            {
+                Logger.LogInformation("[DeliverSignal] Using altstack: sp=0x{AltStackSp:X}+0x{AltStackSize:X}",
+                    AltStackSp, AltStackSize);
+                sp = AltStackSp + AltStackSize;
+            }
+            // If SA_ONSTACK is requested but sigaltstack(2) has not installed an alternate
+            // stack, Linux falls back to the current user stack. Leaving sp unchanged matches that.
+
+            // Return address (restorer or some trampoline)
+            var retAddr = Process.Syscalls.RtSigReturnAddr;
+            if ((action.Flags & 0x04000000) != 0) // SA_RESTORER
+                retAddr = action.Restorer;
+
+            var frameEsp = sp;
+
+            // SignalMask already updated in ProcessPendingSignals
+
+            // Setup Stack based on SA_SIGINFO
+            if ((action.Flags & 0x00000004) != 0) // SA_SIGINFO
+            {
+                if ((action.Flags & 0x04000000) == 0) retAddr = Process.Syscalls.RtSigReturnAddr;
+                SetupSigContext(sp, ref frameEsp, sig, action, retAddr, oldMask, info);
+            }
+            else
+            {
+                if ((action.Flags & 0x04000000) == 0) retAddr = Process.Syscalls.SigReturnAddr;
+                SetupOldSigFrame(sp, ref frameEsp, sig, action, retAddr, oldMask);
+            }
+
+            Logger.LogInformation(
+                "[DeliverSignal] Signal frame setup complete: ESP changed from 0x{OldSp:X} to 0x{NewSp:X}, EIP set to 0x{Handler:X}",
+                sp, frameEsp, action.Handler);
+            CPU.RegWrite(Reg.ESP, frameEsp);
+            CPU.Eip = action.Handler;
+        }
+        else
+        {
+            // No action registered = SIG_DFL
+            Logger.LogInformation("[DeliverSignal] Signal {Sig} has no registered action (SIG_DFL)", sig);
+            ApplyDefaultSignalAction(sig, GetDefaultSignalAction(sig));
+        }
+    }
+
+    /// <summary>
+    ///     Consume a pending signal and deliver it. Used by HandleAsyncSyscall to
+    ///     deliver signals atomically with -ERESTARTSYS processing, mirroring Linux's
+    ///     do_signal(). Registers should already be adjusted (EIP rewound, EAX set)
+    ///     BEFORE calling this method, so the sigcontext captures the restart-ready state.
+    /// </summary>
+    private void DeliverSignalForRestart(int sig, SigAction action)
+    {
+        var mask = 1UL << (sig - 1);
+        ulong oldMask;
+        SigInfo info;
+
+        using (EnterTaskStateScope())
+        {
+            oldMask = SignalMask;
+
+            // Dequeue from pending queue (prevents ProcessPendingSignals from re-delivering)
+            var target = ResolvePendingTargetUnsafe(sig);
+            var dequeued = target == PendingSignalTarget.Process
+                ? Process.DequeueProcessSignalUnsafe(sig)
+                : DequeueSignalUnsafe(sig);
+            info = dequeued ?? new SigInfo { Signo = sig };
+
+            ApplySignalHandlerEntryStateUnsafe(sig, action, mask, "DeliverSignalForRestart");
+        }
+
+        DeliverSignal(sig, action, true, oldMask, info);
+    }
+
+    // Kept for compatibility if called externally (removed HandleSignal method name to avoid confusion, 
+    // but KernelScheduler currently calls HandleSignal. We will update KernelScheduler next.)
+    // Note: I renamed HandleSignal to DeliverSignal and made it private.
+    // I added Signal(sig) as the public API.
+
+    private static DefaultSignalAction GetDefaultSignalAction(int sig)
+    {
+        return sig switch
+        {
+            (int)Signal.SIGCHLD or (int)Signal.SIGURG or (int)Signal.SIGWINCH => DefaultSignalAction.Ignore,
+            (int)Signal.SIGSTOP or (int)Signal.SIGTSTP or (int)Signal.SIGTTIN or (int)Signal.SIGTTOU =>
+                DefaultSignalAction.Stop,
+            (int)Signal.SIGCONT => DefaultSignalAction.Continue,
+            (int)Signal.SIGQUIT or (int)Signal.SIGILL or (int)Signal.SIGTRAP or
+                (int)Signal.SIGABRT or (int)Signal.SIGBUS or (int)Signal.SIGFPE or
+                (int)Signal.SIGSEGV or (int)Signal.SIGXCPU or (int)Signal.SIGXFSZ or
+                (int)Signal.SIGSYS => DefaultSignalAction.Core,
+            _ => DefaultSignalAction.Terminate
+        };
+    }
+
+    private static bool IsSynchronousOnlySignal(int sig)
+    {
+        return sig == (int)Signal.SIGBUS ||
+               sig == (int)Signal.SIGFPE ||
+               sig == (int)Signal.SIGILL ||
+               sig == (int)Signal.SIGSEGV;
+    }
+
+    private void ApplyDefaultSignalAction(int sig, DefaultSignalAction action)
+    {
+        switch (action)
+        {
+            case DefaultSignalAction.Ignore:
+                Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: ignore", sig);
+                break;
+            case DefaultSignalAction.Terminate:
+                Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: terminate", sig);
+                TerminateBySignal(sig, false);
+                break;
+            case DefaultSignalAction.Core:
+                Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: core/terminate", sig);
+                LogGuestExecutionDiagnostics($"default action for fatal signal {sig}");
+                TerminateBySignal(sig, true);
+                break;
+            case DefaultSignalAction.Stop:
+                Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: stop", sig);
+                StopBySignal(sig);
+                break;
+            case DefaultSignalAction.Continue:
+                Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: continue", sig);
+                ContinueBySignal();
+                break;
+        }
+    }
+
+    private void TerminateBySignal(int sig, bool coreDumped)
+    {
+        if (Exited) return;
+
+        SignalVforkDone();
+        ExitRobustList();
+        ClearChildTidAndWake();
+        Exited = true;
+        ExitStatus = 128 + sig;
+        Status = FiberTaskStatus.Terminated;
+        ExecutionMode = TaskExecutionMode.Terminated;
+        SyscallManager.FinalizeProcessExit(this, ExitStatus, true, sig, coreDumped);
+    }
+
+    private void StopBySignal(int sig)
+    {
+        if (Process.State == ProcessState.Zombie || Process.State == ProcessState.Stopped) return;
+
+        Process.State = ProcessState.Stopped;
+        Process.HasWaitableStop = true;
+        Process.StopSignal = sig;
+        Process.HasWaitableContinue = false;
+        Process.StateChangeEvent.Set();
+
+        // Put the task in stopped state
+        ExecutionMode = TaskExecutionMode.Stopped;
+        Status = FiberTaskStatus.Waiting;
+
+        // Wake up parent's wait4
+        var ppid = Process.PPID;
+        var parentProc = ppid > 0 ? CommonKernel.GetProcess(ppid) : null;
+        if (ppid > 0 && SyscallManager.ShouldNotifyParentOfChildStateChange(parentProc))
+            CommonKernel.SignalProcessInfo(ppid, (int)Signal.SIGCHLD, new SigInfo
+            {
+                Signo = (int)Signal.SIGCHLD,
+                Pid = Process.TGID,
+                Status = sig,
+                Code = 5 // CLD_STOPPED
+            });
+    }
+
+    private void ContinueBySignal()
+    {
+        // Even if not fully stopped, we might need to clear pending stop signals
+        // Clear pending stop signals (SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU)
+        var stopMask = (1UL << 18) | (1UL << 19) | (1UL << 20) | (1UL << 21);
+        using (EnterTaskStateScope())
+        {
+            PendingSignals &= ~stopMask;
+            Process.PendingProcessSignals &= ~stopMask;
+        }
+
+        if (Process.State != ProcessState.Stopped) return;
+
+        Process.State = ProcessState.Running;
+        Process.HasWaitableContinue = true;
+        Process.HasWaitableStop = false;
+        Process.StateChangeEvent.Set();
+
+        // Restore execution mode
+        ExecutionMode = TaskExecutionMode.RunningGuest;
+
+        var ppid = Process.PPID;
+        var parentProc = ppid > 0 ? CommonKernel.GetProcess(ppid) : null;
+        if (ppid > 0 && SyscallManager.ShouldNotifyParentOfChildStateChange(parentProc))
+            CommonKernel.SignalProcessInfo(ppid, (int)Signal.SIGCHLD, new SigInfo
+            {
+                Signo = (int)Signal.SIGCHLD,
+                Pid = Process.TGID,
+                Status = (int)Signal.SIGCONT,
+                Code = 6 // CLD_CONTINUED
+            });
+
+        // Reschedule task
+        CommonKernel.Schedule(this);
+    }
+
+    private void SetupOldSigFrame(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask)
+    {
+        // Traditional sigframe:
+        // esp+0: retAddr
+        // esp+4: sig
+        // esp+8: sigcontext
+        // sizeof(sigframe) = 732
+
+        esp = (esp - 736u) & ~0xFu;
+        var sigcontextAddr = esp + 8;
+
+        // Zero out the frame
+        CPU.CopyToUser(esp, new byte[736]);
+
+        WriteSigContext(sigcontextAddr, oldMask);
+
+        if (!CPU.CopyToUser(esp + 4, BitConverter.GetBytes(sig))) return;
+        if (!CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr))) return;
+    }
+
+    private void SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask,
+        SigInfo info)
+    {
+        // ... (existing stack alignment)
+        esp = (esp - 512u) & ~0xFu;
+
+        var ucontextAddr = esp;
+        uint mcontextOffset = 4 + 4 + 12;
+
+        WriteSigContext(esp + mcontextOffset, oldMask);
+
+        esp = (esp - 128u) & ~0xFu;
+        var siginfoAddr = esp;
+
+        // Populate SigInfo (128 bytes)
+        var siBuf = new byte[128];
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(0, 4), info.Signo);
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(4, 4), info.Errno);
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(8, 4), info.Code);
+
+        // Payload (e.g. Pid/Uid for SI_USER, or TimerId for POSIX Timer)
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(12, 4), info.Pid);
+        BinaryPrimitives.WriteUInt32LittleEndian(siBuf.AsSpan(16, 4), info.Uid);
+
+        // Write the unionized payload value (e.g. SIGRT)
+        BinaryPrimitives.WriteUInt64LittleEndian(siBuf.AsSpan(20, 8), info.Value);
+
+        if (!CPU.CopyToUser(siginfoAddr, siBuf)) return;
+
+        // Populate UContext uc_sigmask (offset 108)
+        var maskBuf = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(maskBuf, oldMask);
+        if (!CPU.CopyToUser(ucontextAddr + 108, maskBuf)) return;
+
+        // Align stack for arguments
+        esp = (esp - 4u) & ~0xFu;
+
+        // Push 3 args: sig, siginfo_ptr, ucontext_ptr
+        if (!CPU.CopyToUser(esp - 4, BitConverter.GetBytes(ucontextAddr))) return;
+        if (!CPU.CopyToUser(esp - 8, BitConverter.GetBytes(siginfoAddr))) return;
+        if (!CPU.CopyToUser(esp - 12, BitConverter.GetBytes(sig))) return;
+        esp -= 12u;
+
+        // Push Return Address
+        esp -= 4u;
+        if (!CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr))) return;
+    }
+
+    public void RestoreSigContext(uint addr)
+    {
+        /*
+         * Reference: struct sigcontext_32 from Linux UAPI (arch/x86/include/uapi/asm/sigcontext.h)
+         *
+         * struct sigcontext_32 {
+         *    __u16 gs, __gsh;          // 0
+         *    __u16 fs, __fsh;          // 4
+         *    __u16 es, __esh;          // 8
+         *    __u16 ds, __dsh;          // 12
+         *    __u32 di;                 // 16
+         *    __u32 si;                 // 20
+         *    __u32 bp;                 // 24
+         *    __u32 sp;                 // 28
+         *    __u32 bx;                 // 32
+         *    __u32 dx;                 // 36
+         *    __u32 cx;                 // 40
+         *    __u32 ax;                 // 44
+         *    __u32 trapno;             // 48
+         *    __u32 err;                // 52
+         *    __u32 ip;                 // 56
+         *    __u16 cs, __csh;          // 60
+         *    __u32 flags;              // 64
+         *    __u32 sp_at_signal;       // 68 (UESP)
+         *    __u16 ss, __ssh;          // 72
+         *    __u32 fpstate;            // 76
+         *    __u32 oldmask;            // 80
+         *    __u32 cr2;                // 84
+         * };
+         */
+        var buf = new byte[88];
+        if (!CPU.CopyFromUser(addr, buf)) return;
+        var s = new ReadOnlySpan<byte>(buf);
+
+        // General Registers
+        CPU.RegWrite(Reg.EDI, BinaryPrimitives.ReadUInt32LittleEndian(s[16..]));
+        CPU.RegWrite(Reg.ESI, BinaryPrimitives.ReadUInt32LittleEndian(s[20..]));
+        CPU.RegWrite(Reg.EBP, BinaryPrimitives.ReadUInt32LittleEndian(s[24..]));
+        CPU.RegWrite(Reg.EBX, BinaryPrimitives.ReadUInt32LittleEndian(s[32..]));
+        CPU.RegWrite(Reg.EDX, BinaryPrimitives.ReadUInt32LittleEndian(s[36..]));
+        CPU.RegWrite(Reg.ECX, BinaryPrimitives.ReadUInt32LittleEndian(s[40..]));
+        CPU.RegWrite(Reg.EAX, BinaryPrimitives.ReadUInt32LittleEndian(s[44..]));
+        Logger.LogInformation("[RestoreSigContext] addr=0x{Addr:x} EAX=0x{EAX:X}", addr, CPU.RegRead(Reg.EAX));
+
+        // IP, Flags, SP
+        CPU.Eip = BinaryPrimitives.ReadUInt32LittleEndian(s[56..]);
+        CPU.Eflags = BinaryPrimitives.ReadUInt32LittleEndian(s[64..]);
+        CPU.RegWrite(Reg.ESP, BinaryPrimitives.ReadUInt32LittleEndian(s[68..])); // UESP
+
+        // Restore signal mask
+        if (buf.Length >= 88)
+        {
+            // Cheat: Restore full 64-bit mask from oldmask + cr2 area (80-87)
+            // This is a convenient hack for our emulator to handle RT signals correctly in sigreturn.
+            var oldSignalMask = SignalMask;
+            SignalMask = BinaryPrimitives.ReadUInt64LittleEndian(s[80..]);
+            Logger.LogDebug("[RestoreSigContext] Restored SignalMask {SignalMask}, before {OldSignalMask}", SignalMask,
+                oldSignalMask);
+        }
+    }
+
+    private void WriteSigContext(uint addr, ulong oldMask)
+    {
+        /*
+         * Reference: struct sigcontext_32 from Linux UAPI (arch/x86/include/uapi/asm/sigcontext.h)
+         * (See documentation in RestoreSigContext for full layout)
+         */
+        try
+        {
+            var buf = new byte[88];
+            var s = buf.AsSpan();
+
+            // Segments (dummy for now)
+            BinaryPrimitives.WriteUInt32LittleEndian(s[..], 0); // GS
+            BinaryPrimitives.WriteUInt32LittleEndian(s[4..], 0); // FS
+            BinaryPrimitives.WriteUInt32LittleEndian(s[8..], 0); // ES
+            BinaryPrimitives.WriteUInt32LittleEndian(s[12..], 0x2B); // DS (user data)
+
+            BinaryPrimitives.WriteUInt32LittleEndian(s[16..], CPU.RegRead(Reg.EDI));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[20..], CPU.RegRead(Reg.ESI));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[24..], CPU.RegRead(Reg.EBP));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[28..], CPU.RegRead(Reg.ESP));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[32..], CPU.RegRead(Reg.EBX));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[36..], CPU.RegRead(Reg.EDX));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[40..], CPU.RegRead(Reg.ECX));
+            BinaryPrimitives.WriteUInt32LittleEndian(s[44..], CPU.RegRead(Reg.EAX));
+            Logger.LogInformation("[WriteSigContext] addr=0x{Addr:x} EAX=0x{EAX:X}", addr, CPU.RegRead(Reg.EAX));
+
+            BinaryPrimitives.WriteUInt32LittleEndian(s[48..], 0); // trapno
+            BinaryPrimitives.WriteUInt32LittleEndian(s[52..], 0); // err
+            BinaryPrimitives.WriteUInt32LittleEndian(s[56..], CPU.Eip);
+            BinaryPrimitives.WriteUInt32LittleEndian(s[60..], 0x23); // CS (user code)
+            BinaryPrimitives.WriteUInt32LittleEndian(s[64..], CPU.Eflags);
+            BinaryPrimitives.WriteUInt32LittleEndian(s[68..], CPU.RegRead(Reg.ESP)); // sp_at_signal (UESP)
+            BinaryPrimitives.WriteUInt32LittleEndian(s[72..], 0x2B); // SS
+
+            // Cheat: Store full 64-bit mask in oldmask + cr2 area (8 bytes starting at 80)
+            BinaryPrimitives.WriteUInt64LittleEndian(s[80..], oldMask);
+
+            if (!CPU.CopyToUser(addr, buf))
+            {
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    public bool TryEnterGuestRun()
+    {
+        return !Exited &&
+               Process.State != ProcessState.Stopped &&
+               PendingSyscall == null &&
+               !_hasPendingAsyncSyscallCompletion &&
+               Continuation == null &&
+               ExecutionMode == TaskExecutionMode.RunningGuest;
+    }
+
+    // Called by KernelScheduler once per time-slice.
+    //
+    // Design invariant: every path that sets task.Continuation or task.PendingSyscall
+    // MUST eventually call CommonKernel.Schedule(this) to re-queue the task when it wants
+    // to resume. RunSlice itself never re-queues — it just arranges state and returns.
+    //
+    // RunSlice is always called with Status == Running (enforced by the scheduler).
+    // When it returns, the task must be in one of: Waiting, Ready, or Terminated.
+    public void RunSlice(int instructionLimit = 10_000_000)
+    {
+        CommonKernel.CurrentTask = this;
+        try
+        {
+            ProcessAddressSpaceSync.SyncEngineBeforeRun(Process.Mem, CPU, Process);
+
+            // We must NOT process pending signals if we are in the middle of waiting
+            // for an async syscall to finish its C# awaiter (or its continuation).
+            // If we deliver the signal now, it will save the PRE-SYSCALL completion EAX (SyscallNr)
+            // and then HandleAsyncSyscall will deliver it AGAIN with the POST-SYSCALL EAX (-EINTR)
+            // creating a nested sigreturn that restores SyscallNr and causes userspace to read the 
+            // wrong return value (like returning 240 instead of -4).
+            if (PendingSyscall == null && Continuation == null && !HasPendingAsyncSyscallCompletion())
+                ProcessPendingSignals();
+
+            // ── Phase 1: Resume a stored continuation ────────────────────────────────
+            // A Continuation is set when an awaiter (e.g. EpollAwaiter, PollAwaiter)
+            // has completed an async wait and wants the task to advance its syscall
+            // state machine by one step. The continuation itself is responsible for
+            // deciding what happens next:
+            //   • If the syscall is done → it calls CommonKernel.Schedule(this)
+            //     which sets Status = Ready and re-queues us.
+            //   • If the syscall needs to wait again → it leaves Status = Waiting.
+            // Either way we just return after invoking it.
+            if (Continuation != null)
+            {
+                var c = Continuation;
+                Continuation = null;
+                ExecutionMode = TaskExecutionMode.WaitingContinuation;
+                try
+                {
+                    c?.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex,
+                        "[RunSlice] Continuation crashed. Terminating task TID={Tid} PID={Pid} mode={Mode}",
+                        TID, PID, ExecutionMode);
+                    TerminateBySignal((int)Signal.SIGSEGV, false);
+                    Status = FiberTaskStatus.Terminated;
+                    ExecutionMode = TaskExecutionMode.Terminated;
+                    return;
+                }
+
+                // Ensure we are not left in Running state — the continuation should
+                // have set us to Ready (via Schedule) or Waiting. If it forgot, park.
+                if (Status == FiberTaskStatus.Running)
+                    Status = FiberTaskStatus.Waiting;
+                return;
+            }
+
+            // ── Phase 1.5: Consume a completed async syscall on the task itself ─────────
+            if (TryTakePendingAsyncSyscallCompletion(out var asyncResult, out var asyncError))
+            {
+                ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
+                FinalizeAsyncSyscall(asyncResult, asyncError);
+                if (Status == FiberTaskStatus.Running)
+                    Status = FiberTaskStatus.Waiting;
+                return;
+            }
+
+            // ── Phase 2: Kick off a pending async syscall ─────────────────────────────
+            // PendingSyscall is the ValueTask<int> installed by the syscall handler
+            // (via Engine.Yield) before the CPU yields. HandleAsyncSyscall() drives it
+            // to completion on the scheduler thread, then calls
+            // CommonKernel.Schedule(this). Until that happens the task stays Waiting.
+            //
+            // NOTE: HandleAsyncSyscall handles -ERESTARTSYS + signal delivery internally
+            // (mirroring Linux's do_signal), so there is no race with ProcessPendingSignals.
+            if (PendingSyscall != null)
+            {
+                ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
+                Status = FiberTaskStatus.Waiting;
+                FiberTaskLog.RunSlicePendingSyscall(Logger, TID, _handlingAsyncSyscall, Status, ExecutionMode);
+                if (!_handlingAsyncSyscall)
+                {
+                    FiberTaskLog.RunSliceStartHandleAsyncPhase2(Logger, TID);
+                    _ = HandleAsyncSyscallAsync();
+                }
+                else
+                {
+                    FiberTaskLog.RunSliceSkipHandleAsyncPhase2(Logger, TID);
+                }
+
+                return;
+            }
+
+            // ── Phase 3: Guard — verify we can actually run guest code ─────────────────
+            if (!TryEnterGuestRun())
+            {
+                // TryEnterGuestRun returns false if any of the following holds:
+                //   • task has exited
+                //   • process is SIGSTOP-stopped
+                //   • ExecutionMode != RunningGuest
+                // Park appropriately; the something external (signal, resume) will
+                // re-queue us when conditions change.
+                if (Exited)
+                {
+                    Status = FiberTaskStatus.Terminated;
+                    ExecutionMode = TaskExecutionMode.Terminated;
+                }
+                else if (Process.State == ProcessState.Stopped)
+                {
+                    Status = FiberTaskStatus.Waiting;
+                    ExecutionMode = TaskExecutionMode.Stopped;
+                }
+                else if (Status == FiberTaskStatus.Running)
+                {
+                    Status = FiberTaskStatus.Waiting;
+                }
+
+                return;
+            }
+
+            // ── Phase 4: Execute guest instructions ───────────────────────────────────
+            if (Process.Syscalls?.Strace == true)
+                Logger.LogTrace("[RunSlice] Enter Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
+
+            BeginGuestCpuAccounting();
+            try
+            {
+                CPU.Run(maxInsts: (ulong)instructionLimit);
+            }
+            finally
+            {
+                EndGuestCpuAccounting();
+            }
+
+            if (Process.Syscalls?.Strace == true)
+                Logger.LogTrace("[RunSlice] Exit Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
+
+            if (Exited)
+            {
+                Status = FiberTaskStatus.Terminated;
+                ExecutionMode = TaskExecutionMode.Terminated;
+                return;
+            }
+
+            // ── Phase 5: Dispatch on CPU exit reason ──────────────────────────────────
+            // CPU.Status tells us WHY Run() returned:
+            //   Yield   — guest executed INT 0x80 (syscall) or called sched_yield.
+            //   Running — instruction quota exhausted; yield to other tasks.
+            //   Fault   — unrecoverable CPU exception.
+            switch (CPU.Status)
+            {
+                case EmuStatus.Yield when PendingSyscall != null:
+                    // Syscall handler installed a PendingSyscall before yielding.
+                    // Start driving it asynchronously; task parks until done.
+                    ExecutionMode = TaskExecutionMode.WaitingAsyncSyscall;
+                    Status = FiberTaskStatus.Waiting;
+                    FiberTaskLog.RunSliceYieldedWithPendingSyscall(Logger, TID, _handlingAsyncSyscall);
+                    if (!_handlingAsyncSyscall)
+                    {
+                        FiberTaskLog.RunSliceStartHandleAsyncYield(Logger, TID);
+                        _ = HandleAsyncSyscallAsync();
+                    }
+                    else
+                    {
+                        FiberTaskLog.RunSliceSkipHandleAsyncYield(Logger, TID);
+                    }
+
+                    break;
+
+                case EmuStatus.Yield when _pendingFaultFromInterrupt:
+                    // Yielded due to a #UD or other fault interrupt handled in C#
+                    _pendingFaultFromInterrupt = false;
+                    HandleCpuFault();
+                    break;
+
+                case EmuStatus.Yield:
+                case EmuStatus.Running: // instruction quota exhausted
+                    // Normal yield (quota or explicit sched_yield if implemented)
+                    // Re-queue so other tasks get a turn
+                    ClearInteractiveBurst();
+                    Status = FiberTaskStatus.Ready;
+                    CommonKernel.Schedule(this);
+                    break;
+
+                case EmuStatus.Fault:
+                    HandleCpuFault();
+                    break;
+
+                default:
+                    // Unknown status — re-queue defensively so we don't livelock.
+                    CommonKernel.Schedule(this);
+                    break;
+            }
+        }
+        finally
+        {
+            CommonKernel.CurrentTask = null;
+        }
+    }
+
+    // Handles an unrecoverable CPU fault (e.g. unmapped page, illegal memory access).
+    // Logs register state, delivers SIGSEGV, and marks the task Terminated.
+    private void HandleCpuFault()
+    {
+        var vector = CPU.FaultVector;
+        var sig = vector switch
+        {
+            0 => Signal.SIGFPE,
+            6 => Signal.SIGILL,
+            11 => Signal.SIGBUS,
+            12 => Signal.SIGBUS,
+            13 => Signal.SIGSEGV,
+            14 => Signal.SIGSEGV,
+            _ => Signal.SIGILL
+        };
+
+        var faultName = vector switch
+        {
+            0 => "#DE (Divide Error)",
+            6 => "#UD (Invalid Opcode)",
+            13 => "#GP (General Protection Fault)",
+            14 => "#PF (Page Fault)",
+            _ => $"Vector {vector}"
+        };
+
+        Logger.LogWarning("CPU Fault detected: {FaultName} at EIP=0x{EIP:X}. Delivering {Sig}.",
+            faultName, CPU.Eip, sig);
+        LogGuestExecutionDiagnostics($"cpu fault {faultName}");
+
+        if (MustForceDefaultForSynchronousFault((int)sig))
+        {
+            Logger.LogWarning(
+                "Synchronous fault signal {Sig} is blocked or ignored; forcing default action.",
+                sig);
+            ApplyDefaultSignalAction((int)sig, GetDefaultSignalAction((int)sig));
+            return;
+        }
+
+        if (vector == 6)
+        {
+            var ip = CPU.Eip;
+            var bytes = new byte[16];
+            if (CPU.CopyFromUser(ip, bytes))
+            {
+                var hex = BitConverter.ToString(bytes).Replace("-", " ");
+                var vma = Process.Mem.FindVmArea(ip);
+                Logger.LogInformation("#UD bytes @0x{EIP:X}: {Bytes} (VMA={Vma}, range=0x{Start:X}-0x{End:X})",
+                    ip, hex, vma?.Name ?? "<unknown>", vma?.Start ?? 0, vma?.End ?? 0);
+            }
+            else
+            {
+                Logger.LogInformation("#UD bytes @0x{EIP:X}: <unreadable>", ip);
+            }
+        }
+
+        // Deliver the signal!
+        PostSignal((int)sig);
+
+        // Re-schedule to allow signal processing (either handler or default action)
+        Status = FiberTaskStatus.Ready;
+        CommonKernel.Schedule(this);
+    }
+
+    private bool MustForceDefaultForSynchronousFault(int sig)
+    {
+        if (sig != (int)Signal.SIGBUS &&
+            sig != (int)Signal.SIGFPE &&
+            sig != (int)Signal.SIGILL &&
+            sig != (int)Signal.SIGSEGV)
+            return false;
+
+        var mask = 1UL << (sig - 1);
+        using (EnterTaskStateScope())
+        {
+            if ((SignalMask & mask) != 0) return true;
+            if (Process.SignalActions.TryGetValue(sig, out var action) && action.Handler == 1) return true;
+        }
+
+        return false;
+    }
+
+    internal void LogGuestExecutionDiagnostics(string reason, uint? focusAddr = null)
+    {
+        var depth = Interlocked.Increment(ref _faultDiagnosticsDepth);
+        try
+        {
+            if (depth > 1)
+            {
+                Logger.LogWarning("[FaultDiag] Re-entrant guest fault diagnostics suppressed for TID={Tid}", TID);
+                return;
+            }
+
+            var eip = CPU.Eip;
+            var esp = CPU.RegRead(Reg.ESP);
+            var ebp = CPU.RegRead(Reg.EBP);
+            Logger.LogInformation("[FaultDiag] TID={Tid} PID={Pid} reason={Reason}", TID, PID, reason);
+            if (focusAddr.HasValue)
+                Logger.LogInformation("[FaultDiag] Focus address: 0x{Addr:X8}", focusAddr.Value);
+
+            Logger.LogInformation("CPU State: {CPU}", CPU.ToString());
+            var stats = CPU.DumpStats();
+            if (!string.IsNullOrEmpty(stats))
+                Logger.LogInformation("Native Stats:\n{Stats}", stats);
+
+            LogAddressContext("EIP", eip);
+            LogAddressContext("ESP", esp);
+            LogAddressContext("EBP", ebp);
+            LogInstructionBytes(eip);
+            LogStackWords(esp);
+            LogStackReturnCandidates(esp);
+            LogFramePointerBacktrace(ebp);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _faultDiagnosticsDepth);
+        }
+    }
+
+    private void LogInstructionBytes(uint eip)
+    {
+        var bytes = new byte[16];
+        var copied = CPU.CopyFromUserNoFault(eip, bytes);
+        if (copied <= 0)
+        {
+            Logger.LogInformation("[FaultDiag] Code bytes @EIP=0x{Eip:X8}: <unreadable>", eip);
+            return;
+        }
+
+        var hex = BitConverter.ToString(bytes, 0, copied).Replace("-", " ");
+        Logger.LogInformation("[FaultDiag] Code bytes @EIP=0x{Eip:X8}: {Bytes}", eip, hex);
+    }
+
+    private void LogStackWords(uint esp)
+    {
+        var stackBuf = new byte[FaultStackWordCount * sizeof(uint)];
+        var copied = CPU.CopyFromUserNoFault(esp, stackBuf);
+        if (copied <= 0)
+        {
+            Logger.LogInformation("[FaultDiag] Stack words @ESP=0x{Esp:X8}: <unreadable>", esp);
+            return;
+        }
+
+        var wordCount = copied / sizeof(uint);
+        var parts = new string[wordCount];
+        for (var i = 0; i < wordCount; i++)
+        {
+            var value = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(i * sizeof(uint), sizeof(uint)));
+            parts[i] = $"[{i}]={value:X8}";
+        }
+
+        Logger.LogInformation("[FaultDiag] Stack words @ESP=0x{Esp:X8}: {Words}", esp, string.Join(", ", parts));
+    }
+
+    private void LogStackReturnCandidates(uint esp)
+    {
+        var stackBuf = new byte[FaultStackWordCount * sizeof(uint)];
+        var copied = CPU.CopyFromUserNoFault(esp, stackBuf);
+        var wordCount = copied / sizeof(uint);
+        for (var i = 0; i < wordCount; i++)
+        {
+            var candidate = BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(i * sizeof(uint), sizeof(uint)));
+            var vma = Process.Mem.FindVmArea(candidate);
+            if (vma == null || (vma.Perms & Protection.Exec) == 0)
+                continue;
+
+            Logger.LogInformation(
+                "[FaultDiag] Stack return candidate #{Index}: 0x{Addr:X8} -> {VmaName} [0x{Start:X8}-0x{End:X8}) perms={Perms}",
+                i, candidate, FormatVmaName(vma), vma.Start, vma.End, vma.Perms);
+        }
+    }
+
+    private void LogFramePointerBacktrace(uint ebp)
+    {
+        if (ebp == 0)
+        {
+            Logger.LogInformation("[FaultDiag] Frame-pointer backtrace: <EBP is zero>");
+            return;
+        }
+
+        var previousEbp = 0u;
+        for (var frame = 0; frame < FaultBacktraceMaxFrames; frame++)
+        {
+            var buf = new byte[8];
+            var copied = CPU.CopyFromUserNoFault(ebp, buf);
+            if (copied < buf.Length)
+            {
+                Logger.LogInformation(
+                    "[FaultDiag] Frame #{Frame}: EBP=0x{Ebp:X8} <unreadable {Copied}/{Total} bytes>",
+                    frame, ebp, copied, buf.Length);
+                break;
+            }
+
+            var nextEbp = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
+            var returnAddress = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(4, 4));
+            var vma = Process.Mem.FindVmArea(returnAddress);
+            Logger.LogInformation(
+                "[FaultDiag] Frame #{Frame}: EBP=0x{Ebp:X8} RET=0x{Ret:X8} -> {Location}",
+                frame, ebp, returnAddress, FormatAddressLocation(vma, returnAddress));
+
+            if (nextEbp == 0)
+            {
+                Logger.LogInformation("[FaultDiag] Frame #{Frame}: end of EBP chain", frame);
+                break;
+            }
+
+            if (nextEbp <= ebp || nextEbp == previousEbp)
+            {
+                Logger.LogInformation(
+                    "[FaultDiag] Frame #{Frame}: invalid next EBP 0x{NextEbp:X8}, stopping unwind",
+                    frame, nextEbp);
+                break;
+            }
+
+            previousEbp = ebp;
+            ebp = nextEbp;
+        }
+    }
+
+    private void LogAddressContext(string label, uint address)
+    {
+        var vma = Process.Mem.FindVmArea(address);
+        Logger.LogInformation("[FaultDiag] {Label}=0x{Addr:X8} -> {Location}",
+            label, address, FormatAddressLocation(vma, address));
+    }
+
+    private static string FormatAddressLocation(VmArea? vma, uint address)
+    {
+        if (vma == null)
+            return "<unmapped>";
+
+        var filePath = vma.File != null ? $" path={vma.File.GetBestEffortPath()}" : string.Empty;
+        return
+            $"{FormatVmaName(vma)} [0x{vma.Start:X8}-0x{vma.End:X8}) perms={vma.Perms} offset=0x{address - vma.Start:X}{filePath}";
+    }
+
+    private static string FormatVmaName(VmArea vma)
+    {
+        return string.IsNullOrWhiteSpace(vma.Name) ? "<anonymous>" : vma.Name;
+    }
+
+    internal enum SignalWaitKind
+    {
+        None,
+        WaitSet,
+        Interrupting
+    }
+
+    public readonly struct WaitToken
+    {
+        internal WaitToken(FiberTask owner, long id)
+        {
+            Owner = owner;
+            Id = id;
+        }
+
+        public FiberTask? Owner { get; }
+        public long Id { get; }
+
+        internal bool Matches(FiberTask task, long activeWaitId)
+        {
+            return ReferenceEquals(Owner, task) && Id != 0 && Id == activeWaitId;
+        }
+    }
+
+    private enum DefaultSignalAction
+    {
+        Ignore,
+        Terminate,
+        Core,
+        Stop,
+        Continue
+    }
+
+    // Single-thread scheduling model: keep using-scope syntax so future locking
+    // can be introduced centrally without changing call sites.
+    private readonly struct TaskStateScope : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+#pragma warning disable CS1998 // Async method lacks await operators
+    public async ValueTask<FiberTask> Clone(int flags, uint stackPtr, uint ptidPtr, uint tlsPtr, uint ctidPtr)
+    {
+        const int CLONE_VM = 0x00000100;
+        const int CLONE_FS = (int)LinuxConstants.CLONE_FS;
+        const int CLONE_FILES = 0x00000400;
+        const int CLONE_VFORK = 0x00004000;
+        const int CLONE_THREAD = 0x00010000;
+        const int CLONE_SETTLS = 0x00080000;
+        const int CLONE_PARENT_SETTID = (int)LinuxConstants.CLONE_PARENT_SETTID;
+        const int CLONE_CHILD_CLEARTID = 0x00200000;
+        const int CLONE_CHILD_SETTID = 0x01000000;
+
+        var cloneVm = (flags & CLONE_VM) != 0;
+        var cloneFs = (flags & CLONE_FS) != 0;
+        var cloneFiles = (flags & CLONE_FILES) != 0;
+        var cloneVfork = (flags & CLONE_VFORK) != 0;
+        var cloneThread = (flags & CLONE_THREAD) != 0;
+        var cloneSetTls = (flags & CLONE_SETTLS) != 0;
+        var cloneParentSetTid = (flags & CLONE_PARENT_SETTID) != 0;
+        var cloneChildClearTid = (flags & CLONE_CHILD_CLEARTID) != 0;
+        var cloneChildSetTid = (flags & CLONE_CHILD_SETTID) != 0;
+
+        Engine? newCpu = null;
+        FiberTask? child = null;
+        Process? createdProcess = null;
+        List<VMAManager.NativeRange>? skippedDontForkRanges = null;
+        var linkedToParentChildren = false;
+
+        try
+        {
+            if (!cloneVm)
+                Process.Mem.CaptureDirtyPrivatePages(CPU);
+
+            // 1. Clone CPU
+            // For fork/clone without CLONE_VM, preserve existing MMU external mappings in the child.
+            // We immediately re-protect MAP_PRIVATE ranges to read-only below to enforce COW semantics.
+            newCpu = CPU.Clone(cloneVm);
+
+            // 2. Resource Management
+            Process newProc;
+            if (cloneThread)
+            {
+                newProc = Process; // Shared process
+            }
+            else
+            {
+                var newMem = cloneVm ? Process.Mem : Process.Mem.Clone(out skippedDontForkRanges);
+                if (cloneVm) newMem.AddSharedRef();
+
+                if (!cloneVm)
+                {
+                    newMem.RebuildExternalMappingsFromNative(newCpu, newMem.VMAs);
+                    if (skippedDontForkRanges != null)
+                        foreach (var range in skippedDontForkRanges)
+                            newCpu.MemUnmap(range.Start, range.Length);
+
+                    foreach (var vma in Process.Mem.VMAs)
+                    {
+                        if ((vma.Flags & MapFlags.Private) == 0 || vma.Length == 0) continue;
+                        var reprotectPerms = vma.Perms & ~Protection.Write;
+                        Process.Mem.ReprotectNativeMappings(CPU, vma.Start, vma.Length, reprotectPerms,
+                            false);
+                    }
+
+                    foreach (var vma in newMem.VMAs)
+                    {
+                        if ((vma.Flags & MapFlags.Private) == 0 || vma.Length == 0) continue;
+                        var reprotectPerms = vma.Perms & ~Protection.Write;
+                        newMem.ReprotectNativeMappings(newCpu, vma.Start, vma.Length, reprotectPerms,
+                            false);
+                    }
+                }
+
+                var newSys = Process.Syscalls.Clone(newMem, cloneFiles, cloneFs);
+                // UTS namespace is shared by default in fork/clone unless CLONE_NEWUTS
+                newProc = new Process(CommonKernel.AllocateTaskId(), newMem, newSys, Process.UTS)
+                {
+                    PPID = Process.TGID,
+                    PGID = Process.PGID,
+                    SID = Process.SID,
+                    ControllingTty = Process.ControllingTty // Inherit controlling tty
+                };
+                createdProcess = newProc;
+                newProc.CopyImageFrom(Process);
+                newProc.CopyResourceLimitsFrom(Process);
+                CredentialService.CopyCredentials(Process, newProc);
+
+                // Inherit signal dispositions
+                foreach (var kv in Process.SignalActions) newProc.SignalActions[kv.Key] = kv.Value;
+
+                CommonKernel.RegisterProcess(newProc);
+            }
+
+            var newTid = cloneThread ? CommonKernel.AllocateTaskId() : newProc.TGID;
+            child = new FiberTask(newTid, newProc, newCpu, CommonKernel);
+            child.SignalMask = SignalMask;
+            child.PendingSignals = 0;
+            child.InterruptingSignal = null;
+
+            // Register engine with SyscallManager
+            if (!cloneThread)
+                child.Process.Syscalls.RegisterEngine(newCpu);
+            else
+                // Thread shares SyscallManager
+                Process.Syscalls.RegisterEngine(newCpu);
+
+            // 3. Setup Child State
+            if (stackPtr != 0) child.CPU.RegWrite(Reg.ESP, stackPtr);
+            child.CPU.RegWrite(Reg.EAX, 0); // Return 0 to child
+
+            // TLS
+            if (cloneSetTls && tlsPtr != 0)
+            {
+                var tlsBuf = new byte[4];
+                if (!child.CPU.CopyFromUser(tlsPtr + 4, tlsBuf))
+                    throw new InvalidOperationException("Failed to read TLS base from child address space");
+                var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(tlsBuf);
+                child.CPU.SetSegBase(Seg.GS, baseAddr);
+            }
+
+            // TID Pointers
+            if (cloneParentSetTid && ptidPtr != 0)
+            {
+                var tidBuf = new byte[4];
+                BinaryPrimitives.WriteInt32LittleEndian(tidBuf, child.TID);
+                if (!CPU.CopyToUser(ptidPtr, tidBuf))
+                    throw new InvalidOperationException("Failed to write TID to parent address space");
+            }
+
+            if (cloneChildSetTid && ctidPtr != 0)
+            {
+                var tidBuf = new byte[4];
+                BinaryPrimitives.WriteInt32LittleEndian(tidBuf, child.TID);
+                if (!child.CPU.CopyToUser(ctidPtr, tidBuf))
+                    throw new InvalidOperationException("Failed to write TID to child address space");
+            }
+
+            if (cloneChildClearTid) child.ChildClearTidPtr = ctidPtr;
+
+            if (!cloneThread)
+            {
+                Process.Children.Add(child.Process.TGID);
+                linkedToParentChildren = true;
+            }
+
+            if (cloneVfork)
+            {
+                // vfork semantics: parent is suspended until child calls exec or exit.
+                // The child shares the parent's address space (CLONE_VM), so the parent
+                // MUST NOT run until the child replaces the memory (exec) or exits.
+                var vforkEvent = new AsyncWaitQueue(CommonKernel);
+                child.VforkDoneEvent = vforkEvent;
+                child.VforkParent = this;
+                Logger.LogInformation(
+                    "[Clone] CLONE_VFORK: parent TID={ParentTid} suspending until child TID={ChildTid} does exec/exit",
+                    TID, child.TID);
+                await vforkEvent.WaitAsync(this);
+                Logger.LogInformation("[Clone] CLONE_VFORK: parent TID={ParentTid} resumed after child TID={ChildTid}",
+                    TID, child.TID);
+            }
+
+            return child;
+        }
+        catch
+        {
+            if (child != null)
+                try
+                {
+                    CommonKernel.DetachTask(child);
+                }
+                catch
+                {
+                    // best-effort rollback
+                }
+
+            if (!cloneThread && createdProcess != null)
+            {
+                if (linkedToParentChildren)
+                    Process.Children.Remove(createdProcess.TGID);
+
+                try
+                {
+                    CommonKernel.UnregisterProcess(createdProcess.TGID);
+                }
+                catch
+                {
+                    // best-effort rollback
+                }
+
+                try
+                {
+                    createdProcess.Syscalls.Close();
+                }
+                catch
+                {
+                    // best-effort rollback
+                }
+
+                if (newCpu != null)
+                    try
+                    {
+                        CommonKernel.TryReleaseProcessMemory(createdProcess, newCpu);
+                    }
+                    catch
+                    {
+                        // best-effort rollback
+                    }
+            }
+
+            if (newCpu != null)
+                try
+                {
+                    newCpu.Dispose();
+                }
+                catch
+                {
+                    // best-effort rollback
+                }
+
+            throw;
+        }
+    }
+
+    // Signals the parent task that a vforked child has completed its exec/exit.
+    public void SignalVforkDone()
+    {
+        if (VforkDoneEvent != null)
+        {
+            Logger.LogInformation(
+                "[SignalVforkDone] Child TID={ChildTid} signaling parent TID={ParentTid} that vfork is done",
+                TID, VforkParent?.TID);
+            VforkDoneEvent.Set();
+            VforkDoneEvent = null; // Clear the event after signaling
+            VforkParent = null; // Clear parent reference
+        }
+    }
+
+    private bool _handlingAsyncSyscall;
+
+    private ValueTask HandleAsyncSyscallAsync()
+    {
+        if (_handlingAsyncSyscall)
+        {
+            FiberTaskLog.HandleAsyncSyscallReentry(Logger);
+            return ValueTask.CompletedTask;
+        }
+
+        _handlingAsyncSyscall = true;
+        if (PendingSyscall == null)
+        {
+            _handlingAsyncSyscall = false;
+            return ValueTask.CompletedTask;
+        }
+
+        // Keep PendingSyscall set until completion is finalized on scheduler thread.
+        var pending = PendingSyscall;
+        return HandleAsyncSyscallBackgroundAsync(pending!.Value);
+    }
+
+    private async ValueTask HandleAsyncSyscallBackgroundAsync(ValueTask<int> pending)
+    {
+        var result = 0;
+        Exception? error = null;
+        try
+        {
+            result = await pending;
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+        }
+
+        CommonKernel.RunIngress(() => FinalizeAsyncSyscall(result, error), this);
+    }
+
+    // Runs on scheduler thread; all mutable task/signal/cpu state transitions happen here.
+    private void FinalizeAsyncSyscall(int result, Exception? error)
+    {
+        try
+        {
+            if (IsRetiring || Status == FiberTaskStatus.Terminated || Exited)
+            {
+                PendingSyscall = null;
+                InterruptingSignal = null;
+                _handlingAsyncSyscall = false;
+                return;
+            }
+
+            if (error != null)
+            {
+                var ret = SyscallManager.MapSyscallExceptionToErrno(error);
+                FiberTaskLog.HandleAsyncSyscallUnhandled(Logger, error, TID, PendingSyscall != null, ret);
+                CPU.RegWrite(Reg.EAX, unchecked((uint)ret));
+                PendingSyscall = null;
+                InterruptingSignal = null;
+                if (!Exited)
+                {
+                    PrepareFreshWakeAfterAsyncSyscall();
+                    CommonKernel.Schedule(this);
+                }
+
+                return;
+            }
+
+            // Handle -ERESTARTSYS: decide restart vs EINTR, deliver signal if needed.
+            // This mirrors Linux's do_signal(): we adjust registers FIRST, then set up
+            // the signal frame. The sigcontext saves the adjusted state, so sigreturn
+            // naturally does the right thing (restart or return EINTR).
+            if (result == -(int)Errno.ERESTARTSYS || result == -(int)Errno.ERESTARTNOINTR ||
+                result == -(int)Errno.ERESTARTNOHAND || result == -(int)Errno.ERESTART_RESTARTBLOCK)
+            {
+                var sig = InterruptingSignal;
+                InterruptingSignal = null;
+
+                // Fallback: if InterruptingSignal was overwritten by a second signal or
+                // not set due to timing, find the first unblocked pending signal.
+                if (!sig.HasValue)
+                    using (EnterTaskStateScope())
+                    {
+                        var unblocked = (PendingSignals | Process.PendingProcessSignals) & ~SignalMask;
+                        // SIGKILL/SIGSTOP are never blocked
+                        unblocked |= (PendingSignals | Process.PendingProcessSignals) & ((1UL << 8) | (1UL << 18));
+                        if (unblocked != 0)
+                            for (var i = 0; i < 64; i++)
+                                if ((unblocked & (1UL << i)) != 0)
+                                {
+                                    sig = i + 1;
+                                    break;
+                                }
+                    }
+
+                var executeHandler = false;
+                var hasRestart = false;
+
+                if (sig.HasValue && Process.SignalActions.TryGetValue(sig.Value, out var action))
+                    if (action.Handler > 1) // Real handler
+                    {
+                        executeHandler = true;
+
+                        if (result == -(int)Errno.ERESTARTNOINTR)
+                            hasRestart = true;
+                        else if (result == -(int)Errno.ERESTARTNOHAND || result == -(int)Errno.ERESTART_RESTARTBLOCK)
+                            hasRestart = false;
+                        else // ERESTARTSYS
+                            hasRestart = (action.Flags & LinuxConstants.SA_RESTART) != 0;
+
+                        // According to Linux signal(7), certain syscalls are NEVER restarted
+                        // regardless of SA_RESTART. FUTEX_WAIT* operations are on this list.
+                        if (IsSyscallNeverRestart(this, SyscallNr, SyscallArg1, SyscallArg2))
+                            hasRestart = false;
+                    }
+
+                if (executeHandler)
+                {
+                    // Step 1: Adjust registers BEFORE setting up signal frame.
+                    if (hasRestart)
+                    {
+                        // SA_RESTART: rewind so sigreturn will re-execute syscall
+                        CPU.Eip = SyscallEip;
+                        CPU.RegWrite(Reg.EAX, SyscallNr);
+                    }
+                    else
+                    {
+                        // No restart: userspace will see -EINTR after handler
+                        CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
+                    }
+
+                    // Step 2: Deliver the signal (sets up frame with adjusted registers)
+                    DeliverSignalForRestart(sig!.Value, Process.SignalActions[sig.Value]);
+
+                    PendingSyscall = null;
+                    PrepareFreshWakeAfterAsyncSyscall();
+                    CommonKernel.Schedule(this);
+                    return;
+                }
+
+                // NO handler executed (either SIG_IGN, SIG_DFL, or no action found).
+                // In Linux, if no handler is executed to intercept the return, the syscall is ALWAYS restarted!
+                // Fatal signals will terminate the process before userspace is reached.
+                // Stop signals will suspend the process, and when resumed, it will re-execute.
+                if (sig.HasValue &&
+                    IsStopSignal(sig.Value) &&
+                    IsSyscallInterruptedByStopSignal(this, SyscallNr, SyscallArg1))
+                {
+                    CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
+                    ConsumePendingSignalForDefaultAction(sig.Value);
+
+                    PendingSyscall = null;
+                    if (!Exited && Process.State != ProcessState.Stopped)
+                    {
+                        PrepareFreshWakeAfterAsyncSyscall();
+                        CommonKernel.Schedule(this);
+                    }
+
+                    return;
+                }
+
+                RestoreDeferredSignalMaskIfAny();
+                CPU.Eip = SyscallEip;
+                CPU.RegWrite(Reg.EAX, SyscallNr);
+
+                PendingSyscall = null;
+                PrepareFreshWakeAfterAsyncSyscall();
+                CommonKernel.Schedule(this);
+                return;
+            }
+            else
+            {
+                // Clear interrupting signal if syscall completed normally
+                InterruptingSignal = null;
+                RestoreDeferredSignalMaskIfAny();
+            }
+
+            // We safely clear PendingSyscall here since the wait is truly over
+            PendingSyscall = null;
+
+            // Resume: write result to EAX
+            CPU.RegWrite(Reg.EAX, (uint)result);
+
+            if (Process.Syscalls.Strace)
+                SyscallTracer.TraceExit(Logger, Process.Syscalls, TID, SyscallNr, result, SyscallArg1, SyscallArg2,
+                    SyscallArg3);
+
+            PrepareFreshWakeAfterAsyncSyscall();
+            // Reschedule the task
+            FiberTaskLog.HandleAsyncSyscallFinalizeScheduling(Logger, TID, Environment.CurrentManagedThreadId,
+                CommonKernel.OwnerThreadId, Status, IsReadyQueued);
+            CommonKernel.Schedule(this);
+        }
+        finally
+        {
+            FiberTaskLog.HandleAsyncSyscallLeave(Logger, TID, PendingSyscall != null, Status);
+            _handlingAsyncSyscall = false;
+        }
+    }
+
+    /// <summary>
+    ///     Determines if a syscall should never be restarted regardless of SA_RESTART.
+    ///     According to Linux signal(7), certain syscalls are never restarted:
+    ///     - futex(FUTEX_WAIT*): always returns EINTR when interrupted by signal
+    ///     - pause(): always returns EINTR
+    ///     - nanosleep(): always returns EINTR (with remaining time)
+    ///     - wait*() variants: typically return EINTR
+    ///     See: man 7 signal, "Interruption of system calls and library functions by signal handlers"
+    /// </summary>
+    private static bool IsSyscallNeverRestart(FiberTask task, uint syscallNr, uint syscallArg1, uint syscallArg2)
+    {
+        // pause syscall (x86 32-bit: 29) - always returns EINTR
+        if (syscallNr == X86SyscallNumbers.pause)
+            return true;
+
+        if (syscallNr == X86SyscallNumbers.rt_sigsuspend)
+            return true;
+
+        // nanosleep syscall (x86 32-bit: 162) - always returns EINTR with remaining time
+        if (syscallNr == X86SyscallNumbers.nanosleep)
+            return true;
+
+        // clock_nanosleep syscall (x86 32-bit: 267)
+        if (syscallNr == X86SyscallNumbers.clock_nanosleep)
+            return true;
+
+        // Linux signal(7) and FUTEX_WAIT(2const): FUTEX_WAIT-style sleeps are not restarted.
+        if (syscallNr == X86SyscallNumbers.futex)
+        {
+            var futexOp = (int)syscallArg2 & 0x7F;
+            if (futexOp == LinuxConstants.FUTEX_WAIT ||
+                futexOp == LinuxConstants.FUTEX_WAIT_BITSET ||
+                futexOp == LinuxConstants.FUTEX_WAIT_REQUEUE_PI)
+                return true;
+        }
+
+        // epoll_wait (x86 32-bit: 256), epoll_pwait (319), epoll_pwait2 (441)
+        if (syscallNr == X86SyscallNumbers.epoll_wait ||
+            syscallNr == X86SyscallNumbers.epoll_pwait ||
+            syscallNr == X86SyscallNumbers.epoll_pwait2)
+            return true;
+
+        // ppoll (x86 32-bit: 309), ppoll_time64 (414)
+        if (syscallNr == X86SyscallNumbers.ppoll ||
+            syscallNr == X86SyscallNumbers.ppoll_time64)
+            return true;
+
+        // pselect6 (x86 32-bit: 308), pselect6_time64 (413)
+        if (syscallNr == X86SyscallNumbers.pselect6 ||
+            syscallNr == X86SyscallNumbers.pselect6_time64)
+            return true;
+
+        // poll (168)
+        if (syscallNr == X86SyscallNumbers.poll)
+            return true;
+
+        // select (82), _newselect (142)
+        if (syscallNr == X86SyscallNumbers.select ||
+            syscallNr == X86SyscallNumbers._newselect)
+            return true;
+
+        // semop(2) and semtimedop(2) waits are never automatically restarted.
+        if (syscallNr == X86SyscallNumbers.semop || syscallNr == X86SyscallNumbers.semtimedop_time64)
+            return true;
+
+        if (HasSocketTimeoutForCurrentSyscall(task, syscallNr, syscallArg1))
+            return true;
+
+        return false;
+    }
+
+    private static bool IsSyscallInterruptedByStopSignal(FiberTask task, uint syscallNr, uint syscallArg1)
+    {
+        if (syscallNr == X86SyscallNumbers.epoll_wait ||
+            syscallNr == X86SyscallNumbers.epoll_pwait ||
+            syscallNr == X86SyscallNumbers.epoll_pwait2 ||
+            syscallNr == X86SyscallNumbers.semop)
+            return true;
+
+        return HasSocketTimeoutForCurrentSyscall(task, syscallNr, syscallArg1);
+    }
+
+    private static bool HasSocketTimeoutForCurrentSyscall(FiberTask task, uint syscallNr, uint syscallArg1)
+    {
+        if (!TryResolveSocketSyscall(task, syscallNr, syscallArg1, out var fd, out var kind))
+            return false;
+
+        var file = task.Process.Syscalls.GetFD(fd);
+        if (file?.OpenedInode is not HostSocketInode hostSocket)
+            return false;
+
+        return kind switch
+        {
+            SocketInterruptionKind.Receive => hostSocket.HasReceiveTimeout,
+            SocketInterruptionKind.Send => hostSocket.HasSendTimeout,
+            _ => false
+        };
+    }
+
+    private static bool TryResolveSocketSyscall(FiberTask task, uint syscallNr, uint syscallArg1, out int fd,
+        out SocketInterruptionKind kind)
+    {
+        fd = -1;
+        kind = SocketInterruptionKind.None;
+
+        switch (syscallNr)
+        {
+            case X86SyscallNumbers.connect:
+                fd = (int)syscallArg1;
+                kind = SocketInterruptionKind.Send;
+                return true;
+            case X86SyscallNumbers.accept4:
+                fd = (int)syscallArg1;
+                kind = SocketInterruptionKind.Receive;
+                return true;
+            case X86SyscallNumbers.sendto:
+            case X86SyscallNumbers.sendmsg:
+            case X86SyscallNumbers.sendmmsg:
+                fd = (int)syscallArg1;
+                kind = SocketInterruptionKind.Send;
+                return true;
+            case X86SyscallNumbers.recvfrom:
+            case X86SyscallNumbers.recvmsg:
+            case X86SyscallNumbers.recvmmsg:
+                fd = (int)syscallArg1;
+                kind = SocketInterruptionKind.Receive;
+                return true;
+            case X86SyscallNumbers.socketcall:
+                return TryResolveSocketcall(task, (int)syscallArg1, out fd, out kind);
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryResolveSocketcall(FiberTask task, int subcall, out int fd, out SocketInterruptionKind kind)
+    {
+        fd = -1;
+        kind = SocketInterruptionKind.None;
+
+        Span<byte> buf = stackalloc byte[4];
+        if (!task.CPU.CopyFromUser(task.SyscallArg2, buf))
+            return false;
+        fd = BinaryPrimitives.ReadInt32LittleEndian(buf);
+
+        kind = subcall switch
+        {
+            3 => SocketInterruptionKind.Send, // connect
+            5 => SocketInterruptionKind.Receive, // accept
+            9 => SocketInterruptionKind.Send, // send
+            10 => SocketInterruptionKind.Receive, // recv
+            11 => SocketInterruptionKind.Send, // sendto
+            12 => SocketInterruptionKind.Receive, // recvfrom
+            16 => SocketInterruptionKind.Send, // sendmsg
+            17 => SocketInterruptionKind.Receive, // recvmsg
+            18 => SocketInterruptionKind.Receive, // accept4
+            19 => SocketInterruptionKind.Receive, // recvmmsg
+            20 => SocketInterruptionKind.Send, // sendmmsg
+            _ => SocketInterruptionKind.None
+        };
+
+        return kind != SocketInterruptionKind.None;
+    }
+
+    private void ConsumePendingSignalForDefaultAction(int sig)
+    {
+        using (EnterTaskStateScope())
+        {
+            var target = ResolvePendingTargetUnsafe(sig);
+            if (target == PendingSignalTarget.Process)
+                Process.DequeueProcessSignalUnsafe(sig);
+            else
+                DequeueSignalUnsafe(sig);
+        }
+
+        ApplyDefaultSignalAction(sig, GetDefaultSignalAction(sig));
+    }
+
+    private static bool IsStopSignal(int sig)
+    {
+        return sig == (int)Signal.SIGSTOP ||
+               sig == (int)Signal.SIGTSTP ||
+               sig == (int)Signal.SIGTTIN ||
+               sig == (int)Signal.SIGTTOU;
+    }
+
+    private enum SocketInterruptionKind
+    {
+        None,
+        Receive,
+        Send
+    }
+
+    private void PrepareFreshWakeAfterAsyncSyscall()
+    {
+        ExecutionMode = TaskExecutionMode.RunningGuest;
+        Status = FiberTaskStatus.Ready;
+        // Async completion is a real runnable transition. Clear any stale reservation state so
+        // the scheduler must recreate a concrete run-queue entry for this wakeup.
+        IsReadyQueued = false;
+    }
+
+    private void StorePendingAsyncSyscallCompletion(int result, Exception? error)
+    {
+        lock (_asyncSyscallCompletionGate)
+        {
+            _pendingAsyncSyscallResult = result;
+            _pendingAsyncSyscallError = error;
+            _hasPendingAsyncSyscallCompletion = true;
+        }
+    }
+
+    private bool HasPendingAsyncSyscallCompletion()
+    {
+        lock (_asyncSyscallCompletionGate)
+        {
+            return _hasPendingAsyncSyscallCompletion;
+        }
+    }
+
+    private bool TryTakePendingAsyncSyscallCompletion(out int result, out Exception? error)
+    {
+        lock (_asyncSyscallCompletionGate)
+        {
+            if (!_hasPendingAsyncSyscallCompletion)
+            {
+                result = 0;
+                error = null;
+                return false;
+            }
+
+            result = _pendingAsyncSyscallResult;
+            error = _pendingAsyncSyscallError;
+            _pendingAsyncSyscallResult = 0;
+            _pendingAsyncSyscallError = null;
+            _hasPendingAsyncSyscallCompletion = false;
+            return true;
+        }
+    }
+
+    public void ExitRobustList()
+    {
+        if (RobustListHead == 0) return;
+
+        var head = RobustListHead;
+        var limit = 2048; // ROBUST_LIST_LIMIT
+
+        // read futex_offset
+        var futexOffsetBuf = new byte[4];
+        if (!CPU.CopyFromUser(head + 4, futexOffsetBuf)) return;
+        var futexOffset = BinaryPrimitives.ReadInt32LittleEndian(futexOffsetBuf);
+
+        // read list_op_pending
+        var pendingBuf = new byte[4];
+        if (!CPU.CopyFromUser(head + 8, pendingBuf)) return;
+        var pendingObj = BinaryPrimitives.ReadUInt32LittleEndian(pendingBuf);
+
+        // read list next
+        var entryBuf = new byte[4];
+        if (!CPU.CopyFromUser(head, entryBuf)) return;
+        var entry = BinaryPrimitives.ReadUInt32LittleEndian(entryBuf);
+
+        Logger.LogTrace("[ExitRobustList] FutexOffset={Offset} PendingObj={Pending:X8} FirstEntry={Entry:X8}",
+            futexOffset, pendingObj, entry);
+
+        var sm = Process.Syscalls;
+
+        while (entry != head && entry != 0)
+        {
+            var nextBuf = new byte[4];
+            var rc = CPU.CopyFromUser(entry, nextBuf);
+            if (!rc) break; // Error reading next pointer
+            var nextEntry = BinaryPrimitives.ReadUInt32LittleEndian(nextBuf);
+
+            if (entry != pendingObj) HandleFutexDeath(sm, (uint)(entry + futexOffset), false);
+
+            entry = nextEntry;
+            if (--limit == 0) break;
+        }
+
+        if (pendingObj != 0)
+        {
+            Logger.LogTrace("[ExitRobustList] Handling death for pending {Uaddr:X8}", pendingObj + futexOffset);
+            HandleFutexDeath(sm, (uint)(pendingObj + futexOffset), true);
+        }
+    }
+
+    private void HandleFutexDeath(SyscallManager sm, uint uaddr, bool pendingOp)
+    {
+        var uvalBuf = new byte[4];
+        if (!CPU.CopyFromUser(uaddr, uvalBuf)) return;
+        var uval = BinaryPrimitives.ReadUInt32LittleEndian(uvalBuf);
+
+        var owner = uval & LinuxConstants.FUTEX_TID_MASK;
+
+        // If this is a pending op, and no one owns it, we might just wake it
+        if (pendingOp && owner == 0)
+        {
+            sm.WakeFutexAddress(CPU, uaddr, 1);
+            return;
+        }
+
+        if (owner != TID) return;
+
+        var mval = (uval & LinuxConstants.FUTEX_WAITERS) | LinuxConstants.FUTEX_OWNER_DIED;
+
+        BinaryPrimitives.WriteUInt32LittleEndian(uvalBuf, mval);
+        if (!CPU.CopyToUser(uaddr, uvalBuf)) return;
+
+        if ((uval & LinuxConstants.FUTEX_WAITERS) != 0) sm.WakeFutexAddress(CPU, uaddr, 1);
+    }
+
+    public void ClearChildTidAndWake()
+    {
+        var clearTidPtr = ChildClearTidPtr;
+        if (clearTidPtr == 0) return;
+
+        // One-shot semantics: prevent duplicate wake attempts across exit paths.
+        ChildClearTidPtr = 0;
+
+        var zero = new byte[4];
+        if (!CPU.CopyToUser(clearTidPtr, zero)) return;
+
+        // Wake private-key waiters.
+        Process.Syscalls.WakeFutexAddress(CPU, clearTidPtr, 1);
+    }
+}

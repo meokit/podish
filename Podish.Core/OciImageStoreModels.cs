@@ -1,0 +1,22 @@
+namespace Podish.Core;
+
+public sealed record OciStoredLayer(
+    string Digest,
+    string MediaType,
+    long Size,
+    string BlobPath,
+    string IndexPath);
+
+public sealed record OciStoredImage(
+    string ImageReference,
+    string Registry,
+    string Repository,
+    string Tag,
+    string ManifestDigest,
+    string StoreDirectory,
+    IReadOnlyList<OciStoredLayer> Layers,
+    string? ConfigUser = null,
+    string[]? ConfigEntrypoint = null,
+    string[]? ConfigCmd = null,
+    string[]? ConfigEnv = null,
+    string? ConfigWorkingDir = null);

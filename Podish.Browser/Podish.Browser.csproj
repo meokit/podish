@@ -1,0 +1,130 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <OutputType>Exe</OutputType>
+        <RootNamespace>Podish.Browser</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
+        <RunAOTCompilation>true</RunAOTCompilation>
+        <WasmBuildNative>true</WasmBuildNative>
+        <WasmEnableThreads>false</WasmEnableThreads>
+        <EmccInitialHeapSize>536870912</EmccInitialHeapSize>
+        <WasmNumAbortedWorkersToWarmup>0</WasmNumAbortedWorkersToWarmup>
+        <WasmMaxThreads>4</WasmMaxThreads>
+        <WasmRunWasmOpt>false</WasmRunWasmOpt>
+        <EmccLinkOptimizationFlag>-O0</EmccLinkOptimizationFlag>
+        <WasmLinkOptimizationFlag>-O0</WasmLinkOptimizationFlag>
+        <WasmBitcodeCompileOptimizationFlag>-O0</WasmBitcodeCompileOptimizationFlag>
+        <FiberishForceBrowserWasm>true</FiberishForceBrowserWasm>
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <PackageId>Podish.Browser</PackageId>
+        <PublishTrimmed>true</PublishTrimmed>
+        <TrimMode>full</TrimMode>
+        <WasmStripILAfterAOT>true</WasmStripILAfterAOT>
+        <WasmNativeStrip>true</WasmNativeStrip>
+        <RunManualWasmOptBeforeBundle>true</RunManualWasmOptBeforeBundle>
+        <ManualWasmSafetyLevel>safe3</ManualWasmSafetyLevel>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(Configuration)' == 'RelWithDebInfo'">
+        <EmccLinkOptimizationFlag>-O0</EmccLinkOptimizationFlag>
+        <WasmLinkOptimizationFlag>-O0</WasmLinkOptimizationFlag>
+        <WasmBitcodeCompileOptimizationFlag>-O0</WasmBitcodeCompileOptimizationFlag>
+        <RunManualWasmOptBeforeBundle>false</RunManualWasmOptBeforeBundle>
+        <WasmNativeStrip>false</WasmNativeStrip>
+        <WasmStripILAfterAOT>false</WasmStripILAfterAOT>
+        <DebugType>portable</DebugType>
+        <DebugSymbols>true</DebugSymbols>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <WasmExtraConfig Include="stackSize" Value="8388608"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0"/>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../Podish.Core/Podish.Core.csproj">
+            <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+            <AdditionalProperties>FiberishForceBrowserWasm=true;WasmBuildNative=true</AdditionalProperties>
+        </ProjectReference>
+    </ItemGroup>
+
+    <ItemGroup>
+        <TrimmerRootAssembly Include="Podish.Core" RootMode="all"/>
+        <TrimmerRootAssembly Include="Fiberish.Core" RootMode="all"/>
+        <TrimmerRootAssembly Include="Fiberish.X86" RootMode="all"/>
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+        <Reference Include="Podish.Core">
+            <HintPath>$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/Podish.Core.dll</HintPath>
+            <Private>true</Private>
+        </Reference>
+        <Reference Include="Fiberish.Core">
+            <HintPath>$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/Fiberish.Core.dll</HintPath>
+            <Private>true</Private>
+        </Reference>
+        <Reference Include="Fiberish.X86">
+            <HintPath>$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/Fiberish.X86.dll</HintPath>
+            <Private>true</Private>
+        </Reference>
+        <NativeFileReference Include="$(MSBuildProjectDirectory)/../Fiberish.X86/build_native/browser-wasm/libfibercpu.a"/>
+    </ItemGroup>
+
+    <Target Name="CopyBrowserSpecificProjectOutputs" AfterTargets="Build"
+            Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+        <ItemGroup>
+            <BrowserSpecificManaged Include="$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/Podish.Core.dll"/>
+            <BrowserSpecificManaged Include="$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/Fiberish.Core.dll"/>
+            <BrowserSpecificManaged Include="$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/Fiberish.X86.dll"/>
+            <BrowserSpecificSymbols Include="$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/Podish.Core.pdb" Condition="Exists('$(MSBuildProjectDirectory)/../Podish.Core/bin/$(Configuration)/$(TargetFramework)/Podish.Core.pdb')"/>
+            <BrowserSpecificSymbols Include="$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/Fiberish.Core.pdb" Condition="Exists('$(MSBuildProjectDirectory)/../Fiberish.Core/bin/$(Configuration)/$(TargetFramework)/Fiberish.Core.pdb')"/>
+            <BrowserSpecificSymbols Include="$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/Fiberish.X86.pdb" Condition="Exists('$(MSBuildProjectDirectory)/../Fiberish.X86/bin/$(Configuration)/$(TargetFramework)/Fiberish.X86.pdb')"/>
+        </ItemGroup>
+
+        <Copy SourceFiles="@(BrowserSpecificManaged)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="false"/>
+        <Copy SourceFiles="@(BrowserSpecificSymbols)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="false"/>
+    </Target>
+
+    <Target Name="FrontendBuild" BeforeTargets="Build"
+            Condition="'$(Configuration)' == 'Release' Or '$(Configuration)' == 'RelWithDebInfo'">
+        <Message Importance="high" Text="Building frontend with Vite..."/>
+        <Exec WorkingDirectory="frontend" Command="npm install"/>
+        <Exec WorkingDirectory="frontend" Command="npm run build"/>
+    </Target>
+
+    <Target Name="CleanPublishWwwrootBeforePublish"
+            BeforeTargets="ComputeFilesToPublish"
+            Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+        <PropertyGroup>
+            <_PublishWwwrootDir>$([MSBuild]::NormalizePath('$(PublishDir)', 'wwwroot'))</_PublishWwwrootDir>
+            <_ProjectWwwrootDir>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', 'wwwroot'))</_ProjectWwwrootDir>
+        </PropertyGroup>
+        <Message Importance="high" Text="Cleaning publish wwwroot at $(_PublishWwwrootDir) before publish..."
+                 Condition="'$(_PublishWwwrootDir)' != '' and '$(_PublishWwwrootDir)' != '$(_ProjectWwwrootDir)' and Exists('$(_PublishWwwrootDir)')"/>
+        <RemoveDir Directories="$(_PublishWwwrootDir)"
+                   Condition="'$(_PublishWwwrootDir)' != '' and '$(_PublishWwwrootDir)' != '$(_ProjectWwwrootDir)' and Exists('$(_PublishWwwrootDir)')"/>
+    </Target>
+
+    <Target Name="ManualBrowserWasmOptBeforeBundle"
+            AfterTargets="_BrowserWasmLinkDotNet"
+            BeforeTargets="_CompleteWasmBuildNative"
+            Condition="'$(RuntimeIdentifier)' == 'browser-wasm' and '$(RunManualWasmOptBeforeBundle)' == 'true'">
+        <PropertyGroup>
+            <ManualWasmOptPath Condition="'$(ManualWasmOptPath)' == '' and '$(EmscriptenSdkToolsPath)' != ''">$([MSBuild]::NormalizePath('$(EmscriptenSdkToolsPath)', 'bin', 'wasm-opt$(_ExeExt)'))</ManualWasmOptPath>
+        </PropertyGroup>
+        <Message Importance="high" Text="Running wasm-opt $(ManualWasmSafetyLevel) on browser wasm before bundle hashing..."/>
+                <Error Condition="'$(ManualWasmOptPath)' == '' or !Exists('$(ManualWasmOptPath)')"
+                             Text="Could not resolve wasm-opt. EmscriptenSdkToolsPath=$(EmscriptenSdkToolsPath), ManualWasmOptPath=$(ManualWasmOptPath)" />
+                <Exec WorkingDirectory="$(MSBuildProjectDirectory)"
+                            Command="node frontend/scripts/optimize-wasm.js --input-wasm &quot;$(_WasmIntermediateOutputPath)dotnet.native.wasm&quot; --wasm-opt &quot;$(ManualWasmOptPath)&quot; --safety-level $(ManualWasmSafetyLevel)"/>
+    </Target>
+
+</Project>

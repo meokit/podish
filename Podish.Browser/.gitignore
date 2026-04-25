@@ -1,0 +1,8 @@
+# Ignore build output
+wwwroot/
+dist/
+node_modules/
+frontend/dist/
+frontend/node_modules/
+rootfs.tar.gz
+frontend/public/rootfs/

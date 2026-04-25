@@ -1,0 +1,1493 @@
+using System.Runtime.InteropServices;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Text;
+using System.Text.Json;
+using Fiberish.Core;
+using Fiberish.Core.Net;
+using Fiberish.Core.VFS.TTY;
+using Fiberish.Memory;
+using Fiberish.Native;
+using Fiberish.Syscalls;
+using Fiberish.VFS;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Win32.SafeHandles;
+using Podish.Core.Networking;
+
+namespace Podish.Core;
+
+public sealed class ContainerRunRequest
+{
+    public const string PulseServerSocketPath = "/run/pulse/native";
+    public const string PulseServerEnvVar = "PULSE_SERVER";
+    public const string PulseRuntimePathEnvVar = "PULSE_RUNTIME_PATH";
+    public const string WaylandDisplaySocketPath = "/run/wayland-0";
+    public const string WaylandDisplayEnvVar = "WAYLAND_DISPLAY";
+    public const string XdgRuntimeDirEnvVar = "XDG_RUNTIME_DIR";
+
+    public required string RootfsPath { get; init; }
+    public Func<DeviceNumberManager, SuperBlock>? RootFileSystemFactory { get; init; }
+    public string Hostname { get; init; } = string.Empty;
+    public string? ContainerName { get; init; }
+    public NetworkMode NetworkMode { get; init; } = NetworkMode.Host;
+    public string Exe { get; init; } = string.Empty;
+    public string[] ExeArgs { get; init; } = Array.Empty<string>();
+    public string? WorkingDir { get; init; }
+    public string[] Volumes { get; init; } = Array.Empty<string>();
+    public string[] GuestEnvs { get; init; } = Array.Empty<string>();
+    public string[] DnsServers { get; init; } = Array.Empty<string>();
+    public string? User { get; init; }
+    public bool RootfsMode { get; init; }
+    public bool UseTty { get; init; }
+    public bool Strace { get; init; }
+    public bool UseOverlay { get; init; }
+    public ContainerFileSystemBackend FileSystemBackend { get; init; } = ContainerFileSystemBackend.Hostfs;
+    public required string ContainerId { get; init; }
+    public required string Image { get; init; }
+    public required string ContainerDir { get; init; }
+    public ContainerLogDriver LogDriver { get; init; } = ContainerLogDriver.JsonFile;
+    public required ContainerEventStore EventStore { get; init; }
+    public PodishTerminalBridge? TerminalBridge { get; init; }
+    public ContainerProcessController? ProcessController { get; init; }
+    public bool EnableHostConsoleInput { get; init; } = true;
+    public IReadOnlyList<PublishedPortSpec> PublishedPorts { get; init; } = Array.Empty<PublishedPortSpec>();
+    public bool UseEngineInit { get; init; }
+    public long? MemoryQuotaBytes { get; init; }
+    public string? GuestStatsExportDir { get; init; }
+    public bool EnablePulseServer { get; init; }
+    public bool EnableWaylandServer { get; init; }
+    public int WaylandDesktopWidth { get; init; } = 1024;
+    public int WaylandDesktopHeight { get; init; } = 768;
+    public ushort? TerminalRows { get; init; }
+    public ushort? TerminalCols { get; init; }
+    public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
+    internal Action<SuperBlock>? TestSuperBlockObserver { get; init; }
+}
+
+public enum ContainerFileSystemBackend
+{
+    Hostfs,
+    Tmpfs,
+    Silkfs,
+    OverlayTmpfs,
+    OverlaySilkfs
+}
+
+public sealed class ContainerRuntimeService
+{
+    private readonly ILogger _logger;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly Func<IPortForwardManager> _portForwardManagerFactory;
+    private IPortForwardManager? _portForwardManager;
+
+    public ContainerRuntimeService(ILogger logger, ILoggerFactory loggerFactory)
+        : this(logger, loggerFactory, () => new PortForwardManager(loggerFactory))
+    {
+    }
+
+    internal ContainerRuntimeService(ILogger logger, ILoggerFactory loggerFactory,
+        Func<IPortForwardManager> portForwardManagerFactory)
+    {
+        _logger = logger ?? NullLogger.Instance;
+        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _portForwardManagerFactory = portForwardManagerFactory
+                                     ?? throw new ArgumentNullException(nameof(portForwardManagerFactory));
+    }
+
+    public async Task<int> RunAsync(ContainerRunRequest request)
+    {
+        await Task.CompletedTask;
+        using var memoryContext = new MemoryRuntimeContext();
+
+        var scheduler = new KernelScheduler();
+        scheduler.LoggerFactory = _loggerFactory;
+
+        TtyDiscipline? ttyDiag = null;
+        KernelRuntime? runtime = null;
+        FileStream? stdinStream = null;
+        CancellationTokenSource? inputCts = null;
+        Task? inputTask = null;
+        PosixSignalRegistration? sigwinch = null;
+        ITtyDriver? driver = null;
+        EventHandler? processExitHandler = null;
+        ConsoleCancelEventHandler? cancelKeyPressHandler = null;
+        var rawModeEnabled = false;
+        var isInteractive = request.UseTty && request.EnableHostConsoleInput && !Console.IsInputRedirected;
+
+        using var logSink = CreateContainerLogSink(request.LogDriver, request.ContainerDir, _loggerFactory);
+        var publishedPorts = request.PublishedPorts ?? Array.Empty<PublishedPortSpec>();
+
+        // Always create a driver + discipline so all I/O routes through ITtyDriver.
+        // In TTY mode this provides line discipline, echo, signals, etc.
+        // In non-TTY mode it acts as a passthrough to the driver's Write().
+        driver = request.TerminalBridge != null
+            ? new BridgeTtyDriver(request.TerminalBridge, logSink, scheduler)
+            : new ConsoleTtyDriver(logSink);
+        var broadcaster = new SchedulerSignalBroadcaster(scheduler);
+        ttyDiag = new TtyDiscipline(driver, broadcaster, _loggerFactory.CreateLogger<TtyDiscipline>(), scheduler);
+        if (driver is ConsoleTtyDriver consoleDriver)
+            consoleDriver.BindTty(ttyDiag);
+        if (request.TerminalBridge != null)
+            request.TerminalBridge.BindTty(ttyDiag);
+
+        if (isInteractive)
+        {
+            var tty = ttyDiag!;
+            stdinStream = new FileStream(new SafeFileHandle(0, false), FileAccess.Read);
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) || RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                var res = HostTermios.EnableRawMode(0);
+                if (res != 0) Console.Error.WriteLine($"Warning: Failed to enable raw mode: {res}");
+                rawModeEnabled = res == 0;
+
+                void RawModeCleanup()
+                {
+                    if (!rawModeEnabled)
+                        return;
+
+                    try
+                    {
+                        HostTermios.DisableRawMode(0);
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                // Keep a last-resort restore path for abrupt process termination.
+                processExitHandler = (_, _) => RawModeCleanup();
+                cancelKeyPressHandler = (_, _) =>
+                {
+                    RawModeCleanup();
+                    // Don't cancel — let the default SIGINT handling terminate the process.
+                };
+                AppDomain.CurrentDomain.ProcessExit += processExitHandler;
+                Console.CancelKeyPress += cancelKeyPressHandler;
+            }
+
+            inputCts = new CancellationTokenSource();
+            inputTask = Task.Run(() => InputLoop(tty, stdinStream, inputCts.Token));
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                try
+                {
+                    if (!Console.IsOutputRedirected)
+                        tty.InitializeWindowSize((ushort)Console.WindowHeight, (ushort)Console.WindowWidth);
+
+
+                    sigwinch = PosixSignalRegistration.Create(PosixSignal.SIGWINCH, context =>
+                    {
+                        context.Cancel = true;
+                        try
+                        {
+                            if (!Console.IsOutputRedirected)
+                                tty.Device.EnqueueResize(Console.WindowHeight, Console.WindowWidth);
+                        }
+                        catch
+                        {
+                        }
+                    });
+                }
+                catch
+                {
+                }
+        }
+
+        INetworkBackend? networkBackend = null;
+        ContainerNetworkContext? networkContext = null;
+        var effectiveNetworkMode = OperatingSystem.IsBrowser() && request.NetworkMode == NetworkMode.Private
+            ? NetworkMode.Host
+            : request.NetworkMode;
+        var actualExe = string.IsNullOrEmpty(request.Exe)
+            ? ContainerLaunchSpecResolver.DefaultShellPath
+            : request.Exe;
+        var initProcessStarted = false;
+        var startupPhase = "bootstrap";
+        try
+        {
+            if (request.RootFileSystemFactory == null && !Directory.Exists(request.RootfsPath))
+            {
+                Console.Error.WriteLine($"[Podish Error] RootFS path not found: {request.RootfsPath}");
+                request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit",
+                    request.ContainerId,
+                    request.Image, 1,
+                    "rootfs not found"));
+                return 1;
+            }
+
+            if (request.MemoryQuotaBytes is { } quotaBytes &&
+                quotaBytes < ContainerMemoryLimits.MinimumMemoryQuotaBytes)
+            {
+                var message =
+                    $"memory quota must be at least {ContainerMemoryLimits.MinimumMemoryQuotaBytes / (1024 * 1024)}M";
+                Console.Error.WriteLine($"[Podish Error] {message}");
+                request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit",
+                    request.ContainerId,
+                    request.Image, 1,
+                    message));
+                return 1;
+            }
+
+            if (request.MemoryQuotaBytes.HasValue)
+                memoryContext.MemoryQuotaBytes = request.MemoryQuotaBytes.Value;
+
+            runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag, memoryContext);
+            scheduler.Runtime = runtime;
+            runtime.EnableGuestStatsCollection = !string.IsNullOrWhiteSpace(request.GuestStatsExportDir);
+
+            if (effectiveNetworkMode == NetworkMode.Private)
+                networkBackend = new PrivateNetworkBackend(new DummySwitch());
+            else
+                networkBackend = new HostNetworkBackend();
+
+            if (effectiveNetworkMode == NetworkMode.Private)
+            {
+                networkContext = networkBackend.CreateContainerNetwork(new ContainerNetworkSpec
+                    { ContainerId = request.ContainerId });
+                if (publishedPorts.Count > 0)
+                {
+                    _portForwardManager ??= _portForwardManagerFactory();
+                    _portForwardManager.Start(networkContext, publishedPorts);
+                }
+
+                runtime.Syscalls.SetPrivateNetNamespace(networkContext.SharedNamespace);
+            }
+
+            runtime.Syscalls.NetworkMode = effectiveNetworkMode;
+            var fsBackend = request.RootFileSystemFactory != null
+                ? ContainerFileSystemBackend.Hostfs
+                : request.FileSystemBackend == ContainerFileSystemBackend.Hostfs && request.UseOverlay
+                    ? ContainerFileSystemBackend.OverlaySilkfs
+                    : request.FileSystemBackend;
+            if (fsBackend is ContainerFileSystemBackend.OverlaySilkfs or ContainerFileSystemBackend.OverlayTmpfs)
+            {
+                if (!TryCreateLayerLower(runtime.DeviceNumbers, request.RootfsPath, out var layerLowerSb,
+                        out var layerProvider,
+                        out var layerError))
+                {
+                    Console.Error.WriteLine($"[Podish Error] {layerError}");
+                    request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit",
+                        request.ContainerId, request.Image, 1,
+                        layerError));
+                    return 1;
+                }
+
+                using var _ = layerProvider;
+                var overlayType = FileSystemRegistry.Get("overlay")
+                                  ?? throw new InvalidOperationException("overlay is not registered");
+                var (upperSb, upperDirName) = CreateOverlayUpper(runtime, request, fsBackend);
+                request.TestSuperBlockObserver?.Invoke(upperSb);
+                var overlaySb = overlayType.CreateFileSystem(runtime.DeviceNumbers).ReadSuper(overlayType, 0,
+                    "root_overlay",
+                    new OverlayMountOptions
+                    {
+                        Lower = layerLowerSb!,
+                        Upper = upperSb
+                    });
+                runtime.Syscalls.MountRoot(overlaySb, new SyscallManager.RootMountOptions
+                {
+                    Source = "overlay",
+                    FsType = "overlay",
+                    Options = $"rw,relatime,lowerdir=/,upperdir=/{upperDirName},workdir=/work"
+                });
+                runtime.Syscalls.MountStandardDev(ttyDiag);
+                runtime.Syscalls.MountStandardProc();
+                runtime.Syscalls.MountStandardShm();
+                runtime.Syscalls.CreateStandardTmp();
+            }
+            else
+            {
+                SuperBlock rootSb;
+                string fsType;
+                string source;
+
+                if (request.RootFileSystemFactory != null)
+                {
+                    rootSb = request.RootFileSystemFactory(runtime.DeviceNumbers);
+                    fsType = rootSb.Type?.Name ?? "tmpfs";
+                    source = request.RootfsPath;
+                }
+                else if (fsBackend is ContainerFileSystemBackend.Tmpfs or ContainerFileSystemBackend.Silkfs)
+                {
+                    rootSb = CreateMaterializedImageRoot(runtime, request, fsBackend);
+                    fsType = rootSb.Type?.Name ?? fsBackend.ToString().ToLowerInvariant();
+                    source = request.RootfsPath;
+                }
+                else
+                {
+                    var hostType = FileSystemRegistry.Get("hostfs")
+                                   ?? throw new InvalidOperationException("hostfs is not registered");
+                    rootSb = hostType.CreateFileSystem(runtime.DeviceNumbers)
+                        .ReadSuper(hostType, 0, request.RootfsPath, null);
+                    fsType = "hostfs";
+                    source = request.RootfsPath;
+                }
+
+                request.TestSuperBlockObserver?.Invoke(rootSb);
+                runtime.Syscalls.MountRoot(rootSb, new SyscallManager.RootMountOptions
+                {
+                    Source = source,
+                    FsType = fsType,
+                    Options = "rw,relatime"
+                });
+                runtime.Syscalls.MountStandardDev(ttyDiag);
+                runtime.Syscalls.MountStandardProc();
+                runtime.Syscalls.MountStandardShm();
+            }
+
+            foreach (var vol in request.Volumes)
+            {
+                var parts = vol.Split(':');
+                if (parts.Length < 2)
+                {
+                    _logger.LogWarning("Invalid volume format: {Volume}. Expected /host/path:/guest/path[:ro]", vol);
+                    continue;
+                }
+
+                var hostPath = parts[0];
+                var guestPath = parts[1];
+                var readOnly = parts.Length > 2 && parts[2] == "ro";
+
+                if (!Directory.Exists(hostPath) && !File.Exists(hostPath))
+                {
+                    _logger.LogWarning("Host path does not exist, skipping mount: {HostPath}", hostPath);
+                    continue;
+                }
+
+                var hostInfo = new DirectoryInfo(hostPath);
+                if (hostInfo.LinkTarget != null)
+                {
+                    var resolved = hostInfo.ResolveLinkTarget(true);
+                    if (resolved != null)
+                        hostPath = resolved.FullName;
+                }
+
+                _logger.LogInformation("Mounting {HostPath} at {GuestPath} (ro: {ReadOnly})", hostPath, guestPath,
+                    readOnly);
+                runtime.Syscalls.MountHostfs(hostPath, guestPath, readOnly);
+            }
+
+            try
+            {
+                _logger.LogInformation("Building hidden config tmpfs for generated network configuration.");
+                var configMountHandle = new MountFile(runtime.Syscalls.CreateDetachedTmpfsMount("podish-config"));
+                var configMount = configMountHandle.Mount;
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(request.Hostname))
+                    {
+                        runtime.Syscalls.WriteFileInDetachedMount(
+                            configMount!,
+                            "hostname",
+                            Encoding.UTF8.GetBytes(BuildHostnameFileContent(request.Hostname)));
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(request.Hostname))
+                    {
+                        runtime.Syscalls.WriteFileInDetachedMount(
+                            configMount!,
+                            "hosts",
+                            Encoding.UTF8.GetBytes(BuildHostsFileContent(request.Hostname, request.ContainerName)));
+                    }
+
+                    var resolvConf = BuildResolvConfContent(request.DnsServers);
+                    runtime.Syscalls.WriteFileInDetachedMount(
+                        configMount!,
+                        "resolv.conf",
+                        Encoding.UTF8.GetBytes(resolvConf));
+
+                    _logger.LogInformation("Bind-mounting generated network config into /etc/*.");
+                    if (!string.IsNullOrWhiteSpace(request.Hostname))
+                        runtime.Syscalls.BindMountSubtree(configMount!, "hostname", "/etc/hostname");
+
+                    if (!string.IsNullOrWhiteSpace(request.Hostname))
+                        runtime.Syscalls.BindMountSubtree(configMount!, "hosts", "/etc/hosts");
+
+                    runtime.Syscalls.BindMountSubtree(configMount!, "resolv.conf", "/etc/resolv.conf");
+                }
+                finally
+                {
+                    configMountHandle.Close();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to build and bind generated container network configuration files.");
+            }
+
+            var fullArgs = new[] { actualExe }.Concat(request.ExeArgs).ToArray();
+
+            startupPhase = "resolve-user";
+            var requestedUser = string.IsNullOrWhiteSpace(request.User)
+                ? request.RootfsMode
+                    ? null
+                    : ContainerUserResolver.TryReadImageConfigUser(request.RootfsPath)
+                : request.User;
+            var resolvedCredentials = ContainerUserResolver.Resolve(runtime.Syscalls, requestedUser);
+
+            var baseEnvs = new List<string>
+            {
+                $"PATH={ContainerLaunchSpecResolver.DefaultPathValue}",
+                $"HOME={resolvedCredentials.HomeDirectory}",
+                $"USER={resolvedCredentials.UserName}"
+            };
+            if (request.UseTty)
+                baseEnvs.Add("TERM=xterm");
+
+            var autoEnvs = new List<string>();
+            if (request.EnablePulseServer)
+            {
+                autoEnvs.Add(
+                    $"{ContainerRunRequest.PulseServerEnvVar}=unix:{ContainerRunRequest.PulseServerSocketPath}");
+                autoEnvs.Add($"{ContainerRunRequest.PulseRuntimePathEnvVar}=/run/pulse");
+            }
+
+            if (request.EnableWaylandServer)
+            {
+                autoEnvs.Add($"{ContainerRunRequest.WaylandDisplayEnvVar}=wayland-0");
+                autoEnvs.Add($"{ContainerRunRequest.XdgRuntimeDirEnvVar}=/run");
+            }
+
+            var finalEnvs = ContainerLaunchSpecResolver.MergeEnvironmentEntries(baseEnvs, request.GuestEnvs, autoEnvs);
+
+            startupPhase = "resolve-init";
+            var workingDirectory = ResolveInitialWorkingDirectory(runtime, request.WorkingDir);
+            var (loc, guestPathResolved) = ResolveExecutablePath(runtime, actualExe, finalEnvs, request.WorkingDir);
+            if (!loc.IsValid) throw new FileNotFoundException($"Could not find executable in VFS: {actualExe}");
+
+            var uts = new UTSNamespace
+            {
+                NodeName = string.IsNullOrWhiteSpace(request.Hostname) ? request.ContainerId : request.Hostname
+            };
+
+            Process? engineInitProc = null;
+            if (request.UseEngineInit)
+            {
+                engineInitProc = ProcessFactory.CreateEngineInitProcess(runtime, scheduler, uts);
+                scheduler.SetEngineInitReaperEnabled(true);
+                _logger.LogInformation("Engine init reaper enabled. PID 1 is reserved by runtime.");
+            }
+
+            startupPhase = "load-init";
+            var mainTask = ProcessFactory.CreateInitProcess(runtime, loc.Dentry!, guestPathResolved, fullArgs,
+                finalEnvs,
+                scheduler, ttyDiag, loc.Mount!, uts, engineInitProc?.TGID ?? 0, proc =>
+                    Fiberish.Auth.Cred.CredentialService.InitializeCredentials(
+                        proc,
+                        resolvedCredentials.Uid,
+                        resolvedCredentials.Gid,
+                        resolvedCredentials.SupplementaryGroups),
+                workingDirectory);
+            if (request.EnablePulseServer || request.EnableWaylandServer)
+                request.ConfigureVirtualDaemons?.Invoke(runtime, scheduler, uts, mainTask.Process.TGID);
+            initProcessStarted = true;
+            startupPhase = "running";
+            request.ProcessController?.BindRuntimeControl(() =>
+            {
+                scheduler.ScheduleFromAnyThread(() =>
+                {
+                    try
+                    {
+                        // Best-effort container-wide writeback before forced stop.
+                        runtime.Syscalls.SyncContainerPageCache();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Force-stop writeback failed");
+                    }
+
+                    scheduler.Running = false;
+                    scheduler.WakeUp();
+                });
+            });
+            var exposedInitPid = engineInitProc?.TGID ?? mainTask.Process.TGID;
+            request.ProcessController?.BindInitProcess(exposedInitPid, sig =>
+            {
+                scheduler.ScheduleFromAnyThread(() =>
+                {
+                    if (request.UseEngineInit)
+                        _ = scheduler.SignalProcess(exposedInitPid, sig);
+                    else
+                        mainTask.PostSignal(sig);
+                });
+            });
+            request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-start", request.ContainerId,
+                request.Image));
+
+            _logger.LogDebug(
+                "Starting scheduler run containerId={ContainerId} exe={Exe} args={Args} tty={UseTty} volumes={VolumeCount} logDriver={LogDriver} publishedPortCount={PublishedPortCount}",
+                request.ContainerId, request.Exe, string.Join(" ", request.ExeArgs), request.UseTty,
+                request.Volumes.Length,
+                request.LogDriver, publishedPorts.Count);
+            scheduler.Run();
+            _logger.LogDebug(
+                "Scheduler run returned containerId={ContainerId} mainExited={MainExited}",
+                request.ContainerId, mainTask.Exited);
+
+            TryExportGuestStats(runtime, request);
+
+            if (!mainTask.Exited)
+            {
+                _logger.LogError(
+                    "KernelScheduler returned but main task has not exited. status={Status} mode={Mode} pendingSyscall={HasPendingSyscall} continuation={HasContinuation}",
+                    mainTask.Status, mainTask.ExecutionMode, mainTask.PendingSyscall != null,
+                    mainTask.Continuation != null);
+                request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit",
+                    request.ContainerId, request.Image, 1,
+                    "scheduler returned before main task exited"));
+                return 1;
+            }
+
+            request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", request.ContainerId,
+                request.Image,
+                mainTask.ExitStatus));
+            if (ShouldPrintHandlerProfile())
+                PrintHandlerProfile(runtime.Engine);
+            return mainTask.ExitStatus;
+        }
+        catch (OutOfMemoryException ex)
+        {
+            var message = initProcessStarted
+                ? $"ENOMEM: container ran out of memory while running '{actualExe}'."
+                : $"ENOMEM: container startup failed before init process was ready (phase={startupPhase}, exe='{actualExe}').";
+            _logger.LogError(ex,
+                "Container OOM. containerId={ContainerId} initStarted={InitStarted} phase={Phase} exe={Exe}",
+                request.ContainerId, initProcessStarted, startupPhase, actualExe);
+            Console.Error.WriteLine($"[Podish OOM] {message}");
+            request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", request.ContainerId,
+                request.Image, 1, message));
+            return 1;
+        }
+        catch (ContainerConfigurationException ex)
+        {
+            _logger.LogWarning(ex, "Container configuration failed during startup phase {Phase}", startupPhase);
+            Console.Error.WriteLine($"[Podish Config] {ex.Message}");
+            request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", request.ContainerId,
+                request.Image, 125, ex.Message));
+            return 125;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(ex, "Critical Error during container emulation");
+            Console.Error.WriteLine($"[Podish] Error: {ex}");
+            request.EventStore.Append(new ContainerEvent(DateTimeOffset.UtcNow, "container-exit", request.ContainerId,
+                request.Image, 1,
+                ex.ToString()));
+            return 1;
+        }
+        finally
+        {
+            _logger.LogDebug("Container teardown starting containerId={ContainerId}", request.ContainerId);
+            try
+            {
+                if (OperatingSystem.IsBrowser()) await Task.Delay(50);
+                else Task.Delay(50).Wait();
+            }
+            catch
+            {
+            }
+
+            _logger.LogTrace("Container teardown flushing stdio containerId={ContainerId}", request.ContainerId);
+            Console.Out.Flush();
+            Console.Error.Flush();
+
+            if (inputCts != null)
+            {
+                _logger.LogTrace("Container teardown cancelling input loop containerId={ContainerId}",
+                    request.ContainerId);
+                inputCts.Cancel();
+                if (inputTask != null)
+                    try
+                    {
+                        _logger.LogTrace("Container teardown waiting for input loop containerId={ContainerId}",
+                            request.ContainerId);
+                        if (OperatingSystem.IsBrowser()) await Task.WhenAny(inputTask, Task.Delay(100));
+                        else Task.WhenAny(inputTask, Task.Delay(100)).Wait();
+                    }
+                    catch
+                    {
+                    }
+
+                inputCts.Dispose();
+            }
+
+            _logger.LogTrace("Container teardown disposing SIGWINCH registration containerId={ContainerId}",
+                request.ContainerId);
+            sigwinch?.Dispose();
+            if (driver is IDisposable driverDisposable)
+            {
+                _logger.LogTrace("Container teardown disposing tty driver type={DriverType} containerId={ContainerId}",
+                    driver.GetType().Name, request.ContainerId);
+                driverDisposable.Dispose();
+            }
+
+            try
+            {
+                _logger.LogTrace("Container teardown closing guest syscall managers containerId={ContainerId}",
+                    request.ContainerId);
+                CloseProcessSyscalls(scheduler);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to close guest syscall managers during container teardown");
+            }
+
+            if (processExitHandler != null)
+                AppDomain.CurrentDomain.ProcessExit -= processExitHandler;
+
+            if (cancelKeyPressHandler != null)
+                Console.CancelKeyPress -= cancelKeyPressHandler;
+
+            if (rawModeEnabled && (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ||
+                                   RuntimeInformation.IsOSPlatform(OSPlatform.Linux)))
+            {
+                _logger.LogTrace("Container teardown disabling raw mode containerId={ContainerId}",
+                    request.ContainerId);
+                HostTermios.DisableRawMode(0);
+                rawModeEnabled = false;
+            }
+
+            _logger.LogTrace("Container teardown disposing stdin stream containerId={ContainerId}",
+                request.ContainerId);
+            stdinStream?.Dispose();
+
+            _logger.LogTrace("Container teardown unbinding controller containerId={ContainerId}", request.ContainerId);
+            request.ProcessController?.Unbind();
+
+            if (networkContext != null)
+            {
+                var portForwardStopped = _portForwardManager?.Stop(networkContext) ?? true;
+                if (portForwardStopped)
+                {
+                    networkBackend?.DestroyContainerNetwork(networkContext);
+                    networkContext.Dispose();
+                }
+                else
+                {
+                    _logger.LogCritical(
+                        "Port forwarding loop failed to stop gracefully for container {ContainerId}. Leaking network resources to prevent memory corruption.",
+                        request.ContainerId);
+                }
+            }
+
+            networkBackend?.Dispose();
+            _portForwardManager?.Dispose();
+
+            if (runtime != null)
+            {
+                try
+                {
+                    runtime.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to dispose kernel runtime during container teardown");
+                }
+            }
+
+            _logger.LogDebug("Container teardown finished containerId={ContainerId}", request.ContainerId);
+        }
+    }
+
+    private static void CloseProcessSyscalls(KernelScheduler scheduler)
+    {
+        foreach (var process in scheduler.GetProcessesSnapshot())
+            process.Syscalls.Close();
+    }
+
+    private static (SuperBlock Upper, string UpperDirName) CreateOverlayUpper(KernelRuntime runtime,
+        ContainerRunRequest request, ContainerFileSystemBackend backend)
+    {
+        return backend switch
+        {
+            ContainerFileSystemBackend.OverlaySilkfs => CreateOverlaySilkUpper(runtime, request),
+            ContainerFileSystemBackend.OverlayTmpfs => CreateOverlayTmpfsUpper(runtime),
+            _ => throw new InvalidOperationException($"unsupported overlay backend: {backend}")
+        };
+    }
+
+    private static (SuperBlock Upper, string UpperDirName) CreateOverlaySilkUpper(KernelRuntime runtime,
+        ContainerRunRequest request)
+    {
+        var silkUpperStore = Path.Combine(request.ContainerDir, "silk-upper");
+        Directory.CreateDirectory(silkUpperStore);
+        var silkType = FileSystemRegistry.Get("silkfs")
+                       ?? throw new InvalidOperationException("silkfs is not registered");
+        var upperSb = silkType.CreateFileSystem(runtime.DeviceNumbers).ReadSuper(silkType, 0, silkUpperStore, null);
+        return (upperSb, "silk-upper");
+    }
+
+    private static (SuperBlock Upper, string UpperDirName) CreateOverlayTmpfsUpper(KernelRuntime runtime)
+    {
+        var tmpfsType = FileSystemRegistry.Get("tmpfs")
+                        ?? throw new InvalidOperationException("tmpfs is not registered");
+        var upperSb = tmpfsType.CreateFileSystem(runtime.DeviceNumbers).ReadSuper(tmpfsType, 0, "tmpfs-upper", null);
+        return (upperSb, "tmpfs-upper");
+    }
+
+    private static SuperBlock CreateMaterializedImageRoot(KernelRuntime runtime, ContainerRunRequest request,
+        ContainerFileSystemBackend backend)
+    {
+        var archiveService = new ImageArchiveService(Directory.GetCurrentDirectory());
+        using var rootTar = new MemoryStream();
+        archiveService.ExportImageRootToStream(request.RootfsPath, rootTar);
+        rootTar.Position = 0;
+
+        return backend switch
+        {
+            ContainerFileSystemBackend.Tmpfs => MaterializeRootFromTar(runtime, rootTar, "tmpfs", "image-tmpfs-root"),
+            ContainerFileSystemBackend.Silkfs => MaterializeRootFromTar(runtime, rootTar, "silkfs",
+                PrepareSilkRootStore(request)),
+            _ => throw new InvalidOperationException($"unsupported materialized image backend: {backend}")
+        };
+    }
+
+    private static SuperBlock MaterializeRootFromTar(KernelRuntime runtime, Stream tarStream, string fsTypeName,
+        string sourceName)
+    {
+        var fsType = FileSystemRegistry.Get(fsTypeName)
+                     ?? throw new InvalidOperationException($"{fsTypeName} is not registered");
+        return RootfsArchiveLoader.LoadFromTar(tarStream, runtime.DeviceNumbers, fsType, sourceName);
+    }
+
+    private static string PrepareSilkRootStore(ContainerRunRequest request)
+    {
+        var silkRootStore = Path.Combine(request.ContainerDir, "silk-root");
+        Directory.CreateDirectory(silkRootStore);
+        return silkRootStore;
+    }
+
+    private static PathLocation? ResolveInitialWorkingDirectory(KernelRuntime runtime, string? configuredWorkingDir)
+    {
+        if (string.IsNullOrWhiteSpace(configuredWorkingDir))
+            return null;
+
+        var normalized = ContainerLaunchSpecResolver.NormalizeGuestAbsolutePath(configuredWorkingDir);
+        var (loc, guestPath) = runtime.Syscalls.ResolvePath(normalized, false);
+        if (!loc.IsValid || loc.Dentry?.Inode == null)
+            throw new ContainerConfigurationException($"working directory '{guestPath}' was not found.");
+        if (loc.Dentry.Inode.Type != InodeType.Directory)
+            throw new ContainerConfigurationException($"working directory '{guestPath}' is not a directory.");
+        return loc;
+    }
+
+    private static (PathLocation loc, string guestPath) ResolveExecutablePath(
+        KernelRuntime runtime,
+        string actualExe,
+        IReadOnlyList<string> finalEnvs,
+        string? workingDir)
+    {
+        if (actualExe.Contains('/'))
+            return runtime.Syscalls.ResolvePath(actualExe, true);
+
+        var baseDirectory = string.IsNullOrWhiteSpace(workingDir)
+            ? "/"
+            : ContainerLaunchSpecResolver.NormalizeGuestAbsolutePath(workingDir);
+        var pathValue = ContainerLaunchSpecResolver.TryGetEnvironmentValue(finalEnvs, "PATH")
+                        ?? ContainerLaunchSpecResolver.DefaultPathValue;
+
+        foreach (var pathSegment in pathValue.Split(':'))
+        {
+            var searchDirectory = string.IsNullOrEmpty(pathSegment)
+                ? baseDirectory
+                : ContainerLaunchSpecResolver.CombineGuestPath(baseDirectory, pathSegment);
+            var candidate = ContainerLaunchSpecResolver.CombineGuestPath(searchDirectory, actualExe);
+            var resolved = runtime.Syscalls.ResolvePath(candidate, false);
+            if (resolved.loc.IsValid)
+                return resolved;
+        }
+
+        return (PathLocation.None, actualExe);
+    }
+
+    private bool TryCreateLayerLower(DeviceNumberManager devNumbers, string ociStoreDir, out SuperBlock? lowerSb,
+        out IDisposable? provider,
+        out string error)
+    {
+        lowerSb = null;
+        provider = null;
+        error = string.Empty;
+
+        var imagePath = Path.Combine(ociStoreDir, "image.json");
+        if (!File.Exists(imagePath))
+        {
+            error =
+                $"overlay mode expects OCI image store, but '{ociStoreDir}' has no image.json. Pull with `fiberpod pull --store-oci IMAGE`.";
+            return false;
+        }
+
+        OciStoredImage? storedImage;
+        try
+        {
+            storedImage = JsonSerializer.Deserialize(File.ReadAllText(imagePath),
+                PodishJsonContext.Default.OciStoredImage);
+        }
+        catch (Exception ex)
+        {
+            error = $"failed to parse OCI image metadata: {ex.Message}";
+            return false;
+        }
+
+        if (storedImage == null || storedImage.Layers.Count == 0)
+        {
+            error = "OCI image metadata is empty or invalid.";
+            return false;
+        }
+
+        var digestToBlobPath = new Dictionary<string, string>(StringComparer.Ordinal);
+        var layerIndexes = new List<IReadOnlyList<LayerIndexEntry>>(storedImage.Layers.Count);
+        var normalizedLayers = new List<OciStoredLayer>(storedImage.Layers.Count);
+        var metadataChanged = !string.Equals(storedImage.StoreDirectory, OciStorePath.RelativeStoreDirectory,
+            StringComparison.Ordinal);
+        foreach (var layer in storedImage.Layers)
+        {
+            string blobPath;
+            string indexPath;
+            try
+            {
+                blobPath = OciStorePath.Resolve(ociStoreDir, layer.BlobPath);
+                indexPath = OciStorePath.Resolve(ociStoreDir, layer.IndexPath);
+            }
+            catch (Exception ex)
+            {
+                error =
+                    $"invalid layer stored path for digest {layer.Digest}: blob='{layer.BlobPath}', index='{layer.IndexPath}', store='{ociStoreDir}', error='{ex.Message}'";
+                return false;
+            }
+
+            if (!File.Exists(blobPath))
+            {
+                error = $"missing layer blob file: stored='{layer.BlobPath}', resolved='{blobPath}'";
+                return false;
+            }
+
+            if (!File.Exists(indexPath))
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(indexPath) ?? ociStoreDir);
+                    using var tarStream = File.OpenRead(blobPath);
+                    var rebuilt = OciLayerIndexBuilder.BuildFromTar(tarStream, layer.Digest);
+                    var persistedEntries = rebuilt.Entries.Values
+                        .Select(e => e with { InlineData = null })
+                        .ToList();
+                    File.WriteAllText(indexPath,
+                        JsonSerializer.Serialize(persistedEntries,
+                            PodishJsonContext.Default.ListLayerIndexEntry));
+                    _logger.LogWarning(
+                        "Rebuilt missing layer index '{IndexPath}' from blob '{BlobPath}' for digest {Digest}",
+                        indexPath, blobPath, layer.Digest);
+                    metadataChanged = true;
+                }
+                catch (Exception ex)
+                {
+                    error = $"missing layer index file: {layer.IndexPath}; rebuild failed: {ex.Message}";
+                    return false;
+                }
+
+            if (!File.Exists(indexPath))
+            {
+                error = $"missing layer index file: stored='{layer.IndexPath}', resolved='{indexPath}'";
+                return false;
+            }
+
+            try
+            {
+                var entries =
+                    JsonSerializer.Deserialize(File.ReadAllText(indexPath),
+                        PodishJsonContext.Default.ListLayerIndexEntry);
+                if (entries == null)
+                {
+                    error = $"invalid layer index JSON: {indexPath}";
+                    return false;
+                }
+
+                layerIndexes.Add(entries);
+            }
+            catch (Exception ex)
+            {
+                error = $"failed to parse layer index '{indexPath}': {ex.Message}";
+                return false;
+            }
+
+            digestToBlobPath[layer.Digest] = blobPath;
+            var storedBlobPath = OciStorePath.ToStoredPath(ociStoreDir, blobPath);
+            var storedIndexPath = OciStorePath.ToStoredPath(ociStoreDir, indexPath);
+            if (!string.Equals(layer.BlobPath, storedBlobPath, StringComparison.Ordinal) ||
+                !string.Equals(layer.IndexPath, storedIndexPath, StringComparison.Ordinal))
+                metadataChanged = true;
+            normalizedLayers.Add(layer with { BlobPath = storedBlobPath, IndexPath = storedIndexPath });
+        }
+
+        if (metadataChanged)
+            try
+            {
+                var repaired = storedImage with
+                {
+                    StoreDirectory = OciStorePath.RelativeStoreDirectory, Layers = normalizedLayers
+                };
+                File.WriteAllText(imagePath,
+                    JsonSerializer.Serialize(repaired, PodishJsonContext.Default.OciStoredImage));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to persist repaired OCI image metadata at {ImagePath}", imagePath);
+            }
+
+        var merged = OciLayerIndexMerger.Merge(layerIndexes);
+        var layerType = FileSystemRegistry.Get("layerfs");
+        if (layerType == null)
+        {
+            error = "layerfs is not registered";
+            return false;
+        }
+
+        provider = new TarBlobLayerContentProvider(digestToBlobPath);
+        lowerSb = layerType.CreateFileSystem(devNumbers).ReadSuper(layerType, 0, "layer-lower",
+            new LayerMountOptions { Index = merged, ContentProvider = (ILayerContentProvider)provider });
+        return true;
+    }
+
+
+    private string BuildResolvConfContent(string[] dnsServers)
+    {
+        return BuildResolvConfContent(dnsServers, ReadHostResolvConfLines(), GetHostDnsServersFromNetworkInterfaces());
+    }
+
+    internal string BuildResolvConfContent(string[] dnsServers, IEnumerable<string> hostResolvConfLines,
+        IEnumerable<string> interfaceDnsServers)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("# Generated by Podish");
+
+        if (dnsServers.Length > 0)
+        {
+            foreach (var dns in dnsServers)
+                sb.AppendLine($"nameserver {dns}");
+        }
+        else
+        {
+            var passthroughLines = new List<string>();
+            var resolvConfNameservers = ParseHostResolvConf(hostResolvConfLines, passthroughLines);
+            var hostDnsServers = GetHostDnsServers(interfaceDnsServers, resolvConfNameservers);
+
+            foreach (var hostDnsServer in hostDnsServers)
+                sb.AppendLine($"nameserver {hostDnsServer}");
+
+            foreach (var line in passthroughLines)
+                sb.AppendLine(line);
+
+            if (hostDnsServers.Count == 0)
+            {
+                _logger.LogWarning("Falling back to public DNS because host DNS servers could not be resolved.");
+                sb.AppendLine("nameserver 8.8.8.8");
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private IEnumerable<string> ReadHostResolvConfLines()
+    {
+        var hostResolvConf = "/etc/resolv.conf";
+
+        if (!File.Exists(hostResolvConf))
+            return [];
+
+        try
+        {
+            return File.ReadLines(hostResolvConf).ToArray();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to read host /etc/resolv.conf");
+            return [];
+        }
+    }
+
+    private static List<string> ParseHostResolvConf(IEnumerable<string> lines, List<string> passthroughLines)
+    {
+        var nameservers = new List<string>();
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("nameserver ", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 1)
+                    nameservers.Add(parts[1]);
+                continue;
+            }
+
+            passthroughLines.Add(line);
+        }
+
+        return nameservers;
+    }
+
+    private List<string> GetHostDnsServers(IEnumerable<string> interfaceDnsServers, IEnumerable<string> resolvConfNameservers)
+    {
+        var servers = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var address in GetApplePlatformDnsServers())
+            AddDnsServer(servers, seen, address);
+
+        foreach (var address in interfaceDnsServers)
+            AddDnsServer(servers, seen, address);
+
+        foreach (var address in resolvConfNameservers)
+            AddDnsServer(servers, seen, address);
+
+        return servers;
+    }
+
+    private IEnumerable<string> GetApplePlatformDnsServers()
+    {
+        if (!OperatingSystem.IsIOS())
+            return [];
+
+        try
+        {
+            return AppleResolverNative.GetDnsServers();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to query iOS resolver DNS servers from libresolv.");
+            return [];
+        }
+    }
+
+    private IEnumerable<string> GetHostDnsServersFromNetworkInterfaces()
+    {
+        if (OperatingSystem.IsBrowser())
+            yield break;
+
+        NetworkInterface[] interfaces;
+        try
+        {
+            interfaces = NetworkInterface.GetAllNetworkInterfaces();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to enumerate host network interfaces for DNS discovery.");
+            yield break;
+        }
+
+        foreach (var networkInterface in interfaces)
+        {
+            if (networkInterface.NetworkInterfaceType == NetworkInterfaceType.Loopback ||
+                networkInterface.OperationalStatus != OperationalStatus.Up)
+                continue;
+
+            IPInterfaceProperties properties;
+            try
+            {
+                properties = networkInterface.GetIPProperties();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to inspect network interface {Name} for DNS discovery.",
+                    networkInterface.Name);
+                continue;
+            }
+
+            foreach (var dnsAddress in properties.DnsAddresses)
+                if (TryNormalizeDnsServer(dnsAddress, out var normalized))
+                    yield return normalized;
+        }
+    }
+
+    private static void AddDnsServer(ICollection<string> servers, ISet<string> seen, string candidate)
+    {
+        if (!TryNormalizeDnsServer(candidate, out var normalized) || !seen.Add(normalized))
+            return;
+
+        servers.Add(normalized);
+    }
+
+    private static bool TryNormalizeDnsServer(string candidate, out string normalized)
+    {
+        normalized = string.Empty;
+        if (!IPAddress.TryParse(candidate, out var address))
+            return false;
+
+        return TryNormalizeDnsServer(address, out normalized);
+    }
+
+    private static bool TryNormalizeDnsServer(IPAddress address, out string normalized)
+    {
+        normalized = string.Empty;
+
+        if (IPAddress.IsLoopback(address) ||
+            address.Equals(IPAddress.Any) ||
+            address.Equals(IPAddress.None) ||
+            address.Equals(IPAddress.IPv6Any) ||
+            address.IsIPv6LinkLocal ||
+            address.IsIPv6Multicast ||
+            address.IsIPv6SiteLocal)
+            return false;
+
+        normalized = address.ToString();
+        return true;
+    }
+
+    private static string BuildHostnameFileContent(string hostname)
+    {
+        return hostname.Trim() + "\n";
+    }
+
+    private static string BuildHostsFileContent(string hostname, string? containerName)
+    {
+        var primary = hostname.Trim();
+        var aliases = new List<string> { primary };
+        if (!string.IsNullOrWhiteSpace(containerName))
+        {
+            var alias = containerName.Trim();
+            if (!string.Equals(alias, primary, StringComparison.Ordinal))
+                aliases.Add(alias);
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("127.0.0.1 localhost");
+        sb.Append("127.0.1.1 ");
+        sb.AppendLine(string.Join(" ", aliases));
+        sb.AppendLine("::1 localhost ip6-localhost ip6-loopback");
+        return sb.ToString();
+    }
+
+    private static async Task InputLoop(TtyDiscipline tty, Stream stdin, CancellationToken token)
+    {
+        var buffer = new byte[256];
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                var read = await stdin.ReadAsync(buffer, token);
+                if (read == 0) break;
+                tty.Input(buffer.AsSpan(0, read).ToArray());
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private IContainerLogSink CreateContainerLogSink(ContainerLogDriver driver, string containerDir,
+        ILoggerFactory loggerFactory)
+    {
+        return driver switch
+        {
+            ContainerLogDriver.JsonFile => new JsonFileContainerLogSink(Path.Combine(containerDir, "ctr.log"),
+                loggerFactory.CreateLogger<JsonFileContainerLogSink>()),
+            ContainerLogDriver.None => new NoneContainerLogSink(),
+            _ => new NoneContainerLogSink()
+        };
+    }
+
+    private static bool ShouldPrintHandlerProfile()
+    {
+        var value = Environment.GetEnvironmentVariable("PODISH_HANDLER_PROFILE");
+        return !string.IsNullOrWhiteSpace(value) && value != "0";
+    }
+
+    private static void PrintHandlerProfile(Engine engine)
+    {
+        var stats = engine.GetHandlerProfileStats()
+            .Where(static x => x.ExecCount != 0)
+            .OrderByDescending(static x => x.ExecCount)
+            .ToArray();
+        var imageBase = engine.GetNativeImageBase();
+
+        Console.Error.WriteLine("[Podish.HandlerProfile.Begin]");
+        Console.Error.WriteLine($"base\t0x{imageBase.ToInt64():x}");
+        foreach (var stat in stats)
+            Console.Error.WriteLine($"{stat.ExecCount}\t0x{stat.Handler.ToInt64():x}");
+        Console.Error.WriteLine("[Podish.HandlerProfile.End]");
+    }
+
+    private void TryExportGuestStats(KernelRuntime runtime, ContainerRunRequest request)
+    {
+        var engine = runtime.Engine;
+        if (string.IsNullOrWhiteSpace(request.GuestStatsExportDir))
+            return;
+
+        try
+        {
+            var exportDir = Path.GetFullPath(request.GuestStatsExportDir);
+            Directory.CreateDirectory(exportDir);
+
+            var blocksPath = Path.Combine(exportDir, "blocks.bin");
+            var skipBlocksDump = Environment.GetEnvironmentVariable("PODISH_SKIP_BLOCKS_EXPORT") is
+                                     { Length: > 0 } value &&
+                                 value != "0";
+            if (!skipBlocksDump)
+            {
+                using var fs = File.Create(blocksPath);
+                runtime.DumpAllBlocks(fs);
+            }
+
+            var nativeStats = engine.DumpStats();
+            var blockStats = engine.GetBlockStats();
+            var handlerProfile = engine.GetHandlerProfileStats()
+                .Where(static x => x.ExecCount != 0)
+                .OrderByDescending(static x => x.ExecCount)
+                .Select(static x => new GuestStatsHandlerProfileEntry(
+                    $"0x{x.Handler.ToInt64():x}",
+                    x.ExecCount))
+                .ToArray();
+
+            var summary = new GuestStatsSummary(
+                1,
+                DateTimeOffset.UtcNow,
+                request.ContainerId,
+                request.Image,
+                $"0x{engine.GetNativeImageBase().ToInt64():x}",
+                nativeStats,
+                GuestStatsBlockStats.FromSnapshot(blockStats),
+                handlerProfile,
+                new GuestStatsFiles("blocks.bin"));
+
+            var summaryPath = Path.Combine(exportDir, "summary.json");
+            using (var stream = File.Create(summaryPath))
+            using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+            {
+                JsonSerializer.Serialize(writer, summary, PodishJsonContext.Default.GuestStatsSummary);
+            }
+
+            _logger.LogInformation("Exported guest stats for container {ContainerId} to {ExportDir}",
+                request.ContainerId, exportDir);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to export guest stats for container {ContainerId}",
+                request.ContainerId);
+        }
+    }
+
+    private sealed class TarBlobLayerContentProvider : ILayerContentProvider, IDisposable
+    {
+        private readonly Dictionary<string, string> _digestToBlobPath;
+        private readonly Lock _lock = new();
+        private readonly Dictionary<string, FileStream> _streams = new(StringComparer.Ordinal);
+
+        public TarBlobLayerContentProvider(Dictionary<string, string> digestToBlobPath)
+        {
+            _digestToBlobPath = digestToBlobPath;
+        }
+
+        public void Dispose()
+        {
+            lock (_lock)
+            {
+                foreach (var s in _streams.Values)
+                    s.Dispose();
+                _streams.Clear();
+            }
+        }
+
+        public bool TryRead(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead)
+        {
+            bytesRead = 0;
+            if (entry.Type != InodeType.File) return true;
+
+            var hasBlobBacking = entry.DataOffset >= 0 && !string.IsNullOrWhiteSpace(entry.BlobDigest);
+            if (!hasBlobBacking && entry.InlineData != null)
+            {
+                if (offset >= entry.InlineData.Length) return true;
+                var remaining = entry.InlineData.Length - (int)offset;
+                var toCopy = Math.Min(buffer.Length, remaining);
+                entry.InlineData.AsSpan((int)offset, toCopy).CopyTo(buffer);
+                bytesRead = toCopy;
+                return true;
+            }
+
+            if (entry.DataOffset < 0 || string.IsNullOrWhiteSpace(entry.BlobDigest))
+                return false;
+            if (!_digestToBlobPath.TryGetValue(entry.BlobDigest, out var blobPath))
+                return false;
+            if (offset < 0) return false;
+            if ((ulong)offset >= entry.Size) return true;
+
+            var remainingInEntry = (long)entry.Size - offset;
+            if (remainingInEntry <= 0) return true;
+            var maxReadable = (int)Math.Min(buffer.Length, remainingInEntry);
+            if (maxReadable <= 0) return true;
+
+            lock (_lock)
+            {
+                if (!_streams.TryGetValue(entry.BlobDigest, out var stream))
+                {
+                    stream = new FileStream(blobPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    _streams[entry.BlobDigest] = stream;
+                }
+
+                var start = entry.DataOffset + offset;
+                if (start < 0 || start >= stream.Length)
+                    return false;
+
+                stream.Seek(start, SeekOrigin.Begin);
+                while (bytesRead < maxReadable)
+                {
+                    var n = stream.Read(buffer[bytesRead..maxReadable]);
+                    if (n <= 0)
+                        return false;
+                    bytesRead += n;
+                }
+
+                return true;
+            }
+        }
+    }
+
+    private sealed class ConsoleTtyDriver : ITtyDriver
+    {
+        private readonly IContainerLogSink _containerLogSink;
+        private readonly Stream _stderr = Console.OpenStandardError();
+        private readonly Stream _stdout = Console.OpenStandardOutput();
+        private TtyDiscipline? _tty;
+
+        public ConsoleTtyDriver(IContainerLogSink containerLogSink)
+        {
+            _containerLogSink = containerLogSink;
+        }
+
+        public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
+        {
+            var stream = kind == TtyEndpointKind.Stderr ? _stderr : _stdout;
+            stream.Write(buffer);
+            stream.Flush();
+            _containerLogSink.Write(kind, buffer);
+            return buffer.Length;
+        }
+
+        public void Flush()
+        {
+            _stdout.Flush();
+            _stderr.Flush();
+        }
+
+        public bool CanWrite => true;
+
+        public bool RegisterWriteWait(Action callback, KernelScheduler scheduler)
+        {
+            _ = scheduler;
+            return false;
+        }
+
+        public void BindTty(TtyDiscipline tty)
+        {
+            _tty = tty;
+        }
+    }
+
+    private sealed class BridgeTtyDriver : ITtyDriver, IDisposable
+    {
+        private const int OutputQueueCapacityBytes = 64 * 1024;
+        private readonly PodishTerminalBridge _bridge;
+        private readonly IContainerLogSink _containerLogSink;
+        private readonly Lock _lock = new();
+        private readonly AsyncWaitQueue _writeReady;
+        private bool _disposed;
+        private int _queuedBytes;
+
+        public BridgeTtyDriver(PodishTerminalBridge bridge, IContainerLogSink containerLogSink,
+            KernelScheduler scheduler)
+        {
+            _bridge = bridge;
+            _containerLogSink = containerLogSink;
+            _writeReady = new AsyncWaitQueue(scheduler);
+        }
+
+        public void Dispose()
+        {
+            lock (_lock)
+            {
+                _disposed = true;
+            }
+        }
+
+        public int Write(TtyEndpointKind kind, ReadOnlySpan<byte> buffer)
+        {
+            if (buffer.Length == 0)
+                return 0;
+
+            ReadOnlySpan<byte> payload;
+            lock (_lock)
+            {
+                if (_disposed)
+                    return -(int)Errno.EIO;
+
+                var space = OutputQueueCapacityBytes - _queuedBytes;
+                if (space <= 0)
+                {
+                    _writeReady.Reset();
+                    return -(int)Errno.EAGAIN;
+                }
+
+                var written = Math.Min(space, buffer.Length);
+                payload = buffer[..written];
+                _queuedBytes += written;
+            }
+
+            // On Wasm (single-threaded), emit synchronously on scheduler thread.
+            // On native, same: the pump is the caller, so no background thread needed.
+            _containerLogSink.Write(kind, payload);
+            _bridge.EmitOutput(kind, payload);
+
+            lock (_lock)
+            {
+                _queuedBytes -= payload.Length;
+                if (_queuedBytes < OutputQueueCapacityBytes)
+                    _writeReady.Signal();
+            }
+
+            return payload.Length;
+        }
+
+        public void Flush()
+        {
+        }
+
+        public bool CanWrite
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _queuedBytes < OutputQueueCapacityBytes;
+                }
+            }
+        }
+
+        public bool RegisterWriteWait(Action callback, KernelScheduler scheduler)
+        {
+            if (CanWrite)
+                return false;
+            _writeReady.Register(callback, scheduler);
+            return true;
+        }
+    }
+
+    private sealed class SchedulerSignalBroadcaster : ISignalBroadcaster
+    {
+        private readonly KernelScheduler _scheduler;
+
+        public SchedulerSignalBroadcaster(KernelScheduler scheduler)
+        {
+            _scheduler = scheduler;
+        }
+
+        public void SignalProcessGroup(FiberTask? task, int pgid, int signal)
+        {
+            _scheduler.SignalProcessGroupFromAnyThread(pgid, signal);
+        }
+
+        public void SignalForegroundTask(FiberTask? task, int signal)
+        {
+            if (task != null)
+                _scheduler.SignalTaskFromAnyThread(task, signal);
+        }
+    }
+}

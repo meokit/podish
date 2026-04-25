@@ -1,0 +1,24 @@
+{
+  "originHash" : "754f932dc0da6185c365f4ac8410da7cb067e42cc34b4df027e2ec13ea87ceaf",
+  "pins" : [
+    {
+      "identity" : "messagepack",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Flight-School/MessagePack.git",
+      "state" : {
+        "revision" : "bbc5ab6362db234f2051e73e67296ebf5c3d2042",
+        "version" : "1.2.4"
+      }
+    },
+    {
+      "identity" : "swift-argument-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-argument-parser",
+      "state" : {
+        "revision" : "c5d11a805e765f52ba34ec7284bd4fcd6ba68615",
+        "version" : "1.7.0"
+      }
+    }
+  ],
+  "version" : 3
+}

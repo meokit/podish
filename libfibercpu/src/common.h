@@ -1,0 +1,99 @@
+#pragma once
+
+#include <cstdint>
+#include <type_traits>
+
+// Use SIMDe for cross-platform intrinsics (Arm64 -> x86 SSE/AVX emulation)
+// This definition allows us to use _mm_add_ps etc. on non-x86 hardware.
+#define SIMDE_ENABLE_NATIVE_ALIASES
+#include <simde/x86/sse2.h>
+#include <thread>
+#include "float80.h"
+
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#define CPU_RELAX() _mm_pause()
+#elif defined(__arm64__) || defined(__aarch64__) || defined(_M_ARM64)
+#define CPU_RELAX() __asm__ __volatile__("yield")
+#else
+#define CPU_RELAX() std::this_thread::yield()
+#endif
+
+#ifndef __builtin_assume
+#define __builtin_assume(expr)                \
+    do {                                      \
+        if (!(expr)) __builtin_unreachable(); \
+    } while (0)
+#endif
+
+#ifndef PREFETCH
+#if defined(__GNUC__) || defined(__clang__)
+#define PREFETCH(addr) __builtin_prefetch((addr))
+#else
+#define PREFETCH(addr) ((void)0)
+#endif
+#endif
+
+namespace fiberish {
+
+enum class EmuStatus { Running, Stopped, Fault, Yield };
+
+// General Purpose Registers (Index mapping)
+enum Reg {
+    EAX = 0,
+    ECX = 1,
+    EDX = 2,
+    EBX = 3,
+    ESP = 4,
+    EBP = 5,
+    ESI = 6,
+    EDI = 7,
+};
+
+// Segment Registers
+enum Seg {
+    ES = 0,
+    CS = 1,
+    SS = 2,
+    DS = 3,
+    FS = 4,
+    GS = 5,
+};
+
+// CPU Context
+// Aligned to cache line (64 bytes) to avoid false sharing if we ever go
+// multi-threaded (though this is single threaded)
+struct alignas(64) Context {
+    uint32_t regs[9];      // General Purpose Registers, the 9th is zero register
+    uint32_t eip;          // Instruction Pointer
+    uint64_t flags_state;  // Canonical flags state; architectural EFLAGS live in lower32
+    uint32_t eflags_mask;  // Mask for user-modifiable flags (1=modifiable)
+
+    // Segment Base Addresses
+    // For user-mode simulation:
+    // CS, DS, SS, ES, are typically base 0 (Flat Model).
+    // FS and GS are often used for TLS (Thread Local Storage).
+    // The emulator allows the caller to set these bases.
+    // 0 = Dummy, 1=ES, 2=CS, 3=SS, 4=DS, 5=FS, 6=GS
+    uint32_t seg_base[7];
+
+    // Profiling
+    uint16_t last_opcode;
+
+    uint32_t mxcsr;
+
+    // SSE/SSE2 Registers
+    alignas(16) simde__m128 xmm[8];
+
+    // FPU Registers (80-bit Extended Precision)
+    alignas(16) float80 fpu_regs[8];
+    int fpu_top = 0;
+    uint16_t fpu_sw = 0;
+    uint16_t fpu_cw = 0;       // Default to 0 to match Unicorn (was 0x037F)
+    uint16_t fpu_tw = 0xFFFF;  // Empty
+};
+
+struct EmuState;
+struct DecodedOp;
+
+}  // namespace fiberish

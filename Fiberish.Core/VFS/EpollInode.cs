@@ -1,0 +1,613 @@
+using System.Buffers;
+using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using Fiberish.Core;
+using Fiberish.Native;
+using Timer = Fiberish.Core.Timer;
+
+namespace Fiberish.VFS;
+
+internal sealed class EpollItem
+{
+    public ulong Data;
+    public IReadyDispatcher? Dispatcher;
+    public bool IsDeferredEdgeRearmQueued;
+    public uint Events;
+    public int Fd;
+    public LinuxFile File = null!;
+    public bool IsReady;
+    public bool NeedsEdgeRearm;
+    public IDisposable? WaitRegistration;
+}
+
+public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWaitSource
+{
+    private const int EpollEventSize = 12;
+    private readonly Queue<EpollItem> _deferredEdgeRearms = new();
+    private readonly List<EpollItem> _readyList = new();
+    private readonly KernelScheduler _scheduler;
+    private readonly AsyncWaitQueue _waitQueue;
+    private readonly Dictionary<LinuxFile, EpollItem> _watches = new();
+
+    public EpollInode(ulong ino, SuperBlock sb, KernelScheduler scheduler) : base(ino, sb)
+    {
+        _scheduler = scheduler;
+        _waitQueue = new AsyncWaitQueue(scheduler);
+        Type = InodeType.Fifo;
+        Mode = 0x1A4; // pseudo device mode, like pipe
+    }
+
+    public override short Poll(LinuxFile linuxFile, short events)
+    {
+        const short POLLIN = 0x0001;
+
+        if ((events & POLLIN) == 0)
+            return 0;
+
+        RefreshDeferredEdgeRearms();
+        return _readyList.Count > 0 ? POLLIN : (short)0;
+    }
+
+    public override bool RegisterWait(LinuxFile linuxFile, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) == 0)
+            return false;
+
+        var readWatch = new QueueReadinessWatch(POLLIN, () => IsReadable(), _waitQueue, _waitQueue.Reset);
+        return QueueReadinessRegistration.Register(callback, _scheduler, events, readWatch);
+    }
+
+    public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) == 0)
+            return null;
+
+        var readWatch = new QueueReadinessWatch(POLLIN, () => IsReadable(), _waitQueue, _waitQueue.Reset);
+        return QueueReadinessRegistration.RegisterHandle(callback, _scheduler, events, readWatch);
+    }
+
+    public override IDisposable? RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) == 0)
+            return null;
+
+        var readWatch = new QueueReadinessWatch(POLLIN, () => IsReadable(), _waitQueue, _waitQueue.Reset);
+        return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, _scheduler, events, readWatch);
+    }
+
+    bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) == 0)
+            return false;
+
+        var scheduler = dispatcher.Scheduler;
+        if (scheduler == null)
+            return false;
+
+        var readWatch = new QueueReadinessWatch(POLLIN, () => IsReadable(), _waitQueue, _waitQueue.Reset);
+        return QueueReadinessRegistration.Register(callback, scheduler, events, readWatch);
+    }
+
+    IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) == 0)
+            return null;
+
+        var scheduler = dispatcher.Scheduler;
+        if (scheduler == null)
+            return null;
+
+        var readWatch = new QueueReadinessWatch(POLLIN, () => IsReadable(), _waitQueue, _waitQueue.Reset);
+        return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch);
+    }
+
+    IDisposable? IDispatcherEdgeWaitSource.RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback, short events)
+    {
+        const short POLLIN = 0x0001;
+        if ((events & POLLIN) == 0)
+            return null;
+
+        var scheduler = dispatcher.Scheduler;
+        if (scheduler == null)
+            return null;
+
+        var readWatch = new QueueReadinessWatch(POLLIN, () => IsReadable(), _waitQueue, _waitQueue.Reset);
+        return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, scheduler, events, readWatch);
+    }
+
+    public int Ctl(FiberTask task, int op, int fd, LinuxFile targetFile, uint events, ulong data)
+    {
+        AssertSchedulerThread();
+        var dispatcher = new SchedulerReadyDispatcher(task.CommonKernel);
+        if (op == LinuxConstants.EPOLL_CTL_ADD)
+        {
+            if (_watches.ContainsKey(targetFile)) return -(int)Errno.EEXIST;
+
+            var item = new EpollItem
+                { Fd = fd, File = targetFile, Events = events, Data = data, Dispatcher = dispatcher };
+            _watches[targetFile] = item;
+
+            // Add initial poll and callback registration
+            CheckAndRegister(item);
+        }
+        else if (op == LinuxConstants.EPOLL_CTL_DEL)
+        {
+            if (!_watches.ContainsKey(targetFile)) return -(int)Errno.ENOENT;
+            if (_watches.TryGetValue(targetFile, out var oldItem))
+            {
+                oldItem.NeedsEdgeRearm = false;
+                oldItem.WaitRegistration?.Dispose();
+            }
+            _watches.Remove(targetFile);
+            _readyList.RemoveAll(x => x.File == targetFile);
+            if (_readyList.Count == 0)
+                _waitQueue.Reset();
+        }
+        else if (op == LinuxConstants.EPOLL_CTL_MOD)
+        {
+            if (!_watches.TryGetValue(targetFile, out var item)) return -(int)Errno.ENOENT;
+            item.Events = events;
+            item.Data = data;
+            item.Dispatcher = dispatcher;
+            item.NeedsEdgeRearm = false;
+            item.WaitRegistration?.Dispose();
+            item.WaitRegistration = null;
+
+            // For MOD, we re-evaluate readiness
+            if (item.IsReady)
+            {
+                _readyList.Remove(item);
+                item.IsReady = false;
+                if (_readyList.Count == 0)
+                    _waitQueue.Reset();
+            }
+
+            CheckAndRegister(item);
+        }
+        else
+        {
+            return -(int)Errno.EINVAL;
+        }
+
+        return 0;
+    }
+
+    private void CheckAndRegister(EpollItem item)
+    {
+        AssertSchedulerThread();
+        item.WaitRegistration?.Dispose();
+        item.WaitRegistration = null;
+
+        // For polling, we map EPOLL events to POLL events expected by the underlying Inode.Poll
+        // EPOLLIN == POLLIN, EPOLLOUT == POLLOUT, etc.
+        var watchEvents = (short)(item.Events & 0xFFFF);
+
+        var currentEvents = item.File.OpenedInode!.Poll(item.File, watchEvents);
+
+        // Always include EPOLLERR and EPOLLHUP even if not explicitly requested
+        var mask = (short)(watchEvents | LinuxConstants.EPOLLERR |
+                           LinuxConstants.EPOLLHUP);
+
+        if (item.NeedsEdgeRearm)
+        {
+            if ((currentEvents & mask) != 0)
+                return;
+
+            item.NeedsEdgeRearm = false;
+        }
+
+        if ((currentEvents & mask) != 0)
+        {
+            if (!item.IsReady)
+            {
+                item.IsReady = true;
+                _readyList.Add(item);
+                _waitQueue.Signal(); // Wake up an awaiting FiberTask (epoll_wait)
+            }
+
+            // Item is already ready - no need to register a wait callback.
+            // When HarvestEvents processes this item, for LT it will call CheckAndRegister again.
+            return;
+        }
+
+        // Callback dispatch-to-scheduler is owned by readiness providers (e.g. HostSocketProbeEngine).
+        // EpollInode itself is strict scheduler-thread-only.
+        void RePoll()
+        {
+            AssertSchedulerThread();
+            if (IsWatchRegistered(item))
+                CheckAndRegister(item);
+        }
+
+        if ((item.Events & LinuxConstants.EPOLLET) != 0 &&
+            item.File.OpenedInode is IDispatcherEdgeWaitSource edgeWaitSource)
+            item.WaitRegistration = edgeWaitSource.RegisterEdgeTriggeredWaitHandle(item.File,
+                item.Dispatcher ?? throw new InvalidOperationException("Epoll host socket watch requires dispatcher."),
+                RePoll, watchEvents);
+        else if (item.File.OpenedInode is IDispatcherWaitSource dispatcherWaitSource)
+            item.WaitRegistration = dispatcherWaitSource.RegisterWaitHandle(item.File,
+                item.Dispatcher ?? throw new InvalidOperationException("Epoll host socket watch requires dispatcher."),
+                RePoll, watchEvents);
+        else
+            item.WaitRegistration = item.File.OpenedInode.RegisterWaitHandle(item.File, RePoll, watchEvents);
+    }
+
+    private void RefreshDeferredEdgeRearms()
+    {
+        AssertSchedulerThread();
+        var pendingCount = _deferredEdgeRearms.Count;
+        for (var i = 0; i < pendingCount; i++)
+        {
+            var item = _deferredEdgeRearms.Dequeue();
+            item.IsDeferredEdgeRearmQueued = false;
+
+            if (!item.NeedsEdgeRearm || item.IsReady || item.WaitRegistration != null)
+                continue;
+
+            if (!IsWatchRegistered(item))
+                continue;
+
+            if ((item.Events & 0xFFFF) == 0)
+            {
+                item.NeedsEdgeRearm = false;
+                continue;
+            }
+
+            CheckAndRegister(item);
+            if (item.NeedsEdgeRearm)
+                EnqueueDeferredEdgeRearm(item);
+        }
+    }
+
+    private void RearmEdgeTriggeredItem(EpollItem item)
+    {
+        AssertSchedulerThread();
+        item.WaitRegistration?.Dispose();
+        item.WaitRegistration = null;
+        item.NeedsEdgeRearm = false;
+
+        var watchEvents = (short)(item.Events & 0xFFFF);
+        if (watchEvents == 0)
+            return;
+
+        var openedInode = item.File.OpenedInode
+                          ?? throw new InvalidOperationException("Epoll watch target inode is unavailable.");
+
+        if (openedInode is IDispatcherEdgeWaitSource edgeWaitSource)
+        {
+            var dispatcher = item.Dispatcher
+                             ?? throw new InvalidOperationException(
+                                 "Epoll edge-triggered watch requires dispatcher.");
+            item.WaitRegistration = edgeWaitSource.RegisterEdgeTriggeredWaitHandle(item.File,
+                dispatcher,
+                RePollForEdge, watchEvents);
+            if (item.WaitRegistration != null)
+                return;
+        }
+        else
+        {
+            item.WaitRegistration = openedInode.RegisterEdgeTriggeredWaitHandle(item.File, RePollForEdge, watchEvents);
+            if (item.WaitRegistration != null)
+                return;
+        }
+
+        item.NeedsEdgeRearm = true;
+        EnqueueDeferredEdgeRearm(item);
+        return;
+
+        void RePollForEdge()
+        {
+            AssertSchedulerThread();
+            if (!IsWatchRegistered(item))
+                return;
+
+            CheckAndRegister(item);
+        }
+    }
+
+    private bool IsWatchRegistered(EpollItem item)
+    {
+        return _watches.TryGetValue(item.File, out var current) && ReferenceEquals(current, item);
+    }
+
+    private void EnqueueDeferredEdgeRearm(EpollItem item)
+    {
+        if (item.IsDeferredEdgeRearmQueued)
+            return;
+
+        item.IsDeferredEdgeRearmQueued = true;
+        _deferredEdgeRearms.Enqueue(item);
+    }
+
+    private bool IsReadable()
+    {
+        AssertSchedulerThread();
+        RefreshDeferredEdgeRearms();
+        return _readyList.Count > 0;
+    }
+
+
+    public int TryHarvestNow(Span<byte> eventsBuffer, int maxEvents)
+    {
+        AssertSchedulerThread();
+        RefreshDeferredEdgeRearms();
+        if (_readyList.Count > 0)
+            return HarvestEvents(eventsBuffer, maxEvents);
+        return 0;
+    }
+
+    public EpollAwaitable WaitAsync(FiberTask task, byte[] eventsBuffer, int maxEvents, int timeout,
+        uint syscallNr = 0)
+    {
+        return new EpollAwaitable(task, this, eventsBuffer, maxEvents, timeout, syscallNr);
+    }
+
+    private int HarvestEvents(Span<byte> buffer, int maxEvents)
+    {
+        AssertSchedulerThread();
+        var count = Math.Min(_readyList.Count, maxEvents);
+        EpollItem[]? reEvalItems = null;
+        var reEvalCount = 0;
+        EpollItem[]? edgeRearmItems = null;
+        var edgeRearmCount = 0;
+
+        var harvested = 0;
+        try
+        {
+            for (var i = 0; i < count; i++)
+            {
+                var item = _readyList[i];
+
+                // Re-poll the underlying FD one last time exactly at harvest to get the precise mask
+                var watchEvents = (short)(item.Events & 0xFFFF);
+                var currentEvents = item.File.OpenedInode!.Poll(item.File, watchEvents);
+                var mask = (short)(watchEvents | LinuxConstants.EPOLLERR |
+                                   LinuxConstants.EPOLLHUP);
+
+                var finalEvents = (uint)(currentEvents & mask);
+
+                if (finalEvents == 0)
+                {
+                    // False alarm or event cleared before we harvested
+                    item.IsReady = false;
+                    if ((item.Events & 0xFFFF) != 0)
+                        AddScratchItem(ref reEvalItems, ref reEvalCount, count, item);
+                    continue;
+                }
+
+                var evSpan = buffer.Slice(harvested * EpollEventSize, EpollEventSize);
+                BinaryPrimitives.WriteUInt32LittleEndian(evSpan.Slice(0, 4), finalEvents);
+                BinaryPrimitives.WriteUInt64LittleEndian(evSpan.Slice(4, 8), item.Data);
+
+                item.IsReady = false;
+                harvested++;
+
+                if ((item.Events & LinuxConstants.EPOLLONESHOT) != 0)
+                    // Oneshot means it's disabled after triggering
+                    item.Events &= ~(uint)0xFFFF; // Clear watch events, keep data
+                else if ((item.Events & LinuxConstants.EPOLLET) != 0)
+                    AddScratchItem(ref edgeRearmItems, ref edgeRearmCount, count, item);
+                else if ((item.Events & LinuxConstants.EPOLLET) == 0)
+                    // Level-triggered: it should keep firing if data is still available.
+                    // We'll re-evaluate it immediately after slicing the read queue.
+                    AddScratchItem(ref reEvalItems, ref reEvalCount, count, item);
+            }
+
+            _readyList.RemoveRange(0, count);
+
+            // Re-arm LT events implicitly by re-checking them
+            for (var i = 0; i < reEvalCount; i++)
+            {
+                var item = reEvalItems![i];
+                if (IsWatchRegistered(item))
+                    CheckAndRegister(item);
+            }
+
+            for (var i = 0; i < edgeRearmCount; i++)
+            {
+                var item = edgeRearmItems![i];
+                if (IsWatchRegistered(item))
+                    RearmEdgeTriggeredItem(item);
+            }
+
+            if (_readyList.Count == 0)
+                _waitQueue.Reset();
+
+            return harvested;
+        }
+        finally
+        {
+            if (reEvalItems != null)
+            {
+                Array.Clear(reEvalItems, 0, reEvalCount);
+                ArrayPool<EpollItem>.Shared.Return(reEvalItems, clearArray: false);
+            }
+            if (edgeRearmItems != null)
+            {
+                Array.Clear(edgeRearmItems, 0, edgeRearmCount);
+                ArrayPool<EpollItem>.Shared.Return(edgeRearmItems, clearArray: false);
+            }
+        }
+
+        static void AddScratchItem(ref EpollItem[]? items, ref int itemCount, int capacity, EpollItem item)
+        {
+            items ??= ArrayPool<EpollItem>.Shared.Rent(capacity);
+            items[itemCount++] = item;
+        }
+    }
+
+    private static void AssertSchedulerThread([CallerMemberName] string? caller = null)
+    {
+        // TODO: inject KernelScheduler
+    }
+
+    public readonly struct EpollAwaitable
+    {
+        private readonly EpollAwaitState _state;
+
+        public EpollAwaitable(FiberTask task, EpollInode inode, byte[] buffer, int maxEvents, int timeoutMs,
+            uint syscallNr)
+        {
+            _state = new EpollAwaitState(task, inode, buffer, maxEvents, timeoutMs, syscallNr);
+        }
+
+        public EpollAwaiter GetAwaiter()
+        {
+            return new EpollAwaiter(_state);
+        }
+    }
+
+    public readonly struct EpollAwaiter : INotifyCompletion
+    {
+        private readonly EpollAwaitState _state;
+
+        internal EpollAwaiter(EpollAwaitState state)
+        {
+            _state = state;
+        }
+
+        public bool IsCompleted => false;
+
+        public void OnCompleted(Action continuation)
+        {
+            _state.OnCompleted(continuation);
+        }
+
+        public int GetResult()
+        {
+            return _state.GetResult();
+        }
+    }
+
+    internal sealed class EpollAwaitState
+    {
+        private readonly byte[] _buffer;
+        private readonly EpollInode _inode;
+        private readonly int _maxEvents;
+        private readonly KernelScheduler _scheduler = null!;
+        private readonly FiberTask _task = null!;
+        private readonly int _timeoutMs;
+        private bool _completed;
+        private Action? _continuation;
+        private bool _hasTimedOut;
+        private TaskAsyncOperationHandle? _operation;
+        private IDisposable? _queueWaitRegistration;
+        private int _reschedulePending;
+        private int _result;
+        private Timer? _timer;
+        private FiberTask.WaitToken? _token;
+
+        public EpollAwaitState(FiberTask task, EpollInode inode, byte[] buffer, int maxEvents, int timeoutMs,
+            uint syscallNr)
+        {
+            _task = task;
+            _scheduler = task.CommonKernel;
+            _inode = inode;
+            _buffer = buffer;
+            _maxEvents = maxEvents;
+            _timeoutMs = timeoutMs;
+        }
+
+        public void OnCompleted(Action continuation)
+        {
+            _continuation = continuation;
+            _token = _task.BeginWaitToken();
+            if (!_task.TryEnterAsyncOperation(_token, out var operation) || operation == null)
+                return;
+            _operation = operation;
+            _operation.TryInitialize(continuation);
+
+            if (_timeoutMs > 0)
+            {
+                _timer = _scheduler.ScheduleTimer(_timeoutMs, OnTimeout);
+                _operation.TryAddRegistration(TaskAsyncRegistration.From(_timer));
+            }
+
+            DoPoll();
+
+            if (!_completed)
+                _task.ArmInterruptingSignalSafetyNet(_token, OnSignal);
+        }
+
+        public int GetResult()
+        {
+            _queueWaitRegistration?.Dispose();
+            _queueWaitRegistration = null;
+            if (_token != null) _task.CompleteWaitToken(_token);
+            return _result;
+        }
+
+        private void ScheduleRePoll()
+        {
+            if (Interlocked.Exchange(ref _reschedulePending, 1) == 0)
+                _scheduler.ScheduleContinuation(OnRePollScheduled, _task);
+        }
+
+        private void OnTimeout()
+        {
+            _hasTimedOut = true;
+            ScheduleRePoll();
+        }
+
+        private void OnSignal()
+        {
+            _result = -(int)Errno.ERESTARTSYS;
+            _completed = true;
+            _operation?.TryComplete(WakeReason.Signal);
+        }
+
+        private void OnRePollScheduled()
+        {
+            _reschedulePending = 0;
+            DoPoll();
+        }
+
+        private void DoPoll()
+        {
+            _scheduler.AssertSchedulerThread();
+            if (_completed) return;
+            _queueWaitRegistration?.Dispose();
+            _queueWaitRegistration = null;
+
+            _inode.RefreshDeferredEdgeRearms();
+
+            if (_task.HasInterruptingPendingSignal())
+            {
+                _timer?.Cancel();
+                _result = -(int)Errno.ERESTARTSYS;
+                _completed = true;
+                _operation?.TryComplete(WakeReason.Signal);
+                return;
+            }
+
+            var ready = _inode._readyList.Count > 0
+                ? _inode.HarvestEvents(_buffer, _maxEvents)
+                : 0;
+
+            if (ready > 0)
+            {
+                _timer?.Cancel();
+                _result = ready;
+                _completed = true;
+                _operation?.TryComplete(WakeReason.Event);
+                return;
+            }
+
+            if (_hasTimedOut || _timeoutMs == 0)
+            {
+                _result = 0;
+                _completed = true;
+                _operation?.TryComplete(WakeReason.Timer);
+                return;
+            }
+
+            _queueWaitRegistration = _inode._waitQueue.RegisterCancelable(ScheduleRePoll, _task, _token);
+            _operation?.TryAddRegistration(TaskAsyncRegistration.From(_queueWaitRegistration));
+        }
+    }
+}

@@ -1,0 +1,147 @@
+using Fiberish.Auth.Cred;
+using Fiberish.Core.VFS.TTY;
+using Fiberish.Memory;
+using Fiberish.Syscalls;
+using Fiberish.VFS;
+
+namespace Fiberish.Core;
+
+public static class ProcessFactory
+{
+    public static Process CreateEngineInitProcess(KernelRuntime runtime, KernelScheduler scheduler,
+        UTSNamespace? uts = null)
+    {
+        var initPid = scheduler.AllocateTaskId();
+        var proc = new Process(initPid, runtime.Memory, runtime.Syscalls, uts)
+        {
+            PGID = initPid,
+            SID = initPid,
+            Name = "podish-init"
+        };
+
+        scheduler.RegisterProcess(proc);
+        scheduler.SetInitPid(proc.TGID);
+        ProcFsManager.OnProcessStart(runtime.Syscalls, proc);
+        return proc;
+    }
+
+    public static FiberTask CreateInitProcess(KernelRuntime runtime, Dentry dentry, string guestPath, string[] args,
+        string[] envs,
+        KernelScheduler scheduler, TtyDiscipline? tty = null, Mount? mount = null, UTSNamespace? uts = null,
+        int parentPid = 0, Action<Process>? configureProcess = null, PathLocation? initialWorkingDirectory = null)
+    {
+        return CreateInitProcess(
+            runtime, dentry,
+            FsEncoding.EncodeUtf8(guestPath),
+            args.Select(FsEncoding.EncodeUtf8).ToArray(),
+            envs.Select(FsEncoding.EncodeUtf8).ToArray(),
+            scheduler, tty, mount, uts, parentPid, configureProcess, initialWorkingDirectory);
+    }
+
+    public static FiberTask CreateInitProcess(KernelRuntime runtime, Dentry dentry, byte[] guestPathRaw,
+        byte[][] argsRaw, byte[][] envsRaw,
+        KernelScheduler scheduler, TtyDiscipline? tty = null, Mount? mount = null, UTSNamespace? uts = null,
+        int parentPid = 0, Action<Process>? configureProcess = null, PathLocation? initialWorkingDirectory = null)
+    {
+        var initPid = scheduler.AllocateTaskId();
+        var proc = new Process(initPid, runtime.Memory, runtime.Syscalls, uts)
+        {
+            PGID = 0,
+            SID = 0,
+            PPID = parentPid
+        };
+
+        proc.PGID = proc.TGID;
+        proc.SID = proc.TGID;
+
+        if (tty != null)
+        {
+            tty.SessionId = proc.SID;
+            tty.ForegroundPgrp = proc.PGID;
+            proc.ControllingTty = tty;
+        }
+
+        configureProcess?.Invoke(proc);
+        scheduler.RegisterProcess(proc);
+        scheduler.SetInitPid(proc.TGID);
+
+        if (initialWorkingDirectory is { IsValid: true } cwd)
+            proc.Syscalls.UpdateCurrentWorkingDirectory(cwd, "ProcessFactory.CreateInitProcess");
+
+        FiberTask? mainTask = null;
+        try
+        {
+            mainTask = new FiberTask(proc.TGID, proc, runtime.Engine, scheduler);
+            mainTask.OwnsCPU = false;
+            runtime.Engine.Owner = mainTask;
+
+            proc.LoadExecutable(dentry, guestPathRaw, argsRaw, envsRaw, mount ?? runtime.Syscalls.RootMount!);
+            ProcFsManager.OnProcessStart(runtime.Syscalls, proc);
+
+            if (parentPid > 0)
+            {
+                var parent = scheduler.GetProcess(parentPid);
+                if (parent != null)
+                    if (!parent.Children.Contains(proc.TGID))
+                        parent.Children.Add(proc.TGID);
+            }
+
+            return mainTask;
+        }
+        catch
+        {
+            if (mainTask != null)
+            {
+                scheduler.DetachProcessTasks(proc.TGID);
+                runtime.Engine.Owner = null;
+            }
+
+            scheduler.UnregisterProcess(proc.TGID);
+            throw;
+        }
+    }
+
+    public static FiberTask CreateVirtualDaemonProcess(SyscallManager templateSyscalls, KernelScheduler scheduler,
+        string name, UTSNamespace? uts = null, int parentPid = 0)
+    {
+        scheduler.AssertSchedulerThread();
+
+        var pid = scheduler.AllocateTaskId();
+        var mem = new VMAManager(templateSyscalls.MemoryContext);
+        var engine = new Engine(templateSyscalls.MemoryContext);
+        var syscalls = templateSyscalls.Clone(mem, false, true);
+        syscalls.CurrentSyscallEngine = engine;
+        syscalls.RegisterEngine(engine);
+        engine.CurrentSyscallManager = syscalls;
+
+        var proc = new Process(pid, mem, syscalls, uts)
+        {
+            PGID = pid,
+            SID = pid,
+            PPID = parentPid,
+            Kind = ProcessKind.VirtualDaemon,
+            VirtualDaemonName = name,
+            Name = name
+        };
+
+        var parent = parentPid > 0 ? scheduler.GetProcess(parentPid) : null;
+        if (parent != null)
+            CredentialService.CopyCredentials(parent, proc);
+
+        scheduler.RegisterProcess(proc);
+        ProcFsManager.OnProcessStart(syscalls, proc);
+
+        var task = new FiberTask(proc.TGID, proc, engine, scheduler)
+        {
+            ExecutionMode = TaskExecutionMode.HostService,
+            Status = FiberTaskStatus.Waiting
+        };
+        engine.Owner = task;
+
+        if (parentPid > 0)
+            if (parent != null && !parent.Children.Contains(proc.TGID))
+                parent.Children.Add(proc.TGID);
+
+        return task;
+    }
+}

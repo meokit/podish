@@ -1,0 +1,233 @@
+using Fiberish.Native;
+using Fiberish.VFS;
+
+namespace Fiberish.Memory;
+
+[Flags]
+public enum Protection
+{
+    None = 0,
+    Read = 1,
+    Write = 2,
+    Exec = 4
+}
+
+[Flags]
+public enum MapFlags
+{
+    Shared = 0x01,
+    Private = 0x02,
+    Fixed = 0x10,
+    Anonymous = 0x20,
+    GrowDown = 0x0100,
+    Stack = 0x20000,
+    FixedNoReplace = 0x100000
+}
+
+public class VmArea
+{
+    public uint Start { get; set; }
+    public uint End { get; set; } // Exclusive
+    public Protection Perms { get; set; }
+    public MapFlags Flags { get; set; }
+    public VmaFileMapping? FileMapping { get; set; }
+    public LinuxFile? File => FileMapping?.File;
+    public Inode? LogicalInode => FileMapping?.LogicalInode;
+    public MappingBackedInode? BackingInode => FileMapping?.BackingInode;
+    public long Offset { get; set; }
+    public ulong VmPgoff { get; set; }
+    public bool DontFork { get; set; }
+    public uint GrowDownLimit { get; set; }
+    public uint GrowDownGuardGap { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+    public AddressSpace? VmMapping { get; set; }
+
+    /// <summary>
+    ///     Holds per-process private pages for MAP_PRIVATE mappings.
+    ///     Null for MAP_SHARED and other non-private mappings.
+    /// </summary>
+    public AnonVma? VmAnonVma { get; set; }
+    public uint SyntheticZeroStart { get; set; }
+    public uint SyntheticZeroEnd { get; set; }
+
+    public uint Length => End - Start;
+    public bool HasSyntheticZeroRange => SyntheticZeroStart < SyntheticZeroEnd;
+
+    public bool IsFileBacked => File != null;
+
+    public uint GetPageIndex(uint guestPageStart)
+    {
+        return checked((uint)VmPgoff) + (guestPageStart - Start) / LinuxConstants.PageSize;
+    }
+
+    public long GetRelativeOffsetForAddress(uint guestAddr)
+    {
+        return (long)guestAddr - Start;
+    }
+
+    public long GetRelativeOffsetForPageIndex(uint pageIndex)
+    {
+        return (long)(pageIndex - checked((uint)VmPgoff)) * LinuxConstants.PageSize;
+    }
+
+    public uint GetGuestPageStart(uint pageIndex)
+    {
+        return Start + (uint)GetRelativeOffsetForPageIndex(pageIndex);
+    }
+
+    public long GetAbsoluteFileOffsetForPageIndex(uint pageIndex)
+    {
+        return Offset + GetRelativeOffsetForPageIndex(pageIndex);
+    }
+
+    public long GetFileBackingLength()
+    {
+        if (!IsFileBacked) return 0;
+
+        var inodeSize = (long)(LogicalInode?.Size ?? 0);
+        var remaining = inodeSize - Offset;
+        if (remaining <= 0) return 0;
+        return Math.Min(remaining, Length);
+    }
+
+    public long GetRemainingBackingBytes(long relativeOffset)
+    {
+        return GetFileBackingLength() - relativeOffset;
+    }
+
+    public int GetReadLengthForRelativeOffset(long relativeOffset)
+    {
+        if (GetFileBackingLength() <= 0)
+            return LinuxConstants.PageSize;
+
+        var remainingBackingBytes = GetRemainingBackingBytes(relativeOffset);
+        if (remainingBackingBytes <= 0)
+            return 0;
+        if (remainingBackingBytes < LinuxConstants.PageSize)
+            return (int)remainingBackingBytes;
+        return LinuxConstants.PageSize;
+    }
+
+    public void SetSyntheticZeroRange(uint start, uint end)
+    {
+        SyntheticZeroStart = start;
+        SyntheticZeroEnd = end;
+        TrimSyntheticZeroRangeToBounds();
+    }
+
+    public void TrimSyntheticZeroRangeToBounds()
+    {
+        if (!HasSyntheticZeroRange || End <= Start)
+        {
+            SyntheticZeroStart = 0;
+            SyntheticZeroEnd = 0;
+            return;
+        }
+
+        var clampedStart = SyntheticZeroStart < Start ? Start : SyntheticZeroStart;
+        var clampedEnd = SyntheticZeroEnd > End ? End : SyntheticZeroEnd;
+        if (clampedStart >= clampedEnd)
+        {
+            SyntheticZeroStart = 0;
+            SyntheticZeroEnd = 0;
+            return;
+        }
+
+        SyntheticZeroStart = clampedStart;
+        SyntheticZeroEnd = clampedEnd;
+    }
+
+    public bool TryGetSyntheticZeroPageSlice(uint guestPageStart, out int zeroOffset, out int zeroLength)
+    {
+        zeroOffset = 0;
+        zeroLength = 0;
+        if (!HasSyntheticZeroRange)
+            return false;
+
+        var pageEnd = checked(guestPageStart + LinuxConstants.PageSize);
+        var overlapStart = SyntheticZeroStart > guestPageStart ? SyntheticZeroStart : guestPageStart;
+        var overlapEnd = SyntheticZeroEnd < pageEnd ? SyntheticZeroEnd : pageEnd;
+        if (overlapStart >= overlapEnd)
+            return false;
+
+        zeroOffset = checked((int)(overlapStart - guestPageStart));
+        zeroLength = checked((int)(overlapEnd - overlapStart));
+        return true;
+    }
+
+    public VmArea Clone()
+    {
+        VmMapping?.AddRef();
+        // Private pages are shared page-for-page across fork and split lazily on the next write.
+        var privateObj = VmAnonVma?.CloneForFork();
+        var clonedFileMapping = FileMapping?.AddRef();
+
+        return new VmArea
+        {
+            Start = Start,
+            End = End,
+            Perms = Perms,
+            Flags = Flags,
+            FileMapping = clonedFileMapping,
+            Offset = Offset,
+            VmPgoff = VmPgoff,
+            DontFork = DontFork,
+            GrowDownLimit = GrowDownLimit,
+            GrowDownGuardGap = GrowDownGuardGap,
+            Name = Name,
+            VmMapping = VmMapping,
+            VmAnonVma = privateObj,
+            SyntheticZeroStart = SyntheticZeroStart,
+            SyntheticZeroEnd = SyntheticZeroEnd
+        };
+    }
+}
+
+public sealed class VmaFileMapping
+{
+    private int _refCount = 1;
+
+    public VmaFileMapping(LinuxFile file, Inode? logicalInode = null, MappingBackedInode? backingInode = null)
+    {
+        File = file;
+        LogicalInode = logicalInode ?? file.OpenedInode;
+        BackingInode = backingInode ?? ResolveInitialBackingInode(file);
+    }
+
+    public LinuxFile File { get; }
+    public Inode? LogicalInode { get; }
+    public MappingBackedInode? BackingInode { get; private set; }
+
+    public void SetBackingInode(MappingBackedInode? backingInode)
+    {
+        BackingInode = backingInode;
+    }
+
+    public VmaFileMapping AddRef()
+    {
+        Interlocked.Increment(ref _refCount);
+        return this;
+    }
+
+    public void Release()
+    {
+        var remaining = Interlocked.Decrement(ref _refCount);
+        if (remaining > 0) return;
+        if (remaining == 0)
+        {
+            File.Close();
+            return;
+        }
+
+        VfsDebugTrace.FailInvariant($"VmaFileMapping refcount underflow file={File.Dentry.Name}");
+    }
+
+    private static MappingBackedInode? ResolveInitialBackingInode(LinuxFile file)
+    {
+        if (file.OpenedInode is OverlayInode overlayInode)
+            return overlayInode.ResolveMmapSource(file) as MappingBackedInode ?? file.OpenedInode as MappingBackedInode;
+
+        return file.OpenedInode as MappingBackedInode;
+    }
+}

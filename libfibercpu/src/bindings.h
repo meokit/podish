@@ -1,0 +1,218 @@
+#ifndef EMU86_BINDINGS_H
+#define EMU86_BINDINGS_H
+
+#ifdef __cplusplus
+#include <cstddef>
+#include <cstdint>
+namespace fiberish {
+struct EmuState;
+struct BasicBlock;
+}  // namespace fiberish
+typedef fiberish::EmuState EmuState;
+typedef fiberish::BasicBlock BasicBlock;
+struct X86_MmuHandle;
+#else
+#include <stddef.h>
+#include <stdint.h>
+typedef struct EmuState EmuState;
+typedef struct BasicBlock BasicBlock;
+typedef struct X86_MmuHandle X86_MmuHandle;
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct {
+    uint32_t guest_page;
+    uint8_t perms;
+    uint8_t flags;
+    uint16_t reserved;
+    void* host_page;
+} X86_PageMapping;
+
+enum { X86_PAGE_FLAG_DIRTY = 1 << 0, X86_PAGE_FLAG_EXTERNAL = 1 << 1 };
+
+// Creation / Destruction
+EmuState* X86_Create();
+// share_mem=1: Threads (CLONE_VM), share_mem=0: Fork (copy owned pages, preserve external mappings)
+EmuState* X86_Clone(EmuState* parent, int share_mem);
+void X86_Destroy(EmuState* state);
+
+// Register Access
+uint32_t X86_RegRead(EmuState* state, int reg_index);
+void X86_RegWrite(EmuState* state, int reg_index, uint32_t val);
+
+uint32_t X86_GetEIP(EmuState* state);
+void X86_SetEIP(EmuState* state, uint32_t eip);
+
+uint32_t X86_GetEFLAGS(EmuState* state);
+void X86_SetEFLAGS(EmuState* state, uint32_t val);
+
+// XMM Access (128-bit)
+void X86_ReadXMM(EmuState* state, int idx, uint8_t* val);
+void X86_WriteXMM(EmuState* state, int idx, const uint8_t* val);
+
+// FPU Access
+uint16_t X86_GetFCW(EmuState* state);
+void X86_SetFCW(EmuState* state, uint16_t val);
+uint16_t X86_GetFSW(EmuState* state);
+void X86_SetFSW(EmuState* state, uint16_t val);
+uint16_t X86_GetFTW(EmuState* state);
+void X86_SetFTW(EmuState* state, uint16_t val);
+void X86_ReadFPUReg(EmuState* state, int idx, uint8_t* val);
+void X86_WriteFPUReg(EmuState* state, int idx, const uint8_t* val);
+
+// Segment Base Access
+uint32_t X86_SegBaseRead(EmuState* state, int seg_index);
+void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base);
+
+// Memory Access
+void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms);
+void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size);
+void X86_ReprotectMappedRange(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms);
+// DEPRECATED: Use ResolvePtrForRead/ResolvePtrForWrite + direct memcpy instead. These are slow (byte-by-byte) and for
+// testing only.
+void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size);
+void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size);
+int X86_MemIsDirty(EmuState* state, uint32_t addr);
+int X86_MemHasSlowWrite(EmuState* state, uint32_t addr);
+// Returns physical address (pointer) if valid, or NULL if not mapped/no-perm
+void* X86_ResolvePtrForRead(EmuState* state, uint32_t addr);
+void* X86_ResolvePtrForWrite(EmuState* state, uint32_t addr);
+// Collect present page mappings in [addr, addr + size), one record per mapped page.
+size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86_PageMapping* buffer, size_t max_count);
+// Allocate a single page with given permissions, returns host pointer to page
+void* X86_AllocatePage(EmuState* state, uint32_t addr, uint8_t perms);
+// MMU handle management (intrusive refcount in native core).
+X86_MmuHandle* X86_MmuCreateEmpty();
+X86_MmuHandle* X86_MmuCloneSkipExternal(X86_MmuHandle* mmu);
+X86_MmuHandle* X86_MmuRetain(X86_MmuHandle* mmu);
+void X86_MmuRelease(X86_MmuHandle* mmu);
+uintptr_t X86_MmuGetIdentity(X86_MmuHandle* mmu);
+// Engine/MMU binding APIs.
+X86_MmuHandle* X86_EngineGetMmu(EmuState* state);
+X86_MmuHandle* X86_EngineDetachMmu(EmuState* state);
+int X86_EngineAttachMmu(EmuState* state, X86_MmuHandle* mmu);
+
+// Execution
+void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts);
+void X86_EmuStop(EmuState* state);
+void X86_EmuFault(EmuState* state);
+void X86_EmuYield(EmuState* state);
+int X86_Step(EmuState* state);
+int X86_GetStatus(EmuState* state);
+
+// Callbacks
+typedef int (*FaultHandler)(EmuState* state, uint32_t addr, int is_write, void* userdata);
+typedef void (*MemHook)(EmuState* state, uint32_t addr, uint32_t size, int is_write, uint64_t val, void* userdata);
+typedef int (*InterruptHandler)(EmuState* state, uint32_t vector, void* userdata);
+
+void X86_SetFaultCallback(EmuState* state, FaultHandler handler, void* userdata);
+void X86_SetMemHook(EmuState* state, MemHook hook, void* userdata);
+void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook, void* userdata);
+
+// Cache Control
+void X86_ResetAllCodeCache(EmuState* state);
+void X86_ResetMemory(EmuState* state);
+void X86_ResetCodeCacheByRange(EmuState* state, uint32_t addr, uint32_t size);
+void X86_InvalidateCodeCacheHostPages(EmuState* state, const void* const* host_pages, size_t count);
+void X86_SetCodeCacheBudgetBytes(EmuState* state, uint64_t bytes);
+
+// Diagnostics
+int32_t X86_GetFaultVector(EmuState* state);
+
+// TSC Control
+void X86_SetTscFrequency(EmuState* state, uint64_t freq);
+void X86_SetTscMode(EmuState* state, int mode);
+void X86_SetTscOffset(EmuState* state, uint64_t offset);
+
+// Logging
+// Matches Microsoft.Extensions.Logging.LogLevel
+typedef void (*X86LogCallback)(int level, const char* message, void* userdata);
+void X86_SetLogCallback(EmuState* state, X86LogCallback callback, void* userdata);
+
+// TLB Statistics
+typedef struct {
+    uint64_t l1_read_hits;
+    uint64_t l1_write_hits;
+    uint64_t l2_read_hits;
+    uint64_t l2_write_hits;
+    uint64_t read_misses;
+    uint64_t write_misses;
+    uint64_t total_reads;
+    uint64_t total_writes;
+} X86_TlbStats;
+
+void X86_GetTlbStats(EmuState* state, X86_TlbStats* stats);
+void X86_ResetTlbStats(EmuState* state);
+int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size);
+
+typedef struct {
+    uint64_t block_count;
+    uint64_t total_block_insts;
+    uint64_t stop_reason_counts[8];
+    uint64_t inst_histogram[65];
+    uint64_t block_concat_attempts;
+    uint64_t block_concat_success;
+    uint64_t block_concat_success_direct_jmp;
+    uint64_t block_concat_success_jcc_fallthrough;
+    uint64_t block_concat_reject_not_concat_terminal;
+    uint64_t block_concat_reject_cross_page;
+    uint64_t block_concat_reject_size_limit;
+    uint64_t block_concat_reject_loop;
+    uint64_t block_concat_reject_target_missing;
+} X86_BlockStats;
+
+void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats);
+
+typedef struct {
+    uint32_t start_eip;
+    uint32_t inst_count;
+    uint64_t exec_count;
+} X86_HotBlock;
+
+typedef struct {
+    uint64_t executed_block_entries;
+    uint64_t executed_inst_total;
+    uint64_t exec_weighted_histogram[65];
+    double exec_weighted_avg_block_insts;
+    X86_HotBlock top_blocks[8];
+} X86_BlockExecStats;
+
+void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats);
+
+typedef struct {
+    void* handler;
+    uint64_t exec_count;
+} X86_HandlerProfileEntry;
+
+size_t X86_GetHandlerProfileCount(EmuState* state);
+size_t X86_GetHandlerProfileStats(EmuState* state, X86_HandlerProfileEntry* buffer, size_t max_count);
+
+// Test-only helper for directly exercising HostPageSet spill/dedup behavior.
+size_t X86_DebugHostPageSetUniqueCount(const void* const* host_pages, size_t count);
+
+// Block Coverage
+// Returns pointer to internal BasicBlock structures
+// C# must match the struct layout to read them.
+size_t X86_GetBlockCount(EmuState* state);
+size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count);
+
+// Handler reflection APIs generated from fibercpu_core.
+int32_t X86_GetHandlerCount(void);
+int32_t X86_GetHandlerId(void* handler);
+void* X86_GetHandlerById(int32_t handler_id);
+const char* X86_GetHandlerSymbolById(int32_t handler_id);
+
+// Returns the base logical opcode id for a dispatch/specialized handler, or -1 if unknown.
+int32_t X86_GetOpIdForHandler(void* handler);
+
+// Returns the base address of the fibercpu library (for symbol resolution)
+void* X86_GetLibAddress();
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif  // EMU86_BINDINGS_H

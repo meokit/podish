@@ -1,0 +1,596 @@
+using System.Buffers;
+using System.Buffers.Binary;
+using System.Text;
+using Fiberish.Core;
+using Fiberish.Memory;
+using Fiberish.Native;
+using Fiberish.VFS;
+using Microsoft.Extensions.Logging;
+
+namespace Fiberish.Syscalls;
+
+/// <summary>
+///     Represents a location in the VFS: dentry + mount.
+///     In Linux kernel, this is equivalent to struct path (dentry + vfsmount).
+/// </summary>
+public struct PathLocation
+{
+    public Dentry? Dentry { get; }
+    public Mount? Mount { get; }
+
+    public PathLocation(Dentry? dentry, Mount? mount)
+    {
+        Dentry = dentry;
+        Mount = mount;
+    }
+
+    public static PathLocation None => new(null, null);
+
+    public bool IsValid => Dentry != null && Mount != null;
+    public bool IsNull => Dentry == null;
+}
+
+public readonly record struct UserStringReadResult(string Value, int ErrorCode)
+{
+    public bool Success => ErrorCode == 0;
+}
+
+public struct RentedUserBytes : IDisposable
+{
+    private byte[]? _buffer;
+
+    public RentedUserBytes(byte[] rentedBuffer, int length)
+    {
+        _buffer = rentedBuffer;
+        Length = length;
+    }
+
+    public int Length { get; private set; }
+
+    public bool IsEmpty => Length == 0;
+
+    public bool IsAbsolute => Length > 0 && _buffer![0] == (byte)'/';
+
+    public byte this[int index] => _buffer![index];
+
+    public ReadOnlySpan<byte> Span => _buffer == null ? [] : _buffer.AsSpan(0, Length);
+
+    public byte[] UnsafeBuffer => _buffer ?? Array.Empty<byte>();
+
+    public byte[] ToArray()
+    {
+        return Span.ToArray();
+    }
+
+    public void Dispose()
+    {
+        if (_buffer == null)
+            return;
+
+        ArrayPool<byte>.Shared.Return(_buffer);
+        _buffer = null;
+        Length = 0;
+    }
+}
+
+public partial class SyscallManager
+{
+    // Lazy-initialized PathWalker instance
+    private PathWalker? _pathWalker;
+
+    // Callbacks for Task interaction
+    public Func<int, uint, uint, uint, uint, (int, Exception?)>? CloneHandler { get; set; }
+    public Action<Engine, int, bool>? ExitHandler { get; set; }
+    public Func<Engine, int>? GetTID { get; set; }
+    public Func<Engine, int>? GetTGID { get; set; }
+
+    /// <summary>
+    ///     Gets the PathWalker instance for advanced path resolution.
+    /// </summary>
+    public PathWalker PathWalker => _pathWalker ??= new PathWalker(this);
+
+    public string ReadString(uint addr)
+    {
+        if (addr == 0)
+            return "";
+
+        const int maxLength = 4096;
+        var rented = ArrayPool<byte>.Shared.Rent(maxLength);
+        try
+        {
+            ReadNullTerminatedUserBytes(addr, rented.AsSpan(0, maxLength), out var length, out _);
+            return Encoding.UTF8.GetString(rented.AsSpan(0, length));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    public UserStringReadResult ReadUserString(uint addr, int maxLength = LinuxConstants.PathMax)
+    {
+        if (addr == 0)
+            return new UserStringReadResult("", -(int)Errno.EFAULT);
+        if (maxLength <= 0)
+            return new UserStringReadResult("", -(int)Errno.ENAMETOOLONG);
+
+        var rented = ArrayPool<byte>.Shared.Rent(maxLength);
+        try
+        {
+            // Syscall argument reads should fault in guest pages when the address is valid
+            // but currently unmapped into the host MMU, e.g. string literals in file-backed
+            // mappings. Using CopyFromUser here preserves the existing prefault behavior.
+            var success = ReadNullTerminatedUserBytes(addr, rented.AsSpan(0, maxLength), out var length,
+                out var terminated);
+            if (!success)
+                return new UserStringReadResult("", -(int)Errno.EFAULT);
+            if (!terminated)
+                return new UserStringReadResult("", -(int)Errno.ENAMETOOLONG);
+
+            return new UserStringReadResult(Encoding.UTF8.GetString(rented.AsSpan(0, length)), 0);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    public int ReadUserBytes(uint addr, out RentedUserBytes value, int maxLength = LinuxConstants.PathMax)
+    {
+        value = default;
+        if (addr == 0)
+            return -(int)Errno.EFAULT;
+        if (maxLength <= 0)
+            return -(int)Errno.ENAMETOOLONG;
+
+        var rented = ArrayPool<byte>.Shared.Rent(maxLength);
+        var success = false;
+        var handedOff = false;
+        try
+        {
+            success = ReadNullTerminatedUserBytes(addr, rented.AsSpan(0, maxLength), out var length,
+                out var terminated);
+            if (!success)
+                return -(int)Errno.EFAULT;
+            if (!terminated)
+                return -(int)Errno.ENAMETOOLONG;
+
+            value = new RentedUserBytes(rented, length);
+            handedOff = true;
+            return 0;
+        }
+        finally
+        {
+            if (!handedOff)
+                ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    public int ReadPathArgument(uint addr, out string path, bool allowEmpty = false)
+    {
+        var result = ReadUserString(addr);
+        path = result.Success ? result.Value : "";
+        if (!result.Success) return result.ErrorCode;
+        if (!allowEmpty && path.Length == 0) return -(int)Errno.ENOENT;
+        return 0;
+    }
+
+    public int ReadPathArgumentBytes(uint addr, out RentedUserBytes path, bool allowEmpty = false)
+    {
+        var rc = ReadUserBytes(addr, out path);
+        if (rc != 0)
+            return rc;
+        if (!allowEmpty && path.IsEmpty)
+        {
+            path.Dispose();
+            return -(int)Errno.ENOENT;
+        }
+
+        return 0;
+    }
+
+    public byte[][] ReadUserCStringVectorBytes(uint vectorPtr)
+    {
+        if (vectorPtr == 0)
+            return [];
+
+        var result = new List<byte[]>();
+        var ptrBuf = new byte[4];
+        var curr = vectorPtr;
+
+        while (true)
+        {
+            if (!CurrentSyscallEngine.CopyFromUser(curr, ptrBuf))
+                break;
+            var strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
+            if (strPtr == 0)
+                break;
+
+            if (ReadUserBytes(strPtr, out var rented) != 0)
+                break;
+            try
+            {
+                result.Add(rented.ToArray());
+            }
+            finally
+            {
+                rented.Dispose();
+            }
+
+            curr += 4;
+        }
+
+        return [.. result];
+    }
+
+    /// <summary>
+    ///     Walk a path and return both dentry and mount information.
+    ///     This is the core path resolution function, similar to Linux's path_lookup().
+    ///     Uses the new PathWalker implementation with NameData pattern.
+    /// </summary>
+    /// <param name="path">Path to resolve</param>
+    /// <param name="startAt">Optional starting location (default for cwd)</param>
+    /// <param name="followLink">Whether to follow symlinks on final component</param>
+    /// <returns>Resolved path location</returns>
+    public PathLocation PathWalk(string path, PathLocation? startAt = null, bool followLink = true)
+    {
+        // Use the new PathWalker implementation
+        return PathWalker.PathWalk(path, startAt, followLink);
+    }
+
+    /// <summary>
+    ///     Walk a path with explicit LookupFlags.
+    /// </summary>
+    /// <param name="path">Path to resolve</param>
+    /// <param name="flags">Lookup flags controlling behavior</param>
+    /// <returns>Resolved path location</returns>
+    public PathLocation PathWalkWithFlags(string path, LookupFlags flags)
+    {
+        return PathWalker.PathWalk(path, flags);
+    }
+
+    private bool ReadNullTerminatedUserBytes(uint addr, Span<byte> destination, out int length, out bool terminated)
+    {
+        length = 0;
+        terminated = false;
+        var current = addr;
+
+        while (length < destination.Length)
+        {
+            var chunkLength = Math.Min(destination.Length - length,
+                LinuxConstants.PageSize - (int)(current & (LinuxConstants.PageSize - 1)));
+            var chunk = destination.Slice(length, chunkLength);
+            if (!CurrentSyscallEngine.CopyFromUser(current, chunk))
+                return false;
+
+            var nulIndex = chunk.IndexOf((byte)0);
+            if (nulIndex >= 0)
+            {
+                length += nulIndex;
+                terminated = true;
+                return true;
+            }
+
+            length += chunkLength;
+            current += (uint)chunkLength;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     Walk a path with explicit starting location and flags.
+    /// </summary>
+    /// <param name="path">Path to resolve</param>
+    /// <param name="startAt">Starting path location</param>
+    /// <param name="flags">Lookup flags controlling behavior</param>
+    /// <returns>Resolved path location</returns>
+    public PathLocation PathWalkWithFlags(string path, PathLocation startAt, LookupFlags flags)
+    {
+        return PathWalker.PathWalk(path, startAt, flags);
+    }
+
+    /// <summary>
+    ///     Walk a path and return full NameData with resolution state.
+    ///     Useful for create operations where you need the final component name.
+    /// </summary>
+    /// <param name="path">Path to resolve</param>
+    /// <param name="flags">Lookup flags controlling behavior</param>
+    /// <returns>NameData with full resolution state</returns>
+    public NameData PathWalkWithData(string path, LookupFlags flags = LookupFlags.FollowSymlink)
+    {
+        return PathWalker.PathWalkWithData(path, flags);
+    }
+
+    /// <summary>
+    ///     Prepare for a create operation - resolve parent directory and extract name.
+    /// </summary>
+    /// <param name="path">Path where file will be created</param>
+    /// <param name="startAt">Optional starting location</param>
+    /// <returns>Tuple of (parent location, filename, error code)</returns>
+    public (PathLocation parent, FsName name, int error) PathWalkForCreate(string path, PathLocation? startAt = null)
+    {
+        return PathWalker.PathWalkForCreate(path, startAt);
+    }
+
+    public int AllocFD(LinuxFile linuxFile, int minFd = 0, bool? closeOnExec = null)
+    {
+        var fd = minFd;
+        while (FDs.ContainsKey(fd)) fd++;
+        FDs[fd] = linuxFile;
+        var cloexec = closeOnExec ?? (linuxFile.Flags & FileFlags.O_CLOEXEC) != 0;
+        if (cloexec)
+            FdCloseOnExecSet.Add(fd);
+        else
+            FdCloseOnExecSet.Remove(fd);
+        return fd;
+    }
+
+    public int DupFD(LinuxFile linuxFile, int minFd = 0, bool closeOnExec = false)
+    {
+        linuxFile.Get();
+        return AllocFD(linuxFile, minFd, closeOnExec);
+    }
+
+    public int DupFD(int oldFd, int minFd = 0, bool closeOnExec = false)
+    {
+        var file = GetFD(oldFd);
+        if (file == null) return -(int)Errno.EBADF;
+        return DupFD(file, minFd, closeOnExec);
+    }
+
+    public LinuxFile? GetFD(int fd)
+    {
+        return FDs.TryGetValue(fd, out var f) ? f : null;
+    }
+
+    public bool IsFdCloseOnExec(int fd)
+    {
+        return FdCloseOnExecSet.Contains(fd);
+    }
+
+    public void SetFdCloseOnExec(int fd, bool closeOnExec)
+    {
+        if (!FDs.ContainsKey(fd)) return;
+        if (closeOnExec)
+            FdCloseOnExecSet.Add(fd);
+        else
+            FdCloseOnExecSet.Remove(fd);
+    }
+
+    public IReadOnlyList<int> GetCloseOnExecFds()
+    {
+        return FdCloseOnExecSet.ToList();
+    }
+
+    public void FreeFD(int fd)
+    {
+        TryFreeFD(fd);
+    }
+
+    public bool TryFreeFD(int fd)
+    {
+        FdCloseOnExecSet.Remove(fd);
+        if (!FDs.Remove(fd, out var f)) return false;
+        f.Close();
+        return true;
+    }
+
+    public void CloseAllFileDescriptors()
+    {
+        if (IsClosed) return;
+        var fds = FDs.Keys.ToList();
+        foreach (var fd in fds)
+            FreeFD(fd);
+        FdCloseOnExecSet.Clear();
+    }
+
+    /// <summary>
+    ///     Best-effort container-wide writeback.
+    ///     Flushes shared mmap dirty pages, open-file sync paths, and mounted superblock page caches.
+    /// </summary>
+    public void SyncContainerPageCache()
+    {
+        var scheduler = CurrentTask?.CommonKernel;
+        var managers = new HashSet<SyscallManager>();
+        var mmTargets = new Dictionary<VMAManager, (Engine Engine, Process? Process)>();
+        if (scheduler != null)
+            foreach (var process in scheduler.GetProcessesSnapshot())
+                if (process.Syscalls != null)
+                {
+                    var manager = process.Syscalls;
+                    managers.Add(manager);
+                    var syncEngine = process.Threads
+                        .Select(static t => t.CPU)
+                        .FirstOrDefault(static cpu => cpu.State != IntPtr.Zero) ?? manager.CurrentSyscallEngine;
+                    if (!mmTargets.ContainsKey(manager.Mem))
+                        mmTargets[manager.Mem] = (syncEngine, process);
+                }
+
+        if (managers.Count == 0)
+        {
+            managers.Add(this);
+            var fallbackProcess = CurrentProcess;
+            var fallbackEngine = fallbackProcess?.Threads
+                .Select(static t => t.CPU)
+                .FirstOrDefault(static cpu => cpu.State != IntPtr.Zero) ?? CurrentSyscallEngine;
+            mmTargets[Mem] = (fallbackEngine, fallbackProcess);
+        }
+
+        foreach (var (mm, target) in mmTargets)
+            try
+            {
+                ProcessAddressSpaceSync.SyncAllMappedSharedFiles(mm, target.Engine, target.Process);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "SyncAllMappedSharedFiles failed for one process");
+            }
+
+        var syncedFiles = new HashSet<LinuxFile>();
+        foreach (var manager in managers)
+        foreach (var file in manager.FDs.Values)
+        {
+            if (file == null || !syncedFiles.Add(file)) continue;
+            try
+            {
+                file.OpenedInode?.Sync(file);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Inode.Sync failed for one open file");
+            }
+        }
+
+        var superblocks = new HashSet<SuperBlock>();
+        foreach (var manager in managers)
+        foreach (var mount in manager.Mounts)
+            if (mount?.SB != null)
+                superblocks.Add(mount.SB);
+
+        foreach (var sb in superblocks)
+        {
+            List<Inode> inodes;
+            lock (sb.Lock)
+            {
+                inodes = sb.Inodes.ToList();
+            }
+
+            foreach (var inode in inodes)
+            {
+                if (inode.Mapping == null) continue;
+                try
+                {
+                    _ = inode.WritePages(null, new WritePagesRequest(0, long.MaxValue));
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "WritePages failed for one inode");
+                }
+            }
+        }
+    }
+
+    public (PathLocation loc, string guestPath) ResolvePath(byte[] pathBytes, int pathLength,
+        bool isHostRelativeDefault = false)
+    {
+        string guestPath;
+        PathLocation loc;
+
+        if (pathBytes[0] == '/' || !isHostRelativeDefault)
+        {
+            // Absolute guest path OR relative guest path (not defaulting to host)
+            loc = PathWalker.PathWalk(pathBytes, pathLength);
+            if (loc.IsValid || !isHostRelativeDefault)
+            {
+                guestPath = FsEncoding.DecodeUtf8Lossy(pathBytes.AsSpan(0, pathLength));
+                return (loc, guestPath);
+            }
+        }
+
+        // Fall back to string implementation for host path resolution
+        return ResolvePath(FsEncoding.DecodeUtf8Lossy(pathBytes.AsSpan(0, pathLength)), isHostRelativeDefault);
+    }
+
+    public (PathLocation loc, byte[] guestPathRaw, string displayPath) ResolvePathBytes(ReadOnlySpan<byte> pathBytes,
+        bool isHostRelativeDefault = false)
+    {
+        byte[] guestPathRaw;
+        PathLocation loc;
+
+        if (pathBytes.Length == 0)
+            return (PathLocation.None, [], "");
+
+        if (pathBytes[0] == '/' || !isHostRelativeDefault)
+        {
+            var asArray = pathBytes.ToArray();
+            loc = PathWalker.PathWalk(asArray, asArray.Length);
+            if (loc.IsValid || !isHostRelativeDefault)
+            {
+                guestPathRaw = asArray;
+                return (loc, guestPathRaw, FsEncoding.DecodeUtf8Lossy(guestPathRaw));
+            }
+        }
+
+        // Fall back to string implementation for host path resolution
+        var lossy = FsEncoding.DecodeUtf8Lossy(pathBytes);
+        var stringResult = ResolvePath(lossy, isHostRelativeDefault);
+        return (stringResult.loc, pathBytes.ToArray(), lossy);
+    }
+
+    public (PathLocation loc, string guestPath) ResolvePath(string path, bool isHostRelativeDefault = false)
+    {
+        string guestPath;
+        PathLocation loc;
+
+        if (path.StartsWith("/") || !isHostRelativeDefault)
+        {
+            // Absolute guest path OR relative guest path (not defaulting to host)
+            loc = PathWalk(path);
+            if (loc.IsValid || !isHostRelativeDefault)
+            {
+                guestPath = path;
+                return (loc, guestPath);
+            }
+        }
+
+        // Host resolution (relative path or absolute host path during bootstrap)
+        var hostPath = Path.GetFullPath(path);
+
+        // Try to find if it fits in VFS
+        loc = PathLocation.None;
+        guestPath = path; // Default guest path to the input if not internal
+
+        // Find host root
+        string? hostRoot = null;
+        HostSuperBlock? hsb = null;
+
+        if (Root.Mount!.SB is HostSuperBlock h)
+        {
+            hsb = h;
+            hostRoot = h.HostRoot;
+        }
+        else if (Root.Mount.SB is OverlaySuperBlock osb && osb.LowerSB is HostSuperBlock lh)
+        {
+            hsb = lh;
+            hostRoot = lh.HostRoot;
+        }
+
+        if (hostRoot != null)
+        {
+            hostRoot = Path.GetFullPath(hostRoot).TrimEnd(Path.DirectorySeparatorChar);
+            if (hostPath.StartsWith(hostRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                var vfsLookupPath = hostPath[hostRoot.Length..];
+                if (string.IsNullOrEmpty(vfsLookupPath)) vfsLookupPath = "/";
+                else if (vfsLookupPath[0] != Path.DirectorySeparatorChar && vfsLookupPath[0] != '/')
+                    vfsLookupPath = "/" + vfsLookupPath;
+                vfsLookupPath = vfsLookupPath.Replace(Path.DirectorySeparatorChar, '/');
+
+                loc = PathWalk(vfsLookupPath);
+                if (loc.IsValid) guestPath = vfsLookupPath;
+            }
+        }
+
+        if (!loc.IsValid && hsb != null && File.Exists(hostPath))
+            try
+            {
+                var fileName = Path.GetFileName(hostPath);
+                if (!HostSuperBlock.TryCreateFsNameFromHostName(fileName, out var dentryName))
+                    return (loc, guestPath);
+
+                var dentry = hsb.GetDentry(hostPath, dentryName, null);
+                // For hostfs bootstrap, we might not have a proper mount yet, but 
+                // typically this is used when Root is already set up.
+                loc = new PathLocation(dentry, Root.Mount);
+            }
+            catch
+            {
+                /* ignore */
+            }
+
+        return (loc, guestPath);
+    }
+}
+
+// Wait syscall support

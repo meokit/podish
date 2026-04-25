@@ -1,0 +1,31 @@
+{
+  "name": "Elementary Dark",
+  "background": "#101010",
+  "foreground": "#F2F2F2",
+  "cursor": "#F2F2F2",
+  "ansi": {
+    "black": "#303030",
+    "red": "#E1321A",
+    "green": "#6AB017",
+    "yellow": "#FFC005",
+    "blue": "#004F9E",
+    "magenta": "#EC0048",
+    "cyan": "#2AA7E7",
+    "white": "#F2F2F2",
+    "brightBlack": "#5D5D5D",
+    "brightRed": "#FF361E",
+    "brightGreen": "#7BC91F",
+    "brightYellow": "#FFD00A",
+    "brightBlue": "#0071FF",
+    "brightMagenta": "#FF1D62",
+    "brightCyan": "#4BB8FD",
+    "brightWhite": "#A020F0"
+  },
+  "ui": {
+    "accent": "#0071FF",
+    "accentAlt": "#4BB8FD",
+    "success": "#6AB017",
+    "warning": "#FFC005",
+    "danger": "#E1321A"
+  }
+}
