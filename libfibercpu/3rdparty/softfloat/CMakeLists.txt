@@ -6,6 +6,8 @@ list(FILTER SOURCES EXCLUDE REGEX ".*M(\\.c|To.*\\.c)")
 # - STATIC keeps standalone usage for non-embedded configurations.
 add_library(softfloat_obj OBJECT ${SOURCES})
 add_library(softfloat STATIC $<TARGET_OBJECTS:softfloat_obj>)
+set_target_properties(softfloat_obj PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(softfloat PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(softfloat_obj PUBLIC .)
 target_compile_definitions(softfloat_obj PRIVATE SOFTFLOAT_FAST_INT64)
