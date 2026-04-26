@@ -39,6 +39,28 @@ jobs:
           dotnet build Podish.Pulse.Tests/Podish.Pulse.Tests.csproj -c Debug
           dotnet build Podish.Wayland.Tests/Podish.Wayland.Tests.csproj -c Debug
 
+  build-windows:
+    name: Build Windows PodishCli
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Windows-compatible projects
+        run: |
+          dotnet build Podish.Cli/Podish.Cli.csproj -c Debug -r win-x64
+          dotnet build Fiberish.X86/Fiberish.X86.csproj -c Debug -r win-x64
+        shell: pwsh
+
   build-macos:
     name: Build macOS full solution
     runs-on: macos-latest
@@ -86,8 +108,22 @@ jobs:
             echo "Failed to locate the Emscripten Node runtime under $dotnet_root/packs" >&2
             exit 1
           fi
+          emsdk_tools_root="$(cd "$(dirname "$emscripten_toolchain")/../../../../" && pwd)"
+          ninja_bin="$(command -v ninja || true)"
+          if [[ -z "${ninja_bin:-}" ]]; then
+            echo "Failed to locate ninja in PATH after brew install" >&2
+            exit 1
+          fi
+          echo "EMSDK_PATH=$emsdk_tools_root" >> "$GITHUB_ENV"
+          echo "DOTNET_EMSCRIPTEN_LLVM_ROOT=$emsdk_tools_root/bin" >> "$GITHUB_ENV"
+          echo "DOTNET_EMSCRIPTEN_BINARYEN_ROOT=$emsdk_tools_root" >> "$GITHUB_ENV"
+          echo "DOTNET_EMSCRIPTEN_NODE_JS=$browser_node" >> "$GITHUB_ENV"
           echo "EMSCRIPTEN_TOOLCHAIN_FILE=$emscripten_toolchain" >> "$GITHUB_ENV"
           echo "BROWSER_WASM_NODE_EXECUTABLE=$browser_node" >> "$GITHUB_ENV"
+          echo "$emsdk_tools_root/emscripten" >> "$GITHUB_PATH"
+          echo "$emsdk_tools_root/bin" >> "$GITHUB_PATH"
+          echo "$(dirname "$browser_node")" >> "$GITHUB_PATH"
+          echo "$(dirname "$ninja_bin")" >> "$GITHUB_PATH"
 
       - name: Build full solution
         run: dotnet build Podish.slnx -c Debug -p:EmscriptenToolchainFile="$EMSCRIPTEN_TOOLCHAIN_FILE" -p:BrowserWasmNodeExecutable="$BROWSER_WASM_NODE_EXECUTABLE"
