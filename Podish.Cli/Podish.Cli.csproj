@@ -73,7 +73,6 @@
     </ItemGroup>
 
     <ItemGroup Condition="'$(PublishAot)' == 'true' and $([MSBuild]::IsOsPlatform('Linux'))">
-        <NativeSystemLibrary Include="c++"/>
         <NativeSystemLibrary Include="c++abi"/>
     </ItemGroup>
 
