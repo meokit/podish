@@ -134,9 +134,16 @@ public sealed class ContainerRuntimeService
         if (isInteractive)
         {
             var tty = ttyDiag!;
-            stdinStream = new FileStream(new SafeFileHandle(0, false), FileAccess.Read);
+            if (OperatingSystem.IsWindows())
+            {
+                stdinStream = Console.OpenStandardInput();
+            }
+            else
+            {
+                stdinStream = new FileStream(new SafeFileHandle(0, false), FileAccess.Read);
+            }
 
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) || RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            if (!OperatingSystem.IsBrowser())
             {
                 var res = HostTermios.EnableRawMode(0);
                 if (res != 0) Console.Error.WriteLine($"Warning: Failed to enable raw mode: {res}");
@@ -165,6 +172,12 @@ public sealed class ContainerRuntimeService
                 };
                 AppDomain.CurrentDomain.ProcessExit += processExitHandler;
                 Console.CancelKeyPress += cancelKeyPressHandler;
+
+                // Windows: redirect Ctrl+C as raw 0x03 input to guest
+                if (OperatingSystem.IsWindows())
+                {
+                    Console.TreatControlCAsInput = true;
+                }
             }
 
             inputCts = new CancellationTokenSource();
@@ -640,13 +653,14 @@ public sealed class ContainerRuntimeService
             if (cancelKeyPressHandler != null)
                 Console.CancelKeyPress -= cancelKeyPressHandler;
 
-            if (rawModeEnabled && (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ||
-                                   RuntimeInformation.IsOSPlatform(OSPlatform.Linux)))
+            if (rawModeEnabled)
             {
                 _logger.LogTrace("Container teardown disabling raw mode containerId={ContainerId}",
                     request.ContainerId);
                 HostTermios.DisableRawMode(0);
                 rawModeEnabled = false;
+                if (OperatingSystem.IsWindows())
+                    Console.TreatControlCAsInput = false;
             }
 
             _logger.LogTrace("Container teardown disposing stdin stream containerId={ContainerId}",
