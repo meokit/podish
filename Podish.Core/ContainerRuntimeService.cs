@@ -105,7 +105,7 @@ public sealed class ContainerRuntimeService
 
         TtyDiscipline? ttyDiag = null;
         KernelRuntime? runtime = null;
-        FileStream? stdinStream = null;
+        Stream? stdinStream = null;
         CancellationTokenSource? inputCts = null;
         Task? inputTask = null;
         PosixSignalRegistration? sigwinch = null;
