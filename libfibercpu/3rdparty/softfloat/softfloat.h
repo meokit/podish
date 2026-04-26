@@ -49,7 +49,15 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "softfloat_types.h"
 
 #ifndef THREAD_LOCAL
-#define THREAD_LOCAL
+#if defined(_MSC_VER)
+#define THREAD_LOCAL __declspec(thread)
+#elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
+#define THREAD_LOCAL _Thread_local
+#elif defined(__cplusplus) && (__cplusplus >= 201103L)
+#define THREAD_LOCAL thread_local
+#else
+#define THREAD_LOCAL __thread
+#endif
 #endif
 
 /*----------------------------------------------------------------------------

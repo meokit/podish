@@ -15,12 +15,6 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-if(MSVC)
-    add_compile_definitions(THREAD_LOCAL=__declspec(thread))
-else()
-    add_compile_definitions(THREAD_LOCAL=__thread)
-endif()
-
 # CPM Integration
 include(../cmake/CPM.cmake)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -118,9 +112,14 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-nested-anon-types>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
+    )
+endif()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
+    target_compile_options(fibercpu_core PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
-        $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
     )
 endif()
 
@@ -180,9 +179,14 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-nested-anon-types>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
+    )
+endif()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
+    target_compile_options(fibercpu PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
-        $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
     )
 endif()
 

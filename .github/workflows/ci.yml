@@ -27,7 +27,7 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build
+          sudo apt-get install -y clang cmake ninja-build libc++-dev libc++abi-dev
 
       - name: Build Linux-compatible projects
         run: |
@@ -119,13 +119,19 @@ jobs:
           echo "DOTNET_EMSCRIPTEN_BINARYEN_ROOT=$emsdk_tools_root" >> "$GITHUB_ENV"
           echo "DOTNET_EMSCRIPTEN_NODE_JS=$browser_node" >> "$GITHUB_ENV"
           echo "EM_CACHE=$RUNNER_TEMP/emscripten-cache" >> "$GITHUB_ENV"
-          echo "FROZEN_CACHE=0" >> "$GITHUB_ENV"
+          echo "FROZEN_CACHE=" >> "$GITHUB_ENV"
           echo "EMSCRIPTEN_TOOLCHAIN_FILE=$emscripten_toolchain" >> "$GITHUB_ENV"
           echo "BROWSER_WASM_NODE_EXECUTABLE=$browser_node" >> "$GITHUB_ENV"
           echo "$emsdk_tools_root/emscripten" >> "$GITHUB_PATH"
           echo "$emsdk_tools_root/bin" >> "$GITHUB_PATH"
           echo "$(dirname "$browser_node")" >> "$GITHUB_PATH"
           echo "$(dirname "$ninja_bin")" >> "$GITHUB_PATH"
+
+      - name: Prepare Emscripten cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EM_CACHE"
 
       - name: Build full solution
         run: dotnet build Podish.slnx -c Debug -p:EmscriptenToolchainFile="$EMSCRIPTEN_TOOLCHAIN_FILE" -p:BrowserWasmNodeExecutable="$BROWSER_WASM_NODE_EXECUTABLE"
