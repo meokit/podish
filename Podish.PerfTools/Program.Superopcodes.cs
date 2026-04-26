@@ -185,7 +185,7 @@ internal static partial class Program
         if (separator <= 0)
             return SanitizeCommentPath(arg);
 
-        string key = arg[..separator + 1];
+        string key = arg[..(separator + 1)];
         string value = arg[(separator + 1)..];
         return key + SanitizeCommentPath(value);
     }
