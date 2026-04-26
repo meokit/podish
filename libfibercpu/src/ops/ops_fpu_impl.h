@@ -52,6 +52,12 @@ inline void MergeFpuInvalidStatus(EmuState* state, bool invalid) {
     if (invalid) state->ctx.fpu_sw |= 0x0001;
 }
 
+inline void MergeFcomInvalidStatus(EmuState* state, float80 a, float80 b, bool quiet_on_qnan) {
+    if (!f80_uncomparable(a, b)) return;
+    bool invalid = !quiet_on_qnan || f80_is_signaling_nan(a) || f80_is_signaling_nan(b);
+    MergeFpuInvalidStatus(state, invalid);
+}
+
 inline void SetFcomiFlags(uint64_t& flags_cache, float80 a, float80 b) {
     bool unordered = f80_uncomparable(a, b);
     uint32_t flags = GetFlags32(flags_cache) & ~(fiberish::ZF_MASK | fiberish::PF_MASK | fiberish::CF_MASK |
@@ -67,9 +73,7 @@ inline void SetFcomiFlags(uint64_t& flags_cache, float80 a, float80 b) {
 }
 
 inline void MergeFcomiInvalidStatus(EmuState* state, float80 a, float80 b, bool quiet_on_qnan) {
-    if (!f80_uncomparable(a, b)) return;
-    bool invalid = !quiet_on_qnan || f80_is_signaling_nan(a) || f80_is_signaling_nan(b);
-    MergeFpuInvalidStatus(state, invalid);
+    MergeFcomInvalidStatus(state, a, b, quiet_on_qnan);
 }
 
 inline void SetFpuCompareFlags(EmuState* state, float80 a, float80 b) {
@@ -214,9 +218,11 @@ FORCE_INLINE LogicFlow OpFpu_D8(LogicFuncParams) {
                 break;
             case 2:  // FCOM ST(i)
                 SetFpuCompareFlags(state, st0, sti);
+                MergeFcomInvalidStatus(state, st0, sti, false);
                 break;
             case 3:  // FCOMP ST(i)
                 SetFpuCompareFlags(state, st0, sti);
+                MergeFcomInvalidStatus(state, st0, sti, false);
                 FpuPop(state);
                 break;
             case 4:  // FSUB ST(0), ST(i)
@@ -255,9 +261,11 @@ FORCE_INLINE LogicFlow OpFpu_D8(LogicFuncParams) {
             break;  // FMUL
         case 2:     // FCOM
             SetFpuCompareFlags(state, st0, val);
+            MergeFcomInvalidStatus(state, st0, val, false);
             break;
         case 3:  // FCOMP (Compare and Pop)
             SetFpuCompareFlags(state, st0, val);
+            MergeFcomInvalidStatus(state, st0, val, false);
             FpuPop(state);
             break;
         case 4:
@@ -767,9 +775,11 @@ FORCE_INLINE LogicFlow OpFpu_DC(LogicFuncParams) {
                 break;  // FMUL
             case 2:     // FCOM m64
                 SetFpuCompareFlags(state, st0, val);
+                MergeFcomInvalidStatus(state, st0, val, false);
                 break;
             case 3:  // FCOMP m64
                 SetFpuCompareFlags(state, st0, val);
+                MergeFcomInvalidStatus(state, st0, val, false);
                 FpuPop(state);
                 break;
             case 4:
@@ -817,6 +827,7 @@ FORCE_INLINE LogicFlow OpFpu_DD(LogicFuncParams) {
             int idx = op->modrm & 7;
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
+            MergeFcomInvalidStatus(state, st0, sti, true);
             if (f80_uncomparable(st0, sti)) {
                 state->ctx.fpu_sw = (state->ctx.fpu_sw & ~0x4500) | 0x4500;  // C3=1, C2=1, C0=1
             } else if (f80_eq(st0, sti)) {
@@ -947,6 +958,7 @@ FORCE_INLINE LogicFlow OpFpu_DE(LogicFuncParams) {
             float80 st0 = FpuTop(state, 0);
             float80 st1 = FpuTop(state, 1);
             SetFpuCompareFlags(state, st0, st1);
+            MergeFcomInvalidStatus(state, st0, st1, false);
             FpuPop(state);
             FpuPop(state);
             return ContinueWithSyncedFpuStatus(state);
