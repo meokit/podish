@@ -193,6 +193,41 @@ target_include_directories(fibercpu PRIVATE src)
 target_include_directories(fibercpu SYSTEM PRIVATE ${simde_SOURCE_DIR})
 target_link_libraries(fibercpu PRIVATE unordered_dense::unordered_dense)
 
+if(MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # When using Clang-CL on Windows, we need to link the compiler-rt builtins
+    # to support 128-bit integer operations like __udivti3.
+    execute_process(
+        COMMAND ${CMAKE_CXX_COMPILER} --print-resource-dir
+        OUTPUT_VARIABLE CLANG_RESOURCE_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(CLANG_RESOURCE_DIR)
+        file(TO_CMAKE_PATH "${CLANG_RESOURCE_DIR}" CLANG_RESOURCE_DIR)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64")
+            set(CLANG_RT_ARCH "aarch64")
+        elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
+            set(CLANG_RT_ARCH "i386")
+        else()
+            set(CLANG_RT_ARCH "x86_64")
+        endif()
+        
+        set(CLANG_RT_BUILTINS "${CLANG_RESOURCE_DIR}/lib/windows/clang_rt.builtins-${CLANG_RT_ARCH}.lib")
+        if(EXISTS "${CLANG_RT_BUILTINS}")
+            message(STATUS "Linking Clang runtime builtins: ${CLANG_RT_BUILTINS}")
+            target_link_libraries(fibercpu PRIVATE "${CLANG_RT_BUILTINS}")
+        else()
+            # Fallback for older Clang versions or different layouts
+            file(GLOB CLANG_RT_LIBS "${CLANG_RESOURCE_DIR}/lib/windows/clang_rt.builtins-*.lib")
+            if(CLANG_RT_LIBS)
+                list(GET CLANG_RT_LIBS 0 CLANG_RT_BUILTIN_FALLBACK)
+                message(STATUS "Linking Clang runtime builtin (fallback): ${CLANG_RT_BUILTIN_FALLBACK}")
+                target_link_libraries(fibercpu PRIVATE "${CLANG_RT_BUILTIN_FALLBACK}")
+            endif()
+        endif()
+    endif()
+endif()
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(fibercpu PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-Wall>
