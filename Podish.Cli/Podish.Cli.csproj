@@ -68,7 +68,7 @@
         <NativeLibrary Include="$(PodishNetstackStaticLibPath)"/>
     </ItemGroup>
 
-    <ItemGroup Condition="'$(PublishAot)' == 'true' and $([MSBuild]::IsOsPlatform('OSX'))">
+    <ItemGroup Condition="'$(PublishAot)' == 'true' and ($([MSBuild]::IsOsPlatform('OSX')) or $([MSBuild]::IsOsPlatform('Linux')))">
         <NativeSystemLibrary Include="c++"/>
     </ItemGroup>
 
