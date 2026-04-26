@@ -4,6 +4,18 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifndef THREAD_LOCAL
+#if defined(_MSC_VER)
+#define THREAD_LOCAL __declspec(thread)
+#elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
+#define THREAD_LOCAL _Thread_local
+#elif defined(__cplusplus) && (__cplusplus >= 201103L)
+#define THREAD_LOCAL thread_local
+#else
+#define THREAD_LOCAL __thread
+#endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
