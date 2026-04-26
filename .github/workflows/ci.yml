@@ -61,6 +61,32 @@ jobs:
           dotnet build Fiberish.X86/Fiberish.X86.csproj -c Debug -r win-x64
         shell: pwsh
 
+  publish-windows:
+    name: Publish Windows PodishCli NativeAOT
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish Windows PodishCli NativeAOT
+        run: dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r win-x64 -p:PublishAot=true -m:1
+        shell: pwsh
+
+      - name: Upload Windows publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: podishcli-win-x64-nativeaot-publish
+          path: Podish.Cli/bin/Release/net10.0/win-x64/publish/**
+
   build-macos:
     name: Build macOS full solution
     runs-on: macos-latest
