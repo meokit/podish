@@ -319,7 +319,7 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
 
 // Signal Handler for safety
 #if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
-void SignalHandler(int sig, siginfo_t* info, void* /*ucontext*/) {
+static void SignalHandler(int sig, siginfo_t* info, void* /*ucontext*/) {
     void* array[20];
     size_t size;
     size = backtrace(array, 20);
@@ -338,15 +338,6 @@ static void RegisterFatalSignalHandler(int sig) {
     sa.sa_flags = SA_SIGINFO | SA_RESTART;
     sigaction(sig, &sa, nullptr);
 }
-#elif !defined(__EMSCRIPTEN__)
-void SignalHandler(int sig) {
-    void* array[20];
-    size_t size;
-    size = backtrace(array, 20);
-    fprintf(stderr, "\n[CRASH] Signal %d Caught:\n", sig);
-    backtrace_symbols_fd(array, size, STDERR_FILENO);
-    _exit(1);
-}
 #endif
 
 static bool g_SignalRegistered = false;
@@ -357,16 +348,10 @@ static bool g_SignalRegistered = false;
 
 EmuState* X86_Create() {
     if (!g_SignalRegistered && FatalSignalHandlerEnabled()) {
-#if !defined(__EMSCRIPTEN__)
-#if !defined(_WIN32)
+#if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
         RegisterFatalSignalHandler(SIGSEGV);
         RegisterFatalSignalHandler(SIGILL);
         RegisterFatalSignalHandler(SIGBUS);
-#else
-        signal(SIGSEGV, SignalHandler);
-        signal(SIGILL, SignalHandler);
-        signal(SIGBUS, SignalHandler);
-#endif
 #endif
         g_SignalRegistered = true;
     }

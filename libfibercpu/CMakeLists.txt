@@ -110,6 +110,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         $<$<COMPILE_LANGUAGE:CXX>:-Wall>
         $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
         $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-c++98-compat>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-pre-c++17-compat>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-nested-anon-types>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
@@ -177,6 +179,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         $<$<COMPILE_LANGUAGE:CXX>:-Wall>
         $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
         $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-c++98-compat>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-pre-c++17-compat>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-nested-anon-types>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
