@@ -7,6 +7,9 @@ on:
       - public-main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build-linux:
     name: Build Linux core
@@ -60,6 +63,62 @@ jobs:
           dotnet build Podish.Cli/Podish.Cli.csproj -c Debug -r win-x64
           dotnet build Fiberish.X86/Fiberish.X86.csproj -c Debug -r win-x64
         shell: pwsh
+
+  publish-windows:
+    name: Publish Windows PodishCli NativeAOT
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish Windows PodishCli NativeAOT
+        run: dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r win-x64 -p:PublishAot=true -m:1
+        shell: pwsh
+
+      - name: Upload Windows publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: podishcli-win-x64-nativeaot-publish
+          path: Podish.Cli/bin/Release/net10.0/win-x64/publish/**
+
+  publish-linux:
+    name: Publish Linux PodishCli NativeAOT
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build libc++-dev libc++abi-dev
+
+      - name: Publish Linux PodishCli NativeAOT
+        run: dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r linux-x64 -p:PublishAot=true -m:1
+
+      - name: Upload Linux publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: podishcli-linux-x64-nativeaot-publish
+          path: Podish.Cli/bin/Release/net10.0/linux-x64/publish/**
 
   build-macos:
     name: Build macOS full solution
@@ -135,3 +194,32 @@ jobs:
 
       - name: Build full solution
         run: dotnet build Podish.slnx -c Debug -p:EmscriptenToolchainFile="$EMSCRIPTEN_TOOLCHAIN_FILE" -p:BrowserWasmNodeExecutable="$BROWSER_WASM_NODE_EXECUTABLE"
+
+  publish-macos:
+    name: Publish macOS PodishCli NativeAOT
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native build dependencies
+        run: |
+          brew install cmake ninja
+
+      - name: Publish macOS PodishCli NativeAOT
+        run: dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r osx-arm64 -p:PublishAot=true -m:1
+
+      - name: Upload macOS publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: podishcli-osx-arm64-nativeaot-publish
+          path: Podish.Cli/bin/Release/net10.0/osx-arm64/publish/**

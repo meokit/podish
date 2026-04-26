@@ -40,6 +40,10 @@ option(FIBERCPU_ENABLE_BLOCK_PROFILE "Enable lightweight per-block execution cou
 option(FIBERCPU_ENABLE_HANDLER_PROFILE "Enable approximate per-handler execution profiling" OFF)
 option(FIBERCPU_ENABLE_SUPEROPCODES "Enable generated SuperOpcode matching and handlers" ON)
 
+if(MSVC AND FIBERCPU_BUILD_STATIC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "MSVC runtime library" FORCE)
+endif()
+
 set(FIBERCPU_GENERATED_SUPEROPCODES_FILE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/generated/superopcodes.generated.cpp")
 
