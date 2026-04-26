@@ -336,6 +336,7 @@ export default function App() {
         terminal.writeln('')
         terminal.writeln('\x1b[38;5;244m x86 Linux in your browser — powered by WebAssembly\x1b[0m')
         terminal.writeln('\x1b[38;5;244m GitHub: https://github.com/meokit/podish\x1b[0m')
+        terminal.writeln('\x1b[38;5;244m AltStore: https://github.com/meokit/podish-altstore\x1b[0m')
         terminal.writeln('')
 
         xtermRef.current = terminal

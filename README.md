@@ -8,6 +8,8 @@ If you have used iSH, the goal is similar, but the code is entirely original and
 
 A browser demo is available at [podish.meokit.com](https://podish.meokit.com) (performance is lower than native; networking is not yet enabled).
 
+An AltStore source is available at [meokit/podish-altstore](https://github.com/meokit/podish-altstore) for easy sideloading on iOS.
+
 ---
 
 ## What It Is
