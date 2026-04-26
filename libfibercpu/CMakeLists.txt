@@ -162,17 +162,42 @@ endif()
 set(FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP
     "${CMAKE_CURRENT_BINARY_DIR}/generated/handler_reflection.generated.cpp")
 
-add_custom_command(
-    OUTPUT ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
-            --output ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
-            $<TARGET_OBJECTS:fibercpu_core>
-    DEPENDS fibercpu_core ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
-    COMMENT "Generating handler reflection table from fibercpu_core objects"
-    COMMAND_EXPAND_LISTS
-    VERBATIM
-)
+if(NOT MSVC)
+    add_custom_command(
+        OUTPUT ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
+                --output ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
+                $<TARGET_OBJECTS:fibercpu_core>
+        DEPENDS fibercpu_core ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
+        COMMENT "Generating handler reflection table from fibercpu_core objects"
+        COMMAND_EXPAND_LISTS
+        VERBATIM
+    )
+else()
+    # On Windows (MSVC/ClangCL) the nm/c++filt-based symbol extraction used by
+    # gen_handler_reflection.py is not supported. Generate a minimal stub so the
+    # build succeeds; handler reflection is only used for diagnostic block dumps
+    # and the managed side already gracefully handles an empty handler table.
+    file(WRITE ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
+        "// Auto-generated stub for MSVC builds (handler reflection not supported)\\n"
+        "#include <cstddef>\\n"
+        "#include <cstdint>\\n"
+        "#include \"decoder.h\"\\n\\n"
+        "namespace fiberish::generated::handler_reflection {\\n\\n"
+        "struct HandlerReflectionEntry {\\n"
+        "    HandlerFunc handler;\\n"
+        "    const char* name;\\n"
+        "};\\n\\n"
+        "static const HandlerReflectionEntry kEntries[] = {};\\n\\n"
+        "constexpr size_t kEntryCount = sizeof(kEntries) / sizeof(kEntries[0]);\\n\\n"
+        "size_t HandlerCount() { return kEntryCount; }\\n\\n"
+        "HandlerFunc HandlerForId(uint32_t) { return nullptr; }\\n\\n"
+        "int32_t IdForHandler(HandlerFunc) { return -1; }\\n\\n"
+        "const char* NameForId(uint32_t) { return nullptr; }\\n\\n"
+        "}  // namespace fiberish::generated::handler_reflection\\n"
+    )
+endif()
 
 # Final library includes objects from core
 set(FIBERCPU_LIBRARY_TYPE SHARED)
