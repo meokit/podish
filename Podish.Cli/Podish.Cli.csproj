@@ -76,4 +76,8 @@
         <NativeSystemLibrary Include="c++abi"/>
     </ItemGroup>
 
+    <ItemGroup Condition="'$(PublishAot)' == 'true' and $([MSBuild]::IsOsPlatform('Windows'))">
+        <NativeSystemLibrary Include="userenv"/>
+    </ItemGroup>
+
 </Project>
