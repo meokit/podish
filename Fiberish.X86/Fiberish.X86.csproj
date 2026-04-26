@@ -38,12 +38,16 @@
         <PropertyGroup Condition="'$(LibFibercpuSourceExists)' == 'true'">
             <BuildFibercpuStatic Condition="'$(PublishAot)' == 'true' Or '$(PodishStaticNative)' == 'true' Or '$(IsBrowserWasm)' == 'true'">true</BuildFibercpuStatic>
             <BuildFibercpuStatic Condition="'$(BuildFibercpuStatic)' == ''">false</BuildFibercpuStatic>
-            <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true'">-DCMAKE_BUILD_TYPE=Release -DFIBERCPU_BUILD_STATIC=ON -DFIBERCPU_ENABLE_LTO=OFF</CMakeArgs>
+            <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true'">-DFIBERCPU_BUILD_STATIC=ON -DFIBERCPU_ENABLE_LTO=OFF</CMakeArgs>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('ios'))">$(CMakeArgs) -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64</CMakeArgs>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('ios-'))">$(CMakeArgs) -DCMAKE_OSX_SYSROOT=iphoneos</CMakeArgs>
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' == 'true' And $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('iossimulator-'))">$(CMakeArgs) -DCMAKE_OSX_SYSROOT=iphonesimulator</CMakeArgs>
-            <CMakeArgs Condition="'$(BuildFibercpuStatic)' != 'true'">-DCMAKE_BUILD_TYPE=Release -DFIBERCPU_BUILD_STATIC=OFF</CMakeArgs>
+            <CMakeArgs Condition="'$(BuildFibercpuStatic)' != 'true'">-DFIBERCPU_BUILD_STATIC=OFF</CMakeArgs>
+            <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_BUILD_TYPE=Release</CMakeArgs>
+            <CMakeArgs Condition="'$(IsBrowserWasm)' != 'true' And $([MSBuild]::IsOsPlatform('Windows')) != 'true'">$(CMakeArgs) -DCMAKE_BUILD_TYPE=Release</CMakeArgs>
             <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('OSX')) And '$(IsBrowserWasm)' != 'true'">$(CMakeArgs) -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++</CMakeArgs>
+            <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('Linux')) And '$(IsBrowserWasm)' != 'true'">$(CMakeArgs) -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_CXX_FLAGS=-stdlib=libc++ -DCMAKE_SHARED_LINKER_FLAGS=-stdlib=libc++</CMakeArgs>
+            <CMakeGeneratorArgs Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'">-T ClangCL</CMakeGeneratorArgs>
             <CMakeHandlerProfile Condition="'$(EnableHandlerProfile)' == 'true'">ON</CMakeHandlerProfile>
             <CMakeHandlerProfile Condition="'$(CMakeHandlerProfile)' == ''">OFF</CMakeHandlerProfile>
             <CMakeBlockProfile Condition="'$(EnableBlockProfile)' == 'true'">ON</CMakeBlockProfile>

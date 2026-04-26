@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 
-# Keep native objects compatible with the Podish macOS deployment baseline.
+# Keep native objects aligned with the NativeAOT macOS deployment target.
 if(APPLE)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment version" FORCE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS deployment version" FORCE)
 endif()
 
 project(libfibercpu LANGUAGES C CXX)
@@ -15,12 +15,6 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-if(MSVC)
-    add_compile_definitions(THREAD_LOCAL=__declspec(thread))
-else()
-    add_compile_definitions(THREAD_LOCAL=__thread)
-endif()
-
 # CPM Integration
 include(../cmake/CPM.cmake)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -29,7 +23,7 @@ CPMAddPackage(
     NAME simde
     GITHUB_REPOSITORY simd-everywhere/simde
     VERSION 0.8.2
-    OPTIONS "SIMDE_ENABLE_NATIVE_ALIASES ON"
+    OPTIONS "SIMDE_ENABLE_NATIVE_ALIASES OFF"
 )
 
 CPMAddPackage(
@@ -116,11 +110,33 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         $<$<COMPILE_LANGUAGE:CXX>:-Wall>
         $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
         $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-c++98-compat>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-c++98-compat-pedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-pre-c++17-compat>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-pre-c++20-compat-pedantic>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-nested-anon-types>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-old-style-cast>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-sign-conversion>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-covered-switch-default>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-zero-as-null-pointer-constant>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-reserved-macro-identifier>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unsafe-buffer-usage>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-implicit-int-conversion>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-global-constructors>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-exit-time-destructors>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-format-nonliteral>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-missing-prototypes>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-tautological-type-limit-compare>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-newline-eof>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
+    )
+endif()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
+    target_compile_options(fibercpu_core PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
-        $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
     )
 endif()
 
@@ -129,6 +145,10 @@ if(NOT MSVC)
         $<$<COMPILE_LANGUAGE:C>:-fno-strict-aliasing>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
     )
+endif()
+
+if(MSVC)
+    target_compile_definitions(fibercpu_core PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
 
@@ -178,11 +198,33 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         $<$<COMPILE_LANGUAGE:CXX>:-Wall>
         $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
         $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-c++98-compat>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-c++98-compat-pedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-pre-c++17-compat>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-pre-c++20-compat-pedantic>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-nested-anon-types>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-old-style-cast>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-sign-conversion>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-covered-switch-default>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-zero-as-null-pointer-constant>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-reserved-macro-identifier>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unsafe-buffer-usage>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-implicit-int-conversion>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-global-constructors>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-exit-time-destructors>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-format-nonliteral>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-missing-prototypes>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-tautological-type-limit-compare>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-newline-eof>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
+    )
+endif()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
+    target_compile_options(fibercpu PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
-        $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
     )
 endif()
 
@@ -191,6 +233,10 @@ if(NOT MSVC)
         $<$<COMPILE_LANGUAGE:C>:-fno-strict-aliasing>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
     )
+endif()
+
+if(MSVC)
+    target_compile_definitions(fibercpu PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
 

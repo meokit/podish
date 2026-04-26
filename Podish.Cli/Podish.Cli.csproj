@@ -1,7 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <ItemGroup>
-        <ProjectReference Include="..\Fiberish.Core\Fiberish.Core.csproj"/>
+        <ProjectReference Include="..\Fiberish.Core\Fiberish.Core.csproj">
+            <AdditionalProperties Condition="'$(RuntimeIdentifier)' != ''">RuntimeIdentifier=$(RuntimeIdentifier);PublishAot=$(PublishAot);PodishStaticNative=$(PodishStaticNative)</AdditionalProperties>
+        </ProjectReference>
         <ProjectReference Include="..\Podish.Display\Podish.Display.csproj"/>
         <ProjectReference Include="..\Podish.Core\Podish.Core.csproj"/>
         <ProjectReference Include="..\Podish.Pulse\Podish.Pulse.csproj"/>

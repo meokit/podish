@@ -1,0 +1,168 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Git tag to release, for example v0.2.1
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-macos:
+    name: Build macOS PodishCli NativeAOT
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native build dependencies
+        run: |
+          brew install cmake ninja
+
+      - name: Publish PodishCli NativeAOT
+        run: dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r osx-arm64 -p:PublishAot=true -m:1
+
+      - name: Package release artifacts
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
+          version="${tag#v}"
+          publish_dir="Podish.Cli/bin/Release/net10.0/osx-arm64/publish"
+          staging_dir="$RUNNER_TEMP/PodishCli-$version-osx-arm64"
+          archive_name="PodishCli-$version-osx-arm64-nativeaot.tar.gz"
+          checksum_name="${archive_name}.sha256"
+
+          rm -rf "$staging_dir"
+          mkdir -p "$staging_dir"
+          cp "$publish_dir/Podish.Cli" "$staging_dir/"
+          chmod +x "$staging_dir/Podish.Cli"
+
+          tar -C "$RUNNER_TEMP" -czf "$archive_name" "$(basename "$staging_dir")"
+          shasum -a 256 "$archive_name" > "$checksum_name"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: podishcli-osx-arm64-nativeaot
+          path: |
+            PodishCli-*-osx-arm64-nativeaot.tar.gz
+            PodishCli-*-osx-arm64-nativeaot.tar.gz.sha256
+
+  build-windows:
+    name: Build Windows PodishCli NativeAOT
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish PodishCli NativeAOT
+        run: dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r win-x64 -p:PublishAot=true -m:1
+        shell: pwsh
+
+      - name: Package release artifacts
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = $env:RELEASE_TAG
+          $version = $tag.Substring(1)
+          $publishDir = "Podish.Cli/bin/Release/net10.0/win-x64/publish"
+          $stagingDir = Join-Path $env:RUNNER_TEMP "PodishCli-$version-win-x64"
+          $archiveName = "PodishCli-$version-win-x64-nativeaot.zip"
+          $checksumName = "$archiveName.sha256"
+
+          if (Test-Path $stagingDir) {
+            Remove-Item $stagingDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $stagingDir | Out-Null
+          Copy-Item (Join-Path $publishDir "Podish.Cli.exe") $stagingDir
+
+          if (Test-Path $archiveName) {
+            Remove-Item $archiveName -Force
+          }
+          Compress-Archive -Path "$stagingDir/*" -DestinationPath $archiveName -CompressionLevel Optimal
+          $hash = (Get-FileHash $archiveName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archiveName" | Out-File -FilePath $checksumName -Encoding ascii
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: podishcli-win-x64-nativeaot
+          path: |
+            PodishCli-*-win-x64-nativeaot.zip
+            PodishCli-*-win-x64-nativeaot.zip.sha256
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - build-macos
+      - build-windows
+
+    steps:
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: podishcli-osx-arm64-nativeaot
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: podishcli-win-x64-nativeaot
+
+      - name: Create or update GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
+          gh release upload "$tag" \
+            PodishCli-*-osx-arm64-nativeaot.tar.gz \
+            PodishCli-*-osx-arm64-nativeaot.tar.gz.sha256 \
+            PodishCli-*-win-x64-nativeaot.zip \
+            PodishCli-*-win-x64-nativeaot.zip.sha256 \
+            --clobber
