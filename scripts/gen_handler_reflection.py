@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -17,9 +19,61 @@ HANDLER_PROTO = (
 )
 
 
-def run_nm(obj_path: Path) -> list[tuple[str, str]]:
+def find_tool(*names: str) -> str | None:
+    for name in names:
+        resolved = shutil.which(name)
+        if resolved:
+            return resolved
+
+    compiler_candidates = [
+        os.environ.get("CXX"),
+        os.environ.get("CC"),
+        shutil.which("clang-cl"),
+        shutil.which("clang++"),
+        shutil.which("clang"),
+    ]
+    for compiler in compiler_candidates:
+        if not compiler:
+            continue
+        compiler_path = Path(compiler)
+        for name in names:
+            candidate = compiler_path.with_name(name)
+            if os.name == "nt" and candidate.suffix.lower() != ".exe":
+                candidate = candidate.with_suffix(".exe")
+            if candidate.exists():
+                return str(candidate)
+
+    return None
+
+
+LLVM_NM = find_tool("llvm-nm")
+NM_TOOL = LLVM_NM or find_tool("nm")
+if NM_TOOL is None:
+    raise RuntimeError("failed to locate nm or llvm-nm for handler reflection generation")
+
+
+def run_tool(command: list[str]) -> list[str]:
     proc = subprocess.run(
-        ["nm", "-g", "-P", str(obj_path)],
+        command,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return [line.rstrip("\r") for line in proc.stdout.splitlines() if line.strip()]
+
+
+def run_nm(obj_path: Path) -> list[tuple[str, str]]:
+    if Path(NM_TOOL).name.lower().startswith("llvm-nm"):
+        mangled_names = run_tool([NM_TOOL, "--just-symbol-name", "--defined-only", "--extern-only", str(obj_path)])
+        demangled_names = run_tool(
+            [NM_TOOL, "--just-symbol-name", "--defined-only", "--extern-only", "--demangle", str(obj_path)]
+        )
+        if len(mangled_names) != len(demangled_names):
+            raise RuntimeError(f"llvm-nm returned mismatched symbol counts for {obj_path}")
+        return list(zip(mangled_names, demangled_names))
+
+    proc = subprocess.run(
+        [NM_TOOL, "-g", "-P", str(obj_path)],
         text=True,
         capture_output=True,
         check=True,
@@ -32,7 +86,7 @@ def run_nm(obj_path: Path) -> list[tuple[str, str]]:
         name, sym_type = parts[0], parts[1]
         if sym_type not in {"T", "W"}:
             continue
-        entries.append((name, sym_type))
+        entries.append((name, name))
     return entries
 
 
@@ -57,6 +111,20 @@ def demangle_names(names: list[str]) -> dict[str, str]:
     return dict(zip(names, lines))
 
 
+def extract_signature_suffix(name: str, function_name: str | None = None) -> str | None:
+    anchor = 0
+    if function_name is not None:
+        anchor = name.find(function_name)
+        if anchor < 0:
+            return None
+        anchor += len(function_name)
+
+    paren_index = name.find("(", anchor)
+    if paren_index < 0:
+        return None
+    return name[paren_index:]
+
+
 def escape_cpp_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -70,20 +138,23 @@ def main() -> int:
     object_paths = [Path(obj) for obj in args.objects]
     seen: set[str] = set()
     mangled_names: list[str] = []
+    demangled: dict[str, str] = {}
     for obj_path in object_paths:
-        for name, _sym_type in run_nm(obj_path):
+        for name, maybe_demangled_name in run_nm(obj_path):
             if name in seen:
                 continue
             seen.add(name)
             mangled_names.append(name)
+            demangled[name] = maybe_demangled_name
 
-    demangled = demangle_names(mangled_names)
+    if not Path(NM_TOOL).name.lower().startswith("llvm-nm"):
+        demangled = demangle_names(mangled_names)
 
     template_signature = None
     for mangled_name in mangled_names:
         name = demangled.get(mangled_name, "")
-        if name.startswith(TEMPLATE_NAME + "("):
-            template_signature = name[name.find("("):]
+        template_signature = extract_signature_suffix(name, TEMPLATE_NAME)
+        if template_signature is not None:
             break
 
     if template_signature is None:
