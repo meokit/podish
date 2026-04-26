@@ -66,7 +66,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dotnet_root="$(dirname "$(dirname "$(command -v dotnet)")")"
+          dotnet_root="${DOTNET_ROOT:-}"
+          if [[ -z "${dotnet_root}" ]]; then
+            dotnet_root="$(dirname "$(command -v dotnet)")"
+          fi
+          if [[ ! -d "$dotnet_root/packs" ]]; then
+            echo "Failed to locate dotnet packs under $dotnet_root/packs" >&2
+            echo "command -v dotnet => $(command -v dotnet)" >&2
+            echo "DOTNET_ROOT => ${DOTNET_ROOT:-<unset>}" >&2
+            exit 1
+          fi
           emscripten_toolchain="$(find "$dotnet_root/packs" -path '*/tools/emscripten/cmake/Modules/Platform/Emscripten.cmake' -print -quit)"
           browser_node="$(find "$dotnet_root/packs" -path '*/tools/bin/node' -print | grep 'Microsoft.NET.Runtime.Emscripten.*Node' | head -n 1)"
           if [[ -z "${emscripten_toolchain:-}" ]]; then
