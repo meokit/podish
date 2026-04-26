@@ -43,7 +43,7 @@ jobs:
           brew install cmake ninja
 
       - name: Publish PodishCli NativeAOT
-        run: dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r osx-arm64 -p:PublishAot=true
+        run: dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r osx-arm64 -p:PublishAot=true -m:1
 
       - name: Package release artifacts
         shell: bash
@@ -94,7 +94,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Publish PodishCli NativeAOT
-        run: dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r win-x64 -p:PublishAot=true
+        run: dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r win-x64 -p:PublishAot=true -m:1
         shell: pwsh
 
       - name: Package release artifacts
