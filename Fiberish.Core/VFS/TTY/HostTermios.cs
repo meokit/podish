@@ -72,6 +72,25 @@ public static class HostTermios
     [DllImport("libc", SetLastError = true)]
     private static extern int tcsetattr(int fd, int optional_actions, ref LinuxTermios termios);
 
+    // ── Windows Console Mode (Raw Mode equivalent) ──
+    private const int STD_INPUT_HANDLE = -10;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+
+    private const uint ENABLE_PROCESSED_INPUT = 0x0001;
+    private const uint ENABLE_LINE_INPUT = 0x0002;
+    private const uint ENABLE_ECHO_INPUT = 0x0004;
+    private const uint ENABLE_WINDOW_INPUT = 0x0008;
+    private const uint ENABLE_MOUSE_INPUT = 0x0010;
+    private const uint ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
+
     public static int EnableRawMode(int fd)
     {
         lock (RawModeLock)
@@ -79,6 +98,27 @@ public static class HostTermios
             if (RawModeStates.TryGetValue(fd, out var existing))
             {
                 RawModeStates[fd] = existing with { RefCount = existing.RefCount + 1 };
+                return 0;
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                var hStdin = GetStdHandle(STD_INPUT_HANDLE);
+                if (hStdin == IntPtr.Zero || hStdin == new IntPtr(-1))
+                    return -1;
+
+                if (!GetConsoleMode(hStdin, out uint originalMode))
+                    return -Marshal.GetLastWin32Error();
+
+                uint rawMode = originalMode;
+                rawMode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+                // Keep ENABLE_WINDOW_INPUT for SIGWINCH-style resize events.
+                // ENABLE_VIRTUAL_TERMINAL_INPUT is left as-is (preserve existing setting).
+
+                if (!SetConsoleMode(hStdin, rawMode))
+                    return -Marshal.GetLastWin32Error();
+
+                RawModeStates[fd] = new RawModeState(originalMode, 1);
                 return 0;
             }
 
@@ -129,6 +169,17 @@ public static class HostTermios
             if (state.RefCount > 1)
             {
                 RawModeStates[fd] = state with { RefCount = state.RefCount - 1 };
+                return;
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                var hStdin = GetStdHandle(STD_INPUT_HANDLE);
+                if (hStdin != IntPtr.Zero && hStdin != new IntPtr(-1))
+                {
+                    SetConsoleMode(hStdin, (uint)state.Original);
+                }
+                RawModeStates.Remove(fd);
                 return;
             }
 
