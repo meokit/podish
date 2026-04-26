@@ -184,15 +184,16 @@ jobs:
       - name: Create or update GitHub Release
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
           tag="${RELEASE_TAG}"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "$tag" --generate-notes
+          if ! gh release view "$tag" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GH_REPO" --title "$tag" --generate-notes
           fi
-          gh release upload "$tag" \
+          gh release upload "$tag" --repo "$GH_REPO" \
             release-artifacts/podishcli-*-linux-x64-nativeaot-publish.tar.gz \
             release-artifacts/podishcli-*-linux-x64-nativeaot-publish.tar.gz.sha256 \
             release-artifacts/podishcli-*-osx-arm64-nativeaot-publish.tar.gz \
