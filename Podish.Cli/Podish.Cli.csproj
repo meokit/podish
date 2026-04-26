@@ -33,8 +33,7 @@
         <SelfContained Condition="'$(PublishAot)' == 'true'">true</SelfContained>
         <StripSymbols Condition="'$(PublishAot)' == 'true'">false</StripSymbols>
         <PodishStaticNative Condition="'$(PublishAot)' == 'true'">true</PodishStaticNative>
-        <PodishNativeBuildDir Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">..\Fiberish.X86\build_native\host</PodishNativeBuildDir>
-        <PodishNativeBuildDir Condition="'$(RuntimeIdentifier)' != '' and '$(RuntimeIdentifier)' != 'osx-arm64'">..\Fiberish.X86\build_native\$(RuntimeIdentifier)</PodishNativeBuildDir>
+        <PodishNativeBuildDir Condition="'$(RuntimeIdentifier)' != ''">..\Fiberish.X86\build_native\$(RuntimeIdentifier)</PodishNativeBuildDir>
         <PodishNativeBuildDir Condition="'$(RuntimeIdentifier)' == ''">..\Fiberish.X86\build_native\host</PodishNativeBuildDir>
         <PodishNetstackTarget Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">aarch64-apple-darwin</PodishNetstackTarget>
         <PodishNetstackTarget Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">aarch64-apple-ios</PodishNetstackTarget>
@@ -48,6 +47,19 @@
         <PodishNetstackStaticLibPath Condition="'$(PodishNetstackTarget)' == ''">..\Fiberish.Netstack\target\release\$(PodishNetstackLibName)</PodishNetstackStaticLibPath>
     </PropertyGroup>
 
+    <Target Name="PrepareNativeAotDependencies"
+            BeforeTargets="Build"
+            Condition="'$(DesignTimeBuild)' != 'true' and '$(PublishAot)' == 'true' and '$(RuntimeIdentifier)' != ''">
+        <MSBuild Projects="..\Fiberish.X86\Fiberish.X86.csproj"
+                 Targets="BuildNativeLib"
+                 BuildInParallel="false"
+                 Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);PublishAot=$(PublishAot);PodishStaticNative=$(PodishStaticNative);EmscriptenToolchainFile=$(EmscriptenToolchainFile);BrowserWasmNodeExecutable=$(BrowserWasmNodeExecutable)" />
+        <MSBuild Projects="..\Fiberish.Core\Fiberish.Core.csproj"
+                 Targets="BuildNetstackNative"
+                 BuildInParallel="false"
+                 Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);PublishAot=$(PublishAot);PodishStaticNative=$(PodishStaticNative);FiberishForceBrowserWasm=$(FiberishForceBrowserWasm)" />
+    </Target>
+
     <ItemGroup Condition="'$(PublishAot)' == 'true'">
         <DirectPInvoke Include="fibercpu"/>
         <DirectPInvoke Include="fiberish_netstack"/>
@@ -58,6 +70,11 @@
 
     <ItemGroup Condition="'$(PublishAot)' == 'true' and $([MSBuild]::IsOsPlatform('OSX'))">
         <NativeSystemLibrary Include="c++"/>
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(PublishAot)' == 'true' and $([MSBuild]::IsOsPlatform('Linux'))">
+        <NativeSystemLibrary Include="c++"/>
+        <NativeSystemLibrary Include="c++abi"/>
     </ItemGroup>
 
 </Project>
