@@ -15,11 +15,14 @@
         <EmscriptenToolchainFile Condition="'$(EmscriptenToolchainFile)' == '' and Exists('/opt/homebrew/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake')">/opt/homebrew/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake</EmscriptenToolchainFile>
         <EmscriptenToolchainFile Condition="'$(EmscriptenToolchainFile)' == '' and Exists('/usr/local/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake')">/usr/local/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake</EmscriptenToolchainFile>
         <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/opt/homebrew/opt/node/bin/node')">/opt/homebrew/opt/node/bin/node</BrowserWasmNodeExecutable>
-        <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/opt/homebrew/bin/node')">/opt/homebrew/bin/node</BrowserWasmNodeExecutable>
-        <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/usr/local/bin/node')">/usr/local/bin/node</BrowserWasmNodeExecutable>
-        <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == ''">node</BrowserWasmNodeExecutable>
-        <FibercpuWasmDownloadUrl Condition="'$(FibercpuWasmDownloadUrl)' == ''"></FibercpuWasmDownloadUrl>
-    </PropertyGroup>
+         <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/opt/homebrew/bin/node')">/opt/homebrew/bin/node</BrowserWasmNodeExecutable>
+         <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/usr/local/bin/node')">/usr/local/bin/node</BrowserWasmNodeExecutable>
+         <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == ''">node</BrowserWasmNodeExecutable>
+         <FibercpuWasmDownloadUrl Condition="'$(FibercpuWasmDownloadUrl)' == ''"></FibercpuWasmDownloadUrl>
+         <LibFibercpuSourceDir>$(MSBuildThisFileDirectory)../libfibercpu</LibFibercpuSourceDir>
+         <LibFibercpuSourceExists Condition="Exists('$(LibFibercpuSourceDir)/CMakeLists.txt')">true</LibFibercpuSourceExists>
+         <LibFibercpuSourceExists Condition="'$(LibFibercpuSourceExists)' == ''">false</LibFibercpuSourceExists>
+     </PropertyGroup>
 
     <!-- Define inputs for incremental build tracking -->
     <ItemGroup Condition="'$(LibFibercpuSourceExists)' == 'true'">
