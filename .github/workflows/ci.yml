@@ -118,6 +118,8 @@ jobs:
           echo "DOTNET_EMSCRIPTEN_LLVM_ROOT=$emsdk_tools_root/bin" >> "$GITHUB_ENV"
           echo "DOTNET_EMSCRIPTEN_BINARYEN_ROOT=$emsdk_tools_root" >> "$GITHUB_ENV"
           echo "DOTNET_EMSCRIPTEN_NODE_JS=$browser_node" >> "$GITHUB_ENV"
+          echo "EM_CACHE=$RUNNER_TEMP/emscripten-cache" >> "$GITHUB_ENV"
+          echo "FROZEN_CACHE=0" >> "$GITHUB_ENV"
           echo "EMSCRIPTEN_TOOLCHAIN_FILE=$emscripten_toolchain" >> "$GITHUB_ENV"
           echo "BROWSER_WASM_NODE_EXECUTABLE=$browser_node" >> "$GITHUB_ENV"
           echo "$emsdk_tools_root/emscripten" >> "$GITHUB_PATH"

@@ -1,8 +1,8 @@
 #include "bindings.h"
-#if !defined(__EMSCRIPTEN__)
+#if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
 #include <execinfo.h>
-#endif
 #include <unistd.h>
+#endif
 #include <algorithm>
 #include <array>
 #include <csignal>
