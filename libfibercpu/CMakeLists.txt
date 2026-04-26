@@ -23,7 +23,7 @@ CPMAddPackage(
     NAME simde
     GITHUB_REPOSITORY simd-everywhere/simde
     VERSION 0.8.2
-    OPTIONS "SIMDE_ENABLE_NATIVE_ALIASES ON"
+    OPTIONS "SIMDE_ENABLE_NATIVE_ALIASES OFF"
 )
 
 CPMAddPackage(
@@ -121,6 +121,14 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-covered-switch-default>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-zero-as-null-pointer-constant>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-reserved-macro-identifier>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unsafe-buffer-usage>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-implicit-int-conversion>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-global-constructors>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-exit-time-destructors>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-format-nonliteral>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-missing-prototypes>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-tautological-type-limit-compare>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-newline-eof>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
     )
 endif()
@@ -201,6 +209,14 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-covered-switch-default>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-zero-as-null-pointer-constant>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-reserved-macro-identifier>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unsafe-buffer-usage>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-implicit-int-conversion>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-global-constructors>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-exit-time-destructors>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-format-nonliteral>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-missing-prototypes>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-tautological-type-limit-compare>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-newline-eof>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
     )
 endif()
