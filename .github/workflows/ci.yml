@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - public-main
+  pull_request:
+
+jobs:
+  build-linux:
+    name: Build Linux core
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build
+
+      - name: Build Linux-compatible projects
+        run: |
+          dotnet build Podish.Cli/Podish.Cli.csproj -c Debug
+          dotnet build Podish.Core.Native/Podish.Core.Native.csproj -c Debug
+          dotnet build Podish.PjdFs/Podish.PjdFs.csproj -c Debug
+          dotnet build Fiberish.Tests/Fiberish.Tests.csproj -c Debug
+          dotnet build Fiberish.SilkFS.Tests/Fiberish.SilkFS.Tests.csproj -c Debug
+          dotnet build Podish.Pulse.Tests/Podish.Pulse.Tests.csproj -c Debug
+          dotnet build Podish.Wayland.Tests/Podish.Wayland.Tests.csproj -c Debug
+
+  build-macos:
+    name: Build macOS full solution
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native build dependencies
+        run: |
+          brew install cmake ninja
+
+      - name: Install WebAssembly workload
+        run: dotnet workload install wasm-tools
+
+      - name: Resolve browser-wasm toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet_root="$(dirname "$(dirname "$(command -v dotnet)")")"
+          emscripten_toolchain="$(find "$dotnet_root/packs" -path '*/tools/emscripten/cmake/Modules/Platform/Emscripten.cmake' -print -quit)"
+          browser_node="$(find "$dotnet_root/packs" -path '*/tools/bin/node' -print | grep 'Microsoft.NET.Runtime.Emscripten.*Node' | head -n 1)"
+          if [[ -z "${emscripten_toolchain:-}" ]]; then
+            echo "Failed to locate Emscripten.cmake under $dotnet_root/packs" >&2
+            exit 1
+          fi
+          if [[ -z "${browser_node:-}" ]]; then
+            echo "Failed to locate the Emscripten Node runtime under $dotnet_root/packs" >&2
+            exit 1
+          fi
+          echo "EMSCRIPTEN_TOOLCHAIN_FILE=$emscripten_toolchain" >> "$GITHUB_ENV"
+          echo "BROWSER_WASM_NODE_EXECUTABLE=$browser_node" >> "$GITHUB_ENV"
+
+      - name: Build full solution
+        run: dotnet build Podish.slnx -c Debug -p:EmscriptenToolchainFile="$EMSCRIPTEN_TOOLCHAIN_FILE" -p:BrowserWasmNodeExecutable="$BROWSER_WASM_NODE_EXECUTABLE"
