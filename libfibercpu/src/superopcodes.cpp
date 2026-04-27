@@ -30,14 +30,18 @@ FORCE_INLINE bool Match4(const DecodedOp* ops) {
 
 #define DEFINE_HANDWRITTEN_SUPEROPCODE_2(Name, Op0, Op1)                                                   \
     ATTR_PRESERVE_NONE int64_t Name(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, \
-                                    mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {           \
+                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,      \
+                                    uint32_t branch, uint64_t flags_cache) {                                \
+        mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);                               \
         RUN_SUPEROPCODE_OP(Op0, state, op, instr_limit, utlb, branch, flags_cache);                        \
                                                                                                            \
         DecodedOp* second_op = NextOp(op);                                                                 \
         RUN_SUPEROPCODE_OP(Op1, state, second_op, instr_limit, utlb, branch, flags_cache);                 \
                                                                                                            \
         if (auto* next_op = NextOp(second_op)) {                                                           \
-            ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache); \
+            mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                          \
+            ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend,    \
+                                                  branch, flags_cache);                                     \
         }                                                                                                  \
         __builtin_unreachable();                                                                           \
     }
@@ -54,7 +58,9 @@ FORCE_INLINE bool Match4(const DecodedOp* ops) {
 
 #define DEFINE_HANDWRITTEN_SUPEROPCODE_3(Name, Op0, Op1, Op2)                                              \
     ATTR_PRESERVE_NONE int64_t Name(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, \
-                                    mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {           \
+                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,      \
+                                    uint32_t branch, uint64_t flags_cache) {                                \
+        mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);                               \
         LogicFlow exit_flow = LogicFlow::Continue;                                                         \
         DecodedOp* exit_op = op;                                                                           \
         DecodedOp* second_op = NextOp(op);                                                                 \
@@ -64,16 +70,21 @@ FORCE_INLINE bool Match4(const DecodedOp* ops) {
         RUN_HANDWRITTEN_SUPEROPCODE_OP_WITH_UNIFIED_EXIT(Op2, third_op, exit_flow, exit_op);               \
                                                                                                            \
         if (auto* next_op = NextOp(third_op)) {                                                            \
-            ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache); \
+            mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                          \
+            ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend,    \
+                                                  branch, flags_cache);                                     \
         }                                                                                                  \
         __builtin_unreachable();                                                                           \
     superopcode_exit:                                                                                      \
-        HANDLE_SUPEROPCODE_FLOW(exit_flow, state, exit_op, instr_limit, utlb, branch, flags_cache);        \
+        HANDLE_SUPEROPCODE_FLOW(exit_flow, state, exit_op, instr_limit, utlb, utlb_tags, utlb_addend,     \
+                                branch, flags_cache);                                                       \
     }
 
 #define DEFINE_HANDWRITTEN_SUPEROPCODE_4(Name, Op0, Op1, Op2, Op3)                                         \
     ATTR_PRESERVE_NONE int64_t Name(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, \
-                                    mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {           \
+                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,      \
+                                    uint32_t branch, uint64_t flags_cache) {                                \
+        mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);                               \
         LogicFlow exit_flow = LogicFlow::Continue;                                                         \
         DecodedOp* exit_op = op;                                                                           \
         DecodedOp* second_op = NextOp(op);                                                                 \
@@ -85,11 +96,14 @@ FORCE_INLINE bool Match4(const DecodedOp* ops) {
         RUN_HANDWRITTEN_SUPEROPCODE_OP_WITH_UNIFIED_EXIT(Op3, fourth_op, exit_flow, exit_op);              \
                                                                                                            \
         if (auto* next_op = NextOp(fourth_op)) {                                                           \
-            ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache); \
+            mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                          \
+            ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend,    \
+                                                  branch, flags_cache);                                     \
         }                                                                                                  \
         __builtin_unreachable();                                                                           \
     superopcode_exit:                                                                                      \
-        HANDLE_SUPEROPCODE_FLOW(exit_flow, state, exit_op, instr_limit, utlb, branch, flags_cache);        \
+        HANDLE_SUPEROPCODE_FLOW(exit_flow, state, exit_op, instr_limit, utlb, utlb_tags, utlb_addend,     \
+                                branch, flags_cache);                                                       \
     }
 
 DEFINE_HANDWRITTEN_SUPEROPCODE_2(HandWrittenSuperOpcode_MovLoadEaxEsp_Ret, op::OpMov_Load_Eax_EspBaseNoIndexNoSegment,

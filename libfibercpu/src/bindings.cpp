@@ -33,8 +33,6 @@
 #endif
 
 using namespace fiberish;
-using MicroTLB = mem::MicroTLB;
-
 struct X86_MmuHandle {
     mem::MmuCore* core = nullptr;
 };
@@ -766,10 +764,11 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                 batch_limit -= block_ptr->inst_count();
                 if (state->eip_dirty) state->eip_dirty = false;
 
-                MicroTLB utlb;
+                uint64_t utlb_tags = mem::InvalidMicroTlbAbiTags();
+                uint64_t utlb_addend = 0;
                 uint64_t flags_cache = GetStateFlagsCache(state);
-                int64_t remaining =
-                    block_ptr->entry(state, head, batch_limit, utlb, std::numeric_limits<uint32_t>::max(), flags_cache);
+                int64_t remaining = block_ptr->entry(state, head, batch_limit, utlb_tags, utlb_addend,
+                                                     std::numeric_limits<uint32_t>::max(), flags_cache);
                 state->intercept_exec_write_for_smc = false;
                 total_run_insts += (initial_batch_limit - remaining);
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
@@ -960,7 +959,6 @@ int X86_Step(EmuState* state) {
 
     if (!DecodeInstruction(buf, &inst, &handler_index)) {
         inst.head.SetLength(1);
-        // 0x10B = UD2
         HandlerFunc ud2 = g_Handlers[0x10B];
         inst.head.handler = ud2;
     }
@@ -980,7 +978,6 @@ int X86_Step(EmuState* state) {
     SetNextBlock(&sentinel, state->mmu.invalid_code_block());
     std::memcpy(head + 1, &sentinel, sizeof(sentinel));
 
-    // Run first op
     HandlerFunc h = head->handler;
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     state->current_block_head = head;
@@ -988,9 +985,10 @@ int X86_Step(EmuState* state) {
 
     if (h) {
         state->clear_pending_mem_op();
-        MicroTLB utlb;
+        uint64_t utlb_tags = mem::InvalidMicroTlbAbiTags();
+        uint64_t utlb_addend = 0;
         uint64_t flags_cache = GetStateFlagsCache(state);
-        h(state, head, 0, utlb, std::numeric_limits<uint32_t>::max(),
+        h(state, head, 0, utlb_tags, utlb_addend, std::numeric_limits<uint32_t>::max(),
           flags_cache);  // Limit 0 ensures it returns after 1 inst + sentinel
     } else {
         if (!state->hooks.on_invalid_opcode(state)) {

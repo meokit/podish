@@ -11,17 +11,22 @@ HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops);
 #endif
 void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count);
 
-#define HANDLE_SUPEROPCODE_FLOW(flow, state, flow_op, instr_limit, utlb, branch, flags_cache)                      \
+#define HANDLE_SUPEROPCODE_FLOW(flow, state, flow_op, instr_limit, utlb, utlb_tags, utlb_addend, branch,          \
+                                flags_cache)                                                                        \
     do {                                                                                                           \
         switch (flow) {                                                                                            \
             case LogicFlow::Continue:                                                                              \
                 if (auto* next_op = NextOp(flow_op)) {                                                             \
-                    ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache); \
+                    mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                          \
+                    ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend,    \
+                                                          branch, flags_cache);                                     \
                 }                                                                                                  \
                 __builtin_unreachable();                                                                           \
             case LogicFlow::ContinueSkipOne:                                                                       \
                 if (auto* next_op = NextOp(NextOp(flow_op))) {                                                     \
-                    ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache); \
+                    mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                          \
+                    ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend,    \
+                                                          branch, flags_cache);                                     \
                 }                                                                                                  \
                 __builtin_unreachable();                                                                           \
             case LogicFlow::ExitOnCurrentEIP:                                                                      \
@@ -36,14 +41,19 @@ void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count);
                 return instr_limit;                                                                                \
             case LogicFlow::RestartMemoryOp:                                                                       \
                 RecordBlockHandlersThrough(state, flow_op);                                                        \
-                ATTR_MUSTTAIL return MemoryOpRestart(state, flow_op, instr_limit, utlb, branch, flags_cache);      \
+                mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                              \
+                ATTR_MUSTTAIL return MemoryOpRestart(state, flow_op, instr_limit, utlb_tags, utlb_addend, branch, \
+                                                     flags_cache);                                                  \
             case LogicFlow::RetryMemoryOp:                                                                         \
                 RecordBlockHandlersThrough(state, flow_op);                                                        \
-                ATTR_MUSTTAIL return MemoryOpRetry(state, flow_op, instr_limit, utlb, branch, flags_cache);        \
+                mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                              \
+                ATTR_MUSTTAIL return MemoryOpRetry(state, flow_op, instr_limit, utlb_tags, utlb_addend, branch,   \
+                                                   flags_cache);                                                    \
             case LogicFlow::ExitToBranch:                                                                          \
                 RecordBlockHandlersThrough(state, flow_op);                                                        \
-                ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, flow_op, instr_limit,  \
-                                                                                     utlb, branch, flags_cache);   \
+                mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                              \
+                ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(                              \
+                    state, flow_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);                    \
             default:                                                                                               \
                 CommitFlagsCache(state, flags_cache);                                                              \
                 return instr_limit;                                                                                \
@@ -54,7 +64,8 @@ void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count);
     do {                                                                                          \
         auto flow = target(state, cur_op, &utlb, GetImm(cur_op), &branch, flags_cache);           \
         if (flow != LogicFlow::Continue) [[unlikely]] {                                           \
-            HANDLE_SUPEROPCODE_FLOW(flow, state, cur_op, instr_limit, utlb, branch, flags_cache); \
+            HANDLE_SUPEROPCODE_FLOW(flow, state, cur_op, instr_limit, utlb, utlb_tags,            \
+                                    utlb_addend, branch, flags_cache);                             \
         }                                                                                         \
     } while (false)
 

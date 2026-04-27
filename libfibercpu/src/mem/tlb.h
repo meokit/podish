@@ -23,6 +23,49 @@ struct alignas(16) MicroTLB {
 };
 #endif
 
+using MicroTlbAbiWord = uint64_t;
+
+#if defined(__wasm32__)
+inline constexpr MicroTlbAbiWord PackMicroTlbTags(uint32_t, uint32_t) { return 0; }
+inline constexpr MicroTlbAbiWord InvalidMicroTlbAbiTags() { return 0; }
+inline constexpr MicroTlbAbiWord EncodeMicroTlbTags(const MicroTLB&) { return 0; }
+inline constexpr MicroTlbAbiWord EncodeMicroTlbAddend(const MicroTLB&) { return 0; }
+inline constexpr void EncodeMicroTlbAbi(const MicroTLB&, MicroTlbAbiWord& tags, MicroTlbAbiWord& addend) {
+    tags = 0;
+    addend = 0;
+}
+inline constexpr MicroTLB DecodeMicroTlbAbi(MicroTlbAbiWord, MicroTlbAbiWord) { return {}; }
+#else
+inline constexpr MicroTlbAbiWord PackMicroTlbTags(uint32_t tag_r, uint32_t tag_w) {
+    return static_cast<MicroTlbAbiWord>(tag_r) | (static_cast<MicroTlbAbiWord>(tag_w) << 32);
+}
+
+inline constexpr MicroTlbAbiWord InvalidMicroTlbAbiTags() {
+    return PackMicroTlbTags(std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max());
+}
+
+inline constexpr MicroTlbAbiWord EncodeMicroTlbTags(const MicroTLB& utlb) {
+    return PackMicroTlbTags(utlb.tag_r, utlb.tag_w);
+}
+
+inline constexpr MicroTlbAbiWord EncodeMicroTlbAddend(const MicroTLB& utlb) {
+    return static_cast<MicroTlbAbiWord>(utlb.addend);
+}
+
+inline constexpr void EncodeMicroTlbAbi(const MicroTLB& utlb, MicroTlbAbiWord& tags, MicroTlbAbiWord& addend) {
+    tags = EncodeMicroTlbTags(utlb);
+    addend = EncodeMicroTlbAddend(utlb);
+}
+
+inline constexpr MicroTLB DecodeMicroTlbAbi(MicroTlbAbiWord tags, MicroTlbAbiWord addend) {
+    MicroTLB utlb{};
+    utlb.tag_r = static_cast<uint32_t>(tags);
+    utlb.tag_w = static_cast<uint32_t>(tags >> 32);
+    utlb.addend = static_cast<std::uintptr_t>(addend);
+    return utlb;
+}
+#endif
+
 inline void InvalidateMicroTLB(MicroTLB* utlb) {
 #if !defined(__wasm32__)
     utlb->invalidate();

@@ -34,25 +34,32 @@ FORCE_INLINE void RecordBlockHandlersThrough(EmuState*, const DecodedOp*) {}
 #endif
 
 extern ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                  mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache);
+                                                  mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+                                                  uint32_t branch, uint64_t flags_cache);
 extern ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache);
+                                                mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+                                                uint32_t branch, uint64_t flags_cache);
 extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowLink(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                              int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                              mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                               uint64_t flags_cache);
 extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowControlFlow(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                     int64_t instr_limit, mem::MicroTLB utlb,
-                                                                     uint32_t branch, uint64_t flags_cache);
+                                                                     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                                     mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                                     uint64_t flags_cache);
 extern ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                      int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                      mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                       uint64_t flags_cache);
 
 template <ExtKind Kind>
 FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                  int64_t instr_limit, mem::MicroTLB utlb,
-                                                                  uint32_t target_eip, uint64_t flags_cache) {
+                                                                  int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                                  mem::MicroTlbAbiWord utlb_addend, uint32_t target_eip,
+                                                                  uint64_t flags_cache) {
     (void)op;
-    (void)utlb;
+    (void)utlb_tags;
+    (void)utlb_addend;
     state->clear_pending_mem_op();
     if (instr_limit <= 0) {
         CommitFlagsCache(state, flags_cache);
@@ -82,22 +89,27 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
         state->current_block_head = next_head;
 #endif
         __builtin_assume(entry != nullptr);
-        ATTR_MUSTTAIL return entry(state, next_head, instr_limit, utlb, std::numeric_limits<uint32_t>::max(),
-                                   flags_cache);
+        ATTR_MUSTTAIL return entry(state, next_head, instr_limit, utlb_tags, utlb_addend,
+                                   std::numeric_limits<uint32_t>::max(), flags_cache);
     }
 
     if constexpr (Kind == ExtKind::Link) {
-        ATTR_MUSTTAIL return ResolveBranchTargetSlowLink(state, op, instr_limit, utlb, target_eip, flags_cache);
+        ATTR_MUSTTAIL return ResolveBranchTargetSlowLink(state, op, instr_limit, utlb_tags, utlb_addend, target_eip,
+                                                         flags_cache);
     } else {
-        ATTR_MUSTTAIL return ResolveBranchTargetSlowControlFlow(state, op, instr_limit, utlb, target_eip, flags_cache);
+        ATTR_MUSTTAIL return ResolveBranchTargetSlowControlFlow(state, op, instr_limit, utlb_tags, utlb_addend,
+                                                                target_eip, flags_cache);
     }
 }
 
 template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                           mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
+                                           mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+                                           uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     // Execute Logic
     auto flow = Target(state, op, &utlb, GetImm(op), &branch, flags_cache);
+    mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
 
     switch (flow) {
         case LogicFlow::Continue:
@@ -105,12 +117,14 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             // Note: We don't check for 0 here for speed, assuming well-formed blocks
             // (sentinel always valid)
             if (auto* next_op = NextOp(op)) {
-                ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+                ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
+                                                      flags_cache);
             }
             __builtin_unreachable();
         case LogicFlow::ContinueSkipOne:
             if (auto* next_op = NextOp(NextOp(op))) {
-                ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+                ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
+                                                      flags_cache);
             }
             __builtin_unreachable();
         case LogicFlow::ExitOnCurrentEIP:
@@ -125,14 +139,14 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             return instr_limit;
         case LogicFlow::RestartMemoryOp:
             RecordBlockHandlersThrough(state, op);
-            ATTR_MUSTTAIL return MemoryOpRestart(state, op, instr_limit, utlb, branch, flags_cache);
+            ATTR_MUSTTAIL return MemoryOpRestart(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
         case LogicFlow::RetryMemoryOp:
             RecordBlockHandlersThrough(state, op);
-            ATTR_MUSTTAIL return MemoryOpRetry(state, op, instr_limit, utlb, branch, flags_cache);
+            ATTR_MUSTTAIL return MemoryOpRetry(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
         case LogicFlow::ExitToBranch:
             RecordBlockHandlersThrough(state, op);
-            ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb, branch,
-                                                                                 flags_cache);
+            ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb_tags,
+                                                                                 utlb_addend, branch, flags_cache);
         default:
             CommitFlagsCache(state, flags_cache);
             return instr_limit;
