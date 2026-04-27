@@ -1,6 +1,6 @@
 # Podish
 
-> A high-performance Linux x86 userland container for iOS and Apple Silicon.
+> A Linux x86 userland container for iOS and Apple Silicon.
 
 **Podish** runs unmodified 32-bit Linux binaries on modern Apple platforms without JIT compilation. It is built around a from-scratch C++ interpreter core and a C# Linux compatibility layer, optimized specifically for environments where code generation is restricted.
 
@@ -22,7 +22,7 @@ The result is an interpreter that outperforms QEMU's TCI (Tiny Code Interpreter)
 
 ---
 
-## Why Podish
+## Why interpreter
 
 iOS prohibits JIT by blocking `PROT_EXEC | PROT_WRITE` mappings and unsigned code execution. This rules out LuaJIT's JIT mode, fast UTM, and any engine that generates machine code at runtime.
 
@@ -48,7 +48,7 @@ Podish is roughly **2× iSH** and roughly **9× QEMU TCI** on the same class of 
 
 ---
 
-## What Runs Today
+## Tested softwares
 
 | Category | Representative Software | Status | Notes |
 | --- | --- | --- | --- |
@@ -209,16 +209,6 @@ Early builds scored ~600 on CoreMark, roughly on par with a naive interpreter. T
 4. **Lazy parity flags** (~2,000 → ~2,200): static def-use pruning + lazy PF evaluation.
 5. **Block linking** (~2,200 → ~2,500): appended short successor blocks to reduce boundary costs.
 6. **Profile-guided superopcodes** (~2,500 → ~3,000): ~256 fused instruction pairs based on anchor instructions and RAW dependencies.
-
-### Why A19 Can Beat M3 Max
-
-Podish is single-threaded and latency-bound; it does not benefit from the M3 Max's massive memory bandwidth. On small working sets like CoreMark, the A19's newer core microarchitecture gives it a slight edge despite running in a phone thermal envelope.
-
-### Copy-and-Patch: A Tried-and-Failed Experiment
-
-A copy-and-patch JIT was prototyped using the same Clang ABI machinery (`preserve_none`, `[[musttail]]`). The hope was 200%+ speedup; the reality was a small regression.
-
-The reason: direct-threaded dispatch was already so cheap that the real bottlenecks were memory access, address translation, and instruction-cache pressure. Replacing dispatch with larger patched stencils increased I-cache pressure without reducing the costly work. This confirmed that **a well-tuned interpreter can outperform a naive baseline JIT** when the bottleneck has shifted away from dispatch.
 
 ---
 
