@@ -192,6 +192,11 @@ set(FIBERCPU_FINAL_SOURCES
 
 add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${FIBERCPU_FINAL_SOURCES})
 set_target_properties(fibercpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(WIN32 AND NOT FIBERCPU_BUILD_STATIC)
+    # The managed runtime loads fibercpu.dll via P/Invoke and expects the X86_* symbols
+    # to be exported directly on Windows shared builds.
+    set_target_properties(fibercpu PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
 
 target_include_directories(fibercpu PRIVATE src)
 target_include_directories(fibercpu SYSTEM PRIVATE ${simde_SOURCE_DIR})

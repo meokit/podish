@@ -73,15 +73,17 @@ using GeneratedSuperOpcodeTable =
 // weighted_exec_count=134524 occurrences=147706 relation=RAW anchor=Pop_Reg32_Ebx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_000_OpPop_Reg32_Ebx__OpPop_Reg32_Esi(EmuState* RESTRICT state,
                                                                             DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                            mem::MicroTLB utlb, uint32_t branch,
-                                                                            uint64_t flags_cache) {
+                                                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Ebx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Esi, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -90,15 +92,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_000_OpPop_Reg32_Ebx__OpPop_Reg32_Esi(EmuS
 ATTR_PRESERVE_NONE int64_t SuperOpcode_001_OpTest_EvGv_32_ModReg_Eax__OpJcc_E_Rel32(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -107,15 +111,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_001_OpTest_EvGv_32_ModReg_Eax__OpJcc_E_Re
 ATTR_PRESERVE_NONE int64_t SuperOpcode_002_OpTest_EvGv_32_ModReg_Eax__OpJcc_E_Rel8(EmuState* RESTRICT state,
                                                                                    DecodedOp* RESTRICT op,
                                                                                    int64_t instr_limit,
-                                                                                   mem::MicroTLB utlb, uint32_t branch,
-                                                                                   uint64_t flags_cache) {
+                                                                                   mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -123,15 +129,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_002_OpTest_EvGv_32_ModReg_Eax__OpJcc_E_Re
 // weighted_exec_count=108974 occurrences=129408 relation=RAW anchor=Pop_Reg32_Esi direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_003_OpPop_Reg32_Esi__OpPop_Reg32_Edi(EmuState* RESTRICT state,
                                                                             DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                            mem::MicroTLB utlb, uint32_t branch,
-                                                                            uint64_t flags_cache) {
+                                                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Esi, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Edi, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -140,30 +148,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_003_OpPop_Reg32_Esi__OpPop_Reg32_Edi(EmuS
 ATTR_PRESERVE_NONE int64_t SuperOpcode_004_OpGroup5_Ev_Push_32_Flags__OpCall_Rel(EmuState* RESTRICT state,
                                                                                  DecodedOp* RESTRICT op,
                                                                                  int64_t instr_limit,
-                                                                                 mem::MicroTLB utlb, uint32_t branch,
-                                                                                 uint64_t flags_cache) {
+                                                                                 mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCall_Rel, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=104396 occurrences=122628 relation=RAW anchor=Push_Imm8 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_005_OpPush_Imm8__OpPush_Imm8(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                    int64_t instr_limit, mem::MicroTLB utlb,
-                                                                    uint32_t branch, uint64_t flags_cache) {
+                                                                    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -171,15 +183,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_005_OpPush_Imm8__OpPush_Imm8(EmuState* RE
 // weighted_exec_count=94102 occurrences=110280 relation=RAW anchor=Pop_Reg32_Edi direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_006_OpPop_Reg32_Edi__OpPop_Reg32_Ebp(EmuState* RESTRICT state,
                                                                             DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                            mem::MicroTLB utlb, uint32_t branch,
-                                                                            uint64_t flags_cache) {
+                                                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Edi, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Ebp, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -187,30 +201,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_006_OpPop_Reg32_Edi__OpPop_Reg32_Ebp(EmuS
 // weighted_exec_count=84042 occurrences=111562 relation=RAW anchor=Push_Reg32_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_007_OpPush_Reg32_Eax__OpCall_Rel(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCall_Rel, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=82588 occurrences=95750 relation=RAW anchor=Pop_Reg32_Ebp direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_008_OpPop_Reg32_Ebp__OpRet(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                  int64_t instr_limit, mem::MicroTLB utlb,
-                                                                  uint32_t branch, uint64_t flags_cache) {
+                                                                  int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Ebp, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpRet, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -218,15 +236,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_008_OpPop_Reg32_Ebp__OpRet(EmuState* REST
 // weighted_exec_count=77322 occurrences=17346 relation=RAW anchor=Cmp_EvGv_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_009_OpCmp_EvGv_32_ModReg__OpJcc_B_Rel8(EmuState* RESTRICT state,
                                                                               DecodedOp* RESTRICT op,
-                                                                              int64_t instr_limit, mem::MicroTLB utlb,
-                                                                              uint32_t branch, uint64_t flags_cache) {
+                                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_B_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -234,45 +254,51 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_009_OpCmp_EvGv_32_ModReg__OpJcc_B_Rel8(Em
 // weighted_exec_count=76950 occurrences=108476 relation=RAW anchor=Push_Reg32_Esi direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_010_OpPush_Reg32_Esi__OpPush_Reg32_Ebx(EmuState* RESTRICT state,
                                                                               DecodedOp* RESTRICT op,
-                                                                              int64_t instr_limit, mem::MicroTLB utlb,
-                                                                              uint32_t branch, uint64_t flags_cache) {
+                                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Esi, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=74652 occurrences=93196 relation=RAW anchor=Group1_EvIb_Add_32_Flags_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_011_OpGroup1_EvIb_Add_32_Flags_ModReg__OpPop_Reg32_Ebx(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Add_32_Flags_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Ebx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=72374 occurrences=4346 relation=RAW anchor=Group2_EvIb_Shl direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_012_OpGroup2_EvIb_Shl__OpOr_EvGv_NF_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shl, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpOr_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -280,15 +306,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_012_OpGroup2_EvIb_Shl__OpOr_EvGv_NF_32_Mo
 // weighted_exec_count=65700 occurrences=95264 relation=RAW anchor=Push_Reg32_Edi direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_013_OpPush_Reg32_Edi__OpPush_Reg32_Esi(EmuState* RESTRICT state,
                                                                               DecodedOp* RESTRICT op,
-                                                                              int64_t instr_limit, mem::MicroTLB utlb,
-                                                                              uint32_t branch, uint64_t flags_cache) {
+                                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Edi, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Esi, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -296,45 +324,51 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_013_OpPush_Reg32_Edi__OpPush_Reg32_Esi(Em
 // weighted_exec_count=63090 occurrences=108574 relation=RAW anchor=Test_EvGv_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_014_OpTest_EvGv_32_ModReg__OpJcc_E_Rel8(EmuState* RESTRICT state,
                                                                                DecodedOp* RESTRICT op,
-                                                                               int64_t instr_limit, mem::MicroTLB utlb,
-                                                                               uint32_t branch, uint64_t flags_cache) {
+                                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=61350 occurrences=78006 relation=RAW anchor=Group5_Ev_Push_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_015_OpGroup5_Ev_Push_32_Flags__OpGroup5_Ev_Push_32_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=58428 occurrences=82142 relation=RAW anchor=Group1_EvIb_Sub_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_016_OpGroup1_EvIb_Sub_32_Flags__OpGroup5_Ev_Push_32_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -343,15 +377,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_016_OpGroup1_EvIb_Sub_32_Flags__OpGroup5_
 ATTR_PRESERVE_NONE int64_t SuperOpcode_017_OpOr_EvGv_NF_32_ModReg__OpMov_EvGv_Eax(EmuState* RESTRICT state,
                                                                                   DecodedOp* RESTRICT op,
                                                                                   int64_t instr_limit,
-                                                                                  mem::MicroTLB utlb, uint32_t branch,
-                                                                                  uint64_t flags_cache) {
+                                                                                  mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpOr_EvGv_NF_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -359,15 +395,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_017_OpOr_EvGv_NF_32_ModReg__OpMov_EvGv_Ea
 // weighted_exec_count=56078 occurrences=50250 relation=RAW anchor=Mov_Load_Eax_EaxBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_018_OpMov_Load_Eax_EaxBaseNoIndexNoSegment__OpTest_EvGv_32_ModReg_Eax(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax_EaxBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -375,30 +413,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_018_OpMov_Load_Eax_EaxBaseNoIndexNoSegmen
 // weighted_exec_count=55266 occurrences=97742 relation=RAW anchor=Test_EvGv_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_019_OpTest_EvGv_32_ModReg__OpJcc_E_Rel32(EmuState* RESTRICT state,
                                                                                 DecodedOp* RESTRICT op,
-                                                                                int64_t instr_limit, mem::MicroTLB utlb,
-                                                                                uint32_t branch, uint64_t flags_cache) {
+                                                                                int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=53268 occurrences=64556 relation=RAW anchor=Test_EbGb direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_020_OpTest_EbGb__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                      int64_t instr_limit, mem::MicroTLB utlb,
-                                                                      uint32_t branch, uint64_t flags_cache) {
+                                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EbGb, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -406,15 +448,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_020_OpTest_EbGb__OpJcc_E_Rel32(EmuState* 
 // weighted_exec_count=52544 occurrences=868 relation=RAW anchor=Imul_GvEv direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_021_OpImul_GvEv__OpAdd_EvGv_NF_32_ModReg(EmuState* RESTRICT state,
                                                                                 DecodedOp* RESTRICT op,
-                                                                                int64_t instr_limit, mem::MicroTLB utlb,
-                                                                                uint32_t branch, uint64_t flags_cache) {
+                                                                                int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpImul_GvEv, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -422,15 +466,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_021_OpImul_GvEv__OpAdd_EvGv_NF_32_ModReg(
 // weighted_exec_count=51708 occurrences=62158 relation=RAW anchor=Push_Reg32_Ebx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_022_OpPush_Reg32_Ebx__OpCall_Rel(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCall_Rel, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -438,15 +484,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_022_OpPush_Reg32_Ebx__OpCall_Rel(EmuState
 // weighted_exec_count=51468 occurrences=74288 relation=RAW anchor=Push_Reg32_Ebp direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_023_OpPush_Reg32_Ebp__OpPush_Reg32_Edi(EmuState* RESTRICT state,
                                                                               DecodedOp* RESTRICT op,
-                                                                              int64_t instr_limit, mem::MicroTLB utlb,
-                                                                              uint32_t branch, uint64_t flags_cache) {
+                                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebp, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Edi, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -455,30 +503,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_023_OpPush_Reg32_Ebp__OpPush_Reg32_Edi(Em
 ATTR_PRESERVE_NONE int64_t SuperOpcode_024_OpGroup1_EvIb_Sub_32_Flags__OpPush_Imm8(EmuState* RESTRICT state,
                                                                                    DecodedOp* RESTRICT op,
                                                                                    int64_t instr_limit,
-                                                                                   mem::MicroTLB utlb, uint32_t branch,
-                                                                                   uint64_t flags_cache) {
+                                                                                   mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=47478 occurrences=88072 relation=RAW anchor=Mov_Load_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_025_OpMov_Load_Eax__OpTest_EvGv_32_ModReg_Eax(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -486,15 +538,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_025_OpMov_Load_Eax__OpTest_EvGv_32_ModReg
 // weighted_exec_count=47424 occurrences=51524 relation=RAW anchor=Cmp_EvGv_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_026_OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel8(EmuState* RESTRICT state,
                                                                                DecodedOp* RESTRICT op,
-                                                                               int64_t instr_limit, mem::MicroTLB utlb,
-                                                                               uint32_t branch, uint64_t flags_cache) {
+                                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -502,60 +556,68 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_026_OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel8(E
 // weighted_exec_count=47048 occurrences=61486 relation=RAW anchor=Lea_32_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_027_OpLea_32_Eax__OpPush_Reg32_Eax(EmuState* RESTRICT state,
                                                                           DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                          mem::MicroTLB utlb, uint32_t branch,
-                                                                          uint64_t flags_cache) {
+                                                                          mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpLea_32_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=39374 occurrences=50964 relation=RAW anchor=Push_Imm8 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_028_OpPush_Imm8__OpCall_Rel(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                   int64_t instr_limit, mem::MicroTLB utlb,
-                                                                   uint32_t branch, uint64_t flags_cache) {
+                                                                   int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCall_Rel, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=38514 occurrences=66826 relation=RAW anchor=Sub_GvEv direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_029_OpSub_GvEv__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                      int64_t instr_limit, mem::MicroTLB utlb,
-                                                                      uint32_t branch, uint64_t flags_cache) {
+                                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpSub_GvEv, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=38162 occurrences=11814 relation=RAW anchor=Group1_EvIb_Add_32_NoFlags_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_030_OpGroup1_EvIb_Add_32_NoFlags_Eax__OpCmp_EvGv_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Add_32_NoFlags_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -564,15 +626,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_030_OpGroup1_EvIb_Add_32_NoFlags_Eax__OpC
 ATTR_PRESERVE_NONE int64_t SuperOpcode_031_OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_Rel8(EmuState* RESTRICT state,
                                                                                   DecodedOp* RESTRICT op,
                                                                                   int64_t instr_limit,
-                                                                                  mem::MicroTLB utlb, uint32_t branch,
-                                                                                  uint64_t flags_cache) {
+                                                                                  mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -581,15 +645,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_031_OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_Rel
 ATTR_PRESERVE_NONE int64_t SuperOpcode_032_OpTest_EvGv_32_ModReg_Edx__OpJcc_NE_Rel8(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Edx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -597,23 +663,26 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_032_OpTest_EvGv_32_ModReg_Edx__OpJcc_NE_R
 // weighted_exec_count=37012 occurrences=48558 relation=RAW anchor=Push_Reg32_Esi direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_033_OpPush_Reg32_Esi__OpCall_Rel(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Esi, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCall_Rel, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=36366 occurrences=132 relation=RAW anchor=Group2_EvIb_Sar direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_034_OpGroup2_EvIb_Sar__OpGroup1_EvIb_And_32_NoFlags_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Sar, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -621,7 +690,8 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_034_OpGroup2_EvIb_Sar__OpGroup1_EvIb_And_
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -630,15 +700,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_034_OpGroup2_EvIb_Sar__OpGroup1_EvIb_And_
 ATTR_PRESERVE_NONE int64_t SuperOpcode_035_OpTest_EvGv_32_ModReg_Edx__OpJcc_E_Rel8(EmuState* RESTRICT state,
                                                                                    DecodedOp* RESTRICT op,
                                                                                    int64_t instr_limit,
-                                                                                   mem::MicroTLB utlb, uint32_t branch,
-                                                                                   uint64_t flags_cache) {
+                                                                                   mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Edx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -646,60 +718,68 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_035_OpTest_EvGv_32_ModReg_Edx__OpJcc_E_Re
 // weighted_exec_count=35244 occurrences=326 relation=RAW anchor=Mov_EvGv_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_036_OpMov_EvGv_Eax__OpGroup2_EvIb_Sar(EmuState* RESTRICT state,
                                                                              DecodedOp* RESTRICT op,
-                                                                             int64_t instr_limit, mem::MicroTLB utlb,
-                                                                             uint32_t branch, uint64_t flags_cache) {
+                                                                             int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Sar, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=35212 occurrences=292 relation=RAW anchor=Imul_GvEv direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_037_OpImul_GvEv__OpMov_EvGv_Eax(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                       int64_t instr_limit, mem::MicroTLB utlb,
-                                                                       uint32_t branch, uint64_t flags_cache) {
+                                                                       int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpImul_GvEv, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=35132 occurrences=138 relation=RAW anchor=Add_GvEv_NF direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_038_OpAdd_GvEv_NF__OpImul_GvEv(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                      int64_t instr_limit, mem::MicroTLB utlb,
-                                                                      uint32_t branch, uint64_t flags_cache) {
+                                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpAdd_GvEv_NF, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpImul_GvEv, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=35060 occurrences=18 relation=RAW anchor=Group1_EvIb_And_32_NoFlags_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_039_OpGroup1_EvIb_And_32_NoFlags_ModReg__OpImul_GvEv(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_And_32_NoFlags_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpImul_GvEv, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -707,15 +787,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_039_OpGroup1_EvIb_And_32_NoFlags_ModReg__
 // weighted_exec_count=34412 occurrences=36516 relation=RAW anchor=Push_Reg32_Edi direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_040_OpPush_Reg32_Edi__OpCall_Rel(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Edi, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCall_Rel, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -724,30 +806,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_040_OpPush_Reg32_Edi__OpCall_Rel(EmuState
 ATTR_PRESERVE_NONE int64_t SuperOpcode_041_OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_Rel32(EmuState* RESTRICT state,
                                                                                    DecodedOp* RESTRICT op,
                                                                                    int64_t instr_limit,
-                                                                                   mem::MicroTLB utlb, uint32_t branch,
-                                                                                   uint64_t flags_cache) {
+                                                                                   mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=32678 occurrences=55780 relation=RAW anchor=Push_Reg32_Ebx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_042_OpPush_Reg32_Ebx__OpGroup1_EvIb_Sub_32_NoFlags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_NoFlags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -755,15 +841,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_042_OpPush_Reg32_Ebx__OpGroup1_EvIb_Sub_3
 // weighted_exec_count=32300 occurrences=56798 relation=RAW anchor=Mov_Load_Eax_EspBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_043_OpMov_Load_Eax_EspBaseNoIndexNoSegment__OpSub_GvEv(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax_EspBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpSub_GvEv, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -772,30 +860,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_043_OpMov_Load_Eax_EspBaseNoIndexNoSegmen
 ATTR_PRESERVE_NONE int64_t SuperOpcode_044_OpGroup1_EbIb_Cmp_Flags__OpJcc_E_Rel32(EmuState* RESTRICT state,
                                                                                   DecodedOp* RESTRICT op,
                                                                                   int64_t instr_limit,
-                                                                                  mem::MicroTLB utlb, uint32_t branch,
-                                                                                  uint64_t flags_cache) {
+                                                                                  mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=31448 occurrences=28 relation=RAW anchor=Mov_Load_Ebx_EspBaseNoIndexNoSegment direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_045_OpMov_Load_Ebx_EspBaseNoIndexNoSegment__OpMov_Store_Esi(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Ebx_EspBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMov_Store_Esi, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -803,45 +895,51 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_045_OpMov_Load_Ebx_EspBaseNoIndexNoSegmen
 // weighted_exec_count=30378 occurrences=882 relation=RAW anchor=Cmp_EvGv_16 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_046_OpCmp_EvGv_16__OpJcc_NE_Rel8(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_16, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=29820 occurrences=43158 relation=RAW anchor=Group1_EvIb_Sub_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_047_OpGroup1_EvIb_Sub_32_Flags__OpPush_Reg32_Eax(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=28506 occurrences=50634 relation=RAW anchor=Test_EbGb direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_048_OpTest_EbGb__OpJcc_E_Rel8(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                     int64_t instr_limit, mem::MicroTLB utlb,
-                                                                     uint32_t branch, uint64_t flags_cache) {
+                                                                     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EbGb, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -850,23 +948,26 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_048_OpTest_EbGb__OpJcc_E_Rel8(EmuState* R
 ATTR_PRESERVE_NONE int64_t SuperOpcode_049_OpGroup1_EbIb_Cmp_Flags__OpJcc_E_Rel8(EmuState* RESTRICT state,
                                                                                  DecodedOp* RESTRICT op,
                                                                                  int64_t instr_limit,
-                                                                                 mem::MicroTLB utlb, uint32_t branch,
-                                                                                 uint64_t flags_cache) {
+                                                                                 mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=28178 occurrences=4 relation=RAW anchor=Mov_EvGv_Edx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_050_OpMov_EvGv_Edx__OpMov_Load_Edx_EsiBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Edx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -874,7 +975,8 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_050_OpMov_EvGv_Edx__OpMov_Load_Edx_EsiBas
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -883,30 +985,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_050_OpMov_EvGv_Edx__OpMov_Load_Edx_EsiBas
 ATTR_PRESERVE_NONE int64_t SuperOpcode_051_OpPush_Imm8__OpGroup5_Ev_Push_32_Flags(EmuState* RESTRICT state,
                                                                                   DecodedOp* RESTRICT op,
                                                                                   int64_t instr_limit,
-                                                                                  mem::MicroTLB utlb, uint32_t branch,
-                                                                                  uint64_t flags_cache) {
+                                                                                  mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=27422 occurrences=41634 relation=RAW anchor=Lea_32 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_052_OpLea_32__OpLea_32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                              int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-                                                              uint64_t flags_cache) {
+                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpLea_32, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpLea_32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -915,8 +1021,9 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_052_OpLea_32__OpLea_32(EmuState* RESTRICT
 // direction=successor
 ATTR_PRESERVE_NONE int64_t
 SuperOpcode_053_OpMov_Store_Eax_EspBaseNoIndexNoSegment__OpMov_Load_Eax_EspBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Store_Eax_EspBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -924,7 +1031,8 @@ SuperOpcode_053_OpMov_Store_Eax_EspBaseNoIndexNoSegment__OpMov_Load_Eax_EspBaseN
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -932,105 +1040,119 @@ SuperOpcode_053_OpMov_Store_Eax_EspBaseNoIndexNoSegment__OpMov_Load_Eax_EspBaseN
 // weighted_exec_count=26958 occurrences=46772 relation=RAW anchor=Test_EvGv_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_054_OpTest_EvGv_32_ModReg__OpJcc_NE_Rel8(EmuState* RESTRICT state,
                                                                                 DecodedOp* RESTRICT op,
-                                                                                int64_t instr_limit, mem::MicroTLB utlb,
-                                                                                uint32_t branch, uint64_t flags_cache) {
+                                                                                int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=26736 occurrences=31288 relation=RAW anchor=Test_EbGb direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_055_OpTest_EbGb__OpJcc_NE_Rel8(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                      int64_t instr_limit, mem::MicroTLB utlb,
-                                                                      uint32_t branch, uint64_t flags_cache) {
+                                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EbGb, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=26278 occurrences=32418 relation=RAW anchor=Push_Reg32_Ebx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_056_OpPush_Reg32_Ebx__OpGroup1_EvIb_Sub_32_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=25106 occurrences=46964 relation=RAW anchor=Test_EbGb direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_057_OpTest_EbGb__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                       int64_t instr_limit, mem::MicroTLB utlb,
-                                                                       uint32_t branch, uint64_t flags_cache) {
+                                                                       int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EbGb, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=24818 occurrences=46292 relation=RAW anchor=Mov_Moffs_Load_Word direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_058_OpMov_Moffs_Load_Word__OpTest_EvGv_32_ModReg_Eax(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Moffs_Load_Word, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=24440 occurrences=434 relation=RAW anchor=Add_EvGv_NF_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_059_OpAdd_EvGv_NF_32_ModReg__OpOr_EvGv_NF_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_NF_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpOr_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=24408 occurrences=32912 relation=RAW anchor=Group1_EvIb_Sub_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_060_OpGroup1_EvIb_Sub_32_Flags__OpPush_Reg32_Ebx(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1039,15 +1161,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_060_OpGroup1_EvIb_Sub_32_Flags__OpPush_Re
 ATTR_PRESERVE_NONE int64_t SuperOpcode_061_OpTest_EvGv_32_ModReg__OpJcc_NE_Rel32(EmuState* RESTRICT state,
                                                                                  DecodedOp* RESTRICT op,
                                                                                  int64_t instr_limit,
-                                                                                 mem::MicroTLB utlb, uint32_t branch,
-                                                                                 uint64_t flags_cache) {
+                                                                                 mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1055,45 +1179,51 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_061_OpTest_EvGv_32_ModReg__OpJcc_NE_Rel32
 // weighted_exec_count=24036 occurrences=28468 relation=RAW anchor=Cmp_EvGv_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_062_OpCmp_EvGv_32_ModReg__OpJcc_AE_Rel8(EmuState* RESTRICT state,
                                                                                DecodedOp* RESTRICT op,
-                                                                               int64_t instr_limit, mem::MicroTLB utlb,
-                                                                               uint32_t branch, uint64_t flags_cache) {
+                                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_AE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=23514 occurrences=42896 relation=RAW anchor=Test_EvGv_32_ModReg_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_063_OpTest_EvGv_32_ModReg_Eax__OpJcc_NE_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=23318 occurrences=41976 relation=RAW anchor=Mov_Load_Edx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_064_OpMov_Load_Edx__OpTest_EvGv_32_ModReg_Edx(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Edx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Edx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1101,30 +1231,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_064_OpMov_Load_Edx__OpTest_EvGv_32_ModReg
 // weighted_exec_count=23134 occurrences=37594 relation=RAW anchor=Cmp_EvGv_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_065_OpCmp_EvGv_32_ModReg__OpJcc_E_Rel32(EmuState* RESTRICT state,
                                                                                DecodedOp* RESTRICT op,
-                                                                               int64_t instr_limit, mem::MicroTLB utlb,
-                                                                               uint32_t branch, uint64_t flags_cache) {
+                                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=23104 occurrences=44388 relation=RAW anchor=Group1_EvIb_Cmp_16_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_066_OpGroup1_EvIb_Cmp_16_Flags__OpJcc_E_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_16_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1132,45 +1266,51 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_066_OpGroup1_EvIb_Cmp_16_Flags__OpJcc_E_R
 // weighted_exec_count=22888 occurrences=35916 relation=RAW anchor=Cmp_EvGv_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_067_OpCmp_EvGv_32_ModReg__OpJcc_E_Rel8(EmuState* RESTRICT state,
                                                                               DecodedOp* RESTRICT op,
-                                                                              int64_t instr_limit, mem::MicroTLB utlb,
-                                                                              uint32_t branch, uint64_t flags_cache) {
+                                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=22054 occurrences=25540 relation=RAW anchor=Pop_Reg32_Ebx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_068_OpPop_Reg32_Ebx__OpRet(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                  int64_t instr_limit, mem::MicroTLB utlb,
-                                                                  uint32_t branch, uint64_t flags_cache) {
+                                                                  int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Ebx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpRet, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=21810 occurrences=10990 relation=RAW anchor=Group2_Ev1_Shr direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_069_OpGroup2_Ev1_Shr__OpAdd_EvGv_NF_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup2_Ev1_Shr, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1178,15 +1318,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_069_OpGroup2_Ev1_Shr__OpAdd_EvGv_NF_32_Mo
 // weighted_exec_count=21074 occurrences=39520 relation=RAW anchor=Group3_Eb_Generic direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_070_OpGroup3_Eb_Generic__OpJcc_NE_Rel32(EmuState* RESTRICT state,
                                                                                DecodedOp* RESTRICT op,
-                                                                               int64_t instr_limit, mem::MicroTLB utlb,
-                                                                               uint32_t branch, uint64_t flags_cache) {
+                                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup3_Eb_Generic, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1194,30 +1336,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_070_OpGroup3_Eb_Generic__OpJcc_NE_Rel32(E
 // weighted_exec_count=20854 occurrences=25972 relation=RAW anchor=Push_Imm8 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_071_OpPush_Imm8__OpPush_Reg32_Eax(EmuState* RESTRICT state,
                                                                          DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                         mem::MicroTLB utlb, uint32_t branch,
-                                                                         uint64_t flags_cache) {
+                                                                         mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=20576 occurrences=35416 relation=RAW anchor=Group1_EvIb_Cmp_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_072_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1226,30 +1372,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_072_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E_R
 ATTR_PRESERVE_NONE int64_t SuperOpcode_073_OpTest_EvGv_32_ModReg_Eax__OpJcc_NE_Rel8(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=20462 occurrences=25302 relation=RAW anchor=Sub_EvGv_NF_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_074_OpSub_EvGv_NF_32_ModReg__OpSub_EvGv_NF_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpSub_EvGv_NF_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpSub_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1258,15 +1408,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_074_OpSub_EvGv_NF_32_ModReg__OpSub_EvGv_N
 ATTR_PRESERVE_NONE int64_t SuperOpcode_075_OpTest_EvGv_32_ModReg_Edx__OpJcc_E_Rel32(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Edx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1274,30 +1426,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_075_OpTest_EvGv_32_ModReg_Edx__OpJcc_E_Re
 // weighted_exec_count=19774 occurrences=25902 relation=RAW anchor=Push_Reg32_Ebp direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_076_OpPush_Reg32_Ebp__OpCall_Rel(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebp, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCall_Rel, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=19510 occurrences=6260 relation=RAW anchor=Movzx_Word direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_077_OpMovzx_Word__OpCmp_EvGv_16(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                       int64_t instr_limit, mem::MicroTLB utlb,
-                                                                       uint32_t branch, uint64_t flags_cache) {
+                                                                       int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Word, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_16, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1305,15 +1461,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_077_OpMovzx_Word__OpCmp_EvGv_16(EmuState*
 // weighted_exec_count=19400 occurrences=26 relation=RAW anchor=Group2_EvIb direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_078_OpGroup2_EvIb__OpMov_EvGv_Eax(EmuState* RESTRICT state,
                                                                          DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                         mem::MicroTLB utlb, uint32_t branch,
-                                                                         uint64_t flags_cache) {
+                                                                         mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1321,15 +1479,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_078_OpGroup2_EvIb__OpMov_EvGv_Eax(EmuStat
 // weighted_exec_count=19248 occurrences=36136 relation=RAW anchor=Mov_Load_Eax_EspBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_079_OpMov_Load_Eax_EspBaseNoIndexNoSegment__OpTest_EvGv_32_ModReg_Eax(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax_EspBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1337,15 +1497,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_079_OpMov_Load_Eax_EspBaseNoIndexNoSegmen
 // weighted_exec_count=18892 occurrences=22670 relation=RAW anchor=Push_Reg32_Ecx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_080_OpPush_Reg32_Ecx__OpCall_Rel(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ecx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCall_Rel, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1354,23 +1516,26 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_080_OpPush_Reg32_Ecx__OpCall_Rel(EmuState
 ATTR_PRESERVE_NONE int64_t SuperOpcode_081_OpMov_Load_Ebx__OpTest_EvGv_32_ModReg(EmuState* RESTRICT state,
                                                                                  DecodedOp* RESTRICT op,
                                                                                  int64_t instr_limit,
-                                                                                 mem::MicroTLB utlb, uint32_t branch,
-                                                                                 uint64_t flags_cache) {
+                                                                                 mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Ebx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=18748 occurrences=1170 relation=RAW anchor=Mov_EvGv_Ecx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_082_OpMov_EvGv_Ecx__OpGroup1_EvIb_And_32_NoFlags_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Ecx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -1378,7 +1543,8 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_082_OpMov_EvGv_Ecx__OpGroup1_EvIb_And_32_
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1386,15 +1552,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_082_OpMov_EvGv_Ecx__OpGroup1_EvIb_And_32_
 // weighted_exec_count=18688 occurrences=34052 relation=RAW anchor=Group3_Eb_Generic direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_083_OpGroup3_Eb_Generic__OpJcc_E_Rel8(EmuState* RESTRICT state,
                                                                              DecodedOp* RESTRICT op,
-                                                                             int64_t instr_limit, mem::MicroTLB utlb,
-                                                                             uint32_t branch, uint64_t flags_cache) {
+                                                                             int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup3_Eb_Generic, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1403,8 +1571,9 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_083_OpGroup3_Eb_Generic__OpJcc_E_Rel8(Emu
 // direction=successor
 ATTR_PRESERVE_NONE int64_t
 SuperOpcode_084_OpMov_Load_Eax_EspBaseNoIndexNoSegment__OpMov_Load_Eax_EaxBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax_EspBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -1412,7 +1581,8 @@ SuperOpcode_084_OpMov_Load_Eax_EspBaseNoIndexNoSegment__OpMov_Load_Eax_EaxBaseNo
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1421,30 +1591,34 @@ SuperOpcode_084_OpMov_Load_Eax_EspBaseNoIndexNoSegment__OpMov_Load_Eax_EaxBaseNo
 ATTR_PRESERVE_NONE int64_t SuperOpcode_085_OpOr_EvGv_NF_32_ModReg__OpMov_EvGv_Ecx(EmuState* RESTRICT state,
                                                                                   DecodedOp* RESTRICT op,
                                                                                   int64_t instr_limit,
-                                                                                  mem::MicroTLB utlb, uint32_t branch,
-                                                                                  uint64_t flags_cache) {
+                                                                                  mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpOr_EvGv_NF_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Ecx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=18236 occurrences=24736 relation=RAW anchor=Push_Imm8 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_086_OpPush_Imm8__OpPush_Imm32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                     int64_t instr_limit, mem::MicroTLB utlb,
-                                                                     uint32_t branch, uint64_t flags_cache) {
+                                                                     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1452,45 +1626,51 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_086_OpPush_Imm8__OpPush_Imm32(EmuState* R
 // weighted_exec_count=18162 occurrences=3760 relation=RAW anchor=Mov_Load_Edx_EaxBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_087_OpMov_Load_Edx_EaxBaseNoIndexNoSegment__OpMovzx_Word(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Word, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=17782 occurrences=7802 relation=RAW anchor=Group1_EbIb_Cmp_ModReg_Reg2_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_088_OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags__OpJcc_E_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=17654 occurrences=23722 relation=RAW anchor=Group1_EvIb_Sub_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_089_OpGroup1_EvIb_Sub_32_Flags__OpPush_Reg32_Esi(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Esi, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1499,30 +1679,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_089_OpGroup1_EvIb_Sub_32_Flags__OpPush_Re
 ATTR_PRESERVE_NONE int64_t SuperOpcode_090_OpTest_EvGv_32_ModReg_Ecx__OpJcc_E_Rel8(EmuState* RESTRICT state,
                                                                                    DecodedOp* RESTRICT op,
                                                                                    int64_t instr_limit,
-                                                                                   mem::MicroTLB utlb, uint32_t branch,
-                                                                                   uint64_t flags_cache) {
+                                                                                   mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Ecx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=17068 occurrences=30174 relation=RAW anchor=Cmp_AlImm direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_091_OpCmp_AlImm__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                      int64_t instr_limit, mem::MicroTLB utlb,
-                                                                      uint32_t branch, uint64_t flags_cache) {
+                                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_AlImm, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1530,23 +1714,26 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_091_OpCmp_AlImm__OpJcc_E_Rel32(EmuState* 
 // weighted_exec_count=16924 occurrences=28632 relation=RAW anchor=Movzx_Byte_32_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_092_OpMovzx_Byte_32_Eax__OpCmp_AlImm(EmuState* RESTRICT state,
                                                                             DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                            mem::MicroTLB utlb, uint32_t branch,
-                                                                            uint64_t flags_cache) {
+                                                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte_32_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCmp_AlImm, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=16912 occurrences=740 relation=RAW anchor=Mov_EvGv_Ebx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_093_OpMov_EvGv_Ebx__OpGroup1_EvIb_And_32_NoFlags_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Ebx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -1554,37 +1741,42 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_093_OpMov_EvGv_Ebx__OpGroup1_EvIb_And_32_
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=16880 occurrences=21818 relation=RAW anchor=Push_Reg32_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_094_OpPush_Reg32_Eax__OpGroup5_Ev_Push_32_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=16858 occurrences=18916 relation=RAW anchor=Pop_Reg32_Esi direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_095_OpPop_Reg32_Esi__OpRet(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                  int64_t instr_limit, mem::MicroTLB utlb,
-                                                                  uint32_t branch, uint64_t flags_cache) {
+                                                                  int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Esi, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpRet, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1592,15 +1784,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_095_OpPop_Reg32_Esi__OpRet(EmuState* REST
 // weighted_exec_count=16424 occurrences=76 relation=RAW anchor=Add_EvGv_NF_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_096_OpAdd_EvGv_NF_32_ModReg__OpImul_GvEv(EmuState* RESTRICT state,
                                                                                 DecodedOp* RESTRICT op,
-                                                                                int64_t instr_limit, mem::MicroTLB utlb,
-                                                                                uint32_t branch, uint64_t flags_cache) {
+                                                                                int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_NF_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpImul_GvEv, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1608,15 +1802,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_096_OpAdd_EvGv_NF_32_ModReg__OpImul_GvEv(
 // weighted_exec_count=16106 occurrences=28406 relation=RAW anchor=Cmp_EvGv_32 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_097_OpCmp_EvGv_32__OpJcc_E_Rel32(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1624,30 +1820,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_097_OpCmp_EvGv_32__OpJcc_E_Rel32(EmuState
 // weighted_exec_count=15524 occurrences=19484 relation=RAW anchor=Push_Reg32_Edx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_098_OpPush_Reg32_Edx__OpPush_Reg32_Eax(EmuState* RESTRICT state,
                                                                               DecodedOp* RESTRICT op,
-                                                                              int64_t instr_limit, mem::MicroTLB utlb,
-                                                                              uint32_t branch, uint64_t flags_cache) {
+                                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Edx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=15374 occurrences=27434 relation=RAW anchor=Group1_EvIz_Cmp_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_099_OpGroup1_EvIz_Cmp_32_Flags__OpJcc_A_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_Cmp_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_A_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1656,30 +1856,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_099_OpGroup1_EvIz_Cmp_32_Flags__OpJcc_A_R
 ATTR_PRESERVE_NONE int64_t SuperOpcode_100_OpGroup1_EvIb_Add_32_Flags_ModReg__OpRet(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Add_32_Flags_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpRet, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=14792 occurrences=17860 relation=RAW anchor=Pop_Reg32_Edi direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_101_OpPop_Reg32_Edi__OpRet(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                  int64_t instr_limit, mem::MicroTLB utlb,
-                                                                  uint32_t branch, uint64_t flags_cache) {
+                                                                  int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Edi, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpRet, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1687,45 +1891,51 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_101_OpPop_Reg32_Edi__OpRet(EmuState* REST
 // weighted_exec_count=14766 occurrences=26206 relation=RAW anchor=Group3_Eb_Generic direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_102_OpGroup3_Eb_Generic__OpJcc_NE_Rel8(EmuState* RESTRICT state,
                                                                               DecodedOp* RESTRICT op,
-                                                                              int64_t instr_limit, mem::MicroTLB utlb,
-                                                                              uint32_t branch, uint64_t flags_cache) {
+                                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup3_Eb_Generic, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=14766 occurrences=18274 relation=RAW anchor=Group1_EvIb_Sub_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_103_OpGroup1_EvIb_Sub_32_Flags__OpPush_Reg32_Edi(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Edi, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=14504 occurrences=17610 relation=RAW anchor=Group2_EvIb_Shr direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_104_OpGroup2_EvIb_Shr__OpXor_EvGv_NF_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shr, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpXor_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1734,30 +1944,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_104_OpGroup2_EvIb_Shr__OpXor_EvGv_NF_32_M
 ATTR_PRESERVE_NONE int64_t SuperOpcode_105_OpTest_EvGv_32_ModReg_Ecx__OpJcc_E_Rel32(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Ecx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=14264 occurrences=80 relation=RAW anchor=Movzx_Word direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_106_OpMovzx_Word__OpXor_GvEv_NF(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                       int64_t instr_limit, mem::MicroTLB utlb,
-                                                                       uint32_t branch, uint64_t flags_cache) {
+                                                                       int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Word, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpXor_GvEv_NF, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1765,15 +1979,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_106_OpMovzx_Word__OpXor_GvEv_NF(EmuState*
 // weighted_exec_count=14236 occurrences=24 relation=RAW anchor=Xor_GvEv_NF direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_107_OpXor_GvEv_NF__OpGroup2_EvIb(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpXor_GvEv_NF, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1781,15 +1997,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_107_OpXor_GvEv_NF__OpGroup2_EvIb(EmuState
 // weighted_exec_count=14126 occurrences=26734 relation=RAW anchor=Mov_Load_Edx_EaxBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_108_OpMov_Load_Edx_EaxBaseNoIndexNoSegment__OpTest_EvGv_32_ModReg_Edx(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Edx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1797,15 +2015,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_108_OpMov_Load_Edx_EaxBaseNoIndexNoSegmen
 // weighted_exec_count=13930 occurrences=16388 relation=RAW anchor=Push_Imm8 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_109_OpPush_Imm8__OpPush_Reg32_Ebx(EmuState* RESTRICT state,
                                                                          DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                         mem::MicroTLB utlb, uint32_t branch,
-                                                                         uint64_t flags_cache) {
+                                                                         mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1814,15 +2034,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_109_OpPush_Imm8__OpPush_Reg32_Ebx(EmuStat
 ATTR_PRESERVE_NONE int64_t SuperOpcode_110_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E_Rel8(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1830,30 +2052,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_110_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E_R
 // weighted_exec_count=13662 occurrences=146 relation=RAW anchor=Mov_Load_Ebx_EaxBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_111_OpMov_Load_Ebx_EaxBaseNoIndexNoSegment__OpMovzx_Byte(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Ebx_EaxBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=13586 occurrences=6 relation=RAW anchor=Movzx_Byte direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_112_OpMovzx_Byte__OpCmp_EvGv_16(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                       int64_t instr_limit, mem::MicroTLB utlb,
-                                                                       uint32_t branch, uint64_t flags_cache) {
+                                                                       int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_16, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1861,38 +2087,43 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_112_OpMovzx_Byte__OpCmp_EvGv_16(EmuState*
 // weighted_exec_count=13176 occurrences=22978 relation=RAW anchor=Mov_Load_Edx_EspBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_113_OpMov_Load_Edx_EspBaseNoIndexNoSegment__OpSub_GvEv(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Edx_EspBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpSub_GvEv, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=13176 occurrences=13216 relation=RAW anchor=Group1_EvIb_Add_32_Flags_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_114_OpGroup1_EvIb_Add_32_Flags_ModReg__OpPush_Imm8(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Add_32_Flags_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=13164 occurrences=20694 relation=RAW anchor=Mov_Moffs_Load_Word direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_115_OpMov_Moffs_Load_Word__OpMov_Store_Eax_EspBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Moffs_Load_Word, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -1900,7 +2131,8 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_115_OpMov_Moffs_Load_Word__OpMov_Store_Ea
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1909,8 +2141,9 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_115_OpMov_Moffs_Load_Word__OpMov_Store_Ea
 // direction=successor
 ATTR_PRESERVE_NONE int64_t
 SuperOpcode_116_OpMov_Load_Eax_EspBaseNoIndexNoSegment__OpMov_Store_Eax_EspBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax_EspBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -1918,7 +2151,8 @@ SuperOpcode_116_OpMov_Load_Eax_EspBaseNoIndexNoSegment__OpMov_Store_Eax_EspBaseN
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1926,60 +2160,68 @@ SuperOpcode_116_OpMov_Load_Eax_EspBaseNoIndexNoSegment__OpMov_Store_Eax_EspBaseN
 // weighted_exec_count=13064 occurrences=19144 relation=RAW anchor=Push_Reg32_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_117_OpPush_Reg32_Eax__OpPush_Imm8(EmuState* RESTRICT state,
                                                                          DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                         mem::MicroTLB utlb, uint32_t branch,
-                                                                         uint64_t flags_cache) {
+                                                                         mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=12848 occurrences=23382 relation=RAW anchor=Mov_Load_Ecx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_118_OpMov_Load_Ecx__OpTest_EvGv_32_ModReg_Ecx(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Ecx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Ecx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=12696 occurrences=23576 relation=RAW anchor=Group1_EvIb_Cmp_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_119_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_NE_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=12694 occurrences=4848 relation=RAW anchor=Group1_EbIb_Cmp_ModReg_Reg1_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_120_OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags__OpJcc_E_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -1987,15 +2229,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_120_OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags__
 // weighted_exec_count=12650 occurrences=16726 relation=RAW anchor=Push_Reg32_Edx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_121_OpPush_Reg32_Edx__OpCall_Rel(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Edx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCall_Rel, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2004,23 +2248,26 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_121_OpPush_Reg32_Edx__OpCall_Rel(EmuState
 ATTR_PRESERVE_NONE int64_t SuperOpcode_122_OpGroup5_Ev_Push_32_Flags__OpPush_Imm8(EmuState* RESTRICT state,
                                                                                   DecodedOp* RESTRICT op,
                                                                                   int64_t instr_limit,
-                                                                                  mem::MicroTLB utlb, uint32_t branch,
-                                                                                  uint64_t flags_cache) {
+                                                                                  mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=12460 occurrences=18830 relation=RAW anchor=Lea_32_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_123_OpLea_32_Eax__OpMov_Store_Eax_EspBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpLea_32_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -2028,22 +2275,25 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_123_OpLea_32_Eax__OpMov_Store_Eax_EspBase
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=12432 occurrences=18330 relation=RAW anchor=Cmp_AlImm direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_124_OpCmp_AlImm__OpJcc_E_Rel8(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                     int64_t instr_limit, mem::MicroTLB utlb,
-                                                                     uint32_t branch, uint64_t flags_cache) {
+                                                                     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_AlImm, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2051,60 +2301,68 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_124_OpCmp_AlImm__OpJcc_E_Rel8(EmuState* R
 // weighted_exec_count=11960 occurrences=12628 relation=RAW anchor=Mov_Load_Eax_EspBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_125_OpMov_Load_Eax_EspBaseNoIndexNoSegment__OpGroup1_EbIb_Cmp_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax_EspBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=11870 occurrences=346 relation=RAW anchor=Add_EvGv direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_126_OpAdd_EvGv__OpMovzx_Word(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                    int64_t instr_limit, mem::MicroTLB utlb,
-                                                                    uint32_t branch, uint64_t flags_cache) {
+                                                                    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpAdd_EvGv, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Word, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=11814 occurrences=16104 relation=RAW anchor=Group1_EvIb_Sub_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_127_OpGroup1_EvIb_Sub_32_Flags__OpPush_Reg32_Edx(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Edx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=11772 occurrences=22076 relation=RAW anchor=Or_EvGv direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_128_OpOr_EvGv__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                    int64_t instr_limit, mem::MicroTLB utlb,
-                                                                    uint32_t branch, uint64_t flags_cache) {
+                                                                    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpOr_EvGv, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2112,53 +2370,60 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_128_OpOr_EvGv__OpJcc_E_Rel32(EmuState* RE
 // weighted_exec_count=11698 occurrences=21740 relation=RAW anchor=Group3_Eb_Generic direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_129_OpGroup3_Eb_Generic__OpJcc_E_Rel32(EmuState* RESTRICT state,
                                                                               DecodedOp* RESTRICT op,
-                                                                              int64_t instr_limit, mem::MicroTLB utlb,
-                                                                              uint32_t branch, uint64_t flags_cache) {
+                                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup3_Eb_Generic, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=11554 occurrences=72 relation=RAW anchor=Mov_EvGv_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_130_OpMov_EvGv_Eax__OpGroup1_EvIz_And_16_NoFlags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_And_16_NoFlags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=11368 occurrences=21826 relation=RAW anchor=Group1_EvIb_Cmp_16_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_131_OpGroup1_EvIb_Cmp_16_Flags__OpJcc_NE_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_16_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=11340 occurrences=19714 relation=RAW anchor=Mov_Load_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_132_OpMov_Load_Eax__OpMov_Load_Eax_EaxBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -2166,37 +2431,42 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_132_OpMov_Load_Eax__OpMov_Load_Eax_EaxBas
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=11176 occurrences=20736 relation=RAW anchor=Group1_EvIb_Cmp_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_133_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_NE_Rel8(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=10808 occurrences=20398 relation=RAW anchor=Group1_EvIb_Cmp_32_Flags_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_134_OpGroup1_EvIb_Cmp_32_Flags_Eax__OpJcc_E_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2204,15 +2474,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_134_OpGroup1_EvIb_Cmp_32_Flags_Eax__OpJcc
 // weighted_exec_count=10694 occurrences=10084 relation=RAW anchor=Mov_Sse_Store direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_135_OpMov_Sse_Store__OpMovdqu_Load(EmuState* RESTRICT state,
                                                                           DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                          mem::MicroTLB utlb, uint32_t branch,
-                                                                          uint64_t flags_cache) {
+                                                                          mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Sse_Store, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMovdqu_Load, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2220,68 +2492,77 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_135_OpMov_Sse_Store__OpMovdqu_Load(EmuSta
 // weighted_exec_count=10608 occurrences=15742 relation=RAW anchor=Cmp_EvGv_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_136_OpCmp_EvGv_32_ModReg__OpJcc_AE_Rel32(EmuState* RESTRICT state,
                                                                                 DecodedOp* RESTRICT op,
-                                                                                int64_t instr_limit, mem::MicroTLB utlb,
-                                                                                uint32_t branch, uint64_t flags_cache) {
+                                                                                int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_AE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=10598 occurrences=5378 relation=RAW anchor=Group1_EbIb_Cmp_ModReg_Reg2_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_137_OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags__OpJcc_E_Rel8(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=10540 occurrences=18698 relation=RAW anchor=Group1_EvIb_Sub_32_NoFlags_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_138_OpGroup1_EvIb_Sub_32_NoFlags_Eax__OpCmp_AlImm(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_NoFlags_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCmp_AlImm, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=10538 occurrences=13924 relation=RAW anchor=Group5_Ev_Push_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_139_OpGroup5_Ev_Push_32_Flags__OpPush_Reg32_Eax(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=10448 occurrences=17716 relation=RAW anchor=Group1_EvIb_Sub_32_NoFlags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_140_OpGroup1_EvIb_Sub_32_NoFlags__OpMov_Load_Eax_EspBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_NoFlags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -2289,22 +2570,25 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_140_OpGroup1_EvIb_Sub_32_NoFlags__OpMov_L
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=10308 occurrences=14348 relation=RAW anchor=Group1_EvIb_Sub_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_141_OpGroup1_EvIb_Sub_32_Flags__OpPush_Reg32_Ebp(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebp, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2312,23 +2596,26 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_141_OpGroup1_EvIb_Sub_32_Flags__OpPush_Re
 // weighted_exec_count=10276 occurrences=14490 relation=RAW anchor=Cmp_EvGv_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_142_OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel32(EmuState* RESTRICT state,
                                                                                 DecodedOp* RESTRICT op,
-                                                                                int64_t instr_limit, mem::MicroTLB utlb,
-                                                                                uint32_t branch, uint64_t flags_cache) {
+                                                                                int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=10274 occurrences=1508 relation=RAW anchor=Group1_EvIb_Sub_32_NoFlags_Edx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_143_OpGroup1_EvIb_Sub_32_NoFlags_Edx__OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_NoFlags_Edx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -2336,22 +2623,25 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_143_OpGroup1_EvIb_Sub_32_NoFlags_Edx__OpG
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=10108 occurrences=17634 relation=RAW anchor=Cmp_EvGv_32 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_144_OpCmp_EvGv_32__OpJcc_E_Rel8(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                       int64_t instr_limit, mem::MicroTLB utlb,
-                                                                       uint32_t branch, uint64_t flags_cache) {
+                                                                       int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2360,15 +2650,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_144_OpCmp_EvGv_32__OpJcc_E_Rel8(EmuState*
 ATTR_PRESERVE_NONE int64_t SuperOpcode_145_OpMovzx_Word__OpGroup1_EvIb_Cmp_16_Flags(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Word, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_16_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2376,15 +2668,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_145_OpMovzx_Word__OpGroup1_EvIb_Cmp_16_Fl
 // weighted_exec_count=9944 occurrences=18086 relation=RAW anchor=Cmp_GvEv_32 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_146_OpCmp_GvEv_32__OpJcc_E_Rel32(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_GvEv_32, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2392,15 +2686,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_146_OpCmp_GvEv_32__OpJcc_E_Rel32(EmuState
 // weighted_exec_count=9794 occurrences=6744 relation=RAW anchor=Pop_Reg32_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_147_OpPop_Reg32_Eax__OpPop_Reg32_Edx(EmuState* RESTRICT state,
                                                                             DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                            mem::MicroTLB utlb, uint32_t branch,
-                                                                            uint64_t flags_cache) {
+                                                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Edx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2408,15 +2704,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_147_OpPop_Reg32_Eax__OpPop_Reg32_Edx(EmuS
 // weighted_exec_count=9738 occurrences=17462 relation=RAW anchor=Cmp_EvGv_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_148_OpCmp_EvGv_32_ModReg__OpJcc_B_Rel32(EmuState* RESTRICT state,
                                                                                DecodedOp* RESTRICT op,
-                                                                               int64_t instr_limit, mem::MicroTLB utlb,
-                                                                               uint32_t branch, uint64_t flags_cache) {
+                                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_B_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2425,23 +2723,26 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_148_OpCmp_EvGv_32_ModReg__OpJcc_B_Rel32(E
 ATTR_PRESERVE_NONE int64_t SuperOpcode_149_OpMov_Load_Esi__OpTest_EvGv_32_ModReg(EmuState* RESTRICT state,
                                                                                  DecodedOp* RESTRICT op,
                                                                                  int64_t instr_limit,
-                                                                                 mem::MicroTLB utlb, uint32_t branch,
-                                                                                 uint64_t flags_cache) {
+                                                                                 mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Esi, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=9574 occurrences=16134 relation=RAW anchor=Mov_Load_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_150_OpMov_Load_Eax__OpMov_Store_Eax_EspBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -2449,22 +2750,25 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_150_OpMov_Load_Eax__OpMov_Store_Eax_EspBa
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=9564 occurrences=14052 relation=RAW anchor=Group1_EvIz_Add_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_151_OpGroup1_EvIz_Add_32_Flags__OpPop_Reg32_Ebx(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_Add_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Ebx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2472,15 +2776,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_151_OpGroup1_EvIz_Add_32_Flags__OpPop_Reg
 // weighted_exec_count=9448 occurrences=4506 relation=RAW anchor=Push_Reg32_Esi direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_152_OpPush_Reg32_Esi__OpPush_Reg32_Edi(EmuState* RESTRICT state,
                                                                               DecodedOp* RESTRICT op,
-                                                                              int64_t instr_limit, mem::MicroTLB utlb,
-                                                                              uint32_t branch, uint64_t flags_cache) {
+                                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Esi, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Edi, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2488,30 +2794,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_152_OpPush_Reg32_Esi__OpPush_Reg32_Edi(Em
 // weighted_exec_count=9426 occurrences=16900 relation=RAW anchor=Cmp_EvGv_32 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_153_OpCmp_EvGv_32__OpJcc_NE_Rel32(EmuState* RESTRICT state,
                                                                          DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                         mem::MicroTLB utlb, uint32_t branch,
-                                                                         uint64_t flags_cache) {
+                                                                         mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=9424 occurrences=17796 relation=RAW anchor=Group1_EvIz_Cmp_16_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_154_OpGroup1_EvIz_Cmp_16_Flags__OpJcc_E_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_Cmp_16_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2520,15 +2830,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_154_OpGroup1_EvIz_Cmp_16_Flags__OpJcc_E_R
 ATTR_PRESERVE_NONE int64_t SuperOpcode_155_OpGroup1_EvIb_Cmp_16_Flags__OpJcc_E_Rel8(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_16_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2536,15 +2848,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_155_OpGroup1_EvIb_Cmp_16_Flags__OpJcc_E_R
 // weighted_exec_count=9328 occurrences=12074 relation=RAW anchor=Push_Reg32_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_156_OpPush_Reg32_Eax__OpLea_32_Eax(EmuState* RESTRICT state,
                                                                           DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                          mem::MicroTLB utlb, uint32_t branch,
-                                                                          uint64_t flags_cache) {
+                                                                          mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpLea_32_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2553,8 +2867,9 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_156_OpPush_Reg32_Eax__OpLea_32_Eax(EmuSta
 // direction=successor
 ATTR_PRESERVE_NONE int64_t
 SuperOpcode_157_OpMov_Load_Eax_EaxBaseNoIndexNoSegment__OpMov_Store_Eax_EspBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax_EaxBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -2562,37 +2877,42 @@ SuperOpcode_157_OpMov_Load_Eax_EaxBaseNoIndexNoSegment__OpMov_Store_Eax_EspBaseN
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=9206 occurrences=16086 relation=RAW anchor=Group1_EvIb_Cmp_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_158_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_A_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_A_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=9198 occurrences=16482 relation=RAW anchor=Group1_EvIb_Cmp_32_Flags_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_159_OpGroup1_EvIb_Cmp_32_Flags_Eax__OpJcc_E_Rel8(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2601,15 +2921,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_159_OpGroup1_EvIb_Cmp_32_Flags_Eax__OpJcc
 ATTR_PRESERVE_NONE int64_t SuperOpcode_160_OpGroup1_EvIb_Add_32_Flags__OpMovzx_Byte(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Add_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2617,15 +2939,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_160_OpGroup1_EvIb_Add_32_Flags__OpMovzx_B
 // weighted_exec_count=9146 occurrences=15446 relation=RAW anchor=Mov_Store_Eax_EspBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_161_OpMov_Store_Eax_EspBaseNoIndexNoSegment__OpMov_Moffs_Load_Word(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Store_Eax_EspBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMov_Moffs_Load_Word, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2634,30 +2958,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_161_OpMov_Store_Eax_EspBaseNoIndexNoSegme
 ATTR_PRESERVE_NONE int64_t SuperOpcode_162_OpMov_Load_Edi__OpTest_EvGv_32_ModReg(EmuState* RESTRICT state,
                                                                                  DecodedOp* RESTRICT op,
                                                                                  int64_t instr_limit,
-                                                                                 mem::MicroTLB utlb, uint32_t branch,
-                                                                                 uint64_t flags_cache) {
+                                                                                 mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Edi, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=9064 occurrences=54 relation=RAW anchor=Movzx_Byte_32_Ecx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_163_OpMovzx_Byte_32_Ecx__OpXor_EvGv_NF_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte_32_Ecx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpXor_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2666,15 +2994,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_163_OpMovzx_Byte_32_Ecx__OpXor_EvGv_NF_32
 ATTR_PRESERVE_NONE int64_t SuperOpcode_164_OpGroup2_Ev1_Shr__OpOr_EvGv_NF_32_ModReg(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup2_Ev1_Shr, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpOr_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2682,30 +3012,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_164_OpGroup2_Ev1_Shr__OpOr_EvGv_NF_32_Mod
 // weighted_exec_count=9030 occurrences=14924 relation=RAW anchor=Mov_Store_Eax_EspBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_165_OpMov_Store_Eax_EspBaseNoIndexNoSegment__OpMov_Load_Eax(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Store_Eax_EspBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=8994 occurrences=6 relation=RAW anchor=Group1_EvIz_And_16_NoFlags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_166_OpGroup1_EvIz_And_16_NoFlags__OpAdd_EvGv_NF_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_And_16_NoFlags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2713,30 +3047,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_166_OpGroup1_EvIz_And_16_NoFlags__OpAdd_E
 // weighted_exec_count=8836 occurrences=10852 relation=RAW anchor=Push_Imm8 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_167_OpPush_Imm8__OpPush_Reg32_Esi(EmuState* RESTRICT state,
                                                                          DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                         mem::MicroTLB utlb, uint32_t branch,
-                                                                         uint64_t flags_cache) {
+                                                                         mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Esi, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=8818 occurrences=15770 relation=RAW anchor=Group1_EvIb_Add_32_NoFlags_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_168_OpGroup1_EvIb_Add_32_NoFlags_ModReg__OpCmp_EvGv_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Add_32_NoFlags_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2745,8 +3083,9 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_168_OpGroup1_EvIb_Add_32_NoFlags_ModReg__
 // direction=successor
 ATTR_PRESERVE_NONE int64_t
 SuperOpcode_169_OpMov_Load_Eax_EaxBaseNoIndexNoSegment__OpMov_Load_Eax_EaxBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax_EaxBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -2754,22 +3093,25 @@ SuperOpcode_169_OpMov_Load_Eax_EaxBaseNoIndexNoSegment__OpMov_Load_Eax_EaxBaseNo
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=8626 occurrences=15058 relation=RAW anchor=Test_EvGv_32_ModReg_Edx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_170_OpTest_EvGv_32_ModReg_Edx__OpJcc_NE_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Edx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2777,45 +3119,51 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_170_OpTest_EvGv_32_ModReg_Edx__OpJcc_NE_R
 // weighted_exec_count=8582 occurrences=9236 relation=RAW anchor=Push_Reg32_Ebx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_171_OpPush_Reg32_Ebx__OpPush_Imm8(EmuState* RESTRICT state,
                                                                          DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                         mem::MicroTLB utlb, uint32_t branch,
-                                                                         uint64_t flags_cache) {
+                                                                         mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=8514 occurrences=11424 relation=RAW anchor=Group5_Ev_Push_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_172_OpGroup5_Ev_Push_32_Flags__OpPush_Reg32_Esi(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Esi, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=8456 occurrences=10368 relation=RAW anchor=Group2_EvIb_Shl direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_173_OpGroup2_EvIb_Shl__OpXor_EvGv_NF_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shl, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpXor_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2823,143 +3171,162 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_173_OpGroup2_EvIb_Shl__OpXor_EvGv_NF_32_M
 // weighted_exec_count=8370 occurrences=13878 relation=RAW anchor=Cmp_EvGv_32 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_174_OpCmp_EvGv_32__OpJcc_NE_Rel8(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=8348 occurrences=15738 relation=RAW anchor=Group1_EvIb_Cmp_16_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_175_OpGroup1_EvIb_Cmp_16_Flags__OpJcc_NE_Rel8(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_16_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=8346 occurrences=15642 relation=RAW anchor=Group1_EvIb_Cmp_32_Flags_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_176_OpGroup1_EvIb_Cmp_32_Flags_Eax__OpJcc_A_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_A_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=8332 occurrences=15332 relation=RAW anchor=Sub_GvEv direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_177_OpSub_GvEv__OpJcc_NE_Rel8(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                     int64_t instr_limit, mem::MicroTLB utlb,
-                                                                     uint32_t branch, uint64_t flags_cache) {
+                                                                     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpSub_GvEv, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=8268 occurrences=14846 relation=RAW anchor=Or_EvGv direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_178_OpOr_EvGv__OpJcc_E_Rel8(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                   int64_t instr_limit, mem::MicroTLB utlb,
-                                                                   uint32_t branch, uint64_t flags_cache) {
+                                                                   int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpOr_EvGv, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=8132 occurrences=11304 relation=RAW anchor=Xor_EvGv_NF_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_179_OpXor_EvGv_NF_32_ModReg__OpXor_EvGv_NF_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpXor_EvGv_NF_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpXor_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=8076 occurrences=2176 relation=RAW anchor=Group1_EbIb_Cmp_ModReg_Reg2_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_180_OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags__OpJcc_BE_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_BE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=8028 occurrences=13080 relation=RAW anchor=Cmp_AlImm direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_181_OpCmp_AlImm__OpJcc_NE_Rel8(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                      int64_t instr_limit, mem::MicroTLB utlb,
-                                                                      uint32_t branch, uint64_t flags_cache) {
+                                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_AlImm, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=8014 occurrences=10396 relation=RAW anchor=Push_Reg32_Ebx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_182_OpPush_Reg32_Ebx__OpGroup5_Ev_Push_32_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7872 occurrences=15078 relation=RAW anchor=Group1_EvIb_Add_32_NoFlags_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_183_OpGroup1_EvIb_Add_32_NoFlags_ModReg__OpMov_Load_Edx_EspBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Add_32_NoFlags_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -2967,7 +3334,8 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_183_OpGroup1_EvIb_Add_32_NoFlags_ModReg__
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2976,15 +3344,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_183_OpGroup1_EvIb_Add_32_NoFlags_ModReg__
 ATTR_PRESERVE_NONE int64_t SuperOpcode_184_OpMov_Load_Eax__OpGroup1_EbIb_Cmp_Flags(EmuState* RESTRICT state,
                                                                                    DecodedOp* RESTRICT op,
                                                                                    int64_t instr_limit,
-                                                                                   mem::MicroTLB utlb, uint32_t branch,
-                                                                                   uint64_t flags_cache) {
+                                                                                   mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -2992,30 +3362,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_184_OpMov_Load_Eax__OpGroup1_EbIb_Cmp_Fla
 // weighted_exec_count=7744 occurrences=10022 relation=RAW anchor=Push_Imm8 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_185_OpPush_Imm8__OpPush_Reg32_Ecx(EmuState* RESTRICT state,
                                                                          DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                         mem::MicroTLB utlb, uint32_t branch,
-                                                                         uint64_t flags_cache) {
+                                                                         mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ecx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7630 occurrences=9696 relation=RAW anchor=Group5_Ev_Push_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_186_OpGroup5_Ev_Push_32_Flags__OpPush_Reg32_Ebx(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3023,30 +3397,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_186_OpGroup5_Ev_Push_32_Flags__OpPush_Reg
 // weighted_exec_count=7534 occurrences=13948 relation=RAW anchor=Mov_Load_Eax_EsiBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_187_OpMov_Load_Eax_EsiBaseNoIndexNoSegment__OpTest_EvGv_32_ModReg_Eax(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax_EsiBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7386 occurrences=7408 relation=RAW anchor=Group1_EvIb_Add_32_Flags_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_188_OpGroup1_EvIb_Add_32_Flags_ModReg__OpGroup5_Ev_Push_32_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Add_32_Flags_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3054,75 +3432,85 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_188_OpGroup1_EvIb_Add_32_Flags_ModReg__Op
 // weighted_exec_count=7362 occurrences=13836 relation=RAW anchor=Mov_Load_Esi_EaxBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_189_OpMov_Load_Esi_EaxBaseNoIndexNoSegment__OpTest_EvGv_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Esi_EaxBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7358 occurrences=12936 relation=RAW anchor=Movzx_Byte_32_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_190_OpMovzx_Byte_32_Eax__OpGroup1_EvIb_Sub_32_NoFlags_Eax(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte_32_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_NoFlags_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7344 occurrences=9716 relation=RAW anchor=Push_Reg32_Esi direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_191_OpPush_Reg32_Esi__OpGroup5_Ev_Push_32_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Esi, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7294 occurrences=13724 relation=RAW anchor=Group1_EvIb_Sub_32_NoFlags_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_192_OpGroup1_EvIb_Sub_32_NoFlags_Eax__OpGroup1_EvIb_Cmp_16_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_NoFlags_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_16_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7186 occurrences=38 relation=RAW anchor=Mov_Store_Edx_EsiBaseNoIndexNoSegment direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_193_OpMov_Store_Edx_EsiBaseNoIndexNoSegment__OpPop_Reg32_Ebx(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Store_Edx_EsiBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Ebx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3131,23 +3519,26 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_193_OpMov_Store_Edx_EsiBaseNoIndexNoSegme
 ATTR_PRESERVE_NONE int64_t SuperOpcode_194_OpGroup1_EvIb_Sub_32_Flags__OpPush_Imm32(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7178 occurrences=12088 relation=RAW anchor=Mov_Store_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_195_OpMov_Store_Eax__OpMov_Load_Eax_EspBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Store_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -3155,7 +3546,8 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_195_OpMov_Store_Eax__OpMov_Load_Eax_EspBa
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3163,75 +3555,85 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_195_OpMov_Store_Eax__OpMov_Load_Eax_EspBa
 // weighted_exec_count=7158 occurrences=8560 relation=RAW anchor=Push_Reg32_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_196_OpPush_Reg32_Eax__OpPush_Reg32_Ebx(EmuState* RESTRICT state,
                                                                               DecodedOp* RESTRICT op,
-                                                                              int64_t instr_limit, mem::MicroTLB utlb,
-                                                                              uint32_t branch, uint64_t flags_cache) {
+                                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7138 occurrences=12668 relation=RAW anchor=Sub_EvGv_NF_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_197_OpSub_EvGv_NF_32_ModReg__OpCmp_EvGv_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpSub_EvGv_NF_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7118 occurrences=3650 relation=RAW anchor=Group1_EvIb_And_32_NoFlags_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_198_OpGroup1_EvIb_And_32_NoFlags_ModReg__OpGroup2_EvIb_Shl(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_And_32_NoFlags_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shl, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7074 occurrences=13284 relation=RAW anchor=Group1_EvIb_Cmp_32_Flags_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_199_OpGroup1_EvIb_Cmp_32_Flags_Eax__OpJcc_NE_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7070 occurrences=12530 relation=RAW anchor=Movdqa_Load direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_200_OpMovdqa_Load__OpMovd_Store(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                       int64_t instr_limit, mem::MicroTLB utlb,
-                                                                       uint32_t branch, uint64_t flags_cache) {
+                                                                       int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMovdqa_Load, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMovd_Store, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3239,75 +3641,85 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_200_OpMovdqa_Load__OpMovd_Store(EmuState*
 // weighted_exec_count=7060 occurrences=12114 relation=RAW anchor=Mov_Store_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_201_OpMov_Store_Eax__OpMov_Load_Eax(EmuState* RESTRICT state,
                                                                            DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                           mem::MicroTLB utlb, uint32_t branch,
-                                                                           uint64_t flags_cache) {
+                                                                           mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Store_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7054 occurrences=12656 relation=RAW anchor=Cmp_GvEv_32 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_202_OpCmp_GvEv_32__OpJcc_E_Rel8(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                       int64_t instr_limit, mem::MicroTLB utlb,
-                                                                       uint32_t branch, uint64_t flags_cache) {
+                                                                       int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_GvEv_32, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7052 occurrences=13456 relation=RAW anchor=Cmp_EaxImm direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_203_OpCmp_EaxImm__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                       int64_t instr_limit, mem::MicroTLB utlb,
-                                                                       uint32_t branch, uint64_t flags_cache) {
+                                                                       int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_EaxImm, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7032 occurrences=10008 relation=RAW anchor=Group1_EvIb_Add_32_NoFlags_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_204_OpGroup1_EvIb_Add_32_NoFlags_ModReg__OpCmp_GvEv_32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Add_32_NoFlags_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCmp_GvEv_32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7030 occurrences=10680 relation=RAW anchor=Cmp_AlImm direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_205_OpCmp_AlImm__OpJcc_A_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                      int64_t instr_limit, mem::MicroTLB utlb,
-                                                                      uint32_t branch, uint64_t flags_cache) {
+                                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_AlImm, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_A_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3315,38 +3727,43 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_205_OpCmp_AlImm__OpJcc_A_Rel32(EmuState* 
 // weighted_exec_count=7022 occurrences=12558 relation=RAW anchor=Cmp_GvEv_32 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_206_OpCmp_GvEv_32__OpJcc_AE_Rel8(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_GvEv_32, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_AE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7008 occurrences=13534 relation=RAW anchor=Group1_EvIz_Cmp_16_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_207_OpGroup1_EvIz_Cmp_16_Flags__OpJcc_NE_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_Cmp_16_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=7000 occurrences=12120 relation=RAW anchor=Mov_Moffs_Load_Word direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_208_OpMov_Moffs_Load_Word__OpMov_Load_Eax_EaxBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Moffs_Load_Word, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -3354,37 +3771,42 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_208_OpMov_Moffs_Load_Word__OpMov_Load_Eax
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6992 occurrences=12992 relation=RAW anchor=Cmp_AlImm direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_209_OpCmp_AlImm__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                       int64_t instr_limit, mem::MicroTLB utlb,
-                                                                       uint32_t branch, uint64_t flags_cache) {
+                                                                       int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_AlImm, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6982 occurrences=6974 relation=RAW anchor=Group1_EvIb_Add_32_Flags_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_210_OpGroup1_EvIb_Add_32_Flags_ModReg__OpPush_Reg32_Eax(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Add_32_Flags_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3393,45 +3815,51 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_210_OpGroup1_EvIb_Add_32_Flags_ModReg__Op
 ATTR_PRESERVE_NONE int64_t SuperOpcode_211_OpGroup1_EbIb_Cmp_Flags__OpJcc_NS_Rel32(EmuState* RESTRICT state,
                                                                                    DecodedOp* RESTRICT op,
                                                                                    int64_t instr_limit,
-                                                                                   mem::MicroTLB utlb, uint32_t branch,
-                                                                                   uint64_t flags_cache) {
+                                                                                   mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NS_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6882 occurrences=8924 relation=RAW anchor=Group5_Ev_Push_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_212_OpGroup5_Ev_Push_32_Flags__OpPush_Reg32_Edi(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Edi, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6746 occurrences=9164 relation=RAW anchor=Push_Reg32_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_213_OpPush_Reg32_Eax__OpGroup5_Ev_Call_32_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Call_32_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3439,15 +3867,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_213_OpPush_Reg32_Eax__OpGroup5_Ev_Call_32
 // weighted_exec_count=6716 occurrences=12432 relation=RAW anchor=Mov_Load_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_214_OpMov_Load_Eax__OpMovzx_Word(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Word, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3455,30 +3885,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_214_OpMov_Load_Eax__OpMovzx_Word(EmuState
 // weighted_exec_count=6706 occurrences=8622 relation=RAW anchor=Push_Imm8 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_215_OpPush_Imm8__OpPush_Reg32_Edi(EmuState* RESTRICT state,
                                                                          DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                         mem::MicroTLB utlb, uint32_t branch,
-                                                                         uint64_t flags_cache) {
+                                                                         mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Edi, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6702 occurrences=11916 relation=RAW anchor=Group1_EvIb_Cmp_32_Flags_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_216_OpGroup1_EvIb_Cmp_32_Flags_Eax__OpJcc_NE_Rel8(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3486,30 +3920,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_216_OpGroup1_EvIb_Cmp_32_Flags_Eax__OpJcc
 // weighted_exec_count=6680 occurrences=11308 relation=RAW anchor=Mov_Load_Edx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_217_OpMov_Load_Edx__OpMov_Load_Eax(EmuState* RESTRICT state,
                                                                           DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                          mem::MicroTLB utlb, uint32_t branch,
-                                                                          uint64_t flags_cache) {
+                                                                          mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Edx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6672 occurrences=8390 relation=RAW anchor=Xor_EvGv_NF_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_218_OpXor_EvGv_NF_32_ModReg__OpSub_EvGv_NF_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpXor_EvGv_NF_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpSub_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3518,23 +3956,26 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_218_OpXor_EvGv_NF_32_ModReg__OpSub_EvGv_N
 ATTR_PRESERVE_NONE int64_t SuperOpcode_219_OpMov_Load_Ebp__OpTest_EvGv_32_ModReg(EmuState* RESTRICT state,
                                                                                  DecodedOp* RESTRICT op,
                                                                                  int64_t instr_limit,
-                                                                                 mem::MicroTLB utlb, uint32_t branch,
-                                                                                 uint64_t flags_cache) {
+                                                                                 mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Ebp, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6634 occurrences=9000 relation=RAW anchor=Push_Reg32_Edx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_220_OpPush_Reg32_Edx__OpMov_Store_Edx_EspBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Edx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -3542,37 +3983,42 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_220_OpPush_Reg32_Edx__OpMov_Store_Edx_Esp
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6584 occurrences=1750 relation=RAW anchor=Group1_EbIb_Cmp_ModReg_Reg3_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_221_OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags__OpJcc_E_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6580 occurrences=8534 relation=RAW anchor=Push_Reg32_Edi direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_222_OpPush_Reg32_Edi__OpGroup5_Ev_Push_32_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Edi, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3581,53 +4027,60 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_222_OpPush_Reg32_Edi__OpGroup5_Ev_Push_32
 ATTR_PRESERVE_NONE int64_t SuperOpcode_223_OpAnd_EaxImm_NF__OpAdd_EvGv_NF_32_ModReg(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpAnd_EaxImm_NF, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6560 occurrences=11206 relation=RAW anchor=Sub_EvGv_NF_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_224_OpSub_EvGv_NF_32_ModReg__OpGroup2_Ev1_Shr(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpSub_EvGv_NF_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup2_Ev1_Shr, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6546 occurrences=8922 relation=RAW anchor=Group1_EvIb_Cmp_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_225_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_BE_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_BE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6496 occurrences=8576 relation=RAW anchor=Group1_EvIb_Sub_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_226_OpGroup1_EvIb_Sub_32_Flags__OpMov_Load_Eax_EspBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -3635,22 +4088,25 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_226_OpGroup1_EvIb_Sub_32_Flags__OpMov_Loa
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6492 occurrences=12346 relation=RAW anchor=Group1_EvIb_Cmp_16_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_227_OpGroup1_EvIb_Cmp_16_Flags__OpJcc_A_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_16_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_A_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3658,15 +4114,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_227_OpGroup1_EvIb_Cmp_16_Flags__OpJcc_A_R
 // weighted_exec_count=6442 occurrences=8484 relation=RAW anchor=Push_Reg32_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_228_OpPush_Reg32_Eax__OpPush_Reg32_Esi(EmuState* RESTRICT state,
                                                                               DecodedOp* RESTRICT op,
-                                                                              int64_t instr_limit, mem::MicroTLB utlb,
-                                                                              uint32_t branch, uint64_t flags_cache) {
+                                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Esi, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3675,30 +4133,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_228_OpPush_Reg32_Eax__OpPush_Reg32_Esi(Em
 ATTR_PRESERVE_NONE int64_t SuperOpcode_229_OpMov_EvGv_Eax__OpSub_EvGv_NF_32_ModReg(EmuState* RESTRICT state,
                                                                                    DecodedOp* RESTRICT op,
                                                                                    int64_t instr_limit,
-                                                                                   mem::MicroTLB utlb, uint32_t branch,
-                                                                                   uint64_t flags_cache) {
+                                                                                   mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpSub_EvGv_NF_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6368 occurrences=10886 relation=RAW anchor=Push_Reg32_Ebx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_230_OpPush_Reg32_Ebx__OpGroup1_EvIz_Sub_32_NoFlags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_Sub_32_NoFlags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3706,75 +4168,85 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_230_OpPush_Reg32_Ebx__OpGroup1_EvIz_Sub_3
 // weighted_exec_count=6362 occurrences=11686 relation=RAW anchor=Cmp_GvEv_32 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_231_OpCmp_GvEv_32__OpJcc_AE_Rel32(EmuState* RESTRICT state,
                                                                          DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                         mem::MicroTLB utlb, uint32_t branch,
-                                                                         uint64_t flags_cache) {
+                                                                         mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_GvEv_32, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_AE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6356 occurrences=8696 relation=RAW anchor=Push_Imm8 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_232_OpPush_Imm8__OpLea_32_Eax(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                     int64_t instr_limit, mem::MicroTLB utlb,
-                                                                     uint32_t branch, uint64_t flags_cache) {
+                                                                     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpPush_Imm8, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpLea_32_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6326 occurrences=1084 relation=RAW anchor=Movzx_Byte direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_233_OpMovzx_Byte__OpLea_32_Edx(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                      int64_t instr_limit, mem::MicroTLB utlb,
-                                                                      uint32_t branch, uint64_t flags_cache) {
+                                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpLea_32_Edx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6312 occurrences=904 relation=RAW anchor=Group1_EbIb_Cmp_ModReg_Reg3_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_234_OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags__OpJcc_NE_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6282 occurrences=11974 relation=RAW anchor=Or_EvGv direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_235_OpOr_EvGv__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                     int64_t instr_limit, mem::MicroTLB utlb,
-                                                                     uint32_t branch, uint64_t flags_cache) {
+                                                                     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpOr_EvGv, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3782,15 +4254,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_235_OpOr_EvGv__OpJcc_NE_Rel32(EmuState* R
 // weighted_exec_count=6210 occurrences=11234 relation=RAW anchor=Mov_Load_Ebx_EaxBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_236_OpMov_Load_Ebx_EaxBaseNoIndexNoSegment__OpTest_EvGv_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Ebx_EaxBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3798,30 +4272,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_236_OpMov_Load_Ebx_EaxBaseNoIndexNoSegmen
 // weighted_exec_count=6192 occurrences=2210 relation=RAW anchor=Xor_EvGv_NF_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_237_OpXor_EvGv_NF_32_ModReg__OpAdd_EvGv(EmuState* RESTRICT state,
                                                                                DecodedOp* RESTRICT op,
-                                                                               int64_t instr_limit, mem::MicroTLB utlb,
-                                                                               uint32_t branch, uint64_t flags_cache) {
+                                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpXor_EvGv_NF_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpAdd_EvGv, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=6150 occurrences=8068 relation=RAW anchor=Group5_Ev_Push_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_238_OpGroup5_Ev_Push_32_Flags__OpPush_Reg32_Ebp(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Ebp, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3830,30 +4308,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_238_OpGroup5_Ev_Push_32_Flags__OpPush_Reg
 ATTR_PRESERVE_NONE int64_t SuperOpcode_239_OpGroup3_Eb_Generic__OpCmov_NE_ModReg(EmuState* RESTRICT state,
                                                                                  DecodedOp* RESTRICT op,
                                                                                  int64_t instr_limit,
-                                                                                 mem::MicroTLB utlb, uint32_t branch,
-                                                                                 uint64_t flags_cache) {
+                                                                                 mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup3_Eb_Generic, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCmov_NE_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=5972 occurrences=11026 relation=RAW anchor=Group1_EvIb_Cmp_16_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_240_OpGroup1_EvIb_Cmp_16_Flags__OpJcc_BE_Rel32(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_16_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_BE_Rel32, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3861,30 +4343,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_240_OpGroup1_EvIb_Cmp_16_Flags__OpJcc_BE_
 // weighted_exec_count=5956 occurrences=8146 relation=RAW anchor=Cmp_GvEv_32 direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_241_OpCmp_GvEv_32__OpJcc_NE_Rel8(EmuState* RESTRICT state,
                                                                         DecodedOp* RESTRICT op, int64_t instr_limit,
-                                                                        mem::MicroTLB utlb, uint32_t branch,
-                                                                        uint64_t flags_cache) {
+                                                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_GvEv_32, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=5948 occurrences=10212 relation=RAW anchor=Cmp_AlImm direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_242_OpCmp_AlImm__OpJcc_A_Rel8(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                     int64_t instr_limit, mem::MicroTLB utlb,
-                                                                     uint32_t branch, uint64_t flags_cache) {
+                                                                     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCmp_AlImm, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_A_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3893,38 +4379,43 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_242_OpCmp_AlImm__OpJcc_A_Rel8(EmuState* R
 ATTR_PRESERVE_NONE int64_t SuperOpcode_243_OpGroup1_EvIb_Sub_32_Flags__OpLea_32_Eax(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpLea_32_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=5830 occurrences=6142 relation=RAW anchor=Cdq direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_244_OpCdq__OpPush_Reg32_Edx(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                   int64_t instr_limit, mem::MicroTLB utlb,
-                                                                   uint32_t branch, uint64_t flags_cache) {
+                                                                   int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpCdq, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpPush_Reg32_Edx, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=5822 occurrences=11098 relation=RAW anchor=Group1_EvIb_Add_32_NoFlags_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_245_OpGroup1_EvIb_Add_32_NoFlags_ModReg__OpMov_Load_Eax_EspBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Add_32_NoFlags_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -3932,15 +4423,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_245_OpGroup1_EvIb_Add_32_NoFlags_ModReg__
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=5732 occurrences=210 relation=RAW anchor=Group1_EvIb_And_32_NoFlags_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_246_OpGroup1_EvIb_And_32_NoFlags_ModReg__OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_And_32_NoFlags_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -3948,7 +4441,8 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_246_OpGroup1_EvIb_And_32_NoFlags_ModReg__
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3956,15 +4450,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_246_OpGroup1_EvIb_And_32_NoFlags_ModReg__
 // weighted_exec_count=5686 occurrences=7158 relation=RAW anchor=Mov_Load_Eax_EspBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_247_OpMov_Load_Eax_EspBaseNoIndexNoSegment__OpGroup5_Ev_Push_32_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax_EspBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -3973,23 +4469,26 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_247_OpMov_Load_Eax_EspBaseNoIndexNoSegmen
 ATTR_PRESERVE_NONE int64_t SuperOpcode_248_OpTest_EvGv_32_ModReg_Ecx__OpJcc_NE_Rel8(EmuState* RESTRICT state,
                                                                                     DecodedOp* RESTRICT op,
                                                                                     int64_t instr_limit,
-                                                                                    mem::MicroTLB utlb, uint32_t branch,
-                                                                                    uint64_t flags_cache) {
+                                                                                    mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Ecx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=5574 occurrences=10826 relation=RAW anchor=Group1_EvIb_Add_32_NoFlags_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_249_OpGroup1_EvIb_Add_32_NoFlags_ModReg__OpMov_Load_Ecx_EspBaseNoIndexNoSegment(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Add_32_NoFlags_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
@@ -3997,22 +4496,25 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_249_OpGroup1_EvIb_Add_32_NoFlags_ModReg__
                        flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=5558 occurrences=5980 relation=RAW anchor=Group1_EvIb_Cmp_32_Flags_Edx direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_250_OpGroup1_EvIb_Cmp_32_Flags_Edx__OpJcc_NE_Rel8(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags_Edx, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel8, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -4020,30 +4522,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_250_OpGroup1_EvIb_Cmp_32_Flags_Edx__OpJcc
 // weighted_exec_count=5508 occurrences=9392 relation=RAW anchor=Lea_32_Eax direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_251_OpLea_32_Eax__OpCmp_EvGv_32_ModReg(EmuState* RESTRICT state,
                                                                               DecodedOp* RESTRICT op,
-                                                                              int64_t instr_limit, mem::MicroTLB utlb,
-                                                                              uint32_t branch, uint64_t flags_cache) {
+                                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpLea_32_Eax, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=5508 occurrences=8486 relation=RAW anchor=Group5_Ev_Push_32_Flags direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_252_OpGroup5_Ev_Push_32_Flags__OpGroup5_Ev_Call_32_Flags(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Push_32_Flags, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Call_32_Flags, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -4051,15 +4557,17 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_252_OpGroup5_Ev_Push_32_Flags__OpGroup5_E
 // weighted_exec_count=5490 occurrences=10614 relation=RAW anchor=Mov_Load_Edi_EaxBaseNoIndexNoSegment
 // direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_253_OpMov_Load_Edi_EaxBaseNoIndexNoSegment__OpTest_EvGv_32_ModReg(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Edi_EaxBaseNoIndexNoSegment, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
@@ -4067,30 +4575,34 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_253_OpMov_Load_Edi_EaxBaseNoIndexNoSegmen
 // weighted_exec_count=5490 occurrences=352 relation=RAW anchor=Add_EvGv_NF_32_ModReg direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_254_OpAdd_EvGv_NF_32_ModReg__OpOr_EvGv(EmuState* RESTRICT state,
                                                                               DecodedOp* RESTRICT op,
-                                                                              int64_t instr_limit, mem::MicroTLB utlb,
-                                                                              uint32_t branch, uint64_t flags_cache) {
+                                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_NF_32_ModReg, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpOr_EvGv, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }
 
 // weighted_exec_count=5484 occurrences=10442 relation=RAW anchor=Movzx_Word direction=successor
 ATTR_PRESERVE_NONE int64_t SuperOpcode_255_OpMovzx_Word__OpGroup1_EvIb_Sub_32_NoFlags_Eax(
-    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
-    uint64_t flags_cache) {
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+    uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     RUN_SUPEROPCODE_OP(op::OpMovzx_Word, state, op, instr_limit, utlb, branch, flags_cache);
 
     DecodedOp* second_op = NextOp(op);
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_NoFlags_Eax, state, second_op, instr_limit, utlb, branch, flags_cache);
 
     if (auto* next_op = NextOp(second_op)) {
-        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
     __builtin_unreachable();
 }

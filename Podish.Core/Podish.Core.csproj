@@ -3,6 +3,8 @@
     <ItemGroup>
         <ProjectReference Include="..\Fiberish.Core\Fiberish.Core.csproj">
             <AdditionalProperties Condition="'$(FiberishForceBrowserWasm)' != ''">FiberishForceBrowserWasm=$(FiberishForceBrowserWasm)</AdditionalProperties>
+            <AdditionalProperties Condition="'$(RuntimeIdentifier)' != '' and '$(FiberishForceBrowserWasm)' == ''">RuntimeIdentifier=$(RuntimeIdentifier);PublishAot=$(PublishAot);PodishStaticNative=$(PodishStaticNative)</AdditionalProperties>
+            <AdditionalProperties Condition="'$(RuntimeIdentifier)' != '' and '$(FiberishForceBrowserWasm)' != ''">FiberishForceBrowserWasm=$(FiberishForceBrowserWasm);RuntimeIdentifier=$(RuntimeIdentifier);PublishAot=$(PublishAot);PodishStaticNative=$(PodishStaticNative)</AdditionalProperties>
         </ProjectReference>
         <ProjectReference Include="..\Fiberish.FsName.Generator\Fiberish.FsName.Generator.csproj"
                           OutputItemType="Analyzer"

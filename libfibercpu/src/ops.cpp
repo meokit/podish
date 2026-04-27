@@ -52,7 +52,9 @@ static inline bool PerformMemOp(EmuState* state, DecodedOp* op, mem::MicroTLB& u
 
 template <bool restart>
 ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                           mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
+                                           mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+                                           uint32_t branch, uint64_t flags_cache) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     if (state->mem_op_type == PendingMemOp::Read) {
         auto& mem_op = state->mem_op.read;
         const bool fault = PerformMemOp(state, op, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), false);
@@ -73,28 +75,41 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
         }
     }
 
+    mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
     if constexpr (restart) {
         // Don't clear mem_op, it's pending for restart
-        ATTR_MUSTTAIL return op->handler(state, op, instr_limit, utlb, branch, flags_cache);
+        ATTR_MUSTTAIL return op->handler(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
     }
 
     state->clear_pending_mem_op();
     DecodedOp* next_op = NextOp(op);
-    ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);
+    ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
 }
 
+template ATTR_PRESERVE_NONE int64_t MemoryOpGeneric<true>(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                          int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                          mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                          uint64_t flags_cache);
+template ATTR_PRESERVE_NONE int64_t MemoryOpGeneric<false>(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                           int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                           mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                           uint64_t flags_cache);
+
 ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                           mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
-    ATTR_MUSTTAIL return MemoryOpGeneric<true>(state, op, instr_limit, utlb, branch, flags_cache);
+                                           mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+                                           uint32_t branch, uint64_t flags_cache) {
+    ATTR_MUSTTAIL return MemoryOpGeneric<true>(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
 }
 
 ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                         mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
-    ATTR_MUSTTAIL return MemoryOpGeneric<false>(state, op, instr_limit, utlb, branch, flags_cache);
+                                         mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+                                         uint32_t branch, uint64_t flags_cache) {
+    ATTR_MUSTTAIL return MemoryOpGeneric<false>(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
 }
 
 static FORCE_INLINE int64_t ChainToKnownBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                              mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
+                                              mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+                                              uint32_t branch, uint64_t flags_cache) {
     (void)op;
     (void)branch;
     BasicBlock* next_block = state->last_block;
@@ -107,13 +122,14 @@ static FORCE_INLINE int64_t ChainToKnownBlock(EmuState* RESTRICT state, DecodedO
     state->current_block_head = next_head;
 #endif
     __builtin_assume(next_block->entry != nullptr);
-    ATTR_MUSTTAIL return next_block->entry(state, next_head, instr_limit, utlb, std::numeric_limits<uint32_t>::max(),
-                                           flags_cache);
+    ATTR_MUSTTAIL return next_block->entry(state, next_head, instr_limit, utlb_tags, utlb_addend,
+                                           std::numeric_limits<uint32_t>::max(), flags_cache);
 }
 
 template <ExtKind Kind>
 static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                              int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                              mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                               uint64_t flags_cache) {
     const uint32_t target_eip = branch;
     BasicBlock* next_block = state->mmu.lookup_cached_block(target_eip);
@@ -132,40 +148,45 @@ static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT
     }
 
     state->last_block = next_block;
-    ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb, branch, flags_cache);
+    ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
 }
 
 ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowLink(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                       int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                       int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                       mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                        uint64_t flags_cache) {
-    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<ExtKind::Link>(state, op, instr_limit, utlb, branch, flags_cache);
+    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
+                                                                    branch, flags_cache);
 }
 
 ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowControlFlow(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                              int64_t instr_limit, mem::MicroTLB utlb, uint32_t branch,
+                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                              mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                               uint64_t flags_cache) {
-    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<ExtKind::ControlFlow>(state, op, instr_limit, utlb, branch,
-                                                                           flags_cache);
+    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<ExtKind::ControlFlow>(state, op, instr_limit, utlb_tags,
+                                                                           utlb_addend, branch, flags_cache);
 }
 
 ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                               mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
-    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb, branch,
-                                                                         flags_cache);
+                                               mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+                                               uint32_t branch, uint64_t flags_cache) {
+    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb_tags,
+                                                                         utlb_addend, branch, flags_cache);
 }
 
 // Sentinel Handlers
 template <int I, bool UseBranch>
 ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                       mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {
+                                       mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+                                       uint32_t branch, uint64_t flags_cache) {
     RecordBlockHandlersUntil(state, op);
     if constexpr (UseBranch) {
         if (branch == std::numeric_limits<uint32_t>::max()) __builtin_unreachable();
-        ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb, branch,
-                                                                      flags_cache);
+        ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
+                                                                      branch, flags_cache);
     } else {
-        ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb, op->next_eip,
-                                                                      flags_cache);
+        ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
+                                                                      op->next_eip, flags_cache);
     }
 }
 

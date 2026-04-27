@@ -122,7 +122,9 @@ internal static partial class Program
             sb.AppendLine("ATTR_PRESERVE_NONE int64_t " + handlerName +
                           "(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,");
             sb.AppendLine(
-                "                                          mem::MicroTLB utlb, uint32_t branch, uint64_t flags_cache) {");
+                "                                          mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,");
+            sb.AppendLine("                                          uint32_t branch, uint64_t flags_cache) {");
+            sb.AppendLine("    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);");
             sb.AppendLine($"    RUN_SUPEROPCODE_OP({c.Op0}, state, op, instr_limit, utlb, branch, flags_cache);");
             sb.AppendLine();
             sb.AppendLine("    DecodedOp* second_op = NextOp(op);");
@@ -131,7 +133,9 @@ internal static partial class Program
             sb.AppendLine();
             sb.AppendLine("    if (auto* next_op = NextOp(second_op)) {");
             sb.AppendLine(
-                "        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb, branch, flags_cache);");
+                "        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);");
+            sb.AppendLine(
+                "        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);");
             sb.AppendLine("    }");
             sb.AppendLine("    __builtin_unreachable();");
             sb.AppendLine("}");

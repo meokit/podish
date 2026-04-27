@@ -13,7 +13,8 @@ HANDLER_PROTO = (
     'fiberish::EmuState* RESTRICT state, '
     'fiberish::DecodedOp* RESTRICT op, '
     'int64_t instr_limit, '
-    'fiberish::mem::MicroTLB utlb, '
+    'fiberish::mem::MicroTlbAbiWord utlb_tags, '
+    'fiberish::mem::MicroTlbAbiWord utlb_addend, '
     'uint32_t branch, '
     'uint64_t flags_cache'
 )

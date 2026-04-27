@@ -16,12 +16,15 @@
         <EmscriptenToolchainFile Condition="'$(EmscriptenToolchainFile)' == '' and Exists('/usr/local/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake')">/usr/local/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake</EmscriptenToolchainFile>
         <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/opt/homebrew/opt/node/bin/node')">/opt/homebrew/opt/node/bin/node</BrowserWasmNodeExecutable>
          <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/opt/homebrew/bin/node')">/opt/homebrew/bin/node</BrowserWasmNodeExecutable>
-         <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/usr/local/bin/node')">/usr/local/bin/node</BrowserWasmNodeExecutable>
+        <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/usr/local/bin/node')">/usr/local/bin/node</BrowserWasmNodeExecutable>
          <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == ''">node</BrowserWasmNodeExecutable>
          <FibercpuWasmDownloadUrl Condition="'$(FibercpuWasmDownloadUrl)' == ''"></FibercpuWasmDownloadUrl>
          <LibFibercpuSourceDir>$(MSBuildThisFileDirectory)../libfibercpu</LibFibercpuSourceDir>
          <LibFibercpuSourceExists Condition="Exists('$(LibFibercpuSourceDir)/CMakeLists.txt')">true</LibFibercpuSourceExists>
          <LibFibercpuSourceExists Condition="'$(LibFibercpuSourceExists)' == ''">false</LibFibercpuSourceExists>
+         <VsWhereExe Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'">$(MSBuildProgramFiles32)\Microsoft Visual Studio\Installer\vswhere.exe</VsWhereExe>
+         <WindowsClangTargetArch Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'">x64</WindowsClangTargetArch>
+         <WindowsToolchainSignatureFile Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'">$(NativeBuildDir)\.podish-toolchain</WindowsToolchainSignatureFile>
      </PropertyGroup>
 
     <!-- Define inputs for incremental build tracking -->
@@ -49,8 +52,9 @@
             <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('OSX')) And '$(IsBrowserWasm)' != 'true'">$(CMakeArgs) -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++</CMakeArgs>
             <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('Linux')) And '$(IsBrowserWasm)' != 'true'">$(CMakeArgs) -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++</CMakeArgs>
             
-            <!-- Use ClangCL with VS generator on Windows for best compatibility and automatic toolchain discovery -->
-            <CMakeGeneratorArgs Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'">-T ClangCL</CMakeGeneratorArgs>
+            <!-- CMake 4.1 on Windows does not yet expose a Visual Studio 2026 generator, so use Ninja Multi-Config
+                 with the Visual Studio LLVM toolchain explicitly selected. -->
+            <CMakeGeneratorArgs Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'">-G "Ninja Multi-Config"</CMakeGeneratorArgs>
             
             <CMakeHandlerProfile Condition="'$(EnableHandlerProfile)' == 'true'">ON</CMakeHandlerProfile>
             <CMakeHandlerProfile Condition="'$(CMakeHandlerProfile)' == ''">OFF</CMakeHandlerProfile>
@@ -66,10 +70,59 @@
         </PropertyGroup>
 
         <Message Text="Building libfibercpu with CMake (Incremental check passed)..." Importance="High"/>
+        <Error Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true' And !Exists('$(VsWhereExe)')"
+               Text="Could not locate vswhere.exe at $(VsWhereExe)." />
+        <Exec Command="&quot;$(VsWhereExe)&quot; -latest -products * -property installationPath"
+              ConsoleToMSBuild="true"
+              StandardOutputImportance="Low"
+              Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'">
+            <Output TaskParameter="ConsoleOutput" ItemName="_WindowsVsInstallDirOutput" />
+        </Exec>
+        <PropertyGroup Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'">
+            <WindowsVisualStudioInstallDir>@(_WindowsVsInstallDirOutput->'%(Identity)')</WindowsVisualStudioInstallDir>
+            <WindowsClangClPath Condition="Exists('$(WindowsVisualStudioInstallDir)\VC\Tools\Llvm\$(WindowsClangTargetArch)\bin\clang-cl.exe')">$(WindowsVisualStudioInstallDir)\VC\Tools\Llvm\$(WindowsClangTargetArch)\bin\clang-cl.exe</WindowsClangClPath>
+            <WindowsClangClPath Condition="'$(WindowsClangClPath)' == '' And Exists('$(WindowsVisualStudioInstallDir)\VC\Tools\Llvm\bin\clang-cl.exe')">$(WindowsVisualStudioInstallDir)\VC\Tools\Llvm\bin\clang-cl.exe</WindowsClangClPath>
+            <WindowsNinjaPath>$(WindowsVisualStudioInstallDir)\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe</WindowsNinjaPath>
+            <WindowsVsDevCmdPath>$(WindowsVisualStudioInstallDir)\Common7\Tools\VsDevCmd.bat</WindowsVsDevCmdPath>
+            <WindowsNativeToolchainSignature>clangcl-ninja-mc|$(WindowsVisualStudioInstallDir)|$(WindowsClangClPath)|$(WindowsNinjaPath)</WindowsNativeToolchainSignature>
+            <WindowsCMakeConfigureCommand>cmd /d /s /c &quot;&quot;$(WindowsVsDevCmdPath)&quot; -arch=$(WindowsClangTargetArch) -host_arch=$(WindowsClangTargetArch) &gt;nul &amp;&amp; cmake -S ../libfibercpu -B $(NativeBuildDir) $(CMakeGeneratorArgs) $(CMakeArgs) -DCMAKE_MAKE_PROGRAM=&quot;$(WindowsNinjaPath)&quot; -DCMAKE_C_COMPILER=&quot;$(WindowsClangClPath)&quot; -DCMAKE_CXX_COMPILER=&quot;$(WindowsClangClPath)&quot;&quot;</WindowsCMakeConfigureCommand>
+            <WindowsCMakeBuildCommand>cmd /d /s /c &quot;&quot;$(WindowsVsDevCmdPath)&quot; -arch=$(WindowsClangTargetArch) -host_arch=$(WindowsClangTargetArch) &gt;nul &amp;&amp; cmake --build $(NativeBuildDir) --config Release&quot;</WindowsCMakeBuildCommand>
+        </PropertyGroup>
+        <Error Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true' And '$(WindowsVisualStudioInstallDir)' == ''"
+               Text="Could not resolve a Visual Studio installation path via $(VsWhereExe)." />
+        <Error Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true' And !Exists('$(WindowsClangClPath)')"
+               Text="Could not locate clang-cl.exe under $(WindowsVisualStudioInstallDir)." />
+        <Error Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true' And !Exists('$(WindowsNinjaPath)')"
+               Text="Could not locate ninja.exe under $(WindowsVisualStudioInstallDir)." />
+        <Error Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true' And !Exists('$(WindowsVsDevCmdPath)')"
+               Text="Could not locate VsDevCmd.bat under $(WindowsVisualStudioInstallDir)." />
+        <ReadLinesFromFile File="$(WindowsToolchainSignatureFile)"
+                           Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true' And Exists('$(WindowsToolchainSignatureFile)')">
+            <Output TaskParameter="Lines" ItemName="_ExistingWindowsToolchainSignature" />
+        </ReadLinesFromFile>
+        <PropertyGroup Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'">
+            <ExistingWindowsNativeToolchainSignature>@(_ExistingWindowsToolchainSignature->'%(Identity)')</ExistingWindowsNativeToolchainSignature>
+        </PropertyGroup>
+        <RemoveDir Directories="$(NativeBuildDir)"
+                   Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true' And Exists('$(NativeBuildDir)') And '$(ExistingWindowsNativeToolchainSignature)' != '$(WindowsNativeToolchainSignature)'" />
         
         <MakeDir Directories="$(NativeBuildDir)" />
-        <Exec Command="cmake -S ../libfibercpu -B $(NativeBuildDir) $(CMakeGeneratorArgs) $(CMakeArgs)" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
-        <Exec Command="cmake --build $(NativeBuildDir) --config Release" WorkingDirectory="$(MSBuildThisFileDirectory)"/>
+        <WriteLinesToFile File="$(WindowsToolchainSignatureFile)"
+                          Lines="$(WindowsNativeToolchainSignature)"
+                          Overwrite="true"
+                          Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'" />
+        <Exec Command="$(WindowsCMakeConfigureCommand)"
+              WorkingDirectory="$(MSBuildThisFileDirectory)"
+              Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'" />
+        <Exec Command="cmake -S ../libfibercpu -B $(NativeBuildDir) $(CMakeGeneratorArgs) $(CMakeArgs)"
+              WorkingDirectory="$(MSBuildThisFileDirectory)"
+              Condition="$([MSBuild]::IsOsPlatform('Windows')) != 'true' Or '$(IsBrowserWasm)' == 'true'" />
+        <Exec Command="$(WindowsCMakeBuildCommand)"
+              WorkingDirectory="$(MSBuildThisFileDirectory)"
+              Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'" />
+        <Exec Command="cmake --build $(NativeBuildDir) --config Release"
+              WorkingDirectory="$(MSBuildThisFileDirectory)"
+              Condition="$([MSBuild]::IsOsPlatform('Windows')) != 'true' Or '$(IsBrowserWasm)' == 'true'" />
     </Target>
 
     <ItemGroup Condition="'$(IsBrowserWasm)' == 'true'">

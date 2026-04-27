@@ -622,6 +622,21 @@ public class TtyDiscipline
         return Device.EnqueueInput(input);
     }
 
+    public void CloseInput()
+    {
+        void ApplyClose()
+        {
+            ProcessPendingInput();
+            FlushCanonical(false);
+            _inq.Close();
+        }
+
+        if (_scheduler.IsSchedulerThread)
+            ApplyClose();
+        else
+            _scheduler.RunIngress(ApplyClose);
+    }
+
     /// <summary>
     ///     Inject terminal-generated response bytes (e.g. CSI queries) with priority.
     ///     This bypasses the hardware queue to avoid races against concurrently typed input.
@@ -1372,6 +1387,8 @@ internal sealed class TtyInputQueue
     private readonly Lock _lock = new();
     private readonly Queue<byte> _queue = new();
     private bool _hasCanonicalLine;
+    private bool _hasPendingEof;
+    private bool _isClosed;
 
     public TtyInputQueue(KernelScheduler scheduler)
     {
@@ -1395,7 +1412,7 @@ internal sealed class TtyInputQueue
         {
             lock (_lock)
             {
-                return _queue.Count > 0 || _hasCanonicalLine;
+                return _queue.Count > 0 || _hasCanonicalLine || _hasPendingEof || _isClosed;
             }
         }
     }
@@ -1408,6 +1425,8 @@ internal sealed class TtyInputQueue
         {
             _queue.Clear();
             _hasCanonicalLine = false;
+            _hasPendingEof = false;
+            _isClosed = false;
         }
 
         DataAvailable.Reset();
@@ -1426,15 +1445,23 @@ internal sealed class TtyInputQueue
 
     public void Write(IEnumerable<byte> bytes, bool canonicalReady = false)
     {
+        var wroteAny = false;
         lock (_lock)
         {
             foreach (var b in bytes)
             {
                 _queue.Enqueue(b);
+                wroteAny = true;
                 if (b == 10) _hasCanonicalLine = true;
             }
 
-            if (canonicalReady) _hasCanonicalLine = true;
+            if (canonicalReady)
+            {
+                if (wroteAny)
+                    _hasCanonicalLine = true;
+                else
+                    _hasPendingEof = true;
+            }
         }
 
         DataAvailable.Set();
@@ -1465,6 +1492,16 @@ internal sealed class TtyInputQueue
         DataAvailable.Set();
     }
 
+    public void Close()
+    {
+        lock (_lock)
+        {
+            _isClosed = true;
+        }
+
+        DataAvailable.Set();
+    }
+
     public int Read(Span<byte> buffer, FileFlags flags)
     {
         lock (_lock)
@@ -1474,24 +1511,30 @@ internal sealed class TtyInputQueue
                 var count = 0;
                 while (count < buffer.Length && _queue.Count > 0) buffer[count++] = _queue.Dequeue();
 
-                // Only reset after consuming data, and only if queue is now empty
+                // Only reset after consuming data, and only if queue is now empty and
+                // there isn't a zero-byte EOF read still pending behind it.
                 if (_queue.Count == 0)
                 {
                     _hasCanonicalLine = false;
-                    DataAvailable.Reset();
+                    if (!_hasPendingEof && !_isClosed)
+                        DataAvailable.Reset();
                 }
 
                 return count;
             }
 
-            // EOF in canonical mode: _hasCanonicalLine is set by FlushCanonical(true)
-            // to signal that an EOF was received, even if the buffer is empty.
-            if (_hasCanonicalLine && _queue.Count == 0)
+            // EOF in canonical mode: a Ctrl-D on an empty canonical buffer should
+            // surface as a zero-byte read, even if earlier complete lines were read first.
+            if (_hasPendingEof || _hasCanonicalLine && _queue.Count == 0)
             {
+                _hasPendingEof = false;
                 _hasCanonicalLine = false;
                 DataAvailable.Reset();
                 return 0; // EOF
             }
+
+            if (_isClosed)
+                return 0;
         }
 
         // No data available.

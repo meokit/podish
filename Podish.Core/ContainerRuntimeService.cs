@@ -113,7 +113,8 @@ public sealed class ContainerRuntimeService
         EventHandler? processExitHandler = null;
         ConsoleCancelEventHandler? cancelKeyPressHandler = null;
         var rawModeEnabled = false;
-        var isInteractive = request.UseTty && request.EnableHostConsoleInput && !Console.IsInputRedirected;
+        var hostInputEnabled = request.UseTty && request.EnableHostConsoleInput;
+        var stdinIsConsole = hostInputEnabled && !Console.IsInputRedirected;
 
         using var logSink = CreateContainerLogSink(request.LogDriver, request.ContainerDir, _loggerFactory);
         var publishedPorts = request.PublishedPorts ?? Array.Empty<PublishedPortSpec>();
@@ -131,7 +132,7 @@ public sealed class ContainerRuntimeService
         if (request.TerminalBridge != null)
             request.TerminalBridge.BindTty(ttyDiag);
 
-        if (isInteractive)
+        if (hostInputEnabled)
         {
             var tty = ttyDiag!;
             if (OperatingSystem.IsWindows())
@@ -143,7 +144,7 @@ public sealed class ContainerRuntimeService
                 stdinStream = new FileStream(new SafeFileHandle(0, false), FileAccess.Read);
             }
 
-            if (!OperatingSystem.IsBrowser())
+            if (stdinIsConsole && !OperatingSystem.IsBrowser())
             {
                 var res = HostTermios.EnableRawMode(0);
                 if (res != 0) Console.Error.WriteLine($"Warning: Failed to enable raw mode: {res}");
@@ -181,7 +182,7 @@ public sealed class ContainerRuntimeService
             }
 
             inputCts = new CancellationTokenSource();
-            inputTask = Task.Run(() => InputLoop(tty, stdinStream, inputCts.Token));
+            inputTask = Task.Run(() => InputLoop(tty, stdinStream, inputCts.Token, stdinIsConsole));
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 try
@@ -1171,15 +1172,35 @@ public sealed class ContainerRuntimeService
         return sb.ToString();
     }
 
-    private static async Task InputLoop(TtyDiscipline tty, Stream stdin, CancellationToken token)
+    private static async Task InputLoop(TtyDiscipline tty, Stream stdin, CancellationToken token, bool stdinIsConsole)
     {
         var buffer = new byte[256];
         try
         {
+            if (OperatingSystem.IsWindows() && stdinIsConsole)
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    var read = stdin.Read(buffer, 0, buffer.Length);
+                    if (read <= 0)
+                        break;
+
+                    tty.Input(buffer.AsSpan(0, read).ToArray());
+                }
+
+                return;
+            }
+
             while (!token.IsCancellationRequested)
             {
                 var read = await stdin.ReadAsync(buffer, token);
-                if (read == 0) break;
+                if (read == 0)
+                {
+                    // A redirected stdin closing is a persistent EOF, not just a single Ctrl-D keypress.
+                    tty.CloseInput();
+                    break;
+                }
+
                 tty.Input(buffer.AsSpan(0, read).ToArray());
             }
         }
