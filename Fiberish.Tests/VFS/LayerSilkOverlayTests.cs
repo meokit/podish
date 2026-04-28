@@ -41,7 +41,21 @@ public class LayerSilkOverlayTests
             var layerType = FileSystemRegistry.Get("layerfs")!;
             var lowerSb = layerType.CreateAnonymousFileSystem().ReadSuper(layerType, 0, "test-lower",
                 new LayerMountOptions { Index = index, ContentProvider = new InMemoryLayerContentProvider() });
-            sm.MountRootOverlayWithLower(lowerSb, "silkfs", silkRoot);
+            var upperType = FileSystemRegistry.Get("silkfs")!;
+            using var upperSb = Assert.IsType<SilkSuperBlock>(
+                upperType.CreateFileSystem(sm.DeviceNumbers, sm.MemoryContext).ReadSuper(upperType, 0, silkRoot, null));
+            var overlayType = FileSystemRegistry.Get("overlay")!;
+            var overlaySb = overlayType.CreateFileSystem(sm.DeviceNumbers, sm.MemoryContext).ReadSuper(
+                overlayType,
+                0,
+                "root_overlay",
+                new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+            sm.MountRoot(overlaySb, new SyscallManager.RootMountOptions
+            {
+                Source = "overlay",
+                FsType = "overlay",
+                Options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work"
+            });
 
             var osRelease = sm.PathWalkWithFlags("/etc/os-release", LookupFlags.FollowSymlink);
             Assert.True(osRelease.IsValid);
@@ -70,7 +84,7 @@ public class LayerSilkOverlayTests
             Assert.NotNull(fiberIno);
             var livePath = upperRepo.GetLiveInodePath(fiberIno!.Value);
             Assert.True(File.Exists(livePath));
-            Assert.Equal("hello", File.ReadAllText(livePath));
+            Assert.Equal("hello", ReadAllTextWithUnixCompatibleSharing(livePath));
 
             var lowerEtc = lowerSb.Root.Inode!.Lookup("etc");
             Assert.NotNull(lowerEtc);
@@ -108,7 +122,21 @@ public class LayerSilkOverlayTests
                     ContentProvider = new InMemoryLayerContentProvider(),
                     MinimumReadAheadBytes = 128 * 1024
                 });
-            sm.MountRootOverlayWithLower(lowerSb, "silkfs", silkRoot);
+            var upperType = FileSystemRegistry.Get("silkfs")!;
+            using var upperSb = Assert.IsType<SilkSuperBlock>(
+                upperType.CreateFileSystem(sm.DeviceNumbers, sm.MemoryContext).ReadSuper(upperType, 0, silkRoot, null));
+            var overlayType = FileSystemRegistry.Get("overlay")!;
+            var overlaySb = overlayType.CreateFileSystem(sm.DeviceNumbers, sm.MemoryContext).ReadSuper(
+                overlayType,
+                0,
+                "root_overlay",
+                new OverlayMountOptions { Lower = lowerSb, Upper = upperSb });
+            sm.MountRoot(overlaySb, new SyscallManager.RootMountOptions
+            {
+                Source = "overlay",
+                FsType = "overlay",
+                Options = "rw,relatime,lowerdir=/,upperdir=/overlay_upper,workdir=/work"
+            });
 
             var osRelease = sm.PathWalkWithFlags("/etc/os-release", LookupFlags.FollowSymlink);
             Assert.True(osRelease.IsValid);
@@ -711,5 +739,13 @@ public class LayerSilkOverlayTests
         {
             if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
         }
+    }
+
+    private static string ReadAllTextWithUnixCompatibleSharing(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
     }
 }

@@ -272,7 +272,7 @@ public class SocketSyscallTests
         var inode = Assert.IsType<HostSocketInode>(file.Dentry.Inode);
         Assert.Equal(SocketType.Dgram, inode.LinuxSocketType);
         Assert.Equal(ProtocolType.Icmp, inode.HostProtocolType);
-        Assert.Contains(inode.HostSocketType, [SocketType.Dgram, SocketType.Raw]);
+        Assert.True(inode.HostSocketType is SocketType.Dgram or SocketType.Raw);
     }
 
     [Fact]
@@ -294,7 +294,7 @@ public class SocketSyscallTests
         var inode = Assert.IsType<HostSocketInode>(file.Dentry.Inode);
         Assert.Equal(SocketType.Dgram, inode.LinuxSocketType);
         Assert.Equal(ProtocolType.IcmpV6, inode.HostProtocolType);
-        Assert.Contains(inode.HostSocketType, [SocketType.Dgram, SocketType.Raw]);
+        Assert.True(inode.HostSocketType is SocketType.Dgram or SocketType.Raw);
     }
 
     [Fact]
@@ -556,7 +556,7 @@ public class SocketSyscallTests
 
         env.WriteBytes(0x2A000, [0x42]);
         var sendRc = await CallSysSend(env, (uint)fd, 0x2A000, 1);
-        Assert.Contains(sendRc, [-(int)Errno.EPIPE, -(int)Errno.ENOTCONN, -(int)Errno.ECONNREFUSED]);
+        Assert.True(sendRc is -(int)Errno.EPIPE or -(int)Errno.ENOTCONN or -(int)Errno.ECONNREFUSED);
     }
 
     [Fact]
@@ -1452,6 +1452,7 @@ public class SocketSyscallTests
 
         public void Dispose()
         {
+            SyscallManager.Close();
             GC.KeepAlive(Task);
         }
 

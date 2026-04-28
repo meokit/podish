@@ -10,8 +10,7 @@ public class ConcurrencyIsolationTests
     [Fact]
     public void EventStore_Append_IsSerializedAcrossInstances()
     {
-        var root = Path.Combine(Path.GetTempPath(), "podish-events-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = TestWorkspace.CreateUniqueDirectory("podish-events-");
         var path = Path.Combine(root, "events.jsonl");
 
         try
@@ -43,15 +42,14 @@ public class ConcurrencyIsolationTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public void CooperativeFileLock_SerializesCriticalSection_ForSamePath()
     {
-        var root = Path.Combine(Path.GetTempPath(), "podish-lock-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = TestWorkspace.CreateUniqueDirectory("podish-lock-");
         var lockPath = Path.Combine(root, "resource.lock");
         var trace = new List<string>();
         var gate = new Lock();
@@ -95,15 +93,14 @@ public class ConcurrencyIsolationTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public void NativeContext_LastError_IsThreadIsolated()
     {
-        var root = Path.Combine(Path.GetTempPath(), "podish-native-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = TestWorkspace.CreateUniqueDirectory("podish-native-");
 
         try
         {
@@ -144,15 +141,14 @@ public class ConcurrencyIsolationTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public void NativeContext_CreateContainer_IsAtomic_ForDuplicateNames()
     {
-        var root = Path.Combine(Path.GetTempPath(), "podish-native-create-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = TestWorkspace.CreateUniqueDirectory("podish-native-create-");
 
         try
         {
@@ -180,15 +176,14 @@ public class ConcurrencyIsolationTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public void NativeContext_OpenContainer_DeduplicatesLiveInstance()
     {
-        var root = Path.Combine(Path.GetTempPath(), "podish-native-open-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = TestWorkspace.CreateUniqueDirectory("podish-native-open-");
 
         string containerId;
         try
@@ -232,15 +227,14 @@ public class ConcurrencyIsolationTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public async Task NativeContainer_Remove_PreventsFutureStart()
     {
-        var root = Path.Combine(Path.GetTempPath(), "podish-native-remove-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = TestWorkspace.CreateUniqueDirectory("podish-native-remove-");
 
         try
         {
@@ -263,7 +257,7 @@ public class ConcurrencyIsolationTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 }

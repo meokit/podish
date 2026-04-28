@@ -30,13 +30,14 @@ public sealed class SilkFileSystem : FileSystem
     }
 }
 
-public sealed class SilkSuperBlock : SuperBlock, IDentryCacheDropper
+public sealed class SilkSuperBlock : SuperBlock, IDentryCacheDropper, IDisposable
 {
     private ulong _nextIno = 1;
     private readonly Dictionary<ulong, FsNameMap<Dentry>> _dentriesByParent = [];
     private readonly object _metadataSessionGate = new();
     private SilkMetadataSession? _metadataSession;
     private bool _metadataSessionDisposed;
+    private int _shutdownState;
 
     public SilkSuperBlock(FileSystemType type, SilkRepository repository, DeviceNumberManager devManager,
         MemoryRuntimeContext? memoryContext = null) : base(devManager, memoryContext ?? new MemoryRuntimeContext())
@@ -78,6 +79,9 @@ public sealed class SilkSuperBlock : SuperBlock, IDentryCacheDropper
 
     protected override void Shutdown()
     {
+        if (Interlocked.Exchange(ref _shutdownState, 1) != 0)
+            return;
+
         List<SilkInode> trackedInodes;
         lock (Lock)
         {
@@ -309,6 +313,12 @@ public sealed class SilkSuperBlock : SuperBlock, IDentryCacheDropper
             _metadataSession = null;
             _metadataSessionDisposed = true;
         }
+    }
+
+    public void Dispose()
+    {
+        Shutdown();
+        GC.SuppressFinalize(this);
     }
 
     internal readonly struct MetadataSessionLease : IDisposable
@@ -1945,6 +1955,45 @@ public sealed class SilkInode : MappingBackedInode, IHostMappedCacheDropper
     }
 
     public override int Truncate(long size)
+    {
+        if (Type != InodeType.Symlink)
+            return TruncateWithContextCore(size, default);
+
+        return TruncateCore(size);
+    }
+
+    protected internal override int TruncateWithContextCore(long length, in FileMutationContext context)
+    {
+        if (Type == InodeType.Symlink)
+            return TruncateCore(length);
+
+        var previousSize = CachedSizeForShrinkCoordinator;
+        var resizeScope = ProcessAddressSpaceSync.SuspendHostMappedFileViewsForResize(this, context);
+        var finalSize = previousSize;
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                RetireHostMappedWindowsBeforeFileShrink(length);
+                RetireAllHostMappedMappingPagesForResize();
+            }
+
+            var rc = TruncateCore(length);
+            if (rc != 0)
+                return rc;
+
+            finalSize = Math.Max(0, length);
+            FinalizeExplicitSizeChange(previousSize, length, context);
+            return 0;
+        }
+        finally
+        {
+            if (resizeScope.HasMappings)
+                resizeScope.Restore(finalSize);
+        }
+    }
+
+    private int TruncateCore(long size)
     {
         int rc;
         if (Type == InodeType.Symlink)

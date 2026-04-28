@@ -642,6 +642,7 @@ public sealed class ContainerRuntimeService
                 _logger.LogTrace("Container teardown closing guest syscall managers containerId={ContainerId}",
                     request.ContainerId);
                 CloseProcessSyscalls(scheduler);
+                runtime?.Syscalls.Close();
             }
             catch (Exception ex)
             {

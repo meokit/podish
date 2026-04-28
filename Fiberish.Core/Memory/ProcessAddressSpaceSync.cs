@@ -11,6 +11,31 @@ internal static class ProcessAddressSpaceSync
     private static readonly Dictionary<IntPtr, (VMAManager AddressSpace, Engine Engine)> AddressSpaceByEngineState = [];
     [ThreadStatic] private static Stack<EngineSnapshotBuffer>? SnapshotBufferPool;
 
+    internal sealed class WindowsHostMappedResizeScope
+    {
+        public static readonly WindowsHostMappedResizeScope Empty = new([]);
+
+        private readonly AddressSpaceResizeScope[] _plans;
+
+        internal WindowsHostMappedResizeScope(AddressSpaceResizeScope[] plans)
+        {
+            _plans = plans;
+        }
+
+        internal bool HasMappings => _plans.Length > 0;
+
+        internal void Restore(long newSize)
+        {
+            foreach (var plan in _plans)
+                plan.AddressSpace.RestoreHostMappedFileViewsAfterResize(plan.Plan, newSize, plan.Engines);
+        }
+    }
+
+    internal readonly record struct AddressSpaceResizeScope(
+        VMAManager AddressSpace,
+        VMAManager.WindowsHostMappedResizePlan Plan,
+        Engine[] Engines);
+
     private static Process? ResolveProcess(Engine engine, Process? process)
     {
         return process ?? (engine.Owner as FiberTask)?.Process;
@@ -380,7 +405,7 @@ internal static class ProcessAddressSpaceSync
             FillAddressSpaceEngineSnapshot(target, snapshot.Engines, snapshot.SeenStates, fallback);
             if (snapshot.Engines.Count == 0)
             {
-                target.SyncMappedFile(file, Array.Empty<Engine>());
+                target.SyncMappedFile(file, [engine]);
                 continue;
             }
 
@@ -401,6 +426,44 @@ internal static class ProcessAddressSpaceSync
             FillAddressSpaceEngineSnapshot(target, snapshot.Engines, snapshot.SeenStates, fallback);
             target.NotifyFileContentChanged(inode, start, len, snapshot.Engines.Count == 0 ? [] : snapshot.Engines);
         }
+    }
+
+    internal static WindowsHostMappedResizeScope SuspendHostMappedFileViewsForResize(Inode inode,
+        in FileMutationContext context)
+    {
+        if (!OperatingSystem.IsWindows())
+            return WindowsHostMappedResizeScope.Empty;
+
+        var targets = inode.SnapshotMappedAddressSpaces();
+        if (targets.Length == 0)
+        {
+            if (!context.HasLiveAddressSpace)
+                return WindowsHostMappedResizeScope.Empty;
+
+            using var snapshot = RentEngineSnapshot();
+            FillAddressSpaceEngineSnapshot(context.AddressSpace!, snapshot.Engines, snapshot.SeenStates, context.Engine);
+            Engine[] fallbackEngines = snapshot.Engines.Count == 0 ? [context.Engine!] : [.. snapshot.Engines];
+            var fallbackPlan = context.AddressSpace!.SuspendHostMappedFileViewsForResize(inode, fallbackEngines);
+            return fallbackPlan.GuestPages.Length == 0
+                ? WindowsHostMappedResizeScope.Empty
+                : new WindowsHostMappedResizeScope([new AddressSpaceResizeScope(context.AddressSpace!, fallbackPlan, fallbackEngines)]);
+        }
+
+        List<AddressSpaceResizeScope>? plans = null;
+        foreach (var target in targets)
+        {
+            var fallback = ReferenceEquals(target, context.AddressSpace) ? context.Engine : null;
+            using var snapshot = RentEngineSnapshot();
+            FillAddressSpaceEngineSnapshot(target, snapshot.Engines, snapshot.SeenStates, fallback);
+            Engine[] engines = snapshot.Engines.Count == 0 ? [] : [.. snapshot.Engines];
+            var plan = target.SuspendHostMappedFileViewsForResize(inode, engines);
+            if (plan.GuestPages.Length == 0)
+                continue;
+
+            (plans ??= []).Add(new AddressSpaceResizeScope(target, plan, engines));
+        }
+
+        return plans == null ? WindowsHostMappedResizeScope.Empty : new WindowsHostMappedResizeScope([.. plans]);
     }
 
     internal static void NotifyInodeTruncated(Inode inode, long newSize)
@@ -472,7 +535,7 @@ internal static class ProcessAddressSpaceSync
         using var scope = EnterAddressSpaceScope(engine, process);
         using var snapshot = RentEngineSnapshot();
         FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
-        vmaManager.SyncAllMappedSharedFiles(snapshot.Engines);
+        vmaManager.SyncAllMappedSharedFiles(snapshot.Engines.Count == 0 ? [engine] : snapshot.Engines);
     }
 
     private static void PublishCodeCacheInvalidation(VMAManager vmaManager, Engine engine, uint addr, uint len)

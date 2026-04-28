@@ -15,7 +15,7 @@ public class WindowedMappedFilePageBackendTests
     [Fact]
     public void FourGuestPagesWithin16KWindow_UseSingleWindow()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"mapped-backend-{Guid.NewGuid():N}.bin");
+        var path = TestWorkspace.CreateUniqueFilePath("mapped-backend-", ".bin");
         File.WriteAllBytes(path, new byte[LinuxConstants.PageSize * 8]);
 
         try
@@ -52,15 +52,15 @@ public class WindowedMappedFilePageBackendTests
         }
         finally
         {
-            if (File.Exists(path)) File.Delete(path);
+            TestWorkspace.DeleteFile(path);
         }
     }
 
     [Fact]
     public void UpdatePath_RetiresOldWindows_AndNewFaultUsesNewFile()
     {
-        var pathA = Path.Combine(Path.GetTempPath(), $"mapped-backend-a-{Guid.NewGuid():N}.bin");
-        var pathB = Path.Combine(Path.GetTempPath(), $"mapped-backend-b-{Guid.NewGuid():N}.bin");
+        var pathA = TestWorkspace.CreateUniqueFilePath("mapped-backend-a-", ".bin");
+        var pathB = TestWorkspace.CreateUniqueFilePath("mapped-backend-b-", ".bin");
         File.WriteAllBytes(pathA, BuildPage((byte)'A'));
         File.WriteAllBytes(pathB, BuildPage((byte)'B'));
 
@@ -85,15 +85,15 @@ public class WindowedMappedFilePageBackendTests
         }
         finally
         {
-            if (File.Exists(pathA)) File.Delete(pathA);
-            if (File.Exists(pathB)) File.Delete(pathB);
+            TestWorkspace.DeleteFile(pathA);
+            TestWorkspace.DeleteFile(pathB);
         }
     }
 
     [Fact]
     public void ReleasingRetiredLease_DoesNotAffectReplacementWindow()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"mapped-backend-replace-{Guid.NewGuid():N}.bin");
+        var path = TestWorkspace.CreateUniqueFilePath("mapped-backend-replace-", ".bin");
         File.WriteAllBytes(path, BuildPage((byte)'x'));
 
         try
@@ -110,7 +110,7 @@ public class WindowedMappedFilePageBackendTests
 
             Marshal.Copy("AB"u8.ToArray(), 0, writablePointer, 2);
             Assert.True(backend.TryFlushPage(0));
-            Assert.Equal("ABxx", File.ReadAllText(path)[..4]);
+            Assert.Equal("ABxx", TestWorkspace.ReadAllTextShared(path)[..4]);
 
             var diagnostics = backend.GetDiagnostics();
             Assert.Equal(1, diagnostics.WindowCount);
@@ -120,14 +120,14 @@ public class WindowedMappedFilePageBackendTests
         }
         finally
         {
-            if (File.Exists(path)) File.Delete(path);
+            TestWorkspace.DeleteFile(path);
         }
     }
 
     [Fact]
     public void WritableWindow_FlushesToDisk_AndTruncateRetiresMappings()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"mapped-backend-flush-{Guid.NewGuid():N}.bin");
+        var path = TestWorkspace.CreateUniqueFilePath("mapped-backend-flush-", ".bin");
         File.WriteAllBytes(path, BuildPage((byte)'x'));
 
         try
@@ -139,7 +139,7 @@ public class WindowedMappedFilePageBackendTests
 
             Marshal.Copy("YZ"u8.ToArray(), 0, pointer + 1, 2);
             Assert.True(backend.TryFlushPage(0));
-            Assert.Equal("xYZx", File.ReadAllText(path)[..4]);
+            Assert.Equal("xYZx", TestWorkspace.ReadAllTextShared(path)[..4]);
 
             backend.Truncate(0);
             var diagnostics = backend.GetDiagnostics();
@@ -150,14 +150,14 @@ public class WindowedMappedFilePageBackendTests
         }
         finally
         {
-            if (File.Exists(path)) File.Delete(path);
+            TestWorkspace.DeleteFile(path);
         }
     }
 
     [Fact]
     public void PartialTailPage_UsesDirectMappedWindow()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"mapped-backend-tail-{Guid.NewGuid():N}.bin");
+        var path = TestWorkspace.CreateUniqueFilePath("mapped-backend-tail-", ".bin");
         var fileSize = LinuxConstants.PageSize + 123;
         File.WriteAllBytes(path, BuildFile(fileSize, (byte)'t'));
 
@@ -182,7 +182,7 @@ public class WindowedMappedFilePageBackendTests
         }
         finally
         {
-            if (File.Exists(path)) File.Delete(path);
+            TestWorkspace.DeleteFile(path);
         }
     }
 

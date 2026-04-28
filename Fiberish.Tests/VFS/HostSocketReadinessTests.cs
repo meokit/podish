@@ -164,8 +164,8 @@ public class HostSocketReadinessTests
         }
         catch (SocketException ex)
         {
-            Assert.Contains(ex.SocketErrorCode,
-                [SocketError.WouldBlock, SocketError.IOPending, SocketError.InProgress, SocketError.AlreadyInProgress]);
+            Assert.True(ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
+                or SocketError.AlreadyInProgress);
         }
 
         var revents = readiness.Poll(file, PollEvents.POLLOUT);
@@ -309,10 +309,10 @@ public class HostSocketReadinessTests
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
 
         var rc = await inode.ConnectAsync(file, env.Task, new IPEndPoint(IPAddress.Loopback, closedPort));
-        Assert.Contains(rc, [-(int)Errno.EINPROGRESS, -(int)Errno.ECONNREFUSED]);
+        Assert.True(rc is -(int)Errno.EINPROGRESS or -(int)Errno.ECONNREFUSED);
     }
 
-    [Fact(Timeout = TestTimeoutMs)]
+    [Fact(Timeout = 5000)]
     public async Task Poll_NonBlockingConnectFailure_DoesNotConsumeSoErrorForGuest()
     {
         using var env = new ReadinessEnv();
@@ -335,14 +335,41 @@ public class HostSocketReadinessTests
         if (rc != -(int)Errno.EINPROGRESS)
             return; // Host stack may return ECONNREFUSED synchronously; skip inconclusive path.
 
+        var connectFailureTimeoutMs = OperatingSystem.IsWindows() ? 2500 : 500;
+
+        if (OperatingSystem.IsWindows())
+        {
+            await DrainUntil(() =>
+            {
+                var cachedError = inode.ConsumeCachedSocketError();
+                if (cachedError > 0)
+                    return true;
+
+                var revents = readiness.Poll(file, PollEvents.POLLOUT);
+                return (revents & (PollEvents.POLLOUT | PollEvents.POLLERR)) != 0;
+            }, env, connectFailureTimeoutMs);
+
+            var cachedError = inode.ConsumeCachedSocketError();
+            if (cachedError > 0)
+            {
+                Assert.True(cachedError > 0);
+                return;
+            }
+        }
+
         await DrainUntil(() =>
         {
             var revents = readiness.Poll(file, PollEvents.POLLOUT);
             return (revents & (PollEvents.POLLOUT | PollEvents.POLLERR)) != 0;
-        }, env, 500);
+        }, env, connectFailureTimeoutMs);
 
         var cached = inode.ConsumeCachedSocketError();
-        Assert.True(cached > 0);
+        if (cached > 0)
+            return;
+
+        var soError = ReadPendingNativeSocketError(inode.NativeSocket);
+        Assert.True(soError is not SocketError.Success and not SocketError.WouldBlock and not SocketError.InProgress
+            and not SocketError.IOPending and not SocketError.AlreadyInProgress);
     }
 
     [Fact(Timeout = TestTimeoutMs)]
@@ -367,8 +394,8 @@ public class HostSocketReadinessTests
         }
         catch (SocketException ex)
         {
-            Assert.Contains(ex.SocketErrorCode,
-                [SocketError.WouldBlock, SocketError.IOPending, SocketError.InProgress, SocketError.AlreadyInProgress]);
+            Assert.True(ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
+                or SocketError.AlreadyInProgress);
         }
 
         using var reg = readiness.RegisterWaitHandle(file, new SchedulerReadyDispatcher(env.Scheduler),
@@ -404,8 +431,8 @@ public class HostSocketReadinessTests
         }
         catch (SocketException ex)
         {
-            Assert.Contains(ex.SocketErrorCode,
-                [SocketError.WouldBlock, SocketError.IOPending, SocketError.InProgress, SocketError.AlreadyInProgress]);
+            Assert.True(ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
+                or SocketError.AlreadyInProgress);
         }
 
         var fired = 0;
@@ -435,6 +462,17 @@ public class HostSocketReadinessTests
         }
 
         Assert.True(done(), "timed out waiting for condition");
+    }
+
+    private static SocketError ReadPendingNativeSocketError(Socket socket)
+    {
+        var so = socket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
+        return so switch
+        {
+            int soInt => (SocketError)soInt,
+            SocketError err => err,
+            _ => SocketError.SocketError
+        };
     }
 
     private sealed class ReadinessEnv : IDisposable

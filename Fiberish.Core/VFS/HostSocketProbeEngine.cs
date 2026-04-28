@@ -374,23 +374,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
         if (Interlocked.Exchange(ref _writeProbeInFlight, 1) != 0)
             return;
 
-        var args = EnsureProbeArgs(ProbeKind.Write);
-        if (args.UserToken is ProbeTag connectTag) connectTag.Owner = this;
-        try
-        {
-            if (!_socket.ConnectAsync(args))
-                HandleProbeCompleted(args, ProbeKind.Write);
-        }
-        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending
-                                             or SocketError.InProgress or SocketError.AlreadyInProgress)
-        {
-            Interlocked.Exchange(ref _writeProbeInFlight, 0);
-        }
-        catch
-        {
-            Interlocked.Exchange(ref _writeProbeInFlight, 0);
-            NotifyWaiters(PollEvents.POLLERR, false, true);
-        }
+        ThreadPool.UnsafeQueueUserWorkItem(static state => ((HostSocketProbeEngine)state!).RunConnectProbe(), this);
     }
 
     private void ArmAcceptProbe()
@@ -659,6 +643,93 @@ internal sealed class HostSocketProbeEngine : IDisposable
         }
 
         pool.Add(saea);
+    }
+
+    private void RunConnectProbe()
+    {
+        short readyHint = 0;
+
+        try
+        {
+            while (Volatile.Read(ref _disposed) == 0)
+            {
+                readyHint = ProbeConnectReadyHint();
+                if (readyHint != 0)
+                    break;
+
+                Thread.Sleep(1);
+            }
+        }
+        catch
+        {
+            if (Volatile.Read(ref _disposed) == 0)
+                readyHint = PollEvents.POLLERR;
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _writeProbeInFlight, 0);
+        }
+
+        if (readyHint == 0 || Volatile.Read(ref _disposed) != 0)
+            return;
+
+        PromoteReadyCache(readyHint);
+        NotifyWaiters(readyHint, false, true);
+    }
+
+    private short ProbeConnectReadyHint()
+    {
+        try
+        {
+            var canWrite = false;
+            var hasError = false;
+
+            try
+            {
+                canWrite = _socket.Poll(0, SelectMode.SelectWrite);
+            }
+            catch (SocketException)
+            {
+                hasError = true;
+            }
+
+            try
+            {
+                hasError |= _socket.Poll(0, SelectMode.SelectError);
+            }
+            catch (SocketException)
+            {
+                hasError = true;
+            }
+
+            var soObj = _socket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
+            var soError = soObj switch
+            {
+                int i => (SocketError)i,
+                SocketError se => se,
+                _ => SocketError.SocketError
+            };
+
+            if (soError is not SocketError.Success and not SocketError.IsConnected
+                and not SocketError.WouldBlock and not SocketError.IOPending
+                and not SocketError.InProgress and not SocketError.AlreadyInProgress)
+            {
+                _owner.CachePendingSocketError(soError);
+                return (short)(PollEvents.POLLOUT | PollEvents.POLLERR);
+            }
+
+            if (_socket.Connected || canWrite)
+                return PollEvents.POLLOUT;
+
+            if (hasError)
+                return (short)(PollEvents.POLLOUT | PollEvents.POLLERR);
+
+            return 0;
+        }
+        catch (ObjectDisposedException)
+        {
+            return PollEvents.POLLERR;
+        }
     }
 
     private sealed class WaiterRegistration : IDisposable

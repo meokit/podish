@@ -1072,6 +1072,153 @@ public class VMAManager
             privateObject.TruncateFilePrivatePagesToSize(newSize);
     }
 
+    internal WindowsHostMappedResizePlan SuspendHostMappedFileViewsForResize(Inode inode, IReadOnlyList<Engine> engines)
+    {
+        if (!OperatingSystem.IsWindows())
+            return WindowsHostMappedResizePlan.Empty;
+
+        var guestPages = new List<uint>();
+        var seenGuestPages = new HashSet<uint>();
+        var invalidateRanges = new List<NativeRange>();
+        Dictionary<MappingBackedInode, HashSet<uint>>? retireByInode = null;
+        if (inode is MappingBackedInode mappingBackedInode)
+        {
+            foreach (var record in mappingBackedInode.SnapshotMappingPageRecords())
+            {
+                if (record.BackingKind != FilePageBackingKind.HostMappedWindow)
+                    continue;
+
+                retireByInode ??= [];
+                if (!retireByInode.TryGetValue(mappingBackedInode, out var retiredPages))
+                {
+                    retiredPages = [];
+                    retireByInode[mappingBackedInode] = retiredPages;
+                }
+
+                retiredPages.Add(record.PageIndex);
+            }
+        }
+
+        foreach (var pageAddr in PageMapping.SnapshotMappedPages())
+        {
+            if (!PageMapping.TryGetBinding(pageAddr, out var bindingNullable) || !bindingNullable.HasValue)
+                continue;
+
+            var binding = bindingNullable.Value;
+            if (binding.OwnerKind != MappedPageOwnerKind.AddressSpace)
+                continue;
+
+            var vma = FindVmArea(pageAddr);
+            if (vma == null || !VmaReferencesInode(vma, inode))
+                continue;
+
+            if (!ReferenceEquals(binding.Mapping, vma.VmMapping))
+                continue;
+
+            var mappingInode = ResolveCurrentFileMappingBacking(vma.FileMapping);
+            if (mappingInode == null)
+                continue;
+
+            var pageIndex = GetVmaPageIndex(vma, pageAddr);
+            if (!mappingInode.TryGetMappingPageRecord(pageIndex, out var record) ||
+                record.BackingKind != FilePageBackingKind.HostMappedWindow)
+                continue;
+
+            if (!seenGuestPages.Add(pageAddr))
+                continue;
+
+            guestPages.Add(pageAddr);
+            invalidateRanges.Add(new NativeRange(pageAddr, LinuxConstants.PageSize));
+            retireByInode ??= [];
+            if (!retireByInode.TryGetValue(mappingInode, out var retiredPages))
+            {
+                retiredPages = [];
+                retireByInode[mappingInode] = retiredPages;
+            }
+
+            retiredPages.Add(pageIndex);
+        }
+
+        if (guestPages.Count == 0 && (retireByInode == null || retireByInode.Count == 0))
+            return WindowsHostMappedResizePlan.Empty;
+
+        if (invalidateRanges.Count > 0)
+        {
+            guestPages.Sort();
+            MergeRangesInPlace(invalidateRanges);
+            var sequence = BumpCodeCacheSequence();
+            foreach (var range in invalidateRanges)
+                RecordCodeCacheResetRange(sequence, range.Start, range.Length);
+
+            if (engines.Count > 0)
+            {
+                var primary = GetPrimarySharedMmuEngine(engines, nameof(SuspendHostMappedFileViewsForResize))!;
+                foreach (var range in invalidateRanges)
+                    TearDownNativeMappings(primary, range.Start, range.Length, false, true, true);
+                primary.AddressSpaceCodeCacheSequenceSeen = sequence;
+            }
+        }
+
+        if (retireByInode != null)
+        {
+            foreach (var entry in retireByInode)
+            {
+                var mapping = entry.Key.AcquireMappingRef();
+                try
+                {
+                    foreach (var pageIndex in entry.Value)
+                    {
+                        if (!entry.Key.TryGetMappingPageRecord(pageIndex, out var record) ||
+                            record.BackingKind != FilePageBackingKind.HostMappedWindow)
+                            continue;
+
+                        var removedResidentPages = mapping.RemovePagesInRange(pageIndex, pageIndex + 1);
+                        if (removedResidentPages == 0)
+                        {
+                            if (entry.Key.TryGetMappingPageRecord(pageIndex, out record) &&
+                                record.BackingKind == FilePageBackingKind.HostMappedWindow)
+                                entry.Key.ReleaseInstalledMappingPage(record);
+                        }
+                        else if (entry.Key.TryGetMappingPageRecord(pageIndex, out record) &&
+                                 record.BackingKind == FilePageBackingKind.HostMappedWindow)
+                        {
+                            entry.Key.ReleaseInstalledMappingPage(record);
+                        }
+                    }
+                }
+                finally
+                {
+                    mapping.Release();
+                }
+            }
+        }
+
+        return new WindowsHostMappedResizePlan([.. guestPages]);
+    }
+
+    internal void RestoreHostMappedFileViewsAfterResize(WindowsHostMappedResizePlan plan, long newSize,
+        IReadOnlyList<Engine> engines)
+    {
+        if (!OperatingSystem.IsWindows() || plan.GuestPages.Length == 0)
+            return;
+
+        if (engines.Count == 0)
+            return;
+
+        var primary = GetPrimarySharedMmuEngine(engines, nameof(RestoreHostMappedFileViewsAfterResize))!;
+        foreach (var guestPageStart in plan.GuestPages)
+        {
+            if (newSize <= 0 || (ulong)guestPageStart >= (ulong)newSize)
+                continue;
+
+            if (HandleFaultDetailed(guestPageStart, false, primary) != FaultResult.Handled)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to restore host-mapped file page after truncate at 0x{guestPageStart:X8}.");
+            }
+        }
+    }
+
     public void UnmapMappingRange(Inode inode, long start, long len, bool evenCows, IReadOnlyList<Engine> engines)
     {
         if (len <= 0) return;
@@ -2849,4 +2996,8 @@ public class VMAManager
     internal readonly record struct NativeRange(uint Start, uint Length);
 
     private readonly record struct CodeCacheResetEntry(long Sequence, NativeRange Range);
+    internal readonly record struct WindowsHostMappedResizePlan(uint[] GuestPages)
+    {
+        public static WindowsHostMappedResizePlan Empty => new([]);
+    }
 }

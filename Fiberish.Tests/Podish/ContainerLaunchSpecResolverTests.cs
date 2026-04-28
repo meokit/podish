@@ -14,7 +14,7 @@ public sealed class ContainerLaunchSpecResolverTests
     [Fact]
     public void ResolveEffectiveSpec_UsesOciEntrypointCmdEnvAndWorkingDir()
     {
-        var root = CreateTempDirectory("podish-launch-resolve-");
+        var root = TestWorkspace.CreateUniqueDirectory("podish-launch-resolve-");
         try
         {
             WriteStoredImageMetadata(
@@ -35,21 +35,21 @@ public sealed class ContainerLaunchSpecResolverTests
                 rootfsMode: false);
 
             Assert.Equal("/bin/entry", resolved.Exe);
-            Assert.Equal(["-f", "echo", "hello"], resolved.ExeArgs);
+            Assert.Equal<string[]>(["-f", "echo", "hello"], resolved.ExeArgs);
             Assert.Equal("1000:1001", resolved.User);
-            Assert.Equal(["PATH=/custom/bin", "A=1", "B=override", "C=3"], resolved.Env);
+            Assert.Equal<string[]>(["PATH=/custom/bin", "A=1", "B=override", "C=3"], resolved.Env);
             Assert.Equal("/work/run", resolved.WorkingDir);
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public void ResolveEffectiveSpec_ExplicitCommandOverridesOciCommandButKeepsImageEnvAndWorkingDir()
     {
-        var root = CreateTempDirectory("podish-launch-explicit-");
+        var root = TestWorkspace.CreateUniqueDirectory("podish-launch-explicit-");
         try
         {
             WriteStoredImageMetadata(
@@ -73,21 +73,21 @@ public sealed class ContainerLaunchSpecResolverTests
                 rootfsMode: false);
 
             Assert.Equal("/bin/custom", resolved.Exe);
-            Assert.Equal(["--flag"], resolved.ExeArgs);
+            Assert.Equal<string[]>(["--flag"], resolved.ExeArgs);
             Assert.Equal("5678", resolved.User);
-            Assert.Equal(["A=1", "B=override"], resolved.Env);
+            Assert.Equal<string[]>(["A=1", "B=override"], resolved.Env);
             Assert.Equal("/workspace", resolved.WorkingDir);
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public async Task RunAsync_ImageCmdUsesPathSearchAndReturnsZero()
     {
-        var root = CreateTempDirectory("podish-launch-run-");
+        var root = TestWorkspace.CreateUniqueDirectory("podish-launch-run-");
         var imageStoreDir = Path.Combine(root, "image-store");
 
         try
@@ -95,7 +95,7 @@ public sealed class ContainerLaunchSpecResolverTests
             CreateExecutableImageStore(
                 imageStoreDir,
                 "/bin/hello_static",
-                ResolveHelloStaticPath(),
+                TestWorkspace.ResolveHelloStaticPath(),
                 configCmd: ["hello_static"]);
 
             using var context = new PodishContext(new PodishContextOptions
@@ -117,14 +117,14 @@ public sealed class ContainerLaunchSpecResolverTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public async Task RunAsync_MissingWorkingDirectoryReturns125()
     {
-        var root = CreateTempDirectory("podish-launch-workdir-");
+        var root = TestWorkspace.CreateUniqueDirectory("podish-launch-workdir-");
         var imageStoreDir = Path.Combine(root, "image-store");
 
         try
@@ -132,7 +132,7 @@ public sealed class ContainerLaunchSpecResolverTests
             CreateExecutableImageStore(
                 imageStoreDir,
                 "/bin/hello_static",
-                ResolveHelloStaticPath(),
+                TestWorkspace.ResolveHelloStaticPath(),
                 configCmd: ["hello_static"],
                 configWorkingDir: "/missing",
                 createWorkingDirectory: false);
@@ -156,14 +156,14 @@ public sealed class ContainerLaunchSpecResolverTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public async Task NativeContainer_StartAsync_NormalizesLegacyImageBackedSpecAndPersistsIt()
     {
-        var root = CreateTempDirectory("podish-launch-legacy-");
+        var root = TestWorkspace.CreateUniqueDirectory("podish-launch-legacy-");
         var imageStoreDir = Path.Combine(root, "image-store");
 
         try
@@ -171,7 +171,7 @@ public sealed class ContainerLaunchSpecResolverTests
             CreateExecutableImageStore(
                 imageStoreDir,
                 "/bin/hello_static",
-                ResolveHelloStaticPath(),
+                TestWorkspace.ResolveHelloStaticPath(),
                 configUser: "1000",
                 configCmd: ["hello_static"],
                 configEnv: ["A=1"],
@@ -219,22 +219,22 @@ public sealed class ContainerLaunchSpecResolverTests
             var metadata = PodishContainerMetadataStore.Resolve(ctx.Context.ContainersDir, containerId);
             Assert.NotNull(metadata);
             Assert.Equal("hello_static", metadata!.Spec.Exe);
-            Assert.Equal(Array.Empty<string>(), metadata.Spec.ExeArgs);
+            Assert.Equal<string[]>(Array.Empty<string>(), metadata.Spec.ExeArgs);
             Assert.Equal("1000", metadata.Spec.User);
             Assert.Equal("/workspace", metadata.Spec.WorkingDir);
-            Assert.Equal(["A=1"], metadata.Spec.Env);
+            Assert.Equal<string[]>(["A=1"], metadata.Spec.Env);
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public void ImageArchiveService_SaveLoad_PreservesRuntimeConfigFields()
     {
-        var sourceRoot = CreateTempDirectory("podish-archive-source-");
-        var destinationRoot = CreateTempDirectory("podish-archive-dest-");
+        var sourceRoot = TestWorkspace.CreateUniqueDirectory("podish-archive-source-");
+        var destinationRoot = TestWorkspace.CreateUniqueDirectory("podish-archive-dest-");
         var archivePath = Path.Combine(sourceRoot, "image.oci.tar");
         const string imageReference = "example.com/demo/app:1.0";
 
@@ -245,7 +245,7 @@ public sealed class ContainerLaunchSpecResolverTests
             CreateExecutableImageStore(
                 sourceStoreDir,
                 "/bin/hello_static",
-                ResolveHelloStaticPath(),
+                TestWorkspace.ResolveHelloStaticPath(),
                 configUser: "1000:1001",
                 configCmd: ["hello_static", "--flag"],
                 configEntrypoint: ["/bin/sh", "-lc"],
@@ -258,7 +258,7 @@ public sealed class ContainerLaunchSpecResolverTests
             var destinationArchiveService = new ImageArchiveService(destinationRoot);
             var loaded = destinationArchiveService.Load(archivePath);
 
-            Assert.Equal([imageReference], loaded);
+            Assert.Equal<string[]>([imageReference], loaded.ToArray());
 
             var destinationStoreDir = Path.Combine(destinationRoot, ".fiberpod", "oci", "images", safeName);
             var stored = JsonSerializer.Deserialize(
@@ -267,15 +267,15 @@ public sealed class ContainerLaunchSpecResolverTests
 
             Assert.NotNull(stored);
             Assert.Equal("1000:1001", stored!.ConfigUser);
-            Assert.Equal(["/bin/sh", "-lc"], stored.ConfigEntrypoint);
-            Assert.Equal(["hello_static", "--flag"], stored.ConfigCmd);
-            Assert.Equal(["A=1", "B=2"], stored.ConfigEnv);
+            Assert.Equal<string[]>(["/bin/sh", "-lc"], stored.ConfigEntrypoint!);
+            Assert.Equal<string[]>(["hello_static", "--flag"], stored.ConfigCmd!);
+            Assert.Equal<string[]>(["A=1", "B=2"], stored.ConfigEnv!);
             Assert.Equal("/workspace", stored.ConfigWorkingDir);
         }
         finally
         {
-            Directory.Delete(sourceRoot, true);
-            Directory.Delete(destinationRoot, true);
+            TestWorkspace.DeleteDirectory(sourceRoot);
+            TestWorkspace.DeleteDirectory(destinationRoot);
         }
     }
 
@@ -401,24 +401,4 @@ public sealed class ContainerLaunchSpecResolverTests
         }
     }
 
-    private static string CreateTempDirectory(string prefix)
-    {
-        var path = Path.Combine(Path.GetTempPath(), prefix + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        return path;
-    }
-
-    private static string ResolveHelloStaticPath()
-    {
-        var current = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (current != null)
-        {
-            var candidate = Path.Combine(current.FullName, "tests/linux/hello_static");
-            if (File.Exists(candidate))
-                return candidate;
-            current = current.Parent;
-        }
-
-        throw new FileNotFoundException("Could not locate tests/linux/hello_static from test working directory.");
-    }
 }

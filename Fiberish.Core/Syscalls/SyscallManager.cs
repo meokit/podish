@@ -20,6 +20,8 @@ public partial class SyscallManager
                                       LinuxConstants.MS_NODEV | LinuxConstants.MS_NOEXEC;
 
     private static readonly ILogger Logger = Logging.CreateLogger<SyscallManager>();
+    private static readonly Lock LiveManagersLock = new();
+    private static readonly HashSet<SyscallManager> LiveManagers = [];
     private readonly List<Mount> _containerOwnedMounts = [];
     private readonly FileSystemType _devptsFsType;
 
@@ -61,6 +63,10 @@ public partial class SyscallManager
         SysVSem = new SysVSemManager();
 
         RegisterEngine(engine);
+        lock (LiveManagersLock)
+        {
+            LiveManagers.Add(this);
+        }
 
         // Register default filesystems
         FileSystemRegistry.TryRegister(new FileSystemType
@@ -1481,6 +1487,11 @@ public partial class SyscallManager
         if (Interlocked.Exchange(ref _closed, 1) != 0)
             return;
 
+        lock (LiveManagersLock)
+        {
+            LiveManagers.Remove(this);
+        }
+
         if (CurrentSyscallEngine is not null)
             UnregisterEngine(CurrentSyscallEngine);
 
@@ -1508,6 +1519,14 @@ public partial class SyscallManager
 
         if (_sharedUnixSocketNamespace.ReleaseRef())
             _sharedUnixSocketNamespace.Clear();
+    }
+
+    internal static List<SyscallManager> GetLiveManagersSnapshot()
+    {
+        lock (LiveManagersLock)
+        {
+            return LiveManagers.Where(static manager => !manager.IsClosed).ToList();
+        }
     }
 
     internal bool TryBindUnixPathSocket(Inode pathInode, UnixSocketInode inode)
