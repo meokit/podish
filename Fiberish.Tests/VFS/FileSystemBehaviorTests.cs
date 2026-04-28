@@ -6,6 +6,7 @@ namespace Fiberish.Tests.VFS;
 
 public class FileSystemBehaviorTests
 {
+    private static readonly Lazy<bool> HostFileSymlinkCreationSupported = new(ProbeHostFileSymlinkCreationSupport);
     private static byte[] B(string value) => FsEncoding.EncodeUtf8(value);
 
     public static TheoryData<string> MutableFileSystems => new()
@@ -30,6 +31,9 @@ public class FileSystemBehaviorTests
         rootInode.Unlink(B("file.txt"));
         Assert.Null(rootInode.Lookup(B("file.txt")));
         Assert.DoesNotContain(rootInode.GetEntries(), e => e.Name == "file.txt");
+
+        if (fsName == "hostfs" && !SupportsHostfsSymlinkCreation())
+            return;
 
         var symlink = new Dentry(FsName.FromString("link.txt"), null, root, rig.SuperBlock);
         rootInode.Symlink(symlink, B("target.txt"), 0, 0);
@@ -231,6 +235,9 @@ public class FileSystemBehaviorTests
     [MemberData(nameof(MutableFileSystems))]
     public void Symlink_CreatesLinkAndReadlinkRoundTrips(string fsName)
     {
+        if (fsName == "hostfs" && !SupportsHostfsSymlinkCreation())
+            return;
+
         using var rig = FileSystemTestRigFactory.Create(fsName);
         var root = rig.Root;
         var rootInode = rig.RootInode;
@@ -253,6 +260,9 @@ public class FileSystemBehaviorTests
     [MemberData(nameof(MutableFileSystems))]
     public void Rename_SymlinkPreservesLinkIdentityAndTarget(string fsName)
     {
+        if (fsName == "hostfs" && !SupportsHostfsSymlinkCreation())
+            return;
+
         using var rig = FileSystemTestRigFactory.Create(fsName);
         var root = rig.Root;
         var rootInode = rig.RootInode;
@@ -273,6 +283,50 @@ public class FileSystemBehaviorTests
         Assert.Equal(linkIno, renamed.Inode.Ino);
         Assert.Equal(0, renamed.Inode.Readlink(out byte[]? renamedTarget));
         Assert.Equal("target.txt"u8.ToArray(), renamedTarget);
+    }
+
+    private static bool SupportsHostfsSymlinkCreation()
+    {
+        return !OperatingSystem.IsWindows() || HostFileSymlinkCreationSupported.Value;
+    }
+
+    private static bool ProbeHostFileSymlinkCreationSupport()
+    {
+        if (!OperatingSystem.IsWindows())
+            return true;
+
+        var root = Path.Combine(Path.GetTempPath(), $"podish-hostfs-symlink-cap-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var linkPath = Path.Combine(root, "link");
+        try
+        {
+            File.CreateSymbolicLink(linkPath, "missing-target");
+            return File.Exists(linkPath) || Directory.Exists(linkPath);
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(linkPath) || Directory.Exists(linkPath))
+                    File.Delete(linkPath);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+            }
+            catch
+            {
+            }
+        }
     }
 
     [Theory]

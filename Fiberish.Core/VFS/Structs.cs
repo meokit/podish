@@ -2214,6 +2214,49 @@ public abstract class MappingBackedInode : Inode
         }
     }
 
+    internal InodePageRecord[] SnapshotMappingPageRecords()
+    {
+        lock (_mappingPageLock)
+        {
+            return [.. _mappingPages.Values];
+        }
+    }
+
+    internal void RetireAllHostMappedMappingPagesForResize()
+    {
+        var records = SnapshotMappingPageRecords();
+        if (records.Length == 0)
+            return;
+
+        var mapping = AcquireMappingRef();
+        try
+        {
+            foreach (var record in records)
+            {
+                if (record.BackingKind != FilePageBackingKind.HostMappedWindow)
+                    continue;
+
+                var pageIndex = record.PageIndex;
+                var removedResidentPages = mapping.RemovePagesInRange(pageIndex, pageIndex + 1);
+                if (removedResidentPages == 0)
+                {
+                    if (TryGetMappingPageRecord(pageIndex, out var current) &&
+                        current.BackingKind == FilePageBackingKind.HostMappedWindow)
+                        ReleaseInstalledMappingPage(current);
+                }
+                else if (TryGetMappingPageRecord(pageIndex, out var current) &&
+                         current.BackingKind == FilePageBackingKind.HostMappedWindow)
+                {
+                    ReleaseInstalledMappingPage(current);
+                }
+            }
+        }
+        finally
+        {
+            mapping.Release();
+        }
+    }
+
     private int CountLeadingMissingMappingPages(uint startPageIndex, uint endPageIndexInclusive)
     {
         if (endPageIndexInclusive < startPageIndex)
@@ -2409,7 +2452,8 @@ public abstract class MappingBackedInode : Inode
             return 0;
         }
 
-        var useWritableHostMapping = record.BackingKind == FilePageBackingKind.HostMappedWindow;
+        var useWritableHostMapping = record.BackingKind == FilePageBackingKind.HostMappedWindow &&
+                                     PreferHostMappedMappingPage(PageCacheAccessMode.Write);
         RetireReadonlyMappingPageForWrite(mapping, pageIndex);
 
         if (useWritableHostMapping)

@@ -309,7 +309,7 @@ internal sealed partial class WindowedMappedFilePageBackend(string path, HostMem
                     out var flushLength))
                 return false;
 
-            return Flush(window.Mapping.RawPtr + (nint)flushOffset, flushLength);
+            return Flush(window.Mapping.Ptr + (nint)flushOffset, flushLength);
         }
     }
 
@@ -324,9 +324,9 @@ internal sealed partial class WindowedMappedFilePageBackend(string path, HostMem
                     continue;
                 if (window.AccessMode == WindowAccessMode.ReadOnly)
                     continue;
-                if (window.Mapping.RawPtr == 0 || window.Mapping.FlushLength <= 0)
+                if (window.Mapping.Ptr == 0 || window.Mapping.FlushLength <= 0)
                     continue;
-                if (!Flush(window.Mapping.RawPtr, window.Mapping.FlushLength))
+                if (!Flush(window.Mapping.Ptr, window.Mapping.FlushLength))
                     return false;
             }
         }
@@ -502,10 +502,18 @@ internal sealed partial class WindowedMappedFilePageBackend(string path, HostMem
         if (mappedLength <= 0)
             return null;
 
-        var handle = GetOrOpenCachedHandleLocked(writable);
-        if (handle == null)
-            return null;
+        var access = writable ? FileAccess.ReadWrite : FileAccess.Read;
+        using var transientHandle = File.OpenHandle(
+            _path,
+            FileMode.Open,
+            access,
+            FileShare.ReadWrite | FileShare.Delete);
+        return CreateWindowsWindowCore(transientHandle, windowStart, mappedLength, logicalLength, writable);
+    }
 
+    private static WindowMapping? CreateWindowsWindowCore(SafeFileHandle handle, long windowStart, long mappedLength,
+        long logicalLength, bool writable)
+    {
         var protect = writable ? PageReadWrite : PageReadOnly;
         var mappingHandle = CreateFileMapping(handle.DangerousGetHandle(), 0, protect, 0, 0, null);
         if (mappingHandle == 0)
@@ -513,24 +521,31 @@ internal sealed partial class WindowedMappedFilePageBackend(string path, HostMem
 
         try
         {
-            SplitUInt64(windowStart, out var offsetHigh, out var offsetLow);
+            var viewAlignment = GetWindowsViewAlignment();
+            var alignedWindowStart = AlignDown(windowStart, viewAlignment);
+            var viewOffset = windowStart - alignedWindowStart;
+            if (viewOffset < 0)
+                return null;
+
+            var viewLength = checked(mappedLength + viewOffset);
+            SplitUInt64(alignedWindowStart, out var offsetHigh, out var offsetLow);
             var desiredAccess = writable ? FileMapWrite : FileMapRead;
             var mapped = MapViewOfFile(
                 mappingHandle,
                 desiredAccess,
                 offsetHigh,
                 offsetLow,
-                checked((nuint)mappedLength));
+                checked((nuint)viewLength));
             if (mapped == 0)
                 return null;
 
             return new WindowMapping
             {
                 RawPtr = mapped,
-                Ptr = mapped,
+                Ptr = mapped + (nint)viewOffset,
                 Length = logicalLength,
                 FlushLength = mappedLength,
-                MappedLength = mappedLength
+                MappedLength = viewLength
             };
         }
         finally
@@ -861,6 +876,9 @@ internal sealed partial class WindowedMappedFilePageBackend(string path, HostMem
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool CloseHandle(nint hObject);
 
+    [LibraryImport("kernel32.dll")]
+    private static partial void GetSystemInfo(out SYSTEM_INFO lpSystemInfo);
+
     private static readonly nint MmapFailed = new(-1);
     private const int ProtRead = 0x1;
     private const int ProtWrite = 0x2;
@@ -869,6 +887,7 @@ internal sealed partial class WindowedMappedFilePageBackend(string path, HostMem
     private const uint PageReadWrite = 0x04;
     private const uint FileMapWrite = 0x0002;
     private const uint FileMapRead = 0x0004;
+    private static readonly int WindowsViewAlignment = GetWindowsAllocationGranularity();
 
     private enum WindowAccessMode
     {
@@ -901,4 +920,38 @@ internal sealed partial class WindowedMappedFilePageBackend(string path, HostMem
     }
 
     private readonly record struct PageLease(long PageIndex, long WindowId);
+
+    private static int GetWindowsViewAlignment()
+    {
+        if (!OperatingSystem.IsWindows())
+            return LinuxConstants.PageSize;
+
+        return WindowsViewAlignment > 0 ? WindowsViewAlignment : LinuxConstants.PageSize;
+    }
+
+    private static int GetWindowsAllocationGranularity()
+    {
+        if (!OperatingSystem.IsWindows())
+            return LinuxConstants.PageSize;
+
+        GetSystemInfo(out var systemInfo);
+        var granularity = checked((int)systemInfo.dwAllocationGranularity);
+        return granularity > 0 ? granularity : LinuxConstants.PageSize;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SYSTEM_INFO
+    {
+        public ushort wProcessorArchitecture;
+        public ushort wReserved;
+        public uint dwPageSize;
+        public nint lpMinimumApplicationAddress;
+        public nint lpMaximumApplicationAddress;
+        public nint dwActiveProcessorMask;
+        public uint dwNumberOfProcessors;
+        public uint dwProcessorType;
+        public uint dwAllocationGranularity;
+        public ushort wProcessorLevel;
+        public ushort wProcessorRevision;
+    }
 }

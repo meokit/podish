@@ -717,7 +717,7 @@ internal sealed class PodishFileLoggerProvider : ILoggerProvider
     {
         if (File.Exists(filePath))
             File.Delete(filePath);
-        _writer = new StreamWriter(File.Open(filePath, FileMode.Create, FileAccess.Write, FileShare.Read))
+        _writer = new StreamWriter(File.Open(filePath, FileMode.Create, FileAccess.Write, FileShare.Read | FileShare.Delete))
         {
             AutoFlush = true
         };

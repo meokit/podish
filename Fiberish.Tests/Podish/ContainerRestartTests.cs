@@ -13,13 +13,12 @@ public sealed class ContainerRestartTests
     [Fact]
     public async Task NativeContainer_ImageBacked_StartWaitStartWait_PreservesExecutable()
     {
-        var root = Path.Combine(Path.GetTempPath(), "podish-native-restart-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = TestWorkspace.CreateUniqueDirectory("podish-native-restart-");
 
         try
         {
             var imageStoreDir = Path.Combine(root, "image-store");
-            CreateMinimalOciStore(imageStoreDir, "/bin/ash", ResolveHelloStaticPath());
+            CreateMinimalOciStore(imageStoreDir, "/bin/ash", TestWorkspace.ResolveHelloStaticPath());
 
             using var ctx = new NativeContext
             {
@@ -56,7 +55,7 @@ public sealed class ContainerRestartTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
@@ -82,13 +81,12 @@ public sealed class ContainerRestartTests
     [Fact(Skip = "暂时跳过：test_futex guest 资产当前未纳入此测试流程，待单独补齐。")]
     public async Task NativeContainer_ImageBacked_StartStopStart_DoesNotLoseExecutable()
     {
-        var root = Path.Combine(Path.GetTempPath(), "podish-native-stop-restart-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = TestWorkspace.CreateUniqueDirectory("podish-native-stop-restart-");
 
         try
         {
             var imageStoreDir = Path.Combine(root, "image-store");
-            CreateMinimalOciStore(imageStoreDir, "/bin/ash", ResolveGuestAssetPath("test_futex"));
+            CreateMinimalOciStore(imageStoreDir, "/bin/ash", TestWorkspace.ResolveGuestAssetPath("test_futex"));
 
             using var ctx = new NativeContext
             {
@@ -125,7 +123,7 @@ public sealed class ContainerRestartTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
@@ -214,11 +212,6 @@ public sealed class ContainerRestartTests
         }
     }
 
-    private static string ResolveHelloStaticPath()
-    {
-        return ResolveGuestAssetPath("hello_static", "tests/linux/hello_static");
-    }
-
     private static async Task WaitUntilAsync(Func<NativeContainer, bool> predicate, NativeContainer container,
         TimeSpan timeout)
     {
@@ -231,25 +224,5 @@ public sealed class ContainerRestartTests
         }
 
         Assert.True(predicate(container), "Condition was not met before timeout.");
-    }
-
-    private static string ResolveGuestAssetPath(string fileName, string? fallbackRelativePath = null)
-    {
-        var current = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (current != null)
-        {
-            var candidate = Path.Combine(current.FullName, "tests/linux/assets", fileName);
-            if (File.Exists(candidate))
-                return candidate;
-            if (!string.IsNullOrWhiteSpace(fallbackRelativePath))
-            {
-                candidate = Path.Combine(current.FullName, fallbackRelativePath);
-                if (File.Exists(candidate))
-                    return candidate;
-            }
-            current = current.Parent;
-        }
-
-        throw new FileNotFoundException($"Could not locate guest asset '{fileName}' from test working directory.");
     }
 }

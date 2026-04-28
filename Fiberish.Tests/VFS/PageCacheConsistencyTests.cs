@@ -337,7 +337,7 @@ public class PageCacheConsistencyTests
             var n = file.Dentry.Inode!.ReadToHost(null, file, buf, 0);
             Assert.Equal(5, n);
             Assert.Equal("hZZlo", Encoding.ASCII.GetString(buf));
-            Assert.Equal("hZZlo", File.ReadAllText(hostFile));
+            Assert.Equal("hZZlo", ReadAllTextWithUnixCompatibleSharing(hostFile));
         }
         finally
         {
@@ -483,10 +483,10 @@ public class PageCacheConsistencyTests
             var rc = file.Dentry.Inode!.WriteFromHost(null, file, "XY"u8.ToArray(), 1);
             Assert.Equal(2, rc);
 
-            Assert.Equal("hXYlo", File.ReadAllText(hostFile));
+            Assert.Equal("hXYlo", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             mm.SyncAllMappedSharedFiles(engine);
-            Assert.Equal("hXYlo", File.ReadAllText(hostFile));
+            Assert.Equal("hXYlo", ReadAllTextWithUnixCompatibleSharing(hostFile));
         }
         finally
         {
@@ -559,7 +559,7 @@ public class PageCacheConsistencyTests
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
 
-            var sb = new SilkSuperBlock(new FileSystemType { Name = "silkfs" }, repo, new DeviceNumberManager());
+            using var sb = new SilkSuperBlock(new FileSystemType { Name = "silkfs" }, repo, new DeviceNumberManager());
             sb.LoadFromMetadata();
 
             var root = sb.Root;
@@ -608,7 +608,7 @@ public class PageCacheConsistencyTests
             var repo = new SilkRepository(SilkFsOptions.FromSource(silkRoot));
             repo.Initialize();
 
-            var sb = new SilkSuperBlock(new FileSystemType { Name = "silkfs" }, repo, new DeviceNumberManager(),
+            using var sb = new SilkSuperBlock(new FileSystemType { Name = "silkfs" }, repo, new DeviceNumberManager(),
                 runtime.MemoryContext);
             sb.LoadFromMetadata();
 
@@ -716,7 +716,7 @@ public class PageCacheConsistencyTests
 
             var rc = inode.WriteFromHost(null, file, "XY"u8.ToArray(), 1);
             Assert.Equal(2, rc);
-            Assert.Equal("hXYlo", File.ReadAllText(hostFile));
+            Assert.Equal("hXYlo", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             // Unflushed cached page must not be reclaimable as "clean".
             Assert.True(cache.IsDirty(0));
@@ -908,5 +908,13 @@ public class PageCacheConsistencyTests
         }
 
         return current!;
+    }
+
+    private static string ReadAllTextWithUnixCompatibleSharing(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream, Encoding.UTF8, true);
+        return reader.ReadToEnd();
     }
 }

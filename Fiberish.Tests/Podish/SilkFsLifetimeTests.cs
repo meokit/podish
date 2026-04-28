@@ -20,8 +20,7 @@ public sealed class SilkFsLifetimeTests
     [Fact]
     public void KernelRuntimeDispose_WithoutSyscallsClose_LeavesSilkMetadataSessionAlive()
     {
-        var root = Path.Combine(Path.GetTempPath(), "silkfs-lifetime-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = TestWorkspace.CreateUniqueDirectory("silkfs-lifetime-");
 
         try
         {
@@ -43,16 +42,14 @@ public sealed class SilkFsLifetimeTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public void SyscallsClose_ReleasesSilkSuperBlockAndMetadataSession()
     {
-        var root = Path.Combine(Path.GetTempPath(), "silkfs-close-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = TestWorkspace.CreateUniqueDirectory("silkfs-close-");
 
         try
         {
@@ -69,17 +66,17 @@ public sealed class SilkFsLifetimeTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public async Task PodishSession_ForceStop_ReleasesSilkMetadataSession()
     {
-        EnsureZigAvailable();
+        if (!IsZigAvailable())
+            return;
 
-        var root = Path.Combine(Path.GetTempPath(), "podish-silkfs-force-stop-" + Guid.NewGuid().ToString("N"));
+        var root = TestWorkspace.CreateUniqueDirectory("podish-silkfs-force-stop-");
         var guestAssetDir = Path.Combine(root, "guest-assets");
         var imageStoreDir = Path.Combine(root, "image-store");
         var sleepyBinary = Path.Combine(guestAssetDir, "sleepy");
@@ -129,8 +126,7 @@ public sealed class SilkFsLifetimeTests
         }
         finally
         {
-            if (Directory.Exists(root))
-                Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
@@ -169,10 +165,9 @@ public sealed class SilkFsLifetimeTests
         return field!.GetValue(sb);
     }
 
-    private static void EnsureZigAvailable()
+    private static bool IsZigAvailable()
     {
-        if (!CommandSucceeds("zig", "version"))
-            throw new SkipException("zig is required to build the guest sleep binary for this test.");
+        return CommandSucceeds("zig", "version");
     }
 
     private static void BuildGuestSleepBinary(string outputPath)

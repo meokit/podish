@@ -34,6 +34,8 @@ public class Hostfs : FileSystem
 
 public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 {
+    internal const string WindowsDeletedNamePrefix = ".__podish_deleted__.";
+
     private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
         : StringComparer.Ordinal;
@@ -46,6 +48,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
     private readonly Dictionary<long, string> _dentryPathById = [];
     private readonly Dictionary<HostInode, HostInodeKey> _identityByInode = [];
     private readonly Dictionary<HostInodeKey, HostInode> _inodeByIdentity = [];
+    private readonly Dictionary<HostInodeKey, int> _hiddenLinkCountByIdentity = [];
     private readonly IMountBoundaryPolicy _mountBoundaryPolicy;
     private readonly ulong? _rootMountDomainId;
     private readonly ISpecialNodePolicy _specialNodePolicy;
@@ -64,6 +67,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
             ? rootNode.MountDomainId
             : null;
         MetadataStore = new HostfsMetadataStore(HostRoot, !options.MetadataLess);
+        InitializeWindowsCompatibilityState();
     }
 
     public string HostRoot { get; }
@@ -137,7 +141,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
             return false;
 
         var identity = nodeInfo.Identity;
-        var effectiveNlink = nodeType == InodeType.Directory ? null : nodeInfo.HostLinkCount;
+        var effectiveNlink = GetVisibleHostLinkCount(identity, nodeType, nodeInfo.HostLinkCount);
         HostInode inode;
         lock (Lock)
         {
@@ -243,6 +247,35 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         }
     }
 
+    internal bool IsInternalHiddenName(string name)
+    {
+        return OperatingSystem.IsWindows() &&
+               name.StartsWith(WindowsDeletedNamePrefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool IsInternalHiddenPath(string hostPath)
+    {
+        return IsInternalHiddenName(Path.GetFileName(hostPath));
+    }
+
+    internal string MoveEntryToHiddenDeletedPath(string visiblePath, HostInode inode)
+    {
+        var normalizedVisiblePath = NormalizeHostPath(visiblePath);
+        var directory = Path.GetDirectoryName(normalizedVisiblePath) ?? HostRoot;
+        var identityToken = ComputeHiddenIdentityToken(inode.Identity);
+        string hiddenPath;
+        do
+        {
+            var nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant();
+            hiddenPath = Path.Combine(directory, $"{WindowsDeletedNamePrefix}{identityToken}.{nonce}");
+        } while (PathExistsOnHostRaw(hiddenPath));
+
+        File.Move(normalizedVisiblePath, hiddenPath);
+        MetadataStore.RenamePath(normalizedVisiblePath, hiddenPath);
+        AddHiddenLink(inode.Identity);
+        return hiddenPath;
+    }
+
     internal bool TryGetPathForDentry(Dentry? dentry, out string path)
     {
         path = string.Empty;
@@ -299,6 +332,12 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         mappedType = InodeType.Unknown;
         error = -(int)Errno.ENOENT;
         var normalizedPath = NormalizeHostPath(hostPath);
+        if (MetadataStore.IsMetaDirPath(normalizedPath) || IsInternalHiddenPath(normalizedPath))
+        {
+            node = default;
+            return false;
+        }
+
         if (!TryResolveRawNode(normalizedPath, out node))
         {
             error = -(int)Errno.ENOENT;
@@ -329,7 +368,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
             return error;
 
         var identity = nodeInfo.Identity;
-        var effectiveNlink = type == InodeType.Directory ? null : nodeInfo.HostLinkCount;
+        var effectiveNlink = GetVisibleHostLinkCount(identity, type, nodeInfo.HostLinkCount);
         HostInode inode;
         lock (Lock)
         {
@@ -358,6 +397,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 
     protected override void Shutdown()
     {
+        SweepWindowsDeletedEntries();
         base.Shutdown();
         lock (Lock)
         {
@@ -365,7 +405,139 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
             _dentryPathById.Clear();
             _inodeByIdentity.Clear();
             _identityByInode.Clear();
+            _hiddenLinkCountByIdentity.Clear();
         }
+    }
+
+    internal int? GetVisibleHostLinkCount(HostInodeKey identity, InodeType type, int? hostLinkCount)
+    {
+        if (type == InodeType.Directory || !hostLinkCount.HasValue || !OperatingSystem.IsWindows())
+            return hostLinkCount;
+
+        lock (Lock)
+        {
+            return Math.Max(0, hostLinkCount.Value - _hiddenLinkCountByIdentity.GetValueOrDefault(identity));
+        }
+    }
+
+    internal void AddHiddenLink(HostInodeKey identity)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        lock (Lock)
+        {
+            _hiddenLinkCountByIdentity[identity] = _hiddenLinkCountByIdentity.GetValueOrDefault(identity) + 1;
+        }
+    }
+
+    internal void RemoveHiddenLinks(HostInodeKey identity, int count)
+    {
+        if (!OperatingSystem.IsWindows() || count <= 0)
+            return;
+
+        lock (Lock)
+        {
+            if (!_hiddenLinkCountByIdentity.TryGetValue(identity, out var existing))
+                return;
+
+            existing -= count;
+            if (existing > 0)
+                _hiddenLinkCountByIdentity[identity] = existing;
+            else
+                _hiddenLinkCountByIdentity.Remove(identity);
+        }
+    }
+
+    private void InitializeWindowsCompatibilityState()
+    {
+        if (!OperatingSystem.IsWindows() || !Directory.Exists(HostRoot))
+            return;
+
+        SweepWindowsDeletedEntries();
+    }
+
+    private void SweepWindowsDeletedEntries()
+    {
+        if (!OperatingSystem.IsWindows() || !Directory.Exists(HostRoot))
+            return;
+
+        foreach (var hiddenPath in EnumerateWindowsDeletedEntries())
+        {
+            if (!TryResolveRawNode(hiddenPath, out var node))
+                continue;
+
+            var retained = false;
+            if (!HostInode.HasActiveSharedState(node.Identity))
+            {
+                try
+                {
+                    File.Delete(hiddenPath);
+                    MetadataStore.RemovePath(hiddenPath);
+                }
+                catch
+                {
+                    retained = PathExistsOnHostRaw(hiddenPath);
+                }
+            }
+            else
+            {
+                retained = true;
+            }
+
+            if (retained && TryResolveRawNode(hiddenPath, out var retainedNode))
+                AddHiddenLink(retainedNode.Identity);
+        }
+    }
+
+    private IEnumerable<string> EnumerateWindowsDeletedEntries()
+    {
+        var pending = new Stack<string>();
+        pending.Push(HostRoot);
+
+        while (pending.Count != 0)
+        {
+            var current = pending.Pop();
+            IEnumerable<string> entries;
+            try
+            {
+                entries = Directory.EnumerateFileSystemEntries(current);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var entry in entries)
+            {
+                var name = Path.GetFileName(entry);
+                if (string.Equals(name, HostfsMetadataStore.MetaDirName, StringComparison.Ordinal))
+                    continue;
+                if (IsInternalHiddenName(name))
+                {
+                    yield return entry;
+                    continue;
+                }
+
+                try
+                {
+                    var attributes = File.GetAttributes(entry);
+                    if ((attributes & FileAttributes.Directory) != 0 &&
+                        (attributes & FileAttributes.ReparsePoint) == 0)
+                        pending.Push(entry);
+                }
+                catch
+                {
+                }
+            }
+        }
+    }
+
+    private static string ComputeHiddenIdentityToken(HostInodeKey identity)
+    {
+        var fallback = identity.FallbackPath ?? string.Empty;
+        var raw = $"{identity.Scheme}|{identity.Value0}|{identity.Value1}|{fallback}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw))).ToLowerInvariant()[..16];
     }
 
     private static string NormalizeHostPath(string hostPath)
@@ -376,7 +548,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
     private HostInode CreateHostInodeLocked(string normalizedPath, InodeType type, HostInodeKey identity,
         int? hostNlink)
     {
-        var inode = new HostInode(_nextIno++, this, normalizedPath, type, hostNlink);
+        var inode = new HostInode(_nextIno++, this, normalizedPath, type, identity, hostNlink);
         TrackInode(inode);
         _inodeByIdentity[identity] = inode;
         _identityByInode[inode] = identity;
@@ -1295,20 +1467,194 @@ internal static partial class HostfsOwnershipMapper
 
 public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 {
+    private static readonly Lock SharedFileStatesLock = new();
+    private static readonly Dictionary<HostInodeKey, SharedHostFileState> SharedFileStates = [];
+
+    private static FileShare HostFileShare => OperatingSystem.IsWindows()
+        ? FileShare.ReadWrite | FileShare.Delete
+        : FileShare.ReadWrite;
+
+    private sealed class SharedHostFileState
+    {
+        private readonly object _flockGate = new();
+        private readonly Lock _gate = new();
+        private SafeFileHandle? _cachedReadHandle;
+        private readonly HashSet<LinuxFile> _sharedLockHolders = [];
+        private LinuxFile? _exclusiveLockHolder;
+        private int _leaseCount;
+        private int _lockType;
+        private string _path;
+
+        public SharedHostFileState(HostInodeKey identity, string path)
+        {
+            Identity = identity;
+            _path = path;
+        }
+
+        public HostInodeKey Identity { get; }
+        public Lock MutationLock { get; } = new();
+        public bool HasActiveLeases
+        {
+            get
+            {
+                using (_gate.EnterScope())
+                {
+                    return _leaseCount != 0;
+                }
+            }
+        }
+
+        public void UpdatePath(string path)
+        {
+            using (_gate.EnterScope())
+            {
+                _path = path;
+            }
+        }
+
+        public void AcquireLease(bool writable)
+        {
+            using (_gate.EnterScope())
+            {
+                _leaseCount++;
+            }
+        }
+
+        public void ReleaseLease(bool writable)
+        {
+            using (_gate.EnterScope())
+            {
+                if (_leaseCount > 0)
+                    _leaseCount--;
+            }
+        }
+
+        public SafeFileHandle? GetReadHandle()
+        {
+            using (_gate.EnterScope())
+            {
+                if (IsUsableHandle(_cachedReadHandle))
+                    return _cachedReadHandle;
+
+                return _cachedReadHandle = File.OpenHandle(_path, FileMode.Open, FileAccess.Read, HostFileShare);
+            }
+        }
+
+        public SafeFileHandle OpenTransientWriteHandle()
+        {
+            using (_gate.EnterScope())
+            {
+                return File.OpenHandle(_path, FileMode.Open, FileAccess.ReadWrite, HostFileShare);
+            }
+        }
+
+        public int Flock(LinuxFile linuxFile, int operation)
+        {
+            var nonBlock = (operation & LinuxConstants.LOCK_NB) != 0;
+            var op = operation & ~LinuxConstants.LOCK_NB;
+
+            lock (_flockGate)
+            {
+                while (true)
+                {
+                    if (op == LinuxConstants.LOCK_UN)
+                    {
+                        if (_exclusiveLockHolder == linuxFile)
+                            _exclusiveLockHolder = null;
+                        _sharedLockHolders.Remove(linuxFile);
+                        if (_exclusiveLockHolder == null && _sharedLockHolders.Count == 0)
+                            _lockType = 0;
+                        Monitor.PulseAll(_flockGate);
+                        return 0;
+                    }
+
+                    var canAcquire = false;
+                    if (op == LinuxConstants.LOCK_SH)
+                    {
+                        if (_exclusiveLockHolder == null || _exclusiveLockHolder == linuxFile)
+                            canAcquire = true;
+                    }
+                    else if (op == LinuxConstants.LOCK_EX)
+                    {
+                        if (_lockType == 0)
+                            canAcquire = true;
+                        else if (_exclusiveLockHolder == linuxFile)
+                            canAcquire = true;
+                        else if (_sharedLockHolders.Count == 1 &&
+                                 _sharedLockHolders.Contains(linuxFile) &&
+                                 _exclusiveLockHolder == null)
+                            canAcquire = true;
+                    }
+                    else
+                    {
+                        return -(int)Errno.EINVAL;
+                    }
+
+                    if (canAcquire)
+                    {
+                        if (op == LinuxConstants.LOCK_SH)
+                        {
+                            if (_exclusiveLockHolder == linuxFile)
+                                _exclusiveLockHolder = null;
+                            _sharedLockHolders.Add(linuxFile);
+                            _lockType = 1;
+                        }
+                        else
+                        {
+                            _sharedLockHolders.Remove(linuxFile);
+                            _exclusiveLockHolder = linuxFile;
+                            _lockType = 2;
+                        }
+
+                        return 0;
+                    }
+
+                    if (nonBlock)
+                        return -(int)Errno.EAGAIN;
+
+                    Monitor.Wait(_flockGate);
+                }
+            }
+        }
+
+        public void DisposeHandles()
+        {
+            SafeFileHandle? readHandle;
+            using (_gate.EnterScope())
+            {
+                readHandle = _cachedReadHandle;
+                _cachedReadHandle = null;
+            }
+
+            readHandle?.Dispose();
+        }
+    }
 
     private sealed class HostOpenFileState : IDisposable
     {
+        private readonly Lock _directMutationLock = new();
+
         public HostOpenFileState(SafeFileHandle handle)
         {
-            Handle = handle;
+            DirectHandle = handle;
         }
 
-        public SafeFileHandle Handle { get; }
-        public Lock MutationLock { get; } = new();
+        public HostOpenFileState(SharedHostFileState sharedState, bool writable)
+        {
+            SharedState = sharedState;
+            Writable = writable;
+            SharedState.AcquireLease(writable);
+        }
+
+        public SafeFileHandle? DirectHandle { get; }
+        public SharedHostFileState? SharedState { get; }
+        public bool Writable { get; }
+        public Lock MutationLock => SharedState?.MutationLock ?? _directMutationLock;
 
         public void Dispose()
         {
-            Handle.Dispose();
+            DirectHandle?.Dispose();
+            SharedState?.ReleaseLease(Writable);
         }
     }
 
@@ -1319,6 +1665,9 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     private readonly HashSet<long> _dirtyPageIndexes = [];
     private readonly Lock _dirtyPageLock = new();
     private readonly Lock _mappedCacheLock = new();
+    private readonly HashSet<string> _orphanPaths = new(OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal);
     private readonly Lock _xattrLock = new();
     private bool _hasObservedBackingSnapshot;
     private bool _hasProjectedMetadataCache;
@@ -1334,10 +1683,12 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
     private FsNameMap<byte[]>? _xattrs;
 
-    public HostInode(ulong ino, SuperBlock sb, string hostPath, InodeType type, int? initialLinkCount = null)
+    internal HostInode(ulong ino, SuperBlock sb, string hostPath, InodeType type, HostInodeKey identity,
+        int? initialLinkCount = null)
     {
         Ino = ino;
         SuperBlock = sb;
+        Identity = identity;
         _hostPath = Path.GetFullPath(hostPath);
         _aliasPaths.Add(_hostPath);
         Type = type;
@@ -1374,13 +1725,27 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
                 _mappedPageCache?.UpdatePath(normalized);
             }
 
+            if (OperatingSystem.IsWindows())
+                GetOrCreateSharedFileState().UpdatePath(normalized);
+
             InvalidateProjectedMetadataCache();
         }
     }
 
     public override bool SupportsMmap => Type == InodeType.File;
 
+    internal HostInodeKey Identity { get; }
     internal string? MetadataObjectId { get; set; }
+    internal bool IsTombstoned
+    {
+        get
+        {
+            lock (Lock)
+            {
+                return _orphanPaths.Count != 0;
+            }
+        }
+    }
 
     internal static Func<SafeFileHandle, int>? FlushToDiskOverrideForTests { get; set; }
 
@@ -1494,12 +1859,6 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     private bool TryGetMappedBackingFileLength(LinuxFile? linuxFile, out long hostLength)
     {
         hostLength = 0;
-        if (GetOpenState(linuxFile) != null)
-        {
-            hostLength = Math.Max(0, CachedSizeForShrinkCoordinator);
-            return true;
-        }
-
         try
         {
             if (GetOpenHandleFromFile(linuxFile) is { } handle)
@@ -1528,15 +1887,72 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     {
         return linuxFile?.PrivateData switch
         {
-            HostOpenFileState state => state.Handle,
+            HostOpenFileState { DirectHandle: { } directHandle } => directHandle,
+            HostOpenFileState { SharedState: { } sharedState } => sharedState.GetReadHandle(),
             SafeFileHandle handle => handle,
             _ => null
         };
     }
 
+    private static bool IsUsableHandle(SafeFileHandle? handle)
+    {
+        return handle is { IsInvalid: false, IsClosed: false };
+    }
+
+    internal static bool HasActiveSharedState(HostInodeKey identity)
+    {
+        lock (SharedFileStatesLock)
+        {
+            return SharedFileStates.TryGetValue(identity, out var state) && state.HasActiveLeases;
+        }
+    }
+
+    private SharedHostFileState GetOrCreateSharedFileState()
+    {
+        lock (SharedFileStatesLock)
+        {
+            if (!SharedFileStates.TryGetValue(Identity, out var state))
+            {
+                state = new SharedHostFileState(Identity, HostPath);
+                SharedFileStates[Identity] = state;
+            }
+
+            return state;
+        }
+    }
+
+    private void ReleaseSharedFileState(bool disposeHandles)
+    {
+        SharedHostFileState? state = null;
+        lock (SharedFileStatesLock)
+        {
+            if (!SharedFileStates.TryGetValue(Identity, out state))
+                return;
+
+            if (state.HasActiveLeases)
+                return;
+
+            SharedFileStates.Remove(Identity);
+        }
+
+        if (disposeHandles)
+            state.DisposeHandles();
+    }
+
     protected override SafeFileHandle? GetOpenHandle(LinuxFile? linuxFile)
     {
         return GetOpenHandleFromFile(linuxFile);
+    }
+
+    internal void MarkTombstoned(string tombstonePath)
+    {
+        var normalized = Path.GetFullPath(tombstonePath);
+        lock (Lock)
+        {
+            _orphanPaths.Add(normalized);
+        }
+
+        HostPath = normalized;
     }
 
     private MappedFilePageCache GetOrCreateMappedPageCache(LinuxFile linuxFile)
@@ -1587,8 +2003,17 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         }
     }
 
+    private void InvalidateObservedBackingSnapshot()
+    {
+        lock (Lock)
+        {
+            _hasObservedBackingSnapshot = false;
+        }
+    }
+
     internal override bool PreferHostMappedMappingPage(PageCacheAccessMode accessMode)
     {
+        _ = accessMode;
         return Type == InodeType.File;
     }
 
@@ -1600,6 +2025,13 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
     private static int MapHostException(Exception ex, Errno fallback = Errno.EIO)
     {
+        if (OperatingSystem.IsWindows() && ex is IOException io)
+        {
+            var win32Error = io.HResult & 0xFFFF;
+            if (win32Error != 0)
+                return NegWin32Error(win32Error, fallback);
+        }
+
         return ex switch
         {
             UnauthorizedAccessException => -(int)Errno.EACCES,
@@ -1623,6 +2055,47 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         var prefix = ancestorPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
                      Path.DirectorySeparatorChar;
         return candidatePath.StartsWith(prefix, comparison);
+    }
+
+    private int RemoveHostEntry(string visiblePath, HostInode? inode, bool isDirectory, out bool tombstoned)
+    {
+        tombstoned = false;
+        try
+        {
+            if (OperatingSystem.IsWindows() &&
+                !isDirectory &&
+                inode is { } retainedInode &&
+                retainedInode.HasActiveRuntimeRefs &&
+                retainedInode.GetLinkCountForStat() <= 1)
+            {
+                var tombstonePath = ((HostSuperBlock)SuperBlock).MoveEntryToHiddenDeletedPath(visiblePath, retainedInode);
+                retainedInode.MarkTombstoned(tombstonePath);
+                tombstoned = true;
+                return 0;
+            }
+
+            if (isDirectory)
+                Directory.Delete(visiblePath, false);
+            else
+                File.Delete(visiblePath);
+
+            return 0;
+        }
+        catch (IOException ex) when (isDirectory)
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                var win32Error = ex.HResult & 0xFFFF;
+                if (win32Error != 0)
+                    return NegWin32Error(win32Error, Errno.ENOTEMPTY);
+            }
+
+            return -(int)Errno.ENOTEMPTY;
+        }
+        catch (Exception ex)
+        {
+            return MapHostException(ex, isDirectory ? Errno.ENOTEMPTY : Errno.EIO);
+        }
     }
 
     internal void SetProjectedTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
@@ -1749,12 +2222,13 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             return null;
         }
 
-        if (component == HostfsMetadataStore.MetaDirName) return null;
+        var sb = (HostSuperBlock)SuperBlock;
+        if (component == HostfsMetadataStore.MetaDirName || sb.IsInternalHiddenName(component))
+            return null;
 
         var subPath = Path.Combine(ResolveHostPath(), component);
         if (Dentries.Count == 0) return null;
-        if (((HostSuperBlock)SuperBlock).TryGetDentry(subPath, componentName, Dentries[0], out var dentry,
-                out var error))
+        if (sb.TryGetDentry(subPath, componentName, Dentries[0], out var dentry, out var error))
         {
             SetLookupFailureError(-(int)Errno.ENOENT);
             return dentry;
@@ -1775,8 +2249,10 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
         if (!TryDecodeHostComponent(dentry.Name, out var component))
             return -(int)Errno.EINVAL;
-        var subPath = Path.Combine(ResolveHostPath(), component);
         var sb = (HostSuperBlock)SuperBlock;
+        if (sb.IsInternalHiddenName(component))
+            return -(int)Errno.EINVAL;
+        var subPath = Path.Combine(ResolveHostPath(), component);
         if (sb.PathExistsOnHostRaw(subPath)) return -(int)Errno.EEXIST;
 
         try
@@ -1813,8 +2289,10 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
         if (!TryDecodeHostComponent(dentry.Name, out var component))
             return -(int)Errno.EINVAL;
-        var subPath = Path.Combine(ResolveHostPath(), component);
         var sb = (HostSuperBlock)SuperBlock;
+        if (sb.IsInternalHiddenName(component))
+            return -(int)Errno.EINVAL;
+        var subPath = Path.Combine(ResolveHostPath(), component);
         if (sb.PathExistsOnHostRaw(subPath)) return -(int)Errno.EEXIST;
 
         try
@@ -1851,8 +2329,10 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
         if (!TryDecodeHostComponent(dentry.Name, out var component))
             return -(int)Errno.EINVAL;
-        var subPath = Path.Combine(ResolveHostPath(), component);
         var sb = (HostSuperBlock)SuperBlock;
+        if (sb.IsInternalHiddenName(component))
+            return -(int)Errno.EINVAL;
+        var subPath = Path.Combine(ResolveHostPath(), component);
         if (sb.PathExistsOnHostRaw(subPath)) return -(int)Errno.EEXIST;
 
         try
@@ -1900,8 +2380,10 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (!TryDecodeHostComponent(name, out var componentName, out var component))
             return -(int)Errno.EINVAL;
 
-        var subPath = Path.Combine(ResolveHostPath(), component);
         var sb = (HostSuperBlock)SuperBlock;
+        if (sb.IsInternalHiddenName(component))
+            return -(int)Errno.ENOENT;
+        var subPath = Path.Combine(ResolveHostPath(), component);
         if (!sb.TryGetRawNodeType(subPath, out var targetType))
             return -(int)Errno.ENOENT;
         if (targetType == InodeType.Directory)
@@ -1909,16 +2391,12 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
         // unlink(2) deletes the directory entry itself and must not follow symlinks.
         var dentry = sb.GetDentry(subPath, componentName, null);
-        try
-        {
-            File.Delete(subPath);
-        }
-        catch (Exception ex)
-        {
-            return MapHostException(ex);
-        }
+        var unlinkRc = RemoveHostEntry(subPath, dentry?.Inode as HostInode, false, out var tombstoned);
+        if (unlinkRc < 0)
+            return unlinkRc;
 
-        sb.MetadataStore.RemovePath(subPath);
+        if (!tombstoned)
+            sb.MetadataStore.RemovePath(subPath);
         NamespaceOps.OnEntryRemoved(dentry?.Inode, "HostInode.Unlink");
         if (dentry?.Inode != null && !dentry.Inode.HasActiveRuntimeRefs)
             dentry.UnbindInode("HostInode.Unlink");
@@ -1939,8 +2417,10 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (!TryDecodeHostComponent(name, out var componentName, out var component))
             return -(int)Errno.EINVAL;
 
-        var subPath = Path.Combine(ResolveHostPath(), component);
         var sb = (HostSuperBlock)SuperBlock;
+        if (sb.IsInternalHiddenName(component))
+            return -(int)Errno.ENOENT;
+        var subPath = Path.Combine(ResolveHostPath(), component);
         if (!sb.TryGetRawNodeType(subPath, out var targetType))
             return -(int)Errno.ENOENT;
         if (targetType != InodeType.Directory)
@@ -1951,8 +2431,15 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         {
             Directory.Delete(subPath, false);
         }
-        catch (IOException)
+        catch (IOException ex)
         {
+            if (OperatingSystem.IsWindows())
+            {
+                var win32Error = ex.HResult & 0xFFFF;
+                if (win32Error != 0)
+                    return NegWin32Error(win32Error, Errno.ENOTEMPTY);
+            }
+
             return -(int)Errno.ENOTEMPTY;
         }
         catch (Exception ex)
@@ -1989,12 +2476,16 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
         if (newParent is not HostInode targetParent)
             return -(int)Errno.EXDEV;
+        var sb = (HostSuperBlock)SuperBlock;
+        if (sb.IsInternalHiddenName(oldComponent))
+            return -(int)Errno.ENOENT;
+        if (((HostSuperBlock)targetParent.SuperBlock).IsInternalHiddenName(newComponent))
+            return -(int)Errno.EINVAL;
         var oldFullPath = Path.Combine(ResolveHostPath(), oldComponent);
         var newFullPath = Path.Combine(targetParent.ResolveHostPath(), newComponent);
         if (IsDescendantPath(oldFullPath, newFullPath))
             return -(int)Errno.EINVAL;
 
-        var sb = (HostSuperBlock)SuperBlock;
         var dentry = sb.GetDentry(oldFullPath, oldComponentName, null);
         if (dentry == null)
             return -(int)Errno.ENOENT;
@@ -2018,45 +2509,36 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
                 if (targetDentry != null && targetDentry.Children.Count > 0)
                     return -(int)Errno.ENOTEMPTY;
 
-                try
-                {
-                    Directory.Delete(newFullPath, false);
-                }
-                catch (IOException)
-                {
-                    return -(int)Errno.ENOTEMPTY;
-                }
-                catch (Exception ex)
-                {
-                    return MapHostException(ex);
-                }
+                var removeDirRc = RemoveHostEntry(newFullPath, targetDentry?.Inode as HostInode, true, out var targetDirTombstoned);
+                if (removeDirRc < 0)
+                    return removeDirRc;
 
                 if (targetDentry?.Inode != null)
                     NamespaceOps.OnDirectoryRemoved(targetParent, targetDentry.Inode,
                         "HostInode.Rename.overwrite-target-dir");
+
+                if (!targetDirTombstoned)
+                    sb.MetadataStore.RemovePath(newFullPath);
             }
             else
             {
                 if (sourceIsDirectory)
                     return -(int)Errno.ENOTDIR;
 
-                try
-                {
-                    File.Delete(newFullPath);
-                }
-                catch (Exception ex)
-                {
-                    return MapHostException(ex);
-                }
+                var removeFileRc = RemoveHostEntry(newFullPath, targetDentry?.Inode as HostInode, false, out var targetFileTombstoned);
+                if (removeFileRc < 0)
+                    return removeFileRc;
 
                 NamespaceOps.OnRenameOverwrite(dentry.Inode, targetDentry?.Inode, "HostInode.Rename.overwrite-target");
+
+                if (!targetFileTombstoned)
+                    sb.MetadataStore.RemovePath(newFullPath);
             }
 
             targetDentry?.UnbindInode("HostInode.Rename.overwrite-target");
             if (targetParent.Dentries.Count > 0)
                 _ = targetParent.Dentries[0].TryUncacheChild(newComponentName,
                     "HostInode.Rename.overwrite-target", out _);
-            sb.MetadataStore.RemovePath(newFullPath);
             sb.RemoveDentry(newFullPath);
         }
 
@@ -2110,8 +2592,15 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     [LibraryImport("libc", SetLastError = true)]
     private static partial int flock(int fd, int operation);
 
+    [DllImport("kernel32.dll", EntryPoint = "CreateHardLinkW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateHardLinkWindows(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
+
     public override int Flock(LinuxFile linuxFile, int operation)
     {
+        if (OperatingSystem.IsWindows())
+            return GetOrCreateSharedFileState().Flock(linuxFile, operation);
+
         if (GetOpenHandleFromFile(linuxFile) is { } handle)
         {
             var fd = handle.DangerousGetHandle().ToInt32();
@@ -2129,11 +2618,27 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (oldInode is not HostInode hi) return -(int)Errno.EXDEV;
         if (!TryDecodeHostComponent(dentry.Name, out var component))
             return -(int)Errno.EINVAL;
+        if (((HostSuperBlock)SuperBlock).IsInternalHiddenName(component))
+            return -(int)Errno.EINVAL;
 
         var newPath = Path.Combine(ResolveHostPath(), component);
         var sourcePath = hi.ResolveHostPath();
-        if (link(sourcePath, newPath) != 0)
-            return NegErrnoFromPInvoke();
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                if (!CreateHardLinkWindows(newPath, sourcePath, IntPtr.Zero))
+                    return NegWin32Error(Marshal.GetLastWin32Error(), Errno.EIO);
+            }
+            else if (link(sourcePath, newPath) != 0)
+            {
+                return NegErrnoFromPInvoke();
+            }
+        }
+        catch (Exception ex)
+        {
+            return MapHostException(ex);
+        }
 
         var sb = (HostSuperBlock)SuperBlock;
         dentry.Instantiate(oldInode);
@@ -2151,8 +2656,10 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
         if (!TryDecodeHostComponent(dentry.Name, out var component))
             return -(int)Errno.EINVAL;
-        var newPath = Path.Combine(ResolveHostPath(), component);
         var sb = (HostSuperBlock)SuperBlock;
+        if (sb.IsInternalHiddenName(component))
+            return -(int)Errno.EINVAL;
+        var newPath = Path.Combine(ResolveHostPath(), component);
         if (sb.PathExistsOnHostRaw(newPath))
             return -(int)Errno.EEXIST;
 
@@ -2221,42 +2728,50 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (Type == InodeType.File)
         {
             RefreshCleanPageCacheFromHostIfNeeded();
-            var mode = FileMode.Open;
-            var access = FileAccess.Read;
-            var share = FileShare.ReadWrite;
 
-            if ((linuxFile.Flags & FileFlags.O_WRONLY) != 0) access = FileAccess.ReadWrite;
+            if (OperatingSystem.IsWindows())
+            {
+                linuxFile.PrivateData = new HostOpenFileState(
+                    GetOrCreateSharedFileState(),
+                    (linuxFile.Flags & (FileFlags.O_WRONLY | FileFlags.O_RDWR)) != 0);
+            }
             else
-                access = FileAccess
-                    .ReadWrite; // Default to ReadWrite at host level to support CopyUp, even if guest asked for ReadOnly
-
-            var hasCreate = (linuxFile.Flags & FileFlags.O_CREAT) != 0;
-            var hasExcl = (linuxFile.Flags & FileFlags.O_EXCL) != 0;
-
-            if (hasCreate && hasExcl) mode = FileMode.CreateNew;
-            else if (hasCreate) mode = FileMode.OpenOrCreate;
-
-            // Use SafeFileHandle with RandomAccess for thread-safe I/O without locks
-            var openPath = ResolveHostPath(linuxFile);
-            try
             {
-                var handle = File.OpenHandle(openPath, mode, access, share);
-                linuxFile.PrivateData = new HostOpenFileState(handle);
-            }
-            catch (UnauthorizedAccessException) when (access == FileAccess.ReadWrite &&
-                                                      (linuxFile.Flags & FileFlags.O_WRONLY) == 0 &&
-                                                      (linuxFile.Flags & FileFlags.O_RDWR) == 0)
-            {
-                // Fallback for ReadOnly files (e.g. executable binaries in Docker image)
-                var handle = File.OpenHandle(openPath, mode, FileAccess.Read, share);
-                linuxFile.PrivateData = new HostOpenFileState(handle);
-            }
-            catch (IOException) when (access == FileAccess.ReadWrite && (linuxFile.Flags & FileFlags.O_WRONLY) == 0 &&
-                                      (linuxFile.Flags & FileFlags.O_RDWR) == 0)
-            {
-                // Fallback for ReadOnly files (e.g. executable binaries in Docker image)
-                var handle = File.OpenHandle(openPath, mode, FileAccess.Read, share);
-                linuxFile.PrivateData = new HostOpenFileState(handle);
+                var mode = FileMode.Open;
+                var access = FileAccess.Read;
+                var share = FileShare.ReadWrite;
+
+                if ((linuxFile.Flags & FileFlags.O_WRONLY) != 0) access = FileAccess.ReadWrite;
+                else
+                    access = FileAccess
+                        .ReadWrite; // Default to ReadWrite at host level to support CopyUp, even if guest asked for ReadOnly
+
+                var hasCreate = (linuxFile.Flags & FileFlags.O_CREAT) != 0;
+                var hasExcl = (linuxFile.Flags & FileFlags.O_EXCL) != 0;
+
+                if (hasCreate && hasExcl) mode = FileMode.CreateNew;
+                else if (hasCreate) mode = FileMode.OpenOrCreate;
+
+                var openPath = ResolveHostPath(linuxFile);
+                try
+                {
+                    var handle = File.OpenHandle(openPath, mode, access, share);
+                    linuxFile.PrivateData = new HostOpenFileState(handle);
+                }
+                catch (UnauthorizedAccessException) when (access == FileAccess.ReadWrite &&
+                                                          (linuxFile.Flags & FileFlags.O_WRONLY) == 0 &&
+                                                          (linuxFile.Flags & FileFlags.O_RDWR) == 0)
+                {
+                    var handle = File.OpenHandle(openPath, mode, FileAccess.Read, share);
+                    linuxFile.PrivateData = new HostOpenFileState(handle);
+                }
+                catch (IOException) when (access == FileAccess.ReadWrite &&
+                                          (linuxFile.Flags & FileFlags.O_WRONLY) == 0 &&
+                                          (linuxFile.Flags & FileFlags.O_RDWR) == 0)
+                {
+                    var handle = File.OpenHandle(openPath, mode, FileAccess.Read, share);
+                    linuxFile.PrivateData = new HostOpenFileState(handle);
+                }
             }
 
             if (TryCaptureBackingSnapshot(out var openSnapshot))
@@ -2306,6 +2821,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
                 Flock(linuxFile, LinuxConstants.LOCK_UN);
                 state.Dispose();
                 linuxFile.PrivateData = null;
+                if (state.SharedState != null)
+                    ReleaseSharedFileState(true);
                 break;
             case SafeFileHandle handle:
                 Flock(linuxFile, LinuxConstants.LOCK_UN);
@@ -2366,15 +2883,57 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
     protected internal override int FlushWritebackToDurable(LinuxFile? linuxFile)
     {
-        return FlushWritebackToDurableCore(linuxFile, false);
+        if (!OperatingSystem.IsWindows())
+            return FlushWritebackToDurableCore(linuxFile, false);
+
+        try
+        {
+            if (!FlushMappedWindowsToBacking())
+                return -(int)Errno.EIO;
+
+            using var handle = OpenTransientFlushHandle(linuxFile);
+            if (handle != null)
+                FlushHandleToDiskInternal(handle);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            return MapHostException(ex);
+        }
     }
 
     protected internal override async ValueTask<int> FlushWritebackToDurableAsync(LinuxFile? linuxFile,
         FiberTask? task)
     {
-        var rc = await FlushWritebackToDurableCoreAsync(linuxFile, task, "hostfs.FlushToDisk", false,
-            ex => MapHostException(ex));
-        return rc;
+        if (!OperatingSystem.IsWindows())
+            return await FlushWritebackToDurableCoreAsync(linuxFile, task, "hostfs.FlushToDisk", false,
+                ex => MapHostException(ex));
+
+        SafeFileHandle? handle;
+        try
+        {
+            handle = OpenTransientFlushHandle(linuxFile);
+        }
+        catch (Exception ex)
+        {
+            return MapHostException(ex);
+        }
+
+        return await FlushBlockingHostOperationAsync(task, handle, "hostfs.FlushToDisk", () =>
+        {
+            try
+            {
+                if (!FlushMappedWindowsToBacking())
+                    return -(int)Errno.EIO;
+                if (handle != null)
+                    FlushHandleToDiskInternal(handle);
+                return 0;
+            }
+            finally
+            {
+                handle?.Dispose();
+            }
+        }, ex => MapHostException(ex));
     }
 
     private static void FlushHandleToDiskInternal(SafeFileHandle handle)
@@ -2408,7 +2967,7 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
         // Fallback for unopened files
         using var tempHandle = File.OpenHandle(ResolveHostPath(linuxFile), FileMode.Open, FileAccess.Read,
-            FileShare.ReadWrite);
+            FileShare.ReadWrite | FileShare.Delete);
         return RandomAccess.Read(tempHandle, buffer, offset);
     }
 
@@ -2436,21 +2995,21 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         var cachedSizeBeforeWrite = CachedSizeForShrinkCoordinator;
         ulong logicalEnd;
 
-        if (GetOpenState(linuxFile) is { } openState)
+        if (!OperatingSystem.IsWindows() && GetOpenState(linuxFile)?.DirectHandle is { } directHandle)
         {
-            var handle = openState.Handle;
+            var openState = GetOpenState(linuxFile)!;
             if (append)
             {
-                lock (openState.MutationLock)
+                using (openState.MutationLock.EnterScope())
                 {
-                    var writeOffset = Math.Max(RandomAccess.GetLength(handle), cachedSizeBeforeWrite);
-                    RandomAccess.Write(handle, buffer, writeOffset);
+                    var writeOffset = Math.Max(RandomAccess.GetLength(directHandle), cachedSizeBeforeWrite);
+                    RandomAccess.Write(directHandle, buffer, writeOffset);
                     logicalEnd = (ulong)checked(writeOffset + buffer.Length);
                 }
             }
             else
             {
-                RandomAccess.Write(handle, buffer, offset);
+                RandomAccess.Write(directHandle, buffer, offset);
                 logicalEnd = (ulong)(offset + buffer.Length);
             }
 
@@ -2461,13 +3020,19 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             return buffer.Length;
         }
 
-        // Fallback for unopened files
-        using var tempHandle = File.OpenHandle(ResolveHostPath(linuxFile), FileMode.Open, FileAccess.Write,
-            FileShare.ReadWrite);
+        using var tempHandle = OpenTransientWriteHandle(linuxFile);
         if (append)
         {
-            lock
-                (tempHandle) // Note: locking on a local 'using' handle is less effective across threads, but preserves the logic
+            if (GetOpenState(linuxFile) is { } openState)
+            {
+                using (openState.MutationLock.EnterScope())
+                {
+                    var tempWriteOffset = RandomAccess.GetLength(tempHandle);
+                    RandomAccess.Write(tempHandle, buffer, tempWriteOffset);
+                    logicalEnd = (ulong)(tempWriteOffset + buffer.Length);
+                }
+            }
+            else
             {
                 var tempWriteOffset = RandomAccess.GetLength(tempHandle);
                 RandomAccess.Write(tempHandle, buffer, tempWriteOffset);
@@ -2498,14 +3063,55 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             return prepareRc;
 
         var rc = WriteWithPageCache(file, buffer, offset);
-        if (writeThroughPageCacheOnly || rc <= 0 || offset + rc <= originalSize)
+        if (rc <= 0)
             return rc;
 
         var startPage = offset / LinuxConstants.PageSize;
         var endPage = (offset + rc - 1) / LinuxConstants.PageSize;
+        if (writeThroughPageCacheOnly)
+        {
+            if (OperatingSystem.IsWindows() && !HasWritableHostMappedPagesInRange((uint)startPage, (uint)endPage))
+            {
+                var writebackRc = WritePages(file, new WritePagesRequest(startPage, endPage,
+                    PageWritebackMode.WritebackOnly));
+                if (writebackRc < 0)
+                    return writebackRc;
+            }
+
+            InvalidateObservedBackingSnapshot();
+            return rc;
+        }
+
+        if (offset + rc <= originalSize)
+        {
+            InvalidateObservedBackingSnapshot();
+            return rc;
+        }
+
         var syncRc = WritePages(file, new WritePagesRequest(startPage, endPage,
             PageWritebackMode.WritebackOnly));
-        return syncRc < 0 ? syncRc : rc;
+        if (syncRc < 0)
+            return syncRc;
+
+        InvalidateObservedBackingSnapshot();
+        return rc;
+    }
+
+    private bool HasWritableHostMappedPagesInRange(uint startPageIndex, uint endPageIndexInclusive)
+    {
+        if (endPageIndexInclusive < startPageIndex)
+            return false;
+
+        for (var pageIndex = startPageIndex;; pageIndex++)
+        {
+            if (!TryGetMappingPageRecord(pageIndex, out var record) ||
+                record.BackingKind != FilePageBackingKind.HostMappedWindow ||
+                !record.IsWritable)
+                return false;
+
+            if (pageIndex == endPageIndexInclusive)
+                return true;
+        }
     }
 
     protected override int PrepareHostMappedWrite(LinuxFile? linuxFile, long bufferLength, long offset)
@@ -2535,15 +3141,15 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         try
         {
             long preparedLength;
-            if (GetOpenState(linuxFile) is { } openState)
+            if (!OperatingSystem.IsWindows() && GetOpenState(linuxFile)?.DirectHandle is { } directHandle)
             {
-                lock (openState.MutationLock)
+                var openState = GetOpenState(linuxFile)!;
+                using (openState.MutationLock.EnterScope())
                 {
-                    var handle = openState.Handle;
-                    var currentLength = Math.Max(RandomAccess.GetLength(handle), CachedSizeForShrinkCoordinator);
+                    var currentLength = Math.Max(RandomAccess.GetLength(directHandle), CachedSizeForShrinkCoordinator);
                     if (writeEnd > currentLength)
                     {
-                        RandomAccess.SetLength(handle, writeEnd);
+                        RandomAccess.SetLength(directHandle, writeEnd);
                         preparedLength = writeEnd;
                     }
                     else
@@ -2554,17 +3160,35 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             }
             else
             {
-                using var tempHandle = File.OpenHandle(ResolveHostPath(linuxFile), FileMode.Open, FileAccess.Write,
-                    FileShare.ReadWrite);
-                var currentLength = Math.Max(RandomAccess.GetLength(tempHandle), CachedSizeForShrinkCoordinator);
-                if (writeEnd > currentLength)
+                using var tempHandle = OpenTransientWriteHandle(linuxFile);
+                if (GetOpenState(linuxFile) is { } openState)
                 {
-                    RandomAccess.SetLength(tempHandle, writeEnd);
-                    preparedLength = writeEnd;
+                    using (openState.MutationLock.EnterScope())
+                    {
+                        var currentLength = Math.Max(RandomAccess.GetLength(tempHandle), CachedSizeForShrinkCoordinator);
+                        if (writeEnd > currentLength)
+                        {
+                            RandomAccess.SetLength(tempHandle, writeEnd);
+                            preparedLength = writeEnd;
+                        }
+                        else
+                        {
+                            preparedLength = currentLength;
+                        }
+                    }
                 }
                 else
                 {
-                    preparedLength = currentLength;
+                    var currentLength = Math.Max(RandomAccess.GetLength(tempHandle), CachedSizeForShrinkCoordinator);
+                    if (writeEnd > currentLength)
+                    {
+                        RandomAccess.SetLength(tempHandle, writeEnd);
+                        preparedLength = writeEnd;
+                    }
+                    else
+                    {
+                        preparedLength = currentLength;
+                    }
                 }
             }
 
@@ -2575,6 +3199,41 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         {
             return MapHostException(ex);
         }
+    }
+
+    private static int NegWin32Error(int error, Errno fallback)
+    {
+        return error switch
+        {
+            5 => -(int)Errno.EACCES,
+            32 or 33 => -(int)Errno.EBUSY,
+            80 => -(int)Errno.EEXIST,
+            145 => -(int)Errno.ENOTEMPTY,
+            158 => -(int)Errno.EBADF,
+            _ when error == 0 => -(int)fallback,
+            _ => -(int)fallback
+        };
+    }
+
+    private SafeFileHandle OpenTransientWriteHandle(LinuxFile? linuxFile)
+    {
+        if (OperatingSystem.IsWindows() && GetOpenState(linuxFile)?.SharedState is { } sharedState)
+            return sharedState.OpenTransientWriteHandle();
+
+        var access = OperatingSystem.IsWindows() ? FileAccess.ReadWrite : FileAccess.Write;
+        return File.OpenHandle(ResolveHostPath(linuxFile), FileMode.Open, access, HostFileShare);
+    }
+
+    private SafeFileHandle? OpenTransientFlushHandle(LinuxFile? linuxFile)
+    {
+        if (Type != InodeType.File)
+            return null;
+
+        if (OperatingSystem.IsWindows() && GetOpenState(linuxFile)?.SharedState is { } sharedState)
+            return sharedState.OpenTransientWriteHandle();
+
+        var access = OperatingSystem.IsWindows() ? FileAccess.ReadWrite : FileAccess.Write;
+        return File.OpenHandle(ResolveHostPath(linuxFile), FileMode.Open, access, HostFileShare);
     }
 
     protected override int TryAcquireHostMappedPageLeases(LinuxFile? linuxFile, uint startPageIndex, int pageCount,
@@ -2811,18 +3470,47 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
     public override int Truncate(long size)
     {
-        return TruncateCore(size);
+        return TruncateWithContextCore(size, default);
+    }
+
+    protected internal override int TruncateWithContextCore(long length, in FileMutationContext context)
+    {
+        var previousSize = CachedSizeForShrinkCoordinator;
+        var resizeScope = ProcessAddressSpaceSync.SuspendHostMappedFileViewsForResize(this, context);
+        var finalSize = previousSize;
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                RetireHostMappedWindowsBeforeFileShrink(length);
+                RetireAllHostMappedMappingPagesForResize();
+            }
+
+            var rc = TruncateCore(length);
+            if (rc != 0)
+                return rc;
+
+            finalSize = Math.Max(0, length);
+            FinalizeExplicitSizeChange(previousSize, length, context);
+            return 0;
+        }
+        finally
+        {
+            if (resizeScope.HasMappings)
+                resizeScope.Restore(finalSize);
+        }
     }
 
     private int TruncateCore(long size)
     {
         if (size < 0) return -(int)Errno.EINVAL;
-        using var handle = File.OpenHandle(ResolveHostPath(), FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+        using var handle = File.OpenHandle(ResolveHostPath(), FileMode.Open, FileAccess.Write, HostFileShare);
         RandomAccess.SetLength(handle, size);
         Size = (ulong)size;
         var now = DateTime.Now;
         MTime = now;
         CTime = now;
+        InvalidateObservedBackingSnapshot();
         return 0;
     }
 
@@ -2914,6 +3602,7 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     {
         _ = FlushDirtyDataIfNeeded(null);
         base.OnEvictCache();
+        ReleaseSharedFileState(true);
         ((HostSuperBlock)SuperBlock).UnregisterInodeIdentity(this);
         lock (_mappedCacheLock)
         {
@@ -2924,6 +3613,29 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 
     protected override void OnFinalizeDelete()
     {
+        ReleaseSharedFileState(true);
+        string[] orphanPaths;
+        lock (Lock)
+        {
+            orphanPaths = _orphanPaths.ToArray();
+            _orphanPaths.Clear();
+        }
+
+        foreach (var orphanPath in orphanPaths)
+            try
+            {
+                if (Type == InodeType.Directory)
+                    Directory.Delete(orphanPath, true);
+                else if (File.Exists(orphanPath))
+                    File.Delete(orphanPath);
+                ((HostSuperBlock)SuperBlock).MetadataStore.RemovePath(orphanPath);
+            }
+            catch
+            {
+                // Best-effort cleanup; finalized hostfs inodes should not resurrect on cleanup failures.
+            }
+
+        ((HostSuperBlock)SuperBlock).RemoveHiddenLinks(Identity, orphanPaths.Length);
         ((HostSuperBlock)SuperBlock).UnregisterInodeIdentity(this);
         base.OnFinalizeDelete();
     }
@@ -2941,7 +3653,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         foreach (var entryPath in entries)
         {
             var name = Path.GetFileName(entryPath);
-            if (name == HostfsMetadataStore.MetaDirName) continue;
+            if (name == HostfsMetadataStore.MetaDirName || sb.IsInternalHiddenName(name))
+                continue;
             if (!HostSuperBlock.TryCreateFsNameFromHostName(name, out var encodedName))
                 continue;
             var dentry = sb.GetDentry(entryPath, encodedName, Dentries.Count > 0 ? Dentries[0] : null);
@@ -3109,6 +3822,8 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
             {
                 var name = Path.GetFileName(entryPath);
                 if (string.Equals(name, HostfsMetadataStore.MetaDirName, StringComparison.Ordinal))
+                    continue;
+                if (((HostSuperBlock)SuperBlock).IsInternalHiddenName(name))
                     continue;
 
                 if (sb.TryResolveVisibleNode(entryPath, out _, out var entryType) && entryType == InodeType.Directory)

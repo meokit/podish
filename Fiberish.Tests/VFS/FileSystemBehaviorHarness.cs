@@ -30,8 +30,7 @@ internal sealed class HostfsTestRig : IFileSystemTestRig
 
     public HostfsTestRig()
     {
-        _rootPath = Path.Combine(Path.GetTempPath(), "hostfs-rig-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_rootPath);
+        _rootPath = TestWorkspace.CreateUniqueDirectory("hostfs-rig-");
 
         var fsType = new FileSystemType { Name = "hostfs" };
         var opts = HostfsMountOptions.Parse("rw");
@@ -48,8 +47,7 @@ internal sealed class HostfsTestRig : IFileSystemTestRig
 
     public void Dispose()
     {
-        if (Directory.Exists(_rootPath))
-            Directory.Delete(_rootPath, true);
+        TestWorkspace.DeleteDirectory(_rootPath);
     }
 }
 

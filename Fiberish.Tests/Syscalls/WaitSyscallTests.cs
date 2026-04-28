@@ -927,8 +927,8 @@ public class WaitSyscallTests
         }
         catch (SocketException ex)
         {
-            Assert.Contains(ex.SocketErrorCode,
-                [SocketError.WouldBlock, SocketError.IOPending, SocketError.InProgress, SocketError.AlreadyInProgress]);
+            Assert.True(ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
+                or SocketError.AlreadyInProgress);
         }
 
         env.WriteStruct(pollfdPtr, new PollFd { Fd = fd, Events = LinuxConstants.POLLOUT, Revents = 0 });

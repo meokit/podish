@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -42,7 +43,7 @@ public class HostfsPageCacheWritebackTests
             Assert.NotNull(vma);
             VMAManager.SyncVmArea(vma!, engine, mapAddr, mapAddr + LinuxConstants.PageSize);
 
-            Assert.Equal("hABCo", File.ReadAllText(hostFile));
+        Assert.Equal("hABCo", ReadAllTextWithUnixCompatibleSharing(hostFile));
             file.Dentry.Inode!.Release(file);
         }
         finally
@@ -74,7 +75,7 @@ public class HostfsPageCacheWritebackTests
 
             mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
 
-            Assert.Equal("woXYd", File.ReadAllText(hostFile));
+        Assert.Equal("woXYd", ReadAllTextWithUnixCompatibleSharing(hostFile));
             file.Dentry.Inode!.Release(file);
         }
         finally
@@ -104,11 +105,11 @@ public class HostfsPageCacheWritebackTests
             Assert.True(mm.HandleFault(mapAddr, true, engine));
 
             Assert.True(engine.CopyToUser(mapAddr + 2, "XY"u8.ToArray()));
-            Assert.Equal("world", File.ReadAllText(hostFile));
+        Assert.Equal("world", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
 
-            Assert.Equal("woXYd", File.ReadAllText(hostFile));
+        Assert.Equal("woXYd", ReadAllTextWithUnixCompatibleSharing(hostFile));
             file.Dentry.Inode!.Release(file);
         }
         finally
@@ -201,7 +202,7 @@ public class HostfsPageCacheWritebackTests
 
             var rc = await CallSys(sm, engine, "SysFsync", (uint)fd);
             Assert.Equal(0, rc);
-            Assert.Equal("aZZde", File.ReadAllText(hostFile));
+        Assert.Equal("aZZde", ReadAllTextWithUnixCompatibleSharing(hostFile));
             sm.FreeFD(fd);
         }
         finally
@@ -248,7 +249,7 @@ public class HostfsPageCacheWritebackTests
 
             var rc = await CallSys(sm, engine, "SysFsync", (uint)fd);
             Assert.Equal(0, rc);
-            Assert.Equal("aZZde", File.ReadAllText(hostFile));
+        Assert.Equal("aZZde", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             sm.FreeFD(fd);
             GC.KeepAlive(peer);
@@ -295,7 +296,7 @@ public class HostfsPageCacheWritebackTests
             Assert.True(peer.CPU.CopyToUser(mapAddr + 1, "ZZ"u8.ToArray()));
 
             ProcessAddressSpaceSync.Munmap(mm, engine, mapAddr, LinuxConstants.PageSize, process);
-            Assert.Equal("aZZde", File.ReadAllText(hostFile));
+        Assert.Equal("aZZde", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             GC.KeepAlive(peer);
         }
@@ -345,7 +346,7 @@ public class HostfsPageCacheWritebackTests
 
             var rc = await CallSys(sm, engine, "SysFsync", (uint)fd);
             Assert.Equal(0, rc);
-            Assert.Equal("aZZde", File.ReadAllText(hostFile));
+        Assert.Equal("aZZde", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             sm.FreeFD(fd);
         }
@@ -420,7 +421,7 @@ public class HostfsPageCacheWritebackTests
             flushRelease.Set();
             Assert.Equal(0, await fsyncTcs.Task);
             TraceAsyncFsyncTest("fsync action completed");
-            Assert.Equal("abcde", File.ReadAllText(hostFile));
+        Assert.Equal("abcde", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             scheduler.ScheduleFromAnyThread(() =>
             {
@@ -505,7 +506,7 @@ public class HostfsPageCacheWritebackTests
             flushRelease.Set();
             Assert.Equal(0, await fsyncTcs.Task);
             TraceAsyncFsyncTest("fsync action completed");
-            Assert.Equal("abcde", File.ReadAllText(hostFile));
+        Assert.Equal("abcde", ReadAllTextWithUnixCompatibleSharing(hostFile));
         }
         finally
         {
@@ -544,7 +545,7 @@ public class HostfsPageCacheWritebackTests
 
             var rc = await CallSys(sm, engine, "SysSync");
             Assert.Equal(0, rc);
-            Assert.Equal("12QQ5", File.ReadAllText(hostFile));
+        Assert.Equal("12QQ5", ReadAllTextWithUnixCompatibleSharing(hostFile));
         }
         finally
         {
@@ -592,7 +593,7 @@ public class HostfsPageCacheWritebackTests
 
             var rc = await CallSys(sm1, engine1, "SysSync");
             Assert.Equal(0, rc);
-            Assert.Equal("AxyDE", File.ReadAllText(hostFile));
+        Assert.Equal("AxyDE", ReadAllTextWithUnixCompatibleSharing(hostFile));
         }
         finally
         {
@@ -645,7 +646,7 @@ public class HostfsPageCacheWritebackTests
 
             var rc = await CallSys(sm1, engine1, "SysSync");
             Assert.Equal(0, rc);
-            Assert.Equal("AxyDE", File.ReadAllText(hostFile));
+        Assert.Equal("AxyDE", ReadAllTextWithUnixCompatibleSharing(hostFile));
         }
         finally
         {
@@ -692,7 +693,7 @@ public class HostfsPageCacheWritebackTests
 
             var rc = await CallSys(sm1, engine1, "SysFsync", (uint)fd1);
             Assert.Equal(0, rc);
-            Assert.Equal("AxyDE", File.ReadAllText(hostFile));
+        Assert.Equal("AxyDE", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             sm1.FreeFD(fd1);
             sm1.FreeFD(fd2);
@@ -728,11 +729,11 @@ public class HostfsPageCacheWritebackTests
             {
                 var writeRc = file.Dentry.Inode!.WriteFromHost(null, file, "XY"u8.ToArray(), 1);
                 Assert.Equal(2, writeRc);
-                Assert.Equal("aXYde", File.ReadAllText(hostFile));
+        Assert.Equal("aXYde", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
                 var fsyncRc = await CallSys(sm, engine, "SysFsync", (uint)fd);
                 Assert.Equal(0, fsyncRc);
-                Assert.Equal("aXYde", File.ReadAllText(hostFile));
+        Assert.Equal("aXYde", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
                 sm.FreeFD(fd);
             }
@@ -770,10 +771,10 @@ public class HostfsPageCacheWritebackTests
 
             var writeRc = file.Dentry.Inode!.WriteFromHost(null, file, "XY"u8.ToArray(), 1);
             Assert.Equal(2, writeRc);
-            Assert.Equal("abcde", File.ReadAllText(hostFile));
+        Assert.Equal("abcde", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             sm.FreeFD(fd);
-            Assert.Equal("aXYde", File.ReadAllText(hostFile));
+        Assert.Equal("aXYde", ReadAllTextWithUnixCompatibleSharing(hostFile));
         }
         finally
         {
@@ -804,16 +805,16 @@ public class HostfsPageCacheWritebackTests
             var inode = loc.Dentry.Inode!;
 
             Assert.Equal(1, inode.WriteFromHost(null, file, "A"u8.ToArray(), (long)inode.Size));
-            Assert.Equal("A", File.ReadAllText(hostFile));
+        Assert.Equal("A", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             Assert.Equal(1, inode.WriteFromHost(null, file, "B"u8.ToArray(), (long)inode.Size));
-            Assert.Equal("AB", File.ReadAllText(hostFile));
+        Assert.Equal("AB", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             Assert.Equal(1, inode.WriteFromHost(null, file, "C"u8.ToArray(), (long)inode.Size));
-            Assert.Equal("ABC", File.ReadAllText(hostFile));
+        Assert.Equal("ABC", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             sm.FreeFD(fd);
-            Assert.Equal("ABC", File.ReadAllText(hostFile));
+        Assert.Equal("ABC", ReadAllTextWithUnixCompatibleSharing(hostFile));
         }
         finally
         {
@@ -1255,7 +1256,7 @@ public class HostfsPageCacheWritebackTests
 
             sm.FreeFD(fd);
 
-            var bytes = File.ReadAllBytes(hostFile);
+        var bytes = ReadAllBytesWithUnixCompatibleSharing(hostFile);
             Assert.Equal(tailOffset + tailWrite.Length, bytes.Length);
             Assert.Equal(headWrite, bytes[..headWrite.Length]);
             Assert.All(bytes.AsSpan(headWrite.Length, tailOffset - headWrite.Length).ToArray(), b => Assert.Equal(0, b));
@@ -1291,10 +1292,10 @@ public class HostfsPageCacheWritebackTests
 
             var writeRc = hostInode.WriteFromHost(null, file, "XY"u8.ToArray(), 1);
             Assert.Equal(2, writeRc);
-            Assert.Equal("abcde", File.ReadAllText(hostFile));
+        Assert.Equal("abcde", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             sm.FreeFD(fd);
-            Assert.Equal("aXYde", File.ReadAllText(hostFile));
+        Assert.Equal("aXYde", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             var pagePtr = hostInode.Mapping!.PeekPage(0);
             Assert.NotEqual(IntPtr.Zero, pagePtr);
@@ -1303,12 +1304,12 @@ public class HostfsPageCacheWritebackTests
             hostInode.SetPageDirty(0);
             hostInode.Mapping.MarkDirty(0);
 
-            Assert.Equal("aXYde", File.ReadAllText(hostFile));
+        Assert.Equal("aXYde", ReadAllTextWithUnixCompatibleSharing(hostFile));
             Assert.Contains(hostInode, hostInode.SuperBlock.Inodes);
             hostInode.RefCount = 0;
 
             var evicted = VfsShrinker.EvictUnusedInodes(hostInode.SuperBlock);
-            Assert.Equal("aZZde", File.ReadAllText(hostFile));
+        Assert.Equal("aZZde", ReadAllTextWithUnixCompatibleSharing(hostFile));
             Assert.Equal(1, evicted);
             Assert.True(hostInode.IsCacheEvicted);
         }
@@ -1403,7 +1404,7 @@ public class HostfsPageCacheWritebackTests
 
             mm.Munmap(mapAddr, LinuxConstants.PageSize, engine);
             Assert.Equal(refBeforeMmap - 1, inode.RefCount);
-            Assert.Equal("aZZde", File.ReadAllText(hostFile));
+        Assert.Equal("aZZde", ReadAllTextWithUnixCompatibleSharing(hostFile));
         }
         finally
         {
@@ -1531,6 +1532,23 @@ public class HostfsPageCacheWritebackTests
         TraceAsyncFsyncTest("StopSchedulerAsync waiting scheduler thread");
         await schedulerThread;
         TraceAsyncFsyncTest("StopSchedulerAsync completed");
+    }
+
+    private static string ReadAllTextWithUnixCompatibleSharing(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
+
+    private static byte[] ReadAllBytesWithUnixCompatibleSharing(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var copy = new MemoryStream();
+        stream.CopyTo(copy);
+        return copy.ToArray();
     }
 
     private static void TraceAsyncFsyncTest(string message)

@@ -108,27 +108,25 @@ public class ExecveErrorMappingTests
     [Fact]
     public async Task SysExecve_WhenRegularFileHasNoExecuteBit_ReturnsEacces()
     {
-        var root = CreateTempExecRoot();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
+        var sm = new SyscallManager(engine, mm, 0);
+        MountRootTmpfs(sm, "execve-noexec-root");
+
+        var scheduler = new KernelScheduler();
+        var process = new Process(9210, mm, sm);
+        scheduler.RegisterProcess(process);
+        var task = new FiberTask(process.TGID, process, engine, scheduler);
+        engine.Owner = task;
+
+        const uint pathAddr = 0x61100000;
+        MapUserPage(mm, engine, pathAddr);
+
         try
         {
-            File.Copy(Path.Combine(ResolveGuestRootForHelloStatic(), "hello_static"), Path.Combine(root, "noexec"),
-                true);
-            SetUnixMode(Path.Combine(root, "noexec"), 0x1A4); // 0644
-
-            var runtime = new TestRuntimeFactory();
-            using var engine = runtime.CreateEngine();
-            var mm = runtime.CreateAddressSpace();
-            var sm = new SyscallManager(engine, mm, 0);
-            sm.MountRootHostfs(root);
-
-            var scheduler = new KernelScheduler();
-            var process = new Process(9210, mm, sm);
-            scheduler.RegisterProcess(process);
-            var task = new FiberTask(process.TGID, process, engine, scheduler);
-            engine.Owner = task;
-
-            const uint pathAddr = 0x61100000;
-            MapUserPage(mm, engine, pathAddr);
+            var helloBytes = File.ReadAllBytes(Path.Combine(ResolveGuestRootForHelloStatic(), "hello_static"));
+            sm.WriteGuestFile("/noexec", helloBytes, 0x1A4); // 0644
             WriteCString(engine, pathAddr, "/noexec");
 
             var rc = await Call(sm, "SysExecve", pathAddr);
@@ -136,36 +134,33 @@ public class ExecveErrorMappingTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            sm.Close();
         }
     }
 
     [Fact]
     public async Task SysExecve_WhenShebangInterpreterHasNoExecuteBit_ReturnsEacces()
     {
-        var root = CreateTempExecRoot();
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
+        var sm = new SyscallManager(engine, mm, 0);
+        MountRootTmpfs(sm, "execve-shebang-noexec-root");
+
+        var scheduler = new KernelScheduler();
+        var process = new Process(9211, mm, sm);
+        scheduler.RegisterProcess(process);
+        var task = new FiberTask(process.TGID, process, engine, scheduler);
+        engine.Owner = task;
+
+        const uint pathAddr = 0x61101000;
+        MapUserPage(mm, engine, pathAddr);
+
         try
         {
-            File.Copy(Path.Combine(ResolveGuestRootForHelloStatic(), "hello_static"), Path.Combine(root, "interp"),
-                true);
-            SetUnixMode(Path.Combine(root, "interp"), 0x1A4); // 0644
-            await File.WriteAllTextAsync(Path.Combine(root, "script"), "#!/interp\n");
-            SetUnixMode(Path.Combine(root, "script"), 0x1ED); // 0755
-
-            var runtime = new TestRuntimeFactory();
-            using var engine = runtime.CreateEngine();
-            var mm = runtime.CreateAddressSpace();
-            var sm = new SyscallManager(engine, mm, 0);
-            sm.MountRootHostfs(root);
-
-            var scheduler = new KernelScheduler();
-            var process = new Process(9211, mm, sm);
-            scheduler.RegisterProcess(process);
-            var task = new FiberTask(process.TGID, process, engine, scheduler);
-            engine.Owner = task;
-
-            const uint pathAddr = 0x61101000;
-            MapUserPage(mm, engine, pathAddr);
+            var helloBytes = File.ReadAllBytes(Path.Combine(ResolveGuestRootForHelloStatic(), "hello_static"));
+            sm.WriteGuestFile("/interp", helloBytes, 0x1A4); // 0644
+            sm.WriteGuestFile("/script", Encoding.UTF8.GetBytes("#!/interp\n"), 0x1ED); // 0755
             WriteCString(engine, pathAddr, "/script");
 
             var rc = await Call(sm, "SysExecve", pathAddr);
@@ -173,7 +168,7 @@ public class ExecveErrorMappingTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            sm.Close();
         }
     }
 
@@ -587,18 +582,17 @@ public class ExecveErrorMappingTests
         throw new FileNotFoundException("Could not locate tests/linux/hello_static from test working directory.");
     }
 
-    private static string CreateTempExecRoot()
+    private static void MountRootTmpfs(SyscallManager sm, string sourceName)
     {
-        var root = Path.Combine(Path.GetTempPath(), $"execve-perm-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        return root;
-    }
-
-    private static void SetUnixMode(string path, int mode)
-    {
-#pragma warning disable CA1416
-        File.SetUnixFileMode(path, (UnixFileMode)mode);
-#pragma warning restore CA1416
+        var tmpfsType = FileSystemRegistry.Get("tmpfs")!;
+        var sb = tmpfsType.CreateAnonymousFileSystem().ReadSuper(tmpfsType, 0, sourceName, null);
+        var mount = new Mount(sb, sb.Root)
+        {
+            Source = sourceName,
+            FsType = "tmpfs",
+            Options = "rw"
+        };
+        sm.InitializeRoot(sb.Root, mount);
     }
 
     private sealed class ExecveEnv : IDisposable

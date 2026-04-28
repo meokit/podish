@@ -10,6 +10,8 @@ namespace Fiberish.Tests.VFS;
 
 public class OverlayTests
 {
+    private static readonly Lazy<bool> HostFileSymlinkCreationSupported = new(ProbeHostFileSymlinkCreationSupport);
+
     [Fact]
     public void OverlayRoot_ShrinkMode2_DoesNotFallbackToOverlayMountPointAfterDrop()
     {
@@ -172,7 +174,8 @@ public class OverlayTests
             Assert.True(File.Exists(Path.Combine(tempUpper, "a/b/c/file")));
 
             // Verify content in upper
-            Assert.Equal("helloworld", File.ReadAllText(Path.Combine(tempUpper, "a/b/c/file")));
+            Assert.Equal("helloworld",
+                ReadAllTextWithUnixCompatibleSharing(Path.Combine(tempUpper, "a/b/c/file")));
         }
         finally
         {
@@ -276,6 +279,9 @@ public class OverlayTests
     [Fact]
     public void OverlaySymlink_InLowerOnlyDirectory_ShouldCreateInUpper()
     {
+        if (!SupportsHostfsSymlinkCreation())
+            return;
+
         var tempLower = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         var tempUpper = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tempLower);
@@ -693,6 +699,9 @@ public class OverlayTests
     [Fact]
     public void OverlayCopyUp_LowerOnlyDirectoryMutation_DoesNotChangeAncestorNlink()
     {
+        if (!SupportsHostfsSymlinkCreation())
+            return;
+
         var tempLower = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         var tempUpper = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(tempLower);
@@ -1117,6 +1126,58 @@ public class OverlayTests
         finally
         {
             file.Close();
+        }
+    }
+
+    private static string ReadAllTextWithUnixCompatibleSharing(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
+
+    private static bool SupportsHostfsSymlinkCreation()
+    {
+        return !OperatingSystem.IsWindows() || HostFileSymlinkCreationSupported.Value;
+    }
+
+    private static bool ProbeHostFileSymlinkCreationSupport()
+    {
+        if (!OperatingSystem.IsWindows())
+            return true;
+
+        var root = Path.Combine(Path.GetTempPath(), $"podish-overlay-symlink-cap-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var linkPath = Path.Combine(root, "link");
+        try
+        {
+            File.CreateSymbolicLink(linkPath, "missing-target");
+            return File.Exists(linkPath) || Directory.Exists(linkPath);
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(linkPath) || Directory.Exists(linkPath))
+                    File.Delete(linkPath);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+            }
+            catch
+            {
+            }
         }
     }
 }

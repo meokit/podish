@@ -81,8 +81,8 @@ public class ProcFsTests
         }
         finally
         {
-            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
-            if (Directory.Exists(hostMountDir)) Directory.Delete(hostMountDir, true);
+            TestWorkspace.DeleteDirectory(rootDir);
+            TestWorkspace.DeleteDirectory(hostMountDir);
         }
     }
 
@@ -279,7 +279,7 @@ public class ProcFsTests
         }
         finally
         {
-            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+            TestWorkspace.DeleteDirectory(rootDir);
         }
     }
 
@@ -390,7 +390,7 @@ public class ProcFsTests
         finally
         {
             cache?.Release();
-            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+            TestWorkspace.DeleteDirectory(rootDir);
         }
     }
 
@@ -441,7 +441,7 @@ public class ProcFsTests
         }
         finally
         {
-            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+            TestWorkspace.DeleteDirectory(rootDir);
         }
     }
 
@@ -494,7 +494,7 @@ public class ProcFsTests
         finally
         {
             cache?.Release();
-            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+            TestWorkspace.DeleteDirectory(rootDir);
         }
     }
 
@@ -538,10 +538,11 @@ public class ProcFsTests
             Assert.Equal(0, inode.GetMappedPageCacheDiagnostics().WindowBytes);
             var after = sm.MemoryContext.CaptureMemoryStats(sm);
             Assert.Equal(0, after.HostMappedWindowBytes);
+            sm.Close();
         }
         finally
         {
-            if (Directory.Exists(hostRoot)) Directory.Delete(hostRoot, true);
+            TestWorkspace.DeleteDirectory(hostRoot);
         }
     }
 
@@ -584,7 +585,7 @@ public class ProcFsTests
         }
         finally
         {
-            if (Directory.Exists(hostRoot)) Directory.Delete(hostRoot, true);
+            TestWorkspace.DeleteDirectory(hostRoot);
         }
     }
 
@@ -595,7 +596,7 @@ public class ProcFsTests
 
         try
         {
-            var runtime = CreateTmpfsProcRuntime();
+            using var runtime = CreateTmpfsProcRuntime();
             var sm = runtime.Syscalls;
             var task = AttachTaskContext(runtime, 0, true);
             MountSilkfsAt(sm, silkRoot, "/mnt");
@@ -603,6 +604,7 @@ public class ProcFsTests
             var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
             var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
             Assert.True(loc.IsValid);
+            var silkSb = Assert.IsType<SilkSuperBlock>(loc.Dentry!.SuperBlock);
 
             var file = new Dentry(FsName.FromString("data.bin"), null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
@@ -633,10 +635,14 @@ public class ProcFsTests
             Assert.Equal(0, inode.GetMappedPageCacheDiagnostics().WindowBytes);
             var after = sm.MemoryContext.CaptureMemoryStats(sm);
             Assert.Equal(0, after.HostMappedWindowBytes);
+            sm.UnregisterMount(loc.Mount!);
+            loc.Mount!.SB.Put();
+            sm.Close();
+            silkSb.Dispose();
         }
         finally
         {
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectoryOrDeferOnProcessExit(silkRoot);
         }
     }
 
@@ -647,7 +653,7 @@ public class ProcFsTests
 
         try
         {
-            var runtime = CreateTmpfsProcRuntime();
+            using var runtime = CreateTmpfsProcRuntime();
             var sm = runtime.Syscalls;
             var task = AttachTaskContext(runtime, 0, true);
             MountSilkfsAt(sm, silkRoot, "/mnt");
@@ -655,6 +661,7 @@ public class ProcFsTests
             var dropLoc = sm.PathWalk("/proc/sys/vm/drop_caches");
             var loc = sm.PathWalkWithFlags("/mnt", LookupFlags.FollowSymlink);
             Assert.True(loc.IsValid);
+            var silkSb = Assert.IsType<SilkSuperBlock>(loc.Dentry!.SuperBlock);
 
             var file = new Dentry(FsName.FromString("active.bin"), null, loc.Dentry, loc.Dentry!.SuperBlock);
             loc.Dentry.Inode!.Create(file, 0x1A4, 0, 0);
@@ -688,10 +695,14 @@ public class ProcFsTests
             Assert.Equal("CD", Encoding.ASCII.GetString(verify));
 
             runtime.Memory.Munmap(mapAddr, LinuxConstants.PageSize, runtime.Engine);
+            sm.UnregisterMount(loc.Mount!);
+            loc.Mount!.SB.Put();
+            sm.Close();
+            silkSb.Dispose();
         }
         finally
         {
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectoryOrDeferOnProcessExit(silkRoot);
         }
     }
 
@@ -736,7 +747,7 @@ public class ProcFsTests
         }
         finally
         {
-            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+            TestWorkspace.DeleteDirectory(rootDir);
         }
     }
 
@@ -789,8 +800,8 @@ public class ProcFsTests
         }
         finally
         {
-            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
-            if (Directory.Exists(mountSource)) Directory.Delete(mountSource, true);
+            TestWorkspace.DeleteDirectory(rootDir);
+            TestWorkspace.DeleteDirectory(mountSource);
         }
     }
 
@@ -843,8 +854,8 @@ public class ProcFsTests
         }
         finally
         {
-            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
-            if (Directory.Exists(mountSource)) Directory.Delete(mountSource, true);
+            TestWorkspace.DeleteDirectory(rootDir);
+            TestWorkspace.DeleteDirectory(mountSource);
         }
     }
 
@@ -866,7 +877,7 @@ public class ProcFsTests
         }
         finally
         {
-            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+            TestWorkspace.DeleteDirectory(rootDir);
         }
     }
 
@@ -888,7 +899,7 @@ public class ProcFsTests
         }
         finally
         {
-            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+            TestWorkspace.DeleteDirectory(rootDir);
         }
     }
 
@@ -930,7 +941,7 @@ public class ProcFsTests
         finally
         {
             cache?.Release();
-            if (Directory.Exists(rootDir)) Directory.Delete(rootDir, true);
+            TestWorkspace.DeleteDirectory(rootDir);
         }
     }
 

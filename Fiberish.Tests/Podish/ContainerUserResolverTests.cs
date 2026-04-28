@@ -9,12 +9,10 @@ namespace Fiberish.Tests.Podish;
 
 public sealed class ContainerUserResolverTests
 {
-    private static readonly SemaphoreSlim ConsoleErrorGate = new(1, 1);
-
     [Fact]
     public void Resolve_NamedUserWithExplicitGroup_UsesGuestPasswdAndSupplementaryGroups()
     {
-        var root = CreateTempRoot();
+        var root = TestWorkspace.CreateUniqueDirectory("podish-user-root-");
         try
         {
             Directory.CreateDirectory(Path.Combine(root, "etc"));
@@ -30,20 +28,20 @@ public sealed class ContainerUserResolverTests
 
             Assert.Equal(1000, resolved.Uid);
             Assert.Equal(3000, resolved.Gid);
-            Assert.Equal([1001, 2000], resolved.SupplementaryGroups.OrderBy(static gid => gid).ToArray());
+            Assert.Equal<int[]>([1001, 2000], resolved.SupplementaryGroups.OrderBy(static gid => gid).ToArray());
             Assert.Equal("app", resolved.UserName);
             Assert.Equal("/home/app", resolved.HomeDirectory);
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public void Resolve_NumericUidWithoutGroup_DefaultsGidToUid()
     {
-        var root = CreateTempRoot();
+        var root = TestWorkspace.CreateUniqueDirectory("podish-user-root-");
         try
         {
             using var runtime = Fiberish.Core.KernelRuntime.BootstrapBare(false, memoryContext: new MemoryRuntimeContext());
@@ -59,14 +57,14 @@ public sealed class ContainerUserResolverTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public void Resolve_NamedUserWithoutPasswd_ThrowsConfigurationError()
     {
-        var root = CreateTempRoot();
+        var root = TestWorkspace.CreateUniqueDirectory("podish-user-root-");
         try
         {
             using var runtime = Fiberish.Core.KernelRuntime.BootstrapBare(false, memoryContext: new MemoryRuntimeContext());
@@ -77,7 +75,7 @@ public sealed class ContainerUserResolverTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
@@ -85,8 +83,7 @@ public sealed class ContainerUserResolverTests
     public async Task RunAsync_InvalidNamedUserOnRootfs_Returns125()
     {
         var root = CreateTempRootWithHelloStatic();
-        var runtimeRoot = Path.Combine(Path.GetTempPath(), "podish-user-config-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(runtimeRoot);
+        var runtimeRoot = TestWorkspace.CreateUniqueDirectory("podish-user-config-");
         Directory.CreateDirectory(Path.Combine(runtimeRoot, "ctr"));
         var capture = new StringWriter();
 
@@ -95,33 +92,21 @@ public sealed class ContainerUserResolverTests
             var service = new ContainerRuntimeService(NullLogger.Instance, NullLoggerFactory.Instance);
             var request = CreateHelloStaticRequest(root, runtimeRoot, true, "app");
 
-            int rc;
-            await ConsoleErrorGate.WaitAsync();
-            try
-            {
-                var previous = Console.Error;
-                try
+            var rc = await TestWorkspace.RedirectConsoleErrorAsync(
+                async writer =>
                 {
-                    Console.SetError(capture);
-                    rc = await service.RunAsync(request);
-                }
-                finally
-                {
-                    Console.SetError(previous);
-                }
-            }
-            finally
-            {
-                ConsoleErrorGate.Release();
-            }
+                    var runRc = await service.RunAsync(request);
+                    capture.Write(writer.ToString());
+                    return runRc;
+                });
 
             Assert.Equal(125, rc);
             Assert.Contains("[Podish Config]", capture.ToString(), StringComparison.Ordinal);
         }
         finally
         {
-            Directory.Delete(root, true);
-            Directory.Delete(runtimeRoot, true);
+            TestWorkspace.DeleteDirectory(root);
+            TestWorkspace.DeleteDirectory(runtimeRoot);
         }
     }
 
@@ -129,8 +114,7 @@ public sealed class ContainerUserResolverTests
     public async Task RunAsync_InvalidImageConfigUser_Returns125()
     {
         var root = CreateTempRootWithHelloStatic();
-        var runtimeRoot = Path.Combine(Path.GetTempPath(), "podish-image-user-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(runtimeRoot);
+        var runtimeRoot = TestWorkspace.CreateUniqueDirectory("podish-image-user-");
         Directory.CreateDirectory(Path.Combine(runtimeRoot, "ctr"));
         File.WriteAllText(Path.Combine(root, "image.json"), JsonSerializer.Serialize(new OciStoredImage(
             ImageReference: "test:image",
@@ -148,33 +132,21 @@ public sealed class ContainerUserResolverTests
             var service = new ContainerRuntimeService(NullLogger.Instance, NullLoggerFactory.Instance);
             var request = CreateHelloStaticRequest(root, runtimeRoot, false, null);
 
-            int rc;
-            await ConsoleErrorGate.WaitAsync();
-            try
-            {
-                var previous = Console.Error;
-                try
+            var rc = await TestWorkspace.RedirectConsoleErrorAsync(
+                async writer =>
                 {
-                    Console.SetError(capture);
-                    rc = await service.RunAsync(request);
-                }
-                finally
-                {
-                    Console.SetError(previous);
-                }
-            }
-            finally
-            {
-                ConsoleErrorGate.Release();
-            }
+                    var runRc = await service.RunAsync(request);
+                    capture.Write(writer.ToString());
+                    return runRc;
+                });
 
             Assert.Equal(125, rc);
             Assert.Contains("[Podish Config]", capture.ToString(), StringComparison.Ordinal);
         }
         finally
         {
-            Directory.Delete(root, true);
-            Directory.Delete(runtimeRoot, true);
+            TestWorkspace.DeleteDirectory(root);
+            TestWorkspace.DeleteDirectory(runtimeRoot);
         }
     }
 
@@ -208,30 +180,13 @@ public sealed class ContainerUserResolverTests
     private static string CreateTempRootWithHelloStatic()
     {
         var root = CreateTempRoot();
-        File.Copy(Path.Combine(ResolveGuestRootForHelloStatic(), "hello_static"), Path.Combine(root, "hello_static"), true);
+        File.Copy(Path.Combine(TestWorkspace.ResolveLinuxGuestRoot(), "hello_static"), Path.Combine(root, "hello_static"),
+            true);
         return root;
     }
 
     private static string CreateTempRoot()
     {
-        var root = Path.Combine(Path.GetTempPath(), "podish-user-root-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        return root;
-    }
-
-    private static string ResolveGuestRootForHelloStatic()
-    {
-        const string rel = "tests/linux/hello_static";
-        var cwd = Directory.GetCurrentDirectory();
-        var current = new DirectoryInfo(cwd);
-        while (current != null)
-        {
-            var candidate = Path.Combine(current.FullName, rel);
-            if (File.Exists(candidate))
-                return Path.Combine(current.FullName, "tests/linux");
-            current = current.Parent;
-        }
-
-        throw new FileNotFoundException("Could not locate tests/linux/hello_static from test working directory.");
+        return TestWorkspace.CreateUniqueDirectory("podish-user-root-");
     }
 }

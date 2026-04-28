@@ -8,8 +8,6 @@ namespace Fiberish.Tests.Podish;
 
 public sealed class ContainerMemoryLimitsTests
 {
-    private static readonly SemaphoreSlim ConsoleErrorGate = new(1, 1);
-
     [Theory]
     [InlineData("32M", 32L * 1024 * 1024)]
     [InlineData("64m", 64L * 1024 * 1024)]
@@ -40,8 +38,7 @@ public sealed class ContainerMemoryLimitsTests
     [Fact]
     public async Task RunAsync_MemoryQuotaBelowMinimum_IsRejected()
     {
-        var root = Path.Combine(Path.GetTempPath(), "podish-memory-limit-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = TestWorkspace.CreateUniqueDirectory("podish-memory-limit-");
         var containerDir = Path.Combine(root, "ctr");
         Directory.CreateDirectory(containerDir);
         var eventPath = Path.Combine(root, "events.jsonl");
@@ -75,25 +72,13 @@ public sealed class ContainerMemoryLimitsTests
             };
 
             var capture = new StringWriter();
-            int rc;
-            await ConsoleErrorGate.WaitAsync();
-            try
-            {
-                var previous = Console.Error;
-                try
+            var rc = await TestWorkspace.RedirectConsoleErrorAsync(
+                async writer =>
                 {
-                    Console.SetError(capture);
-                    rc = await service.RunAsync(request);
-                }
-                finally
-                {
-                    Console.SetError(previous);
-                }
-            }
-            finally
-            {
-                ConsoleErrorGate.Release();
-            }
+                    var runRc = await service.RunAsync(request);
+                    capture.Write(writer.ToString());
+                    return runRc;
+                });
 
             Assert.Equal(1, rc);
             var stderr = capture.ToString();
@@ -107,7 +92,7 @@ public sealed class ContainerMemoryLimitsTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
@@ -132,7 +117,7 @@ public sealed class ContainerMemoryLimitsTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
@@ -157,7 +142,7 @@ public sealed class ContainerMemoryLimitsTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
@@ -192,14 +177,13 @@ public sealed class ContainerMemoryLimitsTests
         }
         finally
         {
-            Directory.Delete(root, true);
+            TestWorkspace.DeleteDirectory(root);
         }
     }
 
     private static string CreateRuntimeTestRoot()
     {
-        var root = Path.Combine(Path.GetTempPath(), "podish-runtime-test-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        var root = TestWorkspace.CreateUniqueDirectory("podish-runtime-test-");
         Directory.CreateDirectory(Path.Combine(root, "ctr"));
         return root;
     }
@@ -233,18 +217,7 @@ public sealed class ContainerMemoryLimitsTests
 
     private static string ResolveGuestRootForHelloStatic()
     {
-        const string rel = "tests/linux/hello_static";
-        var cwd = Directory.GetCurrentDirectory();
-        var current = new DirectoryInfo(cwd);
-        while (current != null)
-        {
-            var candidate = Path.Combine(current.FullName, rel);
-            if (File.Exists(candidate))
-                return Path.Combine(current.FullName, "tests/linux");
-            current = current.Parent;
-        }
-
-        throw new FileNotFoundException("Could not locate tests/linux/hello_static from test working directory.");
+        return TestWorkspace.ResolveLinuxGuestRoot();
     }
 
     private sealed class FakePortForwardManager : IPortForwardManager

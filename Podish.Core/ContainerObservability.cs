@@ -59,7 +59,7 @@ public sealed class JsonFileContainerLogSink : IContainerLogSink
         _logger = logger;
         var dir = Path.GetDirectoryName(logPath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        _writer = new StreamWriter(File.Open(logPath, FileMode.Create, FileAccess.Write, FileShare.Read))
+        _writer = new StreamWriter(File.Open(logPath, FileMode.Create, FileAccess.Write, FileShare.Read | FileShare.Delete))
         {
             AutoFlush = true
         };

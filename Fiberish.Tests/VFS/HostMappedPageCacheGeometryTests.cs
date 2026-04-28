@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -93,7 +94,7 @@ public class HostMappedPageCacheGeometryTests
             var vma = Assert.Single(mm.VMAs.Where(v => v.Start == mapAddr));
             VMAManager.SyncVmArea(vma, engine, mapAddr, mapAddr + LinuxConstants.PageSize * 4);
 
-            var updated = File.ReadAllBytes(hostFile);
+            var updated = ReadAllBytesWithUnixCompatibleSharing(hostFile);
             Assert.Equal((byte)'X', updated[1]);
             Assert.Equal((byte)'Y', updated[2]);
             Assert.Equal((byte)'Z', updated[3 * LinuxConstants.PageSize + 2]);
@@ -257,7 +258,7 @@ public class HostMappedPageCacheGeometryTests
 
             file.Close();
 
-            var data = File.ReadAllBytes(hostFile);
+            var data = ReadAllBytesWithUnixCompatibleSharing(hostFile);
             Assert.Equal(3 * LinuxConstants.PageSize + 2, data.Length);
             Assert.Equal("p2"u8.ToArray(), data.AsSpan(2 * LinuxConstants.PageSize, 2).ToArray());
             Assert.Equal("p3"u8.ToArray(), data.AsSpan(3 * LinuxConstants.PageSize, 2).ToArray());
@@ -319,7 +320,7 @@ public class HostMappedPageCacheGeometryTests
             Assert.True(diagnostics.GuestPageCount >= 4);
 
             file.Close();
-            var data = File.ReadAllBytes(hostFile);
+            var data = ReadAllBytesWithUnixCompatibleSharing(hostFile);
             Assert.Equal(LinuxConstants.PageSize * 4, data.Length);
             Assert.Equal((byte)'A', data[0]);
             Assert.Equal((byte)'B', data[LinuxConstants.PageSize]);
@@ -454,7 +455,7 @@ public class HostMappedPageCacheGeometryTests
 
             file.Close();
 
-            var updated = File.ReadAllBytes(hostFile);
+            var updated = ReadAllBytesWithUnixCompatibleSharing(hostFile);
             Assert.Equal(LinuxConstants.PageSize, updated.Length);
             Assert.All(updated, b => Assert.Equal((byte)'W', b));
         }
@@ -731,7 +732,7 @@ public class HostMappedPageCacheGeometryTests
             var vma = Assert.Single(mm.VMAs.Where(v => v.Start == mapAddr));
             VMAManager.SyncVmArea(vma, engine, tailPageAddr, tailPageAddr + LinuxConstants.PageSize);
 
-            var refreshed = File.ReadAllBytes(hostFile);
+            var refreshed = ReadAllBytesWithUnixCompatibleSharing(hostFile);
             Assert.Equal(bytes.Length, refreshed.Length);
             Assert.All(refreshed.AsSpan(bytes.Length - 8).ToArray(), b => Assert.Equal((byte)'q', b));
         }
@@ -774,7 +775,17 @@ public class HostMappedPageCacheGeometryTests
             Assert.True(mm.PageMapping.TryGet(tailPageAddr, out _));
 
             using (var handle = File.OpenHandle(hostFile, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    Assert.Throws<IOException>(() => RandomAccess.SetLength(handle, LinuxConstants.PageSize + 17));
+                    Assert.Equal(1, hostInode.GetMappedPageCacheDiagnostics().GuestPageCount);
+                    Assert.True(mm.PageMapping.TryGet(tailPageAddr, out _));
+                    return;
+                }
+
                 RandomAccess.SetLength(handle, LinuxConstants.PageSize + 17);
+            }
 
             using (var reopen = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!))
                 loc.Dentry!.Inode!.Open(reopen);
@@ -872,7 +883,16 @@ public class HostMappedPageCacheGeometryTests
             Assert.True(mm.PageMapping.TryGet(secondPageAddr, out _));
 
             using (var handle = File.OpenHandle(hostFile, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    Assert.Throws<IOException>(() => RandomAccess.SetLength(handle, 123));
+                    Assert.True(mm.PageMapping.TryGet(secondPageAddr, out _));
+                    return;
+                }
+
                 RandomAccess.SetLength(handle, 123);
+            }
 
             using (var reopen = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!))
                 loc.Dentry!.Inode!.Open(reopen);
@@ -908,6 +928,15 @@ public class HostMappedPageCacheGeometryTests
             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[test]", engine);
         for (var offset = 0; offset < length; offset += LinuxConstants.PageSize)
             Assert.True(mm.HandleFault(addr + (uint)offset, true, engine));
+    }
+
+    private static byte[] ReadAllBytesWithUnixCompatibleSharing(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var copy = new MemoryStream();
+        stream.CopyTo(copy);
+        return copy.ToArray();
     }
 
     private static SyscallManager CreateTmpfsRoot(Engine engine, VMAManager mm)
