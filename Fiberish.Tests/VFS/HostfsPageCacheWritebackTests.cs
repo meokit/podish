@@ -563,8 +563,8 @@ public class HostfsPageCacheWritebackTests
 
         try
         {
-            var runtime1 = new TestRuntimeFactory();
-            var runtime2 = new TestRuntimeFactory();
+            var runtime1 = new TestRuntimeFactory(BufferedOnlyGeometry);
+            var runtime2 = new TestRuntimeFactory(BufferedOnlyGeometry);
             using var engine1 = runtime1.CreateEngine();
             using var engine2 = runtime2.CreateEngine();
             var mm1 = runtime1.CreateAddressSpace();
@@ -575,9 +575,8 @@ public class HostfsPageCacheWritebackTests
             sm2.MountRootHostfs(root);
 
             var scheduler = new KernelScheduler();
-
-            scheduler.RegisterProcess(new Process(1001, mm1, sm1));
-            scheduler.RegisterProcess(new Process(1002, mm2, sm2));
+            var task1 = AttachTaskToScheduler(scheduler, 1001, mm1, engine1, sm1);
+            var task2 = AttachTaskToScheduler(scheduler, 1002, mm2, engine2, sm2);
 
             var loc2 = sm2.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
             Assert.True(loc2.IsValid);
@@ -590,10 +589,68 @@ public class HostfsPageCacheWritebackTests
                 MapFlags.Shared | MapFlags.Fixed, file2, 0, "MAP_SHARED", engine2);
             Assert.True(mm2.HandleFault(mapAddr, true, engine2));
             Assert.True(engine2.CopyToUser(mapAddr + 1, "xy"u8.ToArray()));
+            Assert.Equal("ABCDE", ReadAllTextWithUnixCompatibleSharing(hostFile));
 
             var rc = await CallSys(sm1, engine1, "SysSync");
             Assert.Equal(0, rc);
-        Assert.Equal("AxyDE", ReadAllTextWithUnixCompatibleSharing(hostFile));
+            Assert.Equal("AxyDE", ReadAllTextWithUnixCompatibleSharing(hostFile));
+            GC.KeepAlive(task1);
+            GC.KeepAlive(task2);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task Sync_DoesNotWriteBackMappedDirtyPagesFromUnrelatedRuntime()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-sync-unrelated-runtime-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "ABCDE");
+
+        try
+        {
+            var runtime1 = new TestRuntimeFactory(BufferedOnlyGeometry);
+            var runtime2 = new TestRuntimeFactory(BufferedOnlyGeometry);
+            using var engine1 = runtime1.CreateEngine();
+            using var engine2 = runtime2.CreateEngine();
+            var mm1 = runtime1.CreateAddressSpace();
+            var mm2 = runtime2.CreateAddressSpace();
+            var sm1 = new SyscallManager(engine1, mm1, 0);
+            var sm2 = new SyscallManager(engine2, mm2, 0);
+            sm1.MountRootHostfs(root);
+            sm2.MountRootHostfs(root);
+
+            var scheduler1 = new KernelScheduler();
+            var scheduler2 = new KernelScheduler();
+            var task1 = AttachTaskToScheduler(scheduler1, 1021, mm1, engine1, sm1);
+            var task2 = AttachTaskToScheduler(scheduler2, 1022, mm2, engine2, sm2);
+
+            var loc2 = sm2.PathWalkWithFlags("/data.bin", LookupFlags.FollowSymlink);
+            Assert.True(loc2.IsValid);
+            var file2 = new LinuxFile(loc2.Dentry!, FileFlags.O_RDWR, loc2.Mount!);
+            loc2.Dentry!.Inode!.Open(file2);
+            _ = sm2.AllocFD(file2);
+
+            const uint mapAddr = 0x45100000;
+            mm2.Mmap(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, file2, 0, "MAP_SHARED", engine2);
+            Assert.True(mm2.HandleFault(mapAddr, true, engine2));
+            Assert.True(engine2.CopyToUser(mapAddr + 1, "xy"u8.ToArray()));
+            Assert.Equal("ABCDE", ReadAllTextWithUnixCompatibleSharing(hostFile));
+
+            var rc = await CallSys(sm1, engine1, "SysSync");
+            Assert.Equal(0, rc);
+            Assert.Equal("ABCDE", ReadAllTextWithUnixCompatibleSharing(hostFile));
+
+            rc = await CallSys(sm2, engine2, "SysSync");
+            Assert.Equal(0, rc);
+            Assert.Equal("AxyDE", ReadAllTextWithUnixCompatibleSharing(hostFile));
+            GC.KeepAlive(task1);
+            GC.KeepAlive(task2);
         }
         finally
         {
@@ -646,7 +703,7 @@ public class HostfsPageCacheWritebackTests
 
             var rc = await CallSys(sm1, engine1, "SysSync");
             Assert.Equal(0, rc);
-        Assert.Equal("AxyDE", ReadAllTextWithUnixCompatibleSharing(hostFile));
+            Assert.Equal("AxyDE", ReadAllTextWithUnixCompatibleSharing(hostFile));
         }
         finally
         {
@@ -1451,6 +1508,17 @@ public class HostfsPageCacheWritebackTests
         Assert.NotNull(method);
         var task = (ValueTask<int>)method!.Invoke(sm, [engine, a1, a2, a3, a4, a5, a6])!;
         return await task;
+    }
+
+    private static FiberTask AttachTaskToScheduler(KernelScheduler scheduler, int pid, VMAManager mm, Engine engine,
+        SyscallManager sm)
+    {
+        var process = new Process(pid, mm, sm);
+        scheduler.RegisterProcess(process);
+        var task = new FiberTask(pid, process, engine, scheduler);
+        engine.Owner = task;
+        scheduler.CurrentTask = task;
+        return task;
     }
 
     private static void MapUserPage(VMAManager mm, Engine engine, uint addr)

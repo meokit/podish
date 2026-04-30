@@ -409,20 +409,6 @@ public partial class SyscallManager
 
         if (managers.Count == 0)
         {
-            foreach (var manager in SyscallManager.GetLiveManagersSnapshot())
-            {
-                managers.Add(manager);
-                var fallbackProcess = manager.CurrentProcess;
-                var fallbackEngine = fallbackProcess?.Threads
-                    .Select(static t => t.CPU)
-                    .FirstOrDefault(static cpu => cpu.State != IntPtr.Zero) ?? manager.CurrentSyscallEngine;
-                if (!mmTargets.ContainsKey(manager.Mem))
-                    mmTargets[manager.Mem] = (fallbackEngine, fallbackProcess);
-            }
-        }
-
-        if (managers.Count == 0)
-        {
             managers.Add(this);
             var fallbackProcess = CurrentProcess;
             var fallbackEngine = fallbackProcess?.Threads
