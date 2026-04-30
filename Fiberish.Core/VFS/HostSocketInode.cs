@@ -19,6 +19,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
     private static readonly ILogger Logger = Logging.CreateLogger<HostSocketInode>();
     [ThreadStatic] private static StringBuilder? CachedHexBuilder;
     private readonly HostSocketReadiness _readiness;
+    private int _connectInFlight;
     private int _cachedSocketError;
     private int _receiveTimeoutMs;
     private int _sendTimeoutMs;
@@ -409,74 +410,23 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
     {
         if (endpointObj is not EndPoint endpoint) return -(int)Errno.EAFNOSUPPORT;
         while (true)
-            try
-            {
-                NativeSocket.Connect(endpoint);
-                return await FinalizeConnectResultAsync(file, task);
-            }
-            catch (SocketException ex)
-            {
-                var error = ex.SocketErrorCode;
-                if (error is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
-                    or SocketError.AlreadyInProgress)
-                {
-                    if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
-                    {
-                        Logger.LogDebug(
-                            "Host socket connect in progress (ino={Ino}, flags={Flags:X}, endpoint={Endpoint})",
-                            Ino,
-                            (int)file.Flags, endpoint);
-                        return -(int)Errno.EINPROGRESS;
-                    }
-
-                    var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
-                    if (!ready)
-                        return _sendTimeoutMs > 0 ? -(int)Errno.EINTR : -(int)Errno.ERESTARTSYS;
-
-                    var cachedErrno = ConsumeCachedSocketError();
-                    if (cachedErrno != 0)
-                        return -cachedErrno;
-
-                    var err = GetPendingSocketError();
-                    if (err == SocketError.SocketError)
-                        return -(int)Errno.EIO;
-                    if (err == SocketError.Success || err == SocketError.IsConnected)
-                        return 0;
-                    if (err is SocketError.WouldBlock or SocketError.IOPending or SocketError.InProgress
-                        or SocketError.AlreadyInProgress)
-                        continue;
-                    return MapSocketError(err);
-                }
-
-                return MapSocketError(error);
-            }
-            catch (ObjectDisposedException)
-            {
-                return -(int)Errno.ENOTCONN;
-            }
-    }
-
-    private async ValueTask<int> FinalizeConnectResultAsync(LinuxFile file, FiberTask task)
-    {
-        if (NativeSocket.SocketType != SocketType.Stream)
-            return 0;
-
-        while (true)
         {
-            var err = GetPendingSocketError();
-            if (err == SocketError.SocketError)
-                return -(int)Errno.EIO;
-
-            if (NativeSocket.Connected && (err == SocketError.Success || err == SocketError.IsConnected))
-                return 0;
-
-            var pending = err is SocketError.Success or SocketError.WouldBlock or SocketError.IOPending
-                or SocketError.InProgress or SocketError.AlreadyInProgress;
-            if (!pending)
-                return MapSocketError(err);
+            var connectStart = StartAsyncConnect(endpoint);
+            if (!connectStart.Pending)
+            {
+                if (connectStart.Error is SocketError.Success or SocketError.IsConnected)
+                    return 0;
+                return MapSocketError(connectStart.Error);
+            }
 
             if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+            {
+                Logger.LogDebug(
+                    "Host socket connect in progress (ino={Ino}, flags={Flags:X}, endpoint={Endpoint})",
+                    Ino,
+                    (int)file.Flags, endpoint);
                 return -(int)Errno.EINPROGRESS;
+            }
 
             var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
             if (!ready)
@@ -485,6 +435,87 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
             var cachedErrno = ConsumeCachedSocketError();
             if (cachedErrno != 0)
                 return -cachedErrno;
+
+            if (NativeSocket.Connected)
+                return 0;
+
+            var err = GetPendingSocketError();
+            if (err == SocketError.SocketError)
+                return -(int)Errno.EIO;
+            if (NativeSocket.Connected && (err == SocketError.Success || err == SocketError.IsConnected))
+                return 0;
+            if (err is not SocketError.Success and not SocketError.WouldBlock and not SocketError.IOPending
+                and not SocketError.InProgress and not SocketError.AlreadyInProgress)
+                return MapSocketError(err);
+
+            if (!HasManagedConnectPending)
+                return -(int)Errno.ECONNREFUSED;
+        }
+    }
+
+    private ConnectStartResult StartAsyncConnect(EndPoint endpoint)
+    {
+        if (Interlocked.CompareExchange(ref _connectInFlight, 1, 0) != 0)
+            return new ConnectStartResult(true, SocketError.AlreadyInProgress);
+
+        SocketAsyncEventArgs? args = null;
+        try
+        {
+            args = new SocketAsyncEventArgs
+            {
+                RemoteEndPoint = endpoint
+            };
+            args.Completed += OnConnectCompleted;
+
+            if (!NativeSocket.ConnectAsync(args))
+            {
+                var error = args.SocketError;
+                FinishAsyncConnect(args);
+                return new ConnectStartResult(false, error);
+            }
+
+            return new ConnectStartResult(true, SocketError.IOPending);
+        }
+        catch (SocketException ex)
+        {
+            if (args != null)
+            {
+                args.Completed -= OnConnectCompleted;
+                args.Dispose();
+            }
+
+            Interlocked.Exchange(ref _connectInFlight, 0);
+            return new ConnectStartResult(false, ex.SocketErrorCode);
+        }
+        catch (ObjectDisposedException)
+        {
+            if (args != null)
+            {
+                args.Completed -= OnConnectCompleted;
+                args.Dispose();
+            }
+
+            Interlocked.Exchange(ref _connectInFlight, 0);
+            return new ConnectStartResult(false, SocketError.NotConnected);
+        }
+    }
+
+    private void OnConnectCompleted(object? sender, SocketAsyncEventArgs e)
+    {
+        FinishAsyncConnect(e);
+    }
+
+    private void FinishAsyncConnect(SocketAsyncEventArgs args)
+    {
+        try
+        {
+            _readiness.NotifyManagedConnectCompleted(args.SocketError);
+        }
+        finally
+        {
+            args.Completed -= OnConnectCompleted;
+            args.Dispose();
+            Interlocked.Exchange(ref _connectInFlight, 0);
         }
     }
 
@@ -1142,6 +1173,8 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
             SocketError.HostUnreachable => -(int)Errno.EHOSTUNREACH,
             SocketError.WouldBlock => -(int)Errno.EAGAIN,
             SocketError.IOPending => -(int)Errno.EAGAIN,
+            SocketError.InProgress => -(int)Errno.EINPROGRESS,
+            SocketError.AlreadyInProgress => -(int)Errno.EALREADY,
             SocketError.Interrupted => -(int)Errno.EINTR,
             SocketError.Shutdown => -(int)Errno.EPIPE,
             SocketError.InvalidArgument => -(int)Errno.EINVAL,
@@ -1168,10 +1201,19 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
         return Interlocked.Exchange(ref _cachedSocketError, 0);
     }
 
+    internal int PeekCachedSocketError()
+    {
+        return Volatile.Read(ref _cachedSocketError);
+    }
+
+    internal bool HasManagedConnectPending => Volatile.Read(ref _connectInFlight) != 0;
+
     private static bool IsNonBlocking(LinuxFile file, int flags)
     {
         return (file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & LinuxConstants.MSG_DONTWAIT) != 0;
     }
+
+    private readonly record struct ConnectStartResult(bool Pending, SocketError Error);
 
     private static SocketFlags TranslateSendFlags(int linuxFlags)
     {

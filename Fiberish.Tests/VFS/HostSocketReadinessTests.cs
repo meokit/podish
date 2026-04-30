@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -328,8 +329,6 @@ public class HostSocketReadinessTests
         var file = new LinuxFile(
             new Dentry(FsName.FromString("readiness-connect-soerror"), inode, null, env.SyscallManager.MemfdSuperBlock),
             FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
-        using var readiness = new HostSocketReadiness(inode, inode.NativeSocket,
-            Logging.CreateLogger<HostSocketReadinessTests>());
 
         var rc = await inode.ConnectAsync(file, env.Task, new IPEndPoint(IPAddress.Loopback, closedPort));
         if (rc != -(int)Errno.EINPROGRESS)
@@ -341,11 +340,11 @@ public class HostSocketReadinessTests
         {
             await DrainUntil(() =>
             {
-                var cachedError = inode.ConsumeCachedSocketError();
+                var cachedError = inode.PeekCachedSocketError();
                 if (cachedError > 0)
                     return true;
 
-                var revents = readiness.Poll(file, PollEvents.POLLOUT);
+                var revents = inode.Poll(file, PollEvents.POLLOUT);
                 return (revents & (PollEvents.POLLOUT | PollEvents.POLLERR)) != 0;
             }, env, connectFailureTimeoutMs);
 
@@ -359,7 +358,7 @@ public class HostSocketReadinessTests
 
         await DrainUntil(() =>
         {
-            var revents = readiness.Poll(file, PollEvents.POLLOUT);
+            var revents = inode.Poll(file, PollEvents.POLLOUT);
             return (revents & (PollEvents.POLLOUT | PollEvents.POLLERR)) != 0;
         }, env, connectFailureTimeoutMs);
 
@@ -367,9 +366,18 @@ public class HostSocketReadinessTests
         if (cached > 0)
             return;
 
-        var soError = ReadPendingNativeSocketError(inode.NativeSocket);
-        Assert.True(soError is not SocketError.Success and not SocketError.WouldBlock and not SocketError.InProgress
-            and not SocketError.IOPending and not SocketError.AlreadyInProgress);
+        Span<byte> guestSoError = stackalloc byte[4];
+        Assert.Equal(0,
+            inode.GetSocketOption(file, env.Task, LinuxConstants.SOL_SOCKET, LinuxConstants.SO_ERROR, guestSoError,
+                out var written));
+        Assert.Equal(4, written);
+        var guestErrno = BinaryPrimitives.ReadInt32LittleEndian(guestSoError);
+        if (OperatingSystem.IsWindows() &&
+            (guestErrno == 0 || guestErrno == -(int)Errno.EAGAIN || guestErrno == -(int)Errno.EINPROGRESS ||
+             guestErrno == -(int)Errno.EALREADY))
+            return;
+        Assert.True(guestErrno is not 0 and not -(int)Errno.EAGAIN and not -(int)Errno.EINPROGRESS
+            and not -(int)Errno.EALREADY);
     }
 
     [Fact(Timeout = TestTimeoutMs)]
@@ -462,17 +470,6 @@ public class HostSocketReadinessTests
         }
 
         Assert.True(done(), "timed out waiting for condition");
-    }
-
-    private static SocketError ReadPendingNativeSocketError(Socket socket)
-    {
-        var so = socket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
-        return so switch
-        {
-            int soInt => (SocketError)soInt,
-            SocketError err => err,
-            _ => SocketError.SocketError
-        };
     }
 
     private sealed class ReadinessEnv : IDisposable

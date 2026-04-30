@@ -111,7 +111,10 @@ internal sealed class HostSocketProbeEngine : IDisposable
         {
             regOut = RegisterWaiter(dispatcher, callback, PollEvents.POLLOUT);
             if (IsConnectPending(file))
-                ArmConnectProbe();
+            {
+                if (!_owner.HasManagedConnectPending)
+                    ArmConnectProbe();
+            }
             else
                 ArmWriteProbe();
         }
@@ -126,6 +129,17 @@ internal sealed class HostSocketProbeEngine : IDisposable
         _readyCacheBits = (short)(_readyCacheBits & ~bits);
         if (_readyCacheBits == 0)
             _readyCacheExpireAtMs = 0;
+    }
+
+    public void NotifyManagedConnectCompleted(SocketError error)
+    {
+        if (error is not SocketError.Success and not SocketError.IsConnected)
+            _owner.CachePendingSocketError(error);
+
+        var readyHint = (short)(PollEvents.POLLOUT |
+                                (error is SocketError.Success or SocketError.IsConnected ? 0 : PollEvents.POLLERR));
+        PromoteReadyCache(readyHint);
+        NotifyWaiters(readyHint, false, true);
     }
 
     public bool TryDequeueAcceptedSocket(out Socket socket)
@@ -207,12 +221,25 @@ internal sealed class HostSocketProbeEngine : IDisposable
                 hasError = true;
             }
 
+            if (_owner.PeekCachedSocketError() != 0)
+            {
+                hasError = true;
+                canWrite = false;
+            }
+
             if ((events & PollEvents.POLLOUT) != 0 &&
                 _socket.SocketType == SocketType.Stream &&
                 !_socket.Connected &&
                 (canWrite || hasError))
                 try
                 {
+                    if (_owner.HasManagedConnectPending)
+                    {
+                        canWrite = false;
+                        hasError = false;
+                    }
+                    else
+                    {
                     var soObj = _socket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
                     var soError = soObj switch
                     {
@@ -235,6 +262,7 @@ internal sealed class HostSocketProbeEngine : IDisposable
                     else
                     {
                         hasError = false;
+                    }
                     }
                 }
                 catch
@@ -295,7 +323,10 @@ internal sealed class HostSocketProbeEngine : IDisposable
         if ((events & PollEvents.POLLOUT) != 0)
         {
             if (IsConnectPending(null))
-                ArmConnectProbe();
+            {
+                if (!_owner.HasManagedConnectPending)
+                    ArmConnectProbe();
+            }
             else
                 ArmWriteProbe();
         }
@@ -374,7 +405,23 @@ internal sealed class HostSocketProbeEngine : IDisposable
         if (Interlocked.Exchange(ref _writeProbeInFlight, 1) != 0)
             return;
 
-        ThreadPool.UnsafeQueueUserWorkItem(static state => ((HostSocketProbeEngine)state!).RunConnectProbe(), this);
+        var args = EnsureProbeArgs(ProbeKind.Write);
+        if (args.UserToken is ProbeTag connectTag) connectTag.Owner = this;
+        try
+        {
+            if (!_socket.ConnectAsync(args))
+                HandleProbeCompleted(args, ProbeKind.Write);
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.WouldBlock or SocketError.IOPending
+                                             or SocketError.InProgress or SocketError.AlreadyInProgress)
+        {
+            Interlocked.Exchange(ref _writeProbeInFlight, 0);
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _writeProbeInFlight, 0);
+            NotifyWaiters(PollEvents.POLLERR, false, true);
+        }
     }
 
     private void ArmAcceptProbe()
@@ -463,7 +510,13 @@ internal sealed class HostSocketProbeEngine : IDisposable
             if (e.LastOperation == SocketAsyncOperation.Send && e.SocketError == SocketError.Success)
                 readyHint |= PollEvents.POLLOUT;
             if (e.LastOperation == SocketAsyncOperation.Connect)
+            {
                 readyHint |= PollEvents.POLLOUT | PollEvents.POLLERR;
+                if (e.SocketError is not SocketError.Success and not SocketError.WouldBlock and not SocketError.IOPending
+                    and not SocketError.OperationAborted and not SocketError.Interrupted
+                    and not SocketError.InProgress and not SocketError.AlreadyInProgress)
+                    _owner.CachePendingSocketError(e.SocketError);
+            }
         }
 
         if (e.SocketError is not SocketError.Success and not SocketError.WouldBlock and not SocketError.IOPending
@@ -643,93 +696,6 @@ internal sealed class HostSocketProbeEngine : IDisposable
         }
 
         pool.Add(saea);
-    }
-
-    private void RunConnectProbe()
-    {
-        short readyHint = 0;
-
-        try
-        {
-            while (Volatile.Read(ref _disposed) == 0)
-            {
-                readyHint = ProbeConnectReadyHint();
-                if (readyHint != 0)
-                    break;
-
-                Thread.Sleep(1);
-            }
-        }
-        catch
-        {
-            if (Volatile.Read(ref _disposed) == 0)
-                readyHint = PollEvents.POLLERR;
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _writeProbeInFlight, 0);
-        }
-
-        if (readyHint == 0 || Volatile.Read(ref _disposed) != 0)
-            return;
-
-        PromoteReadyCache(readyHint);
-        NotifyWaiters(readyHint, false, true);
-    }
-
-    private short ProbeConnectReadyHint()
-    {
-        try
-        {
-            var canWrite = false;
-            var hasError = false;
-
-            try
-            {
-                canWrite = _socket.Poll(0, SelectMode.SelectWrite);
-            }
-            catch (SocketException)
-            {
-                hasError = true;
-            }
-
-            try
-            {
-                hasError |= _socket.Poll(0, SelectMode.SelectError);
-            }
-            catch (SocketException)
-            {
-                hasError = true;
-            }
-
-            var soObj = _socket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Error);
-            var soError = soObj switch
-            {
-                int i => (SocketError)i,
-                SocketError se => se,
-                _ => SocketError.SocketError
-            };
-
-            if (soError is not SocketError.Success and not SocketError.IsConnected
-                and not SocketError.WouldBlock and not SocketError.IOPending
-                and not SocketError.InProgress and not SocketError.AlreadyInProgress)
-            {
-                _owner.CachePendingSocketError(soError);
-                return (short)(PollEvents.POLLOUT | PollEvents.POLLERR);
-            }
-
-            if (_socket.Connected || canWrite)
-                return PollEvents.POLLOUT;
-
-            if (hasError)
-                return (short)(PollEvents.POLLOUT | PollEvents.POLLERR);
-
-            return 0;
-        }
-        catch (ObjectDisposedException)
-        {
-            return PollEvents.POLLERR;
-        }
     }
 
     private sealed class WaiterRegistration : IDisposable

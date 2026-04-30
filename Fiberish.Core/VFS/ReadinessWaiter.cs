@@ -17,9 +17,12 @@ internal sealed class ReadinessWaiter
 
     public async ValueTask<bool> WaitAsync(LinuxFile file, IReadyDispatcher dispatcher, FiberTask task, short events)
     {
+        const short terminal = Fiberish.Syscalls.PollEvents.POLLERR |
+                               Fiberish.Syscalls.PollEvents.POLLHUP |
+                               Fiberish.Syscalls.PollEvents.POLLNVAL;
         while (true)
         {
-            if ((_poll(file, events) & events) != 0)
+            if ((_poll(file, events) & (events | terminal)) != 0)
                 return true;
 
             if (task.HasInterruptingPendingSignal())
@@ -34,7 +37,7 @@ internal sealed class ReadinessWaiter
 
                 if (registration == null)
                 {
-                    if ((_poll(file, events) & events) != 0)
+                    if ((_poll(file, events) & (events | terminal)) != 0)
                         return true;
                     var spin = await new SleepAwaitable(1, task);
                     if (spin == AwaitResult.Interrupted)

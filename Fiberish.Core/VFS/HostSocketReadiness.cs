@@ -49,6 +49,11 @@ internal sealed class HostSocketReadiness : IDisposable
         _probeEngine.ClearReadyBits(bits);
     }
 
+    public void NotifyManagedConnectCompleted(SocketError error)
+    {
+        _probeEngine.NotifyManagedConnectCompleted(error);
+    }
+
     public bool TryDequeueAcceptedSocket(out Socket socket)
     {
         return _probeEngine.TryDequeueAcceptedSocket(out socket);
