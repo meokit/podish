@@ -50,7 +50,7 @@
             <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_BUILD_TYPE=Release</CMakeArgs>
             <CMakeArgs Condition="'$(IsBrowserWasm)' != 'true' And $([MSBuild]::IsOsPlatform('Windows')) != 'true'">$(CMakeArgs) -DCMAKE_BUILD_TYPE=Release</CMakeArgs>
             <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('OSX')) And '$(IsBrowserWasm)' != 'true'">$(CMakeArgs) -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++</CMakeArgs>
-            <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('Linux')) And '$(IsBrowserWasm)' != 'true'">$(CMakeArgs) -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++</CMakeArgs>
+            <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('Linux')) And '$(IsBrowserWasm)' != 'true'">$(CMakeArgs) -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_CXX_FLAGS=-stdlib=libc++ -DCMAKE_SHARED_LINKER_FLAGS=-stdlib=libc++</CMakeArgs>
             
             <!-- CMake 4.1 on Windows does not yet expose a Visual Studio 2026 generator, so use Ninja Multi-Config
                  with the Visual Studio LLVM toolchain explicitly selected. -->
