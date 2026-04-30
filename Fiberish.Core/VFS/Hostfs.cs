@@ -411,7 +411,10 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 
     internal int? GetVisibleHostLinkCount(HostInodeKey identity, InodeType type, int? hostLinkCount)
     {
-        if (type == InodeType.Directory || !hostLinkCount.HasValue || !OperatingSystem.IsWindows())
+        if (type == InodeType.Directory)
+            return null;
+
+        if (!hostLinkCount.HasValue || !OperatingSystem.IsWindows())
             return hostLinkCount;
 
         lock (Lock)
@@ -2116,17 +2119,20 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     private void ApplyHostTimes(DateTime? atime, DateTime? mtime, DateTime? ctime)
     {
         var hostPath = ResolveHostPath();
+        var canProjectCreationTime = OperatingSystem.IsWindows();
         if (Type == InodeType.Directory)
         {
             if (atime.HasValue) Directory.SetLastAccessTimeUtc(hostPath, NormalizeUtc(atime.Value));
             if (mtime.HasValue) Directory.SetLastWriteTimeUtc(hostPath, NormalizeUtc(mtime.Value));
-            if (ctime.HasValue) Directory.SetCreationTimeUtc(hostPath, NormalizeUtc(ctime.Value));
+            if (canProjectCreationTime && ctime.HasValue)
+                Directory.SetCreationTimeUtc(hostPath, NormalizeUtc(ctime.Value));
             return;
         }
 
         if (atime.HasValue) File.SetLastAccessTimeUtc(hostPath, NormalizeUtc(atime.Value));
         if (mtime.HasValue) File.SetLastWriteTimeUtc(hostPath, NormalizeUtc(mtime.Value));
-        if (ctime.HasValue) File.SetCreationTimeUtc(hostPath, NormalizeUtc(ctime.Value));
+        if (canProjectCreationTime && ctime.HasValue)
+            File.SetCreationTimeUtc(hostPath, NormalizeUtc(ctime.Value));
     }
 
     private void InvalidateProjectedMetadataCache()
