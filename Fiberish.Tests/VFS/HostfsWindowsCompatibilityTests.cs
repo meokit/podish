@@ -156,20 +156,66 @@ public class HostfsWindowsCompatibilityTests
     }
 
     [Fact]
-    public void Hostfs_Windows_StartupSweep_RemovesLeftoverHiddenDeletedEntries()
+    public void Hostfs_Windows_MountAndShutdown_DoNotSweepDeepHiddenDeletedEntries()
     {
         if (!OperatingSystem.IsWindows())
             return;
 
         var root = CreateTempRoot();
-        var hiddenPath = Path.Combine(root, $"{HostSuperBlock.WindowsDeletedNamePrefix}deadbeef.1234");
+        var nested = Path.Combine(root, "nested");
+        Directory.CreateDirectory(nested);
+        var hiddenPath = Path.Combine(nested, $"{HostSuperBlock.WindowsDeletedNamePrefix}deadbeef.1234");
         File.WriteAllText(hiddenPath, "orphan");
         HostSuperBlock? sb = null;
 
         try
         {
             (sb, _) = MountHostfs(root);
-            Assert.False(File.Exists(hiddenPath));
+            Assert.True(File.Exists(hiddenPath));
+            ShutdownSuperBlock(sb);
+            sb = null;
+            Assert.True(File.Exists(hiddenPath));
+        }
+        finally
+        {
+            CleanupMountAndRoot(sb, root);
+        }
+    }
+
+    [Fact]
+    public void Hostfs_Windows_LazySweep_CleansOnlyAccessedDirectory()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var root = CreateTempRoot();
+        var rootHiddenPath = Path.Combine(root, $"{HostSuperBlock.WindowsDeletedNamePrefix}root.1234");
+        var nested = Path.Combine(root, "nested");
+        Directory.CreateDirectory(nested);
+        var nestedHiddenPath = Path.Combine(nested, $"{HostSuperBlock.WindowsDeletedNamePrefix}nested.1234");
+        File.WriteAllText(rootHiddenPath, "root-orphan");
+        File.WriteAllText(nestedHiddenPath, "nested-orphan");
+        File.WriteAllText(Path.Combine(root, "visible.txt"), "visible");
+        HostSuperBlock? sb = null;
+
+        try
+        {
+            (sb, var rootInode) = MountHostfs(root);
+            Assert.True(File.Exists(rootHiddenPath));
+            Assert.True(File.Exists(nestedHiddenPath));
+
+            Assert.NotNull(rootInode.Lookup("visible.txt"));
+            Assert.False(File.Exists(rootHiddenPath));
+            Assert.True(File.Exists(nestedHiddenPath));
+            Assert.DoesNotContain(rootInode.GetEntries(), entry =>
+                entry.Name.ToString()!.StartsWith(HostSuperBlock.WindowsDeletedNamePrefix,
+                    StringComparison.OrdinalIgnoreCase));
+
+            var nestedDentry = rootInode.Lookup("nested");
+            Assert.NotNull(nestedDentry);
+            var nestedInode = Assert.IsType<HostInode>(nestedDentry!.Inode);
+            _ = nestedInode.GetEntries();
+            Assert.False(File.Exists(nestedHiddenPath));
         }
         finally
         {

@@ -221,7 +221,6 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
     const uint32_t target_tag = addr & ~PAGE_MASK;
     const uint32_t cross_page_mask = (addr ^ end_addr) & ~PAGE_MASK;
 
-#if !defined(__wasm32__)
     if (((utlb->tag_r ^ target_tag) | cross_page_mask) == 0) [[likely]] {
 #ifdef ENABLE_TLB_STATS
         stats.l1_read_hits++;
@@ -231,9 +230,6 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
         std::memcpy(&val, (const void*)(utlb->addend + addr), sizeof(T));
         return val;
     }
-#else
-    (void)utlb;
-#endif
 
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
     const auto entry = tlb.read_tlb[idx];
@@ -246,7 +242,6 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
         T val;
         std::memcpy(&val, (const void*)(entry.addend + addr), sizeof(T));
 
-#if !defined(__wasm32__)
         utlb->tag_r = target_tag;
         utlb->addend = entry.addend;
         // Read-path refill must stay cheap: whether writes may fast-path is
@@ -254,13 +249,10 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
         utlb->tag_w = (has_property(entry.perm, Property::Write) && !has_property(entry.perm, Property::ForceWriteSlow))
                           ? target_tag
                           : std::numeric_limits<decltype(utlb->tag_w)>::max();
-#endif
         return val;
     }
 
-#if !defined(__wasm32__)
     InvalidateMicroTLB(utlb);
-#endif
 
 #ifdef ENABLE_TLB_STATS
     stats.read_misses++;
@@ -276,7 +268,6 @@ MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
     const uint32_t target_tag = addr & ~PAGE_MASK;
     const uint32_t cross_page_mask = (addr ^ end_addr) & ~PAGE_MASK;
 
-#if !defined(__wasm32__)
     if (((utlb->tag_w ^ target_tag) | cross_page_mask) == 0) [[likely]] {
 #ifdef ENABLE_TLB_STATS
         stats.l1_write_hits++;
@@ -285,9 +276,6 @@ MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
         std::memcpy((void*)(utlb->addend + addr), &val, sizeof(T));
         return {};
     }
-#else
-    (void)utlb;
-#endif
 
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
     const auto entry = tlb.write_tlb[idx];
@@ -299,21 +287,17 @@ MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
 #endif
         std::memcpy((void*)(entry.addend + addr), &val, sizeof(T));
 
-#if !defined(__wasm32__)
         utlb->tag_w = target_tag;
         utlb->addend = entry.addend;
         utlb->tag_r =
             has_property(entry.perm, Property::Read) ? target_tag : std::numeric_limits<decltype(utlb->tag_r)>::max();
-#endif
         return {};
     }
 
     // A write miss can be followed by a slow-path COW remap on this page.
     // Invalidate both read/write micro-TLB tags to avoid stale read hits
     // against the pre-remap addend in the same translated block.
-#if !defined(__wasm32__)
     InvalidateMicroTLB(utlb);
-#endif
     tlb.flush_page(addr);
 #ifdef ENABLE_TLB_STATS
     stats.write_misses++;

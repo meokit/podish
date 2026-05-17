@@ -49,6 +49,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
     private readonly Dictionary<HostInode, HostInodeKey> _identityByInode = [];
     private readonly Dictionary<HostInodeKey, HostInode> _inodeByIdentity = [];
     private readonly Dictionary<HostInodeKey, int> _hiddenLinkCountByIdentity = [];
+    private readonly HashSet<string> _countedHiddenDeletedPaths = new(PathComparer);
     private readonly IMountBoundaryPolicy _mountBoundaryPolicy;
     private readonly ulong? _rootMountDomainId;
     private readonly ISpecialNodePolicy _specialNodePolicy;
@@ -67,7 +68,6 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
             ? rootNode.MountDomainId
             : null;
         MetadataStore = new HostfsMetadataStore(HostRoot, !options.MetadataLess);
-        InitializeWindowsCompatibilityState();
     }
 
     public string HostRoot { get; }
@@ -272,7 +272,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 
         File.Move(normalizedVisiblePath, hiddenPath);
         MetadataStore.RenamePath(normalizedVisiblePath, hiddenPath);
-        AddHiddenLink(inode.Identity);
+        CountHiddenDeletedPath(hiddenPath, inode.Identity);
         return hiddenPath;
     }
 
@@ -397,7 +397,6 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
 
     protected override void Shutdown()
     {
-        SweepWindowsDeletedEntries();
         base.Shutdown();
         lock (Lock)
         {
@@ -406,6 +405,7 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
             _inodeByIdentity.Clear();
             _identityByInode.Clear();
             _hiddenLinkCountByIdentity.Clear();
+            _countedHiddenDeletedPaths.Clear();
         }
     }
 
@@ -452,35 +452,46 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
         }
     }
 
-    private void InitializeWindowsCompatibilityState()
+    internal void SweepWindowsDeletedEntriesInDirectory(string directory)
     {
-        if (!OperatingSystem.IsWindows() || !Directory.Exists(HostRoot))
+        if (!OperatingSystem.IsWindows())
             return;
 
-        SweepWindowsDeletedEntries();
-    }
-
-    private void SweepWindowsDeletedEntries()
-    {
-        if (!OperatingSystem.IsWindows() || !Directory.Exists(HostRoot))
+        var normalizedDirectory = NormalizeHostPath(directory);
+        if (!Directory.Exists(normalizedDirectory))
             return;
 
-        foreach (var hiddenPath in EnumerateWindowsDeletedEntries())
+        string[] entries;
+        try
+        {
+            entries = Directory.GetFileSystemEntries(normalizedDirectory);
+        }
+        catch
+        {
+            return;
+        }
+
+        foreach (var hiddenPath in entries.Where(entry => IsInternalHiddenName(Path.GetFileName(entry))))
         {
             if (!TryResolveRawNode(hiddenPath, out var node))
                 continue;
 
+            var normalizedHiddenPath = NormalizeHostPath(hiddenPath);
             var retained = false;
             if (!HostInode.HasActiveSharedState(node.Identity))
             {
                 try
                 {
-                    File.Delete(hiddenPath);
-                    MetadataStore.RemovePath(hiddenPath);
+                    if (node.RawType == InodeType.Directory)
+                        Directory.Delete(normalizedHiddenPath, true);
+                    else
+                        File.Delete(normalizedHiddenPath);
+                    MetadataStore.RemovePath(normalizedHiddenPath);
+                    UncountHiddenDeletedPath(normalizedHiddenPath, node.Identity);
                 }
                 catch
                 {
-                    retained = PathExistsOnHostRaw(hiddenPath);
+                    retained = PathExistsOnHostRaw(normalizedHiddenPath);
                 }
             }
             else
@@ -488,51 +499,41 @@ public class HostSuperBlock : SuperBlock, IDentryCacheDropper
                 retained = true;
             }
 
-            if (retained && TryResolveRawNode(hiddenPath, out var retainedNode))
-                AddHiddenLink(retainedNode.Identity);
+            if (retained && TryResolveRawNode(normalizedHiddenPath, out var retainedNode))
+                CountHiddenDeletedPath(normalizedHiddenPath, retainedNode.Identity);
         }
     }
 
-    private IEnumerable<string> EnumerateWindowsDeletedEntries()
+    private void CountHiddenDeletedPath(string hiddenPath, HostInodeKey identity)
     {
-        var pending = new Stack<string>();
-        pending.Push(HostRoot);
-
-        while (pending.Count != 0)
+        if (!OperatingSystem.IsWindows())
+            return;
+        var normalizedPath = NormalizeHostPath(hiddenPath);
+        lock (Lock)
         {
-            var current = pending.Pop();
-            IEnumerable<string> entries;
-            try
-            {
-                entries = Directory.EnumerateFileSystemEntries(current);
-            }
-            catch
-            {
-                continue;
-            }
+            if (!_countedHiddenDeletedPaths.Add(normalizedPath))
+                return;
+            _hiddenLinkCountByIdentity[identity] = _hiddenLinkCountByIdentity.GetValueOrDefault(identity) + 1;
+        }
+    }
 
-            foreach (var entry in entries)
-            {
-                var name = Path.GetFileName(entry);
-                if (string.Equals(name, HostfsMetadataStore.MetaDirName, StringComparison.Ordinal))
-                    continue;
-                if (IsInternalHiddenName(name))
-                {
-                    yield return entry;
-                    continue;
-                }
+    internal void UncountHiddenDeletedPath(string hiddenPath, HostInodeKey identity)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        var normalizedPath = NormalizeHostPath(hiddenPath);
+        lock (Lock)
+        {
+            if (!_countedHiddenDeletedPaths.Remove(normalizedPath))
+                return;
+            if (!_hiddenLinkCountByIdentity.TryGetValue(identity, out var existing))
+                return;
 
-                try
-                {
-                    var attributes = File.GetAttributes(entry);
-                    if ((attributes & FileAttributes.Directory) != 0 &&
-                        (attributes & FileAttributes.ReparsePoint) == 0)
-                        pending.Push(entry);
-                }
-                catch
-                {
-                }
-            }
+            existing--;
+            if (existing > 0)
+                _hiddenLinkCountByIdentity[identity] = existing;
+            else
+                _hiddenLinkCountByIdentity.Remove(identity);
         }
     }
 
@@ -2232,6 +2233,7 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         if (component == HostfsMetadataStore.MetaDirName || sb.IsInternalHiddenName(component))
             return null;
 
+        sb.SweepWindowsDeletedEntriesInDirectory(ResolveHostPath());
         var subPath = Path.Combine(ResolveHostPath(), component);
         if (Dentries.Count == 0) return null;
         if (sb.TryGetDentry(subPath, componentName, Dentries[0], out var dentry, out var error))
@@ -3635,13 +3637,13 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
                 else if (File.Exists(orphanPath))
                     File.Delete(orphanPath);
                 ((HostSuperBlock)SuperBlock).MetadataStore.RemovePath(orphanPath);
+                ((HostSuperBlock)SuperBlock).UncountHiddenDeletedPath(orphanPath, Identity);
             }
             catch
             {
                 // Best-effort cleanup; finalized hostfs inodes should not resurrect on cleanup failures.
             }
 
-        ((HostSuperBlock)SuperBlock).RemoveHiddenLinks(Identity, orphanPaths.Length);
         ((HostSuperBlock)SuperBlock).UnregisterInodeIdentity(this);
         base.OnFinalizeDelete();
     }
@@ -3654,8 +3656,10 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         list.Add(new DirectoryEntry { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory });
         list.Add(new DirectoryEntry { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory });
 
-        var entries = Directory.GetFileSystemEntries(ResolveHostPath());
         var sb = (HostSuperBlock)SuperBlock;
+        var hostPath = ResolveHostPath();
+        sb.SweepWindowsDeletedEntriesInDirectory(hostPath);
+        var entries = Directory.GetFileSystemEntries(hostPath);
         foreach (var entryPath in entries)
         {
             var name = Path.GetFileName(entryPath);

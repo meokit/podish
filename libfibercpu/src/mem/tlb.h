@@ -7,9 +7,6 @@
 
 namespace fiberish::mem {
 
-#if defined(__wasm32__)
-struct alignas(1) MicroTLB {};
-#else
 struct alignas(16) MicroTLB {
     uint32_t tag_r = std::numeric_limits<uint32_t>::max();  // Mismatch by default (odd value for even aligned vars)
     uint32_t tag_w = std::numeric_limits<uint32_t>::max();
@@ -21,21 +18,9 @@ struct alignas(16) MicroTLB {
         addend = 0;
     }
 };
-#endif
 
 using MicroTlbAbiWord = uint64_t;
 
-#if defined(__wasm32__)
-inline constexpr MicroTlbAbiWord PackMicroTlbTags(uint32_t, uint32_t) { return 0; }
-inline constexpr MicroTlbAbiWord InvalidMicroTlbAbiTags() { return 0; }
-inline constexpr MicroTlbAbiWord EncodeMicroTlbTags(const MicroTLB&) { return 0; }
-inline constexpr MicroTlbAbiWord EncodeMicroTlbAddend(const MicroTLB&) { return 0; }
-inline constexpr void EncodeMicroTlbAbi(const MicroTLB&, MicroTlbAbiWord& tags, MicroTlbAbiWord& addend) {
-    tags = 0;
-    addend = 0;
-}
-inline constexpr MicroTLB DecodeMicroTlbAbi(MicroTlbAbiWord, MicroTlbAbiWord) { return {}; }
-#else
 inline constexpr MicroTlbAbiWord PackMicroTlbTags(uint32_t tag_r, uint32_t tag_w) {
     return static_cast<MicroTlbAbiWord>(tag_r) | (static_cast<MicroTlbAbiWord>(tag_w) << 32);
 }
@@ -64,14 +49,9 @@ inline constexpr MicroTLB DecodeMicroTlbAbi(MicroTlbAbiWord tags, MicroTlbAbiWor
     utlb.addend = static_cast<std::uintptr_t>(addend);
     return utlb;
 }
-#endif
 
 inline void InvalidateMicroTLB(MicroTLB* utlb) {
-#if !defined(__wasm32__)
     utlb->invalidate();
-#else
-    (void)utlb;
-#endif
 }
 
 struct alignas(16) TlbEntry {
