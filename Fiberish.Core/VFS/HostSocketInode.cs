@@ -409,15 +409,21 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
     public async ValueTask<int> ConnectAsync(LinuxFile file, FiberTask task, object endpointObj)
     {
         if (endpointObj is not EndPoint endpoint) return -(int)Errno.EAFNOSUPPORT;
+        if (NativeSocket.SocketType == SocketType.Stream && NativeSocket.Connected)
+            return -(int)Errno.EISCONN;
+
         while (true)
         {
             var connectStart = StartAsyncConnect(endpoint);
             if (!connectStart.Pending)
             {
-                if (connectStart.Error is SocketError.Success or SocketError.IsConnected)
+                if (connectStart.Error == SocketError.Success)
                     return 0;
                 return MapSocketError(connectStart.Error);
             }
+
+            if (!connectStart.Started)
+                return MapSocketError(connectStart.Error);
 
             if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
             {
@@ -456,7 +462,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
     private ConnectStartResult StartAsyncConnect(EndPoint endpoint)
     {
         if (Interlocked.CompareExchange(ref _connectInFlight, 1, 0) != 0)
-            return new ConnectStartResult(true, SocketError.AlreadyInProgress);
+            return new ConnectStartResult(true, false, SocketError.AlreadyInProgress);
 
         SocketAsyncEventArgs? args = null;
         try
@@ -471,10 +477,10 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
             {
                 var error = args.SocketError;
                 FinishAsyncConnect(args);
-                return new ConnectStartResult(false, error);
+                return new ConnectStartResult(false, true, error);
             }
 
-            return new ConnectStartResult(true, SocketError.IOPending);
+            return new ConnectStartResult(true, true, SocketError.IOPending);
         }
         catch (SocketException ex)
         {
@@ -485,7 +491,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
             }
 
             Interlocked.Exchange(ref _connectInFlight, 0);
-            return new ConnectStartResult(false, ex.SocketErrorCode);
+            return new ConnectStartResult(false, true, ex.SocketErrorCode);
         }
         catch (ObjectDisposedException)
         {
@@ -496,7 +502,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
             }
 
             Interlocked.Exchange(ref _connectInFlight, 0);
-            return new ConnectStartResult(false, SocketError.NotConnected);
+            return new ConnectStartResult(false, true, SocketError.NotConnected);
         }
     }
 
@@ -1213,7 +1219,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
         return (file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & LinuxConstants.MSG_DONTWAIT) != 0;
     }
 
-    private readonly record struct ConnectStartResult(bool Pending, SocketError Error);
+    private readonly record struct ConnectStartResult(bool Pending, bool Started, SocketError Error);
 
     private static SocketFlags TranslateSendFlags(int linuxFlags)
     {

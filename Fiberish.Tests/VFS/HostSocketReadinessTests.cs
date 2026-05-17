@@ -313,6 +313,47 @@ public class HostSocketReadinessTests
         Assert.True(rc is -(int)Errno.EINPROGRESS or -(int)Errno.ECONNREFUSED);
     }
 
+    [Fact(Timeout = TestTimeoutMs)]
+    public async Task ConnectAsync_NonBlockingConnectAlreadyPending_ReturnsEalready()
+    {
+        using var env = new ReadinessEnv();
+
+        var inode = new HostSocketInode(3013, env.SyscallManager.MemfdSuperBlock, AddressFamily.InterNetwork,
+            SocketType.Stream, ProtocolType.Tcp);
+        var file = new LinuxFile(
+            new Dentry(FsName.FromString("host-connect-ealready"), inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
+        var connectInFlight = typeof(HostSocketInode).GetField("_connectInFlight",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(connectInFlight);
+        connectInFlight!.SetValue(inode, 1);
+
+        var rc = await inode.ConnectAsync(file, env.Task, new IPEndPoint(IPAddress.Loopback, 9));
+        Assert.Equal(-(int)Errno.EALREADY, rc);
+    }
+
+    [Fact(Timeout = TestTimeoutMs)]
+    public async Task ConnectAsync_AlreadyConnectedStream_ReturnsEisconn()
+    {
+        using var env = new ReadinessEnv();
+        using var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        listener.Listen(1);
+        var ep = (IPEndPoint)listener.LocalEndPoint!;
+
+        using var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        client.Connect(ep);
+        using var server = listener.Accept();
+
+        var inode = new HostSocketInode(3014, env.SyscallManager.MemfdSuperBlock, client);
+        var file = new LinuxFile(
+            new Dentry(FsName.FromString("host-connect-eisconn"), inode, null, env.SyscallManager.MemfdSuperBlock),
+            FileFlags.O_RDWR | FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
+
+        var rc = await inode.ConnectAsync(file, env.Task, ep);
+        Assert.Equal(-(int)Errno.EISCONN, rc);
+    }
+
     [Fact(Timeout = 5000)]
     public async Task Poll_NonBlockingConnectFailure_DoesNotConsumeSoErrorForGuest()
     {
