@@ -133,7 +133,7 @@ public partial class FiberTask
     public Locked<List<SigInfo>> PendingSignalQueue { get; } = new(new List<SigInfo>());
     public uint AltStackSp { get; set; }
     public uint AltStackSize { get; set; }
-    public int AltStackFlags { get; set; }
+    public int AltStackFlags { get; set; } = LinuxConstants.SS_DISABLE;
 
     public bool Exited { get; set; }
 
@@ -677,8 +677,12 @@ public partial class FiberTask
                 }
             }
 
-            // Immediately discard ignored signals if they shouldn't trigger wakeups
-            if (isIgnored)
+            isBlocked = (SignalMask & mask) != 0;
+            if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP) isBlocked = false;
+
+            // An ignored signal is discarded only when it is deliverable. If it
+            // is blocked, sigwaitinfo(2)/sigtimedwait(2) can still consume it.
+            if (isIgnored && !isBlocked)
             {
                 Logger.LogDebug("[PostSignalInfo] Signal {Sig} is ignored. Discarding.", sig);
                 return;
@@ -688,8 +692,10 @@ public partial class FiberTask
                 PendingSignals);
             PendingSignals |= mask;
 
+            info.QueueOwnerUid = Process.UID;
             PendingSignalQueue.Lock(q =>
             {
+                if (info.PendingWithoutInfo) return;
                 if (sig < 32)
                 {
                     var found = false;
@@ -709,8 +715,6 @@ public partial class FiberTask
             });
             // Check if we should interrupt syscall (inside lock for atomicity with PendingSignals)
             // SIGKILL(9) and SIGSTOP(19) cannot be blocked
-            isBlocked = (SignalMask & mask) != 0;
-            if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP) isBlocked = false;
 
             if (!isBlocked)
                 InterruptingSignal = sig;
@@ -832,13 +836,21 @@ public partial class FiberTask
 
         if ((action.Flags & LinuxConstants.SA_RESETHAND) != 0)
         {
-            Process.SignalActions.Remove(sig);
-            Logger.LogDebug("[{Source}] Reset disposition for signal {Sig} to SIG_DFL due to SA_RESETHAND",
+            // Linux keeps the remaining action metadata (notably SA_SIGINFO) when
+            // it resets only the handler on SA_RESETHAND.
+            Process.SignalActions[sig] = new SigAction
+            {
+                Handler = 0,
+                Flags = action.Flags,
+                Restorer = action.Restorer,
+                Mask = action.Mask
+            };
+            Logger.LogDebug("[{Source}] Reset handler for signal {Sig} to SIG_DFL due to SA_RESETHAND",
                 source, sig);
         }
 
         var handlerMask = action.Mask;
-        var autoBlockSelf = (action.Flags & (LinuxConstants.SA_NODEFER | LinuxConstants.SA_RESETHAND)) == 0;
+        var autoBlockSelf = (action.Flags & LinuxConstants.SA_NODEFER) == 0;
         if (autoBlockSelf)
             handlerMask |= signalBit;
 
@@ -933,6 +945,13 @@ public partial class FiberTask
         return false;
     }
 
+    public bool IsSignalMasked(int sig)
+    {
+        if (sig < 1 || sig > 64) return false;
+        using var scope = EnterTaskStateScope();
+        return (SignalMask & (1UL << (sig - 1))) != 0;
+    }
+
     private static bool IsDefaultIgnoredSignal(int sig)
     {
         return sig == (int)Signal.SIGCHLD ||
@@ -973,6 +992,13 @@ public partial class FiberTask
 
                     return (SigInfo?)info;
                 }
+
+            var mask = 1UL << (sig - 1);
+            if ((PendingSignals & mask) != 0)
+            {
+                PendingSignals &= ~mask;
+                return new SigInfo { Signo = sig, Code = 0 };
+            }
 
             return null;
         });
@@ -1025,6 +1051,43 @@ public partial class FiberTask
         return false;
     }
 
+    // SS_ONSTACK is derived from the current user SP, not stored handler nesting state.
+    // AUTODISARM deliberately makes a configured stack appear inactive until delivery.
+    public bool IsOnAltStack(uint sp)
+    {
+        return ((uint)AltStackFlags & LinuxConstants.SS_AUTODISARM) == 0 &&
+               AltStackSize != 0 && sp > AltStackSp && (ulong)sp - AltStackSp <= AltStackSize;
+    }
+
+    public int GetAltStackFlags(uint sp)
+    {
+        var mode = AltStackSize == 0 ? LinuxConstants.SS_DISABLE
+            : IsOnAltStack(sp) ? LinuxConstants.SS_ONSTACK : 0;
+        return mode | (AltStackFlags & unchecked((int)LinuxConstants.SS_AUTODISARM));
+    }
+
+    internal int SetAltStack(uint sp, uint size, uint flags)
+    {
+        if (IsOnAltStack(CPU.RegRead(Reg.ESP))) return -(int)Errno.EPERM;
+        var mode = flags & ~LinuxConstants.SS_AUTODISARM;
+        if (mode != 0 && mode != LinuxConstants.SS_ONSTACK && mode != LinuxConstants.SS_DISABLE)
+            return -(int)Errno.EINVAL;
+        if (mode != LinuxConstants.SS_DISABLE && size < LinuxConstants.MINSIGSTKSZ)
+            return -(int)Errno.ENOMEM;
+
+        AltStackSp = mode == LinuxConstants.SS_DISABLE ? 0 : sp;
+        AltStackSize = mode == LinuxConstants.SS_DISABLE ? 0 : size;
+        AltStackFlags = (int)(flags & (LinuxConstants.SS_AUTODISARM | LinuxConstants.SS_DISABLE));
+        return 0;
+    }
+
+    internal void ResetAltStack()
+    {
+        AltStackSp = 0;
+        AltStackSize = 0;
+        AltStackFlags = LinuxConstants.SS_DISABLE;
+    }
+
     // Prepare stack frame for signal handler
     private void DeliverSignal(int sig, SigAction action, bool hasAction, ulong oldMask, SigInfo info)
     {
@@ -1054,7 +1117,7 @@ public partial class FiberTask
             var sp = CPU.RegRead(Reg.ESP);
 
             // Check altstack
-            if ((AltStackFlags & 1) == 0 && AltStackSp != 0 && (action.Flags & 0x08000000) != 0) // ONSTACK
+            if (AltStackSize != 0 && (action.Flags & LinuxConstants.SA_ONSTACK) != 0 && !IsOnAltStack(sp))
             {
                 Logger.LogInformation("[DeliverSignal] Using altstack: sp=0x{AltStackSp:X}+0x{AltStackSize:X}",
                     AltStackSp, AltStackSize);
@@ -1065,7 +1128,7 @@ public partial class FiberTask
 
             // Return address (restorer or some trampoline)
             var retAddr = Process.Syscalls.RtSigReturnAddr;
-            if ((action.Flags & 0x04000000) != 0) // SA_RESTORER
+            if ((action.Flags & LinuxConstants.SA_RESTORER) != 0 && action.Restorer != 0)
                 retAddr = action.Restorer;
 
             var frameEsp = sp;
@@ -1073,16 +1136,28 @@ public partial class FiberTask
             // SignalMask already updated in ProcessPendingSignals
 
             // Setup Stack based on SA_SIGINFO
-            if ((action.Flags & 0x00000004) != 0) // SA_SIGINFO
+            if ((action.Flags & LinuxConstants.SA_SIGINFO) != 0)
             {
-                if ((action.Flags & 0x04000000) == 0) retAddr = Process.Syscalls.RtSigReturnAddr;
+                if ((action.Flags & LinuxConstants.SA_RESTORER) == 0 || action.Restorer == 0)
+                    retAddr = Process.Syscalls.RtSigReturnAddr;
                 SetupSigContext(sp, ref frameEsp, sig, action, retAddr, oldMask, info);
             }
             else
             {
-                if ((action.Flags & 0x04000000) == 0) retAddr = Process.Syscalls.SigReturnAddr;
+                if ((action.Flags & LinuxConstants.SA_RESTORER) == 0 || action.Restorer == 0)
+                    retAddr = Process.Syscalls.SigReturnAddr;
                 SetupOldSigFrame(sp, ref frameEsp, sig, action, retAddr, oldMask);
             }
+
+            // RT frames saved the configuration in uc_stack. Legacy i386 frames
+            // do not restore it, matching Linux's sigreturn versus rt_sigreturn.
+            if (((uint)AltStackFlags & LinuxConstants.SS_AUTODISARM) != 0)
+                ResetAltStack();
+
+            Logger.LogTrace(
+                "[DeliverSignal] flags=0x{Flags:X} restorer=0x{Restorer:X} retAddr=0x{RetAddr:X} sigreturn=0x{SigRet:X} rtsigreturn=0x{RtSigRet:X}",
+                action.Flags, action.Restorer, retAddr, Process.Syscalls.SigReturnAddr,
+                Process.Syscalls.RtSigReturnAddr);
 
             Logger.LogInformation(
                 "[DeliverSignal] Signal frame setup complete: ESP changed from 0x{OldSp:X} to 0x{NewSp:X}, EIP set to 0x{Handler:X}",
@@ -1288,6 +1363,12 @@ public partial class FiberTask
 
         var ucontextAddr = esp;
         uint mcontextOffset = 4 + 4 + 12;
+
+        var header = new byte[20]; // uc_flags, uc_link, uc_stack (i386 stack_t)
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(8), AltStackSp);
+        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(12), AltStackFlags);
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(16), AltStackSize);
+        if (!CPU.CopyToUser(ucontextAddr, header)) return;
 
         WriteSigContext(esp + mcontextOffset, oldMask);
 
@@ -2030,6 +2111,15 @@ public partial class FiberTask
             child.SignalMask = SignalMask;
             child.PendingSignals = 0;
             child.InterruptingSignal = null;
+
+            // fork and vfork inherit the alternate stack; CLONE_VM without
+            // CLONE_VFORK starts with no stack (including new pthreads).
+            if (!cloneVm || cloneVfork)
+            {
+                child.AltStackSp = AltStackSp;
+                child.AltStackSize = AltStackSize;
+                child.AltStackFlags = AltStackFlags;
+            }
 
             // Register engine with SyscallManager
             if (!cloneThread)

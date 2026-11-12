@@ -716,12 +716,17 @@ public partial class SyscallManager
         public FutexWaitOutcome GetResult()
         {
             var reason = _task.CompleteWaitToken(_token);
+
+            // A wake that raced with signal delivery still completes the futex
+            // wait successfully; the signal is handled on syscall return.
+            if (_waiter.Result) return FutexWaitOutcome.Completed;
+
             if (reason == WakeReason.Timer) return FutexWaitOutcome.TimedOut;
 
             if (reason != WakeReason.Event && reason != WakeReason.None)
                 return FutexWaitOutcome.Interrupted;
 
-            return _waiter.Result ? FutexWaitOutcome.Completed : FutexWaitOutcome.Interrupted;
+            return FutexWaitOutcome.Interrupted;
         }
 
         private sealed class FutexCompletionHandler

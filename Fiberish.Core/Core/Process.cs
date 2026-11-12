@@ -68,6 +68,7 @@ public struct SigAction
 
 public class Process
 {
+    public const int CapabilityKill = 5;
     public const int CapabilitySysAdmin = 21;
     private static readonly byte[] EmptyCmdline = [];
     private static readonly ResourceLimit[] DefaultResourceLimits = CreateDefaultResourceLimits();
@@ -196,6 +197,11 @@ public class Process
         var mask = 1UL << (sig - 1);
         PendingProcessSignals |= mask;
 
+        // kill(2) must still set the pending bit when allocation is limited.
+        // Such notifications coalesce and carry no allocated siginfo record.
+        if (info.PendingWithoutInfo) return true;
+        info.QueueOwnerUid = UID;
+
         PendingProcessSignalQueue.Lock(q =>
         {
             if (sig < 32)
@@ -239,6 +245,13 @@ public class Process
                     return (SigInfo?)info;
                 }
 
+            var mask = 1UL << (sig - 1);
+            if ((PendingProcessSignals & mask) != 0)
+            {
+                PendingProcessSignals &= ~mask;
+                return new SigInfo { Signo = sig, Code = 0 };
+            }
+
             return null;
         });
     }
@@ -247,6 +260,22 @@ public class Process
     {
         PendingProcessSignals = 0;
         PendingProcessSignalQueue.Lock(q => q.Clear());
+    }
+
+    public int GetPendingSignalCount()
+    {
+        var count = PendingProcessSignalQueue.Lock(q => q.Count);
+        foreach (var task in Threads)
+            count += task.PendingSignalQueue.Lock(q => q.Count);
+        return count;
+    }
+
+    internal long GetPendingSignalCount(int uid)
+    {
+        long count = PendingProcessSignalQueue.Lock(q => q.Count(info => info.QueueOwnerUid == uid));
+        foreach (var task in Threads)
+            count += task.PendingSignalQueue.Lock(q => q.Count(info => info.QueueOwnerUid == uid));
+        return count;
     }
 
     public CpuTimeSnapshot GetSelfCpuTimeSnapshot()

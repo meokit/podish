@@ -318,6 +318,12 @@ public static class LinuxConstants
     public const uint SA_RESETHAND = 0x80000000;
     public const uint SA_RESTORER = 0x04000000;
 
+    // sigaltstack constants (i386)
+    public const int MINSIGSTKSZ = 2048;
+    public const int SS_ONSTACK = 1;
+    public const int SS_DISABLE = 2;
+    public const uint SS_AUTODISARM = 0x80000000;
+
     // AT_* flags for path resolution
     public const uint AT_FDCWD = 0xFFFFFF9C; // -100
     public const uint AT_SYMLINK_NOFOLLOW = 0x100;

@@ -145,6 +145,15 @@ public class KernelScheduler
         return _processes.Values.ToList();
     }
 
+    internal long GetPendingSignalCountForUser(int uid)
+    {
+        AssertSchedulerThread();
+        long count = 0;
+        foreach (var process in _processes.Values)
+            count += process.GetPendingSignalCount(uid);
+        return count;
+    }
+
     public bool UnregisterProcess(int pid)
     {
         AssertSchedulerThread();
@@ -1174,19 +1183,19 @@ public class KernelScheduler
 
         if (signal != (int)Signal.SIGKILL && signal != (int)Signal.SIGSTOP)
         {
+            var ignored = false;
             if (process.SignalActions.TryGetValue(signal, out var action))
             {
-                if (action.Handler == 1) return true;
+                ignored = action.Handler == 1;
             }
             else
             {
-                var defaultAction = signal switch
-                {
-                    (int)Signal.SIGCHLD or (int)Signal.SIGURG or (int)Signal.SIGWINCH => true,
-                    _ => false
-                };
-                if (defaultAction) return true;
+                ignored = signal is (int)Signal.SIGCHLD or (int)Signal.SIGURG or (int)Signal.SIGWINCH;
             }
+
+            // A blocked ignored signal remains waitable through sigwaitinfo.
+            if (ignored && !process.Threads.Any(t => t.IsSignalMasked(signal)))
+                return true;
         }
 
         if (!process.EnqueueProcessSignal(info)) return false;

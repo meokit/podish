@@ -9,7 +9,7 @@ using Xunit;
 
 namespace Fiberish.Tests.Syscalls;
 
-public class SignalSyscallTests
+public partial class SignalSyscallTests
 {
     private const uint StackBase = 0x70000000;
 
@@ -65,7 +65,7 @@ public class SignalSyscallTests
     }
 
     [Fact]
-    public void ProcessPendingSignals_SaResetHand_ResetsDisposition_AndDoesNotAutoBlockSameSignal()
+    public void ProcessPendingSignals_SaResetHand_ResetsHandler_AndAutoBlocksSameSignal()
     {
         using var env = new SignalEnv();
         env.MapUserPage(StackBase);
@@ -75,7 +75,7 @@ public class SignalSyscallTests
         env.TargetGroupProcess.SignalActions[(int)Signal.SIGINT] = new SigAction
         {
             Handler = 0x40254F50,
-            Flags = LinuxConstants.SA_RESETHAND,
+            Flags = LinuxConstants.SA_RESETHAND | LinuxConstants.SA_SIGINFO,
             Restorer = 0,
             Mask = 0
         };
@@ -83,13 +83,17 @@ public class SignalSyscallTests
         env.TargetTask.PostSignal((int)Signal.SIGINT);
         InvokeTaskMethod(env.TargetTask, "ProcessPendingSignals");
 
-        Assert.False(env.TargetGroupProcess.SignalActions.ContainsKey((int)Signal.SIGINT));
-        Assert.Equal(0UL, env.TargetTask.SignalMask & (1UL << ((int)Signal.SIGINT - 1)));
+        Assert.True(env.TargetGroupProcess.SignalActions.TryGetValue((int)Signal.SIGINT, out var reset));
+        Assert.Equal(0u, reset.Handler);
+        Assert.NotEqual(0u, reset.Flags & LinuxConstants.SA_SIGINFO);
+
+        // SA_RESETHAND does not imply SA_NODEFER, so the delivered signal is blocked.
+        Assert.NotEqual(0UL, env.TargetTask.SignalMask & (1UL << ((int)Signal.SIGINT - 1)));
         Assert.Equal(0x40254F50u, env.TargetEngine.Eip);
     }
 
     [Fact]
-    public void DeliverSignalForRestart_SaResetHand_ResetsDisposition_AndDoesNotAutoBlockSameSignal()
+    public void DeliverSignalForRestart_SaResetHand_ResetsHandler_AndAutoBlocksSameSignal()
     {
         using var env = new SignalEnv();
         env.MapUserPage(StackBase);
@@ -99,7 +103,7 @@ public class SignalSyscallTests
         var action = new SigAction
         {
             Handler = 0x40254F50,
-            Flags = LinuxConstants.SA_RESETHAND,
+            Flags = LinuxConstants.SA_RESETHAND | LinuxConstants.SA_SIGINFO,
             Restorer = 0,
             Mask = 0
         };
@@ -108,8 +112,10 @@ public class SignalSyscallTests
         env.TargetTask.PostSignal((int)Signal.SIGINT);
         InvokeTaskMethod(env.TargetTask, "DeliverSignalForRestart", (int)Signal.SIGINT, action);
 
-        Assert.False(env.TargetGroupProcess.SignalActions.ContainsKey((int)Signal.SIGINT));
-        Assert.Equal(0UL, env.TargetTask.SignalMask & (1UL << ((int)Signal.SIGINT - 1)));
+        Assert.True(env.TargetGroupProcess.SignalActions.TryGetValue((int)Signal.SIGINT, out var reset));
+        Assert.Equal(0u, reset.Handler);
+        Assert.NotEqual(0u, reset.Flags & LinuxConstants.SA_SIGINFO);
+        Assert.NotEqual(0UL, env.TargetTask.SignalMask & (1UL << ((int)Signal.SIGINT - 1)));
         Assert.Equal(0x40254F50u, env.TargetEngine.Eip);
     }
 
