@@ -507,6 +507,15 @@ public partial class SyscallManager
                 ((FileFlags)flags & FileFlags.O_NONBLOCK) != 0)
                 return -(int)Errno.ENXIO;
 
+            // open(2): O_NOATIME requires ownership or CAP_FOWNER.
+            var noAtime = ((FileFlags)flags & FileFlags.O_NOATIME) != 0;
+            if (noAtime && dentry.Inode != null)
+            {
+                var process = task?.Process;
+                if (process == null || (process.EUID != 0 && process.FSUID != dentry.Inode.Uid))
+                    return -(int)Errno.EPERM;
+            }
+
             if (task?.Process != null && dentry.Inode != null)
             {
                 var requested = AccessMode.None;

@@ -7,8 +7,10 @@ No upstream tests or assertions are patched. See [RESULTS.md](RESULTS.md) for
 the initial Windows Podish results, [FIX_REPORT.md](FIX_REPORT.md) for the
 subsequent fixes (50/50 passing on the repair branch), and
 [PERMISSIONS_BASELINE.md](PERMISSIONS_BASELINE.md) for the separate permission
-and identity batch (71 cases; 62/71 passing on the tmpfs image backend, versus
-38/71 on hostfs).
+and identity batch (70/71 passing on the tmpfs image backend after the
+permission fixes; the remaining `access02` failure is a missing `/bin/sh` test
+asset, not a syscall assertion). Hostfs remains available only for comparison
+and forces mode `0755` on Windows, so it is unsuitable for permission tests.
 
 ## Manifests
 

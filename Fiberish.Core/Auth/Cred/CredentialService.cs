@@ -149,22 +149,26 @@ public static class CredentialService
         var privileged = IsPrivileged(cred);
         var oldRuid = cred.Ruid;
 
-        if (ruid != -1)
+        if (ruid < -1 || euid < -1) return -(int)Errno.EINVAL;
+        // Validate both IDs against the original credential before mutating
+        // either one: setreuid(other, old_ruid) is a legal unprivileged swap.
+        if (!privileged)
         {
-            if (ruid < 0) return -(int)Errno.EINVAL;
-            if (!privileged && !MatchesAnyUid(cred, ruid)) return -(int)Errno.EPERM;
-            cred.Ruid = ruid;
+            if (ruid != -1 && !MatchesAnyUid(cred, ruid)) return -(int)Errno.EPERM;
+            if (euid != -1 && !MatchesAnyUid(cred, euid)) return -(int)Errno.EPERM;
         }
 
+        if (ruid != -1) cred.Ruid = ruid;
         if (euid != -1)
         {
-            if (euid < 0) return -(int)Errno.EINVAL;
-            if (!privileged && !MatchesAnyUid(cred, euid)) return -(int)Errno.EPERM;
             cred.Euid = euid;
             cred.Fsuid = euid;
         }
 
-        if (privileged || (ruid != -1 && ruid != oldRuid) || (euid != -1 && euid != oldRuid))
+        // setreuid(2): the saved UID follows the new effective UID only when
+        // the real UID changes or the effective UID changes away from the old
+        // real UID. Privilege alone must not overwrite it.
+        if ((ruid != -1 && ruid != oldRuid) || (euid != -1 && euid != oldRuid))
             cred.Suid = cred.Euid;
 
         Commit(process, cred);
@@ -177,22 +181,21 @@ public static class CredentialService
         var privileged = IsPrivileged(cred);
         var oldRgid = cred.Rgid;
 
-        if (rgid != -1)
+        if (rgid < -1 || egid < -1) return -(int)Errno.EINVAL;
+        if (!privileged)
         {
-            if (rgid < 0) return -(int)Errno.EINVAL;
-            if (!privileged && !MatchesAnyGid(cred, rgid)) return -(int)Errno.EPERM;
-            cred.Rgid = rgid;
+            if (rgid != -1 && !MatchesAnyGid(cred, rgid)) return -(int)Errno.EPERM;
+            if (egid != -1 && !MatchesAnyGid(cred, egid)) return -(int)Errno.EPERM;
         }
 
+        if (rgid != -1) cred.Rgid = rgid;
         if (egid != -1)
         {
-            if (egid < 0) return -(int)Errno.EINVAL;
-            if (!privileged && !MatchesAnyGid(cred, egid)) return -(int)Errno.EPERM;
             cred.Egid = egid;
             cred.Fsgid = egid;
         }
 
-        if (privileged || (rgid != -1 && rgid != oldRgid) || (egid != -1 && egid != oldRgid))
+        if ((rgid != -1 && rgid != oldRgid) || (egid != -1 && egid != oldRgid))
             cred.Sgid = cred.Egid;
 
         Commit(process, cred);

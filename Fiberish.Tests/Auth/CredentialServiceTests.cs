@@ -43,8 +43,22 @@ public class CredentialServiceTests
         Assert.Equal(0, CredentialService.SetReUid(p, 1000, 2000));
         Assert.Equal(1000, p.UID);
         Assert.Equal(2000, p.EUID);
-        // SUID is set to new EUID because RUID changed or privileged
+        // SUID follows the new EUID because the real UID changed.
         Assert.Equal(2000, p.SUID);
+    }
+
+    [Fact]
+    public void SetReUid_PreservesSavedUid_WhenEuidMatchesOldRuid()
+    {
+        var p = new TestProcess(0, 0);
+        Assert.Equal(0, CredentialService.SetReUid(p, 1000, 0));
+        Assert.Equal(0, p.SUID);
+
+        Assert.Equal(0, CredentialService.SetReUid(p, -1, 1000));
+
+        Assert.Equal(1000, p.UID);
+        Assert.Equal(1000, p.EUID);
+        Assert.Equal(0, p.SUID);
     }
 
     [Fact]

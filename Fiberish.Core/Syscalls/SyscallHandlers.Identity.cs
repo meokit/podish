@@ -249,8 +249,10 @@ public partial class SyscallManager
 
         var size = (int)a1;
         var listPtr = a2;
-        if (size < 0) return new ValueTask<int>(-(int)Errno.EINVAL);
-        if (size > 1024) return new ValueTask<int>(-(int)Errno.EINVAL);
+        // Linux i386 allows up to NGROUPS_MAX (65536). Rejecting at 1024
+        // changes both valid workloads and the EFAULT precedence for a full
+        // NGROUPS_MAX-sized list with an invalid user pointer.
+        if (size < 0 || size > LinuxConstants.NGROUPS_MAX) return new ValueTask<int>(-(int)Errno.EINVAL);
 
         var groups = new int[size];
         if (size > 0)

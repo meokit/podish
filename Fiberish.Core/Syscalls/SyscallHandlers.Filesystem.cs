@@ -2435,8 +2435,6 @@ LocResolvedUtimens64:
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
-        var allowed = DacPolicy.CanChroot(task.Process);
-        if (allowed != 0) return allowed;
 
         var pathErr = ReadPathArgumentBytes(a1, out var path);
         if (pathErr != 0) return pathErr;
@@ -2445,6 +2443,13 @@ LocResolvedUtimens64:
 
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (loc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR; // ENOTDIR
+
+        // Resolve path and search permissions before reporting the capability
+        // failure: an unprivileged caller without search permission sees EACCES.
+        var searchRc = DacPolicy.CheckPathAccess(task.Process, loc.Dentry.Inode, AccessMode.MayExec, true);
+        if (searchRc != 0) return searchRc;
+        var allowed = DacPolicy.CanChroot(task.Process);
+        if (allowed != 0) return allowed;
 
         UpdateProcessRoot(loc, "SysChroot");
         return 0;

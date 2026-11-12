@@ -8,18 +8,47 @@ public class DacPolicyTests
 {
     [Theory]
     [InlineData(InodeType.File)]
-    [InlineData(InodeType.Directory)]
     [InlineData(InodeType.Fifo)]
     [InlineData(InodeType.CharDev)]
     [InlineData(InodeType.BlockDev)]
     [InlineData(InodeType.Socket)]
-    public void ApplySetIdClearOnChown_ClearsBits_ForNonSymlinkInodes(InodeType type)
+    public void ApplySetIdClearOnChown_ClearsBits_ForGroupExecutableNonDirectoryInodes(InodeType type)
     {
         var inode = new TestInode(type, 0x1ED | 0xC00);
 
         var mode = DacPolicy.ApplySetIdClearOnChown(inode, oldUid: 1, oldGid: 2, newUid: 3, newGid: 2);
 
         Assert.Equal(0x1ED, mode);
+    }
+
+    [Fact]
+    public void ApplySetIdClearOnChown_ClearsBits_EvenWhenOwnershipIsUnchanged()
+    {
+        var inode = new TestInode(InodeType.File, 0x1ED | 0xC00);
+
+        var mode = DacPolicy.ApplySetIdClearOnChown(inode, oldUid: 0, oldGid: 0, newUid: 0, newGid: 0);
+
+        Assert.Equal(0x1ED, mode);
+    }
+
+    [Fact]
+    public void ApplySetIdClearOnChown_PreservesSgid_ForNonGroupExecutableFile()
+    {
+        var inode = new TestInode(InodeType.File, 0x1A4 | 0xC00);
+
+        var mode = DacPolicy.ApplySetIdClearOnChown(inode, oldUid: 1, oldGid: 2, newUid: 3, newGid: 2);
+
+        Assert.Equal(0x1A4 | 0x400, mode);
+    }
+
+    [Fact]
+    public void ApplySetIdClearOnChown_PreservesBits_ForDirectory()
+    {
+        var inode = new TestInode(InodeType.Directory, 0x1ED | 0xC00);
+
+        var mode = DacPolicy.ApplySetIdClearOnChown(inode, oldUid: 1, oldGid: 2, newUid: 3, newGid: 2);
+
+        Assert.Equal(0x1ED | 0xC00, mode);
     }
 
     [Fact]

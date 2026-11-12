@@ -98,12 +98,19 @@ public static class DacPolicy
 
     public static int ApplySetIdClearOnChown(Inode inode, int oldUid, int oldGid, int newUid, int newGid)
     {
-        if (oldUid == newUid && oldGid == newGid) return inode.Mode;
-        if (inode.Type == InodeType.Symlink) return inode.Mode;
+        _ = oldUid;
+        _ = oldGid;
+        _ = newUid;
+        _ = newGid;
 
-        // Linux clears S_ISUID/S_ISGID on ownership changes for non-symlink
-        // objects that can carry mode bits in pjdfstest coverage.
-        return inode.Mode & ~0xC00;
+        // Linux keeps directory setgid semantics: the bit controls inheritance
+        // and is preserved across chown. Symlinks have no mode to clear.
+        if (inode.Type is InodeType.Symlink or InodeType.Directory) return inode.Mode;
+
+        var mode = inode.Mode & ~0x800; // S_ISUID
+        // chown(2): S_ISGID is preserved for a non-group-executable file.
+        if ((inode.Mode & 0x08) != 0) mode &= ~0x400;
+        return mode;
     }
 
     public static int ApplySetIdClearOnWrite(Process process, Inode inode)

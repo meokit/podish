@@ -373,6 +373,7 @@ public enum FileFlags
     O_DIRECT = 16384,
     O_DIRECTORY = 65536,
     O_NOFOLLOW = 131072,
+    O_NOATIME = 262144,
     O_CLOEXEC = 524288
 }
 

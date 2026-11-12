@@ -169,6 +169,7 @@ public static class LinuxConstants
     public const int RLIMIT_RSS = 5;
     public const int RLIMIT_NPROC = 6;
     public const int RLIMIT_NOFILE = 7;
+    public const int NGROUPS_MAX = 65536;
     public const int RLIMIT_MEMLOCK = 8;
     public const int RLIMIT_AS = 9;
     public const int RLIMIT_LOCKS = 10;

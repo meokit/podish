@@ -232,6 +232,41 @@ public sealed class LtpRegressionTests
         Assert.Equal(-(int)Errno.EAGAIN, await env.Call("SysRead", (uint)reader, 0x14000, 1));
     }
 
+    [Theory]
+    [InlineData(65536u, -(int)Errno.EFAULT)]
+    [InlineData(65537u, -(int)Errno.EINVAL)]
+    public async Task SetGroups_UsesLinuxLimitAndReportsBadPointer(uint count, int expected)
+    {
+        using var env = new TestEnv();
+        Assert.Equal(expected, await env.Call("SysSetGroups", count, 0xDEAD0000));
+    }
+
+    [Fact]
+    public async Task OpenNoAtime_UnprivilegedNonOwnerGetsEperm()
+    {
+        using var env = new TestEnv();
+        var fd = await env.CreateFile();
+        Assert.Equal(0, await env.Call("SysClose", (uint)fd));
+        env.Process.EUID = 1000;
+        env.Process.FSUID = 1000;
+
+        env.WriteString(0x10000, "/file");
+        Assert.Equal(-(int)Errno.EPERM,
+            await env.Call("SysOpen", 0x10000, (uint)(FileFlags.O_RDONLY | FileFlags.O_NOATIME)));
+    }
+
+    [Fact]
+    public async Task Chroot_NoSearchPermissionReportsEaccesBeforeEperm()
+    {
+        using var env = new TestEnv();
+        env.WriteString(0x10000, "/noexec");
+        Assert.Equal(0, await env.Call("SysMkdir", 0x10000, 0x92)); // 0222: write, no search
+        env.Process.EUID = 1000;
+        env.Process.FSUID = 1000;
+
+        Assert.Equal(-(int)Errno.EACCES, await env.Call("SysChroot", 0x10000));
+    }
+
     [Fact]
     public async Task PacketPipe_NonblockingFullBufferKeepsPacketsAtomic()
     {
