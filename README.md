@@ -181,19 +181,19 @@ dotnet test Fiberish.Tests/Fiberish.Tests.csproj --no-build
 dotnet test Fiberish.SilkFS.Tests/Fiberish.SilkFS.Tests.csproj --no-build
 ```
 
-Python emulator / regression tests:
+Linux syscall integration tests use a pinned [LTP](https://github.com/linux-test-project/ltp)
+submodule and a curated selection of unmodified static i386 test binaries:
 
 ```bash
-pytest
+git submodule update --init tests/ltp/upstream
+bash tests/ltp/build.sh                              # Linux / WSL asset build
+python3 tests/ltp/run.py --backend native             # Linux reference baseline
+python3 tests/ltp/run.py --backend podish             # host-native Podish CLI
 ```
 
-Integration tests:
-
-```bash
-cmake -S tests/integration -B build/integration-assets -DFIBERISH_PROJECT_ROOT=$PWD
-cmake --build build/integration-assets --target integration-tests-build
-pytest -m integration tests/integration
-```
+See [tests/ltp/README.md](tests/ltp/README.md) for build prerequisites, Windows/WSL
+instructions, reports and known compatibility failures. The old Python and
+`tests/integration` harnesses are not present in this checkout.
 
 ---
 
