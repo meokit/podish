@@ -13,18 +13,21 @@ asset, not a syscall assertion), [SYNC_BASELINE.md](SYNC_BASELINE.md) for
 the synchronization batch (futex and SysV semaphores; 3 PASS, 12 PARTIAL,
 10 FAIL, 2 TIMEOUT, 2 BROKEN and 3 SKIP), and
 [SIGNALS_BASELINE.md](SIGNALS_BASELINE.md) for the signal and event batch
-(46 cases; 46/46 passing on tmpfs after the signal fixes). Hostfs remains
-available only for comparison and forces mode `0755` on Windows, so it is
-unsuitable for permission tests.
+(46 cases; 46/46 passing on tmpfs after the signal fixes), and
+[MEMORY_BASELINE.md](MEMORY_BASELINE.md) for the memory management and mapping
+batch (66 cases; 22 PASS, 20 FAIL, 18 BROKEN, 2 TIMEOUT and 4 SKIP as the
+first baseline). Hostfs remains available only for comparison and forces mode
+`0755` on Windows, so it is unsuitable for permission tests.
 
 ## Manifests
 
 `cases.json` is the basic syscall batch. `cases-permissions.json` is the
 permission/identity batch, `cases-sync.json` is the futex + SysV semaphore
-batch, and `cases-signals.json` is the signal + event notification batch. The
-permission, sync and signal manifests require a root native baseline and
-default to tmpfs. Build and run each batch into its own artifact directory so
-`build.json` and baselines do not mix with the basic batch:
+batch, `cases-signals.json` is the signal + event notification batch, and
+`cases-memory.json` is the memory management + address-space mapping batch. The
+permission, sync, signal and memory manifests require a root native baseline
+and default to tmpfs. Build and run each batch into its own artifact directory
+so `build.json` and baselines do not mix with the basic batch:
 
 ```sh
 git submodule update --init tests/ltp/upstream
@@ -42,7 +45,8 @@ python tests/ltp/run.py --backend podish --artifacts artifacts/ltp-permissions \
 
 The synchronization batch uses the same workflow with
 `cases-sync.json` and `artifacts/ltp-sync`. The signal and event batch uses
-`cases-signals.json` and `artifacts/ltp-signals`.
+`cases-signals.json` and `artifacts/ltp-signals`. The memory management batch
+uses `cases-memory.json` and `artifacts/ltp-memory`.
 
 The `tmpfs` backend imports one generated image containing all selected
 binaries under `/opt/ltp/testcases/bin`, then runs each binary in a separate
