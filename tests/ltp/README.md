@@ -9,19 +9,22 @@ subsequent fixes (50/50 passing on the repair branch), and
 [PERMISSIONS_BASELINE.md](PERMISSIONS_BASELINE.md) for the separate permission
 and identity batch (70/71 passing on the tmpfs image backend after the
 permission fixes; the remaining `access02` failure is a missing `/bin/sh` test
-asset, not a syscall assertion), and [SYNC_BASELINE.md](SYNC_BASELINE.md) for
+asset, not a syscall assertion), [SYNC_BASELINE.md](SYNC_BASELINE.md) for
 the synchronization batch (futex and SysV semaphores; 3 PASS, 12 PARTIAL,
-10 FAIL, 2 TIMEOUT, 2 BROKEN and 3 SKIP). Hostfs remains available only for
-comparison and forces mode `0755` on Windows, so it is unsuitable for
+10 FAIL, 2 TIMEOUT, 2 BROKEN and 3 SKIP), and
+[SIGNALS_BASELINE.md](SIGNALS_BASELINE.md) for the signal and event batch
+(46 cases; 30 PASS, 9 FAIL, 5 BROKEN and 2 TIMEOUT). Hostfs remains available
+only for comparison and forces mode `0755` on Windows, so it is unsuitable for
 permission tests.
 
 ## Manifests
 
 `cases.json` is the basic syscall batch. `cases-permissions.json` is the
-permission/identity batch and `cases-sync.json` is the futex + SysV semaphore
-batch; both require a root native baseline and default to tmpfs. Build and run
-each batch into its own artifact directory so `build.json` and baselines do not
-mix with the basic batch:
+permission/identity batch, `cases-sync.json` is the futex + SysV semaphore
+batch, and `cases-signals.json` is the signal + event notification batch. The
+permission, sync and signal manifests require a root native baseline and
+default to tmpfs. Build and run each batch into its own artifact directory so
+`build.json` and baselines do not mix with the basic batch:
 
 ```sh
 git submodule update --init tests/ltp/upstream
@@ -38,7 +41,8 @@ python tests/ltp/run.py --backend podish --artifacts artifacts/ltp-permissions \
 ```
 
 The synchronization batch uses the same workflow with
-`cases-sync.json` and `artifacts/ltp-sync`.
+`cases-sync.json` and `artifacts/ltp-sync`. The signal and event batch uses
+`cases-signals.json` and `artifacts/ltp-signals`.
 
 The `tmpfs` backend imports one generated image containing all selected
 binaries under `/opt/ltp/testcases/bin`, then runs each binary in a separate
