@@ -69,4 +69,9 @@ internal sealed class MappedFilePageCache : IDisposable
     {
         return _backend.GetDiagnostics();
     }
+
+    public bool TryDescribePagePointer(long filePageIndex, IntPtr pointer, out FilePageLeaseDiagnostics diagnostics)
+    {
+        return _backend.TryDescribePagePointer(filePageIndex, pointer, out diagnostics);
+    }
 }

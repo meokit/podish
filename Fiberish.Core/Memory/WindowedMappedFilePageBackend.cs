@@ -392,6 +392,30 @@ internal sealed partial class WindowedMappedFilePageBackend(string path, HostMem
         }
     }
 
+    public bool TryDescribePagePointer(long filePageIndex, IntPtr pointer, out FilePageLeaseDiagnostics diagnostics)
+    {
+        diagnostics = default;
+        if (filePageIndex < 0 || filePageIndex > long.MaxValue / LinuxConstants.PageSize || pointer == IntPtr.Zero)
+            return false;
+        var pageStart = filePageIndex * LinuxConstants.PageSize;
+        lock (_lock)
+        {
+            foreach (var lease in _leases.Values)
+            {
+                if (lease.PageIndex != filePageIndex || !_windowsById.TryGetValue(lease.WindowId, out var window))
+                    continue;
+                var offset = pageStart - window.Start;
+                if (offset < 0 || offset > window.Length - LinuxConstants.PageSize ||
+                    window.Ptr + (nint)offset != pointer)
+                    continue;
+                diagnostics = new FilePageLeaseDiagnostics(window.Id, filePageIndex, window.Ptr, window.Length,
+                    window.AccessMode == WindowAccessMode.ReadWrite, window.Retired, window.RefCount);
+                return true;
+            }
+        }
+        return false;
+    }
+
     public void Dispose()
     {
         List<WindowMapping> disposeNow;

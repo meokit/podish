@@ -1832,6 +1832,16 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         return GetMappedPageCacheDiagnostics();
     }
 
+    bool IHostMappedCacheDropper.TryDescribeMappedPage(long filePageIndex, IntPtr pointer,
+        out FilePageLeaseDiagnostics diagnostics)
+    {
+        lock (_mappedCacheLock)
+        {
+            diagnostics = default;
+            return _mappedPageCache?.TryDescribePagePointer(filePageIndex, pointer, out diagnostics) == true;
+        }
+    }
+
     long IHostMappedCacheDropper.TrimMappedCache(bool aggressive)
     {
         lock (_mappedCacheLock)

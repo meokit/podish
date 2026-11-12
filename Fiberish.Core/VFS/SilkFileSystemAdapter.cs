@@ -514,6 +514,16 @@ public sealed class SilkInode : MappingBackedInode, IHostMappedCacheDropper
         return GetMappedPageCacheDiagnostics();
     }
 
+    bool IHostMappedCacheDropper.TryDescribeMappedPage(long filePageIndex, IntPtr pointer,
+        out FilePageLeaseDiagnostics diagnostics)
+    {
+        lock (_mappedCacheLock)
+        {
+            diagnostics = default;
+            return _mappedPageCache?.TryDescribePagePointer(filePageIndex, pointer, out diagnostics) == true;
+        }
+    }
+
     long IHostMappedCacheDropper.TrimMappedCache(bool aggressive)
     {
         lock (_mappedCacheLock)
@@ -853,6 +863,12 @@ public sealed class SilkInode : MappingBackedInode, IHostMappedCacheDropper
             _childNames.Add(childName);
             return created;
         }
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return Lookup(FsEncoding.EncodeUtf8(name));
     }
 
     public override List<DirectoryEntry> GetEntries()

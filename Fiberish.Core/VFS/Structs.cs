@@ -310,6 +310,7 @@ internal interface IHostMappedCacheDropper
 {
     FilePageBackendDiagnostics GetMappedCacheDiagnostics();
     long TrimMappedCache(bool aggressive);
+    bool TryDescribeMappedPage(long filePageIndex, IntPtr pointer, out FilePageLeaseDiagnostics diagnostics);
 }
 
 public readonly record struct PageIoRequest(long PageIndex, long FileOffset, int Length);

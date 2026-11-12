@@ -58,6 +58,12 @@ internal sealed class BufferedPageBackend : IFilePageBackend
         return default;
     }
 
+    public bool TryDescribePagePointer(long filePageIndex, IntPtr pointer, out FilePageLeaseDiagnostics diagnostics)
+    {
+        diagnostics = default;
+        return false;
+    }
+
     public void Dispose()
     {
     }

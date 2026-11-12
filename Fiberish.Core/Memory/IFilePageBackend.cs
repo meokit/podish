@@ -5,6 +5,11 @@ internal readonly record struct FilePageBackendDiagnostics(
     long WindowBytes,
     int GuestPageCount);
 
+// Read-only provenance for a currently leased pointer; not a residency or RAM-lock claim.
+internal readonly record struct FilePageLeaseDiagnostics(
+    long WindowId, long FilePageIndex, IntPtr WindowPointer, long WindowLength,
+    bool Writable, bool Retired, int WindowRefCount);
+
 internal interface IFilePageBackend : IDisposable
 {
     void UpdatePath(string path);
@@ -21,4 +26,5 @@ internal interface IFilePageBackend : IDisposable
     void Truncate(long size);
     long Trim(bool aggressive);
     FilePageBackendDiagnostics GetDiagnostics();
+    bool TryDescribePagePointer(long filePageIndex, IntPtr pointer, out FilePageLeaseDiagnostics diagnostics);
 }
