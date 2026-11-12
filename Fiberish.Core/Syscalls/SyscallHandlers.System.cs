@@ -132,22 +132,21 @@ public partial class SyscallManager
 
         var uts = t.Process.UTS;
 
-        void WriteUnameString(uint addr, string s)
+        var result = new byte[65 * 6];
+        void WriteUnameString(int offset, string s)
         {
-            var buf = new byte[65];
             var bytes = Encoding.ASCII.GetBytes(s);
-            Array.Copy(bytes, buf, Math.Min(bytes.Length, 64));
-            if (!engine.CopyToUser(addr, buf)) return;
+            Array.Copy(bytes, 0, result, offset, Math.Min(bytes.Length, 64));
         }
 
-        WriteUnameString(a1, uts.SysName);
-        WriteUnameString(a1 + 65, uts.NodeName);
-        WriteUnameString(a1 + 130, uts.Release);
-        WriteUnameString(a1 + 195, uts.Version);
-        WriteUnameString(a1 + 260, uts.Machine);
-        WriteUnameString(a1 + 325, uts.DomainName);
+        WriteUnameString(0, uts.SysName);
+        WriteUnameString(65, uts.NodeName);
+        WriteUnameString(130, uts.Release);
+        WriteUnameString(195, uts.Version);
+        WriteUnameString(260, uts.Machine);
+        WriteUnameString(325, uts.DomainName);
 
-        return 0;
+        return engine.CopyToUser(a1, result) ? 0 : -(int)Errno.EFAULT;
     }
 
     private async ValueTask<int> SysSysinfo(Engine engine, uint sysinfoAddr, uint a2, uint a3, uint a4, uint a5,
@@ -419,6 +418,9 @@ public partial class SyscallManager
     {
         var tvPtr = a1;
 
+        // The obsolete timezone output still needs to be written/validated.
+        if (a2 != 0 && !engine.CopyToUser(a2, new byte[8])) return -(int)Errno.EFAULT;
+
         // Use UtcNow for REALTIME (gettimeofday is strictly REALTIME)
         var ticks = DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks;
         var secs = ticks / TimeSpan.TicksPerSecond;
@@ -532,8 +534,19 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysClockNanosleepTime64(Engine engine, uint a1, uint a2, uint a3, uint a4,
+    private ValueTask<int> SysClockNanosleep(Engine engine, uint a1, uint a2, uint a3, uint a4,
         uint a5, uint a6)
+    {
+        return ClockNanosleep(engine, a1, a2, a3, a4, false);
+    }
+
+    private ValueTask<int> SysClockNanosleepTime64(Engine engine, uint a1, uint a2, uint a3, uint a4,
+        uint a5, uint a6)
+    {
+        return ClockNanosleep(engine, a1, a2, a3, a4, true);
+    }
+
+    private async ValueTask<int> ClockNanosleep(Engine engine, uint a1, uint a2, uint a3, uint a4, bool time64)
     {
         var clockId = (int)a1;
         var flags = (int)a2;
@@ -545,10 +558,12 @@ public partial class SyscallManager
             clockId != LinuxConstants.CLOCK_BOOTTIME)
             return -(int)Errno.EINVAL;
 
-        var reqBuf = new byte[16]; // timespec64
+        var reqBuf = new byte[time64 ? 16 : 8];
         if (!engine.CopyFromUser(reqPtr, reqBuf)) return -(int)Errno.EFAULT;
-        var sec = BinaryPrimitives.ReadInt64LittleEndian(reqBuf.AsSpan(0, 8));
-        var nsec = BinaryPrimitives.ReadInt64LittleEndian(reqBuf.AsSpan(8, 8));
+        long sec = time64 ? BinaryPrimitives.ReadInt64LittleEndian(reqBuf.AsSpan(0, 8))
+            : BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(0, 4));
+        long nsec = time64 ? BinaryPrimitives.ReadInt64LittleEndian(reqBuf.AsSpan(8, 8))
+            : BinaryPrimitives.ReadInt32LittleEndian(reqBuf.AsSpan(4, 4));
         if (sec < 0 || nsec < 0 || nsec >= 1_000_000_000) return -(int)Errno.EINVAL;
 
         if (engine.Owner is not FiberTask fiberTask) return -(int)Errno.EPERM;
@@ -573,10 +588,11 @@ public partial class SyscallManager
             {
                 var elapsedNs = Math.Max(0L, GetSleepClockNs(clockId) - startNs);
                 var remainingNs = Math.Max(0L, durationNs - elapsedNs);
-                if (!WriteTimespec64(engine, remPtr, remainingNs)) return -(int)Errno.EFAULT;
+                if (!(time64 ? WriteTimespec64(engine, remPtr, remainingNs) : WriteTimespec32(engine, remPtr, remainingNs)))
+                    return -(int)Errno.EFAULT;
             }
 
-            return -(int)Errno.ERESTARTSYS;
+            return -(int)Errno.EINTR;
         }
 
         return 0;
@@ -657,6 +673,10 @@ public partial class SyscallManager
             case LinuxConstants.CLOCK_MONOTONIC_RAW:
             case LinuxConstants.CLOCK_MONOTONIC_COARSE:
             case LinuxConstants.CLOCK_BOOTTIME:
+            // Reading alarm-clock resolution needs no CAP_WAKE_ALARM. This does
+            // not enable creating alarm timers or waking a suspended host.
+            case LinuxConstants.CLOCK_REALTIME_ALARM:
+            case LinuxConstants.CLOCK_BOOTTIME_ALARM:
                 resolutionNs = 1_000_000;
                 return true;
             case LinuxConstants.CLOCK_PROCESS_CPUTIME_ID:

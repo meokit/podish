@@ -49,10 +49,12 @@ public class BlockingHostOperationAwaitableTests
 
         async void Entry()
         {
-            scheduler.ScheduleTimer(1, () => task.PostSignal((int)Signal.SIGUSR1));
             result = await new BlockingHostOperationAwaitable(task, "test", () =>
             {
                 workerStarted.Set();
+                // Post from the worker instead of racing a 1 ms timer against
+                // ThreadPool startup. The worker must exist before interruption.
+                scheduler.ScheduleFromAnyThread(() => task.PostSignal((int)Signal.SIGUSR1), task);
                 workerRelease.Wait();
                 return 0;
             });

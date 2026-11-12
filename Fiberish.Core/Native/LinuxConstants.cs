@@ -380,6 +380,8 @@ public static class LinuxConstants
     public const int CLOCK_REALTIME_COARSE = 5;
     public const int CLOCK_MONOTONIC_COARSE = 6;
     public const int CLOCK_BOOTTIME = 7;
+    public const int CLOCK_REALTIME_ALARM = 8;
+    public const int CLOCK_BOOTTIME_ALARM = 9;
 
     // TTY IOCTLs
     public const uint TCGETS = 0x5401;

@@ -164,13 +164,8 @@ public partial class SyscallManager
     private async ValueTask<int> SysClockGetResTime64(Engine engine, uint clockId, uint resPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
-        if (resPtr != 0)
-        {
-            var buf = new byte[16];
-            BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), 0); // 0 sec
-            BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8, 8), 1000000); // 1,000,000 ns (1 ms resolution)
-            if (!engine.CopyToUser(resPtr, buf)) return -(int)Errno.EFAULT;
-        }
+        if (!TryGetClockResolution((int)clockId, out var resolutionNs)) return -(int)Errno.EINVAL;
+        if (resPtr != 0 && !WriteTimespec64(engine, resPtr, resolutionNs)) return -(int)Errno.EFAULT;
 
         return 0;
     }

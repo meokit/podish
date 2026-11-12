@@ -4,7 +4,8 @@ This is a selected **50-binary** LTP suite, not all of LTP. The upstream source
 is the `upstream` git submodule; the superproject's gitlink pins its revision.
 Build scripts, selection and host runner live here, outside the submodule.
 No upstream tests or assertions are patched. See [RESULTS.md](RESULTS.md) for
-the initial Windows Podish results and known incompatibilities.
+the initial Windows Podish results and [FIX_REPORT.md](FIX_REPORT.md) for the
+subsequent fixes (50/50 passing on the repair branch).
 
 ## Selection
 

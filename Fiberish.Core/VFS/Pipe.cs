@@ -14,6 +14,8 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     private const int BufferSize = 65536; // 64KB pipe buffer
     public const int PipeBuf = 4096;
     private byte[] _buffer;
+    private readonly bool _packetMode;
+    private readonly Queue<int> _packetLengths = new();
 
     // Notification handles
     private readonly WaitHandle _readHandle;
@@ -28,8 +30,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     private int _writerCount;
     private bool _writersClosed;
 
-    public PipeInode(KernelScheduler scheduler)
+    public PipeInode(KernelScheduler scheduler, bool packetMode = false)
     {
+        _packetMode = packetMode;
         _waitQueues = new PooledReadWriteWaitQueues(scheduler);
         _readHandle = _waitQueues.ReadQueue;
         _writeHandle = _waitQueues.WriteQueue;
@@ -244,13 +247,15 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         _ = task;
         using (EnterStateScope())
         {
+            if (buffer.Length == 0) return 0;
             if (_lifecycleClosed)
                 return 0;
 
             if (_count > 0)
             {
                 // Read data
-                var available = Math.Min(buffer.Length, _count);
+                var consumed = _packetMode ? _packetLengths.Peek() : Math.Min(buffer.Length, _count);
+                var available = Math.Min(buffer.Length, consumed);
                 var firstChunk = Math.Min(available, BufferSize - _tail);
 
                 if (firstChunk > 0)
@@ -262,8 +267,10 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                     new ReadOnlySpan<byte>(_buffer, 0, secondChunk).CopyTo(buffer.Slice(firstChunk, secondChunk));
                 }
 
-                _tail = (_tail + available) % BufferSize;
-                _count -= available;
+                // A short packet read discards the unread tail of that packet.
+                _tail = (_tail + consumed) % BufferSize;
+                _count -= consumed;
+                if (_packetMode) _packetLengths.Dequeue();
 
                 // Update handles
                 if (_count == 0) _readHandle.Reset();
@@ -287,7 +294,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
             if (_count > 0)
             {
-                var available = Math.Min(buffer.Length, _count);
+                var available = Math.Min(buffer.Length, _packetMode ? _packetLengths.Peek() : _count);
                 var firstChunk = Math.Min(available, BufferSize - _tail);
 
                 if (firstChunk > 0)
@@ -314,6 +321,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         _ = task;
         using (EnterStateScope())
         {
+            if (buffer.Length == 0) return 0;
             if (_lifecycleClosed)
                 return -(int)Errno.EPIPE;
 
@@ -328,10 +336,11 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 // Linux pipe(7): blocking writes of n <= PIPE_BUF bytes must remain atomic,
                 // so we only report progress here when the pipe can accept the whole chunk.
                 // Non-blocking writes of n <= PIPE_BUF bytes return EAGAIN instead of partial progress.
-                if (buffer.Length <= PipeBuf && space < buffer.Length)
+                var requested = _packetMode ? Math.Min(buffer.Length, PipeBuf) : buffer.Length;
+                if (requested <= PipeBuf && space < requested)
                     return -(int)Errno.EAGAIN;
 
-                var toWrite = Math.Min(buffer.Length, space);
+                var toWrite = Math.Min(requested, space);
                 var firstChunk = Math.Min(toWrite, BufferSize - _head);
 
                 if (firstChunk > 0)
@@ -348,6 +357,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 }
 
                 _count += toWrite;
+                if (_packetMode) _packetLengths.Enqueue(toWrite);
 
                 // Update handles
                 if (_count == BufferSize) _writeHandle.Reset();
@@ -363,13 +373,102 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     public override ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task,
         ArraySegment<Iovec> iovs, long offset, int flags)
     {
+        if (_packetMode) return ReadPacketV(engine, file, task, iovs);
         return ReadVViaHostBuffer(engine, file, task, iovs, offset, flags);
     }
 
     public override ValueTask<int> WriteV(Engine engine, LinuxFile file, FiberTask? task,
         ArraySegment<Iovec> iovs, long offset, int flags)
     {
+        if (_packetMode) return WritePacketV(engine, file, task, iovs);
         return WriteVViaHostBuffer(engine, file, task, iovs, offset, flags);
+    }
+
+    private async ValueTask<int> ReadPacketV(Engine engine, LinuxFile file, FiberTask? task,
+        ArraySegment<Iovec> iovs)
+    {
+        var capacity = Math.Min(PipeBuf, iovs.Sum(iov => (long)iov.Len));
+        if (capacity == 0) return 0;
+        var buffer = ArrayPool<byte>.Shared.Rent((int)capacity);
+        try
+        {
+            while (true)
+            {
+                var count = Peek(buffer.AsSpan(0, (int)capacity));
+                if (count == -(int)Errno.EAGAIN)
+                {
+                    if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || task == null) return count;
+                    if (await WaitForRead(file, task) == AwaitResult.Interrupted) return -(int)Errno.ERESTARTSYS;
+                    continue;
+                }
+                if (count <= 0) return count;
+                var copied = 0;
+                foreach (var iov in iovs)
+                {
+                    var length = (int)Math.Min(iov.Len, (uint)(count - copied));
+                    if (length != 0 && !engine.CopyToUser(iov.BaseAddr, buffer.AsSpan(copied, length)))
+                        return -(int)Errno.EFAULT;
+                    copied += length;
+                    if (copied == count) break;
+                }
+                // Consume once, after the scatter copy: guest page/iovec
+                // boundaries must not accidentally split or discard a packet.
+                return ReadToHost(task, file, buffer.AsSpan(0, count), 0);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private async ValueTask<int> WritePacketV(Engine engine, LinuxFile file, FiberTask? task,
+        ArraySegment<Iovec> iovs)
+    {
+        var remaining = iovs.Sum(iov => (long)iov.Len);
+        if (remaining == 0) return 0;
+        var buffer = ArrayPool<byte>.Shared.Rent(PipeBuf);
+        var total = 0;
+        var index = 0;
+        uint offset = 0;
+        try
+        {
+            while (remaining > 0)
+            {
+                var packetSize = (int)Math.Min(PipeBuf, remaining);
+                var copied = 0;
+                while (copied < packetSize)
+                {
+                    var iov = iovs[index];
+                    var length = (int)Math.Min(iov.Len - offset, (uint)(packetSize - copied));
+                    if (length != 0 && !engine.CopyFromUser(iov.BaseAddr + offset, buffer.AsSpan(copied, length)))
+                        return total > 0 ? total : -(int)Errno.EFAULT;
+                    copied += length;
+                    offset += (uint)length;
+                    if (offset == iov.Len) { index++; offset = 0; }
+                }
+                while (true)
+                {
+                    var rc = WriteFromHost(task, file, buffer.AsSpan(0, packetSize), 0);
+                    if (rc == -(int)Errno.EAGAIN && (file.Flags & FileFlags.O_NONBLOCK) == 0 && task != null)
+                    {
+                        if (await WaitForWrite(file, task, packetSize) == AwaitResult.Interrupted)
+                            return total > 0 ? total : -(int)Errno.ERESTARTSYS;
+                        continue;
+                    }
+                    if (rc == -(int)Errno.EPIPE) task?.PostSignal((int)Signal.SIGPIPE);
+                    if (rc <= 0) return total > 0 ? total : rc;
+                    total += rc;
+                    remaining -= rc;
+                    break;
+                }
+            }
+            return total;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     public override async ValueTask<AwaitResult> WaitForRead(LinuxFile linuxFile, FiberTask task)

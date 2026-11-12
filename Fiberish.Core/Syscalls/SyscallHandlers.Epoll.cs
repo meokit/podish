@@ -71,6 +71,7 @@ public partial class SyscallManager
         if (task == null) return -(int)Errno.EPERM;
 
         var flags = (int)a1;
+        if ((flags & ~(int)FileFlags.O_CLOEXEC) != 0) return -(int)Errno.EINVAL;
 
         var inode = new EpollInode(0, MemfdSuperBlock, task.CommonKernel);
         var fileFlags = FileFlags.O_RDWR;

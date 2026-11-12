@@ -652,6 +652,9 @@ public partial class SyscallManager
             case X86SyscallNumbers.clock_getres_time64:
                 handled = true;
                 return SysClockGetResTime64(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.clock_nanosleep:
+                handled = true;
+                return SysClockNanosleep(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.clock_nanosleep_time64:
                 handled = true;
                 return SysClockNanosleepTime64(engine, ebx, ecx, edx, esi, edi, ebp);

@@ -161,7 +161,7 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysTruncate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        return await DoTruncate(this, engine, a1, a2);
+        return await DoTruncate(this, engine, a1, (int)a2);
     }
 
     private async ValueTask<int> SysTruncate64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
@@ -174,6 +174,7 @@ public partial class SyscallManager
 
     private static ValueTask<int> DoTruncate(SyscallManager sm, Engine engine, uint pathPtr, long length)
     {
+        if (length < 0) return new ValueTask<int>(-(int)Errno.EINVAL);
         var pathErr = sm.ReadPathArgumentBytes(pathPtr, out var path);
         if (pathErr != 0)
             return new ValueTask<int>(pathErr);
@@ -207,11 +208,12 @@ public partial class SyscallManager
     private async ValueTask<int> SysFtruncate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var fd = (int)a1;
-        var length = (long)a2;
+        var length = (long)(int)a2;
+        if (length < 0) return -(int)Errno.EINVAL;
 
         var f = GetFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
-        if (f.OpenedInode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
+        if (f.OpenedInode.Type != InodeType.File) return -(int)Errno.EINVAL;
         if ((f.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EINVAL;
 
         return f.OpenedInode.Truncate(length, CreateFileMutationContext(engine));
@@ -222,10 +224,11 @@ public partial class SyscallManager
     {
         var fd = (int)a1;
         var length = (long)(((ulong)a3 << 32) | a2);
+        if (length < 0) return -(int)Errno.EINVAL;
 
         var f = GetFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
-        if (f.OpenedInode.Type == InodeType.Directory) return -(int)Errno.EINVAL;
+        if (f.OpenedInode.Type != InodeType.File) return -(int)Errno.EINVAL;
         if ((f.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EINVAL;
 
         return f.OpenedInode.Truncate(length, CreateFileMutationContext(engine));

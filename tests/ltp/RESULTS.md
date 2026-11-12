@@ -3,6 +3,10 @@
 This is an observed baseline, **not** an expected-failure allowlist. Runtime
 compatibility fixes are intentionally separate from the test integration.
 
+**Follow-up:** all 50 cases now pass on the repair branch. See
+[FIX_REPORT.md](FIX_REPORT.md) for root causes, fixes and regression results.
+The numbers below preserve the original pre-fix snapshot.
+
 ## Environment and results
 
 - LTP gitlink: `e74f6d6f1c09e6be1aee0a09d347d818be3a36e8`
@@ -22,8 +26,8 @@ compatibility fixes are intentionally separate from the test integration.
 - Host runner's 11 unit tests pass on both Windows Python and WSL Linux Python.
 
 Detailed machine-readable results and raw logs are generated under
-`artifacts/ltp/`; they are not checked into Git. A full Podish run currently
-returns exit code 1. No failures are automatically exempted.
+`artifacts/ltp/`; they are not checked into Git. At this initial pre-fix baseline,
+a full Podish run returned exit code 1. No failures were automatically exempted.
 
 ## Observed incompatibilities
 

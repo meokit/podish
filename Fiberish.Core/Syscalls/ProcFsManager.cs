@@ -6,6 +6,21 @@ namespace Fiberish.Syscalls;
 
 public static class ProcFsManager
 {
+    private static char GetProcessState(Process process)
+    {
+        // Process.State tracks lifecycle, while blocked syscalls change task
+        // status. A live process whose threads all wait must be visible as S.
+        return process.State switch
+        {
+            ProcessState.Stopped => 'T',
+            ProcessState.Zombie => 'Z',
+            ProcessState.Dead => 'X',
+            ProcessState.Sleeping => 'S',
+            _ => process.Threads.Count > 0 && process.Threads.All(t => t.Status == FiberTaskStatus.Waiting)
+                ? 'S' : 'R'
+        };
+    }
+
     public static void OnProcessStart(SyscallManager sm, Process process)
     {
         // Dynamic procfs does not need eager inode creation.
@@ -35,15 +50,7 @@ public static class ProcFsManager
     public static string GenerateStatus(Process process)
     {
         // Minimal status
-        var stateChar = process.State switch
-        {
-            ProcessState.Running => 'R',
-            ProcessState.Sleeping => 'S',
-            ProcessState.Stopped => 'T',
-            ProcessState.Zombie => 'Z',
-            ProcessState.Dead => 'X',
-            _ => 'R'
-        };
+        var stateChar = GetProcessState(process);
         var stateMsg = stateChar switch
         {
             'R' => "R (running)",
@@ -66,15 +73,7 @@ public static class ProcFsManager
         // Minimal stat for ps
         // pid (comm) state ppid pgrp session tty_nr tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime priority nice num_threads itrealvalue starttime vsize rss rsslim startcode endcode startstack kstkesp kstkeip signal blocked sigignore sigcatch wchan nswap cnswap exit_signal processor rt_priority policy
 
-        var stateChar = process.State switch
-        {
-            ProcessState.Running => 'R',
-            ProcessState.Sleeping => 'S',
-            ProcessState.Stopped => 'T',
-            ProcessState.Zombie => 'Z',
-            ProcessState.Dead => 'X',
-            _ => 'R'
-        };
+        var stateChar = GetProcessState(process);
 
         // Determine TTY info
         var ttyNr = 0;

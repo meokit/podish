@@ -124,9 +124,8 @@ public class PipeTests
         const uint fdsAddr = 0x12000;
         env.MapUserPage(fdsAddr);
 
-        // O_DIRECT is intentionally unsupported in current implementation.
-        const uint O_DIRECT = 0x4000;
-        var rc = await CallSysPipe2(env, fdsAddr, O_DIRECT);
+        // Packet mode O_DIRECT is supported; O_APPEND is not a pipe2 flag.
+        var rc = await CallSysPipe2(env, fdsAddr, (uint)FileFlags.O_APPEND);
         Assert.Equal(-(int)Errno.EINVAL, rc);
     }
 
