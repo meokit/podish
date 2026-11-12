@@ -27,6 +27,9 @@ class ResultTests(unittest.TestCase):
     def test_configuration_skip_is_not_success(self):
         self.assertEqual(classify(32, summary(passed=0, skipped=1))[0], "SKIP")
 
+    def test_supported_variants_with_extra_skip_are_a_pass_before_baseline_compare(self):
+        self.assertEqual(classify(32, summary(passed=2, skipped=1))[0], "PASS")
+
     def test_broken_and_crash_are_not_syscall_failures(self):
         self.assertEqual(classify(2, summary(broken=1))[0], "BROKEN")
         self.assertEqual(classify(-11, "")[0], "BROKEN")

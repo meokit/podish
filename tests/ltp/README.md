@@ -9,15 +9,19 @@ subsequent fixes (50/50 passing on the repair branch), and
 [PERMISSIONS_BASELINE.md](PERMISSIONS_BASELINE.md) for the separate permission
 and identity batch (70/71 passing on the tmpfs image backend after the
 permission fixes; the remaining `access02` failure is a missing `/bin/sh` test
-asset, not a syscall assertion). Hostfs remains available only for comparison
-and forces mode `0755` on Windows, so it is unsuitable for permission tests.
+asset, not a syscall assertion), and [SYNC_BASELINE.md](SYNC_BASELINE.md) for
+the synchronization batch (futex and SysV semaphores; 3 PASS, 12 PARTIAL,
+10 FAIL, 2 TIMEOUT, 2 BROKEN and 3 SKIP). Hostfs remains available only for
+comparison and forces mode `0755` on Windows, so it is unsuitable for
+permission tests.
 
 ## Manifests
 
 `cases.json` is the basic syscall batch. `cases-permissions.json` is the
-permission/identity batch and requires a root native baseline. Build and run
-the permission batch into its own artifact directory so its `build.json` and
-baseline do not mix with the basic batch:
+permission/identity batch and `cases-sync.json` is the futex + SysV semaphore
+batch; both require a root native baseline and default to tmpfs. Build and run
+each batch into its own artifact directory so `build.json` and baselines do not
+mix with the basic batch:
 
 ```sh
 git submodule update --init tests/ltp/upstream
@@ -32,6 +36,9 @@ python tests/ltp/run.py --backend podish --artifacts artifacts/ltp-permissions \
   --manifest tests/ltp/cases-permissions.json
 # Use --fs-backend hostfs only for an explicit old-backend comparison.
 ```
+
+The synchronization batch uses the same workflow with
+`cases-sync.json` and `artifacts/ltp-sync`.
 
 The `tmpfs` backend imports one generated image containing all selected
 binaries under `/opt/ltp/testcases/bin`, then runs each binary in a separate
@@ -135,14 +142,16 @@ exact same build metadata and binary hashes. Native baseline results live at
 Each test runs in a fresh rootfs/container, with the unmodified binary as the
 guest executable, `--rm --init --network private --log-driver none`, and no shell.
 `--init` is important: LTP's harness treats a parent PID of 1 as an orphaned
-test. The filesystem under test is currently **hostfs**; this suite does not yet
-provide the filesystem-backend matrix of `Podish.PjdFs`.
+test. The basic manifest uses hostfs; permission and sync manifests default to
+a tmpfs image because hostfs forces mode `0755` on Windows. This suite does not
+yet provide the full filesystem-backend matrix of `Podish.PjdFs`.
 
 The runner uses `KCONFIG_SKIP_CHECK=1` to bypass host kernel configuration
 inspection, not syscall assertions. The suite is intentionally filtered to
 behavioral tests which do not need a real kernel config. It does not fabricate
 missing `/proc` entries, suppress ENOSYS, weaken expected errno, or mark failures
-as passes. Native and guest effective UID differ (normal host user vs guest
+as passes. Native and guest effective UID differ for the basic manifest (normal
+host user vs guest
 root); privileged/identity-switching cases are excluded.
 
 ## Results and diagnostics
@@ -160,12 +169,14 @@ python -m unittest discover -s tests/ltp -p 'test_*.py'
   run-local `report.json` and per-case `output.log` in `artifacts/ltp/runs/`.
 - `--trace` additionally enables the trace log level and writes each case's
   syscall/engine trace to `engine.log` beside `output.log`.
-- Exit code is nonzero for any FAIL, BROKEN, SKIP or TIMEOUT. There is no XFAIL
-  allowlist to silently turn known syscall defects green.
+- Exit code is nonzero for any FAIL, BROKEN, SKIP, PARTIAL or TIMEOUT. There is
+  no XFAIL allowlist to silently turn known syscall defects green.
+- `PARTIAL` is reported when at least one supported variant passed but one or
+  more variants were `TCONF`-skipped and therefore native assertion coverage was
+  not reached. It is never treated as PASS.
 - LTP summary counts are retained, including partial skips and multiple variants.
-  Warnings, crashes, malformed/missing summaries are not passes. A Podish PASS
-  must also match the native assertion counts, preventing reduced coverage from
-  silently passing. Counts are aggregated assertions, not unique syscall counts.
+  Warnings, crashes, malformed/missing summaries are not passes. Counts are
+  aggregated assertions, not unique syscall counts.
 
 When adding a case, inspect its source and setup/resource requirements, add it
 to `cases.json`, rebuild, and first obtain a clean Linux baseline. Keep failures

@@ -63,7 +63,7 @@ def classify(returncode, text, timed_out=False):
         return "BROKEN", counts
     if returncode not in (0, 32):
         return "BROKEN", counts
-    if counts["passed"] and returncode == 0:
+    if counts["passed"] and returncode in (0, 32):
         return "PASS", counts
     if counts["skipped"] and not counts["passed"] and returncode == 32:
         return "SKIP", counts
@@ -270,8 +270,17 @@ def main():
             code, text, timed_out, elapsed = execute(command, cwd, env, args.timeout)
             status, counts = classify(code, text, timed_out)
             if status == "PASS" and args.backend == "podish" and counts != baseline[name]["counts"]:
-                status = "BROKEN"
-                text += "\nRunner: assertion counts differ from native; refusing a partial-coverage PASS.\n"
+                native_counts = baseline[name]["counts"]
+                extra_skips_only = (
+                    counts["passed"] > 0 and
+                    counts["failed"] == native_counts["failed"] == 0 and
+                    counts["broken"] == native_counts["broken"] == 0 and
+                    counts["warnings"] == native_counts["warnings"] == 0 and
+                    counts["skipped"] > native_counts["skipped"])
+                status = "PARTIAL" if extra_skips_only else "BROKEN"
+                text += ("\nRunner: partial variant coverage (unsupported assertions skipped); "
+                         "refusing a full PASS.\n" if status == "PARTIAL" else
+                         "\nRunner: assertion counts differ from native; refusing a partial-coverage PASS.\n")
         except OSError as error:
             code, text, elapsed = -1, str(error), 0
             status, counts = "BROKEN", {key: 0 for key in SUMMARY_KEYS}
