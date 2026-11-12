@@ -300,13 +300,33 @@ public partial class SyscallManager
         const uint MFD_EXEC = 0x0010;
 
 
-        var name = engine.ReadStringSafe(a1);
-        if (name == null) return -(int)Errno.EFAULT;
-
         var flags = a2;
         var knownFlags = MFD_CLOEXEC | MFD_ALLOW_SEALING | MFD_NOEXEC_SEAL | MFD_EXEC;
         if ((flags & ~knownFlags) != 0) return -(int)Errno.EINVAL;
         if ((flags & MFD_EXEC) != 0 && (flags & MFD_NOEXEC_SEAL) != 0) return -(int)Errno.EINVAL;
+
+        if (a1 == 0) return -(int)Errno.EFAULT;
+        // memfd names are byte strings of at most NAME_MAX - strlen("memfd:")
+        // bytes. Read only through the terminator, including across page edges.
+        var nameBytes = new byte[250];
+        var nameLength = -1;
+        for (var consumed = 0; consumed < nameBytes.Length;)
+        {
+            var address = a1 + (uint)consumed;
+            var chunk = Math.Min(nameBytes.Length - consumed,
+                LinuxConstants.PageSize - (int)(address & LinuxConstants.PageOffsetMask));
+            var span = nameBytes.AsSpan(consumed, chunk);
+            if (!engine.CopyFromUser(address, span)) return -(int)Errno.EFAULT;
+            var terminator = span.IndexOf((byte)0);
+            if (terminator >= 0)
+            {
+                nameLength = consumed + terminator;
+                break;
+            }
+            consumed += chunk;
+        }
+        if (nameLength < 0) return -(int)Errno.EINVAL;
+        var name = FsEncoding.DecodeUtf8Lossy(nameBytes.AsSpan(0, nameLength));
 
         try
         {

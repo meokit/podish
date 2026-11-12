@@ -10,7 +10,7 @@ using Xunit;
 
 namespace Fiberish.Tests.Syscalls;
 
-public sealed class LtpRegressionTests
+public sealed partial class LtpRegressionTests
 {
     [Theory]
     [InlineData("SysUname")]

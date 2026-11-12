@@ -64,25 +64,46 @@ public partial class SyscallManager
         var fd = (int)a5;
         var offset = (long)a6 * 4096;
 
+        var isAnon = (flags & (int)MapFlags.Anonymous) != 0;
+        LinuxFile? f = null;
+        LinuxFile? mmapFile = null;
+        // Linux resolves a file descriptor before do_mmap validates length.
+        if (!isAnon)
+        {
+            f = GetFD(fd);
+            const FileFlags O_PATH = (FileFlags)0x200000;
+            if (f == null || (f.Flags & O_PATH) != 0) return -(int)Errno.EBADF;
+        }
         if (len == 0) return -(int)Errno.EINVAL;
+        if (len > uint.MaxValue - LinuxConstants.PageOffsetMask) return -(int)Errno.ENOMEM;
 
         var isNoReplace = (flags & (int)MapFlags.FixedNoReplace) != 0;
         var isFixed = (flags & (int)MapFlags.Fixed) != 0 || isNoReplace;
-        if (addr != 0 && (addr & LinuxConstants.PageOffsetMask) != 0)
+        if (isFixed && (addr & LinuxConstants.PageOffsetMask) != 0)
             return -(int)Errno.EINVAL;
+        if (!isFixed) addr &= LinuxConstants.PageMask;
         if (isFixed && addr == 0)
             return -(int)Errno.EINVAL;
 
-        LinuxFile? f = null;
-        LinuxFile? mmapFile = null;
-        var isAnon = (flags & (int)MapFlags.Anonymous) != 0;
-        var isShared = (flags & (int)MapFlags.Shared) != 0;
-        var isPrivate = (flags & (int)MapFlags.Private) != 0;
-
-        if (isShared == isPrivate)
+        var mapType = flags & 0xF;
+        var sharedValidate = mapType == 3;
+        if (mapType != 1 && mapType != 2 && (!sharedValidate || isAnon))
             return -(int)Errno.EINVAL;
+        var isShared = mapType == 1 || sharedValidate;
+        if (sharedValidate)
+        {
+            // Linux's legacy mmap flags; unknown bits are ignored for MAP_SHARED
+            // but explicitly rejected by MAP_SHARED_VALIDATE (MAP_SYNC is not supported).
+            const int legacyFlags = 0x01 | 0x02 | 0x10 | 0x20 | 0x40 | 0x100 | 0x800 | 0x1000 |
+                                    0x2000 | 0x4000 | 0x8000 | 0x10000 | 0x20000 | 0x40000 |
+                                    0x100000;
+            if ((flags & ~legacyFlags) != 0) return -(int)Errno.EOPNOTSUPP;
+            flags = (flags & ~0xF) | (int)MapFlags.Shared;
+        }
 
         var mapLen = (len + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
+        if (isFixed && (ulong)addr + mapLen > (Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32))
+            return -(int)Errno.ENOMEM;
         if (isNoReplace)
         {
             var hasOverlap = false;
@@ -96,19 +117,16 @@ public partial class SyscallManager
             fd = -1;
             offset = 0;
         }
-        else if (fd == -1)
-        {
-            return -(int)Errno.EBADF;
-        }
         else
         {
-            f = GetFD(fd);
-            if (f == null) return -(int)Errno.EBADF;
-            var inode = f.OpenedInode;
+            var inode = f!.OpenedInode;
             if (inode == null) return -(int)Errno.EBADF;
+            if ((f.Flags & (FileFlags.O_WRONLY | FileFlags.O_RDWR)) == FileFlags.O_WRONLY)
+                return -(int)Errno.EACCES;
             if (!inode.SupportsMmap) return -(int)Errno.ENODEV;
             if (isShared && (prot & (int)Protection.Write) != 0)
             {
+                if (inode is TmpfsInode { HasWriteSeal: true }) return -(int)Errno.EPERM;
                 var canWrite = (f.Flags & (FileFlags.O_WRONLY | FileFlags.O_RDWR)) != 0;
                 if (!canWrite) return -(int)Errno.EACCES;
             }
@@ -139,6 +157,9 @@ public partial class SyscallManager
     {
         if (a2 == 0) return -(int)Errno.EINVAL;
         if ((a1 & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
+        var taskSize = Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
+        var roundedLength = ((ulong)a2 + LinuxConstants.PageOffsetMask) & ~(ulong)LinuxConstants.PageOffsetMask;
+        if (a1 >= taskSize || (ulong)a1 + roundedLength > taskSize) return -(int)Errno.EINVAL;
         ProcessAddressSpaceSync.Munmap(Mem, engine, a1, a2);
         return 0;
     }
@@ -151,12 +172,22 @@ public partial class SyscallManager
 
         if (len == 0) return 0;
         if ((addr & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
+        if ((a3 & ~7u) != 0) return -(int)Errno.EINVAL;
+        var roundedLength = ((ulong)len + LinuxConstants.PageOffsetMask) & ~(ulong)LinuxConstants.PageOffsetMask;
+        if ((ulong)addr + roundedLength > (Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32))
+            return -(int)Errno.ENOMEM;
+        foreach (var vma in Mem.FindVmAreasInRange(addr, addr + (uint)roundedLength))
+            if ((prot & Protection.Write) != 0 && (vma.Flags & MapFlags.Shared) != 0 && vma.File != null &&
+                ((vma.File.Flags & FileFlags.O_RDWR) == 0 || vma.LogicalInode is TmpfsInode { HasWriteSeal: true }))
+                return -(int)Errno.EACCES;
 
-        return ProcessAddressSpaceSync.Mprotect(Mem, engine, addr, len, prot);
+        return ProcessAddressSpaceSync.Mprotect(Mem, engine, addr, (uint)roundedLength, prot);
     }
 
     private async ValueTask<int> SysMadvise(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
+        // There is no hardware memory-failure injection facility in this runtime.
+        if (a3 is 100 or 101) return -(int)Errno.EINVAL; // MADV_HWPOISON / MADV_SOFT_OFFLINE
         if (a2 == 0) return 0;
         if ((a1 & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
 
@@ -178,8 +209,23 @@ public partial class SyscallManager
     private async ValueTask<int> SysMsync(Engine engine, uint addr, uint len, uint flags, uint a4, uint a5,
         uint a6)
     {
+        const uint MS_ASYNC = 1, MS_SYNC = 4;
+        if ((addr & LinuxConstants.PageOffsetMask) != 0 || (flags & ~7u) != 0 ||
+            (flags & (MS_ASYNC | MS_SYNC)) == (MS_ASYNC | MS_SYNC))
+            return -(int)Errno.EINVAL;
+        if (len == 0) return 0;
+        var roundedLength = ((ulong)len + LinuxConstants.PageOffsetMask) & ~(ulong)LinuxConstants.PageOffsetMask;
+        var end = (ulong)addr + roundedLength;
+        if (end > (Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32)) return -(int)Errno.ENOMEM;
+        var cursor = addr;
+        var hasHole = false;
+        Mem.VisitVmAreasInRange(addr, (uint)end, vma =>
+        {
+            if (vma.Start > cursor) hasHole = true;
+            cursor = Math.Max(cursor, vma.End);
+        });
         ProcessAddressSpaceSync.SyncSharedRange(Mem, engine, addr, len);
-        return 0;
+        return hasHole || cursor < end ? -(int)Errno.ENOMEM : 0;
     }
 
     private async ValueTask<int> SysMremap(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -197,6 +243,9 @@ public partial class SyscallManager
 
         if (newLen == 0) return -(int)Errno.EINVAL;
         if ((oldAddr & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
+        if ((flags & ~(MREMAP_MAYMOVE | MREMAP_FIXED)) != 0) return -(int)Errno.EINVAL;
+        if (oldLen > uint.MaxValue - LinuxConstants.PageOffsetMask ||
+            newLen > uint.MaxValue - LinuxConstants.PageOffsetMask) return -(int)Errno.ENOMEM;
 
         var mayMove = (flags & MREMAP_MAYMOVE) != 0;
         var isFixed = (flags & MREMAP_FIXED) != 0;
@@ -208,21 +257,26 @@ public partial class SyscallManager
         // Align sizes to page boundaries
         var oldLenAligned = (oldLen + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
         var newLenAligned = (newLen + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
+        var taskSize = Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
+        if ((ulong)oldAddr + oldLenAligned > taskSize) return -(int)Errno.EFAULT;
+        if (isFixed)
+        {
+            if ((ulong)newAddr + newLenAligned > taskSize) return -(int)Errno.EINVAL;
+            if ((ulong)newAddr < (ulong)oldAddr + oldLenAligned &&
+                (ulong)oldAddr < (ulong)newAddr + newLenAligned) return -(int)Errno.EINVAL;
+            if (newAddr < LinuxConstants.MinMmapAddr) return -(int)Errno.EPERM;
+        }
 
         // Find the existing VmArea containing oldAddr
         var oldVma = Mem.FindVmArea(oldAddr);
         if (oldVma == null) return -(int)Errno.EFAULT;
-
-        // Linux mremap operates on an existing mapping, not an arbitrary subrange inside a
-        // larger VMA. Treat subrange remaps conservatively instead of mutating adjacent VMAs
-        // into a shape the guest didn't actually own.
-        if (oldAddr != oldVma.Start) return -(int)Errno.EINVAL;
+        if (oldLen == 0 && (oldVma.Flags & MapFlags.Shared) == 0) return -(int)Errno.EINVAL;
 
         // Verify the old range is fully contained within the VMA
         if (oldAddr + oldLenAligned > oldVma.End) return -(int)Errno.EFAULT;
 
         // Case 1: Shrinking
-        if (newLenAligned < oldLenAligned)
+        if (!isFixed && newLenAligned < oldLenAligned)
         {
             var unmapStart = oldAddr + newLenAligned;
             var unmapLen = oldLenAligned - newLenAligned;
@@ -231,17 +285,16 @@ public partial class SyscallManager
         }
 
         // Case 2: Same size
-        if (newLenAligned == oldLenAligned) return (int)oldAddr;
+        if (!isFixed && newLenAligned == oldLenAligned) return (int)oldAddr;
 
         // Case 3: Growing — try in place first
-        var growLen = newLenAligned - oldLenAligned;
+        var growLen = newLenAligned > oldLenAligned ? newLenAligned - oldLenAligned : 0;
         var growStart = oldAddr + oldLenAligned;
 
         // Check if there's free space right after the old region
-        var canGrowInPlace = true;
-        Mem.VisitVmAreasInRange(growStart, growStart + growLen, v =>
+        var canGrowInPlace = !isFixed && (ulong)oldAddr + newLenAligned <= taskSize;
+        Mem.VisitVmAreasInRange(growStart, growStart + growLen, _ =>
         {
-            if (v == oldVma) return; // ignore the VmArea itself if it extends past oldLen
             canGrowInPlace = false;
         });
 
@@ -265,6 +318,12 @@ public partial class SyscallManager
         // Case 4: Need to move
         if (!mayMove) return -(int)Errno.ENOMEM;
 
+        var copyLen = Math.Min(oldLenAligned, newLenAligned);
+        var needsCopy = NeedsMoveCopy(oldVma, oldAddr, copyLen);
+        // Removing a destination slice can split the same VMA and change its
+        // start/offset. Capture the source file offset before that operation.
+        var sourceOffset = ComputeSliceOffset(oldVma, oldAddr);
+
         // Find or use target address
         uint targetAddr;
         if (isFixed)
@@ -280,12 +339,11 @@ public partial class SyscallManager
         }
 
         // Allocate new region
-        var mapRc = TryMapRemapSlice(this, engine, oldVma, targetAddr, newLenAligned, oldAddr);
+        var mapRc = TryMapRemapSlice(this, engine, oldVma, targetAddr, newLenAligned, oldAddr, sourceOffset);
         if (mapRc != 0)
             return mapRc;
 
-        var copyLen = Math.Min(oldLenAligned, newLenAligned);
-        if (NeedsMoveCopy(oldVma, oldAddr, copyLen))
+        if (needsCopy)
         {
             const int ChunkSize = 64 * 1024;
             var pool = ArrayPool<byte>.Shared;
@@ -334,13 +392,13 @@ public partial class SyscallManager
     }
 
     private static int TryMapRemapSlice(SyscallManager sm, Engine engine, VmArea sourceVma, uint targetAddr,
-        uint length, uint sourceAddr)
+        uint length, uint sourceAddr, long? sourceOffset = null)
     {
         LinuxFile? clonedFile = null;
         try
         {
             clonedFile = CloneMappingFile(sourceVma);
-            var offset = ComputeSliceOffset(sourceVma, sourceAddr);
+            var offset = sourceOffset ?? ComputeSliceOffset(sourceVma, sourceAddr);
             var flags = (sourceVma.Flags | MapFlags.Fixed) & ~MapFlags.FixedNoReplace;
 
             _ = ProcessAddressSpaceSync.Mmap(sm.Mem, engine, targetAddr, length, sourceVma.Perms, flags,

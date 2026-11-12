@@ -319,6 +319,9 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
             });
         else if (name.SequenceEqual("mountinfo"u8))
             created = CreateFile(dir, childName, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager));
+        else if (name.SequenceEqual("mounts"u8))
+            created = CreateFile(dir, childName, 0x124, _ =>
+                ProcFsManager.GenerateMounts(task.CommonKernel.GetProcess(_pid)?.Syscalls));
         else if (name.SequenceEqual("fd"u8))
             created = CreateFdDir(dir, childName);
         else if (name.SequenceEqual("fdinfo"u8))
@@ -373,6 +376,7 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         entries.Add(new DirectoryEntry { Name = FsName.FromString("cmdline"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("stat"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("mountinfo"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("mounts"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("fd"), Ino = 0, Type = InodeType.Directory });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("fdinfo"), Ino = 0, Type = InodeType.Directory });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("task"), Ino = 0, Type = InodeType.Directory });

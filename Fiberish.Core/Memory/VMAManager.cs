@@ -2700,6 +2700,11 @@ public class VMAManager
             return FaultResult.Segv;
         }
 
+        // Do not resolve a protection fault by reinstalling an inaccessible
+        // page and reporting success: the guest would retry it indefinitely.
+        if (vma.Perms == Protection.None)
+            return FaultResult.Segv;
+
         if (vma.IsFileBacked)
             SyncFileBackedVmaMapping(vma, engine);
 
