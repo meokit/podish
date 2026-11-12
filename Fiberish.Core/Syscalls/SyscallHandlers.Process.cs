@@ -610,9 +610,7 @@ public partial class SyscallManager
                 .ToDictionary(kv => kv.Key, kv => kv.Value);
             task.Process.SignalActions.Clear();
             foreach (var kv in ignoredShebang) task.Process.SignalActions[kv.Key] = kv.Value;
-            task.AltStackSp = 0;
-            task.AltStackSize = 0;
-            task.AltStackFlags = 0;
+            task.ResetAltStack();
 
             task.ExitRobustList();
             task.RobustListHead = 0;
@@ -662,9 +660,7 @@ public partial class SyscallManager
         task.Process.SignalActions.Clear();
         foreach (var kv in ignored) task.Process.SignalActions[kv.Key] = kv.Value;
 
-        task.AltStackSp = 0;
-        task.AltStackSize = 0;
-        task.AltStackFlags = 0;
+        task.ResetAltStack();
 
         task.ExitRobustList();
         task.RobustListHead = 0;

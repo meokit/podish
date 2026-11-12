@@ -514,6 +514,9 @@ public partial class SyscallManager
             case X86SyscallNumbers.rt_sigpending:
                 handled = true;
                 return SysRtSigPending(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.sigaltstack:
+                handled = true;
+                return SysSigAltStack(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.rt_sigsuspend:
                 handled = true;
                 return SysRtSigSuspend(engine, ebx, ecx, edx, esi, edi, ebp);

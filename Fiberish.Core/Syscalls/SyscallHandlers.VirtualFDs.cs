@@ -116,6 +116,8 @@ public partial class SyscallManager
         uint a5, uint a6)
     {
         if (size != 8) return -(int)Errno.EINVAL; // i386 sigset_t is 8 bytes
+        if ((flags & ~(uint)(LinuxConstants.SFD_NONBLOCK | LinuxConstants.SFD_CLOEXEC)) != 0)
+            return -(int)Errno.EINVAL;
 
         var maskBuf = new byte[8];
         if (!engine.CopyFromUser(maskPtr, maskBuf)) return -(int)Errno.EFAULT;
@@ -139,12 +141,12 @@ public partial class SyscallManager
             return newFd;
         }
 
-        // Modifying existing signalfd
+        // Modifying an existing signalfd updates its mask and returns the same fd.
         if (!FDs.TryGetValue((int)fd, out var existingFile)) return -(int)Errno.EBADF;
         if (existingFile.OpenedInode is SignalFdInode sfd)
         {
             sfd.SetMask(mask);
-            return 0;
+            return (int)fd;
         }
 
         return -(int)Errno.EINVAL;

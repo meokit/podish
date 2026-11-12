@@ -13,9 +13,9 @@ asset, not a syscall assertion), [SYNC_BASELINE.md](SYNC_BASELINE.md) for
 the synchronization batch (futex and SysV semaphores; 3 PASS, 12 PARTIAL,
 10 FAIL, 2 TIMEOUT, 2 BROKEN and 3 SKIP), and
 [SIGNALS_BASELINE.md](SIGNALS_BASELINE.md) for the signal and event batch
-(46 cases; 30 PASS, 9 FAIL, 5 BROKEN and 2 TIMEOUT). Hostfs remains available
-only for comparison and forces mode `0755` on Windows, so it is unsuitable for
-permission tests.
+(46 cases; 46/46 passing on tmpfs after the signal fixes). Hostfs remains
+available only for comparison and forces mode `0755` on Windows, so it is
+unsuitable for permission tests.
 
 ## Manifests
 

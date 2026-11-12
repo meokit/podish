@@ -194,6 +194,24 @@ public class FiberTaskCloneTests
         Assert.Equal([10, 20, 30], child.Process.SupplementaryGroups);
     }
 
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData((int)LinuxConstants.CLONE_VM, false)]
+    [InlineData((int)(LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD), false)]
+    public async Task Clone_InheritsAlternateStackOnlyWithoutCloneVm(int flags, bool inherits)
+    {
+        using var env = new TestEnv();
+        env.Parent.AltStackSp = 0x71000000;
+        env.Parent.AltStackSize = 16384;
+        env.Parent.AltStackFlags = unchecked((int)LinuxConstants.SS_AUTODISARM);
+
+        var child = await env.Parent.Clone(flags, 0, 0, 0, 0);
+
+        Assert.Equal(inherits ? env.Parent.AltStackSp : 0u, child.AltStackSp);
+        Assert.Equal(inherits ? env.Parent.AltStackSize : 0u, child.AltStackSize);
+        Assert.Equal(inherits ? env.Parent.AltStackFlags : LinuxConstants.SS_DISABLE, child.AltStackFlags);
+    }
+
     private sealed class TestEnv : IDisposable
     {
         private readonly List<LinuxFile> _files = [];

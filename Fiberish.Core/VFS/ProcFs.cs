@@ -1087,6 +1087,8 @@ file sealed class ProcSysRootInode : Inode
             created = CreateFile(dir, childName, ctx => ProcFsManager.GenerateSysKernelVersion(ctx.Process));
         else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("pid_max"u8))
             created = CreateFile(dir, childName, _ => $"{int.MaxValue}\n");
+        else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("tainted"u8))
+            created = CreateFile(dir, childName, _ => "0\n");
         else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("sem"u8))
             created = CreateFile(dir, childName, _ => "32000\t1024000000\t500\t128\n");
         else if (_kind == ProcSysKind.Vm && name.SequenceEqual("overcommit_memory"u8))
@@ -1123,6 +1125,7 @@ file sealed class ProcSysRootInode : Inode
                 entries.Add(new DirectoryEntry { Name = "ostype", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "version", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "pid_max", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "tainted", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "sem", Ino = 0, Type = InodeType.File });
                 break;
             case ProcSysKind.Vm:

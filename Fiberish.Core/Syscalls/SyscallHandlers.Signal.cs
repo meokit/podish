@@ -179,6 +179,39 @@ public partial class SyscallManager
         return engine.CopyToUser(a1, buf) ? 0 : -(int)Errno.EFAULT;
     }
 
+    private async ValueTask<int> SysSigAltStack(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+    {
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        var newStackPtr = a1;
+        var oldStackPtr = a2;
+
+        // Snapshot the old state before applying the new stack, including when
+        // the input and output stack_t pointers alias.
+        var oldBuf = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(oldBuf.AsSpan(0, 4), task.AltStackSp);
+        BinaryPrimitives.WriteInt32LittleEndian(oldBuf.AsSpan(4, 4), task.GetAltStackFlags(engine.RegRead(Reg.ESP)));
+        BinaryPrimitives.WriteUInt32LittleEndian(oldBuf.AsSpan(8, 4), task.AltStackSize);
+
+        if (newStackPtr != 0)
+        {
+            var buf = new byte[12];
+            if (!engine.CopyFromUser(newStackPtr, buf)) return -(int)Errno.EFAULT;
+
+            var ssSp = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
+            var ssFlags = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(4, 4));
+            var ssSize = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(8, 4));
+
+            var error = task.SetAltStack(ssSp, ssSize, ssFlags);
+            if (error != 0) return error;
+        }
+
+        if (oldStackPtr != 0 && !engine.CopyToUser(oldStackPtr, oldBuf)) return -(int)Errno.EFAULT;
+
+        return 0;
+    }
+
     private async ValueTask<int> SysKill(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
@@ -189,34 +222,27 @@ public partial class SyscallManager
 
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
         var kernel = task.CommonKernel;
-        var delivered = 0;
-
-        if (pid > 0)
+        var found = false;
+        var permitted = false;
+        foreach (var target in kernel.GetProcessesSnapshot())
         {
-            if (kernel.GetProcess(pid) == null) return -(int)Errno.ESRCH;
-            if (sig != 0 && kernel.SignalProcess(pid, sig)) delivered = 1;
-            return 0;
+            var matches = pid > 0 ? target.TGID == pid
+                : pid == 0 ? target.PGID == task.Process.PGID
+                : pid == -1 ? target.TGID != task.Process.TGID && target.TGID != 1
+                : pid != int.MinValue && target.PGID == -pid;
+            if (!matches) continue;
+            found = true;
+            if (!CanSignalProcess(task, target, sig)) continue;
+            permitted = true;
+            if (sig == 0) continue;
+
+            var info = UserSignalInfo(task, sig, 0); // SI_USER
+            if (!CanQueueSignal(task, target, sig))
+                info.PendingWithoutInfo = true;
+            kernel.SignalProcessInfo(target.TGID, sig, info);
         }
 
-        if (pid == 0)
-        {
-            if (!kernel.ProcessGroupExists(task.Process.PGID)) return -(int)Errno.ESRCH;
-            if (sig != 0) delivered = kernel.SignalProcessGroupWithCount(task.Process.PGID, sig);
-            return 0;
-        }
-
-        if (pid == -1)
-        {
-            if (sig != 0) delivered = kernel.SignalAllProcesses(sig, task.Process.TGID);
-            if (sig != 0 && delivered == 0) return -(int)Errno.ESRCH;
-            return 0;
-        }
-
-        var pgid = -pid;
-        if (!kernel.ProcessGroupExists(pgid)) return -(int)Errno.ESRCH;
-        if (sig != 0) delivered = kernel.SignalProcessGroupWithCount(pgid, sig);
-        if (sig != 0 && delivered == 0) return -(int)Errno.ESRCH;
-        return 0;
+        return permitted ? 0 : found ? -(int)Errno.EPERM : -(int)Errno.ESRCH;
     }
 
     private async ValueTask<int> SysTkill(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -232,18 +258,20 @@ public partial class SyscallManager
         var kernel = (engine.Owner as FiberTask)!.CommonKernel;
         var target = kernel.GetTask(tid);
         if (target == null) return -(int)Errno.ESRCH;
+        if (!CanSignalProcess(task, target.Process, sig))
+            return -(int)Errno.EPERM;
 
-        if (sig != 0) target.PostSignal(sig);
+        if (sig != 0)
+        {
+            if (!CanQueueSignal(task, target.Process, sig)) return -(int)Errno.EAGAIN;
+            target.PostSignalInfo(UserSignalInfo(task, sig, -6)); // SI_TKILL
+        }
 
         return 0;
     }
 
     private async ValueTask<int> SysTgkill(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        // int tgid = (int)a1; // Not used yet?
-        // int tid = (int)a2;
-        // int sig = (int)a3;
-
         var tgid = (int)a1;
         var tid = (int)a2;
         var sig = (int)a3;
@@ -251,12 +279,20 @@ public partial class SyscallManager
         if (tgid <= 0 || tid <= 0) return -(int)Errno.EINVAL;
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
 
-        var kernel = (engine.Owner as FiberTask)!.CommonKernel;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        var kernel = task.CommonKernel;
         var target = kernel.GetTask(tid);
         if (target == null) return -(int)Errno.ESRCH;
         if (target.Process.TGID != tgid) return -(int)Errno.ESRCH;
+        if (!CanSignalProcess(task, target.Process, sig))
+            return -(int)Errno.EPERM;
 
-        if (sig != 0) target.PostSignal(sig);
+        if (sig != 0)
+        {
+            if (!CanQueueSignal(task, target.Process, sig)) return -(int)Errno.EAGAIN;
+            target.PostSignalInfo(UserSignalInfo(task, sig, -6)); // SI_TKILL
+        }
+
         return 0;
     }
 
@@ -299,6 +335,14 @@ public partial class SyscallManager
         // Restore
         // ucontext.mcontext is at offset 20
         task.RestoreSigContext(ucontextAddr + 20);
+
+        var stackBuf = new byte[12];
+        if (!engine.CopyFromUser(ucontextAddr + 8, stackBuf)) return -(int)Errno.EFAULT;
+        // Linux restores uc_stack after the saved SP. As with restore_altstack,
+        // invalid configurations (including an active outer stack) are ignored.
+        task.SetAltStack(BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(0, 4)),
+            BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(8, 4)),
+            BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(4, 4)));
 
         // RT signals have full 64-bit signal mask in ucontext (offset 20 + 88 roughly, wait: ucontext layout is different)
         // Normal i386 ucontext:
@@ -346,24 +390,46 @@ public partial class SyscallManager
 
         var rc = await SysPause(engine, 0, 0, 0, 0, 0, 0); // Reuse SysPause which now uses PauseAwaiter
         if (rc >= 0) task.RestoreDeferredSignalMaskIfAny();
+
+        // Return ERESTARTSYS so the pending signal handler runs; the syscall is
+        // listed as never-restarted and therefore resumes with -EINTR.
         return rc;
     }
 
     private async ValueTask<int> SysRtSigQueueInfo(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var task = engine.Owner as FiberTask;
-
         var pid = (int)a1;
         var sig = (int)a2;
         var uinfoPtr = a3;
 
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
+        if (!TryReadSigInfo(engine, uinfoPtr, sig, out var info, out var readErr)) return readErr;
 
-        var info = ReadSigInfo(engine, uinfoPtr, sig);
+        var task = engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+        if ((info.Code >= 0 || info.Code == -6) && task.TID != pid) return -(int)Errno.EPERM;
+        info.Signo = sig;
+        var kernel = task.CommonKernel;
 
-        var kernel = task?.CommonKernel !;
-        if (sig != 0 && !kernel.SignalProcessInfo(pid, sig, info)) return -(int)Errno.ESRCH;
+        // Linux resolves the passed identifier as a task id, then signals its
+        // thread group. This allows a non-leader TID to identify the process.
+        var targetTask = kernel.GetTask(pid);
+        if (targetTask == null) return -(int)Errno.ESRCH;
+        var target = targetTask.Process;
+        if (!CanSignalProcess(task, target, sig))
+            return -(int)Errno.EPERM;
+
+        if (sig != 0)
+        {
+            if (!CanQueueSignal(task, target, sig))
+            {
+                if (info.Code != 0) return -(int)Errno.EAGAIN;
+                info.PendingWithoutInfo = true;
+            }
+            kernel.SignalProcessInfo(target.TGID, sig, info);
+        }
+
         return 0;
     }
 
@@ -376,43 +442,99 @@ public partial class SyscallManager
         var uinfoPtr = a4;
 
         if (sig < 0 || sig > 64) return -(int)Errno.EINVAL;
+        if (!TryReadSigInfo(engine, uinfoPtr, sig, out var info, out var readErr)) return readErr;
 
-        var info = ReadSigInfo(engine, uinfoPtr, sig);
-
-        var task = (FiberTask)engine.Owner!;
+        var task = engine.Owner as FiberTask;
+        if (task == null) return -(int)Errno.EPERM;
+        if (tgid <= 0 || tid <= 0) return -(int)Errno.EINVAL;
+        if ((info.Code >= 0 || info.Code == -6) && task.TID != tid) return -(int)Errno.EPERM;
+        info.Signo = sig;
         var kernel = task.CommonKernel;
         var targetTask = kernel.GetTask(tid);
         if (targetTask == null) return -(int)Errno.ESRCH;
         if (targetTask.Process.TGID != tgid) return -(int)Errno.ESRCH;
+        if (!CanSignalProcess(task, targetTask.Process, sig))
+            return -(int)Errno.EPERM;
 
-        if (sig != 0) targetTask.PostSignalInfo(info);
+        if (sig != 0)
+        {
+            if (!CanQueueSignal(task, targetTask.Process, sig))
+            {
+                if (info.Code != 0) return -(int)Errno.EAGAIN;
+                info.PendingWithoutInfo = true;
+            }
+            targetTask.PostSignalInfo(info);
+        }
+
         return 0;
     }
 
-    private static SigInfo ReadSigInfo(Engine engine, uint ptr, int defaultSig)
+    private static SigInfo UserSignalInfo(FiberTask sender, int sig, int code)
     {
-        if (ptr == 0) return new SigInfo { Signo = defaultSig, Code = 0 };
+        return new SigInfo
+        {
+            Signo = sig,
+            Code = code,
+            Pid = sender.Process.TGID,
+            Uid = (uint)sender.Process.UID
+        };
+    }
+
+    private static bool CanSignalProcess(FiberTask sender, Process target, int sig)
+    {
+        if (sender.Process.HasEffectiveCapabilityOrRoot(Process.CapabilityKill)) return true;
+        if (sender.Process.TGID == target.TGID) return true;
+        if (sig == (int)Signal.SIGCONT && sender.Process.SID == target.SID) return true;
+
+        var uid = sender.Process.UID;
+        var euid = sender.Process.EUID;
+        return uid == target.UID || uid == target.SUID ||
+               euid == target.UID || euid == target.SUID;
+    }
+
+    private static bool CanQueueSignal(FiberTask sender, Process target, int sig)
+    {
+        // RLIMIT_SIGPENDING applies to queued real-time signals.
+        if (sig < 32) return true;
+        if (!target.TryGetResourceLimit(LinuxConstants.RLIMIT_SIGPENDING, out var limit)) return true;
+        return limit.Soft == LinuxConstants.RLIM64_INFINITY ||
+               (ulong)sender.CommonKernel.GetPendingSignalCountForUser(target.UID) < limit.Soft;
+    }
+
+    private static bool TryReadSigInfo(Engine engine, uint ptr, int defaultSig, out SigInfo info, out int error)
+    {
+        info = new SigInfo { Signo = defaultSig, Code = 0 };
+        error = 0;
+        if (ptr == 0)
+        {
+            error = -(int)Errno.EFAULT;
+            return false;
+        }
 
         var buf = new byte[24];
         if (!engine.CopyFromUser(ptr, buf))
-            return new SigInfo { Signo = defaultSig, Code = 0 };
+        {
+            error = -(int)Errno.EFAULT;
+            return false;
+        }
 
         var signo = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
         var errno = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
         var code = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
         var pid = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
         var uid = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(16, 4));
-        var value = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(20, 4));
+        var value = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(20, 4));
 
-        return new SigInfo
+        info = new SigInfo
         {
             Signo = signo != 0 ? signo : defaultSig,
             Errno = errno,
             Code = code,
             Pid = pid,
             Uid = uid,
-            Value = (ulong)value
+            Value = value
         };
+        return true;
     }
 
     /// <summary>
@@ -520,16 +642,16 @@ public partial class SyscallManager
     private async ValueTask<int> DoRtSigTimedWait(Engine engine, FiberTask task, ulong waitSet, long? timeoutMs,
         uint infoPtr)
     {
-        // Remove SIGKILL and SIGSTOP from the wait set (they cannot be caught)
+        // SIGKILL and SIGSTOP can never be caught, but an empty wait set is
+        // valid: like Linux, the wait can still be interrupted by a handler.
         waitSet &= ~(1UL << 8); // SIGKILL (9)
         waitSet &= ~(1UL << 18); // SIGSTOP (19)
-
-        if (waitSet == 0) return -(int)Errno.EINVAL;
 
         // Check for already pending signals matching the wait set
         if (TryConsumePendingSignal(task, waitSet, out var consumedInfo))
         {
-            if (infoPtr != 0 && !WriteSigInfo(engine, infoPtr, consumedInfo)) return -(int)Errno.EFAULT;
+            if (infoPtr != 0 && !WriteSigInfoForTask(engine, task, infoPtr, consumedInfo))
+                return -(int)Errno.EFAULT;
             return consumedInfo.Signo;
         }
 
@@ -541,11 +663,29 @@ public partial class SyscallManager
 
         if (result.SignalNumber > 0)
         {
-            if (infoPtr != 0 && !WriteSigInfo(engine, infoPtr, result.Info)) return -(int)Errno.EFAULT;
+            if (infoPtr != 0 && !WriteSigInfoForTask(engine, task, infoPtr, result.Info))
+                return -(int)Errno.EFAULT;
             return result.SignalNumber;
         }
 
         return result.TimedOut ? -(int)Errno.EAGAIN : -(int)Errno.EINTR;
+    }
+
+    private static bool WriteSigInfoForTask(Engine engine, FiberTask task, uint addr, SigInfo info)
+    {
+        // Async syscall continuations may run without a current syscall manager.
+        // Without it, an invalid user pointer would be routed through ordinary
+        // guest page-fault handling (SIGSEGV) instead of returning EFAULT.
+        var previous = engine.CurrentSyscallManager;
+        if (previous == null) engine.CurrentSyscallManager = task.Process.Syscalls;
+        try
+        {
+            return WriteSigInfo(engine, addr, info);
+        }
+        finally
+        {
+            if (previous == null) engine.CurrentSyscallManager = null;
+        }
     }
 
     /// <summary>

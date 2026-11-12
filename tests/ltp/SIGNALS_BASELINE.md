@@ -1,109 +1,126 @@
-# LTP signal and event batch — first baseline
+# LTP signal and event batch — baseline and fixes
 
 Date: 2026-11-12
 Manifest: `tests/ltp/cases-signals.json` (46 cases)
 Backend: Windows Podish, tmpfs image, guest root
 Native reference: WSL Linux 5.15.153.1, root, i386 static executables
 LTP: `e74f6d6f1c09e6be1aee0a09d347d818be3a36e8`
+Branch: `fix/ltp-signal-semantics`
 
 ## Results
 
 | Backend | PASS | FAIL | BROKEN | TIMEOUT | SKIP |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Native Linux | 46 | 0 | 0 | 0 | 0 |
-| Windows Podish | 30 | 9 | 5 | 2 | 0 |
+| Windows Podish, tmpfs (before fixes) | 30 | 9 | 5 | 2 | 0 |
+| **Windows Podish, tmpfs (after fixes)** | **46** | **0** | **0** | **0** | **0** |
 
-Podish assertion counts: 671 passed, 21 failed, 5 broken-test aborts.
+After fixes: **737 assertions passed, 0 failed, 0 broken, 0 skipped**.
 
 ## Excluded before the comparison
 
 - `signal06`: native LTP reports `TCONF: Only test on x86_64.` The reference
   binary is i386 and cannot provide a comparable baseline.
 
-## What the batch exposes
+## Fixes made
 
-### 1. Alternate signal stack is not implemented
+### 1. `sigaltstack(2)` was not dispatched
+- Added syscall 186 dispatch and `SysSigAltStack`.
+- Implemented per-thread stack state, `SS_ONSTACK`, `SS_DISABLE`,
+  `SS_AUTODISARM`, invalid-flag `EINVAL`, and `MINSIGSTKSZ` `ENOMEM`.
+- `DeliverSignal` switches `SA_ONSTACK` handlers to the installed alternate
+  stack. `SS_ONSTACK` is derived from the user SP, so returning from a nested
+  handler cannot reset the stack to its top and overwrite an outer frame.
+- Active alternate stacks cannot be replaced or disabled (`EPERM`). Initial
+  queries report `SS_DISABLE`; Linux-compatible `SS_ONSTACK` input is accepted,
+  and disabling ignores the supplied address/size.
+- `SS_AUTODISARM` clears the configuration on handler entry. RT frames save
+  `uc_stack` and `rt_sigreturn` restores it; legacy i386 frames do not restore
+  alternate-stack configuration. Fork/vfork inherit it, while `CLONE_VM`
+  without `CLONE_VFORK` starts disabled. Exec resets it.
 
-`sigaltstack01` and `sigaltstack02` return `ENOSYS` for `sigaltstack(2)`.
-The second case also expects argument validation (`EINVAL` for bad flags and
-`ENOMEM` for a stack below `MINSIGSTKSZ`) before any setup.
+### 2. `SA_RESETHAND` reset only the handler and still auto-blocked the signal
+- Resetting a one-shot action now keeps the action metadata, including
+  `SA_SIGINFO`, and sets only the handler to `SIG_DFL`, matching Linux.
+- Automatic self-masking is now controlled only by `SA_NODEFER`.
+  `SA_RESETHAND` therefore still masks the delivered signal unless
+  `SA_NODEFER` is set. Explicit `sa_mask` entries apply in either case.
 
-### 2. `rt_sigsuspend` crashes
+### 3. Forked processes lost the vDSO signal-return trampolines
+- `SyscallManager.Clone` now copies `SigReturnAddr` and `RtSigReturnAddr`.
+  Forked children share the copied vDSO mapping, but previously had zero
+  addresses and returned through address 0 after a handler.
+- This fixed the `rt_sigsuspend` and `rt_sigqueueinfo` crashes/timeouts and is
+  the root cause behind several signal-frame failures in forked test workers.
 
-`rt_sigsuspend01` is killed by `SIGSEGV` after the test installs a handler and
-suspends. This is separate from the `sigsuspend` libc cases (`sigsuspend01/02`),
-which pass, so the raw syscall path or its signal-frame delivery is suspect.
+### 4. Signal delivery lacked sender `siginfo` and permission checks
+- `kill`, `tkill`, and `tgkill` populate the sender TGID and real UID;
+  `kill` uses `SI_USER`, and thread sends use `SI_TKILL`.
+- A sender's real OR effective UID may match the target real OR saved UID.
+  Root/CAP_KILL, same-thread-group sends and same-session `SIGCONT` are also
+  permitted. Process-group sends apply these checks per target.
+- `rt_sigqueueinfo` resolves a supplied TID to its thread group and posts to
+  the shared pending queue, so any eligible thread can consume the signal.
+- Both queueinfo syscalls reject non-negative `si_code` and `SI_TKILL` before
+  target lookup except when targeting the calling TID itself. Bad `siginfo`
+  pointers return `EFAULT`.
+- Reliable real-time sends enforce `RLIMIT_SIGPENDING` across processes and
+  threads of the target real UID. Queue records retain their charged UID
+  through credential changes; dequeuing releases the charge. Limits remain
+  unsigned, including `RLIM_INFINITY`.
+- `kill` never fails with `EAGAIN` on queue exhaustion: a coalescing pending
+  bit still delivers a signal without allocating another `siginfo` record.
 
-### 3. `SA_RESETHAND` semantics are incomplete
+### 5. Signal wait and checkpoint races
+- `rt_sigtimedwait` now accepts an empty signal set and is interruptible, as
+  Linux does.
+- Ignored signals that are blocked remain queued and consumable by
+  `sigwaitinfo` / `sigtimedwait` / `signalfd`, while unblocked ignored signals
+  are still discarded.
+- A futex wake racing with signal delivery now completes the futex wait
+  successfully instead of reporting `EINTR`, preventing LTP checkpoint wakeups
+  from being lost.
+- `WriteSigInfoForTask` keeps the syscall manager active during asynchronous
+  signal-wait completion so an invalid `siginfo` pointer returns `EFAULT`
+  instead of generating a guest `SIGSEGV`.
+- `rt_sigsuspend` returns `ERESTARTSYS` so the handler runs, then resumes with
+  `EINTR` through the never-restart syscall list.
 
-`sigaction01` fails three assertions:
+### 6. `signalfd` descriptor and flags
+- Reassigning an existing signalfd returns the same descriptor instead of 0.
+- Invalid flags are rejected with `EINVAL`; invalid/non-signalfd descriptors
+  keep `EBADF`/`EINVAL` precedence.
 
-- `SA_RESETHAND` incorrectly clears `SA_SIGINFO`;
-- `SA_RESETHAND` does not mask the delivered signal while its handler runs;
-- the signal remains unexpectedly masked after handler return when it was
-  originally in `sa_mask`.
+### 7. Missing procfs taint file
+- Added `/proc/sys/kernel/tainted` with value `0`, allowing `kill13` to run its
+  actual signal assertions instead of aborting during setup.
 
-### 4. `kill` error and blocking semantics
+## Verification
 
-- `kill05` accepts a signal delivery that should fail. The case targets a
-  signal handling/permission distinction rather than a simple positive send.
-- `kill10` hangs until the host timeout. It exercises signal blocking and
-  retry behavior, pointing at the signal-wait wakeup path.
-
-### 5. `rt_sigqueueinfo` / `rt_tgsigqueueinfo`
-
-- `rt_sigqueueinfo01` reports `ESRCH` for a valid target.
-- `rt_sigqueueinfo02` reports `ESRCH` where it expects an invalid
-  `si_code` to be rejected with `EPERM`.
-- `rt_tgsigqueueinfo01` hangs until the host timeout, separate from the
-  immediate errors above.
-
-### 6. `tgkill` does not enforce pending-signal limits
-
-`tgkill02` expects `EAGAIN` when `RLIMIT_SIGPENDING` is zero and a real-time
-signal is blocked. Podish accepts the send.
-
-### 7. Signal wait family shares one defect
-
-`sigtimedwait01`, `rt_sigtimedwait01` and `sigwaitinfo01` fail the same
-assertions:
-
-- an invalid timeout/size path returns `EINVAL` where `EINTR` is expected;
-- `siginfo` fields do not match the queued signal;
-- the test later crashes with `SIGSEGV`.
-
-These three should be fixed together because they share `tse_sigwait.c` and
-the signal queue/wait implementation.
-
-### 8. `signalfd` return and flag validation
-
-- `signalfd01` expects `signalfd()` to return the requested descriptor number
-  when given a valid existing descriptor; Podish returns a different number.
-- `signalfd02` accepts invalid flags that Linux rejects.
-
-### 9. Missing procfs file blocks `kill13`
-
-`kill13` aborts because `/proc/sys/kernel/tainted` is absent. The file is not
-used for the syscall behavior itself; add a stable zero-valued entry unless a
-better taint model is introduced.
-
-## Next work items
-
-1. Implement `sigaltstack(2)` with `MINSIGSTKSZ` / flag validation and register
-   the alternate stack per thread.
-2. Trace and repair the raw `rt_sigsuspend` signal-frame path and the
-   `kill10` / `rt_tgsigqueueinfo01` hangs.
-3. Correct `SA_RESETHAND` action mutation and automatic signal masking.
-4. Enforce target existence and permission rules for `rt_sigqueueinfo` and
-   `rt_tgsigqueueinfo`, including `si_code` validation.
-5. Enforce `RLIMIT_SIGPENDING` in `tgkill`; distinguish `EAGAIN` from `ESRCH`.
-6. Repair `sigtimedwait` / `rt_sigtimedwait` / `sigwaitinfo` together:
-   timeout error precedence, `siginfo` population, and signal interruption.
-7. Implement `signalfd` descriptor identity and strict flag validation.
-8. Add `/proc/sys/kernel/tainted` so `kill13` can execute its assertions.
-
-Do not remove LTP assertions, convert expected failures to skips, or widen the
-host timeout to hide hangs.
+- Signal LTP batch: **46/46 PASS**, 737 assertions.
+- Core LTP batch: **50/50 PASS**.
+- Permission LTP batch: **70/71 PASS**, only the documented `access02`
+  `/bin/sh` asset dependency remains.
+- Synchronization LTP batch: **31 PASS, 1 SKIP** (`futex_wake04`'s existing
+  configuration skip), no failed/broken cases.
+- C#: **1824 passed, 0 failed, 1 pre-existing skip**:
+  - `Fiberish.Tests`: 1743 passed, 1 skip.
+  - `Fiberish.SilkFS.Tests`: 13 passed.
+  - `Podish.Wayland.Tests`: 19 passed.
+  - `Podish.Pulse.Tests`: 49 passed.
+- New/updated C# coverage:
+  - sigaltstack install/query/disable, invalid flags and short stack;
+  - signalfd reassignment and flag validation;
+  - `rt_sigqueueinfo` `si_code`/`EFAULT`/`ESRCH` precedence;
+  - Linux-correct `SA_RESETHAND` metadata, masking, and handler reset.
+- Review follow-up adds **36 regression cases**, covering all 12 findings:
+  alternate-stack initial/active/nested/autodisarm behavior, fork versus
+  `CLONE_VM`, UID permission combinations, real sender identity, self-send
+  `si_code` exceptions, shared signal delivery, unsigned/unlimited and per-UID
+  queue limits, and allocation-free notification by `kill`.
+- The new tests first reproduced **35 failures** before the fixes. All tests
+  now pass, and all nine independent static-i386 probe groups match native
+  Linux output without modifying upstream LTP sources or assertions.
 
 ## Reproduce
 
@@ -112,4 +129,4 @@ python tests/ltp/run.py --backend podish --artifacts artifacts/ltp-signals `
   --manifest tests/ltp/cases-signals.json
 ```
 
-Report: `artifacts/ltp-signals/results/podish-tmpfs.json`.
+Report: `artifacts/ltp-signals/results/podish-tmpfs-fixed.json`.

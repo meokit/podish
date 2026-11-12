@@ -1297,6 +1297,10 @@ public partial class SyscallManager
             GetTID = GetTID,
             GetTGID = GetTGID
         };
+        // fork/clone copies the vDSO mapping; keep the trampoline addresses in
+        // sync with that mapping so handlers installed before fork can return.
+        newSys.SigReturnAddr = SigReturnAddr;
+        newSys.RtSigReturnAddr = RtSigReturnAddr;
         return newSys;
     }
 

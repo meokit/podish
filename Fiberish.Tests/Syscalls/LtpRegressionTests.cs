@@ -294,6 +294,88 @@ public sealed class LtpRegressionTests
     }
 
     [Fact]
+    public async Task SigAltStack_InstallQueryAndDisable()
+    {
+        using var env = new TestEnv();
+        const uint newStack = 0x12000;
+        const uint oldStack = 0x12100;
+        const uint stackAddress = 0x13000;
+        const uint stackSize = 8192;
+
+        env.WriteInt(newStack, unchecked((int)stackAddress));
+        env.WriteInt(newStack + 4, 0);
+        env.WriteInt(newStack + 8, (int)stackSize);
+
+        Assert.Equal(0, await env.Call("SysSigAltStack", newStack, oldStack));
+        var old = env.Read(oldStack, 12);
+        Assert.Equal(0, BinaryPrimitives.ReadInt32LittleEndian(old.AsSpan(0, 4)));
+        Assert.Equal(LinuxConstants.SS_DISABLE, BinaryPrimitives.ReadInt32LittleEndian(old.AsSpan(4, 4)));
+        Assert.Equal(0, BinaryPrimitives.ReadInt32LittleEndian(old.AsSpan(8, 4)));
+
+        Assert.Equal(0, await env.Call("SysSigAltStack", 0, oldStack));
+        old = env.Read(oldStack, 12);
+        Assert.Equal(stackAddress, BinaryPrimitives.ReadUInt32LittleEndian(old.AsSpan(0, 4)));
+        Assert.Equal(stackSize, BinaryPrimitives.ReadUInt32LittleEndian(old.AsSpan(8, 4)));
+
+        env.WriteInt(newStack, 0);
+        env.WriteInt(newStack + 4, LinuxConstants.SS_DISABLE);
+        env.WriteInt(newStack + 8, 0);
+        Assert.Equal(0, await env.Call("SysSigAltStack", newStack, 0));
+        Assert.Equal(0, await env.Call("SysSigAltStack", 0, oldStack));
+        old = env.Read(oldStack, 12);
+        Assert.Equal(LinuxConstants.SS_DISABLE, BinaryPrimitives.ReadInt32LittleEndian(old.AsSpan(4, 4)));
+    }
+
+    [Fact]
+    public async Task SigAltStack_RejectsInvalidFlagsAndSmallStack()
+    {
+        using var env = new TestEnv();
+        const uint stack = 0x12000;
+
+        env.WriteInt(stack, 0x13000);
+        env.WriteInt(stack + 4, 9999);
+        env.WriteInt(stack + 8, 8192);
+        Assert.Equal(-(int)Errno.EINVAL, await env.Call("SysSigAltStack", stack, 0));
+
+        env.WriteInt(stack + 4, 0);
+        env.WriteInt(stack + 8, LinuxConstants.MINSIGSTKSZ - 1);
+        Assert.Equal(-(int)Errno.ENOMEM, await env.Call("SysSigAltStack", stack, 0));
+    }
+
+    [Fact]
+    public async Task SignalFd_ReassignReturnsSameFdAndRejectsInvalidFlags()
+    {
+        using var env = new TestEnv();
+        const uint mask = 0x12200;
+        Assert.True(env.Engine.CopyToUser(mask, new byte[8]));
+
+        var fd = await env.Call("SysSignalFd", uint.MaxValue, mask, 8);
+        Assert.True(fd >= 0);
+
+        Assert.Equal(fd, await env.Call("SysSignalFd", (uint)fd, mask, 8));
+        Assert.Equal(-(int)Errno.EINVAL,
+            await env.Call("SysSignalFd4", (uint)fd, mask, 8, uint.MaxValue));
+    }
+
+    [Fact]
+    public async Task SigQueueInfo_ValidatesSiCodeBeforeTargetLookup()
+    {
+        using var env = new TestEnv();
+        const uint info = 0x12300;
+        Assert.True(env.Engine.CopyToUser(info, new byte[24]));
+
+        // si_code == 0 (SI_USER) is invalid for rt_sigqueueinfo.
+        Assert.Equal(-(int)Errno.EPERM,
+            await env.Call("SysRtSigQueueInfo", 999999, (uint)Signal.SIGUSR1, info));
+
+        env.WriteInt(info + 8, -1); // SI_QUEUE
+        Assert.Equal(-(int)Errno.ESRCH,
+            await env.Call("SysRtSigQueueInfo", 999999, (uint)Signal.SIGUSR1, info));
+        Assert.Equal(-(int)Errno.EFAULT,
+            await env.Call("SysRtSigQueueInfo", 999999, (uint)Signal.SIGUSR1, 0xDEAD0000));
+    }
+
+    [Fact]
     public async Task Procfs_ProvidesTaskDirectoryAndThreadStat()
     {
         using var env = new TestEnv();
