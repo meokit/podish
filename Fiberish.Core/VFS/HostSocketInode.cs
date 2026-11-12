@@ -414,24 +414,33 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
 
         while (true)
         {
-            var connectStart = StartAsyncConnect(endpoint);
-            if (!connectStart.Pending)
+            if (!HasManagedConnectPending)
             {
-                if (connectStart.Error == SocketError.Success)
-                    return 0;
-                return MapSocketError(connectStart.Error);
+                var connectStart = StartAsyncConnect(endpoint);
+                if (!connectStart.Pending)
+                {
+                    if (connectStart.Error == SocketError.Success)
+                        return 0;
+                    return MapSocketError(connectStart.Error);
+                }
+
+                if (!connectStart.Started)
+                    return MapSocketError(connectStart.Error);
+
+                if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+                {
+                    Logger.LogDebug(
+                        "Host socket connect in progress (ino={Ino}, flags={Flags:X}, endpoint={Endpoint})",
+                        Ino,
+                        (int)file.Flags, endpoint);
+                    return -(int)Errno.EINPROGRESS;
+                }
             }
-
-            if (!connectStart.Started)
-                return MapSocketError(connectStart.Error);
-
-            if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
+            else if ((file.Flags & FileFlags.O_NONBLOCK) != 0)
             {
-                Logger.LogDebug(
-                    "Host socket connect in progress (ino={Ino}, flags={Flags:X}, endpoint={Endpoint})",
-                    Ino,
-                    (int)file.Flags, endpoint);
-                return -(int)Errno.EINPROGRESS;
+                // A previous non-blocking connect is still in flight; Linux reports EALREADY for
+                // a second connect attempt, but a blocking connect below simply waits for it.
+                return -(int)Errno.EALREADY;
             }
 
             var ready = await WaitForSocketEventAsync(file, task, PollEvents.POLLOUT);
