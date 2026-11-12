@@ -9,6 +9,12 @@ This document refines the earlier HostPage redesign into a more Linux-like owner
 
 This is the preferred implementation direction.
 
+Identity scope clarification for future direct-mapped file work: a pointer keys
+one live host view/binding, not the persistent identity of a file-cache page
+across aliases or view recreation. The [direct-mapped memory refactor plan](./direct-mapped-memory-refactor-plan.md)
+adds logical file/offset identity without requiring replacement of this slot
+storage model. This clarification is proposed work, not a completed migration.
+
 For earlier exploration of the "stable object + pooled side state" approach, see [HostPage Linux-Style Redesign](./hostpage-linux-style-design.md).
 
 ## Goals

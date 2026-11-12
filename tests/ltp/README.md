@@ -15,8 +15,14 @@ the synchronization batch (futex and SysV semaphores; 3 PASS, 12 PARTIAL,
 [SIGNALS_BASELINE.md](SIGNALS_BASELINE.md) for the signal and event batch
 (46 cases; 46/46 passing on tmpfs after the signal fixes), and
 [MEMORY_BASELINE.md](MEMORY_BASELINE.md) for the memory management and mapping
-batch (66 cases; 22 PASS, 20 FAIL, 18 BROKEN, 2 TIMEOUT and 4 SKIP as the
-first baseline). Hostfs remains available only for comparison and forces mode
+batch (66 cases; first baseline: 22 PASS). See
+[MEMORY_FIX_REPORT.md](MEMORY_FIX_REPORT.md) for bounded repairs
+(36 PASS, 11 FAIL, 14 BROKEN, 0 TIMEOUT, 5 SKIP) and deferred memory-model work.
+The proposed next series is documented in the
+[direct-mapped memory refactor plan](../../docs/direct-mapped-memory-refactor-plan.md)
+and [hostfs/SilkFS test plan](MAPPED_FILESYSTEM_TEST_PLAN.md). These are plans,
+not implemented runner support or new backend results.
+Hostfs remains available only for comparison and forces mode
 `0755` on Windows, so it is unsuitable for permission tests.
 
 ## Manifests
