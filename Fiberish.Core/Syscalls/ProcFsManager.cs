@@ -8,17 +8,79 @@ public static class ProcFsManager
 {
     private static char GetProcessState(Process process)
     {
-        // Process.State tracks lifecycle, while blocked syscalls change task
-        // status. A live process whose threads all wait must be visible as S.
         return process.State switch
         {
             ProcessState.Stopped => 'T',
             ProcessState.Zombie => 'Z',
             ProcessState.Dead => 'X',
             ProcessState.Sleeping => 'S',
-            _ => process.Threads.Count > 0 && process.Threads.All(t => t.Status == FiberTaskStatus.Waiting)
-                ? 'S' : 'R'
+            _ => GetProcessTaskState(process)
         };
+    }
+
+    private static char GetProcessTaskState(Process process)
+    {
+        var leader = process.Threads.FirstOrDefault(t => t.TID == process.TGID) ?? process.Threads.FirstOrDefault();
+        if (leader != null)
+        {
+            return leader.Status switch
+            {
+                FiberTaskStatus.Waiting => 'S',
+                FiberTaskStatus.Zombie => 'Z',
+                FiberTaskStatus.Terminated => 'X',
+                _ => 'R'
+            };
+        }
+
+        return 'R';
+    }
+
+    public static char GetTaskState(FiberTask task)
+    {
+        return task.Status switch
+        {
+            FiberTaskStatus.Waiting => 'S',
+            FiberTaskStatus.Zombie => 'Z',
+            FiberTaskStatus.Terminated => 'X',
+            _ => 'R'
+        };
+    }
+
+    public static string GenerateThreadStat(FiberTask task, Process process)
+    {
+        var stateChar = GetTaskState(task);
+        var ttyNr = 0;
+        var tpgid = -1;
+        if (process.ControllingTty != null)
+        {
+            ttyNr = 34816;
+            tpgid = process.ControllingTty.ForegroundPgrp;
+        }
+
+        var selfCpu = process.GetSelfCpuTimeSnapshot();
+        var childrenCpu = process.GetChildrenCpuTimeSnapshot();
+        var utime = SyscallManager.NanosecondsToUserClockTicks(selfCpu.UserNs);
+        var stime = SyscallManager.NanosecondsToUserClockTicks(selfCpu.SystemNs);
+        var cutime = SyscallManager.NanosecondsToUserClockTicks(childrenCpu.UserNs);
+        var cstime = SyscallManager.NanosecondsToUserClockTicks(childrenCpu.SystemNs);
+
+        return
+            $"{task.TID} ({process.Comm}) {stateChar} {process.PPID} {process.PGID} {process.SID} {ttyNr} {tpgid} 0 0 0 0 0 {utime} {stime} {cutime} {cstime} 0 0 {process.Threads.Count} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0";
+    }
+
+    public static string GenerateThreadStatus(FiberTask task, Process process)
+    {
+        var stateChar = GetTaskState(task);
+        var stateMsg = stateChar switch
+        {
+            'R' => "R (running)",
+            'S' => "S (sleeping)",
+            'T' => "T (stopped)",
+            'Z' => "Z (zombie)",
+            'X' => "X (dead)",
+            _ => "R (running)"
+        };
+        return $"Name:\t{process.Comm}\nState:\t{stateMsg}\nTgid:\t{process.TGID}\nPid:\t{task.TID}\nPPid:\t{process.PPID}\n";
     }
 
     public static void OnProcessStart(SyscallManager sm, Process process)

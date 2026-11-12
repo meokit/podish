@@ -282,6 +282,72 @@ public sealed class LtpRegressionTests
         Assert.Equal(PipeInode.PipeBuf, await env.Call("SysWrite", (uint)writer, 0x12000, PipeInode.PipeBuf));
     }
 
+    [Fact]
+    public async Task FutexTime64_ValidatesAddressAndReportsEfault()
+    {
+        using var env = new TestEnv();
+        // Null user pointer returns EFAULT, not ENOSYS (proving syscall 422 is dispatched)
+        Assert.Equal(-(int)Errno.EFAULT, await env.Call("SysFutexTime64", 0u, 0u, 0u, 0u, 0u, 0u));
+
+        // Misaligned address returns EINVAL
+        Assert.Equal(-(int)Errno.EINVAL, await env.Call("SysFutexTime64", 0x10001u, 0u, 0u, 0u, 0u, 0u));
+    }
+
+    [Fact]
+    public async Task Procfs_ProvidesTaskDirectoryAndThreadStat()
+    {
+        using var env = new TestEnv();
+        env.WriteString(0x10000, "/proc");
+        env.WriteString(0x10100, "proc");
+        Assert.Equal(0, await env.Call("SysMkdir", 0x10000u, 0x1FFu));
+        Assert.Equal(0, await env.Call("SysMount", 0u, 0x10000u, 0x10100u, 0u, 0u));
+
+        env.WriteString(0x10000, $"/proc/{env.Process.TGID}/task/{env.Task.TID}/stat");
+        var fd = await env.Call("SysOpen", 0x10000, (uint)FileFlags.O_RDONLY);
+        Assert.True(fd >= 0);
+
+        var buf = new byte[256];
+        var bytesRead = await env.Call("SysRead", (uint)fd, 0x11000, 256);
+        Assert.True(bytesRead > 0);
+        Assert.True(env.Engine.CopyFromUser(0x11000, buf.AsSpan(0, bytesRead)));
+        var statStr = Encoding.UTF8.GetString(buf, 0, bytesRead);
+        Assert.StartsWith($"{env.Task.TID} ", statStr);
+
+        Assert.Equal(0, await env.Call("SysClose", (uint)fd));
+    }
+
+    [Fact]
+    public async Task Procfs_ProvidesSysKernelSem_AndSysvipcSem()
+    {
+        using var env = new TestEnv();
+        env.WriteString(0x10000, "/proc");
+        env.WriteString(0x10100, "proc");
+        Assert.Equal(0, await env.Call("SysMkdir", 0x10000u, 0x1FFu));
+        Assert.Equal(0, await env.Call("SysMount", 0u, 0x10000u, 0x10100u, 0u, 0u));
+
+        // Read /proc/sys/kernel/sem
+        env.WriteString(0x10000, "/proc/sys/kernel/sem");
+        var fd = await env.Call("SysOpen", 0x10000, (uint)FileFlags.O_RDONLY);
+        Assert.True(fd >= 0);
+        var bytesRead = await env.Call("SysRead", (uint)fd, 0x11000, 256);
+        Assert.True(bytesRead > 0);
+        var buf = new byte[bytesRead];
+        Assert.True(env.Engine.CopyFromUser(0x11000, buf));
+        Assert.Contains("32000", Encoding.UTF8.GetString(buf));
+        Assert.Equal(0, await env.Call("SysClose", (uint)fd));
+
+        // Read /proc/sysvipc/sem
+        env.WriteString(0x10000, "/proc/sysvipc/sem");
+        var fdIpc = await env.Call("SysOpen", 0x10000, (uint)FileFlags.O_RDONLY);
+        Assert.True(fdIpc >= 0);
+        var ipcBytesRead = await env.Call("SysRead", (uint)fdIpc, 0x11000, 256);
+        Assert.True(ipcBytesRead > 0);
+        var ipcBuf = new byte[ipcBytesRead];
+        Assert.True(env.Engine.CopyFromUser(0x11000, ipcBuf));
+        Assert.Contains("key", Encoding.UTF8.GetString(ipcBuf));
+        Assert.Equal(0, await env.Call("SysClose", (uint)fdIpc));
+    }
+
     private sealed class TestEnv : IDisposable
     {
         private readonly TestRuntimeFactory _factory = new();

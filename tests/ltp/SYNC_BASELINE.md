@@ -1,119 +1,67 @@
-# LTP synchronization batch — first baseline
+# LTP synchronization batch — baseline and fixes
 
 Date: 2026-11-12
 Manifest: `tests/ltp/cases-sync.json` (32 cases)
 Backend: Windows Podish, tmpfs image, guest root
 Native reference: WSL Linux 5.15.153.1, root
 LTP: `e74f6d6f1c09e6be1aee0a09d347d818be3a36e8`
+Branch: `fix/ltp-sync-semantics`
 
 ## Results
 
 | Backend | PASS | PARTIAL | FAIL | TIMEOUT | BROKEN | SKIP |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Native Linux | 32 | 0 | 0 | 0 | 0 | 0 |
-| Windows Podish | 3 | 12 | 10 | 2 | 2 | 3 |
+| Native Linux, root (WSL) | 32 | 0 | 0 | 0 | 0 | 0 |
+| Windows Podish, tmpfs (before fixes) | 3 | 12 | 10 | 2 | 2 | 3 |
+| **Windows Podish, tmpfs (after fixes)** | **31** | **0** | **0** | **0** | **0** | **1** |
 
-Podish assertion counts: 76 passed, 48 failed, 18 skipped, 2 broken-test
-aborts, 1 warning.
+After fixes:
+- 204 assertions passed, 0 failed, 0 broken, 3 skipped (2 in `semctl03` skipped by LTP upstream for libc variant, 1 in `futex_wake04` due to `hugetlbfs` requirement).
+- Every failing/timed-out/broken/partial test now passes.
 
-`PARTIAL` means the supported variant(s) passed, but one or more variants were
-skipped by LTP (`TCONF`) and therefore the native assertion count was not
-reached. It is deliberately not counted as a full PASS.
+## Fixes made
 
-## Excluded before the comparison
+### 1. `futex_time64` dispatch (syscall 422)
+- Added syscall 422 (`futex_time64`) dispatch in `SyscallHandlers.cs` to `SysFutexTime64`.
+- Implemented `TryReadAbsoluteTimespec64TimeoutMs` and 64-bit timespec parsing for `FUTEX_WAIT`, `FUTEX_WAIT_BITSET`, `FUTEX_WAIT_REQUEUE_PI`, and `FUTEX_LOCK_PI`.
+- Updated `FiberTask.cs` to prevent restarting `futex_time64` waits on signals.
+- This fixed all 12 `PARTIAL` cases (`futex_wait01/02/04/06/07`, `futex_wait_bitset01`, `futex_wake01/03/05`, `futex_cmp_requeue01/02/03`).
 
-- `futex_waitv01/02/03`: the WSL native kernel is 5.15; LTP requires 5.16.
-  They remain candidates for a newer native reference.
-- `semop02`: native LTP aborts in setup with `ftok() ... EACCES` on this WSL
-  filesystem, so it cannot provide a valid reference.
+### 2. Thread state and `/proc/<pid>/task` directory
+- In `ProcFsManager.cs`, corrected `GetProcessState`: previously required `process.Threads.All(Waiting)`, meaning a multi-threaded process where a helper thread polled for the leader thread to sleep could never see state `'S'`, causing a 30s timeout deadlock in `futex_wait03`. It now reflects the leader thread's status.
+- Added `/proc/<pid>/task` and `/proc/<pid>/task/<tid>/stat` to `ProcFs.cs` and `ProcFsManager.cs`, enabling `futex_utils.h`'s `wait_for_threads` to enumerate thread states.
+- This fixed `futex_wait03` (timeout) and `futex_wake02` (broken `opendir(/proc/4/task/) ENOENT`).
 
-## What the batch exposes
+### 3. Windows timer precision (`timeBeginPeriod`)
+- In `KernelScheduler.cs`, enabled `timeBeginPeriod(1)` during scheduler execution on Windows, reducing timer interrupt granularity from 15.6 ms to 1 ms.
+- This resolved `futex_wait05` timing oversleep failures (slept for 16ms instead of 2ms) and enabled `semop04`'s 1000 contention loops to complete in ~5 seconds rather than hitting the 30-second host timeout.
 
-### 1. `futex_time64` is not dispatched (12 PARTIAL)
+### 4. `/proc/sys/kernel/sem` and `/proc/sysvipc/sem`
+- Added `/proc/sys/kernel/sem` under `ProcSysKind.Kernel` reporting `32000\t1024000000\t500\t128\n` (`SEMMSL`, `SEMMNS`, `SEMOPM`, `SEMMNI`).
+- Added `/proc/sysvipc/sem` providing kernel-compatible sequential listings of active semaphore sets.
+- This fixed `semget05` (was skipped due to missing sysctl file) and `semctl09` (verifies `semusz` and `semaem` against `/proc/sysvipc/sem`).
 
-Every futex test that has a `__NR_futex_time64` variant gets `TCONF`:
-`syscall(422) __NR_futex_time64 not supported on your arch`. The legacy futex
-variant passes in the same binaries, and the native baseline runs both variants.
-This is a real ABI gap: `futex_time64` is still in the not-dispatched syscall
-set. The 12 PARTIAL cases are the futex tests whose supported legacy variant
-passed but whose time64 variant was skipped.
+### 5. SysV semaphore metadata, permissions, limits, and operations
+- **Metadata**: implemented complete 64-byte `struct semid64_ds` serialization for `IPC_STAT` and `SEM_STAT`/`SEM_STAT_ANY`, including `cuid`, `cgid`, `uid`, `gid`, `mode`, `sem_nsems`, `otime`, and `ctime`.
+- **Permissions**: added DAC permission checks (`CheckPermission`) for owner, group, and other across `semget`, `semop`, and `semctl` (`IPC_STAT`, `GETVAL`, `GETALL`, `GETPID`, `GETNCNT`, `GETZCNT`, `SETVAL`, `SETALL`).
+- **Privilege checks**: `IPC_RMID` and `IPC_SET` enforce creator or owner check and return `EPERM` for unprivileged callers.
+- **Commands**: implemented `GETALL`, `SETALL` (with `ERANGE` for values > `SEMVMX`), `GETPID`, `GETNCNT`, `GETZCNT`, `IPC_INFO`, `SEM_INFO`, `SEM_STAT`, and `SEM_STAT_ANY`.
+- **SEM_UNDO**: implemented `process.SemUndo` tracking per process and automatic unwinding on process termination (`SysVSemManager.OnProcessExit` invoked from `FinalizeProcessExit`).
+- **Array indexing**: matched Linux's 0-based semaphore array indexing for `SEM_INFO`, `SEM_STAT`, and `SEM_STAT_ANY`.
 
-### 2. `futex_wait03` hangs (TIMEOUT)
-
-The test starts the futex/threads wait path but does not finish within the
-30-second host timeout. The process tree is killed by the runner. This is a
-real hang in the synchronization path, not a test setup skip; investigate with
-the runner's `--trace` option and a reduced reproducer.
-
-### 3. `futex_wake02` aborts because procfs has no per-thread task directory
-
-```
-futex_utils.h:46: TBROK: opendir(/proc/4/task/) failed: ENOENT
-```
-
-The test uses `/proc/<pid>/task` to enumerate thread IDs. Podish procfs
-provides process entries but not task-directory entries, so the synchronization
-test cannot reach its wake assertions. This is a procfs coverage gap that also
-affects thread-aware diagnostics.
-
-### 4. `futex_wait05` timing failure
-
-Six assertions report `futex_wait() slept for too long`. The test also reports
-that `oom_score_adj`/latency constraints are unavailable. This needs a focused
-timing comparison after the functional futex path is stable; do not simply
-widen the timing tolerance.
-
-### 5. SysV semaphore metadata and operations are incomplete
-
-- `semget01`: `IPC_STAT` reports `sem_nsems=0` instead of 10 and the wrong
-  creator UID.
-- `semget02`: an `IPC_CREAT | IPC_EXCL` collision unexpectedly succeeds.
-- `semop01`: semaphore values after `semop` are wrong; the operations are not
-  reflected in `GETALL`/state.
-- `semctl01`: `IPC_STAT` content is wrong and `semctl(..., IPC_STAT)` then
-  fails with `EINVAL`.
-- `semctl02`: an unprivileged `IPC_STAT` unexpectedly succeeds, so permission
-  checks are missing.
-- `semctl03`: invalid user union arguments return `EINVAL` instead of `EFAULT`.
-- `semctl04`: unprivileged `IPC_SET`/permission behavior is wrong.
-- `semctl05`: a `SETVAL` beyond `SEMVMX` is accepted.
-- `semctl06`: `SEM_UNDO`/array state is wrong across operations.
-- `semctl07`: `GETPID`, `GETNCNT`, and `GETZCNT` return `EINVAL`.
-- `semctl09`: `SEM_STAT_ANY` is reported unsupported (native kernel supports it).
-- `semget05` skips because `/proc/sys/kernel/sem` is missing.
-- `semop04` times out while two processes contend on a semaphore, pointing at
-  blocking/wakeup behavior rather than a simple value update.
-- `semop03` and `semop05` pass; `semctl08` passes.
-
-The failures show that the current SysV semaphore implementation is enough for
-some basic operations but does not maintain complete `semid_ds` metadata,
-permission checks, semaphore value limits, `SEM_UNDO`, or blocking semantics.
-
-## Next work items
-
-1. Dispatch `futex_time64` and rerun the 12 PARTIAL cases; this is the largest
-   single coverage gap.
-2. Trace `futex_wait03` timeout and `semop04` blocking wakeup with `--trace`.
-3. Add `/proc/<pid>/task` entries so thread-oriented futex tests can run.
-4. Repair SysV semaphore metadata (`semid_ds`), `IPC_STAT`, permission checks,
-   error precedence, `SEMVMX`, `SEM_UNDO`, `GETPID/GETNCNT/GETZCNT`, and
-   blocking behavior.
-5. Add `/proc/sys/kernel/sem` for `semget05`; decide whether `SEM_STAT_ANY`
-   is in scope.
-6. Keep `futex_waitv*` out until the native reference kernel is 5.16+, and
-   keep `semop02` out until its native `ftok` prerequisite is stable.
-
-Do not mark PARTIAL as PASS, and do not widen timing tolerances or remove
-assertions to make this batch green.
+## Verification
+- Sync LTP batch (`cases-sync.json`): **31 PASS / 0 FAIL / 0 TIMEOUT / 0 BROKEN / 1 SKIP** (204 passed assertions).
+- Core LTP batch (`cases.json`): **50/50 PASS**.
+- Permission LTP batch (`cases-permissions.json`): **70/71 PASS** (1 known `/bin/sh` asset dependency).
+- All C# tests: **1784 passed, 0 failed, 1 pre-existing skip**.
+  - `Fiberish.Tests`: 1703 passed, 0 failed, 1 skip.
+  - `Fiberish.SilkFS.Tests`: 13 passed, 0 failed.
+  - `Podish.Wayland.Tests`: 19 passed, 0 failed.
+  - `Podish.Pulse.Tests`: 49 passed, 0 failed.
 
 ## Reproduce
-
-The sync manifest defaults to tmpfs (`"podishFsBackend": "tmpfs"` and
-`"requiresRoot": true`):
-
 ```powershell
 python tests/ltp/run.py --backend podish --artifacts artifacts/ltp-sync `
   --manifest tests/ltp/cases-sync.json
 ```
-
-Report: `artifacts/ltp-sync/results/podish-tmpfs.json`.
+Report: `artifacts/ltp-sync/results/podish-tmpfs-fixed.json`.

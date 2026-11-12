@@ -15,6 +15,17 @@ public partial class SyscallManager
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
     private ValueTask<int> SysFutex(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
+        return SysFutexCore(engine, a1, a2, a3, a4, a5, a6, false);
+    }
+
+    private ValueTask<int> SysFutexTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        return SysFutexCore(engine, a1, a2, a3, a4, a5, a6, true);
+    }
+
+    private ValueTask<int> SysFutexCore(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6,
+        bool isTime64)
+    {
         var uaddr = a1;
         var op = (int)a2;
         var val = a3;
@@ -31,7 +42,10 @@ public partial class SyscallManager
             int? timeoutMs = null;
             if (a4 != 0)
             {
-                if (!TryReadTimespec32TimeoutMs(engine, a4, out var parsedTimeout, out var timeoutErr))
+                var ok = isTime64
+                    ? TryReadTimespec64TimeoutMs(engine, a4, out var parsedTimeout, out var timeoutErr)
+                    : TryReadTimespec32TimeoutMs(engine, a4, out parsedTimeout, out timeoutErr);
+                if (!ok)
                     return new ValueTask<int>(timeoutErr);
 
                 timeoutMs = parsedTimeout;
@@ -57,9 +71,13 @@ public partial class SyscallManager
             int? timeoutMs = null;
             if (a4 != 0)
             {
-                if (!TryReadAbsoluteTimespec32TimeoutMs(engine, a4,
-                        useClockRealtime ? LinuxConstants.CLOCK_REALTIME : LinuxConstants.CLOCK_MONOTONIC,
-                        out var parsedTimeout, out var timeoutErr))
+                var clockId = useClockRealtime ? LinuxConstants.CLOCK_REALTIME : LinuxConstants.CLOCK_MONOTONIC;
+                var ok = isTime64
+                    ? TryReadAbsoluteTimespec64TimeoutMs(engine, a4, clockId, out var parsedTimeout,
+                        out var timeoutErr)
+                    : TryReadAbsoluteTimespec32TimeoutMs(engine, a4, clockId, out parsedTimeout,
+                        out timeoutErr);
+                if (!ok)
                     return new ValueTask<int>(timeoutErr);
 
                 timeoutMs = parsedTimeout;
@@ -90,9 +108,13 @@ public partial class SyscallManager
             int? timeoutMs = null;
             if (a4 != 0)
             {
-                if (!TryReadAbsoluteTimespec32TimeoutMs(engine, a4,
-                        useClockRealtime ? LinuxConstants.CLOCK_REALTIME : LinuxConstants.CLOCK_MONOTONIC,
-                        out var parsedTimeout, out var timeoutErr))
+                var clockId = useClockRealtime ? LinuxConstants.CLOCK_REALTIME : LinuxConstants.CLOCK_MONOTONIC;
+                var ok = isTime64
+                    ? TryReadAbsoluteTimespec64TimeoutMs(engine, a4, clockId, out var parsedTimeout,
+                        out var timeoutErr)
+                    : TryReadAbsoluteTimespec32TimeoutMs(engine, a4, clockId, out parsedTimeout,
+                        out timeoutErr);
+                if (!ok)
                     return new ValueTask<int>(timeoutErr);
 
                 timeoutMs = parsedTimeout;
@@ -420,6 +442,41 @@ public partial class SyscallManager
         }
 
         var deadlineNs = checked(sec * 1_000_000_000L + nsec);
+        var nowNs = GetSleepClockNs(clockId);
+        var remainingNs = Math.Max(0L, deadlineNs - nowNs);
+        return TryConvertTimespecToTimeoutMs(remainingNs / 1_000_000_000L, remainingNs % 1_000_000_000L,
+            out timeoutMs, out err);
+    }
+
+    private static bool TryReadAbsoluteTimespec64TimeoutMs(Engine engine, uint timespecPtr, int clockId,
+        out int timeoutMs, out int err)
+    {
+        timeoutMs = -1;
+        err = 0;
+        if (timespecPtr == 0) return true;
+
+        Span<byte> buf = stackalloc byte[16];
+        if (!engine.CopyFromUser(timespecPtr, buf))
+        {
+            err = -(int)Errno.EFAULT;
+            return false;
+        }
+
+        var sec = BinaryPrimitives.ReadInt64LittleEndian(buf[..8]);
+        var nsec = BinaryPrimitives.ReadInt64LittleEndian(buf[8..]);
+        if (sec < 0 || nsec < 0 || nsec >= NSEC_PER_SEC)
+        {
+            err = -(int)Errno.EINVAL;
+            return false;
+        }
+
+        if (sec >= long.MaxValue / 1_000_000_000L)
+        {
+            timeoutMs = int.MaxValue;
+            return true;
+        }
+
+        var deadlineNs = sec * 1_000_000_000L + nsec;
         var nowNs = GetSleepClockNs(clockId);
         var remainingNs = Math.Max(0L, deadlineNs - nowNs);
         return TryConvertTimespecToTimeoutMs(remainingNs / 1_000_000_000L, remainingNs % 1_000_000_000L,

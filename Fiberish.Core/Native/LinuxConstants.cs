@@ -471,6 +471,10 @@ public static class LinuxConstants
     public const int GETZCNT = 15;
     public const int SETVAL = 16;
     public const int SETALL = 17;
+    public const int SEM_STAT = 18;
+    public const int SEM_INFO = 19;
+    public const int SEM_STAT_ANY = 20;
+    public const int SEM_UNDO = 0x1000;
 
     // IPC flags (from linux/ipc.h) - these are octal values in Linux
     public const int IPC_CREAT = 0x200; // 01000 octal = create if key is nonexistent

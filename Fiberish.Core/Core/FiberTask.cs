@@ -2395,7 +2395,7 @@ public partial class FiberTask
             return true;
 
         // Linux signal(7) and FUTEX_WAIT(2const): FUTEX_WAIT-style sleeps are not restarted.
-        if (syscallNr == X86SyscallNumbers.futex)
+        if (syscallNr == X86SyscallNumbers.futex || syscallNr == X86SyscallNumbers.futex_time64)
         {
             var futexOp = (int)syscallArg2 & 0x7F;
             if (futexOp == LinuxConstants.FUTEX_WAIT ||

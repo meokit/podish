@@ -150,6 +150,8 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
             created = CreateFile(root, childName, 0x124, ctx => ProcFsManager.GenerateLoadAvg(ctx.Scheduler));
         else if (name.SequenceEqual("sys"u8))
             created = CreateSysDirectory(root, childName);
+        else if (name.SequenceEqual("sysvipc"u8))
+            created = CreateSysvipcDirectory(root, childName);
         else if (name.SequenceEqual("self"u8))
             created = CreateSelfSymlink(root, childName);
 
@@ -198,6 +200,7 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
         entries.Add(new DirectoryEntry { Name = FsName.FromString("uptime"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("loadavg"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("sys"), Ino = 0, Type = InodeType.Directory });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("sysvipc"), Ino = 0, Type = InodeType.Directory });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("self"), Ino = 0, Type = InodeType.Symlink });
 
         var processes = task.CommonKernel.GetProcessesSnapshot();
@@ -252,6 +255,12 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
     private Dentry CreateSysDirectory(Dentry parent, FsName name)
     {
         var inode = new ProcSysRootInode(_sb);
+        return new Dentry(name, inode, parent, _sb);
+    }
+
+    private Dentry CreateSysvipcDirectory(Dentry parent, FsName name)
+    {
+        var inode = new ProcSysvipcDirectoryInode(_sb);
         return new Dentry(name, inode, parent, _sb);
     }
 
@@ -314,6 +323,8 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
             created = CreateFdDir(dir, childName);
         else if (name.SequenceEqual("fdinfo"u8))
             created = CreateFdInfoDir(dir, childName);
+        else if (name.SequenceEqual("task"u8))
+            created = CreateTaskDir(dir, childName);
         else if (name.SequenceEqual("exe"u8))
             created = CreateSymlink(dir, childName, p => p.ExecutablePathRaw);
         else if (name.SequenceEqual("cwd"u8))
@@ -342,7 +353,7 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
 
         // Keep fd/fdinfo hot paths fresh because child fd tables are highly dynamic.
         if (!FsEncoding.IsValidUtf8(name)) return false;
-        if (name.SequenceEqual("fd"u8) || name.SequenceEqual("fdinfo"u8)) return false;
+        if (name.SequenceEqual("fd"u8) || name.SequenceEqual("fdinfo"u8) || name.SequenceEqual("task"u8)) return false;
 
         return true;
     }
@@ -364,6 +375,7 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         entries.Add(new DirectoryEntry { Name = FsName.FromString("mountinfo"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("fd"), Ino = 0, Type = InodeType.Directory });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("fdinfo"), Ino = 0, Type = InodeType.Directory });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("task"), Ino = 0, Type = InodeType.Directory });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("exe"), Ino = 0, Type = InodeType.Symlink });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("cwd"), Ino = 0, Type = InodeType.Symlink });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("root"), Ino = 0, Type = InodeType.Symlink });
@@ -410,6 +422,12 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
     private Dentry CreateFdInfoDir(Dentry parent, FsName name)
     {
         var inode = new ProcPidFdInfoDirectoryInode(_sb, _pid);
+        return new Dentry(name, inode, parent, _sb);
+    }
+
+    private Dentry CreateTaskDir(Dentry parent, FsName name)
+    {
+        var inode = new ProcPidTaskDirectoryInode(_sb, _pid);
         return new Dentry(name, inode, parent, _sb);
     }
 
@@ -615,6 +633,248 @@ file sealed class ProcPidFdInfoDirectoryInode : Inode, IContextualDirectoryInode
             new DirectoryEntry { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory }
         ];
     }
+}
+
+file sealed class ProcPidTaskDirectoryInode : Inode, IContextualDirectoryInode
+{
+    private readonly int _pid;
+    private readonly ProcSuperBlock _sb;
+
+    public ProcPidTaskDirectoryInode(ProcSuperBlock sb, int pid)
+    {
+        _sb = sb;
+        _pid = pid;
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.Directory;
+        Mode = 0x16D; // 0555
+        SetInitialLinkCount(2, "ProcPidTaskDirectoryInode.ctor");
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public Dentry? Lookup(FiberTask task, ReadOnlySpan<byte> name)
+    {
+        if (Dentries.Count == 0) return null;
+        var process = task.CommonKernel.GetProcess(_pid);
+        if (process == null) return null;
+        if (!FsEncoding.TryParseAsciiInt32(name, out var tid)) return null;
+
+        var targetTask = process.Threads.FirstOrDefault(t => t.TID == tid);
+        if (targetTask == null) return null;
+
+        var dir = Dentries[0];
+        if (dir.TryGetCachedChild(name, out var cached))
+            return cached;
+
+        var inode = new ProcTaskDirectoryInode(_sb, _pid, tid);
+        var dentry = new Dentry(FsName.FromBytes(name), inode, dir, _sb);
+        dir.CacheChild(dentry, "ProcPidTaskDirectoryInode.Lookup");
+        return dentry;
+    }
+
+    public bool RevalidateCachedChild(FiberTask task, Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
+    {
+        var process = task.CommonKernel.GetProcess(_pid);
+        if (process == null) return false;
+        if (!FsEncoding.TryParseAsciiInt32(name, out var tid)) return false;
+        return process.Threads.Any(t => t.TID == tid);
+    }
+
+    public List<DirectoryEntry> GetEntries(FiberTask task)
+    {
+        var entries = new List<DirectoryEntry>
+        {
+            new() { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new() { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory }
+        };
+
+        var process = task.CommonKernel.GetProcess(_pid);
+        if (process == null) return entries;
+
+        foreach (var t in process.Threads)
+            entries.Add(new DirectoryEntry
+                { Name = FsName.FromString(t.TID.ToString()), Ino = 0, Type = InodeType.Directory });
+        return entries;
+    }
+
+    public override Dentry? Lookup(string name) => null;
+    public override bool RevalidateCachedChild(Dentry parent, ReadOnlySpan<byte> name, Dentry cached) => false;
+    public override List<DirectoryEntry> GetEntries() =>
+        [
+            new DirectoryEntry { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory }
+        ];
+}
+
+file sealed class ProcTaskDirectoryInode : Inode, IContextualDirectoryInode
+{
+    private readonly int _pid;
+    private readonly int _tid;
+    private readonly ProcSuperBlock _sb;
+
+    public ProcTaskDirectoryInode(ProcSuperBlock sb, int pid, int tid)
+    {
+        _sb = sb;
+        _pid = pid;
+        _tid = tid;
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.Directory;
+        Mode = 0x16D; // 0555
+        SetInitialLinkCount(2, "ProcTaskDirectoryInode.ctor");
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public Dentry? Lookup(FiberTask task, ReadOnlySpan<byte> name)
+    {
+        if (Dentries.Count == 0) return null;
+        var process = task.CommonKernel.GetProcess(_pid);
+        if (process == null) return null;
+        var targetTask = process.Threads.FirstOrDefault(t => t.TID == _tid);
+        if (targetTask == null) return null;
+
+        var dir = Dentries[0];
+        if (dir.TryGetCachedChild(name, out var cached))
+            return cached;
+
+        var childName = FsName.FromBytes(name);
+        Dentry? created = null;
+        if (name.SequenceEqual("status"u8))
+            created = CreateFile(dir, childName, 0x124, _ =>
+            {
+                var p = task.CommonKernel.GetProcess(_pid);
+                var t = p?.Threads.FirstOrDefault(th => th.TID == _tid);
+                return (p == null || t == null) ? string.Empty : ProcFsManager.GenerateThreadStatus(t, p);
+            });
+        else if (name.SequenceEqual("stat"u8))
+            created = CreateFile(dir, childName, 0x124, _ =>
+            {
+                var p = task.CommonKernel.GetProcess(_pid);
+                var t = p?.Threads.FirstOrDefault(th => th.TID == _tid);
+                return (p == null || t == null) ? string.Empty : ProcFsManager.GenerateThreadStat(t, p);
+            });
+        else if (name.SequenceEqual("comm"u8))
+            created = CreateFile(dir, childName, 0x124, _ =>
+            {
+                var p = task.CommonKernel.GetProcess(_pid);
+                return p == null ? string.Empty : $"{p.Comm}\n";
+            });
+        else if (name.SequenceEqual("cmdline"u8))
+            created = CreateRawFile(dir, childName, 0x124, _ =>
+            {
+                var p = task.CommonKernel.GetProcess(_pid);
+                return p == null ? [] : p.CommandLineRaw;
+            });
+
+        if (created != null)
+            dir.CacheChild(created, "ProcTaskDirectoryInode.Lookup");
+
+        return created;
+    }
+
+    public bool RevalidateCachedChild(FiberTask task, Dentry parent, ReadOnlySpan<byte> name, Dentry cached)
+    {
+        var process = task.CommonKernel.GetProcess(_pid);
+        if (process == null) return false;
+        return process.Threads.Any(t => t.TID == _tid);
+    }
+
+    public List<DirectoryEntry> GetEntries(FiberTask task)
+    {
+        var entries = new List<DirectoryEntry>
+        {
+            new() { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new() { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory }
+        };
+
+        var process = task.CommonKernel.GetProcess(_pid);
+        if (process == null || !process.Threads.Any(t => t.TID == _tid)) return entries;
+
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("status"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("stat"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("comm"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("cmdline"), Ino = 0, Type = InodeType.File });
+        return entries;
+    }
+
+    public override Dentry? Lookup(string name) => null;
+    public override bool RevalidateCachedChild(Dentry parent, ReadOnlySpan<byte> name, Dentry cached) => false;
+    public override List<DirectoryEntry> GetEntries() =>
+        [
+            new DirectoryEntry { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory }
+        ];
+
+    private Dentry CreateFile(Dentry parent, FsName name, int mode, Func<ProcOpenContext, string> contentFactory)
+    {
+        var inode = new ProcDynamicFileInode(_sb, mode, contentFactory);
+        return new Dentry(name, inode, parent, _sb);
+    }
+
+    private Dentry CreateRawFile(Dentry parent, FsName name, int mode, Func<ProcOpenContext, byte[]> contentFactory)
+    {
+        var inode = new ProcRawDynamicFileInode(_sb, mode, contentFactory);
+        return new Dentry(name, inode, parent, _sb);
+    }
+}
+
+file sealed class ProcSysvipcDirectoryInode : Inode, IContextualDirectoryInode
+{
+    private readonly ProcSuperBlock _sb;
+
+    public ProcSysvipcDirectoryInode(ProcSuperBlock sb)
+    {
+        _sb = sb;
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.Directory;
+        Mode = 0x16D; // 0555
+        SetInitialLinkCount(2, "ProcSysvipcDirectoryInode.ctor");
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public Dentry? Lookup(FiberTask task, ReadOnlySpan<byte> name)
+    {
+        if (Dentries.Count == 0) return null;
+        var dir = Dentries[0];
+        if (dir.TryGetCachedChild(name, out var cached))
+            return cached;
+
+        var childName = FsName.FromBytes(name);
+        Dentry? created = null;
+        if (name.SequenceEqual("sem"u8))
+        {
+            var inode = new ProcDynamicFileInode(_sb, 0x124,
+                ctx => ctx.SyscallManager?.SysVSem.GenerateProcSysvipcSem() ?? string.Empty);
+            created = new Dentry(childName, inode, dir, _sb);
+        }
+
+        if (created != null)
+            dir.CacheChild(created, "ProcSysvipcDirectoryInode.Lookup");
+
+        return created;
+    }
+
+    public bool RevalidateCachedChild(FiberTask task, Dentry parent, ReadOnlySpan<byte> name, Dentry cached) => true;
+
+    public List<DirectoryEntry> GetEntries(FiberTask task)
+    {
+        return
+        [
+            new DirectoryEntry { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = FsName.FromString("sem"), Ino = 0, Type = InodeType.File }
+        ];
+    }
+
+    public override Dentry? Lookup(string name) => null;
+    public override bool RevalidateCachedChild(Dentry parent, ReadOnlySpan<byte> name, Dentry cached) => false;
+    public override List<DirectoryEntry> GetEntries() =>
+        [
+            new DirectoryEntry { Name = FsName.FromString("."), Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = FsName.FromString(".."), Ino = Ino, Type = InodeType.Directory },
+            new DirectoryEntry { Name = FsName.FromString("sem"), Ino = 0, Type = InodeType.File }
+        ];
 }
 
 file sealed class ProcPidFdSymlinkInode : Inode, IMagicSymlinkInode, IContextualMagicSymlinkInode,
@@ -827,6 +1087,8 @@ file sealed class ProcSysRootInode : Inode
             created = CreateFile(dir, childName, ctx => ProcFsManager.GenerateSysKernelVersion(ctx.Process));
         else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("pid_max"u8))
             created = CreateFile(dir, childName, _ => $"{int.MaxValue}\n");
+        else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("sem"u8))
+            created = CreateFile(dir, childName, _ => "32000\t1024000000\t500\t128\n");
         else if (_kind == ProcSysKind.Vm && name.SequenceEqual("overcommit_memory"u8))
             created = CreateFile(dir, childName, _ => ProcFsManager.GenerateSysVmOvercommitMemory());
         else if (_kind == ProcSysKind.Vm && name.SequenceEqual("swappiness"u8))
@@ -861,6 +1123,7 @@ file sealed class ProcSysRootInode : Inode
                 entries.Add(new DirectoryEntry { Name = "ostype", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "version", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "pid_max", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "sem", Ino = 0, Type = InodeType.File });
                 break;
             case ProcSysKind.Vm:
                 entries.Add(new DirectoryEntry { Name = "overcommit_memory", Ino = 0, Type = InodeType.File });

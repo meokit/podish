@@ -113,6 +113,7 @@ public class Process
     public int FSUID { get; set; }
     public int FSGID { get; set; }
     public List<int> SupplementaryGroups { get; } = [];
+    public Dictionary<(int Semid, int SemNum), int> SemUndo { get; } = new();
     public uint[] CapEffective { get; } = [0U, 0U];
     public uint[] CapPermitted { get; } = [0U, 0U];
     public uint[] CapInheritable { get; } = [0U, 0U];

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Channels;
 using Fiberish.Core.VFS.TTY;
@@ -711,6 +712,12 @@ public class KernelScheduler
         return new TimerAwaiter(ticks, scheduler);
     }
 
+    [DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
+    private static extern uint TimeBeginPeriod(uint uMilliseconds);
+
+    [DllImport("winmm.dll", EntryPoint = "timeEndPeriod")]
+    private static extern uint TimeEndPeriod(uint uMilliseconds);
+
     public void Run(long maxTicks = -1)
     {
         BindOwnerThreadIfNeeded();
@@ -720,6 +727,18 @@ public class KernelScheduler
         var exitReason = "running=false";
 
         var startTick = _timerSystem.CurrentTick;
+        var winTimerActive = false;
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                TimeBeginPeriod(1);
+                winTimerActive = true;
+            }
+            catch
+            {
+            }
+        }
 
         try
         {
@@ -839,6 +858,17 @@ public class KernelScheduler
         }
         finally
         {
+            if (winTimerActive)
+            {
+                try
+                {
+                    TimeEndPeriod(1);
+                }
+                catch
+                {
+                }
+            }
+
             SynchronizationContext.SetSynchronizationContext(previousSyncContext);
             Logger.LogInformation("KernelScheduler stopped. reason={Reason} running={Running} tick={Tick}", exitReason,
                 Running, CurrentTick);

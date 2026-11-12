@@ -247,6 +247,9 @@ public partial class SyscallManager
             case X86SyscallNumbers.futex:
                 handled = true;
                 return SysFutex(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.futex_time64:
+                handled = true;
+                return SysFutexTime64(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.sigpending:
                 handled = true;
                 return SysSigPending(engine, ebx, ecx, edx, esi, edi, ebp);
