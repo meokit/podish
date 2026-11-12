@@ -39,6 +39,17 @@ def classify(returncode, text, timed_out=False):
                     counts[key] += int(match[1])
                 else:
                     has_summary = False
+    else:
+        # Legacy LTP API (test.h) has no Summary block. Its result lines are
+        # still authoritative; require at least one result to avoid treating
+        # a silent/crashed binary as a pass.
+        legacy = re.findall(r"^\S+\s+\d+\s+(TPASS|TFAIL|TBROK|TCONF|TWARN)\b", text, re.MULTILINE)
+        legacy += re.findall(r"Child process returned (TPASS|TFAIL|TBROK|TCONF|TWARN)\b", text)
+        legacy_map = {"TPASS": "passed", "TFAIL": "failed", "TBROK": "broken",
+                      "TCONF": "skipped", "TWARN": "warnings"}
+        for result in legacy:
+            counts[legacy_map[result]] += 1
+        has_summary = bool(legacy)
     if timed_out:
         return "TIMEOUT", counts
     if returncode < 0 or returncode > 63 or not has_summary:
@@ -53,7 +64,7 @@ def classify(returncode, text, timed_out=False):
         return "BROKEN", counts
     if counts["passed"] and returncode == 0:
         return "PASS", counts
-    if counts["skipped"] and not counts["passed"]:
+    if counts["skipped"] and not counts["passed"] and returncode == 32:
         return "SKIP", counts
     return "BROKEN", counts
 
@@ -81,6 +92,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=("native", "podish"), required=True)
     parser.add_argument("--artifacts", type=Path, default=REPO / "artifacts/ltp")
+    parser.add_argument("--manifest", type=Path, default=HERE / "cases.json")
     parser.add_argument("--cli", type=Path, default=REPO / "Podish.Cli/bin/Debug/net10.0/Podish.Cli.dll")
     parser.add_argument("--baseline", type=Path, help="Native report (required for Podish; defaults to results/native.json)")
     parser.add_argument("--output", type=Path, help="JSON report; defaults to results/<backend>.json")
@@ -94,12 +106,17 @@ def main():
         parser.error("--timeout must be positive")
     if args.backend == "native" and platform.system() != "Linux":
         parser.error("Native baseline requires Linux (on Windows use WSL)")
+    manifest = json.loads(args.manifest.read_text())
+    if args.backend == "native" and manifest.get("requiresRoot") and os.geteuid() != 0:
+        parser.error("This manifest requires a root native baseline (use WSL as root)")
     out = args.artifacts.resolve()
     metadata = json.loads((out / "build.json").read_text())
+    if metadata.get("manifest", "cases.json") != args.manifest.name:
+        parser.error("Artifacts were built from a different case manifest")
     commit = subprocess.check_output(["git", "-C", str(HERE / "upstream"), "rev-parse", "HEAD"], text=True).strip()
     if metadata["ltpCommit"] != commit:
         parser.error("LTP submodule changed; rebuild the test binaries")
-    cases = json.loads((HERE / "cases.json").read_text())["cases"]
+    cases = manifest["cases"]
     patterns = args.filter.split(",")
     cases = [case for case in cases if any(fnmatch.fnmatchcase(case["name"], pattern) for pattern in patterns)]
     if not cases:
@@ -149,8 +166,16 @@ def main():
             for directory in ("opt/ltp/testcases/bin", "tmp", "dev", "proc", "etc", "run"):
                 (root / directory).mkdir(parents=True, exist_ok=True)
             shutil.copy2(out / "bin" / name, root / "opt/ltp/testcases/bin" / name)
-            (root / "etc/passwd").write_text("root:x:0:0:root:/:/bin/sh\nnobody:x:65534:65534:nobody:/:/bin/false\n")
-            (root / "etc/group").write_text("root:x:0:\nnogroup:x:65534:\n")
+            (root / "etc/passwd").write_text(
+                "root:x:0:0:root:/:/bin/sh\n"
+                "daemon:x:1:1:daemon:/:/bin/false\n"
+                "bin:x:2:2:bin:/:/bin/false\n"
+                "user1:x:1000:1000:user1:/:/bin/false\n"
+                "user2:x:1001:1001:user2:/:/bin/false\n"
+                "nobody:x:65534:65534:nobody:/:/bin/false\n")
+            (root / "etc/group").write_text(
+                "root:x:0:\ndaemon:x:1:\nbin:x:2:\nusers:x:100:\n"
+                "user1:x:1000:\nuser2:x:1001:\nnogroup:x:65534:\n")
             (root / "etc/nsswitch.conf").write_text("passwd: files\ngroup: files\n")
             # --init keeps LTP's harness parent above PID 1; its heartbeat checks
             # getppid()==1 as an orphan condition. No shell is needed.
@@ -187,6 +212,7 @@ def main():
         print(f"{name:24} {status:8} {elapsed:6.2f}s  {counts}", flush=True)
     statuses = dict(Counter(case["status"] for case in results))
     report = {"backend": args.backend, "build": metadata, "host": platform.platform(),
+              "manifest": args.manifest.name, "requiresRoot": bool(manifest.get("requiresRoot")),
               "timestamp": stamp, "kernelConfigChecks": "disabled (behavioral assertions retained)",
               "timeoutSeconds": args.timeout, "summary": statuses, "cases": results}
     output = (args.output or out / "results" / f"{args.backend}.json").resolve()

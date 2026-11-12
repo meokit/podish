@@ -52,6 +52,15 @@ class ResultTests(unittest.TestCase):
     def test_malformed_summary_is_broken(self):
         self.assertEqual(classify(0, "Summary:\npassed 9\n")[0], "BROKEN")
 
+    def test_legacy_ltp_result_lines_are_counted(self):
+        text = "getgroups01    1  TPASS  :  ok\ngetgroups01    2  TPASS  :  ok\n"
+        status, counts = classify(0, text)
+        self.assertEqual(status, "PASS")
+        self.assertEqual(counts["passed"], 2)
+        self.assertEqual(classify(1, "x 1  TFAIL  :  bad\n")[0], "FAIL")
+        self.assertEqual(classify(0, "silent legacy binary")[0], "BROKEN")
+        self.assertEqual(classify(0, "Child process returned TPASS\n")[0], "PASS")
+
 
 class ProcessTests(unittest.TestCase):
     def test_output_and_status_are_preserved(self):

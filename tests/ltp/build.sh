@@ -4,8 +4,11 @@ set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd -- "$here/../.." && pwd)
 out=${1:-"$repo/artifacts/ltp"}
+manifest=${2:-"$here/cases.json"}
 mkdir -p "$out"
 out=$(cd -- "$out" && pwd)
+[[ -f "$manifest" ]] || { echo "Missing case manifest: $manifest" >&2; exit 1; }
+manifest=$(cd -- "$(dirname -- "$manifest")" && pwd)/$(basename -- "$manifest")
 upstream="$here/upstream"
 if [[ ! -f "$upstream/configure.ac" ]]; then
     echo 'Initialize LTP: git submodule update --init tests/ltp/upstream' >&2
@@ -30,7 +33,7 @@ CC='gcc -m32' CFLAGS='-O2 -g -march=i686 -mno-avx' LDFLAGS='-static' \
     ./configure --host=i686-linux-gnu --prefix=/opt/ltp --without-numa
 make -j"${LTP_JOBS:-4}" include-all lib-all
 mkdir -p "$out/bin"
-python3 - "$here/cases.json" > "$work/selection" <<'PY'
+python3 - "$manifest" > "$work/selection" <<'PY'
 import json, re, sys
 cases = json.load(open(sys.argv[1]))['cases']
 seen = set()
@@ -58,12 +61,14 @@ if any(struct.unpack_from('<I', data, offset + i * size)[0] == 3 for i in range(
 PY
     cp "testcases/kernel/syscalls/$directory/$name" "$out/bin/$name"
 done < "$work/selection"
-python3 - "$out" "$commit" "$here/cases.json" <<'PY'
+python3 - "$out" "$commit" "$manifest" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 out = pathlib.Path(sys.argv[1])
 cases = json.load(open(sys.argv[3]))['cases']
 metadata = {
     'ltpCommit': sys.argv[2],
+    'manifest': pathlib.Path(sys.argv[3]).name,
+    'requiresRoot': bool(json.load(open(sys.argv[3])).get('requiresRoot')),
     'compiler': subprocess.check_output(['gcc', '--version'], text=True).splitlines()[0],
     'flags': '-m32 -static -O2 -g -march=i686 -mno-avx',
     'binaries': {c['name']: hashlib.sha256((out / 'bin' / c['name']).read_bytes()).hexdigest() for c in cases},

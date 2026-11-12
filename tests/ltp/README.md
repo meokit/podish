@@ -4,8 +4,34 @@ This is a selected **50-binary** LTP suite, not all of LTP. The upstream source
 is the `upstream` git submodule; the superproject's gitlink pins its revision.
 Build scripts, selection and host runner live here, outside the submodule.
 No upstream tests or assertions are patched. See [RESULTS.md](RESULTS.md) for
-the initial Windows Podish results and [FIX_REPORT.md](FIX_REPORT.md) for the
-subsequent fixes (50/50 passing on the repair branch).
+the initial Windows Podish results, [FIX_REPORT.md](FIX_REPORT.md) for the
+subsequent fixes (50/50 passing on the repair branch), and
+[PERMISSIONS_BASELINE.md](PERMISSIONS_BASELINE.md) for the separate permission
+and identity batch (71 cases; 38/71 passing on Windows hostfs).
+
+## Manifests
+
+`cases.json` is the basic syscall batch. `cases-permissions.json` is the
+permission/identity batch and requires a root native baseline. Build and run
+the permission batch into its own artifact directory so its `build.json` and
+baseline do not mix with the basic batch:
+
+```sh
+git submodule update --init tests/ltp/upstream
+bash tests/ltp/build.sh artifacts/ltp-permissions tests/ltp/cases-permissions.json
+# Windows/WSL native reference:
+wsl -d Ubuntu -u root -- python3 /mnt/c/Users/Jiang/repos/podish/tests/ltp/run.py \
+  --backend native --artifacts /mnt/c/Users/Jiang/repos/podish/artifacts/ltp-permissions \
+  --manifest /mnt/c/Users/Jiang/repos/podish/tests/ltp/cases-permissions.json
+# Podish:
+python tests/ltp/run.py --backend podish --artifacts artifacts/ltp-permissions \
+  --manifest tests/ltp/cases-permissions.json
+```
+
+The Podish guest rootfs used by the runner contains root, daemon, bin, two
+unprivileged test users (1000/1001) and nobody, plus matching groups. Do not
+run the permission manifest as an ordinary Linux user: LTP's `.needs_root`
+fixtures will abort or produce a non-comparable baseline.
 
 ## Selection
 
