@@ -7,7 +7,8 @@ No upstream tests or assertions are patched. See [RESULTS.md](RESULTS.md) for
 the initial Windows Podish results, [FIX_REPORT.md](FIX_REPORT.md) for the
 subsequent fixes (50/50 passing on the repair branch), and
 [PERMISSIONS_BASELINE.md](PERMISSIONS_BASELINE.md) for the separate permission
-and identity batch (71 cases; 38/71 passing on Windows hostfs).
+and identity batch (71 cases; 62/71 passing on the tmpfs image backend, versus
+38/71 on hostfs).
 
 ## Manifests
 
@@ -23,10 +24,19 @@ bash tests/ltp/build.sh artifacts/ltp-permissions tests/ltp/cases-permissions.js
 wsl -d Ubuntu -u root -- python3 /mnt/c/Users/Jiang/repos/podish/tests/ltp/run.py \
   --backend native --artifacts /mnt/c/Users/Jiang/repos/podish/artifacts/ltp-permissions \
   --manifest /mnt/c/Users/Jiang/repos/podish/tests/ltp/cases-permissions.json
-# Podish:
+# Podish with a writable tmpfs root materialized from an imported image
+# (the permission manifest defaults to tmpfs):
 python tests/ltp/run.py --backend podish --artifacts artifacts/ltp-permissions \
   --manifest tests/ltp/cases-permissions.json
+# Use --fs-backend hostfs only for an explicit old-backend comparison.
 ```
+
+The `tmpfs` backend imports one generated image containing all selected
+binaries under `/opt/ltp/testcases/bin`, then runs each binary in a separate
+container. Unix modes are written explicitly into the image tar; do not use a
+Windows `tar` command, which commonly loses execute bits. The older `hostfs`
+mode remains available with `--fs-backend hostfs` for comparison, but it
+forces mode `0755` on Windows and is not suitable for permission assertions.
 
 The Podish guest rootfs used by the runner contains root, daemon, bin, two
 unprivileged test users (1000/1001) and nobody, plus matching groups. Do not
@@ -79,7 +89,11 @@ Static glibc emits NSS linker warnings; these selected tests do not require
 network NSS services. This does not promise that arbitrary future NSS tests
 will work in a minimal rootfs.
 
-## 1. Native Linux baseline (no root)
+## 1. Native Linux baseline
+
+The basic manifest can use a normal user. The permission manifest requires a
+root native baseline because LTP creates root-owned fixtures and then drops
+privileges itself; see the manifest commands above.
 
 ```sh
 python3 tests/ltp/run.py --backend native

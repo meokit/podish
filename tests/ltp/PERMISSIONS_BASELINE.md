@@ -1,8 +1,7 @@
-# LTP permission / identity batch — first baseline
+# LTP permission / identity batch — tmpfs backend
 
 Date: 2026-11-12
 Manifest: `tests/ltp/cases-permissions.json` (71 cases)
-Artifacts: `artifacts/ltp-permissions` (ignored by Git)
 LTP: `e74f6d6f1c09e6be1aee0a09d347d818be3a36e8`
 
 ## Results
@@ -10,113 +9,123 @@ LTP: `e74f6d6f1c09e6be1aee0a09d347d818be3a36e8`
 | Backend | PASS | FAIL | BROKEN |
 | --- | ---: | ---: | ---: |
 | Native Linux, root (WSL) | 71 | 0 | 0 |
-| Windows Podish, guest root | 38 | 27 | 6 |
+| Windows Podish, guest root, hostfs | 38 | 27 | 6 |
+| Windows Podish, guest root, **tmpfs image** | **62** | **9** | **0** |
 
-Podish assertion counts: 333 passed, 664 failed, 6 broken-test aborts.
-The native baseline is intentionally run as root because LTP's `.needs_root`
-tests create root-owned fixtures and drop privileges themselves. The same
-static i386 ELF binaries are used on both sides. No upstream assertions were
-changed and no runtime permission fix is included in this batch.
+tmpfs run: 492 assertions passed, 25 failed, 0 broken/skipped.
+The native baseline and Podish use the same static i386 ELF hashes. The tmpfs
+image contains one copy of all selected binaries under `/opt/ltp/testcases/bin`;
+each case runs in its own container and root. Modes and ownership are written
+explicitly into the image tar, so Windows hostfs mode rewriting is no longer
+part of the test.
 
-The native baseline exposed two exclusions before the Podish run:
+The runner builds the image with Python `tarfile` and imports it through the
+CLI. Do not generate this tar with Windows `tar`: it commonly writes binaries
+as `0644`, which correctly causes `Execute access denied` at image startup.
 
-- `rename11` / `rename14` need a loop block device and `all_filesystems`; they
-  were removed from the manifest.
-- `chroot01` expects `EPERM` for unprivileged `chroot`, but the WSL kernel
-  returns `EACCES`; it is not a stable cross-environment baseline. `chroot04`
-  remains and tests the search-permission path.
+## What changed from hostfs
 
-## What the failures expose
+The following hostfs failures disappear on tmpfs and are therefore backend
+metadata limitations, not `DacPolicy` failures:
 
-### 1. Windows hostfs does not preserve POSIX mode or ownership
+- `chmod*`, `fchmod*`, `chown*`, `fchown*`, `umask01`
+- `mkdir04`, `unlink08`, `rename09`, `link04`, `open10`
+- mode-dependent `access01` / `faccessat202` assertions
 
-This is the dominant cause. `Fiberish.Core/VFS/Hostfs.cs` has an explicit
-non-Unix fallback:
+Windows hostfs currently forces mode `0755` and returns success for ownership
+changes without applying them. That path must not be used as evidence that
+permission checks are correct; `tmpfs` is the meaningful Windows reference for
+the permission batch.
 
-- `HostfsOwnershipMapper.RefreshGuestProjection` forces mode `0755`.
-- `SetGuestMode` forces mode `0755` and returns success.
-- `SetGuestOwnership` returns success without changing owner/group.
+## Remaining tmpfs failures
 
-Consequences visible in the baseline:
+### 1. `chown02` / `fchown02`: setgid not cleared on chown
 
-- `chmod03/05/07`, `fchmod02/03/04/05`: calls succeed, but mode stays `0755`;
-  sticky/setgid bits disappear.
-- `chown02/03/05`, `fchown02/03/05`, `fchownat01`: calls succeed, but UID/GID
-  stay unchanged or are misprojected.
-- `umask01`: every created file is `0755`; 511 assertion failures.
-- `mkdir02`, `open10`: setgid inheritance cannot be observed because the
-  directory mode is rewritten to `0755`.
-- `mkdir04`, `unlink08`, `rename09`: tests create restrictive `0700/0555/0666`
-  directories, but hostfs exposes `0755`, so operations that should fail
-  succeed.
-- `access01` and `faccessat202` include many mode-dependent assertions that
-  cannot be trusted on this backend.
-- `link04`: hardlink permissions and `EEXIST`/`EIO` behavior are affected by
-  the same mode-less hostfs path.
+After a superuser `chown`, LTP expects a group-executable regular file with
+`S_ISUID|S_ISGID` to become `0100770`. Podish leaves `0106770`; the setgid bit
+survives. `ApplySetIdClearOnChown` returns the old mode unchanged when the
+requested UID/GID equal the current ones, but Linux still applies the set-ID
+clearing rules for a superuser `chown`. The helper also lacks the Linux rule
+that preserves `S_ISGID` on a non-group-executable regular file when ownership
+really changes. This is a real chown semantics bug, not a backend issue.
 
-These are real defects for running permission-sensitive workloads on Windows,
-but they are **backend metadata defects**, not proof that every check in
-`DacPolicy` is wrong. They must be rerun on tmpfs/overlay (or a Unix hostfs)
-after a metadata-capable backend is wired into this runner.
+### 2. `mkdir02`: setgid directory inheritance is lost
 
-### 2. Symlink creation on Windows hostfs returns EIO
+LTP creates a parent directory with `S_ISGID`, chowns it to a free GID, then
+runs as nobody. A new child directory should inherit both the parent GID and
+`S_ISGID`; Podish gets GID `65534` (nobody) and no setgid bit.
 
-`access02`, `faccessat201`, `chmod08`, `lchown01`, `fchownat02` abort in setup
-with `symlink(...) failed: EIO`. The suite therefore cannot test symlink
-permission/lchown/follow behavior on Windows. The core C# tests cover symlink
-objects in tmpfs, so this is specific to the Windows hostfs path rather than a
-missing inode abstraction.
+This is consistent with `ApplySetIdClearOnChown` clearing `S_ISGID` on the
+parent directory during the root `chown`. For directories, Linux preserves
+setgid when the caller has `CAP_FSETID` (or root); the helper currently applies
+the regular-file set-ID clearing rule without a directory/type distinction.
+That destroys the inheritance contract. The same helper must distinguish
+regular files, directories, and the group-executable special case.
 
-### 3. Saved-set-UID semantics are incomplete
+### 3. `setreuid05`: saved-set-UID transitions incomplete
 
-`setreuid05` fails transitions that rely on the saved set-user-ID:
-`setreuid(-1, other)`, `setreuid(other, main)`, and related calls return
-`EPERM` even when Linux permits them for a privileged process. This is a pure
-identity-state bug and does not depend on hostfs metadata.
+Legal privileged transitions that depend on the saved UID still return
+`EPERM`, and some transitions leave the expected real/effective/saved triple
+wrong. Examples:
 
-### 4. `setgroups` error precedence is wrong
+- `setreuid(-1, other)` fails with `EPERM`
+- `setreuid(other, main)` fails with `EPERM`
+- `setreuid(-1, main)` fails with `EPERM`
+- after a permitted transition, `ruid/euid/suid` does not match the expected
+  `1/1/1` or `1/2/2` state
 
-`setgroups03/04` expect `EFAULT` for the exercised invalid-list cases but get
-`EINVAL`. The implementation appears to validate count/size before attempting
-the user-pointer copy. Linux's observable precedence must be verified against
-a native baseline; the current ordering hides the pointer fault. This is a
-pure syscall argument-validation bug.
+This is isolated to saved-ID bookkeeping in `CredentialService.SetReUid`, not
+the filesystem backend.
 
-### 5. `O_NOATIME` privilege check is missing
+### 4. `setgroups03/04`: count limit and EFAULT precedence
 
-`open02` shows an unprivileged process can open `O_RDONLY | O_NOATIME` without
-owning the file or having `CAP_FOWNER`. The open path does not enforce the
-`O_NOATIME` capability/ownership rule. This is independent of mode storage.
+`setgroups` is capped at `1024` in `SyscallHandlers.Identity.cs`, whereas Linux
+accepts the full `NGROUPS_MAX` range (65536 for this ABI). `setgroups(65536,
+bad_pointer)` therefore returns `EINVAL` before touching the user pointer;
+the expected result is `EFAULT`. The hard-coded 1024 limit also prevents valid
+large supplementary-group operations. Fix both the limit and validation order.
 
-### 6. `chroot` returns EPERM before path search permission
+### 5. `open02`: `O_NOATIME` privilege check missing
 
-`chroot04` expects `EACCES` when the target directory has no search permission.
-Podish returns `EPERM` from the privilege check first. Linux checks the path
-and its search permissions before reporting the capability failure for this
-case. The chroot handler needs ordered path/permission validation.
+An unprivileged guest process can open a file with `O_RDONLY | O_NOATIME` even
+when it neither owns the file nor has `CAP_FOWNER`. Linux must return `EPERM`.
+The open-flag path silently accepts the flag.
 
-### 7. `access`/`faccessat` trust the current metadata projection
+### 6. `chroot04`: EPERM before search-permission check
 
-Even after hostfs metadata is fixed, the tests point at a second risk: `access`
-must use real IDs and `faccessat(AT_EACCESS)` effective IDs, and every path
-component needs search/execute permission. The current `DacPolicy.CheckPathAccess`
-only evaluates the final inode; path traversal checks are in `PathWalker`.
-These paths must be validated on a metadata-capable backend, not inferred from
-the hostfs failures above.
+`chroot04` creates a directory without search permission, drops to nobody, and
+expects `EACCES`. Podish checks the privilege/capability first and returns
+`EPERM`. The path lookup must run first (or the capability error must be
+deferred) so the more specific path error is observable.
 
-## Next work items
+### 7. `access02`: environment limitation, not a permission conclusion
 
-1. Add a metadata-preserving backend to the permission runner (tmpfs/overlay
-   or a Unix-hostfs run) and rerun this manifest before changing DacPolicy.
-2. Fix the non-Unix hostfs metadata policy: mode/owner writes cannot silently
-   succeed while forcing `0755`.
-3. Fix Windows hostfs symlink creation or explicitly classify it as
-   unsupported and skip symlink-dependent permission tests.
-4. Fix `setreuid` saved-set-UID transitions and `setgroups` argument precedence.
-5. Add `O_NOATIME` ownership/capability checks.
-6. Reorder chroot permission checks.
-7. Continue with path-component search permission tests after the backend can
-   preserve modes.
+`access02` creates a `#!/bin/sh` executable and runs it. The minimal tmpfs image
+has no `/bin/sh`, so four `X_OK` execution assertions fail with `ENOENT`; the
+other 12 access assertions pass. This is an image dependency, not evidence that
+`access(X_OK)` is wrong. Either add a real guest shell asset to the image or
+exclude this binary from the permission score in future runs. Do not replace
+`/bin/sh` with a no-op fake just to make the test green.
 
-Until items 1-2 are addressed, a green permission run on Windows hostfs would
-be misleading; do not weaken or skip these assertions to make the batch green.
+## Hostfs versus tmpfs summary
+
+The hostfs run was useful for discovering that Windows hostfs silently loses
+POSIX metadata; it is not a valid permission-test backend. After switching to
+tmpfs, the failures collapse to eight failing binaries covering six substantive
+areas (chown/fchown share one), plus one missing test asset (`/bin/sh`). The
+next fixes should target directory setgid preservation, chown set-ID clearing,
+saved-UID transitions, setgroups bounds/order, `O_NOATIME`, and chroot error
+ordering.
+
+## Reproduce
+
+The permission manifest sets `"podishFsBackend": "tmpfs"`, so no flag is
+required. Use `--fs-backend hostfs` only to reproduce the old comparison.
+
+```powershell
+python tests/ltp/run.py --backend podish --artifacts artifacts/ltp-permissions `
+  --manifest tests/ltp/cases-permissions.json
+```
+
+Reports: `artifacts/ltp-permissions/results/podish-tmpfs.json` and
+`podish-hostfs.json`. Native baseline: `results/native.json`.

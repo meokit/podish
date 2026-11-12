@@ -18,6 +18,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 
@@ -69,6 +70,51 @@ def classify(returncode, text, timed_out=False):
     return "BROKEN", counts
 
 
+GUEST_PASSWD = (
+    "root:x:0:0:root:/:/bin/sh\n"
+    "daemon:x:1:1:daemon:/:/bin/false\n"
+    "bin:x:2:2:bin:/:/bin/false\n"
+    "user1:x:1000:1000:user1:/:/bin/false\n"
+    "user2:x:1001:1001:user2:/:/bin/false\n"
+    "nobody:x:65534:65534:nobody:/:/bin/false\n")
+GUEST_GROUP = (
+    "root:x:0:\ndaemon:x:1:\nbin:x:2:\nusers:x:100:\n"
+    "user1:x:1000:\nuser2:x:1001:\nnogroup:x:65534:\n")
+
+
+def write_guest_identity_files(root):
+    (root / "etc").mkdir(parents=True, exist_ok=True)
+    (root / "etc/passwd").write_text(GUEST_PASSWD)
+    (root / "etc/group").write_text(GUEST_GROUP)
+    (root / "etc/nsswitch.conf").write_text("passwd: files\ngroup: files\n")
+
+
+def build_image_tar(root, tar_path, binaries):
+    """Create an OCI rootfs tar with explicit Unix metadata.
+
+    Windows tar tools commonly leave executable files at 0644; the image
+    loader correctly rejects that. Do not rely on the host filesystem mode.
+    """
+    with tarfile.open(tar_path, "w", format=tarfile.PAX_FORMAT) as archive:
+        for dirpath, dirnames, filenames in os.walk(root):
+            relative = os.path.relpath(dirpath, root)
+            relative = "" if relative == "." else relative.replace(os.sep, "/")
+            for directory in sorted(dirnames):
+                name = f"{relative}/{directory}" if relative else directory
+                info = archive.gettarinfo(str(Path(dirpath) / directory), name)
+                info.mode = 0o1777 if name == "tmp" else 0o755
+                info.uid = info.gid = 0
+                archive.addfile(info)
+            for filename in sorted(filenames):
+                name = f"{relative}/{filename}" if relative else filename
+                path = Path(dirpath) / filename
+                info = archive.gettarinfo(str(path), name)
+                info.mode = 0o755 if name in binaries else 0o644
+                info.uid = info.gid = 0
+                with path.open("rb") as source:
+                    archive.addfile(info, source)
+
+
 def execute(command, cwd, env, timeout):
     options = {"start_new_session": True} if os.name != "nt" else {}
     started = time.monotonic()
@@ -98,6 +144,8 @@ def main():
     parser.add_argument("--output", type=Path, help="JSON report; defaults to results/<backend>.json")
     parser.add_argument("--filter", default="*", help="Comma-separated glob patterns for case names")
     parser.add_argument("--timeout", type=float, default=30, help="Host wall-clock seconds per binary")
+    parser.add_argument("--fs-backend", choices=("hostfs", "tmpfs"), default=None,
+                        help="Override the manifest's Podish root filesystem (hostfs or tmpfs image)")
     parser.add_argument("--trace", action="store_true", help="Enable Podish syscall tracing")
     parser.add_argument("--native-work-root", type=Path, default=Path("/tmp"),
                         help="Linux scratch filesystem, not WSL's /mnt/c (32-bit inode overflow/FIFO limitations)")
@@ -107,6 +155,14 @@ def main():
     if args.backend == "native" and platform.system() != "Linux":
         parser.error("Native baseline requires Linux (on Windows use WSL)")
     manifest = json.loads(args.manifest.read_text())
+    if args.backend == "native":
+        if args.fs_backend not in (None, "hostfs"):
+            parser.error("--fs-backend applies only to the Podish backend")
+        fs_backend = "hostfs"
+    else:
+        fs_backend = args.fs_backend or manifest.get("podishFsBackend", "hostfs")
+    if fs_backend not in ("hostfs", "tmpfs"):
+        parser.error("Manifest podishFsBackend must be hostfs or tmpfs")
     if args.backend == "native" and manifest.get("requiresRoot") and os.geteuid() != 0:
         parser.error("This manifest requires a root native baseline (use WSL as root)")
     out = args.artifacts.resolve()
@@ -139,19 +195,45 @@ def main():
         if args.backend == "podish" and (name not in baseline or baseline[name]["status"] != "PASS"):
             parser.error(f"No passing native baseline for {name}")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-    run_dir = out / "runs" / f"{stamp}-{args.backend}"
+    run_dir = out / "runs" / f"{stamp}-{args.backend}-{fs_backend}"
     run_dir.mkdir(parents=True)
+    # Skip kernel-config inspection, not feature/syscall assertions: Podish
+    # has no host kernel .config and the selected eventfd cases probe behavior.
+    common_env = {"LC_ALL": "C", "LTP_COLORIZE_OUTPUT": "0", "LTP_TIMEOUT_MUL": "2",
+                  "KCONFIG_SKIP_CHECK": "1"}
+    base_env = os.environ.copy()
+    base_env.update(common_env)
+    # Preserve the repository's net10.0 TFM when using a net11-only host.
+    base_env.setdefault("DOTNET_ROLL_FORWARD", "LatestMajor")
+    image_ref = "localhost/podish-ltp:latest"
+    image_work = None
+    if args.backend == "podish" and fs_backend == "tmpfs":
+        image_work = run_dir / "image-store"
+        image_work.mkdir()
+        image_root = run_dir / "image-root"
+        for directory in ("opt/ltp/testcases/bin", "tmp", "dev", "proc", "etc", "run"):
+            (image_root / directory).mkdir(parents=True, exist_ok=True)
+        write_guest_identity_files(image_root)
+        binary_names = set()
+        for case in cases:
+            relative = f"opt/ltp/testcases/bin/{case['name']}"
+            shutil.copy2(out / "bin" / case["name"], image_root / relative)
+            binary_names.add(relative)
+        tar_path = run_dir / "image.tar"
+        build_image_tar(image_root, tar_path, binary_names)
+        import_code, import_text, import_timed_out, _ = execute(
+            ["dotnet", str(args.cli), "import", str(tar_path), image_ref],
+            image_work, base_env, 120)
+        (run_dir / "import.log").write_text(import_text, encoding="utf-8")
+        if import_code != 0 or import_timed_out:
+            print(f"Image import failed (rc={import_code}):\n{import_text}", file=sys.stderr)
+            return 1
     results = []
     for case in cases:
         name = case["name"]
         work = run_dir / name
         work.mkdir()
-        env = os.environ.copy()
-        # Skip kernel-config inspection, not feature/syscall assertions: Podish
-        # has no host kernel .config and the selected eventfd cases probe behavior.
-        common_env = {"LC_ALL": "C", "LTP_COLORIZE_OUTPUT": "0", "LTP_TIMEOUT_MUL": "2",
-                      "KCONFIG_SKIP_CHECK": "1"}
-        env.update(common_env)
+        env = base_env.copy()
         native_work = None
         cwd = work
         if args.backend == "native":
@@ -162,35 +244,28 @@ def main():
             env.update(TMPDIR=str(tmp), LTPROOT=str(out))
             command = [str(out / "bin" / name)]
         else:
-            root = work / "rootfs"
-            for directory in ("opt/ltp/testcases/bin", "tmp", "dev", "proc", "etc", "run"):
-                (root / directory).mkdir(parents=True, exist_ok=True)
-            shutil.copy2(out / "bin" / name, root / "opt/ltp/testcases/bin" / name)
-            (root / "etc/passwd").write_text(
-                "root:x:0:0:root:/:/bin/sh\n"
-                "daemon:x:1:1:daemon:/:/bin/false\n"
-                "bin:x:2:2:bin:/:/bin/false\n"
-                "user1:x:1000:1000:user1:/:/bin/false\n"
-                "user2:x:1001:1001:user2:/:/bin/false\n"
-                "nobody:x:65534:65534:nobody:/:/bin/false\n")
-            (root / "etc/group").write_text(
-                "root:x:0:\ndaemon:x:1:\nbin:x:2:\nusers:x:100:\n"
-                "user1:x:1000:\nuser2:x:1001:\nnogroup:x:65534:\n")
-            (root / "etc/nsswitch.conf").write_text("passwd: files\ngroup: files\n")
             # --init keeps LTP's harness parent above PID 1; its heartbeat checks
             # getppid()==1 as an orphan condition. No shell is needed.
             command = ["dotnet", str(args.cli)]
             if args.trace:
                 command.extend(["--log-level", "trace", "--log-file", str(work / "engine.log")])
             command.extend(["run", "--rm", "--init", "--log-driver", "none",
-                            "--rootfs", str(root), "--network", "private"])
+                            "--network", "private"])
+            if image_work is not None:
+                cwd = image_work
+                command.extend(["--fs-backend", "tmpfs", image_ref])
+            else:
+                root = work / "rootfs"
+                for directory in ("opt/ltp/testcases/bin", "tmp", "dev", "proc", "etc", "run"):
+                    (root / directory).mkdir(parents=True, exist_ok=True)
+                shutil.copy2(out / "bin" / name, root / "opt/ltp/testcases/bin" / name)
+                write_guest_identity_files(root)
+                command.extend(["--rootfs", str(root)])
             if args.trace:
                 command.append("--strace")
             for key, value in {**common_env, "TMPDIR": "/tmp", "LTPROOT": "/opt/ltp"}.items():
                 command.extend(["--env", f"{key}={value}"])
             command.append(f"/opt/ltp/testcases/bin/{name}")
-            # Preserve the repository's net10.0 TFM when using a net11-only host.
-            env.setdefault("DOTNET_ROLL_FORWARD", "LatestMajor")
         try:
             code, text, timed_out, elapsed = execute(command, cwd, env, args.timeout)
             status, counts = classify(code, text, timed_out)
@@ -211,7 +286,8 @@ def main():
         results.append(result)
         print(f"{name:24} {status:8} {elapsed:6.2f}s  {counts}", flush=True)
     statuses = dict(Counter(case["status"] for case in results))
-    report = {"backend": args.backend, "build": metadata, "host": platform.platform(),
+    report = {"backend": args.backend, "fileSystemBackend": fs_backend,
+              "build": metadata, "host": platform.platform(),
               "manifest": args.manifest.name, "requiresRoot": bool(manifest.get("requiresRoot")),
               "timestamp": stamp, "kernelConfigChecks": "disabled (behavioral assertions retained)",
               "timeoutSeconds": args.timeout, "summary": statuses, "cases": results}

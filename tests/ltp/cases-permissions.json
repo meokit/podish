@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "description": "Permission and identity semantics: access checks, ownership, mode bits, set*id, supplementary groups and protected operations.",
   "requiresRoot": true,
+  "podishFsBackend": "tmpfs",
   "cases": [
     {"name": "access01", "directory": "access", "group": "permissions"},
     {"name": "access02", "directory": "access", "group": "permissions"},
