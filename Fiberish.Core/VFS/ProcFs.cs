@@ -1102,6 +1102,18 @@ file sealed class ProcSysRootInode : Inode
         else if (_kind == ProcSysKind.Vm && name.SequenceEqual("drop_caches"u8))
             created = CreateFile(dir, childName, _ => ProcFsManager.GenerateSysVmDropCaches(), 0x1A4,
                 HandleDropCachesWrite);
+        else if (_kind == ProcSysKind.Vm && name.SequenceEqual("max_map_count"u8))
+            created = CreateFile(dir, childName, _ => $"{_sb.MemoryContext.MaxMapCount}\n", 0x1A4,
+                (ctx, data, _) =>
+                {
+                    var text = FsEncoding.DecodeUtf8Lossy(data).Trim();
+                    if (int.TryParse(text, out var val) && val > 0)
+                    {
+                        ctx.SyscallManager!.MemoryContext.MaxMapCount = val;
+                        return (int)data.Length;
+                    }
+                    return -(int)Errno.EINVAL;
+                });
 
         if (created != null)
             dir.CacheChild(created, "ProcSysRootInode.Lookup");
@@ -1136,6 +1148,7 @@ file sealed class ProcSysRootInode : Inode
                 entries.Add(new DirectoryEntry { Name = "overcommit_memory", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "swappiness", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "drop_caches", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "max_map_count", Ino = 0, Type = InodeType.File });
                 break;
         }
 

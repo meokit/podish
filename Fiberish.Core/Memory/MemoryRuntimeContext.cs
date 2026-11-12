@@ -37,6 +37,7 @@ public sealed class MemoryRuntimeContext : IDisposable
     public AddressSpacePolicy AddressSpacePolicy { get; }
     public MemoryPressureCoordinator MemoryPressure { get; }
     public ulong? DeterministicAslrSeed { get; set; }
+    public int MaxMapCount { get; set; } = 65530;
 
     public long MemoryQuotaBytes
     {

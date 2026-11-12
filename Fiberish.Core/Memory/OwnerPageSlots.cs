@@ -737,6 +737,33 @@ internal sealed class OwnerPageSlots
         return true;
     }
 
+    public bool TryMovePage(uint sourcePageIndex, OwnerPageSlots targetSlots, uint targetPageIndex, HostPageKind hostPageKind)
+    {
+        ResidentPageRecord pageRecord;
+        lock (_lock)
+        {
+            if (!_pages.Remove(sourcePageIndex, out pageRecord))
+                return false;
+            ApplyPageCountDelta(-1);
+            _pageBindingChanged?.Invoke(sourcePageIndex, pageRecord.Ptr, IntPtr.Zero);
+        }
+
+        var hostPage = pageRecord.HostPage;
+        var oldBinding = _ownerBindingFactory(sourcePageIndex);
+        hostPage.UnbindOwnerRoot(oldBinding);
+
+        var ownerBinding = targetSlots._ownerBindingFactory(targetPageIndex);
+        hostPage.BindOwnerRoot(ownerBinding);
+        lock (targetSlots._lock)
+        {
+            targetSlots._pages[targetPageIndex] = CreateVmPage(hostPage, pageRecord.MappingReleaseOwner, pageRecord.MappingReleaseRecord);
+            Touch(targetSlots._pages[targetPageIndex]);
+            targetSlots.ApplyPageCountDelta(1);
+            targetSlots._pageBindingChanged?.Invoke(targetPageIndex, IntPtr.Zero, pageRecord.Ptr);
+        }
+        return true;
+    }
+
     public int RemovePagesInRange(uint startPageIndex, uint endPageIndex,
         Func<ResidentPageRecord, bool>? predicate = null)
     {

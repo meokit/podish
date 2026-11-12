@@ -160,8 +160,8 @@ public partial class SyscallManager
         var taskSize = Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
         var roundedLength = ((ulong)a2 + LinuxConstants.PageOffsetMask) & ~(ulong)LinuxConstants.PageOffsetMask;
         if (a1 >= taskSize || (ulong)a1 + roundedLength > taskSize) return -(int)Errno.EINVAL;
-        ProcessAddressSpaceSync.Munmap(Mem, engine, a1, a2);
-        return 0;
+        var rc = ProcessAddressSpaceSync.Munmap(Mem, engine, a1, a2);
+        return rc < 0 ? rc : 0;
     }
 
     private async ValueTask<int> SysMprotect(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -319,9 +319,6 @@ public partial class SyscallManager
         if (!mayMove) return -(int)Errno.ENOMEM;
 
         var copyLen = Math.Min(oldLenAligned, newLenAligned);
-        var needsCopy = NeedsMoveCopy(oldVma, oldAddr, copyLen);
-        // Removing a destination slice can split the same VMA and change its
-        // start/offset. Capture the source file offset before that operation.
         var sourceOffset = ComputeSliceOffset(oldVma, oldAddr);
 
         // Find or use target address
@@ -343,52 +340,61 @@ public partial class SyscallManager
         if (mapRc != 0)
             return mapRc;
 
-        if (needsCopy)
+        var targetVma = Mem.FindVmArea(targetAddr);
+        if (targetVma != null)
         {
-            const int ChunkSize = 64 * 1024;
-            var pool = ArrayPool<byte>.Shared;
-            var buf = pool.Rent(ChunkSize);
-            try
-            {
-                var remaining = copyLen;
-                var currentOld = oldAddr;
-                var currentTarget = targetAddr;
-
-                while (remaining > 0)
-                {
-                    var toCopy = (int)Math.Min(remaining, ChunkSize);
-                    if (!engine.CopyFromUser(currentOld, buf.AsSpan(0, toCopy)))
-                    {
-                        ProcessAddressSpaceSync.Munmap(Mem, engine, targetAddr, newLenAligned);
-                        return -(int)Errno.EFAULT;
-                    }
-
-                    if (!engine.CopyToUser(currentTarget, buf.AsSpan(0, toCopy)))
-                    {
-                        ProcessAddressSpaceSync.Munmap(Mem, engine, targetAddr, newLenAligned);
-                        return -(int)Errno.EFAULT;
-                    }
-
-                    currentOld += (uint)toCopy;
-                    currentTarget += (uint)toCopy;
-                    remaining -= (uint)toCopy;
-                }
-            }
-            catch (OutOfMemoryException)
-            {
-                ProcessAddressSpaceSync.Munmap(Mem, engine, targetAddr, newLenAligned);
-                return -(int)Errno.ENOMEM;
-            }
-            finally
-            {
-                pool.Return(buf);
-            }
+            Mem.MigrateVmaPages(oldVma, oldAddr, targetVma, targetAddr, copyLen, engine);
         }
 
         // Unmap old region
         ProcessAddressSpaceSync.Munmap(Mem, engine, oldAddr, oldLenAligned);
 
         return (int)targetAddr;
+    }
+
+    private async ValueTask<int> SysRemapFilePages(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    {
+        var addr = a1;
+        var size = a2;
+        var prot = (int)a3;
+        var pgoff = a4;
+        var flags = (int)a5;
+
+        if (size == 0) return -(int)Errno.EINVAL;
+        if ((addr & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
+        if ((size & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
+        if (flags != 0) return -(int)Errno.EINVAL;
+        if (prot < 0 || (prot & ~7) != 0) return -(int)Errno.EINVAL;
+
+        var taskSize = Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
+        if ((ulong)addr + size > taskSize) return -(int)Errno.EINVAL;
+
+        using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine);
+
+        var end = addr + size;
+        var vma = Mem.FindVmArea(addr);
+        if (vma == null) return -(int)Errno.ENOMEM;
+
+        if (!vma.IsFileBacked || (vma.Flags & MapFlags.Shared) == 0)
+            return -(int)Errno.EINVAL;
+
+        if (end > vma.End)
+        {
+            var cursor = addr;
+            var gap = false;
+            Mem.VisitVmAreasInRange(addr, end, v =>
+            {
+                if (v.Start > cursor || !v.IsFileBacked || (v.Flags & MapFlags.Shared) == 0)
+                    gap = true;
+                cursor = Math.Max(cursor, v.End);
+            });
+            if (gap || cursor < end) return -(int)Errno.ENOMEM;
+        }
+
+        var effectiveProt = prot != 0 ? (Protection)prot : vma.Perms;
+        var newOffset = (long)pgoff * LinuxConstants.PageSize;
+
+        return ProcessAddressSpaceSync.RemapFileRange(Mem, engine, addr, size, effectiveProt, newOffset, (ulong)pgoff);
     }
 
     private static int TryMapRemapSlice(SyscallManager sm, Engine engine, VmArea sourceVma, uint targetAddr,
@@ -438,24 +444,5 @@ public partial class SyscallManager
     {
         if (!sourceVma.IsFileBacked) return 0;
         return sourceVma.Offset + sourceVma.GetRelativeOffsetForAddress(sourceAddr);
-    }
-
-    private static bool NeedsMoveCopy(VmArea sourceVma, uint sourceAddr, uint copyLen)
-    {
-        // Anonymous mappings have no stable backing store and must preserve bytes explicitly.
-        if (!sourceVma.IsFileBacked) return true;
-
-        // File-backed private mappings can be rebuilt from the shared source unless they
-        // already carry process-private pages in their private object.
-        var privateObject = sourceVma.VmAnonVma;
-        if (privateObject == null || copyLen == 0) return false;
-
-        var startPage = sourceVma.GetPageIndex(sourceAddr & LinuxConstants.PageMask);
-        var pageCount = (copyLen + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize;
-        for (uint i = 0; i < pageCount; i++)
-            if (privateObject.PeekPage(startPage + i) != IntPtr.Zero)
-                return true;
-
-        return false;
     }
 }

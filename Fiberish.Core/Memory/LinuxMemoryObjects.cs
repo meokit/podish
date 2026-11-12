@@ -460,6 +460,11 @@ public sealed class AnonVma
         return Pages.RemovePageIfMatches(pageIndex, pageRecord);
     }
 
+    public bool TryMovePage(uint sourcePageIndex, AnonVma targetAnonVma, uint targetPageIndex)
+    {
+        return Pages.TryMovePage(sourcePageIndex, targetAnonVma.Pages, targetPageIndex, HostPageKind.Anon);
+    }
+
     public void TruncateToSize(long size)
     {
         Pages.TruncateToSize(size);

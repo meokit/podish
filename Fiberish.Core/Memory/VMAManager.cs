@@ -27,7 +27,7 @@ public class VMAManager
     private readonly List<CodeCacheResetEntry> _pendingCodeCacheResets = [];
     private readonly List<NativeRange> _pendingMetadataOnlyNativeRemaps = [];
     private readonly HashSet<uint> _tbWpPages = [];
-    private readonly List<VmArea> _vmas = [];
+    private readonly VmaList _vmas = new();
     private int _futexKeyRefCount = 1;
     private VmArea? _lastFaultVma;
     private long _codeCacheSequence;
@@ -51,6 +51,11 @@ public class VMAManager
     public long CurrentMapSequence => CurrentCodeCacheSequence;
 
     public IReadOnlyList<VmArea> VMAs => _vmas;
+
+    public bool CanAllocateVmas(int count)
+    {
+        return _vmas.Count + count <= MemoryContext.MaxMapCount;
+    }
 
     public static (long First, long Replace) GetCowAllocationCounters()
     {
@@ -568,9 +573,17 @@ public class VMAManager
     {
         ValidateVmaBindings(vma);
 
+        var count = _vmas.Count;
+        if (count == 0 || vma.Start >= _vmas[count - 1].End)
+        {
+            _vmas.Add(vma);
+            TrackMappedInodeOnVmaAdded(vma);
+            return;
+        }
+
         var left = 0;
-        var right = _vmas.Count - 1;
-        var insertIndex = _vmas.Count;
+        var right = count - 1;
+        var insertIndex = count;
 
         while (left <= right)
         {
@@ -1309,6 +1322,9 @@ public class VMAManager
         if (end > taskSize)
             throw new OutOfMemoryException("Mapping exceeds user task address space");
 
+        if (!CanAllocateVmas(1))
+            throw new OutOfMemoryException("Execution out of memory (max_map_count exceeded)");
+
         if (CheckOverlap(addr, end))
         {
             if (isFixed)
@@ -1731,9 +1747,9 @@ public class VMAManager
         RegisterVmAreaAttachments(vma);
     }
 
-    public void Munmap(uint addr, uint length, Engine engine)
+    public int Munmap(uint addr, uint length, Engine engine)
     {
-        if (length == 0) return;
+        if (length == 0) return 0;
         var unmappedHostPages = new HashSet<IntPtr>();
         List<(AnonVma AnonVma, uint StartPageIndex, uint EndPageIndexExclusive)>? pendingObjectPageReleases = null;
         uint end;
@@ -1743,11 +1759,21 @@ public class VMAManager
         }
         catch (OverflowException)
         {
-            return;
+            return -(int)Errno.EINVAL;
         }
 
         if (TryGetVmAreaWindow(addr, end, out var startIndex, out var endIndexExclusive))
         {
+            var additionalVmas = 0;
+            for (var i = startIndex; i < endIndexExclusive; i++)
+            {
+                var v = _vmas[i];
+                if (addr > v.Start && end < v.End)
+                    additionalVmas++;
+            }
+            if (additionalVmas > 0 && !CanAllocateVmas(additionalVmas))
+                return -(int)Errno.ENOMEM;
+
             var replacements = new List<VmArea>(endIndexExclusive - startIndex + 1);
             List<VmArea>? removedVmas = null;
             List<VmArea>? addedVmas = null;
@@ -1897,6 +1923,8 @@ public class VMAManager
         ClearTbWpRange(addr, length);
         foreach (var hostPagePtr in unmappedHostPages)
             TbCoh.ApplyWx(MemoryContext, hostPagePtr);
+
+        return 0;
     }
 
     public int Mprotect(uint addr, uint len, Protection prot, Engine engine, out bool resetCodeCacheRange)
@@ -1936,6 +1964,21 @@ public class VMAManager
 
         if (TryGetVmAreaWindow(addr, end, out var startIndex, out var endIndexExclusive))
         {
+            var additionalVmas = 0;
+            for (var i = startIndex; i < endIndexExclusive; i++)
+            {
+                var v = _vmas[i];
+                var overlapStart = Math.Max(v.Start, addr);
+                var overlapEnd = Math.Min(v.End, end);
+                if (overlapStart >= overlapEnd) continue;
+                if (overlapStart > v.Start && overlapEnd < v.End)
+                    additionalVmas += 2;
+                else if (overlapStart > v.Start || overlapEnd < v.End)
+                    additionalVmas += 1;
+            }
+            if (additionalVmas > 0 && !CanAllocateVmas(additionalVmas))
+                return -(int)Errno.ENOMEM;
+
             var replacements = new List<VmArea>(endIndexExclusive - startIndex + 2);
             List<VmArea>? addedVmas = null;
 
@@ -2134,10 +2177,29 @@ public class VMAManager
 
     private bool CheckOverlap(uint start, uint end)
     {
-        foreach (var vma in _vmas)
-            if (start < vma.End && end > vma.Start)
-                return true;
-        return false;
+        var count = _vmas.Count;
+        if (count == 0) return false;
+
+        var left = 0;
+        var right = count - 1;
+        var candidateIndex = -1;
+
+        while (left <= right)
+        {
+            var mid = left + (right - left) / 2;
+            if (_vmas[mid].End > start)
+            {
+                candidateIndex = mid;
+                right = mid - 1;
+            }
+            else
+            {
+                left = mid + 1;
+            }
+        }
+
+        if (candidateIndex < 0) return false;
+        return _vmas[candidateIndex].Start < end;
     }
 
     public void EagerMap(uint addr, uint len, Engine engine)
@@ -2357,7 +2419,7 @@ public class VMAManager
         }
     }
 
-    private AnonVma EnsurePrivateObject(VmArea vma)
+    internal AnonVma EnsurePrivateObject(VmArea vma)
     {
         var privateObject = vma.VmAnonVma;
         if (privateObject != null)
@@ -2367,6 +2429,165 @@ public class VMAManager
         vma.VmAnonVma = privateObject;
         RegisterVmAreaAnonAttachment(vma);
         return privateObject;
+    }
+
+    internal void MigrateVmaPages(VmArea sourceVma, uint sourceStart, VmArea targetVma, uint targetStart, uint length, Engine engine)
+    {
+        var count = length / LinuxConstants.PageSize;
+        for (uint i = 0; i < count; i++)
+        {
+            var sourcePageAddr = sourceStart + i * LinuxConstants.PageSize;
+            var targetPageAddr = targetStart + i * LinuxConstants.PageSize;
+            var sourcePageIndex = sourceVma.GetPageIndex(sourcePageAddr);
+            var targetPageIndex = targetVma.GetPageIndex(targetPageAddr);
+
+            // 1. Move private page if one exists
+            if (sourceVma.VmAnonVma != null && sourceVma.VmAnonVma.PeekPage(sourcePageIndex) != IntPtr.Zero)
+            {
+                var targetAnon = EnsurePrivateObject(targetVma);
+                sourceVma.VmAnonVma.TryMovePage(sourcePageIndex, targetAnon, targetPageIndex);
+            }
+
+            // 2. Retarget installed binding in PageMapping if one exists
+            if (PageMapping.TryGetBinding(sourcePageAddr, out var binding) && binding != null)
+            {
+                var originalBinding = binding.Value;
+                PageMapping.Release(sourcePageAddr, preserveOwnerBinding: true);
+                engine.MemUnmap(sourcePageAddr, LinuxConstants.PageSize);
+
+                var newBinding = new MappedPageBinding
+                {
+                    Ptr = originalBinding.Ptr,
+                    OwnerKind = originalBinding.OwnerKind,
+                    Mapping = targetVma.VmMapping,
+                    AnonVma = targetVma.VmAnonVma,
+                    Page = originalBinding.Page,
+                    PageIndex = targetPageIndex,
+                    FileIdentity = originalBinding.FileIdentity
+                };
+                EnsureExternalMapping(targetPageAddr, newBinding, (byte)targetVma.Perms, engine);
+            }
+        }
+    }
+
+    internal int RemapFileRange(uint addr, uint size, Protection prot, long newOffset, ulong newPgoff, Engine engine)
+    {
+        var end = addr + size;
+        if (TryGetVmAreaWindow(addr, end, out var startIndex, out var endIndexExclusive))
+        {
+            var additionalVmas = 0;
+            for (var i = startIndex; i < endIndexExclusive; i++)
+            {
+                var v = _vmas[i];
+                if (addr > v.Start && end < v.End) additionalVmas += 2;
+                else if (addr > v.Start || end < v.End) additionalVmas += 1;
+            }
+            if (additionalVmas > 0 && !CanAllocateVmas(additionalVmas))
+                return -(int)Errno.ENOMEM;
+
+            TearDownNativeMappings(engine, addr, size, false, true, true);
+
+            var replacements = new List<VmArea>();
+            for (var i = startIndex; i < endIndexExclusive; i++)
+            {
+                var vma = _vmas[i];
+                if (addr <= vma.Start && end >= vma.End)
+                {
+                    vma.Offset = newOffset + (long)(vma.Start - addr);
+                    vma.VmPgoff = newPgoff + (ulong)((vma.Start - addr) / LinuxConstants.PageSize);
+                    vma.Perms = prot;
+                    replacements.Add(vma);
+                }
+                else if (addr > vma.Start && end < vma.End)
+                {
+                    vma.VmMapping?.AddRef();
+                    vma.VmMapping?.AddRef();
+                    var head = vma;
+                    var mid = new VmArea
+                    {
+                        Start = addr,
+                        End = end,
+                        Perms = prot,
+                        Flags = vma.Flags,
+                        FileMapping = vma.FileMapping?.AddRef(),
+                        Offset = newOffset,
+                        VmPgoff = newPgoff,
+                        Name = vma.Name,
+                        VmMapping = vma.VmMapping,
+                        DontFork = vma.DontFork
+                    };
+                    var tail = new VmArea
+                    {
+                        Start = end,
+                        End = vma.End,
+                        Perms = vma.Perms,
+                        Flags = vma.Flags,
+                        FileMapping = vma.FileMapping?.AddRef(),
+                        Offset = vma.Offset + (long)(end - vma.Start),
+                        VmPgoff = vma.GetPageIndex(end),
+                        Name = vma.Name,
+                        VmMapping = vma.VmMapping,
+                        DontFork = vma.DontFork
+                    };
+                    head.End = addr;
+                    replacements.Add(head);
+                    replacements.Add(mid);
+                    replacements.Add(tail);
+                    TrackMappedInodeOnVmaAdded(mid);
+                    TrackMappedInodeOnVmaAdded(tail);
+                }
+                else if (addr > vma.Start && end >= vma.End)
+                {
+                    vma.VmMapping?.AddRef();
+                    var head = vma;
+                    var mid = new VmArea
+                    {
+                        Start = addr,
+                        End = vma.End,
+                        Perms = prot,
+                        Flags = vma.Flags,
+                        FileMapping = vma.FileMapping?.AddRef(),
+                        Offset = newOffset,
+                        VmPgoff = newPgoff,
+                        Name = vma.Name,
+                        VmMapping = vma.VmMapping,
+                        DontFork = vma.DontFork
+                    };
+                    head.End = addr;
+                    replacements.Add(head);
+                    replacements.Add(mid);
+                    TrackMappedInodeOnVmaAdded(mid);
+                }
+                else if (addr <= vma.Start && end < vma.End)
+                {
+                    vma.VmMapping?.AddRef();
+                    var mid = new VmArea
+                    {
+                        Start = vma.Start,
+                        End = end,
+                        Perms = prot,
+                        Flags = vma.Flags,
+                        FileMapping = vma.FileMapping?.AddRef(),
+                        Offset = newOffset + (long)(vma.Start - addr),
+                        VmPgoff = newPgoff + (ulong)((vma.Start - addr) / LinuxConstants.PageSize),
+                        Name = vma.Name,
+                        VmMapping = vma.VmMapping,
+                        DontFork = vma.DontFork
+                    };
+                    vma.Offset += (long)(end - vma.Start);
+                    vma.VmPgoff = vma.GetPageIndex(end);
+                    vma.Start = end;
+                    replacements.Add(mid);
+                    replacements.Add(vma);
+                    TrackMappedInodeOnVmaAdded(mid);
+                }
+            }
+
+            ReplaceVmaWindow(startIndex, endIndexExclusive - startIndex, replacements);
+            return 0;
+        }
+
+        return -(int)Errno.ENOMEM;
     }
 
     private static bool TryPopulateAnonymousAddressSpacePage(IntPtr ptr)
@@ -3004,5 +3225,122 @@ public class VMAManager
     internal readonly record struct WindowsHostMappedResizePlan(uint[] GuestPages)
     {
         public static WindowsHostMappedResizePlan Empty => new([]);
+    }
+
+    private sealed class VmaList : IReadOnlyList<VmArea>
+    {
+        private VmArea[] _items = new VmArea[16];
+        private int _head;
+        private int _count;
+
+        public int Count => _count;
+
+        public VmArea this[int index]
+        {
+            get
+            {
+                if ((uint)index >= (uint)_count)
+                    throw new ArgumentOutOfRangeException(nameof(index));
+                return _items[_head + index];
+            }
+            set
+            {
+                if ((uint)index >= (uint)_count)
+                    throw new ArgumentOutOfRangeException(nameof(index));
+                _items[_head + index] = value;
+            }
+        }
+
+        public void Add(VmArea vma)
+        {
+            EnsureCapacityForInsert(_count, 1);
+            _items[_head + _count] = vma;
+            _count++;
+        }
+
+        public void Insert(int index, VmArea vma)
+        {
+            if ((uint)index > (uint)_count)
+                throw new ArgumentOutOfRangeException(nameof(index));
+
+            EnsureCapacityForInsert(index, 1);
+            if (index < _count)
+                Array.Copy(_items, _head + index, _items, _head + index + 1, _count - index);
+
+            _items[_head + index] = vma;
+            _count++;
+        }
+
+        public void InsertRange(int index, IReadOnlyList<VmArea> items)
+        {
+            var addCount = items.Count;
+            if (addCount == 0) return;
+            EnsureCapacityForInsert(index, addCount);
+            if (index < _count)
+                Array.Copy(_items, _head + index, _items, _head + index + addCount, _count - index);
+
+            for (var i = 0; i < addCount; i++)
+                _items[_head + index + i] = items[i];
+
+            _count += addCount;
+        }
+
+        public void RemoveRange(int index, int removeCount)
+        {
+            if (removeCount == 0) return;
+            if (index == 0)
+            {
+                Array.Clear(_items, _head, removeCount);
+                _head += removeCount;
+                _count -= removeCount;
+                if (_count == 0)
+                    _head = 0;
+                return;
+            }
+
+            var tailCount = _count - (index + removeCount);
+            if (tailCount > 0)
+                Array.Copy(_items, _head + index + removeCount, _items, _head + index, tailCount);
+
+            Array.Clear(_items, _head + _count - removeCount, removeCount);
+            _count -= removeCount;
+        }
+
+        public void Clear()
+        {
+            Array.Clear(_items, _head, _count);
+            _head = 0;
+            _count = 0;
+        }
+
+        private void EnsureCapacityForInsert(int insertIndex, int addCount)
+        {
+            var required = _head + _count + addCount;
+            if (required <= _items.Length)
+                return;
+
+            if (_head > 0 && _count + addCount <= _items.Length)
+            {
+                Array.Copy(_items, _head, _items, 0, _count);
+                Array.Clear(_items, _count, _head);
+                _head = 0;
+                return;
+            }
+
+            var newCapacity = Math.Max(_items.Length * 2, _count + addCount + 16);
+            var newItems = new VmArea[newCapacity];
+            if (_count > 0)
+                Array.Copy(_items, _head, newItems, 0, _count);
+            _items = newItems;
+            _head = 0;
+        }
+
+        public IEnumerator<VmArea> GetEnumerator()
+        {
+            for (var i = 0; i < _count; i++)
+                yield return _items[_head + i];
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }

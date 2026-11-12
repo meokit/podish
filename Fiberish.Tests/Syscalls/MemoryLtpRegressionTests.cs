@@ -210,6 +210,103 @@ public sealed partial class LtpRegressionTests
     }
 
     [Fact]
+    public async Task Munmap_SplittingMiddleAtMaxMapCountFailsWithEnomem()
+    {
+        using var env = new TestEnv();
+        var initialVmas = env.Vma.VMAs.Count;
+        env.Syscalls.MemoryContext.MaxMapCount = initialVmas + 9;
+        for (uint i = 0; i < 9; i++)
+        {
+            var addr = 0x10000000u + i * 3 * Page;
+            Assert.Equal(addr, (uint)await env.Call("SysMmap2", addr, 3 * Page, 0, 0x32, uint.MaxValue));
+        }
+
+        // At max_map_count: unmapping middle page splits 1 VMA into 2, exceeding limit
+        Assert.Equal(-(int)Errno.ENOMEM, await env.Call("SysMunmap", 0x10000000u + Page, Page));
+
+        // Full removal does not split and succeeds
+        Assert.Equal(0, await env.Call("SysMunmap", 0x10000000u, 3 * Page));
+
+        // Now we are at initialVmas + 8: middle split is allowed
+        Assert.Equal(0, await env.Call("SysMunmap", 0x10000000u + 3 * Page + Page, Page));
+    }
+
+    [Fact]
+    public async Task RemapFilePages_ReordersSharedFileOffset()
+    {
+        using var env = new TestEnv();
+        var fd = (uint)await env.CreateFile();
+        Assert.Equal(0, await env.Call("SysFtruncate", fd, 3 * Page));
+        Assert.True(env.Engine.CopyToUser(0x10000, new byte[] { 0x11, 0x22, 0x33 }));
+        Assert.Equal(1, await env.Call("SysPWrite", fd, 0x10000, 1, 0));
+        env.Engine.CopyToUser(0x10000, new byte[] { 0x44 });
+        Assert.Equal(1, await env.Call("SysPWrite", fd, 0x10000, 1, Page));
+        env.Engine.CopyToUser(0x10000, new byte[] { 0x77 });
+        Assert.Equal(1, await env.Call("SysPWrite", fd, 0x10000, 1, 2 * Page));
+
+        var mapped = (uint)await env.Call("SysMmap2", MemoryBase, 3 * Page, 3, 1, fd);
+        Assert.Equal(MemoryBase, mapped);
+
+        // Access page 0 -> should read 0x11
+        Assert.Equal((byte)0x11, env.Read(MemoryBase, 1)[0]);
+        // Access page 1 -> should read 0x44
+        Assert.Equal((byte)0x44, env.Read(MemoryBase + Page, 1)[0]);
+
+        // Remap page 0 to file pgoff 2 (0x77)
+        Assert.Equal(0, await env.Call("SysRemapFilePages", MemoryBase, Page, 0, 2, 0));
+        Assert.Equal((byte)0x77, env.Read(MemoryBase, 1)[0]);
+
+        // Remap page 1 to file pgoff 0 (0x11)
+        Assert.Equal(0, await env.Call("SysRemapFilePages", MemoryBase + Page, Page, 0, 0, 0));
+        Assert.Equal((byte)0x11, env.Read(MemoryBase + Page, 1)[0]);
+    }
+
+    [Fact]
+    public async Task Mremap_ProtNoneRangeMovesWithoutReadingOrEfault()
+    {
+        using var env = new TestEnv();
+        var mapped = (uint)await env.Call("SysMmap2", MemoryBase, Page, 0, 0x32, uint.MaxValue);
+        Assert.Equal(MemoryBase, mapped);
+
+        // Moving PROT_NONE mapping with MREMAP_FIXED | MREMAP_MAYMOVE must not fail with EFAULT
+        var remapped = (uint)await env.Call("SysMremap", MemoryBase, Page, Page, 3, MemoryTarget);
+        Assert.Equal(MemoryTarget, remapped);
+        Assert.Null(env.Vma.FindVmArea(MemoryBase));
+        var targetVma = env.Vma.FindVmArea(remapped);
+        Assert.NotNull(targetVma);
+        Assert.Equal(Protection.None, targetVma!.Perms);
+    }
+
+    [Fact]
+    public async Task Mremap_SparseLazyAnonymousMovesWithoutAllocatingUntouchedPages()
+    {
+        using var env = new TestEnv();
+        const uint numPages = 64;
+        var mapped = (uint)await env.Call("SysMmap2", MemoryBase, numPages * Page, 3, 0x32, uint.MaxValue);
+        Assert.Equal(MemoryBase, mapped);
+
+        // Touch only page 0 and page 63
+        Assert.True(env.Engine.CopyToUser(MemoryBase, new byte[] { 0x55 }));
+        Assert.True(env.Engine.CopyToUser(MemoryBase + 63 * Page, new byte[] { 0xAA }));
+
+        var beforeCow = env.Syscalls.MemoryContext.GetAllocationClassStats().Single(s => s.Class == AllocationClass.Cow).AllocatedPages;
+        var beforeAnon = env.Syscalls.MemoryContext.GetAllocationClassStats().Single(s => s.Class == AllocationClass.Anonymous).AllocatedPages;
+
+        // Move the sparse 64-page mapping to MemoryTarget
+        var remapped = (uint)await env.Call("SysMremap", MemoryBase, numPages * Page, numPages * Page, 3, MemoryTarget);
+        Assert.Equal(MemoryTarget, remapped);
+
+        // Verified touched pages have their data
+        Assert.Equal((byte)0x55, env.Read(remapped, 1)[0]);
+        Assert.Equal((byte)0xAA, env.Read(remapped + 63 * Page, 1)[0]);
+
+        // Verified untouched pages did not cause 62 new page allocations
+        var afterCow = env.Syscalls.MemoryContext.GetAllocationClassStats().Single(s => s.Class == AllocationClass.Cow).AllocatedPages;
+        var afterAnon = env.Syscalls.MemoryContext.GetAllocationClassStats().Single(s => s.Class == AllocationClass.Anonymous).AllocatedPages;
+        Assert.True((afterCow - beforeCow) + (afterAnon - beforeAnon) <= 4);
+    }
+
+    [Fact]
     public async Task Mremap_GrowingIntoOwnVmaTailWithoutMayMoveFails()
     {
         using var env = new TestEnv();

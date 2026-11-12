@@ -267,20 +267,36 @@ internal static class ProcessAddressSpaceSync
         });
     }
 
-    private static void MunmapCore(VMAManager vmaManager, Engine engine, uint addr, uint len)
+    private static int MunmapCore(VMAManager vmaManager, Engine engine, uint addr, uint len)
     {
         using var snapshot = RentEngineSnapshot();
         FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
         SyncSharedMappingsForEngines(vmaManager, snapshot.Engines, addr, len);
-        vmaManager.Munmap(addr, len, engine);
-        PublishCodeCacheInvalidation(vmaManager, engine, addr, len);
+        var rc = vmaManager.Munmap(addr, len, engine);
+        if (rc == 0)
+            PublishCodeCacheInvalidation(vmaManager, engine, addr, len);
+        return rc;
     }
 
-    internal static void Munmap(VMAManager vmaManager, Engine engine, uint addr, uint len, Process? process = null)
+    internal static int Munmap(VMAManager vmaManager, Engine engine, uint addr, uint len, Process? process = null)
     {
-        if (len == 0) return;
+        if (len == 0) return 0;
         using var scope = EnterAddressSpaceScope(engine, process);
-        MunmapCore(vmaManager, engine, addr, len);
+        return MunmapCore(vmaManager, engine, addr, len);
+    }
+
+    internal static int RemapFileRange(VMAManager vmaManager, Engine engine, uint addr, uint len,
+        Protection prot, long newOffset, ulong newPgoff, Process? process = null)
+    {
+        if (len == 0) return 0;
+        using var scope = EnterAddressSpaceScope(engine, process);
+        using var snapshot = RentEngineSnapshot();
+        FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
+        SyncSharedMappingsForEngines(vmaManager, snapshot.Engines, addr, len);
+        var rc = vmaManager.RemapFileRange(addr, len, prot, newOffset, newPgoff, engine);
+        if (rc == 0)
+            PublishCodeCacheInvalidation(vmaManager, engine, addr, len);
+        return rc;
     }
 
     internal static int Mprotect(VMAManager vmaManager, Engine engine, uint addr, uint len, Protection prot,

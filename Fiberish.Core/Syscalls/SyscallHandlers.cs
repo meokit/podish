@@ -727,6 +727,9 @@ public partial class SyscallManager
             case X86SyscallNumbers.mremap:
                 handled = true;
                 return SysMremap(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.remap_file_pages:
+                handled = true;
+                return SysRemapFilePages(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.membarrier:
                 handled = true;
                 return SysMembarrier(engine, ebx, ecx, edx, esi, edi, ebp);
