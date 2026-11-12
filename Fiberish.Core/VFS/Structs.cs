@@ -311,6 +311,10 @@ internal interface IHostMappedCacheDropper
     FilePageBackendDiagnostics GetMappedCacheDiagnostics();
     long TrimMappedCache(bool aggressive);
     bool TryDescribeMappedPage(long filePageIndex, IntPtr pointer, out FilePageLeaseDiagnostics diagnostics);
+    HostPageResidencyStatus CheckPageResidency(long filePageIndex);
+    bool TryPrefaultPage(long filePageIndex, bool writable);
+    bool TryLockPageRange(long startFilePageIndex, int pageCount, out int lockedPages);
+    bool TryUnlockPageRange(long startFilePageIndex, int pageCount);
 }
 
 public readonly record struct PageIoRequest(long PageIndex, long FileOffset, int Length);
@@ -1812,6 +1816,8 @@ public abstract class MappingBackedInode : Inode
     private readonly Lock _mappingPageLock = new();
     private readonly Dictionary<uint, InodePageRecord> _mappingPages = [];
 
+    public virtual FilePageIdentity GetFilePageIdentity(uint pageIndex) => new(SuperBlock?.Dev ?? 0, Ino, pageIndex);
+
     protected ValueTask<int> FlushBlockingHostOperationAsync(FiberTask? task, SafeFileHandle? handle,
         string operationName, Func<int> flushOperation, Func<Exception, int> mapException)
     {
@@ -2393,7 +2399,8 @@ public abstract class MappingBackedInode : Inode
                 PageIndex = pageIndex,
                 Ptr = ptr,
                 BackingKind = FilePageBackingKind.AllocatedPageCache,
-                Handle = pageHandle
+                Handle = pageHandle,
+                OwnerInode = this
             };
             return record;
         }
@@ -2423,7 +2430,8 @@ public abstract class MappingBackedInode : Inode
             Ptr = pageHandle.Pointer,
             BackingKind = FilePageBackingKind.HostMappedWindow,
             Handle = pageHandle,
-            IsWritable = writable
+            IsWritable = writable,
+            OwnerInode = this
         };
         return record;
     }
@@ -3320,7 +3328,8 @@ public abstract class MappingBackedInode : Inode
                         Ptr = pointers[i],
                         BackingKind = FilePageBackingKind.HostMappedWindow,
                         Handle = BackingPageHandle.CreateOwned(pointers[i], this, releaseTokens[i]),
-                        IsWritable = writable
+                        IsWritable = writable,
+                        OwnerInode = this
                     };
                     releaseTokens[i] = 0;
                     records[i] = record;

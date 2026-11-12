@@ -74,4 +74,24 @@ internal sealed class MappedFilePageCache : IDisposable
     {
         return _backend.TryDescribePagePointer(filePageIndex, pointer, out diagnostics);
     }
+
+    public HostPageResidencyStatus CheckPageResidency(long filePageIndex)
+    {
+        return _backend.CheckPageResidency(filePageIndex);
+    }
+
+    public bool TryPrefaultPage(long filePageIndex, bool writable)
+    {
+        return _backend.TryPrefaultPage(filePageIndex, writable);
+    }
+
+    public bool TryLockPageRange(long startFilePageIndex, int pageCount, out int lockedPages)
+    {
+        return _backend.TryLockPageRange(startFilePageIndex, pageCount, out lockedPages);
+    }
+
+    public bool TryUnlockPageRange(long startFilePageIndex, int pageCount)
+    {
+        return _backend.TryUnlockPageRange(startFilePageIndex, pageCount);
+    }
 }

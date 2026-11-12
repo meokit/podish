@@ -801,6 +801,17 @@ internal struct HostPageRef
         }
     }
 
+    public uint OwnerPageIndex
+    {
+        get
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return 0;
+
+            return owner.GetSlotRef(slot).Page.OwnerPageIndex;
+        }
+    }
+
     public long LastAccessTimestamp
     {
         get

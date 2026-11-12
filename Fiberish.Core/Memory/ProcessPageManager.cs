@@ -16,6 +16,7 @@ internal readonly struct MappedPageBinding
     public AnonVma? AnonVma { get; init; }
     public ResidentPageRecord? Page { get; init; }
     public uint PageIndex { get; init; }
+    public FilePageIdentity FileIdentity { get; init; }
 
     internal static MappedPageBinding FromAddressSpacePage(AddressSpace mapping, uint pageIndex, ResidentPageRecord pageRecord)
     {
@@ -25,7 +26,8 @@ internal readonly struct MappedPageBinding
             OwnerKind = MappedPageOwnerKind.AddressSpace,
             Mapping = mapping,
             Page = pageRecord,
-            PageIndex = pageIndex
+            PageIndex = pageIndex,
+            FileIdentity = pageRecord.FileIdentity
         };
     }
 
@@ -37,7 +39,8 @@ internal readonly struct MappedPageBinding
             OwnerKind = MappedPageOwnerKind.AnonVma,
             AnonVma = anonVma,
             Page = pageRecord,
-            PageIndex = pageIndex
+            PageIndex = pageIndex,
+            FileIdentity = pageRecord.FileIdentity
         };
     }
 }

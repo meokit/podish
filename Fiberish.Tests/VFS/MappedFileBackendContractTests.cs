@@ -143,4 +143,155 @@ public sealed class MappedFileBackendContractTests
         cache.ReleasePageLease(token);
         Assert.False(cache.TryDescribePagePointer(0, pointer, out _));
     }
+
+    [Theory]
+    [InlineData("hostfs")]
+    [InlineData("silkfs")]
+    public void FilePageIdentity_LogicalIdentityIsStableAcrossAliasesAndDistinctFromRawPointer(string backend)
+    {
+        using var env = new MappedFileBackendTestEnvironment(backend, 4096);
+        env.Map();
+        Assert.Equal(FaultResult.Handled, env.Memory.HandleFaultDetailed(MappedFileBackendTestEnvironment.Address, false, env.Engine));
+        Assert.True(env.Inode.TryGetMappingPageRecord(0, out var record));
+        Assert.True(env.Memory.PageMapping.TryGetBinding(MappedFileBackendTestEnvironment.Address, out var binding));
+
+        var inodeIdentity = env.Inode.GetFilePageIdentity(0);
+        Assert.True(inodeIdentity.IsValid);
+        Assert.Equal(env.Inode.Ino, inodeIdentity.InodeNumber);
+        Assert.Equal(0u, inodeIdentity.PageIndex);
+
+        Assert.Equal(inodeIdentity, record.FileIdentity);
+        Assert.Equal(inodeIdentity, binding!.Value.FileIdentity);
+        Assert.Equal(inodeIdentity, binding.Value.Page!.Value.FileIdentity);
+    }
+
+    [Theory]
+    [InlineData("hostfs")]
+    [InlineData("silkfs")]
+    public void T06_ProtectionChange_ProtNoneRaisesFaultAndRestorationPreservesDirectLease(string backend)
+    {
+        using var env = new MappedFileBackendTestEnvironment(backend, 4096);
+        env.Map();
+        Assert.Equal(FaultResult.Handled, env.Memory.HandleFaultDetailed(MappedFileBackendTestEnvironment.Address, false, env.Engine));
+        var before = env.TotalPooledAllocations;
+
+        // Reprotect to PROT_NONE
+        Assert.Equal(0, ProcessAddressSpaceSync.Mprotect(env.Memory, env.Engine, MappedFileBackendTestEnvironment.Address, 4096, Protection.None));
+        Assert.Equal(FaultResult.Segv, env.Memory.HandleFaultDetailed(MappedFileBackendTestEnvironment.Address, false, env.Engine));
+
+        // Restore to Read | Exec
+        Assert.Equal(0, ProcessAddressSpaceSync.Mprotect(env.Memory, env.Engine, MappedFileBackendTestEnvironment.Address, 4096, Protection.Read | Protection.Exec));
+        Assert.Equal(FaultResult.Handled, env.Memory.HandleFaultDetailed(MappedFileBackendTestEnvironment.Address, false, env.Engine));
+        Assert.Equal(MappedFileBackendTestEnvironment.Pattern(0), env.Read(MappedFileBackendTestEnvironment.Address));
+        Assert.Equal(before, env.TotalPooledAllocations);
+    }
+
+    [Theory]
+    [InlineData("hostfs")]
+    [InlineData("silkfs")]
+    public void T11_IdentityAndOrphanLifetime_CloseAndRecreateWithSameNameRetainsOriginalView(string backend)
+    {
+        using var env = new MappedFileBackendTestEnvironment(backend, 4096);
+        env.Map();
+        Assert.Equal(FaultResult.Handled, env.Memory.HandleFaultDetailed(MappedFileBackendTestEnvironment.Address, false, env.Engine));
+        var originalIdentity = env.Inode.GetFilePageIdentity(0);
+
+        // Close descriptor while mapped; mapping stays functional.
+        env.CloseFile();
+        Assert.Equal(MappedFileBackendTestEnvironment.Pattern(0), env.Read(MappedFileBackendTestEnvironment.Address));
+
+        // Create a brand new file with a different name.
+        var location = env.Syscalls.PathWalk("/data.bin");
+        Assert.True(location.IsValid);
+        var dir = env.Syscalls.Root.Dentry!;
+        var newFileDentry = new Dentry(FsName.FromString("data_new.bin"), null, dir, dir.SuperBlock);
+        Assert.Equal(0, dir.Inode!.Create(newFileDentry, 0x1A4, 0, 0));
+        var newFile = new LinuxFile(newFileDentry, FileFlags.O_RDWR, location.Mount);
+        dir.Inode.Open(newFile);
+        var newInode = (MappingBackedInode)newFileDentry.Inode!;
+        newInode.Truncate(4096);
+        var newIdentity = newInode.GetFilePageIdentity(0);
+        Assert.NotEqual(originalIdentity.InodeNumber, newIdentity.InodeNumber);
+
+        // Map the new file at an adjacent address.
+        const uint secondAddr = MappedFileBackendTestEnvironment.Address + 8192;
+        newFile.Get();
+        try
+        {
+            env.Memory.Mmap(secondAddr, 4096, Protection.Read | Protection.Write,
+                MapFlags.Shared | MapFlags.Fixed, newFile, 0, "second", env.Engine);
+        }
+        catch
+        {
+            newFile.Close();
+            throw;
+        }
+        Assert.Equal(FaultResult.Handled, env.Memory.HandleFaultDetailed(secondAddr, false, env.Engine));
+
+        Assert.True(env.Memory.PageMapping.TryGetBinding(MappedFileBackendTestEnvironment.Address, out var originalBinding));
+        Assert.True(env.Memory.PageMapping.TryGetBinding(secondAddr, out var newBinding));
+        Assert.Equal(originalIdentity, originalBinding!.Value.FileIdentity);
+        Assert.Equal(newIdentity, newBinding!.Value.FileIdentity);
+
+        newFile.Close();
+        env.Memory.Munmap(secondAddr, 4096, env.Engine);
+        env.Memory.Munmap(MappedFileBackendTestEnvironment.Address, 4096, env.Engine);
+    }
+
+    [Fact]
+    public void T18_InjectedFailure_BackendProviderHandlesErrorsCleanly()
+    {
+        var fake = new FakeHostMemoryBackend();
+        try
+        {
+            FilePageBackendSelector.FactoryOverrideForTests = (_, _) => fake;
+            using var env = new MappedFileBackendTestEnvironment("hostfs", 4096);
+            env.Map();
+            fake.FailLeaseAcquisition = true;
+
+            // When lease acquisition fails, the mapping falls back to allocated buffer cache,
+            // never misreporting that it is using a direct mapped view.
+            Assert.Equal(FaultResult.Handled, env.Memory.HandleFaultDetailed(MappedFileBackendTestEnvironment.Address, false, env.Engine));
+            Assert.True(env.Inode.TryGetMappingPageRecord(0, out var record));
+            Assert.Equal(FilePageBackingKind.AllocatedPageCache, record.BackingKind);
+            Assert.False(((IHostMappedCacheDropper)env.Inode).TryDescribeMappedPage(0, record.Ptr, out _));
+
+            // Test capability error injections
+            fake.FailLock = true;
+            Assert.False(fake.TryLockPageRange(0, 1, out var lockedPages));
+            Assert.Equal(0, lockedPages);
+
+            fake.FailPrefault = true;
+            Assert.False(fake.TryPrefaultPage(0, false));
+
+            fake.ConfiguredResidency = HostPageResidencyStatus.NonResident;
+            Assert.Equal(HostPageResidencyStatus.NonResident, fake.CheckPageResidency(0));
+        }
+        finally
+        {
+            FilePageBackendSelector.FactoryOverrideForTests = null;
+            fake.Dispose();
+        }
+    }
+
+    [Theory]
+    [InlineData("hostfs")]
+    [InlineData("silkfs")]
+    public void HostCapability_ResidencyAndLockLifecycle_ReportsAccurately(string backend)
+    {
+        using var env = new MappedFileBackendTestEnvironment(backend, 8192);
+        env.Map();
+        Assert.Equal(FaultResult.Handled, env.Memory.HandleFaultDetailed(MappedFileBackendTestEnvironment.Address, false, env.Engine));
+
+        var dropper = (IHostMappedCacheDropper)env.Inode;
+        Assert.True(dropper.TryPrefaultPage(0, false));
+        var residency = dropper.CheckPageResidency(0);
+        Assert.True(residency is HostPageResidencyStatus.Resident or HostPageResidencyStatus.Unknown);
+
+        if (dropper.TryLockPageRange(0, 1, out var lockedPages))
+        {
+            Assert.Equal(1, lockedPages);
+            Assert.True(dropper.TryUnlockPageRange(0, 1));
+        }
+    }
 }

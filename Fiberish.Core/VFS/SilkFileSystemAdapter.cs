@@ -532,6 +532,41 @@ public sealed class SilkInode : MappingBackedInode, IHostMappedCacheDropper
         }
     }
 
+    HostPageResidencyStatus IHostMappedCacheDropper.CheckPageResidency(long filePageIndex)
+    {
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.CheckPageResidency(filePageIndex) ?? HostPageResidencyStatus.NonResident;
+        }
+    }
+
+    bool IHostMappedCacheDropper.TryPrefaultPage(long filePageIndex, bool writable)
+    {
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.TryPrefaultPage(filePageIndex, writable) ?? false;
+        }
+    }
+
+    bool IHostMappedCacheDropper.TryLockPageRange(long startFilePageIndex, int pageCount, out int lockedPages)
+    {
+        lock (_mappedCacheLock)
+        {
+            if (_mappedPageCache != null)
+                return _mappedPageCache.TryLockPageRange(startFilePageIndex, pageCount, out lockedPages);
+            lockedPages = 0;
+            return false;
+        }
+    }
+
+    bool IHostMappedCacheDropper.TryUnlockPageRange(long startFilePageIndex, int pageCount)
+    {
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.TryUnlockPageRange(startFilePageIndex, pageCount) ?? true;
+        }
+    }
+
     internal override bool PreferHostMappedMappingPage(PageCacheAccessMode accessMode)
     {
         return Type == InodeType.File;

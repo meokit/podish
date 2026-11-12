@@ -2,6 +2,8 @@ namespace Fiberish.Memory;
 
 internal static class FilePageBackendSelector
 {
+    internal static Func<string, HostMemoryMapGeometry, IFilePageBackend?>? FactoryOverrideForTests { get; set; }
+
     public static IFilePageBackend Create(string path)
     {
         return Create(path, HostMemoryMapGeometry.CreateCurrent());
@@ -9,6 +11,9 @@ internal static class FilePageBackendSelector
 
     public static IFilePageBackend Create(string path, HostMemoryMapGeometry geometry)
     {
+        if (FactoryOverrideForTests?.Invoke(path, geometry) is { } testBackend)
+            return testBackend;
+
         if (geometry.SupportsMappedFileBackend)
             return new WindowedMappedFilePageBackend(path, geometry);
 

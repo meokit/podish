@@ -824,7 +824,8 @@ internal sealed class OwnerPageSlots
             Ptr = hostPage.Ptr,
             HostPage = hostPage,
             MappingReleaseOwner = releaseOwner,
-            MappingReleaseRecord = releaseRecord
+            MappingReleaseRecord = releaseRecord,
+            FileIdentity = releaseRecord?.FileIdentity ?? releaseOwner?.GetFilePageIdentity(hostPage.OwnerPageIndex) ?? default
         };
     }
 
@@ -861,6 +862,7 @@ internal readonly struct ResidentPageRecord
     public required HostPageRef HostPage { get; init; }
     public MappingBackedInode? MappingReleaseOwner { get; init; }
     public InodePageRecord? MappingReleaseRecord { get; init; }
+    public FilePageIdentity FileIdentity { get; init; }
 
     public bool Dirty
     {

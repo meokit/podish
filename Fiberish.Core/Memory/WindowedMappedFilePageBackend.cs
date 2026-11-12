@@ -416,6 +416,165 @@ internal sealed partial class WindowedMappedFilePageBackend(string path, HostMem
         return false;
     }
 
+    public HostPageResidencyStatus CheckPageResidency(long filePageIndex)
+    {
+        if (filePageIndex < 0 || filePageIndex > long.MaxValue / LinuxConstants.PageSize)
+            return HostPageResidencyStatus.NonResident;
+        var pageStart = filePageIndex * LinuxConstants.PageSize;
+        var windowStart = AlignDown(pageStart, geometry.AllocationGranularity);
+        var offsetInWindow = pageStart - windowStart;
+        if (offsetInWindow < 0) return HostPageResidencyStatus.NonResident;
+
+        nint ptr;
+        lock (_lock)
+        {
+            if (!_activeWindowIdsByStart.TryGetValue(windowStart, out var windowId))
+                return HostPageResidencyStatus.NonResident;
+            ref var window = ref GetWindowRef(windowId);
+            if (Unsafe.IsNullRef(ref window) || window.Retired || window.Length < checked(offsetInWindow + LinuxConstants.PageSize))
+                return HostPageResidencyStatus.NonResident;
+            ptr = window.Ptr + (nint)offsetInWindow;
+        }
+
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                var info = new PSAPI_WORKING_SET_EX_INFORMATION { VirtualAddress = ptr };
+                if (QueryWorkingSetEx(GetCurrentProcess(), ref info, (uint)Marshal.SizeOf<PSAPI_WORKING_SET_EX_INFORMATION>()))
+                    return (info.VirtualAttributes & 1) != 0 ? HostPageResidencyStatus.Resident : HostPageResidencyStatus.NonResident;
+                return HostPageResidencyStatus.Unknown;
+            }
+
+            byte vec = 0;
+            if (mincore(ptr, (nuint)LinuxConstants.PageSize, ref vec) == 0)
+                return (vec & 1) != 0 ? HostPageResidencyStatus.Resident : HostPageResidencyStatus.NonResident;
+            return HostPageResidencyStatus.Unknown;
+        }
+        catch
+        {
+            return HostPageResidencyStatus.Unknown;
+        }
+    }
+
+    public bool TryPrefaultPage(long filePageIndex, bool writable)
+    {
+        if (filePageIndex < 0 || filePageIndex > long.MaxValue / LinuxConstants.PageSize)
+            return false;
+        var pageStart = filePageIndex * LinuxConstants.PageSize;
+        var windowStart = AlignDown(pageStart, geometry.AllocationGranularity);
+        var offsetInWindow = pageStart - windowStart;
+        if (offsetInWindow < 0) return false;
+
+        nint ptr;
+        lock (_lock)
+        {
+            if (!_activeWindowIdsByStart.TryGetValue(windowStart, out var windowId))
+                return false;
+            ref var window = ref GetWindowRef(windowId);
+            if (Unsafe.IsNullRef(ref window) || window.Retired || window.Length < checked(offsetInWindow + LinuxConstants.PageSize))
+                return false;
+            if (writable && window.AccessMode != WindowAccessMode.ReadWrite)
+                return false;
+            ptr = window.Ptr + (nint)offsetInWindow;
+        }
+
+        try
+        {
+            unsafe
+            {
+                var b = Volatile.Read(ref *(byte*)ptr);
+                if (writable)
+                    Volatile.Write(ref *(byte*)ptr, b);
+            }
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool TryLockPageRange(long startFilePageIndex, int pageCount, out int lockedPages)
+    {
+        lockedPages = 0;
+        if (startFilePageIndex < 0 || pageCount <= 0 || startFilePageIndex > (long.MaxValue - (long)pageCount * LinuxConstants.PageSize) / LinuxConstants.PageSize)
+            return false;
+
+        var startOffset = startFilePageIndex * LinuxConstants.PageSize;
+        var windowStart = AlignDown(startOffset, geometry.AllocationGranularity);
+        var offsetInWindow = startOffset - windowStart;
+        var length = (long)pageCount * LinuxConstants.PageSize;
+
+        nint ptr;
+        lock (_lock)
+        {
+            if (!_activeWindowIdsByStart.TryGetValue(windowStart, out var windowId))
+                return false;
+            ref var window = ref GetWindowRef(windowId);
+            if (Unsafe.IsNullRef(ref window) || window.Retired || window.Length < checked(offsetInWindow + length))
+                return false;
+            ptr = window.Ptr + (nint)offsetInWindow;
+        }
+
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                if (VirtualLock(ptr, checked((nuint)length)))
+                {
+                    lockedPages = pageCount;
+                    return true;
+                }
+                return false;
+            }
+
+            if (mlock(ptr, checked((nuint)length)) == 0)
+            {
+                lockedPages = pageCount;
+                return true;
+            }
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool TryUnlockPageRange(long startFilePageIndex, int pageCount)
+    {
+        if (startFilePageIndex < 0 || pageCount <= 0 || startFilePageIndex > (long.MaxValue - (long)pageCount * LinuxConstants.PageSize) / LinuxConstants.PageSize)
+            return false;
+
+        var startOffset = startFilePageIndex * LinuxConstants.PageSize;
+        var windowStart = AlignDown(startOffset, geometry.AllocationGranularity);
+        var offsetInWindow = startOffset - windowStart;
+        var length = (long)pageCount * LinuxConstants.PageSize;
+
+        nint ptr;
+        lock (_lock)
+        {
+            if (!_activeWindowIdsByStart.TryGetValue(windowStart, out var windowId))
+                return false;
+            ref var window = ref GetWindowRef(windowId);
+            if (Unsafe.IsNullRef(ref window) || window.Length < checked(offsetInWindow + length))
+                return false;
+            ptr = window.Ptr + (nint)offsetInWindow;
+        }
+
+        try
+        {
+            if (OperatingSystem.IsWindows())
+                return VirtualUnlock(ptr, checked((nuint)length));
+            return munlock(ptr, checked((nuint)length)) == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public void Dispose()
     {
         List<WindowMapping> disposeNow;
@@ -869,6 +1028,37 @@ internal sealed partial class WindowedMappedFilePageBackend(string path, HostMem
 
     [LibraryImport("libc", EntryPoint = "munmap", SetLastError = true)]
     private static partial int munmap(nint addr, nuint length);
+
+    [LibraryImport("libc", EntryPoint = "mlock", SetLastError = true)]
+    private static partial int mlock(nint addr, nuint len);
+
+    [LibraryImport("libc", EntryPoint = "munlock", SetLastError = true)]
+    private static partial int munlock(nint addr, nuint len);
+
+    [LibraryImport("libc", EntryPoint = "mincore", SetLastError = true)]
+    private static partial int mincore(nint addr, nuint len, ref byte vec);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "VirtualLock", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool VirtualLock(nint lpAddress, nuint dwSize);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "VirtualUnlock", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool VirtualUnlock(nint lpAddress, nuint dwSize);
+
+    [LibraryImport("kernel32.dll")]
+    private static partial nint GetCurrentProcess();
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PSAPI_WORKING_SET_EX_INFORMATION
+    {
+        public nint VirtualAddress;
+        public nuint VirtualAttributes;
+    }
+
+    [LibraryImport("psapi.dll", EntryPoint = "QueryWorkingSetEx", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool QueryWorkingSetEx(nint hProcess, ref PSAPI_WORKING_SET_EX_INFORMATION pv, uint cb);
 
     [LibraryImport("kernel32.dll", EntryPoint = "CreateFileMappingW", SetLastError = true,
         StringMarshalling = StringMarshalling.Utf16)]

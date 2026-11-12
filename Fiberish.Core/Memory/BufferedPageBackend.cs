@@ -64,6 +64,27 @@ internal sealed class BufferedPageBackend : IFilePageBackend
         return false;
     }
 
+    public HostPageResidencyStatus CheckPageResidency(long filePageIndex)
+    {
+        return HostPageResidencyStatus.NonResident;
+    }
+
+    public bool TryPrefaultPage(long filePageIndex, bool writable)
+    {
+        return false;
+    }
+
+    public bool TryLockPageRange(long startFilePageIndex, int pageCount, out int lockedPages)
+    {
+        lockedPages = 0;
+        return false;
+    }
+
+    public bool TryUnlockPageRange(long startFilePageIndex, int pageCount)
+    {
+        return true;
+    }
+
     public void Dispose()
     {
     }

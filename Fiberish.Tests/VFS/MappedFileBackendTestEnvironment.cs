@@ -104,19 +104,32 @@ internal sealed class MappedFileBackendTestEnvironment : IDisposable
         return bytes[0];
     }
 
+    public void CloseFile()
+    {
+        if (File != null)
+        {
+            File.Close();
+            File = null!;
+        }
+    }
+
     public void Dispose()
     {
         try
         {
             Memory.Clear(Engine);
-            File?.Close();
+            if (File != null)
+            {
+                File.Close();
+                File = null!;
+            }
             Syscalls.Close();
         }
         finally
         {
             Engine.Dispose();
             Context.Dispose();
-            if (Directory.Exists(_scratch)) Directory.Delete(_scratch, true);
+            TestWorkspace.DeleteDirectory(_scratch);
         }
     }
 }
