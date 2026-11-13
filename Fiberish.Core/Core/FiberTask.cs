@@ -1385,8 +1385,17 @@ public partial class FiberTask
         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(8, 4), info.Code);
 
         // Payload (e.g. Pid/Uid for SI_USER, or TimerId for POSIX Timer)
-        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(12, 4), info.Pid);
-        BinaryPrimitives.WriteUInt32LittleEndian(siBuf.AsSpan(16, 4), info.Uid);
+        if (info.HasFdPayload)
+        {
+            // SIGPOLL/SIGIO: si_band (long, 4 bytes) then si_fd.
+            BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(12, 4), (int)info.Band);
+            BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(16, 4), info.Fd);
+        }
+        else
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(12, 4), info.Pid);
+            BinaryPrimitives.WriteUInt32LittleEndian(siBuf.AsSpan(16, 4), info.Uid);
+        }
 
         // Write the unionized payload value (e.g. SIGRT)
         BinaryPrimitives.WriteUInt64LittleEndian(siBuf.AsSpan(20, 8), info.Value);

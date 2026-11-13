@@ -1154,17 +1154,9 @@ public class OverlayInode : MappingBackedInode
         return 0;
     }
 
-    public override int Flock(LinuxFile linuxFile, int operation)
+    public override Inode GetLockTargetInode()
     {
-        if (UpperInode != null) return UpperInode.Flock(linuxFile, operation);
-        if (LowerInode != null)
-        {
-            var rc = LowerInode.Flock(linuxFile, operation);
-            if (rc != -(int)Errno.ENOSYS) return rc;
-            return ((OverlaySuperBlock)SuperBlock).Flock(new InodeKey(Dev, Ino), linuxFile, operation);
-        }
-
-        return -(int)Errno.ENOSYS;
+        return UpperInode ?? LowerInode ?? this;
     }
 
     public override int Readlink(out byte[]? target)

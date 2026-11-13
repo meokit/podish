@@ -281,10 +281,16 @@ public static class ProcFsManager
             var mountPoint = EscapeMountField(m.Target);
             var source = EscapeMountField(m.Source);
             var options = string.IsNullOrWhiteSpace(m.Options) ? "rw,relatime" : m.Options;
+            var devMajor = (m.Dev >> 8) & 0xFF;
+            var devMinor = m.Dev & 0xFF;
             sb.Append(m.Id)
                 .Append(' ')
                 .Append(m.ParentId)
-                .Append(" 0:0 / ")
+                .Append(' ')
+                .Append(devMajor)
+                .Append(':')
+                .Append(devMinor)
+                .Append(" / ")
                 .Append(mountPoint)
                 .Append(' ')
                 .Append(options)

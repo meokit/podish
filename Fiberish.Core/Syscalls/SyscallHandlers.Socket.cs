@@ -670,7 +670,19 @@ public partial class SyscallManager
             fileFlags, AnonMount);
 
         var fd1 = AllocFD(file1);
+        if (fd1 < 0)
+        {
+            file1.Close();
+            file2.Close();
+            return fd1;
+        }
         var fd2 = AllocFD(file2);
+        if (fd2 < 0)
+        {
+            file2.Close();
+            FreeFD(fd1);
+            return fd2;
+        }
 
         var buf = new byte[8];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), fd1);

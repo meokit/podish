@@ -28,7 +28,7 @@ public partial class SyscallManager
     /// </summary>
     private readonly MountNamespace _mountNamespace;
 
-    private readonly SharedFdTable _sharedFdTable;
+    private SharedFdTable _sharedFdTable;
 
     private readonly SharedFsState _sharedFsState;
     private readonly SharedUnixSocketNamespace _sharedUnixSocketNamespace;
@@ -1480,6 +1480,28 @@ public partial class SyscallManager
         }
     }
 
+    /// <summary>
+    ///     Give this process a private copy of the descriptor table (CLONE_FILES
+    ///     unshare), keeping the shared table intact for other processes.
+    /// </summary>
+    public void UnshareFdTable()
+    {
+        var oldTable = _sharedFdTable;
+        var stillShared = oldTable.DecrementRef() > 0;
+        var newTable = new SharedFdTable();
+        foreach (var (fd, file) in oldTable.Fds)
+        {
+            if (stillShared)
+                file.Get();
+            newTable.Fds[fd] = file;
+        }
+
+        foreach (var fd in oldTable.CloseOnExec)
+            newTable.CloseOnExec.Add(fd);
+
+        _sharedFdTable = newTable;
+    }
+
     public void Close()
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0)
@@ -1564,6 +1586,11 @@ public partial class SyscallManager
         public bool ReleaseRef()
         {
             return Interlocked.Decrement(ref _refCount) == 0;
+        }
+
+        public int DecrementRef()
+        {
+            return Interlocked.Decrement(ref _refCount);
         }
     }
 

@@ -33,8 +33,8 @@ public partial class SyscallManager
 
         var (result, newOffset) = await DoSendfile(this, engine, outFd, inFd, offset, count);
 
-        if (result >= 0 && offsetPtr != 0 && offset.HasValue)
-            if (!engine.CopyToUser(offsetPtr, BitConverter.GetBytes((uint)offset.Value)))
+        if (result >= 0 && offsetPtr != 0 && newOffset.HasValue)
+            if (!engine.CopyToUser(offsetPtr, BitConverter.GetBytes((uint)newOffset.Value)))
                 return -(int)Errno.EFAULT;
 
         return result;
@@ -186,14 +186,25 @@ public partial class SyscallManager
             // Reader
             var rDentry = new Dentry(FsName.FromString("pipe:[read]"), pipe, null, MemfdSuperBlock);
             var rFile = new LinuxFile(rDentry, FileFlags.O_RDONLY, AnonMount);
-            rFd = AllocFD(rFile);
-            // pipe.AddReader(); // Handled by File ctor -> Inode.Open
+            var allocatedR = AllocFD(rFile);
+            if (allocatedR < 0)
+            {
+                rFile.Close();
+                return allocatedR;
+            }
+            rFd = allocatedR;
 
             // Writer
             var wDentry = new Dentry(FsName.FromString("pipe:[write]"), pipe, null, MemfdSuperBlock);
             var wFile = new LinuxFile(wDentry, FileFlags.O_WRONLY, AnonMount);
-            wFd = AllocFD(wFile);
-            // pipe.AddWriter(); // Handled by File ctor -> Inode.Open
+            var allocatedW = AllocFD(wFile);
+            if (allocatedW < 0)
+            {
+                wFile.Close();
+                FreeFD(rFd.Value);
+                return allocatedW;
+            }
+            wFd = allocatedW;
 
             // Write FDs to user memory
             var fds = new[] { rFd.Value, wFd.Value };
@@ -247,13 +258,26 @@ public partial class SyscallManager
             var rFlags = FileFlags.O_RDONLY | (baseFlags & ~FileFlags.O_DIRECT);
             var rDentry = new Dentry(FsName.FromString("pipe:[read]"), pipe, null, MemfdSuperBlock);
             var rFile = new LinuxFile(rDentry, rFlags, AnonMount);
-            rFd = AllocFD(rFile);
+            var allocatedR = AllocFD(rFile);
+            if (allocatedR < 0)
+            {
+                rFile.Close();
+                return allocatedR;
+            }
+            rFd = allocatedR;
 
             // Writer
             var wFlags = FileFlags.O_WRONLY | baseFlags;
             var wDentry = new Dentry(FsName.FromString("pipe:[write]"), pipe, null, MemfdSuperBlock);
             var wFile = new LinuxFile(wDentry, wFlags, AnonMount);
-            wFd = AllocFD(wFile);
+            var allocatedW = AllocFD(wFile);
+            if (allocatedW < 0)
+            {
+                wFile.Close();
+                FreeFD(rFd.Value);
+                return allocatedW;
+            }
+            wFd = allocatedW;
 
             // Write FDs to user memory
             var fds = new[] { rFd.Value, wFd.Value };
@@ -372,12 +396,13 @@ public partial class SyscallManager
             Logger.LogTrace("[Open] Path='{Path}' Flags={Flags} Mode={Mode}",
                 FsEncoding.DecodeUtf8Lossy(pathBytes.AsSpan(0, pathLength)), flags, mode);
         const uint O_TMPFILE_MASK = 0x400000;
+        var isPathOnly = ((FileFlags)flags & FileFlags.O_PATH) != 0;
         var createdHere = false;
         var accessMode = flags & 3u;
         var wantDirectory = ((FileFlags)flags & FileFlags.O_DIRECTORY) != 0;
-        var wantCreate = ((FileFlags)flags & FileFlags.O_CREAT) != 0;
-        var wantExcl = ((FileFlags)flags & FileFlags.O_EXCL) != 0;
-        var wantTrunc = ((FileFlags)flags & FileFlags.O_TRUNC) != 0;
+        var wantCreate = !isPathOnly && ((FileFlags)flags & FileFlags.O_CREAT) != 0;
+        var wantExcl = !isPathOnly && ((FileFlags)flags & FileFlags.O_EXCL) != 0;
+        var wantTrunc = !isPathOnly && ((FileFlags)flags & FileFlags.O_TRUNC) != 0;
         var noFollow = ((FileFlags)flags & FileFlags.O_NOFOLLOW) != 0;
         var task = sm.CurrentTask;
 
@@ -508,7 +533,7 @@ public partial class SyscallManager
         }
         else
         {
-            if (noFollow && dentry.Inode?.Type == InodeType.Symlink)
+            if (noFollow && !isPathOnly && dentry.Inode?.Type == InodeType.Symlink)
                 return -(int)Errno.ELOOP;
 
             if (wantDirectory && dentry.Inode?.Type != InodeType.Directory)
@@ -518,50 +543,53 @@ public partial class SyscallManager
             if (wantCreate && wantExcl)
                 return -(int)Errno.EEXIST;
 
-            if (dentry.Inode?.Type == InodeType.Directory && (accessMode != 0 || wantTrunc || wantCreate))
-                return -(int)Errno.EISDIR;
-            if (dentry.Inode?.Type == InodeType.Socket)
-                return -(int)Errno.ENXIO;
-            if (dentry.Inode?.Type == InodeType.Fifo &&
-                accessMode == (int)FileFlags.O_WRONLY &&
-                ((FileFlags)flags & FileFlags.O_NONBLOCK) != 0)
-                return -(int)Errno.ENXIO;
-
-            // open(2): O_NOATIME requires ownership or CAP_FOWNER.
-            var noAtime = ((FileFlags)flags & FileFlags.O_NOATIME) != 0;
-            if (noAtime && dentry.Inode != null)
+            if (!isPathOnly)
             {
-                var process = task?.Process;
-                if (process == null || (process.EUID != 0 && process.FSUID != dentry.Inode.Uid))
-                    return -(int)Errno.EPERM;
+                if (dentry.Inode?.Type == InodeType.Directory && (accessMode != 0 || wantTrunc || wantCreate))
+                    return -(int)Errno.EISDIR;
+                if (dentry.Inode?.Type == InodeType.Socket)
+                    return -(int)Errno.ENXIO;
+                if (dentry.Inode?.Type == InodeType.Fifo &&
+                    accessMode == (int)FileFlags.O_WRONLY &&
+                    ((FileFlags)flags & FileFlags.O_NONBLOCK) != 0)
+                    return -(int)Errno.ENXIO;
+
+                // open(2): O_NOATIME requires ownership or CAP_FOWNER.
+                var noAtime = ((FileFlags)flags & FileFlags.O_NOATIME) != 0;
+                if (noAtime && dentry.Inode != null)
+                {
+                    var process = task?.Process;
+                    if (process == null || (process.EUID != 0 && process.FSUID != dentry.Inode.Uid))
+                        return -(int)Errno.EPERM;
+                }
+
+                if (task?.Process != null && dentry.Inode != null)
+                {
+                    var requested = AccessMode.None;
+                    if (accessMode == 0)
+                        requested |= AccessMode.MayRead;
+                    else if (accessMode == 1)
+                        requested |= AccessMode.MayWrite;
+                    else if (accessMode == 2)
+                        requested |= AccessMode.MayRead | AccessMode.MayWrite;
+                    if (wantTrunc)
+                        requested |= AccessMode.MayWrite;
+
+                    var accessRc = DacPolicy.CheckPathAccess(task.Process, dentry.Inode, requested, true);
+                    if (accessRc < 0)
+                        return accessRc;
+                }
+
+                // Check mount read-only for write operations on existing file
+                if (accessMode != 0 || wantTrunc) // O_WRONLY or O_RDWR or O_TRUNC
+                    if (mount != null && mount.IsReadOnly)
+                        return -(int)Errno.EROFS;
             }
-
-            if (task?.Process != null && dentry.Inode != null)
-            {
-                var requested = AccessMode.None;
-                if (accessMode == 0)
-                    requested |= AccessMode.MayRead;
-                else if (accessMode == 1)
-                    requested |= AccessMode.MayWrite;
-                else if (accessMode == 2)
-                    requested |= AccessMode.MayRead | AccessMode.MayWrite;
-                if (wantTrunc)
-                    requested |= AccessMode.MayWrite;
-
-                var accessRc = DacPolicy.CheckPathAccess(task.Process, dentry.Inode, requested, true);
-                if (accessRc < 0)
-                    return accessRc;
-            }
-
-            // Check mount read-only for write operations on existing file
-            if (accessMode != 0 || wantTrunc) // O_WRONLY or O_RDWR or O_TRUNC
-                if (mount != null && mount.IsReadOnly)
-                    return -(int)Errno.EROFS;
         }
 
         try
         {
-            if (!createdHere &&
+            if (!isPathOnly && !createdHere &&
                 (flags & (uint)FileFlags.O_TRUNC) != 0 &&
                 dentry?.Inode?.Type == InodeType.File)
             {
@@ -579,7 +607,13 @@ public partial class SyscallManager
             var f = new LinuxFile(dentry, (FileFlags)openFlags, mount ?? sm.RootMount!);
             if (task != null && f.OpenedInode is ITaskContextBoundInode taskBoundInode)
                 taskBoundInode.BindTaskContext(f, task);
-            return sm.AllocFD(f);
+            var allocatedFd = sm.AllocFD(f);
+            if (allocatedFd < 0)
+            {
+                f.Close();
+                return allocatedFd;
+            }
+            return allocatedFd;
         }
         catch (Exception ex)
         {
@@ -613,8 +647,10 @@ public partial class SyscallManager
         else
         {
             var f = GetFD(dfd);
-            if (f != null) startLoc = f.LivePath;
-            else return ValueTask.FromResult(-(int)Errno.EBADF);
+            if (f == null) return ValueTask.FromResult(-(int)Errno.EBADF);
+            if (!path.IsAbsolute && f.OpenedInode?.Type != InodeType.Directory)
+                return ValueTask.FromResult(-(int)Errno.ENOTDIR);
+            startLoc = f.LivePath;
         }
 
         return ValueTask.FromResult(ImplOpen(this, path, a3, a4, startLoc));
@@ -643,6 +679,8 @@ public partial class SyscallManager
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return ValueTask.FromResult(-(int)Errno.EBADF);
+            if (fdir.OpenedInode?.Type != InodeType.Directory)
+                return ValueTask.FromResult(-(int)Errno.ENOTDIR);
             startAt = fdir.LivePath;
         }
 
@@ -733,6 +771,20 @@ public partial class SyscallManager
             return -(int)Errno.EINVAL;
 
         var writeStartOffset = offset == -1 ? f.Position : offset;
+
+        // RLIMIT_FSIZE: writes entirely past the limit fail with EFBIG and raise SIGXFSZ.
+        if (f.OpenedInode.Type == InodeType.File && task?.Process != null &&
+            task.Process.TryGetResourceLimit(LinuxConstants.RLIMIT_FSIZE, out var fsizeLimit) &&
+            fsizeLimit.Soft != ulong.MaxValue)
+        {
+            var limit = (long)Math.Min(fsizeLimit.Soft, (ulong)long.MaxValue);
+            if (writeStartOffset >= limit)
+            {
+                task.PostSignal((int)Signal.SIGXFSZ);
+                return -(int)Errno.EFBIG;
+            }
+        }
+
         var sizeBeforeWrite = (long)f.OpenedInode.Size;
         var rc = await f.OpenedInode.WriteV(engine, f, task, new ArraySegment<Iovec>(iovs, 0, iovCnt), offset, flags);
 
@@ -932,6 +984,8 @@ public partial class SyscallManager
     {
         var offset = a4 | ((long)a5 << 32);
         var flags = (int)a6;
+        const int KnownRwfFlags = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20;
+        if ((flags & ~KnownRwfFlags) != 0) return -(int)Errno.EOPNOTSUPP;
         var positionError = ValidatePositionedIo((int)a1, offset, true);
         if (positionError != 0) return positionError;
         var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);
@@ -950,6 +1004,8 @@ public partial class SyscallManager
     {
         var offset = a4 | ((long)a5 << 32);
         var flags = (int)a6;
+        const int KnownRwfFlags = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20;
+        if ((flags & ~KnownRwfFlags) != 0) return -(int)Errno.EOPNOTSUPP;
         var positionError = ValidatePositionedIo((int)a1, offset, true);
         if (positionError != 0) return positionError;
         var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);

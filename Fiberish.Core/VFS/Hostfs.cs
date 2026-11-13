@@ -2679,22 +2679,6 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CreateHardLinkWindows(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
 
-    public override int Flock(LinuxFile linuxFile, int operation)
-    {
-        if (OperatingSystem.IsWindows())
-            return GetOrCreateSharedFileState().Flock(linuxFile, operation);
-
-        if (GetOpenHandleFromFile(linuxFile) is { } handle)
-        {
-            var fd = handle.DangerousGetHandle().ToInt32();
-            if (flock(fd, operation) != 0) return -Marshal.GetLastPInvokeError();
-
-            return 0;
-        }
-
-        return -(int)Errno.EBADF;
-    }
-
     public override int Link(Dentry dentry, Inode oldInode)
     {
         if (Type != InodeType.Directory) return -(int)Errno.ENOTDIR;

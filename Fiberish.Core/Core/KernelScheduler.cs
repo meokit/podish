@@ -68,6 +68,7 @@ public class KernelScheduler
 
     public long CurrentTick => _timerSystem.CurrentTick;
     internal TimeWheel TimerSystem => _timerSystem;
+    public int PipeMaxSize { get; set; } = 1048576;
     public bool Running { get; set; } = true;
 
     public ILoggerFactory LoggerFactory { get; set; } = new NullLoggerFactory();

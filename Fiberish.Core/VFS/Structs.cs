@@ -379,7 +379,8 @@ public enum FileFlags
     O_DIRECTORY = 65536,
     O_NOFOLLOW = 131072,
     O_NOATIME = 262144,
-    O_CLOEXEC = 524288
+    O_CLOEXEC = 524288,
+    O_PATH = 2097152
 }
 
 public enum InodeRefKind
@@ -667,6 +668,14 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     private readonly List<Dentry> _dentries = [];
     private int _lookupFailureError = -(int)Errno.ENOENT;
     private VMAManager[] _mappedAddressSpaces = [];
+    private FileLockState? _fileLockState;
+    private readonly Lock _leaseGate = new();
+    private int _openCount;
+    private int _openWriteCount;
+    private int _leaseType;
+    private LinuxFile? _leaseFile;
+    private Process? _leaseOwner;
+    private List<LinuxFile>? _dnotifyWatchers;
 
     /// <summary>
     ///     Optional per-inode page cache / address_space.
@@ -1724,11 +1733,212 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     }
 
     /// <summary>
-    ///     Handle flock requests for this inode. Default implementation returns ENOSYS.
+    ///     Handle flock requests for this inode.
     /// </summary>
     public virtual int Flock(LinuxFile linuxFile, int operation)
     {
-        return -(int)Errno.ENOSYS;
+        return GetLockTargetInode().GetOrCreateFileLockState().FlockAsync(linuxFile, null, operation).GetAwaiter().GetResult();
+    }
+
+    public virtual ValueTask<int> FlockAsync(LinuxFile linuxFile, FiberTask? task, int operation)
+    {
+        return GetLockTargetInode().GetOrCreateFileLockState().FlockAsync(linuxFile, task, operation);
+    }
+
+    public virtual Inode GetLockTargetInode()
+    {
+        return this;
+    }
+
+    public FileLockState GetOrCreateFileLockState()
+    {
+        var existing = Volatile.Read(ref _fileLockState);
+        if (existing != null)
+            return existing;
+
+        var created = new FileLockState();
+        return Interlocked.CompareExchange(ref _fileLockState, created, null) ?? created;
+    }
+
+    public void ReleasePosixLocks(Process ownerProcess)
+    {
+        Volatile.Read(ref _fileLockState)?.ReleasePosixLocks(ownerProcess);
+    }
+
+    public void ReleaseFileDescriptorLocks(LinuxFile file)
+    {
+        Volatile.Read(ref _fileLockState)?.ReleaseFileDescriptorLocks(file);
+    }
+
+    public int TrySetLease(LinuxFile file, Process? process, int leaseType)
+    {
+        const int F_RDLCK = 0;
+        const int F_WRLCK = 1;
+        const int F_UNLCK = 2;
+
+        if (Type != InodeType.File)
+            return -(int)Errno.EINVAL;
+
+        lock (_leaseGate)
+        {
+            if (leaseType == F_UNLCK)
+            {
+                if (_leaseFile != null && !ReferenceEquals(_leaseFile, file))
+                    return -(int)Errno.EINVAL;
+                _leaseType = 0;
+                _leaseFile = null;
+                _leaseOwner = null;
+                return 0;
+            }
+
+            if (leaseType != F_RDLCK && leaseType != F_WRLCK)
+                return -(int)Errno.EINVAL;
+
+            if (process != null && process.EUID != 0 && process.FSUID != Uid)
+                return -(int)Errno.EPERM;
+
+            if (_leaseType != 0 && !ReferenceEquals(_leaseFile, file))
+                return -(int)Errno.EAGAIN;
+
+            var accessMode = file.Flags & FileFlags.O_ACCMODE;
+            if (leaseType == F_RDLCK)
+            {
+                if (accessMode != FileFlags.O_RDONLY)
+                    return -(int)Errno.EAGAIN;
+                if (_openWriteCount > 0)
+                    return -(int)Errno.EAGAIN;
+            }
+            else
+            {
+                if (accessMode == FileFlags.O_RDONLY)
+                    return -(int)Errno.EAGAIN;
+                if (_openCount > 1)
+                    return -(int)Errno.EAGAIN;
+            }
+
+            _leaseType = leaseType == F_RDLCK ? 1 : 2;
+            _leaseFile = file;
+            _leaseOwner = process;
+            return 0;
+        }
+    }
+
+    public int GetLease()
+    {
+        lock (_leaseGate)
+        {
+            return _leaseType switch
+            {
+                1 => 0, // F_RDLCK
+                2 => 1, // F_WRLCK
+                _ => 2 // F_UNLCK
+            };
+        }
+    }
+
+    public void RegisterOpenFile(LinuxFile file)
+    {
+        var accessMode = file.Flags & FileFlags.O_ACCMODE;
+        lock (_leaseGate)
+        {
+            _openCount++;
+            if (accessMode != FileFlags.O_RDONLY)
+                _openWriteCount++;
+        }
+    }
+
+    public void UnregisterOpenFile(LinuxFile file)
+    {
+        var accessMode = file.Flags & FileFlags.O_ACCMODE;
+        lock (_leaseGate)
+        {
+            if (_openCount > 0) _openCount--;
+            if (accessMode != FileFlags.O_RDONLY && _openWriteCount > 0) _openWriteCount--;
+            if (_leaseFile != null && ReferenceEquals(_leaseFile, file))
+            {
+                _leaseType = 0;
+                _leaseFile = null;
+                _leaseOwner = null;
+            }
+            if (_dnotifyWatchers != null && _dnotifyWatchers.Contains(file))
+                _dnotifyWatchers.Remove(file);
+        }
+    }
+
+    public void ReleaseLeasesForProcess(Process ownerProcess)
+    {
+        lock (_leaseGate)
+        {
+            if (_leaseOwner != null && ReferenceEquals(_leaseOwner, ownerProcess))
+            {
+                _leaseType = 0;
+                _leaseFile = null;
+                _leaseOwner = null;
+            }
+        }
+    }
+
+    public void AddDnotifyWatcher(LinuxFile file)
+    {
+        lock (_leaseGate)
+        {
+            _dnotifyWatchers ??= new List<LinuxFile>();
+            if (!_dnotifyWatchers.Contains(file))
+                _dnotifyWatchers.Add(file);
+        }
+    }
+
+    public void RemoveDnotifyWatcher(LinuxFile file)
+    {
+        lock (_leaseGate)
+        {
+            _dnotifyWatchers?.Remove(file);
+        }
+    }
+
+    public void NotifyDnotifyWatchers(int eventMask)
+    {
+        const int DnMultishot = unchecked((int)0x80000000);
+        const int SigIo = (int)Signal.SIGIO;
+        List<LinuxFile>? snapshot;
+        lock (_leaseGate)
+        {
+            if (_dnotifyWatchers == null || _dnotifyWatchers.Count == 0)
+                return;
+            snapshot = [.. _dnotifyWatchers];
+        }
+
+        foreach (var watcher in snapshot)
+        {
+            var mask = watcher.DnotifyMask;
+            if ((mask & eventMask) == 0)
+                continue;
+
+            var scheduler = watcher.DnotifyScheduler;
+            var pid = watcher.DnotifyPid;
+            if (scheduler == null || pid <= 0)
+                continue;
+
+            var sig = watcher.AsyncSignal > 0 ? watcher.AsyncSignal : SigIo;
+            var info = new SigInfo
+            {
+                Signo = sig,
+                Code = 1, // POLL_IN
+                Pid = pid,
+                Fd = watcher.DnotifyFd,
+                HasFdPayload = true
+            };
+            scheduler.SignalProcessInfo(pid, sig, info);
+
+            if ((mask & DnMultishot) == 0)
+            {
+                lock (_leaseGate)
+                {
+                    watcher.DnotifyMask = 0;
+                    _dnotifyWatchers.Remove(watcher);
+                }
+            }
+        }
     }
 
     public virtual int SetXAttr(ReadOnlySpan<byte> name, ReadOnlySpan<byte> value, int flags)
@@ -1775,10 +1985,12 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     // File operations hooks
     public virtual void Open(LinuxFile linuxFile)
     {
+        RegisterOpenFile(linuxFile);
     }
 
     public virtual void Release(LinuxFile linuxFile)
     {
+        UnregisterOpenFile(linuxFile);
     }
 
     public virtual void Sync(LinuxFile linuxFile)
@@ -4467,6 +4679,13 @@ public class LinuxFile : IDisposable
     public object? PrivateData { get; set; }
     public bool IsTmpFile { get; set; }
     public ReferenceKind Kind { get; }
+    public int AsyncOwnerType { get; set; }
+    public int AsyncOwnerId { get; set; }
+    public int AsyncSignal { get; set; }
+    public int DnotifyMask { get; set; }
+    public int DnotifyFd { get; set; } = -1;
+    public int DnotifyPid { get; set; }
+    public KernelScheduler? DnotifyScheduler { get; set; }
 
     public void Dispose()
     {
@@ -4514,6 +4733,7 @@ public class LinuxFile : IDisposable
             }
 
         var dentry = Dentry;
+        OpenedInode?.ReleaseFileDescriptorLocks(this);
         OpenedInode?.Release(this);
         var refKind = Kind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
         OpenedInode?.ReleaseRef(refKind, "LinuxFile.Close");

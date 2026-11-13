@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Native;
@@ -11,11 +12,13 @@ namespace Fiberish.VFS;
 
 public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatcherEdgeWaitSource
 {
-    private const int BufferSize = 65536; // 64KB pipe buffer
+    private const int Default_capacity = 65536; // 64KB default pipe buffer
     public const int PipeBuf = 4096;
+    private int _capacity;
     private byte[] _buffer;
     private readonly bool _packetMode;
     private readonly Queue<int> _packetLengths = new();
+    private readonly HashSet<LinuxFile> _openFiles = new(ReferenceEqualityComparer.Instance);
 
     // Notification handles
     private readonly WaitHandle _readHandle;
@@ -36,12 +39,81 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         _waitQueues = new PooledReadWriteWaitQueues(scheduler);
         _readHandle = _waitQueues.ReadQueue;
         _writeHandle = _waitQueues.WriteQueue;
+        var isUnpriv = scheduler.CurrentTask?.Process != null && scheduler.CurrentTask.Process.EUID != 0;
+        var initialCap = Default_capacity;
+        if (isUnpriv && scheduler.PipeMaxSize < initialCap)
+            initialCap = Math.Max(4096, NormalizePipeCapacity(scheduler.PipeMaxSize));
+        _capacity = initialCap;
         Type = InodeType.Fifo;
         Mode = 0x1000 | 0x1FF; // FIFO + 777
         AnonymousInodeLifecycle.Initialize(this, "PipeInode.ctor");
-        _buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+        _buffer = ArrayPool<byte>.Shared.Rent(_capacity);
         // Initially writable (empty)
         _writeHandle.Set();
+    }
+
+    private static int NormalizePipeCapacity(int requested)
+    {
+        if (requested <= 4096)
+            return 4096;
+        var rounded = BitOperations.RoundUpToPowerOf2((uint)requested);
+        return rounded > (1u << 30) ? -1 : (int)rounded;
+    }
+
+    public int GetPipeSize()
+    {
+        using (EnterStateScope())
+        {
+            return _capacity;
+        }
+    }
+
+    public int SetPipeSize(int requestedSize, bool isPrivileged)
+    {
+        if (requestedSize < 0)
+            return -(int)Errno.EINVAL;
+
+        var target = NormalizePipeCapacity(requestedSize);
+        if (target < 0)
+            return -(int)Errno.EINVAL;
+
+        var pipeMax = _waitQueues.Scheduler.PipeMaxSize;
+        if (!isPrivileged && target > pipeMax)
+            return -(int)Errno.EPERM;
+
+        using (EnterStateScope())
+        {
+            if (_lifecycleClosed)
+                return -(int)Errno.EBADF;
+            if (target < _count)
+                return -(int)Errno.EBUSY;
+            if (target == _capacity)
+                return _capacity;
+
+            var newBuffer = ArrayPool<byte>.Shared.Rent(target);
+            if (_count > 0)
+            {
+                var firstChunk = Math.Min(_count, _capacity - _tail);
+                new ReadOnlySpan<byte>(_buffer, _tail, firstChunk).CopyTo(newBuffer.AsSpan(0, firstChunk));
+                if (_count > firstChunk)
+                {
+                    var secondChunk = _count - firstChunk;
+                    new ReadOnlySpan<byte>(_buffer, 0, secondChunk).CopyTo(newBuffer.AsSpan(firstChunk, secondChunk));
+                }
+            }
+
+            if (_buffer.Length > 0)
+                ArrayPool<byte>.Shared.Return(_buffer, clearArray: false);
+            _buffer = newBuffer;
+            _capacity = target;
+            _tail = 0;
+            _head = _count % target;
+            if (_count < _capacity)
+                _writeHandle.Set();
+            else
+                _writeHandle.Reset();
+            return _capacity;
+        }
     }
 
     bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
@@ -61,7 +133,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             if ((events & POLLIN) != 0)
@@ -89,7 +161,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch, writeWatch);
@@ -112,7 +184,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, scheduler, events, readWatch,
@@ -134,7 +206,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             if ((events & POLLIN) != 0)
@@ -159,7 +231,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             return QueueReadinessRegistration.RegisterHandle(callback, task, events, readWatch, writeWatch);
@@ -224,6 +296,12 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
     public override void Open(LinuxFile linuxFile)
     {
+        base.Open(linuxFile);
+        using (EnterStateScope())
+        {
+            _openFiles.Add(linuxFile);
+        }
+
         const int O_ACCMODE = 3;
         var mode = (int)linuxFile.Flags & O_ACCMODE;
         if (mode == (int)FileFlags.O_RDONLY)
@@ -256,7 +334,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 // Read data
                 var consumed = _packetMode ? _packetLengths.Peek() : Math.Min(buffer.Length, _count);
                 var available = Math.Min(buffer.Length, consumed);
-                var firstChunk = Math.Min(available, BufferSize - _tail);
+                var firstChunk = Math.Min(available, _capacity - _tail);
 
                 if (firstChunk > 0)
                     new ReadOnlySpan<byte>(_buffer, _tail, firstChunk).CopyTo(buffer[..firstChunk]);
@@ -268,7 +346,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 }
 
                 // A short packet read discards the unread tail of that packet.
-                _tail = (_tail + consumed) % BufferSize;
+                _tail = (_tail + consumed) % _capacity;
                 _count -= consumed;
                 if (_packetMode) _packetLengths.Dequeue();
 
@@ -295,7 +373,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             if (_count > 0)
             {
                 var available = Math.Min(buffer.Length, _packetMode ? _packetLengths.Peek() : _count);
-                var firstChunk = Math.Min(available, BufferSize - _tail);
+                var firstChunk = Math.Min(available, _capacity - _tail);
 
                 if (firstChunk > 0)
                     new ReadOnlySpan<byte>(_buffer, _tail, firstChunk).CopyTo(buffer[..firstChunk]);
@@ -330,7 +408,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 // Send SIGPIPE to current task?
                 return -(int)Errno.EPIPE;
 
-            var space = BufferSize - _count;
+            var space = _capacity - _count;
             if (space > 0)
             {
                 // Linux pipe(7): blocking writes of n <= PIPE_BUF bytes must remain atomic,
@@ -341,32 +419,76 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                     return -(int)Errno.EAGAIN;
 
                 var toWrite = Math.Min(requested, space);
-                var firstChunk = Math.Min(toWrite, BufferSize - _head);
+                var firstChunk = Math.Min(toWrite, _capacity - _head);
 
                 if (firstChunk > 0)
                 {
                     buffer[..firstChunk].CopyTo(new Span<byte>(_buffer, _head, firstChunk));
-                    _head = (_head + firstChunk) % BufferSize;
+                    _head = (_head + firstChunk) % _capacity;
                 }
 
                 if (toWrite > firstChunk)
                 {
                     var secondChunk = toWrite - firstChunk;
                     buffer.Slice(firstChunk, secondChunk).CopyTo(new Span<byte>(_buffer, _head, secondChunk));
-                    _head = (_head + secondChunk) % BufferSize;
+                    _head = (_head + secondChunk) % _capacity;
                 }
 
                 _count += toWrite;
                 if (_packetMode) _packetLengths.Enqueue(toWrite);
 
                 // Update handles
-                if (_count == BufferSize) _writeHandle.Reset();
+                if (_count == _capacity) _writeHandle.Reset();
                 _readHandle.Set(); // Data available
+                NotifyAsyncReadersLocked();
 
                 return toWrite;
             }
 
             return -(int)Errno.EAGAIN;
+        }
+    }
+
+    private void NotifyAsyncReadersLocked()
+    {
+        const int O_ASYNC = 0x2000;
+        const int O_ACCMODE = 3;
+        if (_openFiles.Count == 0)
+            return;
+
+        var scheduler = _waitQueues.Scheduler;
+        foreach (var file in _openFiles)
+        {
+            if (((int)file.Flags & O_ASYNC) == 0)
+                continue;
+            var mode = (int)file.Flags & O_ACCMODE;
+            if (mode == (int)FileFlags.O_WRONLY)
+                continue;
+
+            var ownerId = file.AsyncOwnerId;
+            if (ownerId <= 0)
+                continue;
+
+            var sig = file.AsyncSignal > 0 ? file.AsyncSignal : (int)Signal.SIGIO;
+            var info = new SigInfo { Signo = sig, Code = -4 /* SI_ASYNCIO */, Pid = 0, Uid = 0 };
+            switch (file.AsyncOwnerType)
+            {
+                case 0: // F_OWNER_TID
+                {
+                    var targetTask = scheduler.GetTask(ownerId);
+                    if (targetTask != null)
+                        targetTask.PostSignal(sig);
+                    break;
+                }
+                case 1: // F_OWNER_PID
+                    scheduler.SignalProcessInfo(ownerId, sig, info);
+                    break;
+                case 2: // F_OWNER_PGRP
+                    foreach (var proc in scheduler.GetProcessesSnapshot())
+                        if (proc.PGID == ownerId)
+                            scheduler.SignalProcessInfo(proc.TGID, sig, info);
+                    break;
+            }
         }
     }
 
@@ -492,7 +614,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     public override async ValueTask<AwaitResult> WaitForWrite(LinuxFile linuxFile, FiberTask task,
         int minWritableBytes = 1)
     {
-        minWritableBytes = Math.Clamp(minWritableBytes, 1, BufferSize);
+        minWritableBytes = Math.Clamp(minWritableBytes, 1, _capacity);
 
         while (true)
         {
@@ -501,7 +623,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 if (_lifecycleClosed)
                     return AwaitResult.Completed;
 
-                var space = BufferSize - _count;
+                var space = _capacity - _count;
                 if (_readersClosed || space >= minWritableBytes)
                     return AwaitResult.Completed;
 
@@ -548,7 +670,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 ? new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle, _readHandle.Reset)
                 : default;
             var writeWatch = canWrite && !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             revents |= QueueReadinessRegistration.ComputeRevents(events, readWatch, writeWatch);
@@ -587,7 +709,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, _waitQueues.Scheduler, events,
@@ -597,6 +719,12 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
     public override void Release(LinuxFile linuxFile)
     {
+        base.Release(linuxFile);
+        using (EnterStateScope())
+        {
+            _openFiles.Remove(linuxFile);
+        }
+
         const int O_ACCMODE = 3;
         var mode = (int)linuxFile.Flags & O_ACCMODE;
         if (mode == (int)FileFlags.O_RDONLY)

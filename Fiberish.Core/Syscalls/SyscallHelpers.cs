@@ -315,8 +315,19 @@ public partial class SyscallManager
 
     public int AllocFD(LinuxFile linuxFile, int minFd = 0, bool? closeOnExec = null)
     {
+        if (minFd < 0)
+            return -(int)Errno.EINVAL;
+
+        ulong nofileLimit = ulong.MaxValue;
+        var proc = CurrentTask?.Process ?? CurrentProcess;
+        if (proc != null && proc.TryGetResourceLimit(LinuxConstants.RLIMIT_NOFILE, out var limit))
+            nofileLimit = limit.Soft;
+
         var fd = minFd;
         while (FDs.ContainsKey(fd)) fd++;
+        if ((ulong)fd >= nofileLimit)
+            return -(int)Errno.EMFILE;
+
         FDs[fd] = linuxFile;
         var cloexec = closeOnExec ?? (linuxFile.Flags & FileFlags.O_CLOEXEC) != 0;
         if (cloexec)
@@ -328,8 +339,18 @@ public partial class SyscallManager
 
     public int DupFD(LinuxFile linuxFile, int minFd = 0, bool closeOnExec = false)
     {
-        linuxFile.Get();
-        return AllocFD(linuxFile, minFd, closeOnExec);
+        if (minFd < 0)
+            return -(int)Errno.EINVAL;
+
+        var proc = CurrentTask?.Process ?? CurrentProcess;
+        if (proc != null && proc.TryGetResourceLimit(LinuxConstants.RLIMIT_NOFILE, out var limit) &&
+            (ulong)minFd >= limit.Soft)
+            return -(int)Errno.EINVAL;
+
+        var fd = AllocFD(linuxFile, minFd, closeOnExec);
+        if (fd >= 0)
+            linuxFile.Get();
+        return fd;
     }
 
     public int DupFD(int oldFd, int minFd = 0, bool closeOnExec = false)
@@ -368,10 +389,28 @@ public partial class SyscallManager
         TryFreeFD(fd);
     }
 
+    public void ReleasePosixLocksForProcess(Process ownerProcess)
+    {
+        if (ownerProcess == null) return;
+        var seen = new HashSet<Inode>(ReferenceEqualityComparer.Instance);
+        foreach (var file in FDs.Values)
+        {
+            var inode = file.OpenedInode;
+            if (inode == null) continue;
+            var target = inode.GetLockTargetInode();
+            target.ReleaseLeasesForProcess(ownerProcess);
+            if (!seen.Add(target)) continue;
+            target.ReleasePosixLocks(ownerProcess);
+        }
+    }
+
     public bool TryFreeFD(int fd)
     {
         FdCloseOnExecSet.Remove(fd);
         if (!FDs.Remove(fd, out var f)) return false;
+        var ownerProcess = CurrentTask?.Process ?? CurrentProcess;
+        if (ownerProcess != null)
+            f.OpenedInode?.ReleasePosixLocks(ownerProcess);
         f.Close();
         return true;
     }
