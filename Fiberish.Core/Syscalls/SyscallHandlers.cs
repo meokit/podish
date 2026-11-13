@@ -16,6 +16,7 @@ public partial class SyscallManager
             case X86SyscallNumbers.fork:
                 handled = true;
                 return SysFork(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.fcntl:
             case X86SyscallNumbers.fcntl64:
                 handled = true;
                 return SysFcntl64(engine, ebx, ecx, edx, esi, edi, ebp);
@@ -811,6 +812,15 @@ public partial class SyscallManager
             case X86SyscallNumbers.tee:
                 handled = true;
                 return SysTee(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.vmsplice:
+                handled = true;
+                return SysVmsplice(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.copy_file_range:
+                handled = true;
+                return SysCopyFileRange(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.close_range:
+                handled = true;
+                return SysCloseRange(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.readahead:
                 handled = true;
                 return SysReadahead(engine, ebx, ecx, edx, esi, edi, ebp);

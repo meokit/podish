@@ -450,9 +450,19 @@ public partial class SyscallManager
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), info.Signo);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), info.Errno);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), info.Code);
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), info.Pid);
-        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(16, 4), info.Uid);
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(20, 4), info.Status);
+
+        // SIGPOLL/SIGIO carry si_band (long, 4 bytes on i386) and si_fd.
+        if (info.HasFdPayload)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), (int)info.Band);
+            BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(16, 4), info.Fd);
+        }
+        else
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), info.Pid);
+            BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(16, 4), info.Uid);
+            BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(20, 4), info.Status);
+        }
         return engine.CopyToUser(addr, buf);
     }
 
@@ -463,6 +473,7 @@ public partial class SyscallManager
 
         var sm = task.Process.Syscalls;
 
+        sm.ReleasePosixLocksForProcess(task.Process);
         sm.Close();
         ProcFsManager.OnProcessExit(sm, task.Process.TGID);
         sm.SysVSem.OnProcessExit(task.Process);

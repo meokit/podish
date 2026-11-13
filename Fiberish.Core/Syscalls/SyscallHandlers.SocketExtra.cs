@@ -230,6 +230,30 @@ public partial class SyscallManager
         if (inIsPipe && offIn != 0) return -(int)Errno.ESPIPE;
         if (outIsPipe && offOut != 0) return -(int)Errno.ESPIPE;
 
+        // Only regular files, sockets and character devices support splice on the
+        // file side; inotify/eventfd/epoll descriptors must fail fast, not block.
+        if (!inIsPipe &&
+            fileIn.OpenedInode!.Type is not (InodeType.File or InodeType.Socket or InodeType.CharDev))
+            return -(int)Errno.EINVAL;
+        if (!outIsPipe &&
+            fileOut.OpenedInode!.Type is not (InodeType.File or InodeType.Socket or InodeType.CharDev))
+            return -(int)Errno.EINVAL;
+
+        // Unconnected sockets cannot be spliced.
+        if (fileIn.OpenedInode is UnixSocketInode inSock && !inSock.IsConnected)
+            return -(int)Errno.EINVAL;
+        if (fileOut.OpenedInode is UnixSocketInode outSock && !outSock.IsConnected)
+            return -(int)Errno.EINVAL;
+
+        // splice(2) requires fd_in to be readable and fd_out to be writable.
+        if ((fileIn.Flags & (FileFlags.O_PATH | FileFlags.O_ACCMODE)) == FileFlags.O_PATH)
+            return -(int)Errno.EBADF;
+        if ((fileOut.Flags & (FileFlags.O_PATH | FileFlags.O_ACCMODE)) == FileFlags.O_PATH)
+            return -(int)Errno.EBADF;
+        if ((fileIn.Flags & FileFlags.O_ACCMODE) == FileFlags.O_WRONLY) return -(int)Errno.EBADF;
+        if ((fileOut.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EBADF;
+        if ((fileOut.Flags & FileFlags.O_APPEND) != 0) return -(int)Errno.EINVAL;
+
         // Resolve read offset
         var readOffset = fileIn.Position;
         if (offIn != 0)
@@ -358,8 +382,8 @@ public partial class SyscallManager
         if (fileIn == null || fileOut == null) return -(int)Errno.EBADF;
 
         if (fileIn.OpenedInode is not PipeInode pipeIn) return -(int)Errno.EINVAL;
-        if (fileOut.OpenedInode is not PipeInode) return -(int)Errno.EINVAL;
-        if (fdIn == fdOut) return -(int)Errno.EINVAL;
+        if (fileOut.OpenedInode is not PipeInode pipeOut) return -(int)Errno.EINVAL;
+        if (ReferenceEquals(pipeIn, pipeOut)) return -(int)Errno.EINVAL;
 
         var bufSize = Math.Min(len, 65536);
         var buf = ArrayPool<byte>.Shared.Rent(bufSize);

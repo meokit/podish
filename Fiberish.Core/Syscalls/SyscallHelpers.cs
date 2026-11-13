@@ -313,23 +313,45 @@ public partial class SyscallManager
         return PathWalker.PathWalkForCreate(path, startAt);
     }
 
-    public int AllocFD(LinuxFile linuxFile, int minFd = 0, bool? closeOnExec = null)
+    public int AllocFD(LinuxFile linuxFile, int minFd = 0, bool? closeOnExec = null, FiberTask? task = null)
     {
+        if (minFd < 0)
+            return -(int)Errno.EINVAL;
+
+        ulong nofileLimit = ulong.MaxValue;
+        var proc = (task ?? CurrentTask)?.Process;
+        if (proc != null && proc.TryGetResourceLimit(LinuxConstants.RLIMIT_NOFILE, out var limit))
+            nofileLimit = limit.Soft;
+
         var fd = minFd;
-        while (FDs.ContainsKey(fd)) fd++;
-        FDs[fd] = linuxFile;
+        var table = task == null ? CurrentFdTable : GetTaskFdTable(task);
+        while (table.Fds.ContainsKey(fd)) fd++;
+        if ((ulong)fd >= nofileLimit)
+            return -(int)Errno.EMFILE;
+
+        table.Fds[fd] = linuxFile;
         var cloexec = closeOnExec ?? (linuxFile.Flags & FileFlags.O_CLOEXEC) != 0;
         if (cloexec)
-            FdCloseOnExecSet.Add(fd);
+            table.CloseOnExec.Add(fd);
         else
-            FdCloseOnExecSet.Remove(fd);
+            table.CloseOnExec.Remove(fd);
         return fd;
     }
 
     public int DupFD(LinuxFile linuxFile, int minFd = 0, bool closeOnExec = false)
     {
-        linuxFile.Get();
-        return AllocFD(linuxFile, minFd, closeOnExec);
+        if (minFd < 0)
+            return -(int)Errno.EINVAL;
+
+        var proc = CurrentTask?.Process ?? CurrentProcess;
+        if (proc != null && proc.TryGetResourceLimit(LinuxConstants.RLIMIT_NOFILE, out var limit) &&
+            (ulong)minFd >= limit.Soft)
+            return -(int)Errno.EINVAL;
+
+        var fd = AllocFD(linuxFile, minFd, closeOnExec);
+        if (fd >= 0)
+            linuxFile.Get();
+        return fd;
     }
 
     public int DupFD(int oldFd, int minFd = 0, bool closeOnExec = false)
@@ -339,9 +361,16 @@ public partial class SyscallManager
         return DupFD(file, minFd, closeOnExec);
     }
 
-    public LinuxFile? GetFD(int fd)
+    public LinuxFile? GetFD(int fd, FiberTask? task = null)
     {
-        return FDs.TryGetValue(fd, out var f) ? f : null;
+        var table = task == null ? CurrentFdTable : GetTaskFdTable(task);
+        return table.Fds.TryGetValue(fd, out var f) ? f : null;
+    }
+
+    private LinuxFile? GetIoFD(int fd)
+    {
+        var file = GetFD(fd);
+        return file?.IsPathOnly == true ? null : file;
     }
 
     public bool IsFdCloseOnExec(int fd)
@@ -368,10 +397,29 @@ public partial class SyscallManager
         TryFreeFD(fd);
     }
 
+    public void ReleasePosixLocksForProcess(Process ownerProcess)
+    {
+        if (ownerProcess == null) return;
+        var seen = new HashSet<Inode>(ReferenceEqualityComparer.Instance);
+        var tables = _taskFdTables.Values.Append(_sharedFdTable).Distinct();
+        foreach (var file in tables.SelectMany(static table => table.Fds.Values))
+        {
+            var inode = file.OpenedInode;
+            if (inode == null) continue;
+            var target = inode.GetLockTargetInode();
+            target.ReleaseLeasesForProcess(ownerProcess);
+            if (!seen.Add(target)) continue;
+            target.ReleasePosixLocks(ownerProcess);
+        }
+    }
+
     public bool TryFreeFD(int fd)
     {
         FdCloseOnExecSet.Remove(fd);
         if (!FDs.Remove(fd, out var f)) return false;
+        var ownerProcess = CurrentTask?.Process ?? CurrentProcess;
+        if (ownerProcess != null)
+            f.OpenedInode?.ReleasePosixLocks(ownerProcess);
         f.Close();
         return true;
     }
