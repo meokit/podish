@@ -164,7 +164,8 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, ID
     public async ValueTask<int> SendAsync(LinuxFile file, FiberTask task, ReadOnlyMemory<byte> buffer, int flags)
     {
         var rc = await SendMessageAsync(file, task, buffer, null, flags, null);
-        if (rc == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+        if (rc == -(int)Errno.EPIPE && (flags & LinuxConstants.MSG_NOSIGNAL) == 0)
+            task.PostSignal((int)Signal.SIGPIPE);
         return rc;
     }
 
@@ -199,7 +200,8 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, ID
         }
 
         var rc = await SendMessageAsync(file, task, buffer, null, flags, explicitPeer);
-        if (rc == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+        if (rc == -(int)Errno.EPIPE && (flags & LinuxConstants.MSG_NOSIGNAL) == 0)
+            task.PostSignal((int)Signal.SIGPIPE);
         return rc;
     }
 
@@ -247,7 +249,8 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, ID
         }
 
         var rc = await SendMessageAsync(file, task, buffer, fds, flags, explicitPeer);
-        if (rc == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+        if (rc == -(int)Errno.EPIPE && (flags & LinuxConstants.MSG_NOSIGNAL) == 0)
+            task.PostSignal((int)Signal.SIGPIPE);
         return rc;
     }
 
@@ -350,6 +353,8 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, ID
             var loc = sm.PathWalker.PathWalk(unixAddr.PathBytes, unixAddr.PathBytes.Length);
             if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
             if (loc.Dentry.Inode.Type != InodeType.Socket) return -(int)Errno.ECONNREFUSED;
+            var accessErr = DacPolicy.CheckPathAccess(task.Process, loc.Dentry.Inode, AccessMode.MayWrite, true);
+            if (accessErr < 0) return accessErr;
             target = sm.LookupUnixPathSocket(loc.Dentry.Inode);
         }
 
@@ -442,11 +447,16 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, ID
     {
         written = 4;
         if (level != LinuxConstants.SOL_SOCKET)
-            return -(int)Errno.ENOPROTOOPT;
+        {
+            if (level == LinuxConstants.IPPROTO_IP || level == LinuxConstants.IPPROTO_TCP)
+                return -(int)Errno.ENOPROTOOPT;
+            return -(int)Errno.EOPNOTSUPP;
+        }
 
         switch (optname)
         {
             case LinuxConstants.SO_TYPE:
+                if (optval.Length < 4) return -(int)Errno.EINVAL;
                 BinaryPrimitives.WriteInt32LittleEndian(optval, UnixSocketType switch
                 {
                     SocketType.Stream => LinuxConstants.SOCK_STREAM,
@@ -456,15 +466,37 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, ID
                 });
                 return 0;
             case LinuxConstants.SO_ERROR:
+                if (optval.Length < 4) return -(int)Errno.EINVAL;
                 BinaryPrimitives.WriteInt32LittleEndian(optval, 0);
                 return 0;
             case LinuxConstants.SO_SNDBUF:
             case LinuxConstants.SO_RCVBUF:
+                if (optval.Length < 4) return -(int)Errno.EINVAL;
                 BinaryPrimitives.WriteInt32LittleEndian(optval, MaxSendBuffer);
                 return 0;
             case LinuxConstants.SO_PASSCRED:
+                if (optval.Length < 4) return -(int)Errno.EINVAL;
                 BinaryPrimitives.WriteInt32LittleEndian(optval, _passCred ? 1 : 0);
                 return 0;
+            case LinuxConstants.SO_PEERCRED:
+            {
+                written = 12;
+                if (optval.Length < 12) return -(int)Errno.EINVAL;
+                var cred = _peerCredentials;
+                if (cred != null)
+                {
+                    BinaryPrimitives.WriteInt32LittleEndian(optval.Slice(0, 4), cred.Pid);
+                    BinaryPrimitives.WriteInt32LittleEndian(optval.Slice(4, 4), cred.Uid);
+                    BinaryPrimitives.WriteInt32LittleEndian(optval.Slice(8, 4), cred.Gid);
+                }
+                else
+                {
+                    BinaryPrimitives.WriteInt32LittleEndian(optval.Slice(0, 4), 0);
+                    BinaryPrimitives.WriteInt32LittleEndian(optval.Slice(4, 4), -1);
+                    BinaryPrimitives.WriteInt32LittleEndian(optval.Slice(8, 4), -1);
+                }
+                return 0;
+            }
             default:
                 return -(int)Errno.ENOPROTOOPT;
         }
@@ -978,8 +1010,16 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, ID
                     return (toCopy, msg.Fds, msg.SourceSunPathRaw, msg.Credentials);
                 }
 
-                if (_shutDownRead || _peer == null || _peerWriteClosed)
+                if (_shutDownRead)
                     return (0, null, null, null); // EOF
+
+                if (UnixSocketType != SocketType.Dgram)
+                {
+                    if (_peer == null)
+                        return (-(int)Errno.ENOTCONN, null, null, null);
+                    if (_peerWriteClosed && _receiveQueue.Count == 0)
+                        return (0, null, null, null); // EOF
+                }
             }
 
             _writeWaitQueue.Set();

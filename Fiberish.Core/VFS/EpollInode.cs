@@ -12,10 +12,13 @@ internal sealed class EpollItem
     public ulong Data;
     public IReadyDispatcher? Dispatcher;
     public bool IsDeferredEdgeRearmQueued;
+    public bool IsEdgeArmed;
     public uint Events;
     public int Fd;
     public LinuxFile File = null!;
     public bool IsReady;
+    public short LastObservedEvents;
+    public short Mask;
     public bool NeedsEdgeRearm;
     public IDisposable? WaitRegistration;
 }
@@ -23,7 +26,9 @@ internal sealed class EpollItem
 public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWaitSource
 {
     private const int EpollEventSize = 12;
+    private const int MaxEpollNestingEdges = 4;
     private readonly Queue<EpollItem> _deferredEdgeRearms = new();
+    private readonly HashSet<EpollInode> _parents = new();
     private readonly List<EpollItem> _readyList = new();
     private readonly KernelScheduler _scheduler;
     private readonly AsyncWaitQueue _waitQueue;
@@ -128,6 +133,15 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
         {
             if (_watches.ContainsKey(targetFile)) return -(int)Errno.EEXIST;
 
+            if (targetFile.OpenedInode is EpollInode childEpoll)
+            {
+                if (ReferenceEquals(childEpoll, this) || childEpoll.CanReach(this))
+                    return -(int)Errno.ELOOP;
+                if (GetMaxAncestorEdges() + 1 + childEpoll.GetMaxDescendantEdges() > MaxEpollNestingEdges)
+                    return -(int)Errno.EINVAL;
+                childEpoll._parents.Add(this);
+            }
+
             var item = new EpollItem
                 { Fd = fd, File = targetFile, Events = events, Data = data, Dispatcher = dispatcher };
             _watches[targetFile] = item;
@@ -141,8 +155,11 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
             if (_watches.TryGetValue(targetFile, out var oldItem))
             {
                 oldItem.NeedsEdgeRearm = false;
+                oldItem.IsEdgeArmed = false;
                 oldItem.WaitRegistration?.Dispose();
             }
+            if (targetFile.OpenedInode is EpollInode childEpoll)
+                childEpoll._parents.Remove(this);
             _watches.Remove(targetFile);
             _readyList.RemoveAll(x => x.File == targetFile);
             if (_readyList.Count == 0)
@@ -155,6 +172,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
             item.Data = data;
             item.Dispatcher = dispatcher;
             item.NeedsEdgeRearm = false;
+            item.IsEdgeArmed = false;
             item.WaitRegistration?.Dispose();
             item.WaitRegistration = null;
 
@@ -192,6 +210,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
         // Always include EPOLLERR and EPOLLHUP even if not explicitly requested
         var mask = (short)(watchEvents | LinuxConstants.EPOLLERR |
                            LinuxConstants.EPOLLHUP);
+        item.Mask = mask;
 
         if (item.NeedsEdgeRearm)
         {
@@ -201,20 +220,25 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
             item.NeedsEdgeRearm = false;
         }
 
-        if ((currentEvents & mask) != 0)
-        {
-            if (!item.IsReady)
-            {
-                item.IsReady = true;
-                _readyList.Add(item);
-                _waitQueue.Signal(); // Wake up an awaiting FiberTask (epoll_wait)
-            }
+        var isEdge = (item.Events & LinuxConstants.EPOLLET) != 0;
+        var effective = (short)(currentEvents & mask);
+        item.LastObservedEvents = effective;
+        if (effective == 0)
+            goto registerWait;
+        _ = isEdge;
 
-            // Item is already ready - no need to register a wait callback.
-            // When HarvestEvents processes this item, for LT it will call CheckAndRegister again.
-            return;
+        if (!item.IsReady)
+        {
+            item.IsReady = true;
+            _readyList.Add(item);
+            _waitQueue.Signal(); // Wake up an awaiting FiberTask (epoll_wait)
         }
 
+        // Item is already ready - no need to register a wait callback.
+        // When HarvestEvents processes this item, for LT it will call CheckAndRegister again.
+        return;
+
+    registerWait:
         // Callback dispatch-to-scheduler is owned by readiness providers (e.g. HostSocketProbeEngine).
         // EpollInode itself is strict scheduler-thread-only.
         void RePoll()
@@ -287,13 +311,19 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
                 dispatcher,
                 RePollForEdge, watchEvents);
             if (item.WaitRegistration != null)
+            {
+                item.IsEdgeArmed = true;
                 return;
+            }
         }
         else
         {
             item.WaitRegistration = openedInode.RegisterEdgeTriggeredWaitHandle(item.File, RePollForEdge, watchEvents);
             if (item.WaitRegistration != null)
+            {
+                item.IsEdgeArmed = true;
                 return;
+            }
         }
 
         item.NeedsEdgeRearm = true;
@@ -306,13 +336,83 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
             if (!IsWatchRegistered(item))
                 return;
 
+            item.IsEdgeArmed = false;
             CheckAndRegister(item);
         }
+    }
+
+    private bool CanReach(EpollInode target)
+    {
+        foreach (var item in _watches.Values)
+        {
+            if (item.File.OpenedInode is EpollInode child)
+            {
+                if (ReferenceEquals(child, target) || child.CanReach(target))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private int GetMaxDescendantEdges()
+    {
+        var maxChild = 0;
+        foreach (var item in _watches.Values)
+        {
+            if (item.File.OpenedInode is EpollInode child)
+                maxChild = Math.Max(maxChild, 1 + child.GetMaxDescendantEdges());
+        }
+
+        return maxChild;
+    }
+
+    private int GetMaxAncestorEdges()
+    {
+        var maxParent = 0;
+        foreach (var parent in _parents)
+            maxParent = Math.Max(maxParent, 1 + parent.GetMaxAncestorEdges());
+        return maxParent;
+    }
+
+    public override void Release(LinuxFile linuxFile)
+    {
+        foreach (var item in _watches.Values)
+        {
+            item.WaitRegistration?.Dispose();
+            item.WaitRegistration = null;
+            if (item.File.OpenedInode is EpollInode child)
+                child._parents.Remove(this);
+        }
+
+        _watches.Clear();
+        _readyList.Clear();
+        base.Release(linuxFile);
     }
 
     private bool IsWatchRegistered(EpollItem item)
     {
         return _watches.TryGetValue(item.File, out var current) && ReferenceEquals(current, item);
+    }
+
+    private void RefreshPendingWatches()
+    {
+        foreach (var item in _watches.Values)
+        {
+            if (item.IsReady || item.NeedsEdgeRearm || item.IsEdgeArmed) continue;
+            var watchEvents = (short)(item.Events & 0xFFFF);
+            if (watchEvents == 0) continue;
+            var inode = item.File.OpenedInode;
+            if (inode == null) continue;
+
+            var current = (short)(inode.Poll(item.File, watchEvents) & item.Mask);
+            item.LastObservedEvents = current;
+            if (current == 0) continue;
+
+            item.IsReady = true;
+            _readyList.Add(item);
+            _waitQueue.Signal();
+        }
     }
 
     private void EnqueueDeferredEdgeRearm(EpollItem item)
@@ -328,6 +428,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
     {
         AssertSchedulerThread();
         RefreshDeferredEdgeRearms();
+        RefreshPendingWatches();
         return _readyList.Count > 0;
     }
 
@@ -336,6 +437,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
     {
         AssertSchedulerThread();
         RefreshDeferredEdgeRearms();
+        RefreshPendingWatches();
         if (_readyList.Count > 0)
             return HarvestEvents(eventsBuffer, maxEvents);
         return 0;
@@ -370,6 +472,9 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
                                    LinuxConstants.EPOLLHUP);
 
                 var finalEvents = (uint)(currentEvents & mask);
+                item.Mask = mask;
+                if ((item.Events & LinuxConstants.EPOLLET) != 0)
+                    item.LastObservedEvents = (short)(currentEvents & mask);
 
                 if (finalEvents == 0)
                 {
@@ -575,6 +680,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
             _queueWaitRegistration = null;
 
             _inode.RefreshDeferredEdgeRearms();
+            _inode.RefreshPendingWatches();
 
             if (_task.HasInterruptingPendingSignal())
             {

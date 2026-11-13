@@ -73,6 +73,8 @@ public partial class SyscallManager
             F_SETLK64 => 0,
             F_SETLKW64 => 0,
             F_DUPFD_CLOEXEC => DupFD(targetFd, (int)arg, true),
+            LinuxConstants.F_SETPIPE_SZ => SetPipeSize(file, (int)arg),
+            LinuxConstants.F_GETPIPE_SZ => GetPipeSize(file),
             F_ADD_SEALS => AddSeals(file, arg),
             F_GET_SEALS => GetSeals(file),
             _ => -(int)Errno.EINVAL
@@ -84,6 +86,17 @@ public partial class SyscallManager
             return 0;
         }
 
+        static int SetPipeSize(LinuxFile file, int requested)
+        {
+            if (file.OpenedInode is not PipeInode pipe) return -(int)Errno.EINVAL;
+            return pipe.TrySetCapacity(requested);
+        }
+
+        static int GetPipeSize(LinuxFile file)
+        {
+            if (file.OpenedInode is not PipeInode pipe) return -(int)Errno.EINVAL;
+            return pipe.Capacity;
+        }
         static int SetStatusFlags(LinuxFile file, uint arg)
         {
             // Linux: F_SETFL only updates a subset of status flags.

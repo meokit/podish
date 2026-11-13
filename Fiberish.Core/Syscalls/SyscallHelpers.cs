@@ -315,8 +315,22 @@ public partial class SyscallManager
 
     public int AllocFD(LinuxFile linuxFile, int minFd = 0, bool? closeOnExec = null)
     {
+        if (minFd < 0)
+        {
+            linuxFile.Close();
+            return -(int)Errno.EINVAL;
+        }
+
         var fd = minFd;
         while (FDs.ContainsKey(fd)) fd++;
+        if (CurrentProcess is { } proc &&
+            proc.TryGetResourceLimit(LinuxConstants.RLIMIT_NOFILE, out var limit) &&
+            (ulong)fd >= limit.Soft)
+        {
+            linuxFile.Close();
+            return -(int)Errno.EMFILE;
+        }
+
         FDs[fd] = linuxFile;
         var cloexec = closeOnExec ?? (linuxFile.Flags & FileFlags.O_CLOEXEC) != 0;
         if (cloexec)
@@ -328,6 +342,13 @@ public partial class SyscallManager
 
     public int DupFD(LinuxFile linuxFile, int minFd = 0, bool closeOnExec = false)
     {
+        if (minFd < 0)
+            return -(int)Errno.EINVAL;
+        if (CurrentProcess is { } proc &&
+            proc.TryGetResourceLimit(LinuxConstants.RLIMIT_NOFILE, out var limit) &&
+            (ulong)minFd >= limit.Soft)
+            return -(int)Errno.EINVAL;
+
         linuxFile.Get();
         return AllocFD(linuxFile, minFd, closeOnExec);
     }

@@ -12,8 +12,11 @@ namespace Fiberish.VFS;
 public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatcherEdgeWaitSource
 {
     private const int BufferSize = 65536; // 64KB pipe buffer
+    private const int MinPipeCapacity = 4096;
+    private const int MaxPipeCapacity = 1024 * 1024;
     public const int PipeBuf = 4096;
     private byte[] _buffer;
+    private int _capacity = BufferSize;
     private readonly bool _packetMode;
     private readonly Queue<int> _packetLengths = new();
 
@@ -61,7 +64,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             if ((events & POLLIN) != 0)
@@ -89,7 +92,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             return QueueReadinessRegistration.RegisterHandle(callback, scheduler, events, readWatch, writeWatch);
@@ -112,7 +115,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, scheduler, events, readWatch,
@@ -134,7 +137,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             if ((events & POLLIN) != 0)
@@ -159,7 +162,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             return QueueReadinessRegistration.RegisterHandle(callback, task, events, readWatch, writeWatch);
@@ -330,7 +333,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 // Send SIGPIPE to current task?
                 return -(int)Errno.EPIPE;
 
-            var space = BufferSize - _count;
+            var space = _capacity - _count;
             if (space > 0)
             {
                 // Linux pipe(7): blocking writes of n <= PIPE_BUF bytes must remain atomic,
@@ -360,7 +363,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 if (_packetMode) _packetLengths.Enqueue(toWrite);
 
                 // Update handles
-                if (_count == BufferSize) _writeHandle.Reset();
+                if (_count >= _capacity) _writeHandle.Reset();
                 _readHandle.Set(); // Data available
 
                 return toWrite;
@@ -492,7 +495,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     public override async ValueTask<AwaitResult> WaitForWrite(LinuxFile linuxFile, FiberTask task,
         int minWritableBytes = 1)
     {
-        minWritableBytes = Math.Clamp(minWritableBytes, 1, BufferSize);
+        minWritableBytes = Math.Clamp(minWritableBytes, 1, _capacity);
 
         while (true)
         {
@@ -501,7 +504,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 if (_lifecycleClosed)
                     return AwaitResult.Completed;
 
-                var space = BufferSize - _count;
+                var space = _capacity - _count;
                 if (_readersClosed || space >= minWritableBytes)
                     return AwaitResult.Completed;
 
@@ -516,6 +519,23 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             var result = await _writeHandle.WaitInterruptiblyAsync(task);
             if (result == AwaitResult.Interrupted)
                 return AwaitResult.Interrupted;
+        }
+    }
+
+    public int Capacity => _capacity;
+
+    public int TrySetCapacity(int requested)
+    {
+        using (EnterStateScope())
+        {
+            if (_lifecycleClosed) return -(int)Errno.EBADF;
+            if (requested <= 0) return -(int)Errno.EINVAL;
+            var size = Math.Clamp((requested + MinPipeCapacity - 1) / MinPipeCapacity * MinPipeCapacity,
+                MinPipeCapacity, MaxPipeCapacity);
+            if (size < _count) return -(int)Errno.EBUSY;
+            _capacity = size;
+            if (_count < _capacity) _writeHandle.Set();
+            return _capacity;
         }
     }
 
@@ -548,10 +568,12 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 ? new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle, _readHandle.Reset)
                 : default;
             var writeWatch = canWrite && !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             revents |= QueueReadinessRegistration.ComputeRevents(events, readWatch, writeWatch);
+            if (_writersClosed && _count == 0)
+                revents &= unchecked((short)~POLLIN);
 
             if (canRead)
                 if (_writersClosed)
@@ -587,7 +609,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, () => _count < BufferSize, _writeHandle, _writeHandle.Reset)
+                ? new QueueReadinessWatch(POLLOUT, () => _count < _capacity, _writeHandle, _writeHandle.Reset)
                 : default;
 
             return QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, _waitQueues.Scheduler, events,

@@ -69,6 +69,8 @@ public struct SigAction
 public class Process
 {
     public const int CapabilityKill = 5;
+    public const int CapabilityNetBindService = 10;
+    public const int CapabilityNetAdmin = 12;
     public const int CapabilitySysAdmin = 21;
     private static readonly byte[] EmptyCmdline = [];
     private static readonly ResourceLimit[] DefaultResourceLimits = CreateDefaultResourceLimits();

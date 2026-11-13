@@ -131,6 +131,8 @@ public partial class SyscallManager
         if (tvp != 0)
         {
             var tv = ReadStruct<Timeval>(engine, tvp);
+            if (tv.TvSec < 0 || tv.TvUsec < 0 || tv.TvUsec >= 1_000_000)
+                return -(int)Errno.EINVAL;
             timeoutMs = tv.TvSec * 1000 + tv.TvUsec / 1000;
         }
 
@@ -140,6 +142,8 @@ public partial class SyscallManager
     private static async ValueTask<int> DoSelectWithTimeout(SyscallManager sm, Engine engine, int n, uint inp,
         uint outp, uint exp, long timeoutMs)
     {
+        if (n < 0 || n > 1024) return -(int)Errno.EINVAL;
+
         // 1. Scan
         var ready = ScanSelect(sm, engine, n, inp, outp, exp, engine.Owner as FiberTask, out var resIn,
             out var resOut,
@@ -184,12 +188,19 @@ public partial class SyscallManager
     private static async ValueTask<int> DoPoll(SyscallManager sm, Engine engine, uint fdsAddr, uint nfds,
         int timeoutMs)
     {
+        var task = engine.Owner as FiberTask;
+        var maxNfds = task != null &&
+                      task.Process.TryGetResourceLimit(LinuxConstants.RLIMIT_NOFILE, out var nofileLimit)
+            ? nofileLimit.Soft
+            : 1024UL;
+        if (nfds > maxNfds)
+            return -(int)Errno.EINVAL;
+
         // 1. Scan
-        var ready = ScanPoll(sm, engine, fdsAddr, nfds, engine.Owner as FiberTask);
+        var ready = ScanPoll(sm, engine, fdsAddr, nfds, task);
         if (ready > 0 || timeoutMs == 0) return ready;
 
         // 2. Await
-        var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
         return await new PollAwaitable(task, sm.FDs, fdsAddr, nfds, timeoutMs);
     }

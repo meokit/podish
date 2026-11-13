@@ -566,16 +566,22 @@ public static class LinuxConstants
     public const int SO_TYPE = 3;
     public const int SO_ERROR = 4;
     public const int SO_REUSEADDR = 2;
-    public const int SO_KEEPALIVE = 6;
-    public const int SO_OOBINLINE = 7;
-    public const int SO_SNDBUF = 8;
-    public const int SO_RCVBUF = 9;
+    public const int SO_SNDBUF = 7;
+    public const int SO_RCVBUF = 8;
+    public const int SO_KEEPALIVE = 9;
+    public const int SO_OOBINLINE = 10;
     public const int SO_LINGER = 13;
     public const int SO_PASSCRED = 16;
     public const int SO_PEERCRED = 17;
     public const int SO_REUSEPORT = 15;
     public const int SO_RCVTIMEO = 20;
     public const int SO_SNDTIMEO = 21;
+    public const int SO_SNDBUFFORCE = 32;
+    public const int SO_RCVBUFFORCE = 33;
+    public const int MCAST_JOIN_GROUP = 42;
+    public const int MCAST_LEAVE_GROUP = 45;
+    public const uint F_SETPIPE_SZ = 1031;
+    public const uint F_GETPIPE_SZ = 1032;
 
     public const int SCHED_OTHER = 0;
     public const int SCHED_FIFO = 1;
@@ -626,6 +632,7 @@ public static class LinuxConstants
     public const uint SIOCGIFADDR = 0x8915;
     public const uint SIOCGIFNETMASK = 0x891B;
     public const uint SIOCGIFMTU = 0x8921;
+    public const uint SIOCGIFINDEX = 0x8933;
     public const uint SIOCGIFTXQLEN = 0x8942;
     public const int IFNAMSIZ = 16;
 }

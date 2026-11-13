@@ -186,13 +186,22 @@ public partial class SyscallManager
             // Reader
             var rDentry = new Dentry(FsName.FromString("pipe:[read]"), pipe, null, MemfdSuperBlock);
             var rFile = new LinuxFile(rDentry, FileFlags.O_RDONLY, AnonMount);
-            rFd = AllocFD(rFile);
+            var allocatedReadFd = AllocFD(rFile);
+            if (allocatedReadFd < 0)
+                return allocatedReadFd;
+            rFd = allocatedReadFd;
             // pipe.AddReader(); // Handled by File ctor -> Inode.Open
 
             // Writer
             var wDentry = new Dentry(FsName.FromString("pipe:[write]"), pipe, null, MemfdSuperBlock);
             var wFile = new LinuxFile(wDentry, FileFlags.O_WRONLY, AnonMount);
-            wFd = AllocFD(wFile);
+            var allocatedWriteFd = AllocFD(wFile);
+            if (allocatedWriteFd < 0)
+            {
+                FreeFD(rFd.Value);
+                return allocatedWriteFd;
+            }
+            wFd = allocatedWriteFd;
             // pipe.AddWriter(); // Handled by File ctor -> Inode.Open
 
             // Write FDs to user memory
@@ -247,13 +256,22 @@ public partial class SyscallManager
             var rFlags = FileFlags.O_RDONLY | (baseFlags & ~FileFlags.O_DIRECT);
             var rDentry = new Dentry(FsName.FromString("pipe:[read]"), pipe, null, MemfdSuperBlock);
             var rFile = new LinuxFile(rDentry, rFlags, AnonMount);
-            rFd = AllocFD(rFile);
+            var allocatedReadFd = AllocFD(rFile);
+            if (allocatedReadFd < 0)
+                return allocatedReadFd;
+            rFd = allocatedReadFd;
 
             // Writer
             var wFlags = FileFlags.O_WRONLY | baseFlags;
             var wDentry = new Dentry(FsName.FromString("pipe:[write]"), pipe, null, MemfdSuperBlock);
             var wFile = new LinuxFile(wDentry, wFlags, AnonMount);
-            wFd = AllocFD(wFile);
+            var allocatedWriteFd = AllocFD(wFile);
+            if (allocatedWriteFd < 0)
+            {
+                FreeFD(rFd.Value);
+                return allocatedWriteFd;
+            }
+            wFd = allocatedWriteFd;
 
             // Write FDs to user memory
             var fds = new[] { rFd.Value, wFd.Value };

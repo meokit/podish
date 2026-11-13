@@ -23,6 +23,7 @@ const ERR_INVALID_STATE: i32 = -3;
 const ERR_WOULD_BLOCK: i32 = -4;
 const ERR_PROTOCOL: i32 = -5;
 const ERR_ADDR_IN_USE: i32 = -6;
+const ERR_MSG_SIZE: i32 = -7;
 
 #[derive(Clone)]
 enum SocketObject {
@@ -672,6 +673,12 @@ pub extern "C" fn fiber_tcp_stream_connect(
         let [a, b, c, d] = remote_ipv4_be.to_be_bytes();
         let remote_ip = Ipv4Address::new(a, b, c, d);
 
+        // Linux loopback semantics: connecting to a port with no listener fails
+        // immediately with ECONNREFUSED instead of retransmitting SYNs.
+        if !is_tcp_listener_port_in_use(state, remote_port, None) {
+            return ERR_PROTOCOL;
+        }
+
         let cx = state.iface.context();
         let socket = state.sockets.get_mut::<TcpSocket>(stream.handle);
         if socket
@@ -1063,8 +1070,7 @@ pub extern "C" fn fiber_udp_socket_bind(ns_handle: u64, socket_handle: u64, loca
         }
 
         state.notify();
-        0
-    })
+        0    })
     .unwrap_or_else(|rc| rc)
 }
 
@@ -1080,6 +1086,11 @@ pub extern "C" fn fiber_udp_socket_send_to(
 ) -> i32 {
     if data.is_null() || out_written.is_null() {
         return ERR_INVALID_ARG;
+    }
+
+    // Maximum IPv4 UDP payload; larger datagrams fail with EMSGSIZE.
+    if len > 65507 {
+        return ERR_MSG_SIZE;
     }
 
     with_namespace(ns_handle, |state| {
