@@ -16,6 +16,7 @@ internal readonly struct MappedPageBinding
     public AnonVma? AnonVma { get; init; }
     public ResidentPageRecord? Page { get; init; }
     public uint PageIndex { get; init; }
+    public FilePageIdentity FileIdentity { get; init; }
 
     internal static MappedPageBinding FromAddressSpacePage(AddressSpace mapping, uint pageIndex, ResidentPageRecord pageRecord)
     {
@@ -25,7 +26,8 @@ internal readonly struct MappedPageBinding
             OwnerKind = MappedPageOwnerKind.AddressSpace,
             Mapping = mapping,
             Page = pageRecord,
-            PageIndex = pageIndex
+            PageIndex = pageIndex,
+            FileIdentity = pageRecord.FileIdentity
         };
     }
 
@@ -37,7 +39,8 @@ internal readonly struct MappedPageBinding
             OwnerKind = MappedPageOwnerKind.AnonVma,
             AnonVma = anonVma,
             Page = pageRecord,
-            PageIndex = pageIndex
+            PageIndex = pageIndex,
+            FileIdentity = pageRecord.FileIdentity
         };
     }
 }
@@ -52,6 +55,8 @@ public sealed class ProcessPageManager
         ArgumentNullException.ThrowIfNull(memoryContext);
         _memoryContext = memoryContext;
     }
+
+    public int Count => _pages.Count;
 
     public bool TryGet(uint pageAddr, out IntPtr ptr)
     {
@@ -116,9 +121,21 @@ public sealed class ProcessPageManager
         for (var p = start; p < end; p += LinuxConstants.PageSize) Release(p, preserveOwnerBinding);
     }
 
-    public IReadOnlyList<uint> SnapshotMappedPages()
+    public uint[] SnapshotMappedPages()
     {
         if (_pages.Count == 0) return Array.Empty<uint>();
         return _pages.Keys.ToArray();
+    }
+
+    public int CountInRange(uint start, uint end)
+    {
+        if (_pages.Count == 0 || start >= end) return 0;
+        var count = 0;
+        foreach (var pageAddr in _pages.Keys)
+        {
+            if (pageAddr >= start && pageAddr < end)
+                count++;
+        }
+        return count;
     }
 }

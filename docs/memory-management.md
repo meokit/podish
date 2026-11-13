@@ -14,6 +14,11 @@ It focuses on the real object graph and runtime behavior in:
 
 For forward-looking host-page redesign notes, see [HostPage Linux-Style Redesign](./hostpage-linux-style-design.md) and [HostPage Slot Ownership Design](./hostpage-slot-ownership-design.md). This document is about the current implementation, not those proposals.
 
+For the proposed Linux-compatibility work that preserves hostfs/SilkFS direct
+host-cache mappings, see [Direct-mapped memory refactor plan](./direct-mapped-memory-refactor-plan.md)
+and its [backend test plan](../tests/ltp/MAPPED_FILESYSTEM_TEST_PLAN.md). They
+describe future work, not functionality already implemented.
+
 ## Table of Contents
 
 1. High-Level Model

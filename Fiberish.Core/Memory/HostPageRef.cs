@@ -16,6 +16,13 @@ internal enum HostPageOwnerKind
     AnonVma
 }
 
+internal enum OwnerRootTransferResult
+{
+    Transferred,
+    NeedsCowCopy,
+    Invalid
+}
+
 internal readonly record struct HostPageOwnerBinding
 {
     public required HostPageOwnerKind OwnerKind { get; init; }
@@ -801,6 +808,17 @@ internal struct HostPageRef
         }
     }
 
+    public uint OwnerPageIndex
+    {
+        get
+        {
+            if (!TryGetLiveSlot(out var owner, out var slot))
+                return 0;
+
+            return owner.GetSlotRef(slot).Page.OwnerPageIndex;
+        }
+    }
+
     public long LastAccessTimestamp
     {
         get
@@ -918,6 +936,48 @@ internal struct HostPageRef
         return true;
     }
 
+    public OwnerRootTransferResult TryTransferOwnerRoot(HostPageOwnerBinding oldBinding,
+        HostPageOwnerBinding newBinding)
+    {
+        if (!TryGetLiveSlot(out var owner, out var slot))
+            return OwnerRootTransferResult.Invalid;
+
+        lock (owner.Gate)
+        {
+            ref var slotRef = ref owner.GetSlotRef(slot);
+            if (!slotRef.InUse || slotRef.Generation != Generation)
+                return OwnerRootTransferResult.Invalid;
+
+            ref var page = ref slotRef.Page;
+            if (page.Kind == HostPageKind.Zero)
+                return OwnerRootTransferResult.Transferred;
+
+            newBinding.Validate(page.Kind);
+            if (!page.HasOwnerRoot)
+            {
+                SetOwnerBinding(ref page, newBinding);
+                page.OwnerResidentCount = 1;
+                return OwnerRootTransferResult.Transferred;
+            }
+
+            var existing = GetOwnerBinding(ref page);
+            if (!existing.Matches(oldBinding))
+                throw new InvalidOperationException(
+                    $"Host page {page.Ptr} attempted to transfer from a non-owning owner root.");
+
+            if (existing.Matches(newBinding))
+                return OwnerRootTransferResult.Transferred;
+
+            if (page.OwnerResidentCount <= 1)
+            {
+                SetOwnerBinding(ref page, newBinding);
+                return OwnerRootTransferResult.Transferred;
+            }
+
+            return OwnerRootTransferResult.NeedsCowCopy;
+        }
+    }
+
     public bool HasOwnerRoot
     {
         get
@@ -927,6 +987,60 @@ internal struct HostPageRef
 
             return owner.GetSlotRef(slot).Page.HasOwnerRoot;
         }
+    }
+
+    public bool SameSlot(in HostPageRef other)
+    {
+        return ReferenceEquals(Owner, other.Owner) &&
+               Slot == other.Slot &&
+               Generation == other.Generation;
+    }
+
+    public bool TryPin()
+    {
+        if (!TryGetLiveSlot(out var owner, out var slot))
+            return false;
+
+        lock (owner.Gate)
+        {
+            ref var slotRef = ref owner.GetSlotRef(slot);
+            if (!slotRef.InUse || slotRef.Generation != Generation)
+                return false;
+
+            if (slotRef.Page.Kind == HostPageKind.Zero)
+                return true;
+
+            slotRef.Page.PinCount++;
+            return true;
+        }
+    }
+
+    public void Unpin()
+    {
+        if (!TryGetLiveSlot(out var owner, out var slot))
+            return;
+
+        var shouldTryRemove = false;
+        lock (owner.Gate)
+        {
+            ref var slotRef = ref owner.GetSlotRef(slot);
+            if (!slotRef.InUse || slotRef.Generation != Generation)
+                return;
+
+            if (slotRef.Page.Kind == HostPageKind.Zero)
+                return;
+
+            if (slotRef.Page.PinCount > 0)
+                slotRef.Page.PinCount--;
+
+            shouldTryRemove = slotRef.Page.OwnerResidentCount == 0 &&
+                              slotRef.Page.MapCount == 0 &&
+                              slotRef.Page.PinCount == 0 &&
+                              !slotRef.Page.HasOwnerRoot;
+        }
+
+        if (shouldTryRemove)
+            TryRemoveIfUnused();
     }
 
     internal void TryRemoveIfUnused()

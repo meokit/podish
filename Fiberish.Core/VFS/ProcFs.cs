@@ -319,6 +319,17 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
             });
         else if (name.SequenceEqual("mountinfo"u8))
             created = CreateFile(dir, childName, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager));
+        else if (name.SequenceEqual("mounts"u8))
+            created = CreateFile(dir, childName, 0x124, _ =>
+                ProcFsManager.GenerateMounts(task.CommonKernel.GetProcess(_pid)?.Syscalls));
+        else if (name.SequenceEqual("maps"u8))
+            created = CreateFile(dir, childName, 0x124, _ =>
+                ProcFsManager.GenerateMaps(task.CommonKernel.GetProcess(_pid)));
+        else if (name.SequenceEqual("smaps"u8))
+            created = CreateFile(dir, childName, 0x124, _ =>
+                ProcFsManager.GenerateSmaps(task.CommonKernel.GetProcess(_pid)));
+        else if (name.SequenceEqual("pagemap"u8))
+            created = new Dentry(childName, new ProcPagemapFileInode(_sb, _pid), dir, _sb);
         else if (name.SequenceEqual("fd"u8))
             created = CreateFdDir(dir, childName);
         else if (name.SequenceEqual("fdinfo"u8))
@@ -373,6 +384,10 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         entries.Add(new DirectoryEntry { Name = FsName.FromString("cmdline"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("stat"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("mountinfo"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("mounts"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("maps"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("smaps"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("pagemap"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("fd"), Ino = 0, Type = InodeType.Directory });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("fdinfo"), Ino = 0, Type = InodeType.Directory });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("task"), Ino = 0, Type = InodeType.Directory });
@@ -435,6 +450,33 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
     {
         var inode = new ProcPidSymlinkInode(_sb, _pid, resolver);
         return new Dentry(name, inode, parent, _sb);
+    }
+}
+
+file sealed class ProcPagemapFileInode : Inode
+{
+    private readonly int _pid;
+
+    public ProcPagemapFileInode(ProcSuperBlock sb, int pid)
+    {
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.File;
+        Mode = 0x124;
+        _pid = pid;
+        SetInitialLinkCount(1, "ProcPagemapFileInode.ctor");
+        Size = ((ulong)LinuxConstants.TaskSize32 / LinuxConstants.PageSize) * 8;
+        MTime = ATime = CTime = DateTime.UtcNow;
+    }
+
+    public override int ReadToHost(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer, long offset)
+    {
+        if (offset < 0) return -(int)Errno.EINVAL;
+        if (buffer.Length == 0) return 0;
+        var process = task?.CommonKernel.GetProcess(_pid);
+        if (process == null) return 0;
+
+        return ProcFsManager.ReadPagemap(process, offset, buffer);
     }
 }
 
@@ -1098,6 +1140,18 @@ file sealed class ProcSysRootInode : Inode
         else if (_kind == ProcSysKind.Vm && name.SequenceEqual("drop_caches"u8))
             created = CreateFile(dir, childName, _ => ProcFsManager.GenerateSysVmDropCaches(), 0x1A4,
                 HandleDropCachesWrite);
+        else if (_kind == ProcSysKind.Vm && name.SequenceEqual("max_map_count"u8))
+            created = CreateFile(dir, childName, _ => $"{_sb.MemoryContext.MaxMapCount}\n", 0x1A4,
+                (ctx, data, _) =>
+                {
+                    var text = FsEncoding.DecodeUtf8Lossy(data).Trim();
+                    if (int.TryParse(text, out var val) && val > 0)
+                    {
+                        ctx.SyscallManager!.MemoryContext.MaxMapCount = val;
+                        return (int)data.Length;
+                    }
+                    return -(int)Errno.EINVAL;
+                });
 
         if (created != null)
             dir.CacheChild(created, "ProcSysRootInode.Lookup");
@@ -1132,6 +1186,7 @@ file sealed class ProcSysRootInode : Inode
                 entries.Add(new DirectoryEntry { Name = "overcommit_memory", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "swappiness", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "drop_caches", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "max_map_count", Ino = 0, Type = InodeType.File });
                 break;
         }
 

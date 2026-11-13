@@ -20,6 +20,7 @@ public enum MapFlags
     Fixed = 0x10,
     Anonymous = 0x20,
     GrowDown = 0x0100,
+    Locked = 0x2000,
     Stack = 0x20000,
     FixedNoReplace = 0x100000
 }
@@ -37,6 +38,8 @@ public class VmArea
     public long Offset { get; set; }
     public ulong VmPgoff { get; set; }
     public bool DontFork { get; set; }
+    public bool WipeOnFork { get; set; }
+    public bool LockOnFault { get; set; }
     public uint GrowDownLimit { get; set; }
     public uint GrowDownGuardGap { get; set; }
 
@@ -173,6 +176,8 @@ public class VmArea
             Offset = Offset,
             VmPgoff = VmPgoff,
             DontFork = DontFork,
+            WipeOnFork = WipeOnFork,
+            LockOnFault = LockOnFault,
             GrowDownLimit = GrowDownLimit,
             GrowDownGuardGap = GrowDownGuardGap,
             Name = Name,

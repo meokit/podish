@@ -27,10 +27,13 @@ internal readonly record struct PageSyncRequest(uint PageIndex, long FileOffset,
 internal sealed class InodePageRecord
 {
     public BackingPageHandle Handle;
+    public MappingBackedInode? OwnerInode { get; init; }
     public required uint PageIndex { get; init; }
     public required IntPtr Ptr { get; init; }
     public required FilePageBackingKind BackingKind { get; init; }
     public bool IsWritable { get; init; } = true;
+
+    public FilePageIdentity FileIdentity => OwnerInode != null ? OwnerInode.GetFilePageIdentity(PageIndex) : default;
 
     public HostPageKind HostPageKind => BackingKind == FilePageBackingKind.ZeroSharedPage
         ? HostPageKind.Zero

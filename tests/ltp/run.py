@@ -25,6 +25,8 @@ import time
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 SUMMARY_KEYS = ("passed", "failed", "broken", "skipped", "warnings")
+FS_BACKENDS = ("hostfs", "tmpfs", "silkfs")
+IMAGE_BACKENDS = ("tmpfs", "silkfs")
 
 
 def classify(returncode, text, timed_out=False):
@@ -134,6 +136,86 @@ def execute(command, cwd, env, timeout):
     return proc.returncode, output.decode("utf-8", errors="replace"), timed_out, time.monotonic() - started
 
 
+def source_state():
+    """Identify local code as well as committed code; artifacts are git-ignored."""
+    revision = subprocess.check_output(["git", "-C", str(REPO), "rev-parse", "HEAD"], text=True).strip()
+    diff = subprocess.check_output(["git", "-C", str(REPO), "diff", "--binary", "HEAD"], text=True)
+    untracked = subprocess.check_output(
+        ["git", "-C", str(REPO), "ls-files", "--others", "--exclude-standard"], text=True).splitlines()
+    digest = hashlib.sha256(diff.encode("utf-8"))
+    for name in sorted(untracked):
+        path = REPO / name
+        if path.is_file():
+            digest.update(name.encode("utf-8"))
+            digest.update(path.read_bytes())
+    return {"revision": revision, "dirty": bool(diff or untracked), "changesSha256": digest.hexdigest()}
+
+
+def podish_command(cli, fs_backend, work, binaries, env, executable, image_ref=None, trace=False):
+    """Use identical backend/container routing for the preflight and LTP cases."""
+    command = ["dotnet", str(cli)]
+    if trace:
+        command.extend(["--log-level", "trace", "--log-file", str(work / "engine.log")])
+    command.extend(["run", "--rm", "--init", "--log-driver", "none", "--network", "private"])
+    if fs_backend in IMAGE_BACKENDS:
+        if image_ref is None:
+            raise ValueError("Image backend requires an imported image")
+        command.extend(["--fs-backend", fs_backend, image_ref])
+    else:
+        root = work / "rootfs"
+        for directory in ("opt/ltp/testcases/bin", "tmp", "dev", "proc", "etc", "run"):
+            (root / directory).mkdir(parents=True, exist_ok=True)
+        for binary in binaries:
+            shutil.copy2(binary, root / "opt/ltp/testcases/bin" / binary.name)
+        write_guest_identity_files(root)
+        command.extend(["--rootfs", str(root)])
+    if trace:
+        command.append("--strace")
+    for key, value in env.items():
+        command.extend(["--env", f"{key}={value}"])
+    command.append(executable)
+    return command
+
+
+def verify_backend_probe(text, fs_backend):
+    """Mount evidence is not proof of the host pointer/zero-copy data path."""
+    observations = [json.loads(line) for line in text.splitlines() if line.startswith('{"schema":')]
+    if len(observations) != 1 or observations[0].get("schema") != 1:
+        raise ValueError("Missing or malformed backend probe observation")
+    observation = observations[0]
+    if observation.get("sharedMappingCoherent") is not True:
+        raise ValueError("Backend probe shared mapping was not coherent")
+    mounts = []
+    path_warnings = []
+    for line in observation["mountinfo"].splitlines():
+        before, after = line.split(" - ", 1)
+        # Linux mountinfo escapes whitespace/backslashes as octal.
+        point = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), before.split()[4])
+        normalized = re.sub(r"/+", "/", point)
+        if normalized != point:
+            path_warnings.append({"reported": point, "normalized": normalized})
+        point = normalized
+        mounts.append((point, after.split()[0]))
+
+    def mount_for(path):
+        matches = [(point, kind) for point, kind in mounts
+                   if point == "/" or path == point or path.startswith(point.rstrip("/") + "/")]
+        if not matches:
+            raise ValueError(f"No mount for probe path {path}")
+        point, kind = max(matches, key=lambda entry: len(entry[0]))
+        return {"mountPoint": point, "fsType": kind}
+
+    routes = {path: mount_for(path) for path in ("/", "/tmp", "/dev/shm", observation["dataPath"])}
+    for path in ("/", "/tmp", observation["dataPath"]):
+        if routes[path]["fsType"] != fs_backend:
+            raise ValueError(f"Probe {path} routed to {routes[path]['fsType']}, requested {fs_backend}")
+    if routes["/dev/shm"]["fsType"] != "tmpfs" or observation.get("shmFsMagic") != 0x01021994:
+        raise ValueError("Expected the independent /dev/shm tmpfs mount")
+    return {"status": "mounts-verified", "scope": "separate-preflight-container",
+            "directMappingVerified": False, "routes": routes, "pathWarnings": path_warnings,
+            "observation": observation}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=("native", "podish"), required=True)
@@ -144,8 +226,10 @@ def main():
     parser.add_argument("--output", type=Path, help="JSON report; defaults to results/<backend>.json")
     parser.add_argument("--filter", default="*", help="Comma-separated glob patterns for case names")
     parser.add_argument("--timeout", type=float, default=30, help="Host wall-clock seconds per binary")
-    parser.add_argument("--fs-backend", choices=("hostfs", "tmpfs"), default=None,
-                        help="Override the manifest's Podish root filesystem (hostfs or tmpfs image)")
+    parser.add_argument("--fs-backend", choices=FS_BACKENDS, default=None,
+                        help="Override the manifest's Podish filesystem (hostfs, tmpfs or silkfs)")
+    parser.add_argument("--fs-probe", type=Path,
+                        help="Optional static-i386 backend probe; mount failures block the run")
     parser.add_argument("--trace", action="store_true", help="Enable Podish syscall tracing")
     parser.add_argument("--native-work-root", type=Path, default=Path("/tmp"),
                         help="Linux scratch filesystem, not WSL's /mnt/c (32-bit inode overflow/FIFO limitations)")
@@ -161,8 +245,12 @@ def main():
         fs_backend = "hostfs"
     else:
         fs_backend = args.fs_backend or manifest.get("podishFsBackend", "hostfs")
-    if fs_backend not in ("hostfs", "tmpfs"):
-        parser.error("Manifest podishFsBackend must be hostfs or tmpfs")
+    if fs_backend not in FS_BACKENDS:
+        parser.error("Manifest podishFsBackend must be hostfs, tmpfs or silkfs")
+    if args.fs_probe is not None:
+        args.fs_probe = args.fs_probe.resolve()
+        if args.backend != "podish" or not args.fs_probe.is_file():
+            parser.error("--fs-probe requires Podish and an existing probe binary")
     if args.backend == "native" and manifest.get("requiresRoot") and os.geteuid() != 0:
         parser.error("This manifest requires a root native baseline (use WSL as root)")
     out = args.artifacts.resolve()
@@ -207,7 +295,7 @@ def main():
     base_env.setdefault("DOTNET_ROLL_FORWARD", "LatestMajor")
     image_ref = "localhost/podish-ltp:latest"
     image_work = None
-    if args.backend == "podish" and fs_backend == "tmpfs":
+    if args.backend == "podish" and fs_backend in IMAGE_BACKENDS:
         image_work = run_dir / "image-store"
         image_work.mkdir()
         image_root = run_dir / "image-root"
@@ -219,6 +307,12 @@ def main():
             relative = f"opt/ltp/testcases/bin/{case['name']}"
             shutil.copy2(out / "bin" / case["name"], image_root / relative)
             binary_names.add(relative)
+        if args.fs_probe is not None:
+            relative = f"opt/ltp/testcases/bin/{args.fs_probe.name}"
+            if args.fs_probe.name in {case["name"] for case in cases}:
+                parser.error("Probe filename must not replace an LTP binary")
+            shutil.copy2(args.fs_probe, image_root / relative)
+            binary_names.add(relative)
         tar_path = run_dir / "image.tar"
         build_image_tar(image_root, tar_path, binary_names)
         import_code, import_text, import_timed_out, _ = execute(
@@ -227,6 +321,24 @@ def main():
         (run_dir / "import.log").write_text(import_text, encoding="utf-8")
         if import_code != 0 or import_timed_out:
             print(f"Image import failed (rc={import_code}):\n{import_text}", file=sys.stderr)
+            return 1
+    provenance = {"status": "not-collected", "directMappingVerified": False}
+    if args.fs_probe is not None:
+        probe_work = run_dir / "backend-probe"
+        probe_work.mkdir()
+        command = podish_command(args.cli, fs_backend, probe_work, [args.fs_probe],
+                                 {**common_env, "TMPDIR": "/tmp", "LTPROOT": "/opt/ltp"},
+                                 f"/opt/ltp/testcases/bin/{args.fs_probe.name}", image_ref)
+        code, text, expired, _ = execute(command, image_work or probe_work, base_env, args.timeout)
+        (probe_work / "output.log").write_text(text, encoding="utf-8")
+        try:
+            if expired or code != 0:
+                raise ValueError(f"Backend probe failed: rc={code}, timeout={expired}")
+            provenance = verify_backend_probe(text, fs_backend)
+            provenance["binarySha256"] = hashlib.sha256(args.fs_probe.read_bytes()).hexdigest()
+            (probe_work / "evidence.json").write_text(json.dumps(provenance, indent=2) + "\n")
+        except (ValueError, KeyError, IndexError) as error:
+            print(f"Backend preflight failed: {error}; see {probe_work / 'output.log'}", file=sys.stderr)
             return 1
     results = []
     for case in cases:
@@ -244,43 +356,32 @@ def main():
             env.update(TMPDIR=str(tmp), LTPROOT=str(out))
             command = [str(out / "bin" / name)]
         else:
-            # --init keeps LTP's harness parent above PID 1; its heartbeat checks
-            # getppid()==1 as an orphan condition. No shell is needed.
-            command = ["dotnet", str(args.cli)]
-            if args.trace:
-                command.extend(["--log-level", "trace", "--log-file", str(work / "engine.log")])
-            command.extend(["run", "--rm", "--init", "--log-driver", "none",
-                            "--network", "private"])
-            if image_work is not None:
-                cwd = image_work
-                command.extend(["--fs-backend", "tmpfs", image_ref])
-            else:
-                root = work / "rootfs"
-                for directory in ("opt/ltp/testcases/bin", "tmp", "dev", "proc", "etc", "run"):
-                    (root / directory).mkdir(parents=True, exist_ok=True)
-                shutil.copy2(out / "bin" / name, root / "opt/ltp/testcases/bin" / name)
-                write_guest_identity_files(root)
-                command.extend(["--rootfs", str(root)])
-            if args.trace:
-                command.append("--strace")
-            for key, value in {**common_env, "TMPDIR": "/tmp", "LTPROOT": "/opt/ltp"}.items():
-                command.extend(["--env", f"{key}={value}"])
-            command.append(f"/opt/ltp/testcases/bin/{name}")
+            cwd = image_work or work
+            command = podish_command(args.cli, fs_backend, work, [out / "bin" / name],
+                                     {**common_env, "TMPDIR": "/tmp", "LTPROOT": "/opt/ltp"},
+                                     f"/opt/ltp/testcases/bin/{name}", image_ref, args.trace)
         try:
             code, text, timed_out, elapsed = execute(command, cwd, env, args.timeout)
             status, counts = classify(code, text, timed_out)
             if status == "PASS" and args.backend == "podish" and counts != baseline[name]["counts"]:
                 native_counts = baseline[name]["counts"]
-                extra_skips_only = (
-                    counts["passed"] > 0 and
+                more_passed_from_skips = (
                     counts["failed"] == native_counts["failed"] == 0 and
                     counts["broken"] == native_counts["broken"] == 0 and
                     counts["warnings"] == native_counts["warnings"] == 0 and
-                    counts["skipped"] > native_counts["skipped"])
-                status = "PARTIAL" if extra_skips_only else "BROKEN"
-                text += ("\nRunner: partial variant coverage (unsupported assertions skipped); "
-                         "refusing a full PASS.\n" if status == "PARTIAL" else
-                         "\nRunner: assertion counts differ from native; refusing a partial-coverage PASS.\n")
+                    counts["passed"] >= native_counts["passed"] and
+                    counts["passed"] + counts["skipped"] == native_counts["passed"] + native_counts["skipped"])
+                if not more_passed_from_skips:
+                    extra_skips_only = (
+                        counts["passed"] > 0 and
+                        counts["failed"] == native_counts["failed"] == 0 and
+                        counts["broken"] == native_counts["broken"] == 0 and
+                        counts["warnings"] == native_counts["warnings"] == 0 and
+                        counts["skipped"] > native_counts["skipped"])
+                    status = "PARTIAL" if extra_skips_only else "BROKEN"
+                    text += ("\nRunner: partial variant coverage (unsupported assertions skipped); "
+                             "refusing a full PASS.\n" if status == "PARTIAL" else
+                             "\nRunner: assertion counts differ from native; refusing a partial-coverage PASS.\n")
         except OSError as error:
             code, text, elapsed = -1, str(error), 0
             status, counts = "BROKEN", {key: 0 for key in SUMMARY_KEYS}
@@ -296,11 +397,13 @@ def main():
         print(f"{name:24} {status:8} {elapsed:6.2f}s  {counts}", flush=True)
     statuses = dict(Counter(case["status"] for case in results))
     report = {"backend": args.backend, "fileSystemBackend": fs_backend,
+              "source": source_state(), "dataBackendEvidence": provenance,
               "build": metadata, "host": platform.platform(),
               "manifest": args.manifest.name, "requiresRoot": bool(manifest.get("requiresRoot")),
               "timestamp": stamp, "kernelConfigChecks": "disabled (behavioral assertions retained)",
               "timeoutSeconds": args.timeout, "summary": statuses, "cases": results}
-    output = (args.output or out / "results" / f"{args.backend}.json").resolve()
+    report_name = "native.json" if args.backend == "native" else f"podish-{fs_backend}.json"
+    output = (args.output or out / "results" / report_name).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     (run_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

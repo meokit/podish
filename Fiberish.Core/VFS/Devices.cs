@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
+using Fiberish.Memory;
 using Fiberish.Native;
 
 namespace Fiberish.VFS;
@@ -636,7 +637,7 @@ public class RandomInode : Inode
     }
 }
 
-public class ZeroInode : Inode
+public class ZeroInode : MappingBackedInode
 {
     public ZeroInode(SuperBlock sb)
     {
@@ -644,6 +645,28 @@ public class ZeroInode : Inode
         Type = InodeType.CharDev;
         Mode = 0x1B6; // 666
         Ino = 1; // Dummy
+        Size = ulong.MaxValue;
+    }
+
+    public override bool SupportsMmap => true;
+
+    internal override AddressSpace AcquireMappingRef()
+    {
+        return SuperBlock.MemoryContext.AcquireZeroMappingRef();
+    }
+
+    internal override InodePageRecord? TryCreateIntrinsicMappingPage(uint pageIndex)
+    {
+        var zeroPage = SuperBlock.MemoryContext.AcquireZeroMappingPage(pageIndex);
+        return new InodePageRecord
+        {
+            Handle = default,
+            PageIndex = pageIndex,
+            Ptr = zeroPage,
+            BackingKind = FilePageBackingKind.ZeroSharedPage,
+            IsWritable = false,
+            OwnerInode = this
+        };
     }
 
     public override int Create(Dentry dentry, int mode, int uid, int gid)

@@ -514,11 +514,84 @@ public sealed class SilkInode : MappingBackedInode, IHostMappedCacheDropper
         return GetMappedPageCacheDiagnostics();
     }
 
+    bool IHostMappedCacheDropper.TryDescribeMappedPage(long filePageIndex, IntPtr pointer,
+        out FilePageLeaseDiagnostics diagnostics)
+    {
+        lock (_mappedCacheLock)
+        {
+            diagnostics = default;
+            return _mappedPageCache?.TryDescribePagePointer(filePageIndex, pointer, out diagnostics) == true;
+        }
+    }
+
     long IHostMappedCacheDropper.TrimMappedCache(bool aggressive)
     {
         lock (_mappedCacheLock)
         {
             return _mappedPageCache?.Trim(aggressive) ?? 0;
+        }
+    }
+
+    HostPageResidencyStatus IHostMappedCacheDropper.CheckPageResidency(long filePageIndex)
+    {
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.CheckPageResidency(filePageIndex) ?? HostPageResidencyStatus.NonResident;
+        }
+    }
+
+    bool IHostMappedCacheDropper.TryPrefaultPage(long filePageIndex, bool writable)
+    {
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.TryPrefaultPage(filePageIndex, writable) ?? false;
+        }
+    }
+
+    bool IHostMappedCacheDropper.TryLockPageRange(long startFilePageIndex, int pageCount, out int lockedPages)
+    {
+        lock (_mappedCacheLock)
+        {
+            if (_mappedPageCache != null)
+                return _mappedPageCache.TryLockPageRange(startFilePageIndex, pageCount, out lockedPages);
+            lockedPages = 0;
+            return false;
+        }
+    }
+
+    bool IHostMappedCacheDropper.TryUnlockPageRange(long startFilePageIndex, int pageCount)
+    {
+        lock (_mappedCacheLock)
+        {
+            return _mappedPageCache?.TryUnlockPageRange(startFilePageIndex, pageCount) ?? true;
+        }
+    }
+
+    private static readonly byte[] ZeroPunchBuffer = new byte[64 * 1024];
+
+    protected override int PunchHoleBackingCore(long offset, long length)
+    {
+        try
+        {
+            using var handle = _repository.OpenLiveInodeHandle((long)Ino, FileMode.Open, FileAccess.ReadWrite);
+            var remaining = length;
+            var current = offset;
+            while (remaining > 0)
+            {
+                var chunk = (int)Math.Min(ZeroPunchBuffer.Length, remaining);
+                RandomAccess.Write(handle, ZeroPunchBuffer.AsSpan(0, chunk), current);
+                current += chunk;
+                remaining -= chunk;
+            }
+            return 0;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return -(int)Errno.EACCES;
+        }
+        catch (IOException)
+        {
+            return -(int)Errno.EIO;
         }
     }
 
@@ -853,6 +926,12 @@ public sealed class SilkInode : MappingBackedInode, IHostMappedCacheDropper
             _childNames.Add(childName);
             return created;
         }
+    }
+
+    public override Dentry? Lookup(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return Lookup(FsEncoding.EncodeUtf8(name));
     }
 
     public override List<DirectoryEntry> GetEntries()

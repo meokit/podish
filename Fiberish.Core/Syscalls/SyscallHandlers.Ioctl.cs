@@ -104,6 +104,7 @@ public partial class SyscallManager
 
         static int AddSeals(LinuxFile file, uint arg)
         {
+            if ((file.Flags & FileFlags.O_RDWR) == 0) return -(int)Errno.EPERM;
             return file.OpenedInode is TmpfsInode tmpfsInode
                 ? tmpfsInode.AddSeals(arg)
                 : -(int)Errno.EINVAL;

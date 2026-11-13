@@ -286,7 +286,9 @@ internal static class RootfsArchiveLoader
             }
 
             var created = new Dentry(FsName.FromString(segment), null, current, current.SuperBlock);
-            current.Inode.Mkdir(created, mode, 0, 0);
+            var rc = current.Inode.Mkdir(created, mode, 0, 0);
+            if (rc < 0)
+                throw new InvalidOperationException($"EnsureDirectory Mkdir failed: parent={current.Name} segment={segment} rc={rc} existingWasNull=true created.InodeIsNull={created.Inode == null}");
             current = created;
         }
 
@@ -296,7 +298,11 @@ internal static class RootfsArchiveLoader
     private static void CreateOrReplaceFile(Dentry root, string relativePath, int mode, byte[] data)
     {
         var (parent, name) = ResolveParent(root, relativePath);
-        var existing = parent.Inode!.Lookup(name);
+        if (parent == null)
+            throw new InvalidOperationException($"ResolveParent returned null parent for '{relativePath}'");
+        if (parent.Inode == null)
+            throw new InvalidOperationException($"ResolveParent returned parent with null Inode for '{relativePath}': parent.Name={parent.Name}");
+        var existing = parent.Inode.Lookup(name);
         if (existing != null)
         {
             if (existing.Inode?.Type == InodeType.Directory)

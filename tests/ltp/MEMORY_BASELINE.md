@@ -7,6 +7,10 @@ Native reference: WSL Linux 5.15.153.1, root, i386 static executables
 LTP: `e74f6d6f1c09e6be1aee0a09d347d818be3a36e8`
 Branch: `main` (baseline only; fixes go on `fix/ltp-memory-mapping`)
 
+This document preserves the initial baseline. See
+[MEMORY_FIX_REPORT.md](MEMORY_FIX_REPORT.md) for the bounded repairs, current
+results, and work deferred under the user's no-large-refactor constraint.
+
 ## Results
 
 | Backend | PASS | FAIL | BROKEN | TIMEOUT | SKIP |
@@ -22,7 +26,7 @@ Branch: `main` (baseline only; fixes go on `fix/ltp-memory-mapping`)
 
 ## Coverage
 
-Groups: `mmap` (15), `munmap` (3), `mprotect` (5), `madvise` (9), `mremap` (8),
+Groups: `mmap` (15), `munmap` (3), `mprotect` (5), `madvise` (8), `mremap` (8),
 `brk` (2), `msync` (4), `mincore` (4), `memfd` (4), `mlock` (11), `remap` (1),
 `barrier` (1).
 
@@ -30,12 +34,13 @@ Groups: `mmap` (15), `munmap` (3), `mprotect` (5), `madvise` (9), `mremap` (8),
 
 ### 1. `mmap(2)` argument validation is incomplete
 
-- `mmap06`: six cases expect `EACCES` for a file opened `O_WRONLY` when the
-  mapping requests read access, and `EINVAL` for `MAP_FILE` without
-  `MAP_SHARED`/`MAP_PRIVATE`. Podish accepts most of these mappings.
+- `mmap06`: six cases expect `EACCES` for a file opened `O_WRONLY`, for
+  either shared or private mappings. Both other `EINVAL` assertions already
+  pass. File mappings require a readable descriptor regardless of `prot`.
 - `mmap08`: expects `EBADF` for a closed descriptor; Podish returns `EINVAL`
-  because it checks the `fd == -1` sentinel before validating that the
-  descriptor is still open.
+  because this upstream case supplies a zero length (`page_sz` is never set),
+  and Podish validates length before resolving the closed descriptor. Native
+  Linux returns `EBADF` first. No upstream source was modified.
 - `mmap20`: expects `EOPNOTSUPP` for `MAP_SHARED_VALIDATE` combined with an
   invalid flag; Podish returns `EINVAL`.
 - `mmap12`: fails because `/proc/self/pagemap` is missing, so the test cannot
@@ -44,20 +49,23 @@ Groups: `mmap` (15), `munmap` (3), `mprotect` (5), `madvise` (9), `mremap` (8),
 ### 2. `mmap(2)` with `PROT_NONE` does not fault
 
 `mmap05` and `mprotect04` map or protect a region with no access and then
-touch it, expecting `SIGSEGV`. Podish never faults, so both cases hang until
-the host timeout. The engine log shows the guest repeatedly re-entering the
-same instruction, confirming the access silently succeeds.
+touch it, expecting `SIGSEGV`. Both cases hang until the host timeout. The
+engine repeatedly retries the same instruction: the VMA fault resolver
+incorrectly reports `Handled` after installing a still-inaccessible page.
+This is a fault-resolution loop, not evidence of a successful memory access.
 
 ### 3. `mmap(2)` of a file larger than the mapping
 
 `mmap13` maps twice the file size and writes past the end of the file,
-expecting `SIGBUS`. Podish raises `SIGSEGV` instead and the case is reported
-as `TBROK`.
+expecting `SIGBUS`. The memory callback correctly queues `SIGBUS`, but the
+CPU-exit path treats that same fault as another `SIGSEGV`. The latter kills
+the worker after it starts the `SIGBUS` handler.
 
 ### 4. `MAP_GROWSDOWN` is not honored
 
-`mmap18` expects a stack-like mapping to grow on demand. Podish kills the
-child with `SIGSEGV` where the test expects success.
+`mmap18` expects a stack-like mapping to grow on demand. Podish already has
+`TryExpandGrowDownVma`, but its existing index/bounds policy rejects these
+growth accesses and kills the child with `SIGSEGV` instead of succeeding.
 
 ### 5. `munmap(2)` does not validate its arguments
 
@@ -71,9 +79,9 @@ child with `SIGSEGV` where the test expects success.
 ### 6. `mprotect(2)` error paths
 
 `mprotect01` expects `ENOMEM` for an unmapped address and `EACCES` when
-adding write access to a read-only file mapping. Podish's `mprotect` on an
-unmapped range returns success, and mapping `/dev/zero` fails with `ENODEV`
-because the character device does not support `mmap`.
+adding write access to a read-only file mapping. The first two assertions
+already pass (`ENOMEM`, `EINVAL`). The third cannot run because mapping
+`/dev/zero` fails with `ENODEV`: the character device does not support `mmap`.
 
 ### 7. `madvise(2)` advice coverage and semantics
 
@@ -88,10 +96,12 @@ because the character device does not support `mmap`.
 
 ### 8. `mremap(2)` semantics
 
-- `mremap04`, `mremap09`: expect `ENOMEM` when the region cannot grow in
-  place. Podish succeeds.
+- `mremap04` expects `ENOMEM` when growth would consume the tail of the same
+  existing VMA. Podish ignores that occupied tail. The separate blocker case
+  `mremap09` already passes.
 - `mremap05`: expects `EINVAL` for `MREMAP_FIXED` without `MREMAP_MAYMOVE`
-  and for overlapping source and destination ranges. Podish accepts both.
+  and for overlapping source and destination ranges. Only the overlap
+  assertion fails; the other two already pass.
 - `mremap08`: expects `MREMAP_FIXED` to move the mapping and to return the new
   address. Podish returns the old address and leaves the old mapping in place.
 - `mremap06`: aborts because the first `mremap` call itself fails.
@@ -105,9 +115,10 @@ for an unmapped range. Podish's `msync` always returns success.
 
 ### 10. `mincore(2)` is not implemented
 
-All four `mincore` cases fail with `ENOSYS`. The case expects `EINVAL` for an
-unaligned address, `EFAULT` for an invalid vector pointer, and `ENOMEM` for an
-unmapped range.
+`mincore01` and `mincore03` reach an unimplemented `mincore` syscall.
+`mincore02` and `mincore04` abort earlier at the unimplemented `mlock`.
+`mincore01` expects `EINVAL` for an unaligned address, `EFAULT` for an invalid
+vector pointer, and `ENOMEM` for an unmapped range.
 
 ### 11. The `mlock` family is not implemented
 
@@ -124,14 +135,15 @@ also breaks `mincore02`, `mincore04` and `madvise02`, which lock memory first.
 
 ### 13. `remap_file_pages(2)` is not implemented
 
-`remap_file_pages01` expects `ENOSYS` on a kernel without the fix but a
-working remap otherwise; Podish returns `ENOSYS` and then the case crashes
-with `SIGSEGV`.
+`remap_file_pages01` exercises nonlinear shared mappings. Podish returns
+`ENOSYS`; later assertions/cleanup also report `SIGSEGV`. This is not an
+expected-`ENOSYS` test.
 
 ### 14. `membarrier(2)` is only partially implemented
 
-`membarrier01` expects `membarrier(MEMBARRIER_CMD_GLOBAL)` to succeed.
-Podish returns `EPERM` for the global expedited command.
+`membarrier01` expects `MEMBARRIER_CMD_GLOBAL_EXPEDITED` to succeed without
+caller registration. Podish incorrectly requires the caller to register;
+`MEMBARRIER_CMD_GLOBAL` itself already passes.
 
 ### 15. Missing procfs files
 

@@ -861,8 +861,9 @@ public partial class SyscallManager
             LinuxConstants.MEMBARRIER_CMD_GLOBAL => 0,
             LinuxConstants.MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED => RegisterMembarrier(task.Process,
                 LinuxConstants.MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED),
-            LinuxConstants.MEMBARRIER_CMD_GLOBAL_EXPEDITED => RequireMembarrierRegistration(registered,
-                LinuxConstants.MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED),
+            // Registration controls which processes participate, not whether
+            // this caller may issue the global barrier. Guest execution is serialized.
+            LinuxConstants.MEMBARRIER_CMD_GLOBAL_EXPEDITED => 0,
             LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED => RegisterMembarrier(task.Process,
                 LinuxConstants.MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED),
             LinuxConstants.MEMBARRIER_CMD_PRIVATE_EXPEDITED => RequireMembarrierRegistration(registered,

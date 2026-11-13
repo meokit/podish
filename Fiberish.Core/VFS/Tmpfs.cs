@@ -187,6 +187,13 @@ public class TmpfsInode : IndexedMemoryInode
         if (!AllowSealing || (SealFlags & F_SEAL_SEAL) != 0)
             return -(int)Errno.EPERM;
 
+        if ((seals & F_SEAL_WRITE & ~SealFlags) != 0)
+            foreach (var mm in SnapshotMappedAddressSpaces())
+                foreach (var vma in mm.VMAs)
+                    if (ReferenceEquals(vma.LogicalInode, this) && (vma.Flags & Memory.MapFlags.Shared) != 0 &&
+                        vma.File != null && (vma.File.Flags & FileFlags.O_RDWR) != 0)
+                        return -(int)Errno.EBUSY;
+
         SealFlags |= seals;
         return 0;
     }
@@ -194,6 +201,18 @@ public class TmpfsInode : IndexedMemoryInode
     public int GetSeals()
     {
         return IsMemfd ? (int)SealFlags : -(int)Errno.EINVAL;
+    }
+
+    internal bool HasWriteSeal => (SealFlags & F_SEAL_WRITE) != 0;
+
+    protected override int PrepareHostMappedWrite(LinuxFile? linuxFile, long bufferLength, long offset)
+    {
+        // The vector/scalar mapped-I/O fast path bypasses WriteToPageCache.
+        if (HasWriteSeal) return -(int)Errno.EPERM;
+        if (bufferLength > 0 && offset > long.MaxValue - bufferLength) return -(int)Errno.EFBIG;
+        if ((SealFlags & F_SEAL_GROW) != 0 && offset + bufferLength > (long)Size)
+            return -(int)Errno.EPERM;
+        return base.PrepareHostMappedWrite(linuxFile, bufferLength, offset);
     }
 
     protected override int WriteToPageCache(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)

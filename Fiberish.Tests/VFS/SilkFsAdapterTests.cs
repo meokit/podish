@@ -107,7 +107,7 @@ public class SilkFsAdapterTests
         finally
         {
             sm.Close();
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectory(silkRoot);
         }
     }
 
@@ -616,7 +616,7 @@ public class SilkFsAdapterTests
         }
         finally
         {
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectory(silkRoot);
         }
     }
 
@@ -677,7 +677,7 @@ public class SilkFsAdapterTests
         }
         finally
         {
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectory(silkRoot);
         }
     }
 
@@ -739,7 +739,7 @@ public class SilkFsAdapterTests
         }
         finally
         {
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectory(silkRoot);
         }
     }
 
@@ -800,7 +800,7 @@ public class SilkFsAdapterTests
         }
         finally
         {
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectory(silkRoot);
         }
     }
 
@@ -891,7 +891,7 @@ public class SilkFsAdapterTests
         }
         finally
         {
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectory(silkRoot);
         }
     }
 
@@ -978,7 +978,7 @@ public class SilkFsAdapterTests
         }
         finally
         {
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectory(silkRoot);
         }
     }
 
@@ -1042,7 +1042,7 @@ public class SilkFsAdapterTests
         }
         finally
         {
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectory(silkRoot);
         }
     }
 
@@ -1117,7 +1117,7 @@ public class SilkFsAdapterTests
             sm.MemoryContext.AddressSpacePolicy.HighWatermarkBytes = originalHigh;
             sm.MemoryContext.AddressSpacePolicy.LowWatermarkBytes = originalLow;
             sm.MemoryContext.AddressSpacePolicy.WritebackInterval = originalInterval;
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectory(silkRoot);
         }
     }
 
@@ -1184,7 +1184,7 @@ public class SilkFsAdapterTests
         }
         finally
         {
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectory(silkRoot);
         }
     }
 
@@ -1237,7 +1237,7 @@ public class SilkFsAdapterTests
         }
         finally
         {
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectory(silkRoot);
         }
     }
 
@@ -1319,7 +1319,7 @@ public class SilkFsAdapterTests
         }
         finally
         {
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectory(silkRoot);
         }
     }
 
@@ -1407,7 +1407,7 @@ public class SilkFsAdapterTests
         }
         finally
         {
-            if (Directory.Exists(silkRoot)) Directory.Delete(silkRoot, true);
+            TestWorkspace.DeleteDirectory(silkRoot);
         }
     }
 

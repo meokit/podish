@@ -74,6 +74,7 @@ public partial class FiberTask
     private int _pendingAsyncSyscallResult;
 
     private bool _pendingFaultFromInterrupt;
+    private Signal? _pendingMemoryFaultSignal;
     private long _runningGuestCpuSinceTimestamp;
     private long _signalWaitId;
     private SignalWaitKind _signalWaitKind;
@@ -561,6 +562,7 @@ public partial class FiberTask
                     "Re-entrant page fault at 0x{Addr:X} ({Mode}); delivering SIGSEGV with minimal diagnostics.",
                     addr, isWrite ? "Write" : "Read");
                 PostSignal((int)Signal.SIGSEGV);
+                _pendingMemoryFaultSignal = Signal.SIGSEGV;
                 _pendingFaultFromInterrupt = true;
                 CPU.Yield();
                 return true;
@@ -595,6 +597,7 @@ public partial class FiberTask
                 Signo = (int)fatalSignal,
                 Code = faultResult == FaultResult.BusError ? 2 : 1
             });
+            _pendingMemoryFaultSignal = fatalSignal;
             _pendingFaultFromInterrupt = true;
             CPU.Yield();
             return true; // Return true to C++ so it stops with Yield status instead of Fault status
@@ -1734,6 +1737,23 @@ public partial class FiberTask
     // Logs register state, delivers SIGSEGV, and marks the task Terminated.
     private void HandleCpuFault()
     {
+        if (_pendingMemoryFaultSignal is { } postedSignal)
+        {
+            // The memory fault callback already selected SIGBUS or SIGSEGV.
+            // A subsequent native #PF/Yield is the same fault, not a second
+            // SIGSEGV that should be delivered inside the SIGBUS handler.
+            _pendingMemoryFaultSignal = null;
+            _pendingFaultFromInterrupt = false;
+            if (MustForceDefaultForSynchronousFault((int)postedSignal))
+                ApplyDefaultSignalAction((int)postedSignal, GetDefaultSignalAction((int)postedSignal));
+            else
+            {
+                Status = FiberTaskStatus.Ready;
+                CommonKernel.Schedule(this);
+            }
+            return;
+        }
+
         var vector = CPU.FaultVector;
         var sig = vector switch
         {
@@ -2064,10 +2084,11 @@ public partial class FiberTask
 
                 if (!cloneVm)
                 {
-                    newMem.RebuildExternalMappingsFromNative(newCpu, newMem.VMAs);
                     if (skippedDontForkRanges != null)
                         foreach (var range in skippedDontForkRanges)
                             newCpu.MemUnmap(range.Start, range.Length);
+
+                    newMem.RebuildExternalMappingsFromNative(newCpu, newMem.VMAs);
 
                     foreach (var vma in Process.Mem.VMAs)
                     {

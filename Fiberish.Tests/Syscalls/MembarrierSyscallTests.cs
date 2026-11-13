@@ -43,12 +43,12 @@ public class MembarrierSyscallTests
     }
 
     [Fact]
-    public async Task GlobalExpedited_RequiresRegistration()
+    public async Task GlobalExpedited_DoesNotRequireCallerRegistration()
     {
         using var env = new TestEnv();
 
         var rc = await CallSysMembarrier(env, LinuxConstants.MEMBARRIER_CMD_GLOBAL_EXPEDITED);
-        Assert.Equal(-(int)Errno.EPERM, rc);
+        Assert.Equal(0, rc);
 
         rc = await CallSysMembarrier(env, LinuxConstants.MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED);
         Assert.Equal(0, rc);

@@ -737,6 +737,66 @@ internal sealed class OwnerPageSlots
         return true;
     }
 
+    public bool TryMovePage(uint sourcePageIndex, OwnerPageSlots targetSlots, uint targetPageIndex, HostPageKind hostPageKind)
+    {
+        ResidentPageRecord pageRecord;
+        lock (_lock)
+        {
+            if (!_pages.Remove(sourcePageIndex, out pageRecord))
+                return false;
+            ApplyPageCountDelta(-1);
+            _pageBindingChanged?.Invoke(sourcePageIndex, pageRecord.Ptr, IntPtr.Zero);
+        }
+
+        var hostPage = pageRecord.HostPage;
+        var oldBinding = _ownerBindingFactory(sourcePageIndex);
+        var ownerBinding = targetSlots._ownerBindingFactory(targetPageIndex);
+        var transfer = hostPage.TryTransferOwnerRoot(oldBinding, ownerBinding);
+        if (transfer == OwnerRootTransferResult.Invalid)
+            return false;
+
+        if (transfer == OwnerRootTransferResult.NeedsCowCopy)
+        {
+            var wasDirty = pageRecord.Dirty;
+            var wasUptodate = pageRecord.Uptodate;
+            if (!_memoryContext.BackingPagePool.TryAllocAnonPageMayFail(out var cowHandle, AllocationClass.Cow,
+                    AllocationSource.CowReplacePrivate))
+            {
+                lock (_lock)
+                {
+                    _pages[sourcePageIndex] = pageRecord;
+                    ApplyPageCountDelta(1);
+                    _pageBindingChanged?.Invoke(sourcePageIndex, IntPtr.Zero, pageRecord.Ptr);
+                }
+                throw new OutOfMemoryException("Failed to allocate COW copy during page move.");
+            }
+
+            unsafe
+            {
+                Buffer.MemoryCopy((void*)pageRecord.Ptr, (void*)cowHandle.Pointer,
+                    LinuxConstants.PageSize, LinuxConstants.PageSize);
+            }
+
+            hostPage.UnbindOwnerRoot(oldBinding);
+            targetSlots.ReplacePage(targetPageIndex, ref cowHandle, hostPageKind);
+            if ((wasDirty || wasUptodate) && targetSlots.PeekVmPage(targetPageIndex) is { } movedRecord)
+            {
+                if (wasDirty) movedRecord.Dirty = true;
+                if (wasUptodate) movedRecord.Uptodate = true;
+            }
+            return true;
+        }
+
+        lock (targetSlots._lock)
+        {
+            targetSlots._pages[targetPageIndex] = CreateVmPage(hostPage, pageRecord.MappingReleaseOwner, pageRecord.MappingReleaseRecord);
+            Touch(targetSlots._pages[targetPageIndex]);
+            targetSlots.ApplyPageCountDelta(1);
+            targetSlots._pageBindingChanged?.Invoke(targetPageIndex, IntPtr.Zero, pageRecord.Ptr);
+        }
+        return true;
+    }
+
     public int RemovePagesInRange(uint startPageIndex, uint endPageIndex,
         Func<ResidentPageRecord, bool>? predicate = null)
     {
@@ -824,7 +884,8 @@ internal sealed class OwnerPageSlots
             Ptr = hostPage.Ptr,
             HostPage = hostPage,
             MappingReleaseOwner = releaseOwner,
-            MappingReleaseRecord = releaseRecord
+            MappingReleaseRecord = releaseRecord,
+            FileIdentity = releaseRecord?.FileIdentity ?? releaseOwner?.GetFilePageIdentity(hostPage.OwnerPageIndex) ?? default
         };
     }
 
@@ -861,6 +922,7 @@ internal readonly struct ResidentPageRecord
     public required HostPageRef HostPage { get; init; }
     public MappingBackedInode? MappingReleaseOwner { get; init; }
     public InodePageRecord? MappingReleaseRecord { get; init; }
+    public FilePageIdentity FileIdentity { get; init; }
 
     public bool Dirty
     {
