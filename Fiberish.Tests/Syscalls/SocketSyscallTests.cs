@@ -104,6 +104,11 @@ public class SocketSyscallTests
         return env.Invoke("SysIoctl", fd, request, arg, 0u, 0u, 0u);
     }
 
+    private static ValueTask<int> CallSysRead(TestEnv env, uint fd, uint bufPtr, uint len)
+    {
+        return env.Invoke("SysRead", fd, bufPtr, len, 0u, 0u, 0u);
+    }
+
     private static ValueTask<int> CallSysWrite(TestEnv env, uint fd, uint bufPtr, uint len)
     {
         return env.Invoke("SysWrite", fd, bufPtr, len, 0u, 0u, 0u);
@@ -1045,6 +1050,411 @@ public class SocketSyscallTests
 
         Assert.Equal(0, await CallSysShutdown(env, (uint)clientFd, 1));
         Assert.Equal(-(int)Errno.EPIPE, await CallSysSend(env, (uint)clientFd, 0x32000u, 4u));
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_BindPortZero_Listen_WriteRead_AndCloseReleasePort_Works()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        env.MapUserPage(0x30000);
+        env.MapUserPage(0x31000);
+        env.MapUserPage(0x32000);
+
+        WriteSockaddrIn(env, 0x30000, 0x7F000001u, 0);
+        env.WriteInt32(0x31000, 16);
+
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(serverFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)serverFd, 0x30000, 16));
+        Assert.Equal(0, await CallSysGetSockName(env, (uint)serverFd, 0x30000, 0x31000));
+        var (boundIp, boundPort) = ReadSockaddrIn(env, 0x30000);
+        Assert.Equal(0x7F000001u, boundIp);
+        Assert.True(boundPort >= 49152);
+
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 16));
+
+        // Duplicate bind on the same port returns EADDRINUSE (never EFAULT).
+        var dupFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(dupFd >= 0);
+        WriteSockaddrIn(env, 0x32000, 0x7F000001u, boundPort);
+        Assert.Equal(-(int)Errno.EADDRINUSE, await CallSysBind(env, (uint)dupFd, 0x32000, 16));
+
+        var clientFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(clientFd >= 0);
+        Assert.Equal(0, await CallSysConnect(env, (uint)clientFd, 0x32000, 16));
+
+        var acceptedFd = await CallSysAccept(env, (uint)serverFd, 0, 0);
+        Assert.True(acceptedFd >= 0);
+
+        // Stream write() / read() must go through NetstackSocketInode ReadV/WriteV instead of returning 0.
+        var req = Encoding.ASCII.GetBytes("GET / HTTP/1.1\r\n\r\n");
+        env.WriteBytes(0x32000, req);
+        Assert.Equal(req.Length, await CallSysWrite(env, (uint)clientFd, 0x32000, (uint)req.Length));
+
+        var read = await CallSysRead(env, (uint)acceptedFd, 0x31000, 64);
+        Assert.Equal(req.Length, read);
+        Assert.Equal("GET / HTTP/1.1\r\n\r\n", Encoding.ASCII.GetString(env.ReadBytes(0x31000, read)));
+
+        // Closing the server FD releases the reserved port so dupFd can bind it.
+        Assert.Equal(0, await CallSysClose(env, (uint)serverFd));
+        WriteSockaddrIn(env, 0x32000, 0x7F000001u, boundPort);
+        Assert.Equal(0, await CallSysBind(env, (uint)dupFd, 0x32000, 16));
+        Assert.Equal(0, await CallSysListen(env, (uint)dupFd, 4));
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_UnboundListen_AutoAssignsEphemeralPort()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        env.MapUserPage(0x30000);
+        env.MapUserPage(0x31000);
+        env.WriteInt32(0x31000, 16);
+
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(serverFd >= 0);
+
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 8));
+        Assert.Equal(0, await CallSysGetSockName(env, (uint)serverFd, 0x30000, 0x31000));
+        var (boundIp, boundPort) = ReadSockaddrIn(env, 0x30000);
+        Assert.Equal(0x00000000u, boundIp);
+        Assert.True(boundPort >= 49152);
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_CloseAfter32KibWrite_DrainsAllBytesToPeer()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        env.MapUserPage(0x30000);
+        env.MapUserPage(0x31000);
+        for (uint addr = 0x32000; addr < 0x36000; addr += LinuxConstants.PageSize)
+            env.MapUserPage(addr);
+        for (uint addr = 0x36000; addr < 0x3A000; addr += LinuxConstants.PageSize)
+            env.MapUserPage(addr);
+
+        WriteSockaddrIn(env, 0x30000, 0x7F000001u, 19400);
+        WriteSockaddrIn(env, 0x31000, 0x7F000001u, 19400);
+
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        var clientFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(serverFd >= 0 && clientFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)serverFd, 0x30000, 16));
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 4));
+        Assert.Equal(0, await CallSysConnect(env, (uint)clientFd, 0x31000, 16));
+
+        var acceptedFd = await CallSysAccept(env, (uint)serverFd, 0, 0);
+        Assert.True(acceptedFd >= 0);
+
+        var chunk1 = new byte[16 * 1024];
+        var chunk2 = new byte[16 * 1024];
+        for (var i = 0; i < chunk1.Length; i++)
+        {
+            chunk1[i] = (byte)(i & 0xFF);
+            chunk2[i] = (byte)((i * 3 + 5) & 0xFF);
+        }
+
+        env.WriteBytes(0x32000, chunk1);
+        Assert.Equal(chunk1.Length, await CallSysWrite(env, (uint)clientFd, 0x32000, (uint)chunk1.Length));
+        env.WriteBytes(0x32000, chunk2);
+        Assert.Equal(chunk2.Length, await CallSysWrite(env, (uint)clientFd, 0x32000, (uint)chunk2.Length));
+
+        // Close sender immediately after the two buffered writes return success.
+        Assert.Equal(0, await CallSysClose(env, (uint)clientFd));
+
+        var received = new List<byte>(chunk1.Length + chunk2.Length);
+        while (true)
+        {
+            var n = await CallSysRead(env, (uint)acceptedFd, 0x36000, 16 * 1024);
+            Assert.True(n >= 0);
+            if (n == 0)
+                break;
+            received.AddRange(env.ReadBytes(0x36000, n));
+        }
+
+        Assert.Equal(chunk1.Length + chunk2.Length, received.Count);
+        Assert.Equal(chunk1, received.GetRange(0, chunk1.Length).ToArray());
+        Assert.Equal(chunk2, received.GetRange(chunk1.Length, chunk2.Length).ToArray());
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_EpollEdgeTriggered_DoesNotRepeatWithoutIoAndRearmsAfterDrain()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        env.MapUserPage(0x30000);
+        env.MapUserPage(0x31000);
+        env.MapUserPage(0x32000);
+        env.MapUserPage(0x33000);
+        env.MapUserPage(0x34000);
+
+        WriteSockaddrIn(env, 0x30000, 0x7F000001u, 19410);
+        WriteSockaddrIn(env, 0x31000, 0x7F000001u, 19410);
+
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        var clientFd = await CallSysSocket(env, LinuxConstants.AF_INET,
+            LinuxConstants.SOCK_STREAM | LinuxConstants.SOCK_NONBLOCK, 0);
+        Assert.True(serverFd >= 0 && clientFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)serverFd, 0x30000, 16));
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 4));
+        var connectRc = await CallSysConnect(env, (uint)clientFd, 0x31000, 16);
+        Assert.True(connectRc == 0 || connectRc == -(int)Errno.EINPROGRESS);
+
+        var acceptedFd = await CallSysAccept(env, (uint)serverFd, 0, 0);
+        Assert.True(acceptedFd >= 0);
+
+        var epfd = await env.Invoke("SysEpollCreate1", 0, 0, 0, 0, 0, 0);
+        Assert.True(epfd >= 0);
+
+        var ev = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(ev.AsSpan(0, 4),
+            LinuxConstants.EPOLLOUT | LinuxConstants.EPOLLET);
+        BinaryPrimitives.WriteUInt64LittleEndian(ev.AsSpan(4, 8), 0xCAFEBABEUL);
+        env.WriteBytes(0x32000, ev);
+        Assert.Equal(0,
+            await env.Invoke("SysEpollCtl", (uint)epfd, LinuxConstants.EPOLL_CTL_ADD, (uint)clientFd, 0x32000, 0, 0));
+
+        // First harvest observes EPOLLOUT.
+        Assert.Equal(1, await env.Invoke("SysEpollWait", (uint)epfd, 0x33000, 1, 100, 0, 0));
+        Assert.Equal(LinuxConstants.EPOLLOUT,
+            BinaryPrimitives.ReadUInt32LittleEndian(env.ReadBytes(0x33000, 12).AsSpan(0, 4)));
+
+        // Without performing any I/O, waiting past polling timer intervals must NOT fire again.
+        Assert.Equal(0, await env.Invoke("SysEpollWait", (uint)epfd, 0x33000, 1, 40, 0, 0));
+
+        // Switch watch to EPOLLIN | EPOLLET and test partial read vs full drain.
+        BinaryPrimitives.WriteUInt32LittleEndian(ev.AsSpan(0, 4),
+            LinuxConstants.EPOLLIN | LinuxConstants.EPOLLET);
+        env.WriteBytes(0x32000, ev);
+        Assert.Equal(0,
+            await env.Invoke("SysEpollCtl", (uint)epfd, LinuxConstants.EPOLL_CTL_MOD, (uint)clientFd, 0x32000, 0, 0));
+
+        env.WriteBytes(0x34000, Encoding.ASCII.GetBytes("hello!"));
+        Assert.Equal(6, await CallSysWrite(env, (uint)acceptedFd, 0x34000, 6));
+
+        Assert.Equal(1, await env.Invoke("SysEpollWait", (uint)epfd, 0x33000, 1, 100, 0, 0));
+
+        // Partial read leaves bytes buffered -> no new edge.
+        Assert.Equal(2, await CallSysRead(env, (uint)clientFd, 0x34000, 2));
+        Assert.Equal(0, await env.Invoke("SysEpollWait", (uint)epfd, 0x33000, 1, 35, 0, 0));
+
+        // Drain the rest (4 bytes), then peer sends new data -> new edge fires.
+        Assert.Equal(4, await CallSysRead(env, (uint)clientFd, 0x34000, 8));
+        Assert.Equal(-(int)Errno.EAGAIN, await CallSysRead(env, (uint)clientFd, 0x34000, 8));
+
+        env.WriteBytes(0x34000, Encoding.ASCII.GetBytes("ok"));
+        Assert.Equal(2, await CallSysWrite(env, (uint)acceptedFd, 0x34000, 2));
+        Assert.Equal(1, await env.Invoke("SysEpollWait", (uint)epfd, 0x33000, 1, 100, 0, 0));
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_UnconnectedUdpReadAndReadV_Succeed()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        env.MapUserPage(0x49000);
+        env.MapUserPage(0x4A000);
+        env.MapUserPage(0x4B000);
+        env.MapUserPage(0x4C000);
+        env.MapUserPage(0x4D000);
+
+        WriteSockaddrIn(env, 0x49000, 0x7F000001u, 19420);
+        WriteSockaddrIn(env, 0x4A000, 0x7F000001u, 19420);
+
+        var receiverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        var senderFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        Assert.True(receiverFd >= 0 && senderFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)receiverFd, 0x49000, 16));
+
+        env.WriteBytes(0x4C000, Encoding.ASCII.GetBytes("abc"));
+        Assert.Equal(3, await CallSysSendTo(env, (uint)senderFd, 0x4C000, 3, 0, 0x4A000, 16));
+
+        var readRc = await CallSysRead(env, (uint)receiverFd, 0x4B000, 16);
+        Assert.Equal(3, readRc);
+        Assert.Equal("abc", Encoding.ASCII.GetString(env.ReadBytes(0x4B000, 3)));
+
+        env.WriteBytes(0x4C000, Encoding.ASCII.GetBytes("xyz"));
+        Assert.Equal(3, await CallSysSendTo(env, (uint)senderFd, 0x4C000, 3, 0, 0x4A000, 16));
+
+        WriteIovec(env, 0x4D000, 0x4B000, 1);
+        WriteIovec(env, 0x4D008, 0x4B010, 2);
+        var readvRc = await CallSysReadV(env, (uint)receiverFd, 0x4D000, 2);
+        Assert.Equal(3, readvRc);
+        Assert.Equal("x", Encoding.ASCII.GetString(env.ReadBytes(0x4B000, 1)));
+        Assert.Equal("yz", Encoding.ASCII.GetString(env.ReadBytes(0x4B010, 2)));
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_BoundWithoutListen_PreventsEphemeralConnectCollision()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        env.MapUserPage(0x30000);
+        env.MapUserPage(0x31000);
+        env.MapUserPage(0x32000);
+        env.MapUserPage(0x33000);
+        env.WriteInt32(0x33000, 16);
+
+        // Bind socketA to 49152 without calling listen().
+        WriteSockaddrIn(env, 0x30000, 0x7F000001u, 49152);
+        var boundOnlyFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(boundOnlyFd >= 0);
+        Assert.Equal(0, await CallSysBind(env, (uint)boundOnlyFd, 0x30000, 16));
+
+        // Listen on another port and connect a client; native ephemeral allocation must skip 49152.
+        WriteSockaddrIn(env, 0x31000, 0x7F000001u, 19430);
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        var clientFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(serverFd >= 0 && clientFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)serverFd, 0x31000, 16));
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 4));
+        Assert.Equal(0, await CallSysConnect(env, (uint)clientFd, 0x31000, 16));
+
+        Assert.Equal(0, await CallSysGetSockName(env, (uint)clientFd, 0x32000, 0x33000));
+        var (_, clientPort) = ReadSockaddrIn(env, 0x32000);
+        Assert.NotEqual(49152, clientPort);
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_ManyIdleWatches_ShareOneNamespacePollPumpWithLowAllocation()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        var dispatcher = new SchedulerReadyDispatcher(env.Scheduler);
+
+        var registrations = new List<IDisposable>(256);
+        var files = new List<LinuxFile>(256);
+        var fireCounts = new int[256];
+
+        try
+        {
+            for (var i = 0; i < 256; i++)
+            {
+                var fd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+                Assert.True(fd >= 0);
+                var file = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(fd));
+                var inode = Assert.IsType<NetstackSocketInode>(file.OpenedInode);
+                if (i == 0)
+                {
+                    env.MapUserPage(0x30000);
+                    WriteSockaddrIn(env, 0x30000, 0x7F000001u, 19440);
+                    Assert.Equal(0, await CallSysBind(env, (uint)fd, 0x30000, 16));
+                }
+
+                var idx = i;
+                var reg = ((IDispatcherWaitSource)inode).RegisterWaitHandle(file, dispatcher,
+                    () => Interlocked.Increment(ref fireCounts[idx]), PollEvents.POLLIN);
+                Assert.NotNull(reg);
+                registrations.Add(reg!);
+                files.Add(file);
+            }
+
+            // Warm up one tick, then measure 1000ms of virtual-time timer advances.
+            var startTick = env.Scheduler.CurrentTick;
+            env.Scheduler.TimerSystem.Advance(startTick + 10);
+
+            var allocBefore = GC.GetAllocatedBytesForCurrentThread();
+            for (var ms = 20; ms <= 1010; ms += 10)
+                env.Scheduler.TimerSystem.Advance(startTick + ms);
+            var allocAfter = GC.GetAllocatedBytesForCurrentThread();
+
+            Assert.True(allocAfter - allocBefore < 64 * 1024,
+                $"Expected < 64 KiB managed allocation for 1s of shared pump polling, got {allocAfter - allocBefore} bytes");
+            Assert.All(fireCounts, count => Assert.Equal(0, count));
+
+            // Sending a UDP packet to socket 0 should wake its watch on the next pump tick.
+            var senderFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+            Assert.True(senderFd >= 0);
+            env.MapUserPage(0x31000);
+            env.WriteBytes(0x31000, Encoding.ASCII.GetBytes("wake"));
+            Assert.Equal(4, await CallSysSendTo(env, (uint)senderFd, 0x31000, 4, 0, 0x30000, 16));
+
+            env.Scheduler.TimerSystem.Advance(env.Scheduler.CurrentTick + 25);
+            Assert.Equal(1, fireCounts[0]);
+        }
+        finally
+        {
+            foreach (var reg in registrations)
+                reg.Dispose();
+        }
+
+        env.Scheduler.TimerSystem.Advance(env.Scheduler.CurrentTick + 20);
+        Assert.False(env.Scheduler.TimerSystem.HasTimers);
+        Assert.Equal(1, fireCounts[0]);
+    }
+
+    [Fact]
+    public async Task Socket_PrivateNetwork_WriteV_64Kib_CapsToTxCapacityAndTransfersAllData()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        env.MapUserPage(0x30000);
+        env.MapUserPage(0x31000);
+        env.MapUserPage(0x32000);
+        for (uint addr = 0x40000; addr < 0x50000; addr += LinuxConstants.PageSize)
+            env.MapUserPage(addr);
+        for (uint addr = 0x50000; addr < 0x60000; addr += LinuxConstants.PageSize)
+            env.MapUserPage(addr);
+
+        WriteSockaddrIn(env, 0x30000, 0x7F000001u, 19450);
+        WriteSockaddrIn(env, 0x31000, 0x7F000001u, 19450);
+
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        var clientFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        Assert.True(serverFd >= 0 && clientFd >= 0);
+
+        Assert.Equal(0, await CallSysBind(env, (uint)serverFd, 0x30000, 16));
+        Assert.Equal(0, await CallSysListen(env, (uint)serverFd, 4));
+        Assert.Equal(0, await CallSysConnect(env, (uint)clientFd, 0x31000, 16));
+        var acceptedFd = await CallSysAccept(env, (uint)serverFd, 0, 0);
+        Assert.True(acceptedFd >= 0);
+
+        var payload = new byte[64 * 1024];
+        for (var i = 0; i < payload.Length; i++)
+            payload[i] = (byte)((i * 7 + 13) & 0xFF);
+        env.WriteBytes(0x40000, payload);
+
+        // 4 x 16 KiB iovecs -> WriteV writes up to native available capacity (16 KiB)
+        // without copying or discarding the remaining 48 KiB.
+        for (var i = 0; i < 4; i++)
+            WriteIovec(env, 0x32000 + (uint)(i * 8), 0x40000 + (uint)(i * 16 * 1024), 16 * 1024);
+
+        var written1 = await CallSysWriteV(env, (uint)clientFd, 0x32000, 4);
+        Assert.Equal(16 * 1024, written1);
+
+        // Non-blocking WriteV when TX buffer is full returns EAGAIN cleanly.
+        var clientFile = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(clientFd));
+        clientFile.Flags |= FileFlags.O_NONBLOCK;
+        Assert.Equal(-(int)Errno.EAGAIN, await CallSysWriteV(env, (uint)clientFd, 0x32008, 3));
+        clientFile.Flags &= ~FileFlags.O_NONBLOCK;
+
+        var received = new List<byte>(payload.Length);
+        var offset = written1;
+        while (received.Count < payload.Length)
+        {
+            while (received.Count < offset)
+            {
+                var n = await CallSysRead(env, (uint)acceptedFd, 0x50000, 32 * 1024);
+                Assert.True(n > 0);
+                received.AddRange(env.ReadBytes(0x50000, n));
+            }
+
+            if (offset < payload.Length)
+            {
+                WriteIovec(env, 0x32020, 0x40000 + (uint)offset, payload.Length - offset);
+                var nextWritten = await CallSysWriteV(env, (uint)clientFd, 0x32020, 1);
+                Assert.True(nextWritten > 0);
+                offset += nextWritten;
+            }
+        }
+
+        Assert.Equal(payload, received.ToArray());
     }
 
     [Fact]

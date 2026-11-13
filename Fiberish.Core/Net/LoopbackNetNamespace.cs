@@ -1,6 +1,8 @@
 using System.Net;
 using System.Runtime.InteropServices;
+using Fiberish.Core;
 using Fiberish.Core.Native;
+using Timer = Fiberish.Core.Timer;
 
 namespace Fiberish.Core.Net;
 
@@ -10,6 +12,10 @@ public sealed class LoopbackNetNamespace : IDisposable
 
     private static readonly nint NotifyThunkPtr =
         Marshal.GetFunctionPointerForDelegate(NotifyThunk);
+
+    private readonly Lock _pumpGate = new();
+    private readonly Dictionary<KernelScheduler, PollPump> _pumps = [];
+    private int _pumpCount;
 
     private LoopbackNetNamespace(ulong handle, uint ipv4Be, byte prefixLen)
     {
@@ -30,6 +36,23 @@ public sealed class LoopbackNetNamespace : IDisposable
     {
         if (Handle == 0)
             return;
+
+        PollPump[]? pumps = null;
+        lock (_pumpGate)
+        {
+            if (_pumps.Count > 0)
+            {
+                pumps = [.. _pumps.Values];
+                _pumps.Clear();
+                Volatile.Write(ref _pumpCount, 0);
+            }
+        }
+
+        if (pumps != null)
+        {
+            foreach (var pump in pumps)
+                pump.Dispose();
+        }
 
         UnbindWakeCallback();
         var handle = Handle;
@@ -83,6 +106,80 @@ public sealed class LoopbackNetNamespace : IDisposable
     {
         ThrowIfDisposed();
         NetstackNative.ClearNotify(Handle);
+    }
+
+    public bool TryAllocateEphemeralPort(out ushort port)
+    {
+        ThrowIfDisposed();
+        if (NetstackNative.AllocateEphemeralPort(Handle, out var candidate) == 0)
+        {
+            port = candidate;
+            return true;
+        }
+
+        port = 0;
+        return false;
+    }
+
+    public bool TryReserveTcpPort(ushort port)
+    {
+        if (port == 0)
+            return false;
+
+        ThrowIfDisposed();
+        return NetstackNative.ReserveTcpPort(Handle, port) == 0;
+    }
+
+    public void ReleaseTcpPort(ushort port)
+    {
+        if (port == 0 || Handle == 0)
+            return;
+
+        NetstackNative.ReleaseTcpPort(Handle, port);
+    }
+
+    internal void RegisterWaitTarget(KernelScheduler scheduler, INetstackWaitTarget target)
+    {
+        if (Handle == 0)
+            return;
+
+        PollPump pump;
+        lock (_pumpGate)
+        {
+            if (Handle == 0)
+                return;
+            if (!_pumps.TryGetValue(scheduler, out pump!))
+            {
+                pump = new PollPump(this, scheduler);
+                _pumps[scheduler] = pump;
+                Volatile.Write(ref _pumpCount, _pumps.Count);
+            }
+        }
+
+        pump.Add(target);
+    }
+
+    internal void UnregisterWaitTarget(KernelScheduler scheduler, INetstackWaitTarget target)
+    {
+        PollPump? pump;
+        lock (_pumpGate)
+        {
+            _pumps.TryGetValue(scheduler, out pump);
+        }
+
+        pump?.Remove(target);
+    }
+
+    internal void NudgeWaitPumps()
+    {
+        if (Volatile.Read(ref _pumpCount) == 0 || Handle == 0)
+            return;
+
+        lock (_pumpGate)
+        {
+            foreach (var pump in _pumps.Values)
+                pump.Nudge();
+        }
     }
 
     public TcpListenerSocket CreateTcpListener()
@@ -141,6 +238,16 @@ public sealed class LoopbackNetNamespace : IDisposable
             }
         }
 
+        public ushort LocalPort
+        {
+            get
+            {
+                ThrowIfDisposed();
+                var rc = NetstackNative.TcpListenerGetLocalPort(_namespace.Handle, _handle, out var port);
+                return rc == 0 ? port : (ushort)0;
+            }
+        }
+
         public void Dispose()
         {
             if (_handle == 0)
@@ -151,21 +258,39 @@ public sealed class LoopbackNetNamespace : IDisposable
             NetstackNative.CloseSocket(_namespace.Handle, handle);
         }
 
-        public void Listen(ushort localPort, uint backlog = 16)
+        public int TryListen(ushort localPort, uint backlog = 16)
         {
             ThrowIfDisposed();
-            var rc = NetstackNative.TcpListenerListen(_namespace.Handle, _handle, localPort, backlog);
+            return NetstackNative.TcpListenerListen(_namespace.Handle, _handle, localPort, backlog);
+        }
+
+        public void Listen(ushort localPort, uint backlog = 16)
+        {
+            var rc = TryListen(localPort, backlog);
             if (rc != 0)
                 throw new InvalidOperationException($"Failed to listen on TCP socket (rc={rc}).");
         }
 
-        public TcpStreamSocket Accept()
+        public int TryAccept(out TcpStreamSocket? accepted)
         {
             ThrowIfDisposed();
-            var rc = NetstackNative.TcpListenerAccept(_namespace.Handle, _handle, out var accepted);
+            var rc = NetstackNative.TcpListenerAccept(_namespace.Handle, _handle, out var handle);
             if (rc != 0)
+            {
+                accepted = null;
+                return rc;
+            }
+
+            accepted = new TcpStreamSocket(_namespace, handle);
+            return 0;
+        }
+
+        public TcpStreamSocket Accept()
+        {
+            var rc = TryAccept(out var accepted);
+            if (rc != 0 || accepted == null)
                 throw new InvalidOperationException($"Failed to accept TCP socket (rc={rc}).");
-            return new TcpStreamSocket(_namespace, accepted);
+            return accepted;
         }
 
         private void ThrowIfDisposed()
@@ -207,6 +332,18 @@ public sealed class LoopbackNetNamespace : IDisposable
                 if (rc < 0)
                     throw new InvalidOperationException($"Failed to query write readiness (rc={rc}).");
                 return rc != 0;
+            }
+        }
+
+        public int AvailableSendBytes
+        {
+            get
+            {
+                ThrowIfDisposed();
+                var rc = NetstackNative.TcpStreamSendAvailable(_namespace.Handle, _handle);
+                if (rc < 0)
+                    throw new InvalidOperationException($"Failed to query TCP send capacity (rc={rc}).");
+                return rc;
             }
         }
 
@@ -286,15 +423,20 @@ public sealed class LoopbackNetNamespace : IDisposable
             NetstackNative.CloseSocket(_namespace.Handle, handle);
         }
 
-        public void Connect(uint remoteIpv4Be, ushort remotePort)
+        public int TryConnect(uint remoteIpv4Be, ushort remotePort)
         {
             ThrowIfDisposed();
-            var rc = NetstackNative.TcpStreamConnect(_namespace.Handle, _handle, remoteIpv4Be, remotePort);
+            return NetstackNative.TcpStreamConnect(_namespace.Handle, _handle, remoteIpv4Be, remotePort);
+        }
+
+        public void Connect(uint remoteIpv4Be, ushort remotePort)
+        {
+            var rc = TryConnect(remoteIpv4Be, remotePort);
             if (rc != 0)
                 throw new InvalidOperationException($"Failed to connect TCP socket (rc={rc}).");
         }
 
-        public int Send(ReadOnlySpan<byte> data)
+        public int TrySend(ReadOnlySpan<byte> data, out int written)
         {
             ThrowIfDisposed();
             unsafe
@@ -302,15 +444,22 @@ public sealed class LoopbackNetNamespace : IDisposable
                 fixed (byte* ptr = data)
                 {
                     var rc = NetstackNative.TcpStreamSend(_namespace.Handle, _handle, ptr, (nuint)data.Length,
-                        out var written);
-                    if (rc != 0)
-                        throw new InvalidOperationException($"Failed to send TCP data (rc={rc}).");
-                    return checked((int)written);
+                        out var nativeWritten);
+                    written = rc == 0 ? checked((int)nativeWritten) : 0;
+                    return rc;
                 }
             }
         }
 
-        public int Receive(Span<byte> buffer)
+        public int Send(ReadOnlySpan<byte> data)
+        {
+            var rc = TrySend(data, out var written);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to send TCP data (rc={rc}).");
+            return written;
+        }
+
+        public int TryReceive(Span<byte> buffer, out int read)
         {
             ThrowIfDisposed();
             unsafe
@@ -318,18 +467,30 @@ public sealed class LoopbackNetNamespace : IDisposable
                 fixed (byte* ptr = buffer)
                 {
                     var rc = NetstackNative.TcpStreamRecv(_namespace.Handle, _handle, ptr, (nuint)buffer.Length,
-                        out var read);
-                    if (rc != 0)
-                        throw new InvalidOperationException($"Failed to receive TCP data (rc={rc}).");
-                    return checked((int)read);
+                        out var nativeRead);
+                    read = rc == 0 ? checked((int)nativeRead) : 0;
+                    return rc;
                 }
             }
         }
 
-        public void CloseWrite()
+        public int Receive(Span<byte> buffer)
+        {
+            var rc = TryReceive(buffer, out var read);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to receive TCP data (rc={rc}).");
+            return read;
+        }
+
+        public int TryCloseWrite()
         {
             ThrowIfDisposed();
-            var rc = NetstackNative.TcpStreamClose(_namespace.Handle, _handle);
+            return NetstackNative.TcpStreamClose(_namespace.Handle, _handle);
+        }
+
+        public void CloseWrite()
+        {
+            var rc = TryCloseWrite();
             if (rc != 0)
                 throw new InvalidOperationException($"Failed to close TCP send side (rc={rc}).");
         }
@@ -401,15 +562,20 @@ public sealed class LoopbackNetNamespace : IDisposable
             NetstackNative.CloseSocket(_namespace.Handle, handle);
         }
 
-        public void Bind(ushort localPort)
+        public int TryBind(ushort localPort)
         {
             ThrowIfDisposed();
-            var rc = NetstackNative.UdpSocketBind(_namespace.Handle, _handle, localPort);
+            return NetstackNative.UdpSocketBind(_namespace.Handle, _handle, localPort);
+        }
+
+        public void Bind(ushort localPort)
+        {
+            var rc = TryBind(localPort);
             if (rc != 0)
                 throw new InvalidOperationException($"Failed to bind UDP socket (rc={rc}).");
         }
 
-        public int SendTo(uint remoteIpv4Be, ushort remotePort, ReadOnlySpan<byte> data)
+        public int TrySendTo(uint remoteIpv4Be, ushort remotePort, ReadOnlySpan<byte> data, out int written)
         {
             ThrowIfDisposed();
             unsafe
@@ -418,15 +584,22 @@ public sealed class LoopbackNetNamespace : IDisposable
                 {
                     var rc = NetstackNative.UdpSocketSendTo(_namespace.Handle, _handle, remoteIpv4Be, remotePort, ptr,
                         (nuint)data.Length,
-                        out var written);
-                    if (rc != 0)
-                        throw new InvalidOperationException($"Failed to send UDP data (rc={rc}).");
-                    return checked((int)written);
+                        out var nativeWritten);
+                    written = rc == 0 ? checked((int)nativeWritten) : 0;
+                    return rc;
                 }
             }
         }
 
-        public int ReceiveFrom(Span<byte> buffer, out IPEndPoint remoteEndPoint)
+        public int SendTo(uint remoteIpv4Be, ushort remotePort, ReadOnlySpan<byte> data)
+        {
+            var rc = TrySendTo(remoteIpv4Be, remotePort, data, out var written);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to send UDP data (rc={rc}).");
+            return written;
+        }
+
+        public int TryReceiveFrom(Span<byte> buffer, out int read, out IPEndPoint remoteEndPoint)
         {
             ThrowIfDisposed();
             unsafe
@@ -434,24 +607,221 @@ public sealed class LoopbackNetNamespace : IDisposable
                 fixed (byte* ptr = buffer)
                 {
                     var rc = NetstackNative.UdpSocketRecvFrom(_namespace.Handle, _handle, ptr, (nuint)buffer.Length,
-                        out var read,
+                        out var nativeRead,
                         out var ipv4Be, out var port);
                     if (rc != 0)
-                        throw new InvalidOperationException($"Failed to receive UDP data (rc={rc}).");
+                    {
+                        read = 0;
+                        remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
+                        return rc;
+                    }
+
                     remoteEndPoint =
                         new IPEndPoint(
                             new IPAddress([
                                 (byte)(ipv4Be >> 24), (byte)(ipv4Be >> 16), (byte)(ipv4Be >> 8), (byte)ipv4Be
                             ]), port);
-                    return checked((int)read);
+                    read = checked((int)nativeRead);
+                    return 0;
                 }
             }
+        }
+
+        public int ReceiveFrom(Span<byte> buffer, out IPEndPoint remoteEndPoint)
+        {
+            var rc = TryReceiveFrom(buffer, out var read, out remoteEndPoint);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to receive UDP data (rc={rc}).");
+            return read;
         }
 
         private void ThrowIfDisposed()
         {
             if (_handle == 0)
                 throw new ObjectDisposedException(nameof(UdpDatagramSocket));
+        }
+    }
+
+    internal interface INetstackWaitTarget
+    {
+        int PumpIndex { get; set; }
+        bool EvaluateReady();
+        void InvokeReady();
+    }
+
+    private sealed class PollPump : IDisposable
+    {
+        private readonly long _baseWallMs;
+        private readonly Lock _gate = new();
+        private readonly LoopbackNetNamespace _namespace;
+        private readonly List<INetstackWaitTarget> _readyScratch = [];
+        private readonly KernelScheduler _scheduler;
+        private readonly List<INetstackWaitTarget> _targets = [];
+        private readonly Action _tickAction;
+        private bool _disposed;
+        private long _lastNextPollMs = 1;
+        private int _nudgePending;
+        private Timer? _timer;
+        private bool _timerScheduled;
+
+        public PollPump(LoopbackNetNamespace @namespace, KernelScheduler scheduler)
+        {
+            _namespace = @namespace;
+            _scheduler = scheduler;
+            _baseWallMs = Environment.TickCount64 - scheduler.CurrentTick;
+            _tickAction = OnTick;
+        }
+
+        public void Add(INetstackWaitTarget target)
+        {
+            lock (_gate)
+            {
+                if (_disposed || target.PumpIndex >= 0)
+                    return;
+
+                target.PumpIndex = _targets.Count;
+                _targets.Add(target);
+                if (!_timerScheduled)
+                {
+                    var delay = Math.Clamp(_lastNextPollMs, 1, 10);
+                    _timerScheduled = true;
+                    _timer = _scheduler.ScheduleTimer(delay, _tickAction);
+                }
+            }
+        }
+
+        public void Remove(INetstackWaitTarget target)
+        {
+            lock (_gate)
+            {
+                var idx = target.PumpIndex;
+                if (idx < 0 || idx >= _targets.Count || !ReferenceEquals(_targets[idx], target))
+                    return;
+
+                SwapRemoveAt(idx);
+                if (_targets.Count == 0 && _timerScheduled)
+                {
+                    _timer?.Cancel();
+                    _timer = null;
+                    _timerScheduled = false;
+                }
+            }
+        }
+
+        public void Nudge()
+        {
+            if (_disposed)
+                return;
+
+            lock (_gate)
+            {
+                if (_disposed || _targets.Count == 0)
+                    return;
+            }
+
+            if (Interlocked.Exchange(ref _nudgePending, 1) == 0)
+                _scheduler.Schedule(_tickAction);
+        }
+
+        public void Dispose()
+        {
+            lock (_gate)
+            {
+                _disposed = true;
+                _timer?.Cancel();
+                _timer = null;
+                _timerScheduled = false;
+                for (var i = 0; i < _targets.Count; i++)
+                    _targets[i].PumpIndex = -1;
+                _targets.Clear();
+                _readyScratch.Clear();
+            }
+        }
+
+        private void SwapRemoveAt(int idx)
+        {
+            var lastIdx = _targets.Count - 1;
+            var removed = _targets[idx];
+            if (idx != lastIdx)
+            {
+                var moved = _targets[lastIdx];
+                _targets[idx] = moved;
+                moved.PumpIndex = idx;
+            }
+
+            _targets.RemoveAt(lastIdx);
+            removed.PumpIndex = -1;
+        }
+
+        private void OnTick()
+        {
+            bool shouldPoll;
+            lock (_gate)
+            {
+                _timer?.Cancel();
+                _timer = null;
+                _timerScheduled = false;
+                Volatile.Write(ref _nudgePending, 0);
+                shouldPoll = !_disposed && _targets.Count > 0;
+            }
+
+            if (!shouldPoll)
+                return;
+
+            long nextPoll;
+            try
+            {
+                var nowMs = Math.Max(Environment.TickCount64, _baseWallMs + _scheduler.CurrentTick);
+                nextPoll = _namespace.Poll(nowMs);
+            }
+            catch (ObjectDisposedException)
+            {
+                Dispose();
+                return;
+            }
+
+            lock (_gate)
+            {
+                if (_disposed || _targets.Count == 0)
+                    return;
+
+                _lastNextPollMs = nextPoll;
+                _readyScratch.Clear();
+                for (var i = 0; i < _targets.Count; i++)
+                {
+                    var target = _targets[i];
+                    if (target.EvaluateReady())
+                        _readyScratch.Add(target);
+                }
+
+                for (var i = 0; i < _readyScratch.Count; i++)
+                {
+                    var readyTarget = _readyScratch[i];
+                    var idx = readyTarget.PumpIndex;
+                    if (idx >= 0 && idx < _targets.Count && ReferenceEquals(_targets[idx], readyTarget))
+                        SwapRemoveAt(idx);
+                }
+            }
+
+            try
+            {
+                for (var i = 0; i < _readyScratch.Count; i++)
+                    _readyScratch[i].InvokeReady();
+            }
+            finally
+            {
+                _readyScratch.Clear();
+            }
+
+            lock (_gate)
+            {
+                if (!_disposed && _targets.Count > 0 && !_timerScheduled)
+                {
+                    var delay = Math.Clamp(_lastNextPollMs, 1, 10);
+                    _timerScheduled = true;
+                    _timer = _scheduler.ScheduleTimer(delay, _tickAction);
+                }
+            }
         }
     }
 }

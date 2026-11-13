@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ptr;
 use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -22,6 +22,7 @@ const ERR_NOT_FOUND: i32 = -2;
 const ERR_INVALID_STATE: i32 = -3;
 const ERR_WOULD_BLOCK: i32 = -4;
 const ERR_PROTOCOL: i32 = -5;
+const ERR_ADDR_IN_USE: i32 = -6;
 
 #[derive(Clone)]
 enum SocketObject {
@@ -33,6 +34,8 @@ enum SocketObject {
 #[derive(Clone, Copy)]
 struct TcpStreamObject {
     handle: SocketHandle,
+    local_port: Option<u16>,
+    is_accepted: bool,
 }
 
 #[derive(Clone)]
@@ -46,6 +49,16 @@ struct TcpListenerObject {
 #[derive(Clone, Copy)]
 struct UdpSocketObject {
     handle: SocketHandle,
+    local_port: Option<u16>,
+}
+
+struct ClosingStreamEntry {
+    handle: SocketHandle,
+    local_port: Option<u16>,
+    is_accepted: bool,
+    closed_at_ms: Option<i64>,
+    last_send_queue: usize,
+    last_progress_ms: Option<i64>,
 }
 
 struct NamespaceState {
@@ -55,6 +68,14 @@ struct NamespaceState {
     ipv4_be: u32,
     prefix_len: u8,
     next_ephemeral_port: u16,
+    last_poll_ms: Option<i64>,
+    reserved_tcp_ports: HashSet<u16>,
+    tcp_listener_ports: HashMap<u16, u32>,
+    tcp_outbound_ports: HashMap<u16, u32>,
+    tcp_accepted_ports: HashMap<u16, u32>,
+    udp_ports: HashMap<u16, u32>,
+    all_ports: HashMap<u16, u32>,
+    closing_streams: Vec<ClosingStreamEntry>,
     objects: HashMap<u64, SocketObject>,
     notify_cb: Option<NotifyCallback>,
     notify_userdata: usize,
@@ -106,6 +127,14 @@ fn build_namespace(ipv4_be: u32, prefix_len: u8) -> NamespaceState {
         ipv4_be,
         prefix_len,
         next_ephemeral_port: 49152,
+        last_poll_ms: None,
+        reserved_tcp_ports: HashSet::new(),
+        tcp_listener_ports: HashMap::new(),
+        tcp_outbound_ports: HashMap::new(),
+        tcp_accepted_ports: HashMap::new(),
+        udp_ports: HashMap::new(),
+        all_ports: HashMap::new(),
+        closing_streams: Vec::new(),
         objects: HashMap::new(),
         notify_cb: None,
         notify_userdata: 0,
@@ -136,9 +165,14 @@ fn add_udp_socket(state: &mut NamespaceState) -> SocketHandle {
 fn tcp_stream_create_internal(state: &mut NamespaceState) -> u64 {
     let handle = add_tcp_socket(state);
     let object_handle = alloc_handle();
-    state
-        .objects
-        .insert(object_handle, SocketObject::TcpStream(TcpStreamObject { handle }));
+    state.objects.insert(
+        object_handle,
+        SocketObject::TcpStream(TcpStreamObject {
+            handle,
+            local_port: None,
+            is_accepted: false,
+        }),
+    );
     object_handle
 }
 
@@ -160,10 +194,39 @@ fn tcp_listener_create_internal(state: &mut NamespaceState) -> u64 {
 fn udp_socket_create_internal(state: &mut NamespaceState) -> u64 {
     let handle = add_udp_socket(state);
     let object_handle = alloc_handle();
-    state
-        .objects
-        .insert(object_handle, SocketObject::UdpSocket(UdpSocketObject { handle }));
+    state.objects.insert(
+        object_handle,
+        SocketObject::UdpSocket(UdpSocketObject {
+            handle,
+            local_port: None,
+        }),
+    );
     object_handle
+}
+
+fn inc_port(map: &mut HashMap<u16, u32>, port: u16) {
+    *map.entry(port).or_insert(0) += 1;
+}
+
+fn dec_port(map: &mut HashMap<u16, u32>, port: u16) {
+    if let Some(count) = map.get_mut(&port) {
+        if *count <= 1 {
+            map.remove(&port);
+        } else {
+            *count -= 1;
+        }
+    }
+}
+
+fn release_stream_port(state: &mut NamespaceState, local_port: Option<u16>, is_accepted: bool) {
+    if let Some(port) = local_port {
+        if is_accepted {
+            dec_port(&mut state.tcp_accepted_ports, port);
+        } else {
+            dec_port(&mut state.tcp_outbound_ports, port);
+        }
+        dec_port(&mut state.all_ports, port);
+    }
 }
 
 fn with_namespace<R>(ns_handle: u64, f: impl FnOnce(&mut NamespaceState) -> R) -> Result<R, i32> {
@@ -178,6 +241,8 @@ fn with_namespace<R>(ns_handle: u64, f: impl FnOnce(&mut NamespaceState) -> R) -
 fn poll_namespace(state: &mut NamespaceState, now: Instant) {
     let poll_res = state.iface.poll(now, &mut state.device, &mut state.sockets);
     let mut changed = !matches!(poll_res, smoltcp::iface::PollResult::None);
+    let now_ms = now.total_millis();
+    state.last_poll_ms = Some(now_ms);
 
     let listener_handles: Vec<u64> = state
         .objects
@@ -191,6 +256,65 @@ fn poll_namespace(state: &mut NamespaceState, now: Instant) {
     for listener_handle in listener_handles {
         changed |= promote_pending_accept(state, listener_handle);
     }
+
+    if !state.closing_streams.is_empty() {
+        const FIN_LINGER_MS: i64 = 5_000;
+        const NO_PROGRESS_CLOSE_MS: i64 = 30_000;
+        const MAX_CLOSING_LINGER_MS: i64 = 120_000;
+
+        let mut idx = 0;
+        while idx < state.closing_streams.len() {
+            let should_remove = {
+                let entry = &mut state.closing_streams[idx];
+                let closed_at_ms = *entry.closed_at_ms.get_or_insert(now_ms);
+                let socket = state.sockets.get_mut::<TcpSocket>(entry.handle);
+                let cur_send_queue = socket.send_queue();
+                let last_progress_ms = match entry.last_progress_ms {
+                    Some(ts) => {
+                        if cur_send_queue < entry.last_send_queue {
+                            entry.last_send_queue = cur_send_queue;
+                            entry.last_progress_ms = Some(now_ms);
+                            now_ms
+                        } else {
+                            ts
+                        }
+                    }
+                    None => {
+                        entry.last_send_queue = cur_send_queue;
+                        entry.last_progress_ms = Some(now_ms);
+                        now_ms
+                    }
+                };
+
+                let remove = match socket.state() {
+                    TcpState::Closed => true,
+                    TcpState::FinWait2 | TcpState::TimeWait
+                        if cur_send_queue == 0 && now_ms.saturating_sub(closed_at_ms) >= FIN_LINGER_MS =>
+                    {
+                        true
+                    }
+                    _ if cur_send_queue == 0 && now_ms.saturating_sub(closed_at_ms) >= NO_PROGRESS_CLOSE_MS => true,
+                    _ if now_ms.saturating_sub(last_progress_ms) >= NO_PROGRESS_CLOSE_MS => true,
+                    _ if now_ms.saturating_sub(closed_at_ms) >= MAX_CLOSING_LINGER_MS => true,
+                    _ => false,
+                };
+                if remove && socket.state() != TcpState::Closed {
+                    socket.abort();
+                }
+                remove
+            };
+
+            if should_remove {
+                let entry = state.closing_streams.swap_remove(idx);
+                state.sockets.remove(entry.handle);
+                release_stream_port(state, entry.local_port, entry.is_accepted);
+                changed = true;
+            } else {
+                idx += 1;
+            }
+        }
+    }
+
     if changed {
         state.notify();
     }
@@ -215,6 +339,8 @@ fn promote_pending_accept(state: &mut NamespaceState, listener_handle: u64) -> b
         accepted_handle,
         SocketObject::TcpStream(TcpStreamObject {
             handle: listener.handle,
+            local_port: Some(local_port),
+            is_accepted: true,
         }),
     );
 
@@ -228,6 +354,9 @@ fn promote_pending_accept(state: &mut NamespaceState, listener_handle: u64) -> b
         }
     }
 
+    inc_port(&mut state.tcp_accepted_ports, local_port);
+    inc_port(&mut state.all_ports, local_port);
+
     if let Some(SocketObject::TcpListener(listener_mut)) = state.objects.get_mut(&listener_handle) {
         listener_mut.handle = replacement_socket_handle;
         listener_mut.pending_accepts.push_back(accepted_handle);
@@ -237,14 +366,63 @@ fn promote_pending_accept(state: &mut NamespaceState, listener_handle: u64) -> b
     }
 }
 
-fn allocate_local_port(state: &mut NamespaceState) -> u16 {
-    let port = state.next_ephemeral_port;
-    state.next_ephemeral_port = if state.next_ephemeral_port == u16::MAX {
-        49152
-    } else {
-        state.next_ephemeral_port + 1
-    };
-    port
+fn is_tcp_listener_port_in_use(
+    state: &NamespaceState,
+    port: u16,
+    ignore_socket_handle: Option<u64>,
+) -> bool {
+    let count = state.tcp_listener_ports.get(&port).copied().unwrap_or(0);
+    if count == 0 {
+        return false;
+    }
+    if let Some(handle) = ignore_socket_handle {
+        if let Some(SocketObject::TcpListener(listener)) = state.objects.get(&handle) {
+            if listener.local_port == Some(port) {
+                return count > 1;
+            }
+        }
+    }
+    true
+}
+
+fn is_outbound_tcp_port_in_use(state: &NamespaceState, port: u16) -> bool {
+    state.tcp_outbound_ports.contains_key(&port)
+}
+
+fn is_udp_port_in_use(
+    state: &NamespaceState,
+    port: u16,
+    ignore_socket_handle: Option<u64>,
+) -> bool {
+    let count = state.udp_ports.get(&port).copied().unwrap_or(0);
+    if count == 0 {
+        return false;
+    }
+    if let Some(handle) = ignore_socket_handle {
+        if let Some(SocketObject::UdpSocket(udp)) = state.objects.get(&handle) {
+            if udp.local_port == Some(port) {
+                return count > 1;
+            }
+        }
+    }
+    true
+}
+
+fn is_port_in_use(state: &NamespaceState, port: u16) -> bool {
+    state.all_ports.contains_key(&port)
+}
+
+fn allocate_local_port(state: &mut NamespaceState) -> Option<u16> {
+    let mut candidate = state.next_ephemeral_port.max(49152);
+    for _ in 0..=(u16::MAX - 49152) {
+        let next = if candidate == u16::MAX { 49152 } else { candidate + 1 };
+        if !is_port_in_use(state, candidate) {
+            state.next_ephemeral_port = next;
+            return Some(candidate);
+        }
+        candidate = next;
+    }
+    None
 }
 
 fn next_poll_delay(state: &mut NamespaceState, now: Instant) -> i64 {
@@ -360,23 +538,117 @@ pub extern "C" fn fiber_udp_socket_create(ns_handle: u64) -> u64 {
 }
 
 #[no_mangle]
+pub extern "C" fn fiber_netns_allocate_ephemeral_port(ns_handle: u64, out_port: *mut u16) -> i32 {
+    if out_port.is_null() {
+        return ERR_INVALID_ARG;
+    }
+
+    with_namespace(ns_handle, |state| {
+        let Some(port) = allocate_local_port(state) else {
+            return ERR_ADDR_IN_USE;
+        };
+        if state.reserved_tcp_ports.insert(port) {
+            inc_port(&mut state.all_ports, port);
+        }
+        unsafe { ptr::write(out_port, port) };
+        0
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_netns_reserve_tcp_port(ns_handle: u64, port: u16) -> i32 {
+    if port == 0 {
+        return ERR_INVALID_ARG;
+    }
+
+    with_namespace(ns_handle, |state| {
+        if state.reserved_tcp_ports.contains(&port)
+            || is_tcp_listener_port_in_use(state, port, None)
+            || is_outbound_tcp_port_in_use(state, port)
+        {
+            return ERR_ADDR_IN_USE;
+        }
+        if state.reserved_tcp_ports.insert(port) {
+            inc_port(&mut state.all_ports, port);
+        }
+        0
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_netns_release_tcp_port(ns_handle: u64, port: u16) -> i32 {
+    if port == 0 {
+        return 0;
+    }
+
+    with_namespace(ns_handle, |state| {
+        if state.reserved_tcp_ports.remove(&port) {
+            dec_port(&mut state.all_ports, port);
+        }
+        0
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
 pub extern "C" fn fiber_tcp_listener_listen(ns_handle: u64, socket_handle: u64, local_port: u16, backlog: u32) -> i32 {
     with_namespace(ns_handle, |state| {
         let Some(SocketObject::TcpListener(listener)) = state.objects.get(&socket_handle).cloned() else {
             return ERR_NOT_FOUND;
         };
 
+        let listen_port = if local_port == 0 {
+            let Some(port) = allocate_local_port(state) else {
+                return ERR_ADDR_IN_USE;
+            };
+            port
+        } else if is_tcp_listener_port_in_use(state, local_port, Some(socket_handle)) {
+            return ERR_ADDR_IN_USE;
+        } else {
+            local_port
+        };
+
         let socket = state.sockets.get_mut::<TcpSocket>(listener.handle);
-        if socket.listen(local_port).is_err() {
+        if socket.listen(listen_port).is_err() {
             return ERR_PROTOCOL;
         }
 
+        if listener.local_port != Some(listen_port) {
+            if let Some(old_port) = listener.local_port {
+                dec_port(&mut state.tcp_listener_ports, old_port);
+                dec_port(&mut state.all_ports, old_port);
+            }
+            inc_port(&mut state.tcp_listener_ports, listen_port);
+            inc_port(&mut state.all_ports, listen_port);
+        }
+
         if let Some(SocketObject::TcpListener(listener_mut)) = state.objects.get_mut(&socket_handle) {
-            listener_mut.local_port = Some(local_port);
+            listener_mut.local_port = Some(listen_port);
             listener_mut.backlog = backlog as usize;
         }
 
         state.notify();
+        0
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_tcp_listener_get_local_port(ns_handle: u64, socket_handle: u64, out_port: *mut u16) -> i32 {
+    if out_port.is_null() {
+        return ERR_INVALID_ARG;
+    }
+
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::TcpListener(listener)) = state.objects.get(&socket_handle) else {
+            return ERR_NOT_FOUND;
+        };
+        let Some(port) = listener.local_port else {
+            return ERR_INVALID_STATE;
+        };
+        unsafe { ptr::write(out_port, port) };
         0
     })
     .unwrap_or_else(|rc| rc)
@@ -394,16 +666,32 @@ pub extern "C" fn fiber_tcp_stream_connect(
             return ERR_NOT_FOUND;
         };
 
-        let local_port = allocate_local_port(state);
+        let Some(local_port) = allocate_local_port(state) else {
+            return ERR_ADDR_IN_USE;
+        };
         let [a, b, c, d] = remote_ipv4_be.to_be_bytes();
         let remote_ip = Ipv4Address::new(a, b, c, d);
 
         let cx = state.iface.context();
         let socket = state.sockets.get_mut::<TcpSocket>(stream.handle);
-        socket
+        if socket
             .connect(cx, (IpAddress::Ipv4(remote_ip), remote_port), local_port)
-            .map(|_| 0)
-            .map(|_| { state.notify(); 0 }).unwrap_or(ERR_PROTOCOL)
+            .is_err()
+        {
+            return ERR_PROTOCOL;
+        }
+
+        if stream.local_port != Some(local_port) {
+            release_stream_port(state, stream.local_port, stream.is_accepted);
+            inc_port(&mut state.tcp_outbound_ports, local_port);
+            inc_port(&mut state.all_ports, local_port);
+        }
+        if let Some(SocketObject::TcpStream(stream_mut)) = state.objects.get_mut(&socket_handle) {
+            stream_mut.local_port = Some(local_port);
+        }
+
+        state.notify();
+        0
     })
     .unwrap_or_else(|rc| rc)
 }
@@ -536,6 +824,22 @@ pub extern "C" fn fiber_tcp_stream_can_write(ns_handle: u64, socket_handle: u64)
 }
 
 #[no_mangle]
+pub extern "C" fn fiber_tcp_stream_send_available(ns_handle: u64, socket_handle: u64) -> i32 {
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+
+        let socket = state.sockets.get::<TcpSocket>(stream.handle);
+        if !socket.may_send() {
+            return 0;
+        }
+        socket.send_capacity().saturating_sub(socket.send_queue()) as i32
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
 pub extern "C" fn fiber_tcp_stream_may_read(ns_handle: u64, socket_handle: u64) -> i32 {
     with_namespace(ns_handle, |state| {
         let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
@@ -588,6 +892,35 @@ pub extern "C" fn fiber_tcp_listener_accept_pending(ns_handle: u64, socket_handl
     .unwrap_or_else(|rc| rc)
 }
 
+fn close_or_linger_tcp_stream(state: &mut NamespaceState, stream: TcpStreamObject) {
+    let (should_remove_immediately, send_queue) = {
+        let socket = state.sockets.get_mut::<TcpSocket>(stream.handle);
+        let remove = match socket.state() {
+            TcpState::Closed | TcpState::Listen => true,
+            _ => {
+                socket.close();
+                socket.state() == TcpState::Closed
+            }
+        };
+        (remove, socket.send_queue())
+    };
+
+    if should_remove_immediately {
+        state.sockets.remove(stream.handle);
+        release_stream_port(state, stream.local_port, stream.is_accepted);
+    } else {
+        let ts = state.last_poll_ms;
+        state.closing_streams.push(ClosingStreamEntry {
+            handle: stream.handle,
+            local_port: stream.local_port,
+            is_accepted: stream.is_accepted,
+            closed_at_ms: ts,
+            last_send_queue: send_queue,
+            last_progress_ms: ts,
+        });
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn fiber_socket_close(ns_handle: u64, socket_handle: u64) -> i32 {
     with_namespace(ns_handle, |state| {
@@ -597,18 +930,26 @@ pub extern "C" fn fiber_socket_close(ns_handle: u64, socket_handle: u64) -> i32 
 
         match object {
             SocketObject::TcpStream(stream) => {
-                state.sockets.remove(stream.handle);
+                close_or_linger_tcp_stream(state, stream);
             }
             SocketObject::TcpListener(listener) => {
                 state.sockets.remove(listener.handle);
+                if let Some(port) = listener.local_port {
+                    dec_port(&mut state.tcp_listener_ports, port);
+                    dec_port(&mut state.all_ports, port);
+                }
                 for pending in listener.pending_accepts {
                     if let Some(SocketObject::TcpStream(stream)) = state.objects.remove(&pending) {
-                        state.sockets.remove(stream.handle);
+                        close_or_linger_tcp_stream(state, stream);
                     }
                 }
             }
             SocketObject::UdpSocket(udp) => {
                 state.sockets.remove(udp.handle);
+                if let Some(port) = udp.local_port {
+                    dec_port(&mut state.udp_ports, port);
+                    dec_port(&mut state.all_ports, port);
+                }
             }
         }
 
@@ -693,16 +1034,36 @@ pub extern "C" fn fiber_udp_socket_bind(ns_handle: u64, socket_handle: u64, loca
         };
 
         let bind_port = if local_port == 0 {
-            allocate_local_port(state)
+            let Some(port) = allocate_local_port(state) else {
+                return ERR_ADDR_IN_USE;
+            };
+            port
+        } else if is_udp_port_in_use(state, local_port, Some(socket_handle)) {
+            return ERR_ADDR_IN_USE;
         } else {
             local_port
         };
 
         let socket = state.sockets.get_mut::<UdpSocket>(udp.handle);
-        socket
-            .bind(bind_port)
-            .map(|_| 0)
-            .map(|_| { state.notify(); 0 }).unwrap_or(ERR_PROTOCOL)
+        if socket.bind(bind_port).is_err() {
+            return ERR_PROTOCOL;
+        }
+
+        if udp.local_port != Some(bind_port) {
+            if let Some(old_port) = udp.local_port {
+                dec_port(&mut state.udp_ports, old_port);
+                dec_port(&mut state.all_ports, old_port);
+            }
+            inc_port(&mut state.udp_ports, bind_port);
+            inc_port(&mut state.all_ports, bind_port);
+        }
+
+        if let Some(SocketObject::UdpSocket(udp_mut)) = state.objects.get_mut(&socket_handle) {
+            udp_mut.local_port = Some(bind_port);
+        }
+
+        state.notify();
+        0
     })
     .unwrap_or_else(|rc| rc)
 }

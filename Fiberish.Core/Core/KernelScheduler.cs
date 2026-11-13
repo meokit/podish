@@ -67,6 +67,7 @@ public class KernelScheduler
     public KernelRuntime? Runtime { get; set; }
 
     public long CurrentTick => _timerSystem.CurrentTick;
+    internal TimeWheel TimerSystem => _timerSystem;
     public bool Running { get; set; } = true;
 
     public ILoggerFactory LoggerFactory { get; set; } = new NullLoggerFactory();
@@ -706,9 +707,12 @@ public class KernelScheduler
         var realNow = _sw.ElapsedMilliseconds;
         if (targetTick < realNow + delayMs) targetTick = realNow + delayMs;
 
-        Logger.LogTrace(
-            "[Scheduler] ScheduleTimer delayMs={DelayMs} currentTick={CurrentTick} realNow={RealNow} targetTick={TargetTick}",
-            delayMs, beforeTick, realNow, targetTick);
+        if (Logger.IsEnabled(LogLevel.Trace))
+        {
+            Logger.LogTrace(
+                "[Scheduler] ScheduleTimer delayMs={DelayMs} currentTick={CurrentTick} realNow={RealNow} targetTick={TargetTick}",
+                delayMs, beforeTick, realNow, targetTick);
+        }
         var timer = _timerSystem.ScheduleAbsolute(targetTick, callback);
         // If this timer is the new earliest one, or if we were sleeping, we should wake up
         // to re-evaluate our wait time.

@@ -33,6 +33,15 @@ internal static partial class NetstackNative
     [LibraryImport(LibName, EntryPoint = "fiber_netns_poll")]
     internal static partial int Poll(ulong handle, long nowMillis, out long nextPollMillis);
 
+    [LibraryImport(LibName, EntryPoint = "fiber_netns_allocate_ephemeral_port")]
+    internal static partial int AllocateEphemeralPort(ulong handle, out ushort port);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_netns_reserve_tcp_port")]
+    internal static partial int ReserveTcpPort(ulong handle, ushort port);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_netns_release_tcp_port")]
+    internal static partial int ReleaseTcpPort(ulong handle, ushort port);
+
     [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_create")]
     internal static partial ulong CreateTcpStream(ulong netnsHandle);
 
@@ -45,6 +54,10 @@ internal static partial class NetstackNative
     [LibraryImport(LibName, EntryPoint = "fiber_tcp_listener_listen")]
     internal static partial int
         TcpListenerListen(ulong netnsHandle, ulong socketHandle, ushort localPort, uint backlog);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_tcp_listener_get_local_port")]
+    internal static partial int
+        TcpListenerGetLocalPort(ulong netnsHandle, ulong socketHandle, out ushort localPort);
 
     [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_connect")]
     internal static partial int TcpStreamConnect(ulong netnsHandle, ulong socketHandle, uint remoteIpv4Be,
@@ -67,6 +80,9 @@ internal static partial class NetstackNative
 
     [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_can_write")]
     internal static partial int TcpStreamCanWrite(ulong netnsHandle, ulong socketHandle);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_send_available")]
+    internal static partial int TcpStreamSendAvailable(ulong netnsHandle, ulong socketHandle);
 
     [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_may_read")]
     internal static partial int TcpStreamMayRead(ulong netnsHandle, ulong socketHandle);
