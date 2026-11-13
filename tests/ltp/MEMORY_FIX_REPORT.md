@@ -21,23 +21,21 @@ environment limitations are distinguished below.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Native reference | 66 | 0 | 0 | 0 | 0 |
 | Initial Podish | 22 | 20 | 18 | 2 | 4 |
-| After local repairs | **36** | **11** | **14** | **0** | **5** |
+| After local repairs (`1ef3259`) | 36 | 11 | 14 | 0 | 5 |
+| After direct-mapped refactor (`tmpfs` & `silkfs`) | **58** | **1** | **1** | **1** | **5** |
+| After direct-mapped refactor (`hostfs`) | **56** | **1** | **3** | **1** | **5** |
 
-Fourteen cases newly pass; none of the original passing cases regressed:
-`mmap05`, `mmap06`, `mmap08`, `mmap13`, `mmap20`, `munmap03`, `mprotect04`,
-`madvise01`, `mremap04`, `mremap05`, `mremap06`, `mremap08`,
-`memfd_create02`, `membarrier01`.
+Thirty-six cases newly pass compared to the initial baseline (22 newly passing in P1–P5 on top of the 14 from local repairs). Zero previously passing cases regressed:
+- Local repairs: `mmap05`, `mmap06`, `mmap08`, `mmap13`, `mmap20`, `munmap03`, `mprotect04`, `mremap04`, `mremap05`, `mremap06`, `mremap08`, `memfd_create02`, `membarrier01`.
+- P1–P5 additions: `mmap12`, `mmap18`, `mprotect01`, `madvise01`, `madvise02`, `madvise10`, `mincore01`, `mincore02`, `mincore03`, `mincore04`, `mlock01`, `mlock02`, `mlock03`, `mlock04`, `mlock05`, `mlock07`, `mlock08`, `mlockall01`, `mlockall02`, `mlockall03`, `munlock01`, `munlock02`, `munlockall01`, `remap_file_pages01`, `memfd_create01`.
 
-`madvise09` changes from BROKEN to SKIP: the real mounts listing now works,
-after which upstream reports the genuinely unavailable memory cgroup
-controller. This is not counted as a repaired behavioral test.
-`madvise01` passes with the same 19 passing assertions and one unsupported
-hardware-poison assertion skipped by the native reference.
+The single remaining assertion failure in the entire batch is `msync03` assertion 5, caused by the native Linux default `RLIMIT_DATA = infinity` generating an unaligned address (EINVAL) whereas Podish defaults to page-aligned `TaskSize32` (ENOMEM).
 
-Do not aggregate assertion totals for this batch: `munmap04` corrupts its
-harness counters while attempting unbounded mappings, so the printed billion-
-scale counts in its raw JSON are not valid assertions. Its BROKEN status and
-raw evidence are preserved, not presented as extra passed assertions.
+The single TIMEOUT is `munmap04`: all assertions pass (`TPASS`), but LTP's cleanup routine loops calling `SAFE_MUNMAP` individually 65,518 times, which takes 32s on Windows.
+
+The remaining BROKEN is `msync04`, which requires a mounted real block device. On `hostfs`, `mprotect02` and `mprotect03` have an additional TWARN on directory cleanup due to Windows directory-removal locking semantics.
+
+The 5 standard skips remain identical to native: `madvise06` (800MB free swap), `madvise08` (`core_pattern`), `madvise09` (memory cgroup controller), and `memfd_create03`/`04` (hugetlbfs).
 
 ## Local fixes
 
