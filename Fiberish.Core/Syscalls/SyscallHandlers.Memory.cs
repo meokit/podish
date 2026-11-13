@@ -209,7 +209,7 @@ public partial class SyscallManager
     private async ValueTask<int> SysMsync(Engine engine, uint addr, uint len, uint flags, uint a4, uint a5,
         uint a6)
     {
-        const uint MS_ASYNC = 1, MS_SYNC = 4;
+        const uint MS_ASYNC = 1, MS_INVALIDATE = 2, MS_SYNC = 4;
         if ((addr & LinuxConstants.PageOffsetMask) != 0 || (flags & ~7u) != 0 ||
             (flags & (MS_ASYNC | MS_SYNC)) == (MS_ASYNC | MS_SYNC))
             return -(int)Errno.EINVAL;
@@ -219,11 +219,15 @@ public partial class SyscallManager
         if (end > (Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32)) return -(int)Errno.ENOMEM;
         var cursor = addr;
         var hasHole = false;
+        var isLocked = false;
         Mem.VisitVmAreasInRange(addr, (uint)end, vma =>
         {
             if (vma.Start > cursor) hasHole = true;
+            if ((vma.Flags & MapFlags.Locked) != 0) isLocked = true;
             cursor = Math.Max(cursor, vma.End);
         });
+        if ((flags & MS_INVALIDATE) != 0 && isLocked)
+            return -(int)Errno.EBUSY;
         ProcessAddressSpaceSync.SyncSharedRange(Mem, engine, addr, len);
         return hasHole || cursor < end ? -(int)Errno.ENOMEM : 0;
     }

@@ -294,4 +294,30 @@ public sealed class MappedFileBackendContractTests
             Assert.True(dropper.TryUnlockPageRange(0, 1));
         }
     }
+
+    [Theory]
+    [InlineData("hostfs")]
+    [InlineData("silkfs")]
+    public void T09_HolePunch_ZeroesRangeAndFreesWholePages(string backend)
+    {
+        using var env = new MappedFileBackendTestEnvironment(backend, 3 * 4096);
+        env.Map(length: 3 * 4096);
+        const uint addr = MappedFileBackendTestEnvironment.Address;
+
+        // Verify initial patterns
+        Assert.Equal(MappedFileBackendTestEnvironment.Pattern(0), env.Read(addr));
+        Assert.Equal(MappedFileBackendTestEnvironment.Pattern(1), env.Read(addr + 4096));
+        Assert.Equal(MappedFileBackendTestEnvironment.Pattern(2), env.Read(addr + 8192));
+
+        // Punch hole in middle page (4096..8192)
+        Assert.Equal(0, env.Inode.PunchHole(4096, 4096, default));
+
+        // File size must be preserved
+        Assert.Equal(3 * 4096u, env.Inode.Size);
+
+        // Page 0 unchanged, page 1 reads zeroes, page 2 unchanged
+        Assert.Equal(MappedFileBackendTestEnvironment.Pattern(0), env.Read(addr));
+        Assert.Equal((byte)0, env.Read(addr + 4096));
+        Assert.Equal(MappedFileBackendTestEnvironment.Pattern(2), env.Read(addr + 8192));
+    }
 }

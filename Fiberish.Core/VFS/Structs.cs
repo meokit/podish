@@ -1239,6 +1239,11 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
         return TruncateWithContextCore(length, context);
     }
 
+    public virtual int PunchHole(long offset, long length, in FileMutationContext context)
+    {
+        return -(int)Errno.EOPNOTSUPP;
+    }
+
     protected internal virtual int TruncateWithContextCore(long length, in FileMutationContext context)
     {
         _ = context;
@@ -2117,6 +2122,86 @@ public abstract class MappingBackedInode : Inode
         RetireResidentHostMappedTailPageBeforeFileShrink(newSize);
         Mapping?.TruncateToSize(newSize);
         OnFileShrinkReconciled(previousSize, newSize);
+    }
+
+    public override int PunchHole(long offset, long length, in FileMutationContext context)
+    {
+        if (offset < 0 || length <= 0)
+            return -(int)Errno.EINVAL;
+
+        lock (_mappingLock)
+        {
+            var fileSize = (long)Size;
+            if (offset >= fileSize)
+                return 0;
+
+            var effectiveLength = Math.Min(length, fileSize - offset);
+            var start = offset;
+            var end = offset + effectiveLength;
+
+            var startPage = (uint)(start / LinuxConstants.PageSize);
+            var endPage = (uint)((end + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize);
+
+            // 1. Partial head page: zero out the partial slice if present
+            var headOffset = (int)(start % LinuxConstants.PageSize);
+            if (headOffset != 0)
+            {
+                if (TryGetMappingPageRecord(startPage, out var headRecord) || (Mapping?.PeekPage(startPage) is { } ptr && ptr != IntPtr.Zero))
+                {
+                    var p = headRecord?.Ptr ?? Mapping!.PeekPage(startPage);
+                    var zeroLen = (int)Math.Min(LinuxConstants.PageSize - headOffset, end - start);
+                    unsafe
+                    {
+                        new Span<byte>((byte*)p + headOffset, zeroLen).Clear();
+                    }
+                    Mapping?.MarkDirty(startPage);
+                }
+                startPage++;
+            }
+
+            // 2. Partial tail page: zero out the partial slice if present
+            var tailBytes = (int)(end % LinuxConstants.PageSize);
+            if (tailBytes != 0 && endPage > startPage)
+            {
+                var tailPage = endPage - 1;
+                if (TryGetMappingPageRecord(tailPage, out var tailRecord) || (Mapping?.PeekPage(tailPage) is { } ptr && ptr != IntPtr.Zero))
+                {
+                    var p = tailRecord?.Ptr ?? Mapping!.PeekPage(tailPage);
+                    unsafe
+                    {
+                        new Span<byte>((byte*)p, tailBytes).Clear();
+                    }
+                    Mapping?.MarkDirty(tailPage);
+                }
+                endPage--;
+            }
+
+            // 3. Whole pages in between: remove from mapping and release leases
+            if (endPage > startPage)
+            {
+                for (var p = startPage; p < endPage; p++)
+                {
+                    if (TryGetMappingPageRecord(p, out var record))
+                        ReleaseInstalledMappingPage(record);
+                }
+                Mapping?.RemovePagesInRange(startPage, endPage);
+            }
+
+            // 4. Invalidate native translations across all address spaces mapping this inode
+            ProcessAddressSpaceSync.UnmapMappingRange(this, start, effectiveLength, false);
+
+            // 5. Backend-specific punch-hole hook (for hostfs/silkfs live data)
+            PunchHoleBackingCore(start, effectiveLength);
+
+            var now = DateTime.Now;
+            MTime = now;
+            CTime = now;
+            return 0;
+        }
+    }
+
+    protected virtual void PunchHoleBackingCore(long offset, long length)
+    {
     }
 
     internal virtual void OnMappingPageReleased(uint pageIndex, InodePageRecord record)

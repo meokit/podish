@@ -1665,6 +1665,7 @@ public class VMAManager
         var cursor = addr;
         foreach (var vma in vmas)
         {
+            if ((vma.Flags & MapFlags.Locked) != 0) return -(int)Errno.EINVAL;
             if (vma.Start > cursor) return -(int)Errno.ENOMEM;
             if (vma.End > cursor) cursor = vma.End;
             if (cursor >= end) break;

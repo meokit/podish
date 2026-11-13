@@ -567,6 +567,27 @@ public sealed class SilkInode : MappingBackedInode, IHostMappedCacheDropper
         }
     }
 
+    protected override void PunchHoleBackingCore(long offset, long length)
+    {
+        try
+        {
+            using var handle = _repository.OpenLiveInodeHandle((long)Ino, FileMode.Open, FileAccess.ReadWrite);
+            var buffer = new byte[Math.Min(64 * 1024, length)];
+            var remaining = length;
+            var current = offset;
+            while (remaining > 0)
+            {
+                var chunk = (int)Math.Min(buffer.Length, remaining);
+                RandomAccess.Write(handle, buffer.AsSpan(0, chunk), current);
+                current += chunk;
+                remaining -= chunk;
+            }
+        }
+        catch
+        {
+        }
+    }
+
     internal override bool PreferHostMappedMappingPage(PageCacheAccessMode accessMode)
     {
         return Type == InodeType.File;

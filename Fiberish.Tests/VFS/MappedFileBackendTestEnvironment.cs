@@ -82,12 +82,12 @@ internal sealed class MappedFileBackendTestEnvironment : IDisposable
     public long TotalPooledAllocations => Context.GetAllocationClassStats().Sum(stat => stat.AllocatedPages);
     public static byte Pattern(uint index) => (byte)(index % 251 + 1);
 
-    public void Map(long offset = 0, uint address = Address, bool shared = true)
+    public void Map(long offset = 0, uint address = Address, bool shared = true, uint length = LinuxConstants.PageSize)
     {
         File.Get();
         try
         {
-            Memory.Mmap(address, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+            Memory.Mmap(address, length, Protection.Read | Protection.Write,
                 (shared ? MapFlags.Shared : MapFlags.Private) | MapFlags.Fixed, File, offset, "contract", Engine);
         }
         catch

@@ -1885,6 +1885,28 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         }
     }
 
+    protected override void PunchHoleBackingCore(long offset, long length)
+    {
+        try
+        {
+            var path = ResolveHostPath();
+            using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
+            var buffer = new byte[Math.Min(64 * 1024, length)];
+            var remaining = length;
+            var current = offset;
+            while (remaining > 0)
+            {
+                var chunk = (int)Math.Min(buffer.Length, remaining);
+                RandomAccess.Write(handle, buffer.AsSpan(0, chunk), current);
+                current += chunk;
+                remaining -= chunk;
+            }
+        }
+        catch
+        {
+        }
+    }
+
     private bool TryGetBackingFileLength(out ulong hostLength)
     {
         if (HostInodeIdentityResolver.TryReadUnixStat(HostPath, out var statData))

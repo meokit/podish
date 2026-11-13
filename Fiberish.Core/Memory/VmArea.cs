@@ -20,6 +20,7 @@ public enum MapFlags
     Fixed = 0x10,
     Anonymous = 0x20,
     GrowDown = 0x0100,
+    Locked = 0x2000,
     Stack = 0x20000,
     FixedNoReplace = 0x100000
 }

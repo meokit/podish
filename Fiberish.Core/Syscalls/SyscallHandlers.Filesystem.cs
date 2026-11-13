@@ -237,7 +237,8 @@ public partial class SyscallManager
     private async ValueTask<int> SysFallocate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         const int FallocFlKeepSize = 0x01;
-        const int supportedFlags = FallocFlKeepSize;
+        const int FallocFlPunchHole = 0x02;
+        const int supportedFlags = FallocFlKeepSize | FallocFlPunchHole;
 
         var fd = (int)a1;
         var mode = unchecked((int)a2);
@@ -263,6 +264,21 @@ public partial class SyscallManager
         catch (OverflowException)
         {
             return -(int)Errno.EFBIG;
+        }
+
+        var isPunchHole = (mode & FallocFlPunchHole) != 0;
+        if (isPunchHole)
+        {
+            if ((mode & FallocFlKeepSize) == 0)
+                return -(int)Errno.EINVAL;
+
+            if ((file.Flags & (FileFlags.O_WRONLY | FileFlags.O_RDWR)) == 0)
+                return -(int)Errno.EBADF;
+
+            if (file.OpenedInode is TmpfsInode { HasWriteSeal: true })
+                return -(int)Errno.EPERM;
+
+            return file.OpenedInode.PunchHole(offset, length, CreateFileMutationContext(engine));
         }
 
         if ((mode & FallocFlKeepSize) != 0)
