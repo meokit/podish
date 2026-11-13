@@ -2555,6 +2555,34 @@ public class VMAManager
         return privateObject;
     }
 
+    internal bool TryExtendHeapVma(uint start, uint end, MapFlags expectedFlags, bool lockOnFault)
+    {
+        if (start >= end || start <= LinuxConstants.MinMmapAddr)
+            return false;
+
+        if (CheckOverlap(start, end))
+            return false;
+
+        var leftVma = FindVmArea(start - 1);
+        if (leftVma == null || leftVma.End != start)
+            return false;
+
+        const MapFlags ignoredFlags = MapFlags.Fixed | MapFlags.FixedNoReplace;
+        if (leftVma.IsFileBacked ||
+            !string.Equals(leftVma.Name, "HEAP", StringComparison.Ordinal) ||
+            leftVma.Perms != (Protection.Read | Protection.Write) ||
+            (leftVma.Flags & ~ignoredFlags) != (expectedFlags & ~ignoredFlags) ||
+            leftVma.DontFork ||
+            leftVma.WipeOnFork ||
+            leftVma.LockOnFault != lockOnFault ||
+            leftVma.GrowDownLimit != 0)
+            return false;
+
+        leftVma.End = end;
+        ResetVmAreaAttachmentsForSplit(leftVma);
+        return true;
+    }
+
     internal void ResetVmAreaAttachmentsAfterResize(VmArea vma)
     {
         ResetVmAreaAttachmentsForSplit(vma);

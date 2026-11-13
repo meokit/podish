@@ -29,7 +29,8 @@ public partial class SyscallManager
             if (end > start)
                 try
                 {
-                    var brkFlags = MapFlags.Private | MapFlags.Anonymous;
+                    var brkFlags = MapFlags.Private | MapFlags.Anonymous | MapFlags.FixedNoReplace;
+                    var lockOnFault = Mem.LockFutureMappings && Mem.LockFutureOnFault;
                     if (Mem.LockFutureMappings)
                     {
                         if (engine.Owner is FiberTask brkTask && brkTask.Process != null &&
@@ -42,15 +43,21 @@ public partial class SyscallManager
                         brkFlags |= MapFlags.Locked;
                     }
 
-                    // Map anonymous
-                    ProcessAddressSpaceSync.Mmap(Mem, engine, start, end - start,
-                        Protection.Read | Protection.Write, brkFlags, null, 0,
-                        "HEAP");
+                    var extended = Mem.TryExtendHeapVma(start, end, brkFlags, lockOnFault);
+                    if (!extended)
+                    {
+                        var mapped = ProcessAddressSpaceSync.Mmap(Mem, engine, start, end - start,
+                            Protection.Read | Protection.Write, brkFlags, null, 0,
+                            "HEAP");
+                        if (mapped != start)
+                            return (int)BrkAddr;
+                    }
+
                     if ((brkFlags & MapFlags.Locked) != 0)
                     {
-                        if (Mem.LockFutureOnFault)
+                        if (lockOnFault)
                         {
-                            if (Mem.FindVmArea(start) is { } lockedHeapVma)
+                            if (!extended && Mem.FindVmArea(start) is { } lockedHeapVma)
                                 lockedHeapVma.LockOnFault = true;
                         }
                         else if (Mem.LockRange(start, end - start, false, engine) < 0 &&

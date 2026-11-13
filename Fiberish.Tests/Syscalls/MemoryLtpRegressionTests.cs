@@ -656,4 +656,47 @@ public sealed partial class LtpRegressionTests
         var pmAlias = Fiberish.Syscalls.ProcFsManager.ReadPagemap(env.Process, (long)(aliasAddr / Page) * 8, 8);
         Assert.Equal(0UL, BitConverter.ToUInt64(pmAlias, 0) >> 63);
     }
+
+    [Fact]
+    public async Task Brk_CollisionWithExistingMapping_ReturnsOldBrkWithoutRelocatingOrReplacing()
+    {
+        using var env = new TestEnv();
+        env.Syscalls.BrkAddr = MemoryBase;
+
+        // Place a PROT_NONE reservation one page above BrkAddr (like V8's random hint mmap).
+        var reservation = MemoryBase + Page;
+        Assert.Equal(reservation,
+            (uint)await env.Call("SysMmap2", reservation, 4 * Page, 0, 0x22, uint.MaxValue));
+
+        // Growing past the reservation must fail and return the old BrkAddr without
+        // relocating HEAP elsewhere or replacing the reservation.
+        var grown = (uint)await env.Call("SysBrk", MemoryBase + 2 * Page);
+        Assert.Equal(MemoryBase, grown);
+        Assert.Equal(MemoryBase, env.Syscalls.BrkAddr);
+        Assert.NotNull(env.Vma.FindVmArea(reservation));
+        Assert.Equal(Protection.None, env.Vma.FindVmArea(reservation)!.Perms);
+    }
+
+    [Fact]
+    public async Task Brk_ConsecutiveGrowthsCoalesceIntoSingleHeapVma_AndShrinkUnmapsTail()
+    {
+        using var env = new TestEnv();
+        env.Syscalls.BrkAddr = MemoryBase;
+
+        for (uint i = 1; i <= 8; i++)
+        {
+            var target = MemoryBase + i * Page;
+            Assert.Equal(target, (uint)await env.Call("SysBrk", target));
+        }
+
+        var heapVmas = env.Vma.VMAs.Where(v => v.Name == "HEAP").ToList();
+        Assert.Single(heapVmas);
+        Assert.Equal(MemoryBase, heapVmas[0].Start);
+        Assert.Equal(MemoryBase + 8 * Page, heapVmas[0].End);
+        Assert.True(env.Engine.CopyToUser(MemoryBase + 7 * Page, new byte[] { 0x42 }));
+
+        Assert.Equal(MemoryBase + 2 * Page, (uint)await env.Call("SysBrk", MemoryBase + 2 * Page));
+        Assert.Null(env.Vma.FindVmArea(MemoryBase + 7 * Page));
+        Assert.NotNull(env.Vma.FindVmArea(MemoryBase + Page));
+    }
 }
