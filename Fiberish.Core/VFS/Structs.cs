@@ -2001,7 +2001,7 @@ public abstract class MappingBackedInode : Inode
         return null;
     }
 
-    internal AddressSpace AcquireMappingRef()
+    internal virtual AddressSpace AcquireMappingRef()
     {
         lock (_mappingLock)
         {

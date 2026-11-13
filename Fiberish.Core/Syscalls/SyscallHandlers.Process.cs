@@ -83,8 +83,9 @@ public partial class SyscallManager
         {
             return -(int)Errno.EINVAL;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
+            Logger.LogError(ex, "SysClone InvalidOperationException: {Message}", ex.Message);
             return -(int)Errno.EFAULT;
         }
 

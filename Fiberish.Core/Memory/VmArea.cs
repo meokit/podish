@@ -38,6 +38,7 @@ public class VmArea
     public long Offset { get; set; }
     public ulong VmPgoff { get; set; }
     public bool DontFork { get; set; }
+    public bool WipeOnFork { get; set; }
     public uint GrowDownLimit { get; set; }
     public uint GrowDownGuardGap { get; set; }
 
@@ -174,6 +175,7 @@ public class VmArea
             Offset = Offset,
             VmPgoff = VmPgoff,
             DontFork = DontFork,
+            WipeOnFork = WipeOnFork,
             GrowDownLimit = GrowDownLimit,
             GrowDownGuardGap = GrowDownGuardGap,
             Name = Name,

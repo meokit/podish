@@ -195,6 +195,26 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysMadvise(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
+        const uint MADV_NORMAL = 0;
+        const uint MADV_RANDOM = 1;
+        const uint MADV_SEQUENTIAL = 2;
+        const uint MADV_WILLNEED = 3;
+        const uint MADV_DONTNEED = 4;
+        const uint MADV_FREE = 8;
+        const uint MADV_REMOVE = 9;
+        const uint MADV_DONTFORK = 10;
+        const uint MADV_DOFORK = 11;
+        const uint MADV_MERGEABLE = 12;
+        const uint MADV_UNMERGEABLE = 13;
+        const uint MADV_HUGEPAGE = 14;
+        const uint MADV_NOHUGEPAGE = 15;
+        const uint MADV_DONTDUMP = 16;
+        const uint MADV_DODUMP = 17;
+        const uint MADV_WIPEONFORK = 18;
+        const uint MADV_KEEPONFORK = 19;
+        const uint MADV_COLD = 20;
+        const uint MADV_PAGEOUT = 21;
+
         // There is no hardware memory-failure injection facility in this runtime.
         if (a3 is 100 or 101) return -(int)Errno.EINVAL; // MADV_HWPOISON / MADV_SOFT_OFFLINE
         if (a2 == 0) return 0;
@@ -203,14 +223,66 @@ public partial class SyscallManager
         var alignedLen = a2 > uint.MaxValue - LinuxConstants.PageOffsetMask
             ? uint.MaxValue & LinuxConstants.PageMask
             : (a2 + LinuxConstants.PageOffsetMask) & ~LinuxConstants.PageOffsetMask;
+        var end = (ulong)a1 + alignedLen;
+        var taskSize = Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
+        if (end > taskSize) return -(int)Errno.ENOMEM;
+
+        var knownAdvice = a3 is MADV_NORMAL or MADV_RANDOM or MADV_SEQUENTIAL or MADV_WILLNEED or
+                          MADV_DONTNEED or MADV_FREE or MADV_REMOVE or MADV_DONTFORK or MADV_DOFORK or
+                          MADV_MERGEABLE or MADV_UNMERGEABLE or MADV_HUGEPAGE or MADV_NOHUGEPAGE or
+                          MADV_DONTDUMP or MADV_DODUMP or MADV_WIPEONFORK or MADV_KEEPONFORK or
+                          MADV_COLD or MADV_PAGEOUT;
+        if (!knownAdvice) return -(int)Errno.EINVAL;
+
+        var cursor = a1;
+        var hasHole = false;
+        Mem.VisitVmAreasInRange(a1, (uint)end, vma =>
+        {
+            if (vma.Start > cursor) hasHole = true;
+            cursor = Math.Max(cursor, vma.End);
+        });
+        if (hasHole || cursor < end) return -(int)Errno.ENOMEM;
+
+        if (a3 == MADV_REMOVE)
+        {
+            var canRemove = true;
+            Mem.VisitVmAreasInRange(a1, (uint)end, vma =>
+            {
+                if ((vma.Perms & Protection.Write) == 0 || (vma.Flags & MapFlags.Shared) == 0 || vma.LogicalInode is not TmpfsInode)
+                    canRemove = false;
+            });
+            if (!canRemove) return -(int)Errno.EINVAL;
+        }
+
+        if (a3 is MADV_MERGEABLE or MADV_UNMERGEABLE)
+        {
+            var canMerge = true;
+            Mem.VisitVmAreasInRange(a1, (uint)end, vma =>
+            {
+                if ((vma.Flags & MapFlags.Shared) != 0 && (vma.Perms & Protection.Write) == 0)
+                    canMerge = false;
+            });
+            if (!canMerge) return -(int)Errno.EINVAL;
+        }
+
+        if (a3 == MADV_FREE)
+        {
+            var allPrivateAnon = true;
+            Mem.VisitVmAreasInRange(a1, (uint)end, vma =>
+            {
+                if (vma.IsFileBacked || (vma.Flags & MapFlags.Private) == 0 || (vma.Flags & MapFlags.Shared) != 0)
+                    allPrivateAnon = false;
+            });
+            if (!allPrivateAnon) return -(int)Errno.EINVAL;
+        }
 
         return a3 switch
         {
-            LinuxConstants.MADV_DONTNEED => ProcessAddressSpaceSync.MadviseDontNeed(Mem, engine, a1, alignedLen),
-            LinuxConstants.MADV_DONTFORK => ProcessAddressSpaceSync.MadviseForkInheritance(Mem, engine, a1,
-                alignedLen, true),
-            LinuxConstants.MADV_DOFORK => ProcessAddressSpaceSync.MadviseForkInheritance(Mem, engine, a1,
-                alignedLen, false),
+            MADV_DONTNEED => ProcessAddressSpaceSync.MadviseDontNeed(Mem, engine, a1, alignedLen),
+            MADV_DONTFORK => ProcessAddressSpaceSync.MadviseForkInheritance(Mem, engine, a1, alignedLen, true),
+            MADV_DOFORK => ProcessAddressSpaceSync.MadviseForkInheritance(Mem, engine, a1, alignedLen, false),
+            MADV_WIPEONFORK => ProcessAddressSpaceSync.MadviseWipeOnFork(Mem, engine, a1, alignedLen, true),
+            MADV_KEEPONFORK => ProcessAddressSpaceSync.MadviseWipeOnFork(Mem, engine, a1, alignedLen, false),
             _ => 0
         };
     }

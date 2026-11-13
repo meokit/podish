@@ -365,16 +365,23 @@ def main():
             status, counts = classify(code, text, timed_out)
             if status == "PASS" and args.backend == "podish" and counts != baseline[name]["counts"]:
                 native_counts = baseline[name]["counts"]
-                extra_skips_only = (
-                    counts["passed"] > 0 and
+                more_passed_from_skips = (
                     counts["failed"] == native_counts["failed"] == 0 and
                     counts["broken"] == native_counts["broken"] == 0 and
                     counts["warnings"] == native_counts["warnings"] == 0 and
-                    counts["skipped"] > native_counts["skipped"])
-                status = "PARTIAL" if extra_skips_only else "BROKEN"
-                text += ("\nRunner: partial variant coverage (unsupported assertions skipped); "
-                         "refusing a full PASS.\n" if status == "PARTIAL" else
-                         "\nRunner: assertion counts differ from native; refusing a partial-coverage PASS.\n")
+                    counts["passed"] >= native_counts["passed"] and
+                    counts["passed"] + counts["skipped"] == native_counts["passed"] + native_counts["skipped"])
+                if not more_passed_from_skips:
+                    extra_skips_only = (
+                        counts["passed"] > 0 and
+                        counts["failed"] == native_counts["failed"] == 0 and
+                        counts["broken"] == native_counts["broken"] == 0 and
+                        counts["warnings"] == native_counts["warnings"] == 0 and
+                        counts["skipped"] > native_counts["skipped"])
+                    status = "PARTIAL" if extra_skips_only else "BROKEN"
+                    text += ("\nRunner: partial variant coverage (unsupported assertions skipped); "
+                             "refusing a full PASS.\n" if status == "PARTIAL" else
+                             "\nRunner: assertion counts differ from native; refusing a partial-coverage PASS.\n")
         except OSError as error:
             code, text, elapsed = -1, str(error), 0
             status, counts = "BROKEN", {key: 0 for key in SUMMARY_KEYS}

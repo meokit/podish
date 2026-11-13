@@ -1359,10 +1359,12 @@ public class VMAManager
                     var backingInode = ResolveInitialFileMappingBacking(file)!;
                     sharedObj = backingInode.AcquireMappingRef();
                     fileMapping = new VmaFileMapping(file, file.OpenedInode, backingInode);
+                    vmPgoff = (flags & MapFlags.GrowDown) != 0 ? (ulong)(addr / LinuxConstants.PageSize) : 0;
                 }
                 else if (isPrivate)
                 {
                     sharedObj = MemoryContext.AcquireZeroMappingRef();
+                    vmPgoff = (flags & MapFlags.GrowDown) != 0 ? (ulong)(addr / LinuxConstants.PageSize) : 0;
                 }
             }
             else if (isShared)
@@ -1428,6 +1430,21 @@ public class VMAManager
                 continue;
             }
 
+            if (vma.WipeOnFork)
+            {
+                if (vma.Length != 0)
+                    skippedDontForkRanges.Add(new NativeRange(vma.Start, vma.Length));
+                var wiped = vma.Clone();
+                wiped.VmAnonVma?.Release();
+                wiped.VmAnonVma = null;
+                wiped.VmMapping?.Release();
+                wiped.VmMapping = MemoryContext.AcquireZeroMappingRef();
+                newMM._vmas.Add(wiped);
+                newMM.TrackMappedInodeOnVmaAdded(wiped);
+                newMM.RegisterVmAreaAttachments(wiped);
+                continue;
+            }
+
             var cloned = vma.Clone();
             newMM._vmas.Add(cloned);
             newMM.TrackMappedInodeOnVmaAdded(cloned);
@@ -1451,6 +1468,9 @@ public class VMAManager
                 throw new InvalidOperationException(
                     $"Clone external binding lost VMA context: page=0x{pageAddr:X8}, owner={binding.OwnerKind}");
             }
+
+            if (clonedVma.WipeOnFork)
+                continue;
 
             var pageIndex = clonedVma.GetPageIndex(pageAddr);
             MappedPageBinding clonedBinding;
@@ -1639,6 +1659,52 @@ public class VMAManager
         if (addedVmas != null)
             foreach (var vma in addedVmas)
                 TrackMappedInodeOnVmaAdded(vma);
+
+        return 0;
+    }
+
+    public int MadviseWipeOnFork(uint addr, uint len, bool wipeOnFork)
+    {
+        if (len == 0) return 0;
+        uint end;
+        try
+        {
+            end = checked(addr + len);
+        }
+        catch (OverflowException)
+        {
+            return -(int)Errno.ENOMEM;
+        }
+
+        var vmas = FindVmAreasInRange(addr, end);
+        if (vmas.Count == 0) return -(int)Errno.ENOMEM;
+
+        vmas.Sort((a, b) => a.Start.CompareTo(b.Start));
+        var cursor = addr;
+        foreach (var vma in vmas)
+        {
+            if (vma.Start > cursor) return -(int)Errno.ENOMEM;
+            if (vma.End > cursor) cursor = vma.End;
+            if (vma.IsFileBacked || (vma.Flags & MapFlags.Private) == 0 || (vma.Flags & MapFlags.Shared) != 0)
+                return -(int)Errno.EINVAL;
+            if (cursor >= end) break;
+        }
+
+        if (cursor < end) return -(int)Errno.ENOMEM;
+
+        if (!TryGetVmAreaWindow(addr, end, out var startIndex, out var endIndexExclusive))
+            return 0;
+
+        for (var i = startIndex; i < endIndexExclusive; i++)
+        {
+            var vma = _vmas[i];
+            var overlapStart = Math.Max(vma.Start, addr);
+            var overlapEnd = Math.Min(vma.End, end);
+            if (overlapStart >= overlapEnd) continue;
+
+            if (overlapStart == vma.Start && overlapEnd == vma.End)
+                vma.WipeOnFork = wipeOnFork;
+        }
 
         return 0;
     }

@@ -95,7 +95,7 @@ as a new general-purpose abstraction layer.
 - [x] P2 — unify VMA edits and reference-preserving remap operations.
 - [x] P3 — unify file mutation, invalidation and writeback error handling.
 - [x] P4 — implement prefault, residency and real lock lifecycles.
-- [ ] P5 — integrate advice, inheritance and guest procfs projections.
+- [x] P5 — integrate advice, inheritance and guest procfs projections.
 - [ ] P6 — close the cross-backend regression and compatibility report.
 
 ### P0 — baseline and harness, before semantic refactoring

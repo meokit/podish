@@ -2084,10 +2084,11 @@ public partial class FiberTask
 
                 if (!cloneVm)
                 {
-                    newMem.RebuildExternalMappingsFromNative(newCpu, newMem.VMAs);
                     if (skippedDontForkRanges != null)
                         foreach (var range in skippedDontForkRanges)
                             newCpu.MemUnmap(range.Start, range.Length);
+
+                    newMem.RebuildExternalMappingsFromNative(newCpu, newMem.VMAs);
 
                     foreach (var vma in Process.Mem.VMAs)
                     {
