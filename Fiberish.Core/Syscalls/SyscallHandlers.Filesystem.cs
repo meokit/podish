@@ -139,7 +139,6 @@ public partial class SyscallManager
         var fd = (int)a1;
         var f = GetFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
-        if ((f.Flags & FileFlags.O_PATH) != 0) return -(int)Errno.EBADF;
         if (f.OpenedInode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
         var task = engine.Owner as FiberTask;
@@ -225,7 +224,7 @@ public partial class SyscallManager
         var length = (long)(int)a2;
         if (length < 0) return -(int)Errno.EINVAL;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         if (f.OpenedInode.Type != InodeType.File) return -(int)Errno.EINVAL;
         if ((f.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EINVAL;
@@ -240,7 +239,7 @@ public partial class SyscallManager
         var length = (long)(((ulong)a3 << 32) | a2);
         if (length < 0) return -(int)Errno.EINVAL;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         if (f.OpenedInode.Type != InodeType.File) return -(int)Errno.EINVAL;
         if ((f.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EINVAL;
@@ -264,7 +263,7 @@ public partial class SyscallManager
         if (offset < 0 || length <= 0)
             return -(int)Errno.EINVAL;
 
-        var file = GetFD(fd);
+        var file = GetIoFD(fd);
         if (file?.OpenedInode == null)
             return -(int)Errno.EBADF;
         if (file.OpenedInode.Type == InodeType.Directory)
@@ -457,7 +456,7 @@ public partial class SyscallManager
         if (name.IsEmpty) return -(int)Errno.EINVAL;
         if (a4 > int.MaxValue) return -(int)Errno.EINVAL;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
         var readErr = ReadUserBuffer(engine, a3, (int)a4, out var valueBytes);
@@ -486,7 +485,7 @@ public partial class SyscallManager
         var size = (int)a4;
         if (name.IsEmpty) return -(int)Errno.EINVAL;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         return CopyXAttrToUser(engine, f.OpenedInode, name.Span, valueAddr, size);
     }
@@ -510,7 +509,7 @@ public partial class SyscallManager
         if (a3 > int.MaxValue) return -(int)Errno.EINVAL;
         var size = (int)a3;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         return CopyXAttrListToUser(engine, f.OpenedInode, listAddr, size);
     }
@@ -536,7 +535,7 @@ public partial class SyscallManager
         using var nameLease = name;
         if (name.IsEmpty) return -(int)Errno.EINVAL;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         return f.OpenedInode.RemoveXAttr(name.Span);
     }
@@ -748,7 +747,7 @@ public partial class SyscallManager
         var bufAddr = a2;
         var count = (int)a3;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         if (f.OpenedInode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
@@ -1595,7 +1594,7 @@ LocResolvedUtimens64:
         var fd = (int)a1;
         var mode = a2;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -9; // EBADF
 
         RefreshHostfsProjectionForCaller(this, f.OpenedInode);
@@ -1641,7 +1640,7 @@ LocResolvedUtimens64:
         var uid = (int)a2;
         var gid = (int)a3;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -9; // EBADF
 
         RefreshHostfsProjectionForCaller(this, f.OpenedInode);
@@ -1697,7 +1696,7 @@ LocResolvedUtimens64:
 
     private async ValueTask<int> SysFsync(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var file = GetFD((int)a1);
+        var file = GetIoFD((int)a1);
         if (file == null) return -(int)Errno.EBADF;
         var inode = file.OpenedInode;
         if (inode == null) return -(int)Errno.EBADF;
@@ -1787,7 +1786,7 @@ LocResolvedUtimens64:
         var bufAddr = a2;
         var count = (int)a3;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return ValueTask.FromResult(-(int)Errno.EBADF);
 
         try
@@ -2538,7 +2537,7 @@ LocResolvedUtimens64:
         var fd = (int)a1;
         var op = (int)a2;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
         return await f.OpenedInode.FlockAsync(f, engine.Owner as FiberTask, op);

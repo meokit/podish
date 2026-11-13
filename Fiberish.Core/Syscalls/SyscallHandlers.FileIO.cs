@@ -73,6 +73,7 @@ public partial class SyscallManager
         if (!sm.FDs.TryGetValue(inFd, out var inFile) || !sm.FDs.TryGetValue(outFd, out var outFile))
             return (-(int)Errno.EBADF, null);
         if (inFile == null || outFile == null) return (-(int)Errno.EBADF, null);
+        if (inFile.IsPathOnly || outFile.IsPathOnly) return (-(int)Errno.EBADF, null);
         var task = engine.Owner as FiberTask;
 
         // Verify modes
@@ -397,6 +398,8 @@ public partial class SyscallManager
                 FsEncoding.DecodeUtf8Lossy(pathBytes.AsSpan(0, pathLength)), flags, mode);
         const uint O_TMPFILE_MASK = 0x400000;
         var isPathOnly = ((FileFlags)flags & FileFlags.O_PATH) != 0;
+        if (isPathOnly)
+            flags &= (uint)(FileFlags.O_PATH | FileFlags.O_DIRECTORY | FileFlags.O_NOFOLLOW | FileFlags.O_CLOEXEC);
         var createdHere = false;
         var accessMode = flags & 3u;
         var wantDirectory = ((FileFlags)flags & FileFlags.O_DIRECTORY) != 0;
@@ -742,7 +745,7 @@ public partial class SyscallManager
         long offset, int flags)
     {
         var f = sm.GetFD(fd);
-        if (f == null) return -(int)Errno.EBADF;
+        if (f == null || f.IsPathOnly) return -(int)Errno.EBADF;
         var task = engine.Owner as FiberTask;
         const int O_ACCMODE = 3;
         if (((int)f.Flags & O_ACCMODE) == (int)FileFlags.O_WRONLY)
@@ -770,23 +773,52 @@ public partial class SyscallManager
         if (f.OpenedInode == null)
             return -(int)Errno.EINVAL;
 
-        var writeStartOffset = offset == -1 ? f.Position : offset;
+        var writeStartOffset = offset == -1
+            ? (f.Flags & FileFlags.O_APPEND) != 0 ? (long)f.OpenedInode.Size : f.Position
+            : offset;
+        var writeIovs = new ArraySegment<Iovec>(iovs, 0, iovCnt);
+        Iovec[]? limitedIovs = null;
 
-        // RLIMIT_FSIZE: writes entirely past the limit fail with EFBIG and raise SIGXFSZ.
+        // Only a non-empty write at/above the limit raises SIGXFSZ. A write that
+        // straddles the limit succeeds for the prefix, including across iovecs.
         if (f.OpenedInode.Type == InodeType.File && task?.Process != null &&
             task.Process.TryGetResourceLimit(LinuxConstants.RLIMIT_FSIZE, out var fsizeLimit) &&
             fsizeLimit.Soft != ulong.MaxValue)
         {
             var limit = (long)Math.Min(fsizeLimit.Soft, (ulong)long.MaxValue);
-            if (writeStartOffset >= limit)
+            long requested = 0;
+            foreach (var iov in writeIovs)
+                requested += iov.Len;
+            if (requested > 0 && writeStartOffset >= limit)
             {
                 task.PostSignal((int)Signal.SIGXFSZ);
                 return -(int)Errno.EFBIG;
             }
+            if (requested > 0 && writeStartOffset >= 0 && requested > limit - writeStartOffset)
+            {
+                limitedIovs = ArrayPool<Iovec>.Shared.Rent(iovCnt);
+                var remaining = limit - writeStartOffset;
+                for (var i = 0; i < iovCnt; i++)
+                {
+                    limitedIovs[i] = iovs[i];
+                    limitedIovs[i].Len = (uint)Math.Min(iovs[i].Len, remaining);
+                    remaining -= limitedIovs[i].Len;
+                }
+                writeIovs = new ArraySegment<Iovec>(limitedIovs, 0, iovCnt);
+            }
         }
 
         var sizeBeforeWrite = (long)f.OpenedInode.Size;
-        var rc = await f.OpenedInode.WriteV(engine, f, task, new ArraySegment<Iovec>(iovs, 0, iovCnt), offset, flags);
+        int rc;
+        try
+        {
+            rc = await f.OpenedInode.WriteV(engine, f, task, writeIovs, offset, flags);
+        }
+        finally
+        {
+            if (limitedIovs != null)
+                ArrayPool<Iovec>.Shared.Return(limitedIovs);
+        }
 
         if (rc > 0 && f.OpenedInode is Inode inode)
         {
@@ -804,7 +836,7 @@ public partial class SyscallManager
     private int ValidatePositionedIo(int fd, long offset, bool allowCurrentPosition = false)
     {
         var file = GetFD(fd);
-        if (file?.OpenedInode == null) return -(int)Errno.EBADF;
+        if (file?.OpenedInode == null || file.IsPathOnly) return -(int)Errno.EBADF;
         if (offset < 0 && !(allowCurrentPosition && offset == -1)) return -(int)Errno.EINVAL;
         if (offset != -1 && file.OpenedInode.Type is InodeType.Fifo or InodeType.Socket)
             return -(int)Errno.ESPIPE;
@@ -1026,7 +1058,7 @@ public partial class SyscallManager
         var offset = (long)(int)a2; // signed offset
         var whence = (int)a3;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null) return -(int)Errno.EBADF;
         var inode = f.OpenedInode;
         if (inode == null) return -(int)Errno.EBADF;
@@ -1052,7 +1084,7 @@ public partial class SyscallManager
         var resultPtr = a4;
         var whence = (int)a5;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null) return -(int)Errno.EBADF;
         var inode = f.OpenedInode;
         if (inode == null) return -(int)Errno.EBADF;

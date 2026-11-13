@@ -16,6 +16,7 @@ public partial class SyscallManager
         uint a6)
     {
         if (!FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
+        if (file.IsPathOnly) return -(int)Errno.EBADF;
 
         // Delegate to the inode's Ioctl method (polymorphic dispatch)
         var inode = file.OpenedInode;
@@ -68,6 +69,9 @@ public partial class SyscallManager
         const uint F_GETPIPE_SZ = 1032;
         const uint F_ADD_SEALS = 1033;
         const uint F_GET_SEALS = 1034;
+
+        if (file.IsPathOnly && cmd is not (F_DUPFD or F_DUPFD_CLOEXEC or F_GETFD or F_SETFD or F_GETFL))
+            return -(int)Errno.EBADF;
 
         const uint FD_CLOEXEC = 1;
         const int O_ASYNC = 0x2000;

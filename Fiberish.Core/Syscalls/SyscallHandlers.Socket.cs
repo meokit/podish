@@ -335,7 +335,9 @@ public partial class SyscallManager
                 WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, addrRes);
             }
 
-            return AllocFD(newFile);
+            var acceptedFd = AllocFD(newFile, task: task);
+            if (acceptedFd < 0) newFile.Close();
+            return acceptedFd;
         }
 
         return -(int)Errno.ENOTSOCK;
@@ -952,8 +954,7 @@ public partial class SyscallManager
 
             for (var i = 0; i < numFds; i++)
             {
-                var fd = AllocFD(fds[i]);
-                if (cloexec) SetFdCloseOnExec(fd, true);
+                var fd = AllocFD(fds[i], closeOnExec: cloexec, task: engine.Owner as FiberTask);
                 BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(12 + i * 4, 4), fd);
             }
 

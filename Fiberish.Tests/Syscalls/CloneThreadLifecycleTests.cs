@@ -211,7 +211,8 @@ public class CloneThreadLifecycleTests
     public async Task SysExit_LeaderWithAliveThreads_MustNotFinalizeProcessOrCloseFds()
     {
         using var env = new TestEnv(240, 240);
-        var peer = await env.Task.Clone((int)(LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD), 0, 0, 0, 0);
+        var peer = await env.Task.Clone((int)(LinuxConstants.CLONE_VM | LinuxConstants.CLONE_THREAD |
+                                             LinuxConstants.CLONE_FILES), 0, 0, 0, 0);
 
         var eventFd = new EventFdInode(77, env.SyscallManager.MemfdSuperBlock, env.Task.CommonKernel, 0,
             FileFlags.O_RDWR);

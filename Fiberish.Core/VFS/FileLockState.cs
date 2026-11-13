@@ -24,10 +24,8 @@ public sealed class FileLockState
     private readonly HashSet<LinuxFile> _flockShared = new(ReferenceEqualityComparer.Instance);
     private LinuxFile? _flockExclusive;
     private int _flockType; // 0 = none, 1 = SH, 2 = EX
-    private AsyncWaitQueue? _flockWaitQueue;
-    private KernelScheduler? _flockScheduler;
-    private AsyncWaitQueue? _recordWaitQueue;
-    private KernelScheduler? _recordScheduler;
+    private readonly List<LockWaiter> _flockWaiters = [];
+    private readonly List<LockWaiter> _recordWaiters = [];
 
     public async ValueTask<int> FlockAsync(LinuxFile linuxFile, FiberTask? task, int operation)
     {
@@ -39,9 +37,8 @@ public sealed class FileLockState
 
         while (true)
         {
-            AsyncWaitQueue? waitQueue = null;
-            AsyncWaitQueue? signalQueue = null;
-            KernelScheduler? signalScheduler = null;
+            LockWaiter? waiter = null;
+            LockWaiter[]? toWake = null;
             var returnImmediate = false;
 
             lock (_gate)
@@ -50,8 +47,7 @@ public sealed class FileLockState
                 {
                     if (ReleaseFlockLocked(linuxFile))
                     {
-                        signalQueue = _flockWaitQueue;
-                        signalScheduler = _flockScheduler;
+                        toWake = [.. _flockWaiters];
                     }
                     returnImmediate = true;
                 }
@@ -82,8 +78,7 @@ public sealed class FileLockState
 
                         if (downgraded)
                         {
-                            signalQueue = _flockWaitQueue;
-                            signalScheduler = _flockScheduler;
+                            toWake = [.. _flockWaiters];
                         }
                         returnImmediate = true;
                     }
@@ -92,22 +87,27 @@ public sealed class FileLockState
                         if (nonBlock || task == null)
                             return -(int)Errno.EAGAIN;
 
-                        _flockScheduler ??= task.CommonKernel;
-                        _flockWaitQueue ??= new AsyncWaitQueue(_flockScheduler);
-                        _flockWaitQueue.Reset();
-                        waitQueue = _flockWaitQueue;
+                        waiter = new LockWaiter(task.CommonKernel);
+                        _flockWaiters.Add(waiter);
                     }
                 }
             }
 
             if (returnImmediate)
             {
-                SignalQueueSafe(signalQueue, signalScheduler);
+                SignalWaiters(toWake);
                 return 0;
             }
 
-            if (await waitQueue!.WaitInterruptiblyAsync(task!) == AwaitResult.Interrupted)
-                return -(int)Errno.ERESTARTSYS;
+            try
+            {
+                if (await waiter!.Queue.WaitInterruptiblyAsync(task!) == AwaitResult.Interrupted)
+                    return -(int)Errno.ERESTARTSYS;
+            }
+            finally
+            {
+                lock (_gate) _flockWaiters.Remove(waiter!);
+            }
         }
     }
 
@@ -133,9 +133,8 @@ public sealed class FileLockState
     {
         while (true)
         {
-            AsyncWaitQueue? waitQueue = null;
-            AsyncWaitQueue? signalQueue = null;
-            KernelScheduler? signalScheduler = null;
+            LockWaiter? waiter = null;
+            LockWaiter[]? toWake = null;
             List<object>? blockingOwners = null;
             var returnImmediate = false;
 
@@ -145,8 +144,7 @@ public sealed class FileLockState
                 {
                     if (RemoveOwnerRangeLocked(ownerKey, start, end))
                     {
-                        signalQueue = _recordWaitQueue;
-                        signalScheduler = _recordScheduler;
+                        toWake = [.. _recordWaiters];
                     }
                     returnImmediate = true;
                 }
@@ -170,8 +168,7 @@ public sealed class FileLockState
                     {
                         if (PlaceOwnerLockLocked(ownerKey, pid, type, start, end))
                         {
-                            signalQueue = _recordWaitQueue;
-                            signalScheduler = _recordScheduler;
+                            toWake = [.. _recordWaiters];
                         }
                         returnImmediate = true;
                     }
@@ -180,27 +177,26 @@ public sealed class FileLockState
                         if (!TryRegisterWaitEdge(ownerKey, blockingOwners))
                             return -(int)Errno.EDEADLK;
 
-                        _recordScheduler ??= task!.CommonKernel;
-                        _recordWaitQueue ??= new AsyncWaitQueue(_recordScheduler);
-                        _recordWaitQueue.Reset();
-                        waitQueue = _recordWaitQueue;
+                        waiter = new LockWaiter(task!.CommonKernel);
+                        _recordWaiters.Add(waiter);
                     }
                 }
             }
 
             if (returnImmediate)
             {
-                SignalQueueSafe(signalQueue, signalScheduler);
+                SignalWaiters(toWake);
                 return 0;
             }
 
             try
             {
-                if (await waitQueue!.WaitInterruptiblyAsync(task!) == AwaitResult.Interrupted)
+                if (await waiter!.Queue.WaitInterruptiblyAsync(task!) == AwaitResult.Interrupted)
                     return -(int)Errno.ERESTARTSYS;
             }
             finally
             {
+                lock (_gate) _recordWaiters.Remove(waiter!);
                 ClearWaitEdges(ownerKey);
             }
         }
@@ -208,50 +204,50 @@ public sealed class FileLockState
 
     public void ReleasePosixLocks(object ownerKey)
     {
-        AsyncWaitQueue? signalQueue = null;
-        KernelScheduler? signalScheduler = null;
+        LockWaiter[]? toWake = null;
         lock (_gate)
         {
             if (RemoveAllOwnerLocksLocked(ownerKey))
             {
-                signalQueue = _recordWaitQueue;
-                signalScheduler = _recordScheduler;
+                toWake = [.. _recordWaiters];
             }
         }
-        SignalQueueSafe(signalQueue, signalScheduler);
+        SignalWaiters(toWake);
     }
 
     public void ReleaseFileDescriptorLocks(LinuxFile file)
     {
-        AsyncWaitQueue? flockQueue = null;
-        KernelScheduler? flockScheduler = null;
-        AsyncWaitQueue? recordQueue = null;
-        KernelScheduler? recordScheduler = null;
+        LockWaiter[]? flockWaiters = null;
+        LockWaiter[]? recordWaiters = null;
         lock (_gate)
         {
             if (ReleaseFlockLocked(file))
             {
-                flockQueue = _flockWaitQueue;
-                flockScheduler = _flockScheduler;
+                flockWaiters = [.. _flockWaiters];
             }
             if (RemoveAllOwnerLocksLocked(file))
             {
-                recordQueue = _recordWaitQueue;
-                recordScheduler = _recordScheduler;
+                recordWaiters = [.. _recordWaiters];
             }
         }
-        SignalQueueSafe(flockQueue, flockScheduler);
-        SignalQueueSafe(recordQueue, recordScheduler);
+        SignalWaiters(flockWaiters);
+        SignalWaiters(recordWaiters);
     }
 
-    private static void SignalQueueSafe(AsyncWaitQueue? queue, KernelScheduler? scheduler)
+    private static void SignalWaiters(LockWaiter[]? waiters)
     {
-        if (queue == null || scheduler == null)
-            return;
-        if (scheduler.IsSchedulerThread)
-            queue.Signal();
-        else
-            scheduler.Schedule(queue.Signal);
+        if (waiters == null) return;
+        foreach (var waiter in waiters)
+            if (waiter.Scheduler.IsSchedulerThread)
+                waiter.Queue.Signal();
+            else
+                waiter.Scheduler.Schedule(waiter.Queue.Signal);
+    }
+
+    private sealed class LockWaiter(KernelScheduler scheduler)
+    {
+        public KernelScheduler Scheduler { get; } = scheduler;
+        public AsyncWaitQueue Queue { get; } = new(scheduler);
     }
 
     private bool ReleaseFlockLocked(LinuxFile file)

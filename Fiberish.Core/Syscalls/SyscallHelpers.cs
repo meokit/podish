@@ -313,27 +313,28 @@ public partial class SyscallManager
         return PathWalker.PathWalkForCreate(path, startAt);
     }
 
-    public int AllocFD(LinuxFile linuxFile, int minFd = 0, bool? closeOnExec = null)
+    public int AllocFD(LinuxFile linuxFile, int minFd = 0, bool? closeOnExec = null, FiberTask? task = null)
     {
         if (minFd < 0)
             return -(int)Errno.EINVAL;
 
         ulong nofileLimit = ulong.MaxValue;
-        var proc = CurrentTask?.Process ?? CurrentProcess;
+        var proc = (task ?? CurrentTask)?.Process;
         if (proc != null && proc.TryGetResourceLimit(LinuxConstants.RLIMIT_NOFILE, out var limit))
             nofileLimit = limit.Soft;
 
         var fd = minFd;
-        while (FDs.ContainsKey(fd)) fd++;
+        var table = task == null ? CurrentFdTable : GetTaskFdTable(task);
+        while (table.Fds.ContainsKey(fd)) fd++;
         if ((ulong)fd >= nofileLimit)
             return -(int)Errno.EMFILE;
 
-        FDs[fd] = linuxFile;
+        table.Fds[fd] = linuxFile;
         var cloexec = closeOnExec ?? (linuxFile.Flags & FileFlags.O_CLOEXEC) != 0;
         if (cloexec)
-            FdCloseOnExecSet.Add(fd);
+            table.CloseOnExec.Add(fd);
         else
-            FdCloseOnExecSet.Remove(fd);
+            table.CloseOnExec.Remove(fd);
         return fd;
     }
 
@@ -360,9 +361,16 @@ public partial class SyscallManager
         return DupFD(file, minFd, closeOnExec);
     }
 
-    public LinuxFile? GetFD(int fd)
+    public LinuxFile? GetFD(int fd, FiberTask? task = null)
     {
-        return FDs.TryGetValue(fd, out var f) ? f : null;
+        var table = task == null ? CurrentFdTable : GetTaskFdTable(task);
+        return table.Fds.TryGetValue(fd, out var f) ? f : null;
+    }
+
+    private LinuxFile? GetIoFD(int fd)
+    {
+        var file = GetFD(fd);
+        return file?.IsPathOnly == true ? null : file;
     }
 
     public bool IsFdCloseOnExec(int fd)
@@ -393,7 +401,8 @@ public partial class SyscallManager
     {
         if (ownerProcess == null) return;
         var seen = new HashSet<Inode>(ReferenceEqualityComparer.Instance);
-        foreach (var file in FDs.Values)
+        var tables = _taskFdTables.Values.Append(_sharedFdTable).Distinct();
+        foreach (var file in tables.SelectMany(static table => table.Fds.Values))
         {
             var inode = file.OpenedInode;
             if (inode == null) continue;

@@ -1752,8 +1752,13 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
 
     public FileLockState GetOrCreateFileLockState()
     {
+        return GetLockTargetInode().GetFileLockState(true)!;
+    }
+
+    protected virtual FileLockState? GetFileLockState(bool create)
+    {
         var existing = Volatile.Read(ref _fileLockState);
-        if (existing != null)
+        if (existing != null || !create)
             return existing;
 
         var created = new FileLockState();
@@ -1762,12 +1767,12 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
 
     public void ReleasePosixLocks(Process ownerProcess)
     {
-        Volatile.Read(ref _fileLockState)?.ReleasePosixLocks(ownerProcess);
+        GetLockTargetInode().GetFileLockState(false)?.ReleasePosixLocks(ownerProcess);
     }
 
     public void ReleaseFileDescriptorLocks(LinuxFile file)
     {
-        Volatile.Read(ref _fileLockState)?.ReleaseFileDescriptorLocks(file);
+        GetLockTargetInode().GetFileLockState(false)?.ReleaseFileDescriptorLocks(file);
     }
 
     public int TrySetLease(LinuxFile file, Process? process, int leaseType)
@@ -4634,13 +4639,15 @@ public class LinuxFile : IDisposable
             holderRegistered = true;
             OpenedInode?.AcquireRef(refKind, "LinuxFile.ctor");
             inodeRefAcquired = OpenedInode != null;
-            OpenedInode?.Open(this);
+            if (!IsPathOnly)
+                OpenedInode?.Open(this);
         }
         catch
         {
             try
             {
-                OpenedInode?.Release(this);
+                if (!IsPathOnly)
+                    OpenedInode?.Release(this);
             }
             catch
             {
@@ -4675,6 +4682,7 @@ public class LinuxFile : IDisposable
     public string DebugOrigin { get; }
     public long Position { get; set; }
     public FileFlags Flags { get; set; }
+    public bool IsPathOnly => (Flags & FileFlags.O_PATH) != 0;
     public Mount? Mount { get; protected set; }
     public object? PrivateData { get; set; }
     public bool IsTmpFile { get; set; }
@@ -4698,6 +4706,7 @@ public class LinuxFile : IDisposable
     /// </summary>
     public int WantWrite()
     {
+        if (IsPathOnly) return -(int)Errno.EBADF;
         // Check file flags first
         var accessMode = (int)Flags & 3; // O_ACCMODE
         if (accessMode == 0) // O_RDONLY
@@ -4734,7 +4743,8 @@ public class LinuxFile : IDisposable
 
         var dentry = Dentry;
         OpenedInode?.ReleaseFileDescriptorLocks(this);
-        OpenedInode?.Release(this);
+        if (!IsPathOnly)
+            OpenedInode?.Release(this);
         var refKind = Kind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;
         OpenedInode?.ReleaseRef(refKind, "LinuxFile.Close");
         VfsFileHolderTracking.Unregister(OpenedInode, this);

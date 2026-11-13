@@ -1473,6 +1473,29 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
 {
     private static readonly Lock SharedFileStatesLock = new();
     private static readonly Dictionary<HostInodeKey, SharedHostFileState> SharedFileStates = [];
+    private static readonly Dictionary<HostInodeKey, WeakReference<FileLockState>> SharedFileLocks = [];
+    private FileLockState? _hostFileLocks;
+
+    protected override FileLockState? GetFileLockState(bool create)
+    {
+        // Separate mounts of the same host file must coordinate by host identity.
+        // The registry is weak: it must not keep closed files/processes alive.
+        lock (SharedFileStatesLock)
+        {
+            if (_hostFileLocks != null) return _hostFileLocks;
+            if (SharedFileLocks.TryGetValue(Identity, out var weak) && weak.TryGetTarget(out var existing))
+                return _hostFileLocks = existing;
+            if (!create) return null;
+
+            if (SharedFileLocks.Count >= 128)
+                foreach (var key in SharedFileLocks.Where(static pair => !pair.Value.TryGetTarget(out _))
+                             .Select(static pair => pair.Key).ToArray())
+                    SharedFileLocks.Remove(key);
+            _hostFileLocks = new FileLockState();
+            SharedFileLocks[Identity] = new WeakReference<FileLockState>(_hostFileLocks);
+            return _hostFileLocks;
+        }
+    }
 
     private static FileShare HostFileShare => OperatingSystem.IsWindows()
         ? FileShare.ReadWrite | FileShare.Delete

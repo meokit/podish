@@ -53,8 +53,9 @@ public partial class SyscallManager
             try
             {
                 var total = 0;
-                foreach (var iov in iovs)
+                for (var i = 0; i < (int)nrSegs; i++)
                 {
+                    var iov = iovs[i];
                     if (iov.Len == 0) continue;
                     var remaining = (int)iov.Len;
                     var baseAddr = iov.BaseAddr;
@@ -71,7 +72,8 @@ public partial class SyscallManager
                             {
                                 if (total > 0) return total;
                                 if (nonBlock) return -(int)Errno.EAGAIN;
-                                var wait = await pipe.WaitForWrite(file, task);
+                                var minWritableBytes = chunk <= PipeInode.PipeBuf ? chunk : 1;
+                                var wait = await pipe.WaitForWrite(file, task, minWritableBytes);
                                 if (wait == AwaitResult.Interrupted)
                                     return total > 0 ? total : -(int)Errno.ERESTARTSYS;
                                 continue;
@@ -150,9 +152,11 @@ public partial class SyscallManager
         var fileIn = GetFD(fdIn);
         var fileOut = GetFD(fdOut);
         if (fileIn?.OpenedInode == null || fileOut?.OpenedInode == null) return -(int)Errno.EBADF;
+        if (fileIn.IsPathOnly || fileOut.IsPathOnly) return -(int)Errno.EBADF;
 
         if ((fileIn.Flags & FileFlags.O_ACCMODE) == FileFlags.O_WRONLY) return -(int)Errno.EBADF;
         if ((fileOut.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EBADF;
+        if ((fileOut.Flags & FileFlags.O_APPEND) != 0) return -(int)Errno.EBADF;
 
         long readOffset;
         long writeOffset;
@@ -241,8 +245,6 @@ public partial class SyscallManager
 
         if (first > last) return -(int)Errno.EINVAL;
         if ((flags & ~(CloseRangeUnshare | CloseRangeCloexec)) != 0) return -(int)Errno.EINVAL;
-        if ((flags & CloseRangeUnshare) != 0 && (flags & CloseRangeCloexec) != 0)
-            return -(int)Errno.EINVAL;
 
         var targets = new List<int>();
         foreach (var fd in FDs.Keys)
@@ -253,8 +255,8 @@ public partial class SyscallManager
         }
 
         var markCloexec = (flags & CloseRangeCloexec) != 0;
-        if ((flags & CloseRangeUnshare) != 0 && !markCloexec)
-            UnshareFdTable();
+        if ((flags & CloseRangeUnshare) != 0)
+            UnshareFdTable(engine.Owner as FiberTask);
 
         foreach (var fd in targets)
         {

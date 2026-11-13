@@ -107,3 +107,36 @@ After fixes: **0 FAIL, 0 BROKEN, 0 TIMEOUT**. The single `PARTIAL` and the eight
 - C# tests: `Fiberish.Tests` 1860 PASS / 0 FAIL / 1 SKIP, SilkFS 13,
   Wayland 19, Pulse 49.
 - `python -m unittest discover -s tests/ltp -p 'test_*.py'`: 20/20.
+
+## Code review follow-up (2026-11-14)
+
+The 11 review findings are covered by the project regression tests
+in `Fiberish.Tests/Syscalls/FsFdReviewRegressionTests.cs` and
+`Fiberish.Tests/VFS/FileLockReviewRegressionTests.cs`. These are project tests;
+no upstream LTP source, assertion, case manifest or expected errno was changed.
+
+| Review | Fix | Regression coverage |
+| --- | --- | --- |
+| 1 | Normalize `O_PATH` flags, do not invoke data-open hooks, and reject data/metadata operations that require a normal fd | `OPath_UnprivilegedOpen_DoesNotGrantReadOrWrite`, `OPath_CloexecIsPreserved_ButNotReportedAsAStatusFlag` |
+| 2 | Process only the submitted `nrSegs`, not the full rented array | `Vmsplice_UsesOnlyTheSubmittedIovecs` (1 and 3 iovecs, with a deliberately primed pool tail) |
+| 3 | Wait for the whole atomic pipe-write chunk instead of one byte | `Vmsplice_SmallAtomicWrite_YieldsUntilTheWholeChunkFits` (4095/4096 bytes occupied; reader frees the needed space) |
+| 4 | Reference-count descriptor tables per task; inherit the caller's table and release it on thread retirement | `CloseRange_Unshare_DoesNotChangeSiblingDescriptors`, `CloseRange_Unshare_PrivateTableIsClosedOnThreadExit`, `CloseRange_Unshare_ForkUsesTheCallingThreadsTable`, `CloneThread_WithoutCloneFiles_CopiesTheCallingThreadsTable`, `FdHelpers_AfterUnshare_ExplicitTaskOverridesAmbientSiblingContext` |
+| 5 | Keep overlay lock state independent of the changing backing inode; share it with lower/upper aliases within that overlay | `Overlay_CopyUp_PreservesLockConflictsAndUnlocks` (flock/POSIX/OFD), `Overlay_CopyUp_NewUpperOnlyAliasFindsTheOriginalLocks`, `Overlay_IndependentOverlaysDoNotShareLocksThroughTheLowerLayer` |
+| 6 | Route POSIX/OFD release through the same lock-state resolver as acquisition | `Overlay_Close_ReleasesTheSameLockStateUsedForAcquisition` (POSIX close-any-fd versus OFD last-close), `CloseRange_Unshare_DoesNotReleaseLocksOnRetainedDescriptors` |
+| 7 | Coordinate hostfs locks by host file identity, using a weak registry; wait queues remain scheduler-local | `Hostfs_SeparateMounts_CoordinateLocksByHostFileIdentity` (flock/POSIX/OFD), `SharedLockState_WaitersOnDifferentSchedulers_AreBothWoken` |
+| 8 | Accept `CLOSE_RANGE_UNSHARE` together with `CLOSE_RANGE_CLOEXEC` | `CloseRange_Unshare_DoesNotChangeSiblingDescriptors(flags: 6)` also checks the sibling's CLOEXEC bits and subsequent thread inheritance |
+| 9 | Reject `copy_file_range` to an `O_APPEND` destination with `EBADF` before modifying data or offsets | `CopyFileRange_AppendDestination_ReturnsEbadfWithoutChangingFilesOrOffsets` |
+| 10 | Clip the iovec prefix at `RLIMIT_FSIZE`; allow zero-byte writes and use EOF for ordinary append writes | `FsizeLimit_ClipsWritesAcrossTheLimit` (write/pwrite/writev/pwritev), `FsizeLimit_ZeroLengthWriteAtLimit_SucceedsWithoutSignal`, `FsizeLimit_AppendUsesEof_AndRaisesSigxfszOnlyWhenNoByteFits` |
+| 11 | Allow `fchdir` on an `O_PATH` directory while retaining search-permission checks | `Fchdir_OPathDirectory_ChecksSearchPermission` (allowed and `EACCES`) |
+
+There are 35 new xUnit cases including theory variants. The existing
+`SysExit_LeaderWithAliveThreads_MustNotFinalizeProcessOrCloseFds` fixture now
+explicitly requests `CLONE_FILES`, as required for the shared-table behavior
+its unchanged assertions exercise.
+
+Verification: `Fiberish.Tests` **1895 PASS / 0 FAIL / 1 SKIP**; the FS/FD LTP
+batch remains **106 PASS / 8 SKIP / 1 PARTIAL**, with no FAIL/BROKEN/TIMEOUT;
+Core **50/50** and Signals **46/46**. The original i386 Linux/Podish review
+probes also reproduce the corrected permission, iovec-count, blocking-pipe,
+thread-unshare, append, file-size-limit and `fchdir` behavior. The separate
+pre-existing two-reader flock upgrade deadlock is not one of these 11 fixes.

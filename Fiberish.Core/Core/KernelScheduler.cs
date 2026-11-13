@@ -224,6 +224,9 @@ public class KernelScheduler
         task.Process.AccumulateExitedThreadCpuTime(task.SnapshotThreadCpuTime());
         task.CancelAsyncSyscallForRetirement();
         task.BeginTaskRetirement();
+        if (task.Process.Threads.Count == 1)
+            task.Process.Syscalls?.ReleasePosixLocksForProcess(task.Process);
+        task.Process.Syscalls?.ReleaseTaskFileDescriptors(task);
         task.Process.Syscalls?.UnregisterEngine(task.CPU);
         task.Status = FiberTaskStatus.Terminated;
         task.ExecutionMode = TaskExecutionMode.Terminated;
