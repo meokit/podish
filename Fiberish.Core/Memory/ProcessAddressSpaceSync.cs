@@ -286,14 +286,14 @@ internal static class ProcessAddressSpaceSync
     }
 
     internal static int RemapFileRange(VMAManager vmaManager, Engine engine, uint addr, uint len,
-        Protection prot, long newOffset, ulong newPgoff, Process? process = null)
+        long newOffset, ulong newPgoff, Process? process = null)
     {
         if (len == 0) return 0;
         using var scope = EnterAddressSpaceScope(engine, process);
         using var snapshot = RentEngineSnapshot();
         FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
         SyncSharedMappingsForEngines(vmaManager, snapshot.Engines, addr, len);
-        var rc = vmaManager.RemapFileRange(addr, len, prot, newOffset, newPgoff, engine);
+        var rc = vmaManager.RemapFileRange(addr, len, newOffset, newPgoff, engine);
         if (rc == 0)
             PublishCodeCacheInvalidation(vmaManager, engine, addr, len);
         return rc;
@@ -566,8 +566,15 @@ internal static class ProcessAddressSpaceSync
     {
         if (len == 0) return;
         var sequence = vmaManager.BumpCodeCacheSequence();
-        vmaManager.RecordCodeCacheResetRange(sequence, addr, len);
         engine.AddressSpaceCodeCacheSequenceSeen = sequence;
+        var minSeen = GetMinSeenSequence(vmaManager);
+        if (minSeen >= sequence)
+        {
+            vmaManager.PruneCodeCacheResetRanges(minSeen);
+            return;
+        }
+
+        vmaManager.RecordCodeCacheResetRange(sequence, addr, len);
     }
 
     private sealed class EngineSnapshotBuffer

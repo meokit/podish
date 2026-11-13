@@ -320,4 +320,136 @@ public sealed class MappedFileBackendContractTests
         Assert.Equal((byte)0, env.Read(addr + 4096));
         Assert.Equal(MappedFileBackendTestEnvironment.Pattern(2), env.Read(addr + 8192));
     }
+
+    [Theory]
+    [InlineData("hostfs")]
+    [InlineData("silkfs")]
+    public void T09_PartialHolePunch_OnReadOnlyMappedView_ZeroesWithoutHostCrash(string backend)
+    {
+        using var env = new MappedFileBackendTestEnvironment(backend, 4096);
+        env.File.Get();
+        env.Memory.Mmap(MappedFileBackendTestEnvironment.Address, 4096, Protection.Read,
+            MapFlags.Shared | MapFlags.Fixed, env.File, 0, "ro-punch", env.Engine);
+        const uint addr = MappedFileBackendTestEnvironment.Address;
+
+        Assert.Equal(MappedFileBackendTestEnvironment.Pattern(0), env.Read(addr));
+        Assert.Equal(0, env.Inode.PunchHole(1, 16, default));
+
+        Assert.Equal(4096u, env.Inode.Size);
+        Assert.Equal(MappedFileBackendTestEnvironment.Pattern(0), env.Read(addr));
+        Assert.Equal((byte)0, env.Read(addr + 1));
+        Assert.Equal((byte)0, env.Read(addr + 16));
+        Assert.Equal(MappedFileBackendTestEnvironment.Pattern(0), env.Read(addr + 17));
+    }
+
+    [Theory]
+    [InlineData("hostfs")]
+    [InlineData("silkfs")]
+    public void T09_HolePunch_InvalidatesCleanPrivateMapping_WhilePreservingCowPages(string backend)
+    {
+        using var env = new MappedFileBackendTestEnvironment(backend, 2 * 4096);
+        env.Map(shared: false, length: 2 * 4096);
+        const uint addr = MappedFileBackendTestEnvironment.Address;
+
+        // Read page 0 (clean private mapping) and COW-write page 1.
+        Assert.Equal(MappedFileBackendTestEnvironment.Pattern(0), env.Read(addr));
+        Assert.True(env.Engine.CopyToUser(addr + 4096, new byte[] { 0xE7 }));
+
+        Assert.Equal(0, env.Inode.PunchHole(0, 2 * 4096, default));
+
+        Assert.Equal((byte)0, env.Read(addr));
+        Assert.Equal((byte)0xE7, env.Read(addr + 4096));
+    }
+
+    [Fact]
+    public void T13_HostLockFailure_PreventsMarkingVmaLocked_AndUnlockBalancesSuccess()
+    {
+        var fake = new FakeHostMemoryBackend();
+        try
+        {
+            FilePageBackendSelector.FactoryOverrideForTests = (_, _) => fake;
+            using var env = new MappedFileBackendTestEnvironment("hostfs", 4096);
+            env.Map();
+            const uint addr = MappedFileBackendTestEnvironment.Address;
+
+            fake.FailLock = true;
+            Assert.Equal(-(int)Errno.ENOMEM, env.Memory.LockRange(addr, 4096, false, env.Engine));
+            Assert.Equal((MapFlags)0, env.Memory.FindVmArea(addr)!.Flags & MapFlags.Locked);
+
+            fake.FailLock = false;
+            Assert.Equal(0, env.Memory.LockRange(addr, 4096, false, env.Engine));
+            Assert.NotEqual((MapFlags)0, env.Memory.FindVmArea(addr)!.Flags & MapFlags.Locked);
+            Assert.True(fake.TotalLockedPages >= 1);
+
+            Assert.Equal(0, env.Memory.UnlockRange(addr, 4096));
+            Assert.Equal(0, fake.TotalLockedPages);
+        }
+        finally
+        {
+            FilePageBackendSelector.FactoryOverrideForTests = null;
+            fake.Dispose();
+        }
+    }
+
+    [Fact]
+    public void T13_LockedFilePage_CannotBeEvictedUnderProtNone_AndTruncateReleasesAndReacquiresLock()
+    {
+        var fake = new FakeHostMemoryBackend();
+        try
+        {
+            FilePageBackendSelector.FactoryOverrideForTests = (_, _) => fake;
+            using var env = new MappedFileBackendTestEnvironment("hostfs", 4096);
+            env.Map();
+            const uint addr = MappedFileBackendTestEnvironment.Address;
+
+            Assert.Equal(0, env.Memory.LockRange(addr, 4096, false, env.Engine));
+            Assert.Equal(1, fake.TotalLockedPages);
+
+            Assert.Equal(0, env.Memory.Mprotect(addr, 4096, Protection.None, env.Engine, out _));
+            var vma = env.Memory.FindVmArea(addr)!;
+            Assert.False(vma.VmMapping!.TryEvictCleanPage(vma.GetPageIndex(addr)));
+
+            Assert.Equal(0, env.Inode.Truncate(0));
+            Assert.Equal(0, fake.TotalLockedPages);
+
+            Assert.Equal(0, env.Inode.Truncate(4096));
+            Assert.Equal(0, env.Memory.Mprotect(addr, 4096, Protection.Read, env.Engine, out _));
+            Assert.Equal(FaultResult.Handled, env.Memory.HandleFaultDetailed(addr, false, env.Engine));
+            Assert.Equal(1, fake.TotalLockedPages);
+
+            Assert.Equal(0, env.Memory.UnlockRange(addr, 4096));
+            Assert.Equal(0, fake.TotalLockedPages);
+        }
+        finally
+        {
+            FilePageBackendSelector.FactoryOverrideForTests = null;
+            fake.Dispose();
+        }
+    }
+
+    [Fact]
+    public void T13_OnFaultLockFailure_PropagatesOom_AndLeavesNoDanglingPteOrLock()
+    {
+        var fake = new FakeHostMemoryBackend();
+        try
+        {
+            FilePageBackendSelector.FactoryOverrideForTests = (_, _) => fake;
+            using var env = new MappedFileBackendTestEnvironment("hostfs", 4096);
+            env.Map();
+            const uint addr = MappedFileBackendTestEnvironment.Address;
+
+            Assert.Equal(0, env.Memory.LockRange(addr, 4096, true, env.Engine));
+            Assert.Equal(0, fake.TotalLockedPages);
+
+            fake.FailLock = true;
+            Assert.Equal(FaultResult.Oom, env.Memory.HandleFaultDetailed(addr, false, env.Engine));
+            Assert.False(env.Memory.PageMapping.TryGet(addr, out _));
+            Assert.Equal(0, fake.TotalLockedPages);
+        }
+        finally
+        {
+            FilePageBackendSelector.FactoryOverrideForTests = null;
+            fake.Dispose();
+        }
+    }
 }

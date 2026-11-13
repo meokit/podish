@@ -476,9 +476,7 @@ file sealed class ProcPagemapFileInode : Inode
         var process = task?.CommonKernel.GetProcess(_pid);
         if (process == null) return 0;
 
-        var bytes = ProcFsManager.ReadPagemap(process, offset, buffer.Length);
-        bytes.AsSpan(0, Math.Min(bytes.Length, buffer.Length)).CopyTo(buffer);
-        return Math.Min(bytes.Length, buffer.Length);
+        return ProcFsManager.ReadPagemap(process, offset, buffer);
     }
 }
 

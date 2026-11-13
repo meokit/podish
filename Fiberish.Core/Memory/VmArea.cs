@@ -39,6 +39,7 @@ public class VmArea
     public ulong VmPgoff { get; set; }
     public bool DontFork { get; set; }
     public bool WipeOnFork { get; set; }
+    public bool LockOnFault { get; set; }
     public uint GrowDownLimit { get; set; }
     public uint GrowDownGuardGap { get; set; }
 
@@ -176,6 +177,7 @@ public class VmArea
             VmPgoff = VmPgoff,
             DontFork = DontFork,
             WipeOnFork = WipeOnFork,
+            LockOnFault = LockOnFault,
             GrowDownLimit = GrowDownLimit,
             GrowDownGuardGap = GrowDownGuardGap,
             Name = Name,

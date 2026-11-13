@@ -416,4 +416,244 @@ public sealed partial class LtpRegressionTests
         Assert.Equal(0, await env.Call("SysFcntl64", fd, 1033, 8));
         Assert.Equal(-(int)Errno.EPERM, await env.Call("SysMmap2", MemoryBase, Page, 3, 0x11, fd));
     }
+
+    [Fact]
+    public async Task RemapFilePages_RejectsNonZeroProt_AndDoesNotEscalateReadOnlyFd()
+    {
+        using var env = new TestEnv();
+        var fd = (uint)await env.CreateFile();
+        Assert.Equal(0, await env.Call("SysFtruncate", fd, Page));
+        Assert.Equal(0, await env.Call("SysClose", fd));
+
+        var roFd = (uint)await env.Call("SysOpen", 0x10000, (uint)FileFlags.O_RDONLY);
+        Assert.Equal(MemoryBase, (uint)await env.Call("SysMmap2", MemoryBase, Page, 1, 0x11, roFd));
+        Assert.Equal(-(int)Errno.EINVAL, await env.Call("SysRemapFilePages", MemoryBase, Page, 3, 0, 0));
+        Assert.Equal(Protection.Read, env.Vma.FindVmArea(MemoryBase)!.Perms);
+        Assert.False(env.Engine.CopyToUser(MemoryBase, new byte[] { 0xAA }));
+    }
+
+    [Fact]
+    public async Task Madvise_Remove_ZeroesTmpfsSharedMapping()
+    {
+        using var env = new TestEnv();
+        var fd = (uint)await env.CreateFile();
+        Assert.Equal(0, await env.Call("SysFtruncate", fd, Page));
+        Assert.True(env.Engine.CopyToUser(0x10000, new byte[] { 0x2F }));
+        Assert.Equal(1, await env.Call("SysWrite", fd, 0x10000, 1));
+        Assert.Equal(MemoryBase, (uint)await env.Call("SysMmap2", MemoryBase, Page, 3, 0x11, fd));
+        Assert.Equal((byte)0x2F, env.Read(MemoryBase, 1)[0]);
+
+        const uint MADV_REMOVE = 9;
+        Assert.Equal(0, await env.Call("SysMadvise", MemoryBase, Page, MADV_REMOVE));
+        Assert.Equal((byte)0x00, env.Read(MemoryBase, 1)[0]);
+    }
+
+    [Fact]
+    public async Task Madvise_WipeOnFork_PartialSplitAndMprotectPreservesPolicy()
+    {
+        using var env = new TestEnv();
+        MapAnonymous(env, MemoryBase, 3 * Page);
+
+        const uint MADV_WIPEONFORK = 18;
+        Assert.Equal(0, await env.Call("SysMadvise", MemoryBase + Page, Page, MADV_WIPEONFORK));
+        Assert.False(env.Vma.FindVmArea(MemoryBase)!.WipeOnFork);
+        Assert.True(env.Vma.FindVmArea(MemoryBase + Page)!.WipeOnFork);
+        Assert.False(env.Vma.FindVmArea(MemoryBase + 2 * Page)!.WipeOnFork);
+
+        Assert.Equal(0, await env.Call("SysMadvise", MemoryBase, 3 * Page, MADV_WIPEONFORK));
+        Assert.Equal(0, await env.Call("SysMprotect", MemoryBase + Page, Page, 1));
+        Assert.True(env.Vma.FindVmArea(MemoryBase)!.WipeOnFork);
+        Assert.True(env.Vma.FindVmArea(MemoryBase + Page)!.WipeOnFork);
+        Assert.True(env.Vma.FindVmArea(MemoryBase + 2 * Page)!.WipeOnFork);
+    }
+
+    [Fact]
+    public async Task Mlock_PartialRangeSplitsVma_AndMclFutureLocksNewMappings()
+    {
+        using var env = new TestEnv();
+        MapAnonymous(env, MemoryBase, 3 * Page);
+
+        Assert.Equal(0, await env.Call("SysMlock", MemoryBase + Page, Page));
+        Assert.Equal((MapFlags)0, env.Vma.FindVmArea(MemoryBase)!.Flags & MapFlags.Locked);
+        Assert.NotEqual((MapFlags)0, env.Vma.FindVmArea(MemoryBase + Page)!.Flags & MapFlags.Locked);
+        Assert.Equal((MapFlags)0, env.Vma.FindVmArea(MemoryBase + 2 * Page)!.Flags & MapFlags.Locked);
+
+        Assert.Equal(0, await env.Call("SysMunlock", MemoryBase, Page));
+        Assert.NotEqual((MapFlags)0, env.Vma.FindVmArea(MemoryBase + Page)!.Flags & MapFlags.Locked);
+
+        const uint MCL_FUTURE = 2;
+        Assert.Equal(0, await env.Call("SysMlockall", MCL_FUTURE));
+        Assert.Equal(MemoryTarget, (uint)await env.Call("SysMmap2", MemoryTarget, Page, 3, 0x32, uint.MaxValue));
+        Assert.NotEqual((MapFlags)0, env.Vma.FindVmArea(MemoryTarget)!.Flags & MapFlags.Locked);
+
+        Assert.Equal(0, await env.Call("SysMunlockall"));
+        Assert.False(env.Vma.LockFutureMappings);
+    }
+
+    [Fact]
+    public async Task Mlock2_OnFault_DoesNotPopulateUntouchedPages_AndProcfsReportsZeroRss()
+    {
+        using var env = new TestEnv();
+        MapAnonymous(env, MemoryBase, 3 * Page);
+
+        var smapsBefore = Fiberish.Syscalls.ProcFsManager.GenerateSmaps(env.Process);
+        var sectionBefore = smapsBefore.Split($"{MemoryBase:x8}-")[1].Split("VmFlags")[0];
+        Assert.Contains("Rss:                       0 kB", sectionBefore);
+        Assert.Contains("Locked:                    0 kB", sectionBefore);
+
+        var pagemap = Fiberish.Syscalls.ProcFsManager.ReadPagemap(env.Process, (long)(MemoryBase / Page) * 8, 24);
+        Assert.All(Enumerable.Range(0, 3), idx => Assert.Equal(0UL, BitConverter.ToUInt64(pagemap, idx * 8) >> 63));
+
+        const uint MLOCK_ONFAULT = 1;
+        Assert.Equal(0, await env.Call("SysMlock2", MemoryBase, 3 * Page, MLOCK_ONFAULT));
+        Assert.False(env.Vma.PageMapping.TryGet(MemoryBase, out _));
+        var smapsAfter = Fiberish.Syscalls.ProcFsManager.GenerateSmaps(env.Process);
+        var sectionAfter = smapsAfter.Split($"{MemoryBase:x8}-")[1].Split("VmFlags")[0];
+        Assert.Contains("Rss:                       0 kB", sectionAfter);
+        Assert.Contains("Locked:                    0 kB", sectionAfter);
+    }
+
+    [Fact]
+    public async Task Mremap_ProtNoneWrittenPage_PreservesData()
+    {
+        using var env = new TestEnv();
+        MapAnonymous(env, MemoryBase, Page);
+        Assert.True(env.Engine.CopyToUser(MemoryBase, new byte[] { 0x77 }));
+        Assert.Equal(0, await env.Call("SysMprotect", MemoryBase, Page, 0));
+        Assert.Equal(MemoryTarget, (uint)await env.Call("SysMremap", MemoryBase, Page, Page, 3, MemoryTarget));
+        Assert.Equal(0, await env.Call("SysMprotect", MemoryTarget, Page, 3));
+        Assert.Equal((byte)0x77, env.Read(MemoryTarget, 1)[0]);
+    }
+
+    [Fact]
+    public async Task Mremap_CleanPrivateFileMapping_PreservesCowIsolation()
+    {
+        using var env = new TestEnv();
+        var fd = (uint)await env.CreateFile();
+        Assert.Equal(0, await env.Call("SysFtruncate", fd, Page));
+        Assert.True(env.Engine.CopyToUser(0x10000, new byte[] { 0x2F }));
+        Assert.Equal(1, await env.Call("SysPWrite", fd, 0x10000, 1, 0));
+
+        Assert.Equal(MemoryBase, (uint)await env.Call("SysMmap2", MemoryBase, Page, 3, 0x12, fd));
+        Assert.Equal((byte)0x2F, env.Read(MemoryBase, 1)[0]); // clean read
+
+        Assert.Equal(MemoryTarget, (uint)await env.Call("SysMremap", MemoryBase, Page, Page, 3, MemoryTarget));
+        Assert.True(env.Engine.CopyToUser(MemoryTarget, new byte[] { 0xBB }));
+
+        Assert.Equal(MemoryBase, (uint)await env.Call("SysMmap2", MemoryBase, Page, 1, 0x11, fd));
+        Assert.Equal((byte)0x2F, env.Read(MemoryBase, 1)[0]);
+    }
+
+    [Fact]
+    public async Task Mremap_ForkSharedPrivatePage_MovesWithoutExceptionOrCorruptingChild()
+    {
+        using var env = new TestEnv();
+        MapAnonymous(env, MemoryBase, 2 * Page);
+        Assert.True(env.Engine.CopyToUser(MemoryBase, new byte[] { 0x55 }));
+
+        using var childCpu = env.Engine.Clone(false);
+        var childMem = env.Vma.Clone();
+        try
+        {
+            childMem.RebuildExternalMappingsFromNative(childCpu, childMem.VMAs);
+            env.Vma.ReprotectNativeMappings(env.Engine, MemoryBase, 2 * Page, Protection.Read, false);
+            childMem.ReprotectNativeMappings(childCpu, MemoryBase, 2 * Page, Protection.Read, false);
+
+            Assert.Equal(MemoryTarget,
+                (uint)await env.Call("SysMremap", MemoryBase, 2 * Page, 2 * Page, 3, MemoryTarget));
+            Assert.True(env.Engine.CopyToUser(MemoryTarget, new byte[] { 0x99 }));
+
+            var childBytes = new byte[1];
+            Assert.True(childCpu.CopyFromUser(MemoryBase, childBytes));
+            Assert.Equal((byte)0x55, childBytes[0]);
+            Assert.Equal((byte)0x99, env.Read(MemoryTarget, 1)[0]);
+        }
+        finally
+        {
+            childMem.Clear(childCpu);
+        }
+    }
+
+    [Fact]
+    public async Task Mremap_DoesNotExtendPrefixNamedRegularFile_AndSharedAnonTailBusErrors()
+    {
+        using var env = new TestEnv();
+        env.WriteString(0x10000, "/.map_shared_anon.user");
+        var rwFd = (uint)await env.Call("SysOpen", 0x10000, (uint)(FileFlags.O_RDWR | FileFlags.O_CREAT), 0x1A4);
+        Assert.Equal(0, await env.Call("SysFtruncate", rwFd, Page));
+        Assert.Equal(0, await env.Call("SysClose", rwFd));
+
+        var roFd = (uint)await env.Call("SysOpen", 0x10000, (uint)FileFlags.O_RDONLY);
+        Assert.Equal(MemoryBase, (uint)await env.Call("SysMmap2", MemoryBase, Page, 1, 0x12, roFd));
+        Assert.Equal(MemoryBase, (uint)await env.Call("SysMremap", MemoryBase, Page, 2 * Page, 1));
+        Assert.Equal(Page, env.Vma.FindVmArea(MemoryBase)!.LogicalInode!.Size);
+
+        Assert.Equal(MemoryTarget, (uint)await env.Call("SysMmap2", MemoryTarget, Page, 3, 0x31, uint.MaxValue));
+        Assert.Equal(MemoryTarget, (uint)await env.Call("SysMremap", MemoryTarget, Page, 2 * Page, 1));
+        Assert.Equal(FaultResult.BusError, env.Vma.HandleFaultDetailed(MemoryTarget + Page, true, env.Engine));
+    }
+
+    [Fact]
+    public async Task Mprotect_MiddleSplitOfSingleVma_PreservesWipeOnForkAndLockOnFaultOnRightTail()
+    {
+        using var env = new TestEnv();
+        MapAnonymous(env, MemoryBase, 3 * Page);
+
+        const uint MADV_WIPEONFORK = 18;
+        const uint MLOCK_ONFAULT = 1;
+        Assert.Equal(0, await env.Call("SysMadvise", MemoryBase, 3 * Page, MADV_WIPEONFORK));
+        Assert.Equal(0, await env.Call("SysMlock2", MemoryBase, 3 * Page, MLOCK_ONFAULT));
+        Assert.Equal(0, await env.Call("SysMprotect", MemoryBase + Page, Page, 1));
+
+        for (uint i = 0; i < 3; i++)
+        {
+            var vma = env.Vma.FindVmArea(MemoryBase + i * Page)!;
+            Assert.True(vma.WipeOnFork);
+            Assert.True(vma.LockOnFault);
+        }
+    }
+
+    [Fact]
+    public async Task Mlockall_CurrentOnlyClearsPreviousMclFuture()
+    {
+        using var env = new TestEnv();
+        const uint MCL_CURRENT = 1;
+        const uint MCL_FUTURE = 2;
+
+        Assert.Equal(0, await env.Call("SysMlockall", MCL_FUTURE));
+        Assert.True(env.Vma.LockFutureMappings);
+
+        Assert.Equal(0, await env.Call("SysMlockall", MCL_CURRENT));
+        Assert.False(env.Vma.LockFutureMappings);
+        Assert.False(env.Vma.LockFutureOnFault);
+
+        Assert.Equal(MemoryTarget, (uint)await env.Call("SysMmap2", MemoryTarget, Page, 3, 0x32, uint.MaxValue));
+        Assert.Equal((MapFlags)0, env.Vma.FindVmArea(MemoryTarget)!.Flags & MapFlags.Locked);
+    }
+
+    [Fact]
+    public async Task ProcFs_StatusReportsVmLckForOnFault_AndUntouchedFileAliasDoesNotInheritGlobalCache()
+    {
+        using var env = new TestEnv();
+        MapAnonymous(env, MemoryBase, 3 * Page);
+        const uint MLOCK_ONFAULT = 1;
+        Assert.Equal(0, await env.Call("SysMlock2", MemoryBase, 3 * Page, MLOCK_ONFAULT));
+
+        var status = Fiberish.Syscalls.ProcFsManager.GenerateStatus(env.Process);
+        Assert.Contains("VmLck:\t      12 kB", status);
+
+        var fd = (uint)await env.CreateFile();
+        Assert.Equal(0, await env.Call("SysFtruncate", fd, Page));
+        Assert.Equal(MemoryTarget, (uint)await env.Call("SysMmap2", MemoryTarget, Page, 1, 0x11, fd));
+        var aliasAddr = MemoryTarget + 2 * Page;
+        Assert.Equal(aliasAddr, (uint)await env.Call("SysMmap2", aliasAddr, Page, 1, 0x11, fd));
+        Assert.Single(env.Read(MemoryTarget, 1));
+
+        var smapsAlias = Fiberish.Syscalls.ProcFsManager.GenerateSmaps(env.Process)
+            .Split($"{aliasAddr:x8}-")[1].Split("VmFlags")[0];
+        Assert.Contains("Rss:                       0 kB", smapsAlias);
+
+        var pmAlias = Fiberish.Syscalls.ProcFsManager.ReadPagemap(env.Process, (long)(aliasAddr / Page) * 8, 8);
+        Assert.Equal(0UL, BitConverter.ToUInt64(pmAlias, 0) >> 63);
+    }
 }

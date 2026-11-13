@@ -29,10 +29,36 @@ public partial class SyscallManager
             if (end > start)
                 try
                 {
+                    var brkFlags = MapFlags.Private | MapFlags.Anonymous;
+                    if (Mem.LockFutureMappings)
+                    {
+                        if (engine.Owner is FiberTask brkTask && brkTask.Process != null &&
+                            brkTask.Process.EUID != 0 &&
+                            brkTask.Process.TryGetResourceLimit(LinuxConstants.RLIMIT_MEMLOCK, out var brkLimit))
+                        {
+                            if (brkLimit.Soft == 0 || (ulong)Mem.GetTotalLockedVmBytes() + (end - start) > brkLimit.Soft)
+                                return (int)BrkAddr;
+                        }
+                        brkFlags |= MapFlags.Locked;
+                    }
+
                     // Map anonymous
                     ProcessAddressSpaceSync.Mmap(Mem, engine, start, end - start,
-                        Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Anonymous, null, 0,
+                        Protection.Read | Protection.Write, brkFlags, null, 0,
                         "HEAP");
+                    if ((brkFlags & MapFlags.Locked) != 0)
+                    {
+                        if (Mem.LockFutureOnFault)
+                        {
+                            if (Mem.FindVmArea(start) is { } lockedHeapVma)
+                                lockedHeapVma.LockOnFault = true;
+                        }
+                        else if (Mem.LockRange(start, end - start, false, engine) < 0 &&
+                                 Mem.FindVmArea(start) is { } heapVma)
+                        {
+                            heapVma.Flags &= ~MapFlags.Locked;
+                        }
+                    }
                 }
                 catch
                 {
@@ -132,6 +158,19 @@ public partial class SyscallManager
             }
         }
 
+        var futureLock = Mem.LockFutureMappings && (flags & (int)MapFlags.Locked) == 0;
+        if (futureLock)
+            flags |= (int)MapFlags.Locked;
+
+        if ((flags & (int)MapFlags.Locked) != 0 &&
+            engine.Owner is FiberTask lockTask && lockTask.Process != null &&
+            lockTask.Process.EUID != 0 &&
+            lockTask.Process.TryGetResourceLimit(LinuxConstants.RLIMIT_MEMLOCK, out var memlockLimit))
+        {
+            if (memlockLimit.Soft == 0 || (ulong)Mem.GetTotalLockedVmBytes() + mapLen > memlockLimit.Soft)
+                return -(int)Errno.EAGAIN;
+        }
+
         try
         {
             if (f != null)
@@ -142,9 +181,26 @@ public partial class SyscallManager
             mmapFile = null; // ownership transferred to VMAs
 
             const int MAP_POPULATE = 0x8000;
-            if ((flags & MAP_POPULATE) != 0)
+            var endAddr = (uint)res + (uint)mapLen;
+            if ((flags & (int)MapFlags.Locked) != 0)
             {
-                var endAddr = (uint)res + (uint)mapLen;
+                if (futureLock && Mem.LockFutureOnFault)
+                {
+                    if (Mem.FindVmArea((uint)res) is { } lockedVma)
+                        lockedVma.LockOnFault = true;
+                }
+                else
+                {
+                    if (Mem.LockRange((uint)res, (uint)mapLen, false, engine) < 0 &&
+                        Mem.FindVmArea((uint)res) is { } mappedVma)
+                    {
+                        mappedVma.Flags &= ~MapFlags.Locked;
+                        mappedVma.LockOnFault = false;
+                    }
+                }
+            }
+            else if ((flags & MAP_POPULATE) != 0)
+            {
                 for (var p = (uint)res; p < endAddr; p += LinuxConstants.PageSize)
                     Mem.HandleFault(p, false, engine);
             }
@@ -183,12 +239,21 @@ public partial class SyscallManager
         if ((addr & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
         if ((a3 & ~7u) != 0) return -(int)Errno.EINVAL;
         var roundedLength = ((ulong)len + LinuxConstants.PageOffsetMask) & ~(ulong)LinuxConstants.PageOffsetMask;
-        if ((ulong)addr + roundedLength > (Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32))
+        var endLong = (ulong)addr + roundedLength;
+        if (endLong > (Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32))
             return -(int)Errno.ENOMEM;
-        foreach (var vma in Mem.FindVmAreasInRange(addr, addr + (uint)roundedLength))
-            if ((prot & Protection.Write) != 0 && (vma.Flags & MapFlags.Shared) != 0 && vma.File != null &&
-                ((vma.File.Flags & FileFlags.O_RDWR) == 0 || vma.LogicalInode is TmpfsInode { HasWriteSeal: true }))
-                return -(int)Errno.EACCES;
+
+        if (Mem.TryGetVmaWindowForSyscall(addr, (uint)endLong, out var startIndex, out var endIndexExclusive))
+        {
+            var vmas = Mem.VMAs;
+            for (var i = startIndex; i < endIndexExclusive; i++)
+            {
+                var vma = vmas[i];
+                if ((prot & Protection.Write) != 0 && (vma.Flags & MapFlags.Shared) != 0 && vma.File != null &&
+                    ((vma.File.Flags & FileFlags.O_RDWR) == 0 || vma.LogicalInode is TmpfsInode { HasWriteSeal: true }))
+                    return -(int)Errno.EACCES;
+            }
+        }
 
         return ProcessAddressSpaceSync.Mprotect(Mem, engine, addr, (uint)roundedLength, prot);
     }
@@ -234,46 +299,41 @@ public partial class SyscallManager
                           MADV_COLD or MADV_PAGEOUT;
         if (!knownAdvice) return -(int)Errno.EINVAL;
 
-        var cursor = a1;
-        var hasHole = false;
-        Mem.VisitVmAreasInRange(a1, (uint)end, vma =>
-        {
-            if (vma.Start > cursor) hasHole = true;
-            cursor = Math.Max(cursor, vma.End);
-        });
-        if (hasHole || cursor < end) return -(int)Errno.ENOMEM;
+        if (!Mem.TryGetContiguousVmaWindow(a1, (uint)end, out var startIndex, out var endIndexExclusive))
+            return -(int)Errno.ENOMEM;
 
+        var vmas = Mem.VMAs;
         if (a3 == MADV_REMOVE)
         {
-            var canRemove = true;
-            Mem.VisitVmAreasInRange(a1, (uint)end, vma =>
+            for (var i = startIndex; i < endIndexExclusive; i++)
             {
+                var vma = vmas[i];
                 if ((vma.Perms & Protection.Write) == 0 || (vma.Flags & MapFlags.Shared) == 0 || vma.LogicalInode is not TmpfsInode)
-                    canRemove = false;
-            });
-            if (!canRemove) return -(int)Errno.EINVAL;
+                    return -(int)Errno.EINVAL;
+                if (vma.LogicalInode is TmpfsInode { HasWriteSeal: true })
+                    return -(int)Errno.EPERM;
+            }
+            return MadviseRemoveRange(engine, a1, (uint)end, startIndex, endIndexExclusive);
         }
 
         if (a3 is MADV_MERGEABLE or MADV_UNMERGEABLE)
         {
-            var canMerge = true;
-            Mem.VisitVmAreasInRange(a1, (uint)end, vma =>
+            for (var i = startIndex; i < endIndexExclusive; i++)
             {
+                var vma = vmas[i];
                 if ((vma.Flags & MapFlags.Shared) != 0 && (vma.Perms & Protection.Write) == 0)
-                    canMerge = false;
-            });
-            if (!canMerge) return -(int)Errno.EINVAL;
+                    return -(int)Errno.EINVAL;
+            }
         }
 
         if (a3 == MADV_FREE)
         {
-            var allPrivateAnon = true;
-            Mem.VisitVmAreasInRange(a1, (uint)end, vma =>
+            for (var i = startIndex; i < endIndexExclusive; i++)
             {
+                var vma = vmas[i];
                 if (vma.IsFileBacked || (vma.Flags & MapFlags.Private) == 0 || (vma.Flags & MapFlags.Shared) != 0)
-                    allPrivateAnon = false;
-            });
-            if (!allPrivateAnon) return -(int)Errno.EINVAL;
+                    return -(int)Errno.EINVAL;
+            }
         }
 
         return a3 switch
@@ -287,6 +347,31 @@ public partial class SyscallManager
         };
     }
 
+    private int MadviseRemoveRange(Engine engine, uint start, uint end, int startIndex, int endIndexExclusive)
+    {
+        var vmas = Mem.VMAs;
+        var mutationCtx = CreateFileMutationContext(engine);
+        for (var i = startIndex; i < endIndexExclusive; i++)
+        {
+            var vma = vmas[i];
+            var overlapStart = Math.Max(vma.Start, start);
+            var overlapEnd = Math.Min(vma.End, end);
+            if (overlapStart >= overlapEnd)
+                continue;
+
+            var inode = vma.BackingInode ?? vma.LogicalInode;
+            if (inode == null)
+                return -(int)Errno.EINVAL;
+
+            var fileOffset = vma.Offset + (long)(overlapStart - vma.Start);
+            var holeLen = (long)(overlapEnd - overlapStart);
+            var rc = inode.PunchHole(fileOffset, holeLen, mutationCtx);
+            if (rc < 0)
+                return rc;
+        }
+        return 0;
+    }
+
     private async ValueTask<int> SysMsync(Engine engine, uint addr, uint len, uint flags, uint a4, uint a5,
         uint a6)
     {
@@ -298,19 +383,22 @@ public partial class SyscallManager
         var roundedLength = ((ulong)len + LinuxConstants.PageOffsetMask) & ~(ulong)LinuxConstants.PageOffsetMask;
         var end = (ulong)addr + roundedLength;
         if (end > (Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32)) return -(int)Errno.ENOMEM;
-        var cursor = addr;
-        var hasHole = false;
-        var isLocked = false;
-        Mem.VisitVmAreasInRange(addr, (uint)end, vma =>
+
+        var hasHole = !Mem.TryGetContiguousVmaWindow(addr, (uint)end, out var startIndex, out var endIndexExclusive);
+        if ((flags & MS_INVALIDATE) != 0 &&
+            Mem.TryGetVmaWindowForSyscall(addr, (uint)end, out var winStart, out var winEnd))
         {
-            if (vma.Start > cursor) hasHole = true;
-            if ((vma.Flags & MapFlags.Locked) != 0) isLocked = true;
-            cursor = Math.Max(cursor, vma.End);
-        });
-        if ((flags & MS_INVALIDATE) != 0 && isLocked)
-            return -(int)Errno.EBUSY;
+            var vmas = Mem.VMAs;
+            for (var i = winStart; i < winEnd; i++)
+            {
+                if ((vmas[i].Flags & MapFlags.Locked) != 0)
+                    return -(int)Errno.EBUSY;
+            }
+        }
+        _ = startIndex;
+        _ = endIndexExclusive;
         ProcessAddressSpaceSync.SyncSharedRange(Mem, engine, addr, len);
-        return hasHole || cursor < end ? -(int)Errno.ENOMEM : 0;
+        return hasHole ? -(int)Errno.ENOMEM : 0;
     }
 
     private async ValueTask<int> SysMincore(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -328,52 +416,60 @@ public partial class SyscallManager
         var taskSize = Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
         if (end > taskSize) return -(int)Errno.ENOMEM;
 
-        var pageCount = (int)(roundedLen / LinuxConstants.PageSize);
-        var cursor = addr;
-        var hasHole = false;
-        Mem.VisitVmAreasInRange(addr, (uint)end, vma =>
-        {
-            if (vma.Start > cursor) hasHole = true;
-            cursor = Math.Max(cursor, vma.End);
-        });
-        if (hasHole || cursor < end) return -(int)Errno.ENOMEM;
+        if (!Mem.TryGetContiguousVmaWindow(addr, (uint)end, out var startIndex, out var endIndexExclusive))
+            return -(int)Errno.ENOMEM;
 
-        var vec = new byte[pageCount];
-        for (var i = 0; i < pageCount; i++)
+        var vmas = Mem.VMAs;
+        var pageCount = (int)(roundedLen / LinuxConstants.PageSize);
+        const int ChunkSize = 256;
+        Span<byte> chunk = stackalloc byte[ChunkSize];
+
+        var vmaIdx = startIndex;
+        var currentVma = vmas[vmaIdx];
+        var written = 0;
+
+        while (written < pageCount)
         {
-            var p = addr + (uint)i * LinuxConstants.PageSize;
-            var vma = Mem.FindVmArea(p);
-            var isResident = false;
-            if (vma != null)
+            var batch = Math.Min(ChunkSize, pageCount - written);
+            for (var i = 0; i < batch; i++)
             {
-                var pageIndex = vma.GetPageIndex(p);
-                if (vma.IsFileBacked)
+                var p = addr + (uint)(written + i) * LinuxConstants.PageSize;
+                while (p >= currentVma.End && vmaIdx + 1 < endIndexExclusive)
+                    currentVma = vmas[++vmaIdx];
+
+                var isResident = false;
+                if (p >= currentVma.Start && p < currentVma.End)
                 {
-                    if (Mem.PageMapping.TryGet(p, out _))
-                        isResident = true;
-                    else if (vma.VmAnonVma is { } anon && anon.PeekPage(pageIndex) != IntPtr.Zero)
-                        isResident = true;
-                    else if (vma.VmMapping is { } mapping && mapping.PeekPage(pageIndex) != IntPtr.Zero)
-                        isResident = true;
-                    else if (vma.LogicalInode is IHostMappedCacheDropper dropper &&
-                             dropper.CheckPageResidency((long)pageIndex) == HostPageResidencyStatus.Resident)
-                        isResident = true;
+                    var pageIndex = currentVma.GetPageIndex(p);
+                    if (currentVma.IsFileBacked)
+                    {
+                        if (Mem.PageMapping.TryGet(p, out _))
+                            isResident = true;
+                        else if (currentVma.VmAnonVma is { } anon && anon.PeekPage(pageIndex) != IntPtr.Zero)
+                            isResident = true;
+                        else if (currentVma.VmMapping is { } mapping && mapping.PeekPage(pageIndex) != IntPtr.Zero)
+                            isResident = true;
+                        else if (currentVma.LogicalInode is IHostMappedCacheDropper dropper &&
+                                 dropper.CheckPageResidency((long)pageIndex) == HostPageResidencyStatus.Resident)
+                            isResident = true;
+                    }
+                    else
+                    {
+                        if (currentVma.VmAnonVma is { } anon && anon.PeekPage(pageIndex) != IntPtr.Zero)
+                            isResident = true;
+                        else if ((currentVma.Flags & MapFlags.Locked) != 0 && Mem.PageMapping.TryGet(p, out _))
+                            isResident = true;
+                    }
                 }
-                else
-                {
-                    // Anonymous mapping: resident only if private page was written/allocated, or locked and faulted
-                    if (vma.VmAnonVma is { } anon && anon.PeekPage(pageIndex) != IntPtr.Zero)
-                        isResident = true;
-                    else if ((vma.Flags & MapFlags.Locked) != 0 && Mem.PageMapping.TryGet(p, out _))
-                        isResident = true;
-                }
+
+                chunk[i] = (byte)(isResident ? 1 : 0);
             }
 
-            vec[i] = (byte)(isResident ? 1 : 0);
-        }
+            if (!engine.CopyToUser(vecPtr + (uint)written, chunk[..batch]))
+                return -(int)Errno.EFAULT;
 
-        if (!engine.CopyToUser(vecPtr, vec))
-            return -(int)Errno.EFAULT;
+            written += batch;
+        }
 
         return 0;
     }
@@ -394,50 +490,23 @@ public partial class SyscallManager
         if (len == 0) return 0;
 
         var start = addr & LinuxConstants.PageMask;
-        var roundedLen = ((ulong)addr + len + LinuxConstants.PageOffsetMask) & ~(ulong)LinuxConstants.PageOffsetMask;
-        var end = roundedLen;
+        var end = ((ulong)addr + len + LinuxConstants.PageOffsetMask) & ~(ulong)LinuxConstants.PageOffsetMask;
         var taskSize = Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
         if (end <= start || end > taskSize) return -(int)Errno.ENOMEM;
 
-        var lockBytes = (uint)(end - start);
-        var cursor = start;
-        var hasHole = false;
-        Mem.VisitVmAreasInRange(start, (uint)end, vma =>
-        {
-            if (vma.Start > cursor) hasHole = true;
-            cursor = Math.Max(cursor, vma.End);
-        });
-        if (hasHole || cursor < end) return -(int)Errno.ENOMEM;
+        if (!Mem.TryGetContiguousVmaWindow(start, (uint)end, out _, out _))
+            return -(int)Errno.ENOMEM;
 
-        if (engine.Owner is FiberTask task && task.Process != null)
+        if (engine.Owner is FiberTask task && task.Process != null &&
+            task.Process.EUID != 0 && task.Process.TryGetResourceLimit(LinuxConstants.RLIMIT_MEMLOCK, out var limit))
         {
-            if (task.Process.EUID != 0 && task.Process.TryGetResourceLimit(LinuxConstants.RLIMIT_MEMLOCK, out var limit))
-            {
-                if (limit.Soft == 0) return -(int)Errno.EPERM;
-                if (lockBytes > limit.Soft) return -(int)Errno.ENOMEM;
-            }
+            if (limit.Soft == 0) return -(int)Errno.EPERM;
+            var totalLockedAfter = Mem.GetTotalLockedVmBytes() + Mem.GetAdditionalLockBytes(start, (uint)end);
+            if ((ulong)totalLockedAfter > limit.Soft) return -(int)Errno.ENOMEM;
         }
 
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine);
-
-        Mem.VisitVmAreasInRange(start, (uint)end, vma =>
-        {
-            vma.Flags |= MapFlags.Locked;
-            if (vma.LogicalInode is IHostMappedCacheDropper dropper)
-            {
-                var startPage = vma.GetPageIndex(Math.Max(vma.Start, start));
-                var count = (int)((Math.Min(vma.End, (uint)end) - Math.Max(vma.Start, start)) / LinuxConstants.PageSize);
-                dropper.TryLockPageRange(startPage, count, out _);
-            }
-        });
-
-        if ((flags & MLOCK_ONFAULT) == 0)
-        {
-            for (var p = start; p < end; p += LinuxConstants.PageSize)
-                Mem.HandleFault(p, false, engine);
-        }
-
-        return 0;
+        return Mem.LockRange(start, (uint)(end - start), (flags & MLOCK_ONFAULT) != 0, engine);
     }
 
     private async ValueTask<int> SysMunlock(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -447,34 +516,15 @@ public partial class SyscallManager
         if (len == 0) return 0;
 
         var start = addr & LinuxConstants.PageMask;
-        var roundedLen = ((ulong)addr + len + LinuxConstants.PageOffsetMask) & ~(ulong)LinuxConstants.PageOffsetMask;
-        var end = roundedLen;
+        var end = ((ulong)addr + len + LinuxConstants.PageOffsetMask) & ~(ulong)LinuxConstants.PageOffsetMask;
         var taskSize = Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
         if (end <= start || end > taskSize) return -(int)Errno.ENOMEM;
 
-        var cursor = start;
-        var hasHole = false;
-        Mem.VisitVmAreasInRange(start, (uint)end, vma =>
-        {
-            if (vma.Start > cursor) hasHole = true;
-            cursor = Math.Max(cursor, vma.End);
-        });
-        if (hasHole || cursor < end) return -(int)Errno.ENOMEM;
+        if (!Mem.TryGetContiguousVmaWindow(start, (uint)end, out _, out _))
+            return -(int)Errno.ENOMEM;
 
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine);
-
-        Mem.VisitVmAreasInRange(start, (uint)end, vma =>
-        {
-            vma.Flags &= ~MapFlags.Locked;
-            if (vma.LogicalInode is IHostMappedCacheDropper dropper)
-            {
-                var startPage = vma.GetPageIndex(Math.Max(vma.Start, start));
-                var count = (int)((Math.Min(vma.End, (uint)end) - Math.Max(vma.Start, start)) / LinuxConstants.PageSize);
-                dropper.TryUnlockPageRange(startPage, count);
-            }
-        });
-
-        return 0;
+        return Mem.UnlockRange(start, (uint)(end - start));
     }
 
     private async ValueTask<int> SysMlockall(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -490,38 +540,18 @@ public partial class SyscallManager
             task.Process.TryGetResourceLimit(LinuxConstants.RLIMIT_MEMLOCK, out var limit))
         {
             if (limit.Soft == 0) return -(int)Errno.EPERM;
-            var totalBytes = 0L;
-            foreach (var vma in Mem.VMAs)
-                totalBytes += vma.Length;
-            if (totalBytes > (long)limit.Soft)
+            if ((flags & MCL_CURRENT) != 0 && (ulong)Mem.GetTotalVmBytes() > limit.Soft)
                 return -(int)Errno.ENOMEM;
         }
 
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine);
-
-        if ((flags & MCL_CURRENT) != 0)
-        {
-            foreach (var vma in Mem.VMAs)
-            {
-                vma.Flags |= MapFlags.Locked;
-                if ((flags & MCL_ONFAULT) == 0)
-                {
-                    for (var p = vma.Start; p < vma.End; p += LinuxConstants.PageSize)
-                        Mem.HandleFault(p, false, engine);
-                }
-            }
-        }
-
-        return 0;
+        return Mem.MlockAll((flags & MCL_CURRENT) != 0, (flags & MCL_FUTURE) != 0, (flags & MCL_ONFAULT) != 0, engine);
     }
 
     private async ValueTask<int> SysMunlockall(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine);
-
-        foreach (var vma in Mem.VMAs)
-            vma.Flags &= ~MapFlags.Locked;
-
+        Mem.MunlockAll();
         return 0;
     }
 
@@ -589,18 +619,30 @@ public partial class SyscallManager
         var growStart = oldAddr + oldLenAligned;
 
         // Check if there's free space right after the old region
-        var canGrowInPlace = !isFixed && (ulong)oldAddr + newLenAligned <= taskSize;
-        Mem.VisitVmAreasInRange(growStart, growStart + growLen, _ =>
-        {
-            canGrowInPlace = false;
-        });
+        var canGrowInPlace = !isFixed && (ulong)oldAddr + newLenAligned <= taskSize &&
+                             !Mem.TryGetVmaWindowForSyscall(growStart, growStart + growLen, out _, out _);
 
         if (canGrowInPlace)
         {
+            if ((oldVma.Flags & MapFlags.Locked) != 0 &&
+                engine.Owner is FiberTask lockTask && lockTask.Process != null &&
+                lockTask.Process.EUID != 0 &&
+                lockTask.Process.TryGetResourceLimit(LinuxConstants.RLIMIT_MEMLOCK, out var memlockLimit))
+            {
+                if (memlockLimit.Soft == 0 || (ulong)Mem.GetTotalLockedVmBytes() + growLen > memlockLimit.Soft)
+                    return -(int)Errno.ENOMEM;
+            }
+
             // If oldAddr is at VmArea start and the old region covers the whole VmArea, extend it
             if (oldAddr == oldVma.Start && oldAddr + oldLenAligned == oldVma.End)
             {
                 oldVma.End = oldAddr + newLenAligned;
+                Mem.ResetVmAreaAttachmentsAfterResize(oldVma);
+                if ((oldVma.Flags & MapFlags.Locked) != 0 && !oldVma.LockOnFault)
+                {
+                    if (Mem.LockRange(growStart, growLen, false, engine) < 0)
+                        oldVma.Flags &= ~MapFlags.Locked;
+                }
                 return (int)oldAddr;
             }
 
@@ -617,6 +659,21 @@ public partial class SyscallManager
 
         var copyLen = Math.Min(oldLenAligned, newLenAligned);
         var sourceOffset = ComputeSliceOffset(oldVma, oldAddr);
+
+        var splitMiddle = oldAddr > oldVma.Start && oldAddr + oldLenAligned < oldVma.End;
+        var neededVmas = 1 + (splitMiddle ? 1 : 0);
+        if (!Mem.CanAllocateVmas(neededVmas))
+            return -(int)Errno.ENOMEM;
+
+        if (newLenAligned > oldLenAligned && (oldVma.Flags & MapFlags.Locked) != 0 &&
+            engine.Owner is FiberTask moveLockTask && moveLockTask.Process != null &&
+            moveLockTask.Process.EUID != 0 &&
+            moveLockTask.Process.TryGetResourceLimit(LinuxConstants.RLIMIT_MEMLOCK, out var moveLimit))
+        {
+            var delta = newLenAligned - oldLenAligned;
+            if (moveLimit.Soft == 0 || (ulong)Mem.GetTotalLockedVmBytes() + delta > moveLimit.Soft)
+                return -(int)Errno.ENOMEM;
+        }
 
         // Find or use target address
         uint targetAddr;
@@ -641,6 +698,12 @@ public partial class SyscallManager
         if (targetVma != null)
         {
             Mem.MigrateVmaPages(oldVma, oldAddr, targetVma, targetAddr, copyLen, engine);
+            if ((targetVma.Flags & MapFlags.Locked) != 0 && !targetVma.LockOnFault && newLenAligned > copyLen)
+            {
+                var tailStart = targetAddr + copyLen;
+                if (Mem.LockRange(tailStart, newLenAligned - copyLen, false, engine) < 0)
+                    targetVma.Flags &= ~MapFlags.Locked;
+            }
         }
 
         // Unmap old region
@@ -653,15 +716,15 @@ public partial class SyscallManager
     {
         var addr = a1;
         var size = a2;
-        var prot = (int)a3;
+        var prot = a3;
         var pgoff = a4;
         var flags = (int)a5;
 
         if (size == 0) return -(int)Errno.EINVAL;
         if ((addr & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
         if ((size & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
+        if (prot != 0) return -(int)Errno.EINVAL;
         if (flags != 0) return -(int)Errno.EINVAL;
-        if (prot < 0 || (prot & ~7) != 0) return -(int)Errno.EINVAL;
 
         var taskSize = Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
         if ((ulong)addr + size > taskSize) return -(int)Errno.EINVAL;
@@ -669,29 +732,19 @@ public partial class SyscallManager
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine);
 
         var end = addr + size;
-        var vma = Mem.FindVmArea(addr);
-        if (vma == null) return -(int)Errno.ENOMEM;
+        if (!Mem.TryGetContiguousVmaWindow(addr, end, out var startIndex, out var endIndexExclusive))
+            return -(int)Errno.ENOMEM;
 
-        if (!vma.IsFileBacked || (vma.Flags & MapFlags.Shared) == 0)
-            return -(int)Errno.EINVAL;
-
-        if (end > vma.End)
+        var vmas = Mem.VMAs;
+        for (var i = startIndex; i < endIndexExclusive; i++)
         {
-            var cursor = addr;
-            var gap = false;
-            Mem.VisitVmAreasInRange(addr, end, v =>
-            {
-                if (v.Start > cursor || !v.IsFileBacked || (v.Flags & MapFlags.Shared) == 0)
-                    gap = true;
-                cursor = Math.Max(cursor, v.End);
-            });
-            if (gap || cursor < end) return -(int)Errno.ENOMEM;
+            var v = vmas[i];
+            if (!v.IsFileBacked || (v.Flags & MapFlags.Shared) == 0)
+                return -(int)Errno.EINVAL;
         }
 
-        var effectiveProt = prot != 0 ? (Protection)prot : vma.Perms;
         var newOffset = (long)pgoff * LinuxConstants.PageSize;
-
-        return ProcessAddressSpaceSync.RemapFileRange(Mem, engine, addr, size, effectiveProt, newOffset, (ulong)pgoff);
+        return ProcessAddressSpaceSync.RemapFileRange(Mem, engine, addr, size, newOffset, pgoff);
     }
 
     private static int TryMapRemapSlice(SyscallManager sm, Engine engine, VmArea sourceVma, uint targetAddr,
@@ -706,9 +759,17 @@ public partial class SyscallManager
 
             _ = ProcessAddressSpaceSync.Mmap(sm.Mem, engine, targetAddr, length, sourceVma.Perms, flags,
                 clonedFile, offset, sourceVma.Name);
-            if (sourceVma.DontFork)
-                _ = ProcessAddressSpaceSync.MadviseForkInheritance(sm.Mem, engine, targetAddr, length, true);
             clonedFile = null; // ownership transferred to the new VmArea
+            if (sm.Mem.FindVmArea(targetAddr) is { } targetVma)
+            {
+                if (!sourceVma.IsFileBacked)
+                    targetVma.VmPgoff = sourceVma.GetPageIndex(sourceAddr);
+                targetVma.DontFork = sourceVma.DontFork;
+                targetVma.WipeOnFork = sourceVma.WipeOnFork;
+                targetVma.LockOnFault = sourceVma.LockOnFault;
+                targetVma.GrowDownLimit = sourceVma.GrowDownLimit;
+                targetVma.GrowDownGuardGap = sourceVma.GrowDownGuardGap;
+            }
             return 0;
         }
         catch (OutOfMemoryException)

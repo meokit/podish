@@ -126,14 +126,19 @@ public static class ProcFsManager
 
         var lockedKb = 0L;
         var vmSizeKb = 0L;
-        foreach (var vma in process.Mem.VMAs)
+        var vmRssKb = 0L;
+        var vmas = process.Mem.VMAs;
+        for (var i = 0; i < vmas.Count; i++)
         {
-            vmSizeKb += vma.Length / 1024;
+            var vma = vmas[i];
+            var vmaKb = vma.Length / 1024;
+            vmSizeKb += vmaKb;
+            vmRssKb += CountVmaResidentKb(process, vma);
             if ((vma.Flags & MapFlags.Locked) != 0)
-                lockedKb += vma.Length / 1024;
+                lockedKb += vmaKb;
         }
 
-        return $"Name:\t{process.Comm}\nState:\t{stateMsg}\nPid:\t{process.TGID}\nPPid:\t{process.PPID}\nVmSize:\t{vmSizeKb,8} kB\nVmLck:\t{lockedKb,8} kB\nVmRSS:\t{vmSizeKb,8} kB\n";
+        return $"Name:\t{process.Comm}\nState:\t{stateMsg}\nPid:\t{process.TGID}\nPPid:\t{process.PPID}\nVmSize:\t{vmSizeKb,8} kB\nVmLck:\t{lockedKb,8} kB\nVmRSS:\t{vmRssKb,8} kB\n";
     }
 
     public static string GenerateCmdline(Process process)
@@ -358,22 +363,52 @@ public static class ProcFsManager
         return "0\n";
     }
 
+    private static void AppendVmaHeaderLine(StringBuilder sb, VmArea vma)
+    {
+        var dev = vma.LogicalInode?.SuperBlock?.Dev ?? 0;
+        var ino = vma.LogicalInode?.Ino ?? 0;
+        sb.Append($"{vma.Start:x8}-{vma.End:x8} ");
+        sb.Append((vma.Perms & Protection.Read) != 0 ? 'r' : '-');
+        sb.Append((vma.Perms & Protection.Write) != 0 ? 'w' : '-');
+        sb.Append((vma.Perms & Protection.Exec) != 0 ? 'x' : '-');
+        sb.Append((vma.Flags & MapFlags.Shared) != 0 ? 's' : 'p');
+        sb.Append($" {vma.Offset:x8} {dev >> 20:x2}:{dev & 0xFFFFF:x2} {ino,-8} {vma.Name}\n");
+    }
+
+    private static long CountVmaResidentKb(Process process, VmArea vma)
+    {
+        var pageMapping = process.Mem.PageMapping;
+        var anon = vma.VmAnonVma;
+        var anonCount = anon?.PageCount ?? 0;
+        if (pageMapping.Count == 0 && anonCount == 0)
+            return 0;
+
+        var vmaPageCount = (ulong)vma.Length / LinuxConstants.PageSize;
+        if (anonCount == 0 && vmaPageCount > (ulong)pageMapping.Count * 2)
+            return (long)pageMapping.CountInRange(vma.Start, vma.End) * 4;
+
+        var residentKb = 0L;
+        for (var p = vma.Start; p < vma.End; p += LinuxConstants.PageSize)
+        {
+            if (pageMapping.TryGet(p, out _))
+            {
+                residentKb += 4;
+                continue;
+            }
+
+            if (anonCount > 0 && anon!.PeekPage(vma.GetPageIndex(p)) != IntPtr.Zero)
+                residentKb += 4;
+        }
+        return residentKb;
+    }
+
     public static string GenerateMaps(Process? process)
     {
         if (process == null) return string.Empty;
         var sb = new StringBuilder();
-        foreach (var vma in process.Mem.VMAs)
-        {
-            var perms = $"{((vma.Perms & Protection.Read) != 0 ? 'r' : '-')}" +
-                        $"{((vma.Perms & Protection.Write) != 0 ? 'w' : '-')}" +
-                        $"{((vma.Perms & Protection.Exec) != 0 ? 'x' : '-')}" +
-                        $"{((vma.Flags & MapFlags.Shared) != 0 ? 's' : 'p')}";
-            var dev = vma.LogicalInode?.SuperBlock?.Dev ?? 0;
-            var devStr = $"{dev >> 20:x2}:{dev & 0xFFFFF:x2}";
-            var ino = vma.LogicalInode?.Ino ?? 0;
-            var name = vma.Name;
-            sb.Append($"{vma.Start:x8}-{vma.End:x8} {perms} {vma.Offset:x8} {devStr} {ino,-8} {name}\n");
-        }
+        var vmas = process.Mem.VMAs;
+        for (var i = 0; i < vmas.Count; i++)
+            AppendVmaHeaderLine(sb, vmas[i]);
         return sb.ToString();
     }
 
@@ -381,62 +416,53 @@ public static class ProcFsManager
     {
         if (process == null) return string.Empty;
         var sb = new StringBuilder();
-        foreach (var vma in process.Mem.VMAs)
+        var vmas = process.Mem.VMAs;
+        for (var i = 0; i < vmas.Count; i++)
         {
-            var perms = $"{((vma.Perms & Protection.Read) != 0 ? 'r' : '-')}" +
-                        $"{((vma.Perms & Protection.Write) != 0 ? 'w' : '-')}" +
-                        $"{((vma.Perms & Protection.Exec) != 0 ? 'x' : '-')}" +
-                        $"{((vma.Flags & MapFlags.Shared) != 0 ? 's' : 'p')}";
-            var dev = vma.LogicalInode?.SuperBlock?.Dev ?? 0;
-            var devStr = $"{dev >> 20:x2}:{dev & 0xFFFFF:x2}";
-            var ino = vma.LogicalInode?.Ino ?? 0;
-            var name = vma.Name;
+            var vma = vmas[i];
             var sizeKb = vma.Length / 1024;
             var isLocked = (vma.Flags & MapFlags.Locked) != 0;
-            var residentKb = 0L;
-            for (var p = vma.Start; p < vma.End; p += LinuxConstants.PageSize)
-            {
-                if (process.Mem.PageMapping.TryGet(p, out _))
-                    residentKb += 4;
-                else if (vma.VmAnonVma?.PeekPage(vma.GetPageIndex(p)) != IntPtr.Zero)
-                    residentKb += 4;
-                else if (vma.VmMapping?.PeekPage(vma.GetPageIndex(p)) != IntPtr.Zero)
-                    residentKb += 4;
-            }
-            var lockedKb = isLocked ? sizeKb : 0;
-            if (isLocked && residentKb < sizeKb) residentKb = sizeKb;
+            var residentKb = CountVmaResidentKb(process, vma);
+            var lockedKb = isLocked ? residentKb : 0;
 
-            sb.Append($"{vma.Start:x8}-{vma.End:x8} {perms} {vma.Offset:x8} {devStr} {ino,-8} {name}\n");
+            AppendVmaHeaderLine(sb, vma);
             sb.Append($"Size:               {sizeKb,8} kB\n");
-            sb.Append($"KernelPageSize:            4 kB\n");
-            sb.Append($"MMUPageSize:               4 kB\n");
+            sb.Append("KernelPageSize:            4 kB\n");
+            sb.Append("MMUPageSize:               4 kB\n");
             sb.Append($"Rss:                {residentKb,8} kB\n");
             sb.Append($"Pss:                {residentKb,8} kB\n");
-            sb.Append($"Shared_Clean:              0 kB\n");
-            sb.Append($"Shared_Dirty:              0 kB\n");
-            sb.Append($"Private_Clean:             0 kB\n");
+            sb.Append("Shared_Clean:              0 kB\n");
+            sb.Append("Shared_Dirty:              0 kB\n");
+            sb.Append("Private_Clean:             0 kB\n");
             sb.Append($"Private_Dirty:      {residentKb,8} kB\n");
             sb.Append($"Referenced:         {residentKb,8} kB\n");
-            sb.Append($"Anonymous:          {residentKb,8} kB\n");
-            sb.Append($"LazyFree:                  0 kB\n");
-            sb.Append($"AnonHugePages:             0 kB\n");
-            sb.Append($"ShmemPmdMapped:            0 kB\n");
-            sb.Append($"FilePmdMapped:             0 kB\n");
-            sb.Append($"Shared_Hugetlb:            0 kB\n");
-            sb.Append($"Private_Hugetlb:           0 kB\n");
+            var anonKb = !vma.IsFileBacked && (vma.Flags & MapFlags.Shared) == 0 ? residentKb : 0;
+            sb.Append($"Anonymous:          {anonKb,8} kB\n");
+            sb.Append("LazyFree:                  0 kB\n");
+            sb.Append("AnonHugePages:             0 kB\n");
+            sb.Append("ShmemPmdMapped:            0 kB\n");
+            sb.Append("FilePmdMapped:             0 kB\n");
+            sb.Append("Shared_Hugetlb:            0 kB\n");
+            sb.Append("Private_Hugetlb:           0 kB\n");
             sb.Append($"Locked:             {lockedKb,8} kB\n");
             sb.Append("VmFlags: rd wr mr mw me ac\n");
         }
         return sb.ToString();
     }
 
-    public static byte[] ReadPagemap(Process? process, long offset, int length)
+    public static int ReadPagemap(Process? process, long offset, Span<byte> destination)
     {
-        if (process == null || length <= 0 || offset < 0) return [];
-        var result = new byte[length];
+        if (process == null || destination.Length <= 0 || offset < 0) return 0;
         var taskSize = process.Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
+        var maxBytes = (long)((taskSize / LinuxConstants.PageSize) * 8);
+        if (offset >= maxBytes) return 0;
+
+        var readable = (int)Math.Min(destination.Length, maxBytes - offset);
+        var slice = destination[..readable];
+        slice.Clear();
+
         var startPage = (uint)(offset / 8);
-        var pageCount = (length + 7) / 8;
+        var pageCount = (readable + 7) / 8;
 
         for (var i = 0; i < pageCount; i++)
         {
@@ -451,9 +477,7 @@ public static class ProcFsManager
             {
                 if (process.Mem.PageMapping.TryGet(addr, out _))
                     isPresent = true;
-                else if (vma.VmAnonVma?.PeekPage(vma.GetPageIndex(addr)) != IntPtr.Zero)
-                    isPresent = true;
-                else if (vma.VmMapping?.PeekPage(vma.GetPageIndex(addr)) != IntPtr.Zero)
+                else if (vma.VmAnonVma is { } anon && anon.PeekPage(vma.GetPageIndex(addr)) != IntPtr.Zero)
                     isPresent = true;
             }
 
@@ -461,12 +485,20 @@ public static class ProcFsManager
             {
                 var entry = 1UL << 63; // PAGE_PRESENT
                 var byteOffset = i * 8;
-                if (byteOffset + 8 <= result.Length)
-                    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(result.AsSpan(byteOffset, 8), entry);
+                if (byteOffset + 8 <= slice.Length)
+                    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(slice.Slice(byteOffset, 8), entry);
             }
         }
 
-        return result;
+        return readable;
+    }
+
+    public static byte[] ReadPagemap(Process? process, long offset, int length)
+    {
+        if (process == null || length <= 0 || offset < 0) return [];
+        var result = new byte[length];
+        var read = ReadPagemap(process, offset, result.AsSpan());
+        return read == length ? result : result[..read];
     }
 
     public static string GenerateSysVmSwappiness()

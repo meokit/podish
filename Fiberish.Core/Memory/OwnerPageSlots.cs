@@ -750,10 +750,43 @@ internal sealed class OwnerPageSlots
 
         var hostPage = pageRecord.HostPage;
         var oldBinding = _ownerBindingFactory(sourcePageIndex);
-        hostPage.UnbindOwnerRoot(oldBinding);
-
         var ownerBinding = targetSlots._ownerBindingFactory(targetPageIndex);
-        hostPage.BindOwnerRoot(ownerBinding);
+        var transfer = hostPage.TryTransferOwnerRoot(oldBinding, ownerBinding);
+        if (transfer == OwnerRootTransferResult.Invalid)
+            return false;
+
+        if (transfer == OwnerRootTransferResult.NeedsCowCopy)
+        {
+            var wasDirty = pageRecord.Dirty;
+            var wasUptodate = pageRecord.Uptodate;
+            if (!_memoryContext.BackingPagePool.TryAllocAnonPageMayFail(out var cowHandle, AllocationClass.Cow,
+                    AllocationSource.CowReplacePrivate))
+            {
+                lock (_lock)
+                {
+                    _pages[sourcePageIndex] = pageRecord;
+                    ApplyPageCountDelta(1);
+                    _pageBindingChanged?.Invoke(sourcePageIndex, IntPtr.Zero, pageRecord.Ptr);
+                }
+                throw new OutOfMemoryException("Failed to allocate COW copy during page move.");
+            }
+
+            unsafe
+            {
+                Buffer.MemoryCopy((void*)pageRecord.Ptr, (void*)cowHandle.Pointer,
+                    LinuxConstants.PageSize, LinuxConstants.PageSize);
+            }
+
+            hostPage.UnbindOwnerRoot(oldBinding);
+            targetSlots.ReplacePage(targetPageIndex, ref cowHandle, hostPageKind);
+            if ((wasDirty || wasUptodate) && targetSlots.PeekVmPage(targetPageIndex) is { } movedRecord)
+            {
+                if (wasDirty) movedRecord.Dirty = true;
+                if (wasUptodate) movedRecord.Uptodate = true;
+            }
+            return true;
+        }
+
         lock (targetSlots._lock)
         {
             targetSlots._pages[targetPageIndex] = CreateVmPage(hostPage, pageRecord.MappingReleaseOwner, pageRecord.MappingReleaseRecord);

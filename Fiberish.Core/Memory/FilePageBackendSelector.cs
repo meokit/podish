@@ -2,7 +2,13 @@ namespace Fiberish.Memory;
 
 internal static class FilePageBackendSelector
 {
-    internal static Func<string, HostMemoryMapGeometry, IFilePageBackend?>? FactoryOverrideForTests { get; set; }
+    private static readonly AsyncLocal<Func<string, HostMemoryMapGeometry, IFilePageBackend?>?> TestFactoryOverride = new();
+
+    internal static Func<string, HostMemoryMapGeometry, IFilePageBackend?>? FactoryOverrideForTests
+    {
+        get => TestFactoryOverride.Value;
+        set => TestFactoryOverride.Value = value;
+    }
 
     public static IFilePageBackend Create(string path)
     {

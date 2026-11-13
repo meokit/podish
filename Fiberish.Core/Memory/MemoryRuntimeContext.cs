@@ -34,6 +34,7 @@ public sealed class MemoryRuntimeContext : IDisposable
     public HostMemoryMapGeometry HostMemoryMapGeometry { get; }
     public BackingPagePool BackingPagePool { get; }
     internal HostPageManager HostPages { get; }
+    internal HostMemoryLockTracker HostLocks { get; } = new();
     public AddressSpacePolicy AddressSpacePolicy { get; }
     public MemoryPressureCoordinator MemoryPressure { get; }
     public ulong? DeterministicAslrSeed { get; set; }
@@ -92,6 +93,7 @@ public sealed class MemoryRuntimeContext : IDisposable
         }
 
         AddressSpacePolicy.Dispose();
+        HostLocks.Dispose();
         HostPages.Dispose();
         BackingPagePool.Dispose();
     }

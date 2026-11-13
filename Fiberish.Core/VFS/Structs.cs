@@ -1241,6 +1241,9 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
 
     public virtual int PunchHole(long offset, long length, in FileMutationContext context)
     {
+        _ = offset;
+        _ = length;
+        _ = context;
         return -(int)Errno.EOPNOTSUPP;
     }
 
@@ -2126,72 +2129,90 @@ public abstract class MappingBackedInode : Inode
 
     public override int PunchHole(long offset, long length, in FileMutationContext context)
     {
+        _ = context;
         if (offset < 0 || length <= 0)
             return -(int)Errno.EINVAL;
 
+        var fileSize = (long)Size;
+        if (offset >= fileSize)
+            return 0;
+
+        var effectiveLength = Math.Min(length, fileSize - offset);
+        var start = offset;
+        var end = offset + effectiveLength;
+
+        // 1. Invalidate native translations across all address spaces (including clean MAP_PRIVATE pages)
+        //    BEFORE releasing host leases or mutating backing/cache pages.
+        ProcessAddressSpaceSync.UnmapMappingRange(this, start, effectiveLength, false);
+
+        // 2. Update backend storage first and propagate any I/O error before discarding cache state.
+        var backingRc = PunchHoleBackingCore(start, effectiveLength);
+        if (backingRc < 0)
+            return backingRc;
+
+        var startPage = (uint)(start / LinuxConstants.PageSize);
+        var endPage = (uint)((end + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize);
+
         lock (_mappingLock)
         {
-            var fileSize = (long)Size;
-            if (offset >= fileSize)
-                return 0;
-
-            var effectiveLength = Math.Min(length, fileSize - offset);
-            var start = offset;
-            var end = offset + effectiveLength;
-
-            var startPage = (uint)(start / LinuxConstants.PageSize);
-            var endPage = (uint)((end + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize);
-
-            // 1. Partial head page: zero out the partial slice if present
+            // 3. Partial head page
             var headOffset = (int)(start % LinuxConstants.PageSize);
             if (headOffset != 0)
             {
-                if (TryGetMappingPageRecord(startPage, out var headRecord) || (Mapping?.PeekPage(startPage) is { } ptr && ptr != IntPtr.Zero))
+                if (TryGetMappingPageRecord(startPage, out var headRecord) &&
+                    headRecord.BackingKind == FilePageBackingKind.HostMappedWindow)
                 {
-                    var p = headRecord?.Ptr ?? Mapping!.PeekPage(startPage);
+                    // Never write through a potentially read-only HostMappedWindow pointer;
+                    // PunchHoleBackingCore already zeroed the host cache, and unmapping retired the lease.
+                    Mapping?.RemovePagesInRange(startPage, startPage + 1);
+                    if (TryGetMappingPageRecord(startPage, out var remaining) &&
+                        remaining.BackingKind == FilePageBackingKind.HostMappedWindow)
+                        ReleaseInstalledMappingPage(remaining);
+                }
+                else if (Mapping?.PeekPage(startPage) is { } p && p != IntPtr.Zero)
+                {
                     var zeroLen = (int)Math.Min(LinuxConstants.PageSize - headOffset, end - start);
                     unsafe
                     {
                         new Span<byte>((byte*)p + headOffset, zeroLen).Clear();
                     }
-                    Mapping?.MarkDirty(startPage);
+                    Mapping.MarkDirty(startPage);
                 }
+
                 startPage++;
             }
 
-            // 2. Partial tail page: zero out the partial slice if present
+            // 4. Partial tail page
             var tailBytes = (int)(end % LinuxConstants.PageSize);
             if (tailBytes != 0 && endPage > startPage)
             {
                 var tailPage = endPage - 1;
-                if (TryGetMappingPageRecord(tailPage, out var tailRecord) || (Mapping?.PeekPage(tailPage) is { } ptr && ptr != IntPtr.Zero))
+                if (TryGetMappingPageRecord(tailPage, out var tailRecord) &&
+                    tailRecord.BackingKind == FilePageBackingKind.HostMappedWindow)
                 {
-                    var p = tailRecord?.Ptr ?? Mapping!.PeekPage(tailPage);
+                    Mapping?.RemovePagesInRange(tailPage, tailPage + 1);
+                    if (TryGetMappingPageRecord(tailPage, out var remaining) &&
+                        remaining.BackingKind == FilePageBackingKind.HostMappedWindow)
+                        ReleaseInstalledMappingPage(remaining);
+                }
+                else if (Mapping?.PeekPage(tailPage) is { } p && p != IntPtr.Zero)
+                {
                     unsafe
                     {
                         new Span<byte>((byte*)p, tailBytes).Clear();
                     }
-                    Mapping?.MarkDirty(tailPage);
+                    Mapping.MarkDirty(tailPage);
                 }
+
                 endPage--;
             }
 
-            // 3. Whole pages in between: remove from mapping and release leases
+            // 5. Whole pages in between: remove from mapping (which releases leases) and clean up any stragglers.
             if (endPage > startPage)
             {
-                for (var p = startPage; p < endPage; p++)
-                {
-                    if (TryGetMappingPageRecord(p, out var record))
-                        ReleaseInstalledMappingPage(record);
-                }
                 Mapping?.RemovePagesInRange(startPage, endPage);
+                ReleaseInstalledMappingPagesInRange(startPage, endPage);
             }
-
-            // 4. Invalidate native translations across all address spaces mapping this inode
-            ProcessAddressSpaceSync.UnmapMappingRange(this, start, effectiveLength, false);
-
-            // 5. Backend-specific punch-hole hook (for hostfs/silkfs live data)
-            PunchHoleBackingCore(start, effectiveLength);
 
             var now = DateTime.Now;
             MTime = now;
@@ -2200,8 +2221,55 @@ public abstract class MappingBackedInode : Inode
         }
     }
 
-    protected virtual void PunchHoleBackingCore(long offset, long length)
+    protected virtual int PunchHoleBackingCore(long offset, long length)
     {
+        return 0;
+    }
+
+    private void ReleaseInstalledMappingPagesInRange(uint startPageIndex, uint endPageIndexExclusive)
+    {
+        if (startPageIndex >= endPageIndexExclusive)
+            return;
+
+        List<InodePageRecord>? toRelease = null;
+        lock (_mappingPageLock)
+        {
+            if (_mappingPages.Count == 0)
+                return;
+
+            var rangeCount = (ulong)endPageIndexExclusive - startPageIndex;
+            if (rangeCount <= (ulong)_mappingPages.Count)
+            {
+                for (var p = startPageIndex; p < endPageIndexExclusive; p++)
+                {
+                    if (_mappingPages.Remove(p, out var record))
+                        (toRelease ??= []).Add(record);
+                }
+            }
+            else
+            {
+                foreach (var kv in _mappingPages)
+                {
+                    if (kv.Key >= startPageIndex && kv.Key < endPageIndexExclusive)
+                        (toRelease ??= []).Add(kv.Value);
+                }
+
+                if (toRelease != null)
+                {
+                    foreach (var record in toRelease)
+                        _mappingPages.Remove(record.PageIndex);
+                }
+            }
+        }
+
+        if (toRelease == null)
+            return;
+
+        foreach (var record in toRelease)
+        {
+            OnMappingPageReleased(record.PageIndex, record);
+            record.ReleaseOwnership();
+        }
     }
 
     internal virtual void OnMappingPageReleased(uint pageIndex, InodePageRecord record)

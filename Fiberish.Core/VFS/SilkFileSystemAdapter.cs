@@ -567,24 +567,31 @@ public sealed class SilkInode : MappingBackedInode, IHostMappedCacheDropper
         }
     }
 
-    protected override void PunchHoleBackingCore(long offset, long length)
+    private static readonly byte[] ZeroPunchBuffer = new byte[64 * 1024];
+
+    protected override int PunchHoleBackingCore(long offset, long length)
     {
         try
         {
             using var handle = _repository.OpenLiveInodeHandle((long)Ino, FileMode.Open, FileAccess.ReadWrite);
-            var buffer = new byte[Math.Min(64 * 1024, length)];
             var remaining = length;
             var current = offset;
             while (remaining > 0)
             {
-                var chunk = (int)Math.Min(buffer.Length, remaining);
-                RandomAccess.Write(handle, buffer.AsSpan(0, chunk), current);
+                var chunk = (int)Math.Min(ZeroPunchBuffer.Length, remaining);
+                RandomAccess.Write(handle, ZeroPunchBuffer.AsSpan(0, chunk), current);
                 current += chunk;
                 remaining -= chunk;
             }
+            return 0;
         }
-        catch
+        catch (UnauthorizedAccessException)
         {
+            return -(int)Errno.EACCES;
+        }
+        catch (IOException)
+        {
+            return -(int)Errno.EIO;
         }
     }
 
