@@ -148,6 +148,7 @@ public partial class SyscallManager
         var ready = ScanSelect(sm, engine, n, inp, outp, exp, engine.Owner as FiberTask, out var resIn,
             out var resOut,
             out var resEx);
+        if (ready < 0) return ready; // EBADF for a closed descriptor in a set
         if (ready > 0)
         {
             WriteSelectResults(engine, inp, outp, exp, resIn, resOut, resEx);

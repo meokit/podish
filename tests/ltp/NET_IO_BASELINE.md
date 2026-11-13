@@ -1,11 +1,11 @@
 # LTP network sockets and I/O multiplexing batch — baseline and fixes
 
-Date: 2026-11-13
+Date: 2026-11-14
 Manifest: `tests/ltp/cases-net-io.json` (73 cases)
 Backend: Windows Podish, tmpfs image, guest root, `--network private`
 Native reference: WSL Linux 5.15.153.1, root, i386 static executables
 LTP: `e74f6d6f1c09e6be1aee0a09d347d818be3a36e8`
-Branch: `fix/ltp-net-io` (baseline plus first repair round)
+Branch: `fix/ltp-net-io` (baseline, first repair round, timer and readiness round)
 
 ## Results
 
@@ -13,10 +13,13 @@ Branch: `fix/ltp-net-io` (baseline plus first repair round)
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Native Linux | 73 | 0 | 0 | 0 | 0 | 0 |
 | Windows Podish, tmpfs (before) | 25 | 1 | 25 | 18 | 4 | 0 |
-| **Windows Podish, tmpfs (after first round)** | **52** | **4** | **4** | **5** | **7** | **1** |
+| Windows Podish, tmpfs (first round) | 52 | 4 | 4 | 5 | 7 | 1 |
+| **Windows Podish, tmpfs (current)** | **62** | **5** | **0** | **5** | **0** | **1** |
 
 `PARTIAL`/`SKIP` mean the case ran with a supported subset (unsupported
 `SCTP`/`UDP-Lite` protocol or unavailable fd types), not a fabricated pass.
+No case fails or times out any more; the remaining `BROKEN` cases need kernel
+features or guest tooling that this batch does not provide (see below).
 
 ## Excluded before the comparison
 
@@ -54,7 +57,8 @@ Branch: `fix/ltp-net-io` (baseline plus first repair round)
 - `AllocFD`/`DupFD` honour `RLIMIT_NOFILE` (`EMFILE`/`EINVAL`), so
   `epoll_create03` and `fcntl12` behave like Linux; `pipe`/`pipe2`/
   `socketpair` roll back partially allocated descriptors.
-- `accept4` returns `EBADF` for `O_PATH` descriptors instead of `ENOTSOCK`.
+- `accept`/`accept4` return `EBADF` for `O_PATH` and `open_tree(2)` descriptors
+  instead of `ENOTSOCK` (`accept03`).
 
 ### 3. Datagram and stream send/receive semantics
 - Oversized UDP datagrams (> 65507 bytes) now fail with `EMSGSIZE` instead of
@@ -67,6 +71,9 @@ Branch: `fix/ltp-net-io` (baseline plus first repair round)
   (`EMSGSIZE` beyond `UIO_MAXIOV`).
 - `shutdown` validates `how`, returns `ENOTCONN` for unconnected sockets, and
   `MSG_NOSIGNAL` now suppresses `SIGPIPE` for Unix sockets.
+- UDP `MSG_MORE` corks the payload into a pending datagram and flushes it on the
+  next send without `MSG_MORE`, while `send()` still reports only the caller's
+  byte count (`send02`).
 
 ### 4. Connect and loopback routing
 - `connect()` to `0.0.0.0` is treated as loopback (Linux behaviour).
@@ -74,6 +81,13 @@ Branch: `fix/ltp-net-io` (baseline plus first repair round)
   the target port, instead of retransmitting SYNs until the host test timeout.
 - A connect that completes and is then reset by the peer is no longer reported
   as `ECONNREFUSED`; established-then-closed is a successful connect.
+- Every post-handshake state (`ESTABLISHED`, `FIN_WAIT*`, `CLOSE_WAIT`,
+  `CLOSING`, `LAST_ACK`, `TIME_WAIT`) now counts as a completed connect, and a
+  second `connect()` on such a socket returns `EISCONN` (`connect01`,
+  `accept02`).
+- `Drive()` now advances the netstack until no deadline is due, so a loopback
+  handshake finishes inside the syscall instead of sleeping for the TCP RTO
+  (`send02` ran 1000 iterations per protocol after this).
 
 ### 5. `epoll` correctness
 - `epoll_ctl` rejects descriptors that cannot be polled with `EPERM`
@@ -87,29 +101,66 @@ Branch: `fix/ltp-net-io` (baseline plus first repair round)
 - `epoll_wait` reports at most `maxevents` and keeps the remaining ready
   descriptors for later calls (`epoll_wait13`).
 - `epoll_wait`/`poll`/`select` reject `nfds` above `RLIMIT_NOFILE` and negative
-  `select` timeouts with `EINVAL` (`poll03`, `select03` first case, `ppoll01`).
-- `F_SETPIPE_SZ`/`F_GETPIPE_SZ` resize the pipe capacity, so
-  `epoll_wait06`'s edge-triggered pipe test can fill and drain deterministically.
-- `epoll_wait` no longer lets a stale ready entry consume the only harvest slot.
+  `select` timeouts with `EINVAL` (`poll03`, `select03`, `ppoll01`).
+- `select`/`pselect` return `EBADF` when a set names a closed descriptor before
+  blocking, which fixes the forked `pselect02`/`select03` hangs.
+- `F_SETPIPE_SZ`/`F_GETPIPE_SZ` resize the pipe capacity, and pipe writability
+  is page-buffer granular like Linux, so `epoll_wait06`'s edge-triggered pipe
+  reports `EPOLLOUT` only once the pipe is fully drained.
+- Edge-triggered watches are sampled at `epoll_wait` entry (rising edge against
+  the last observed mask) so a readiness notification still queued in the
+  scheduler cannot report an empty set.
+- A stale ready entry no longer consumes one of the caller's `maxevents` slots.
 
-## Remaining failures and analysis (next round)
+### 6. Millisecond timer precision on Windows
+`tst_timer_test` measures `epoll_wait`/`poll`/`pselect` timeouts and compares the
+truncated mean against the requested interval. The batch failed because a 1 ms
+timeout took 2–15 ms. Two root causes were measured on the host:
 
-| Case | Status | Root cause / next step |
+| Wait primitive | 1 ms request (median) | 5 ms request (median) |
+| --- | ---: | ---: |
+| `WaitHandle.WaitOne`, no `timeBeginPeriod` | 15.05 ms | 15.04 ms |
+| `WaitHandle.WaitOne` with `timeBeginPeriod(1)` | 15.04 ms | 15.02 ms |
+| `CreateWaitableTimerEx(HIGH_RESOLUTION)` | 1.02 ms | 5.50 ms |
+| `Stopwatch` spin | 1.002 ms | 5.002 ms |
+
+`timeBeginPeriod(1)` reports success (`NtQueryTimerResolution` = 1.000 ms) but
+Win32 waitable objects are still coalesced to the ~15.6 ms system tick, so the
+old `_wakeEvent.Wait(timeoutMs)` could not express a millisecond sleep.
+
+- New `Fiberish.Core/HighResolutionWait.cs` wraps
+  `CreateWaitableTimerExW(CREATE_WAITABLE_TIMER_HIGH_RESOLUTION)` and waits on
+  `[scheduler wake event, timer]` with `WaitForMultipleObjects`, falling back to
+  a plain `WaitOne` when the timer cannot be created.
+- `KernelScheduler` replaced the `ManualResetEventSlim` idle wait with a gated
+  `AutoResetEvent` plus the high-resolution timer. `EnqueueWake()` publishes the
+  work item before reading the waiter flag, and the waiter re-checks the
+  channels after publishing the flag, so no wake is lost.
+- Timer placement now maps the request onto the tick axis at its ceiling
+  (`ceil(elapsed + delay) - 1`) so a timer never fires before the requested
+  delay, and the idle wait targets the exact wall-clock instant at which the
+  next tick becomes current. This removed the extra whole millisecond that
+  `Advance()` used to add, and a zero-delay timer scheduled from inside
+  `Advance()` no longer lands in an already-drained slot (256-tick delay).
+
+Measured after the change: 1 ms timeout ≈ 2.0 ms median (the remaining 1 ms is
+the wheel's 1 ms tick and is inside the LTP threshold), 100 ms ≈ 100.9 ms, and
+the 1 s case ≈ 1000.7 ms. `epoll_wait02`, `epoll_pwait03`, `poll02`,
+`pselect01` and `pselect02` now pass.
+
+## Remaining cases
+
+| Case | Status | Why it is not a pass |
 | --- | --- | --- |
-| `accept02` | TIMEOUT | Multicast assertions pass; the client thread's `connect()` remains pending after the server accepted and closed. Needs netstack state tracing for "established then peer close" on the client side. |
-| `connect01` | TIMEOUT | Setup `connect()` to `0.0.0.0` is still pending; handshake does not complete for a listener bound to `INADDR_ANY` when the client also binds `INADDR_ANY`. |
-| `send02` | TIMEOUT | `MSG_MORE` is treated as an immediate flush; the second iteration's `connect()` hangs after the first stream is closed. Needs `MSG_MORE` buffering plus listener-replacement audit. |
-| `select03` | TIMEOUT | After the negative-`nfds` pass, the second forked case hangs; `select` with a closed fd in the set does not return `EBADF` in the child. |
-| `epoll_wait02`, `epoll_pwait03`, `poll02`, `pselect01`, `pselect02` | FAIL/TIMEOUT | `tst_timer_test` measures 1004–1014 ms for a 1000 ms timeout, above the LTP upper bound. Needs sub-millisecond timer accuracy in `SleepAwaitable`/`TimeWheel` (Windows 15.6 ms tick granularity is the likely floor). |
-| `epoll_wait06` | FAIL | Edge-triggered pipe: the write end is reported at the wrong point; needs `EPOLLET` re-check bookkeeping that keeps the existing `NetworkTests` rearm contract. |
-| `epoll_wait10` | BROKEN | Requires `/proc/mounts` `POLLPRI` notifications on mount namespace changes; procfs does not emit poll events yet. |
-| `epoll_wait16` | BROKEN | `EPOLLEXCLUSIVE` is rejected with `EINVAL`; needs cross-epoll exclusive wakeup policy. |
-| `setsockopt05`, `setsockopt08` | BROKEN | Both use `unshare(CLONE_NEWUSER|...)` in `tst_setup_netns`; `unshare` returns `ENOSYS`. Environment/namespace support, not a socket bug. |
-| `sendmsg01` | BROKEN | Legacy LTP test shells out to `ip`/`ifconfig` to bring up `lo`; the guest has no such tools. |
-| `bind04`, `bind05`, `sendto02` | PARTIAL/SKIP | `SCTP`/`UDP-Lite` protocols are not implemented; native runs them. |
-| `epoll_ctl06`, `epoll_pwait06` | PARTIAL | Remaining variants need `pidfd`, `fanotify`, `userfaultfd`, `io_uring`, `bpf`, `fsopen`/`fspick` fd types. |
+| `epoll_wait16` | BROKEN | `EPOLLEXCLUSIVE` is still rejected with `EINVAL`: one-event-wakes-one-waiter needs a per-target exclusive wakeup arbiter shared by all epoll instances. Needs its own change with the epoll wakeup contract. |
+| `epoll_wait10` | BROKEN | Needs `/proc/mounts` to emit `POLLPRI` on mount-namespace changes; procfs has no poll notifications yet. |
+| `setsockopt05`, `setsockopt08` | BROKEN | The tests call `unshare(CLONE_NEWUSER\|CLONE_NEWNET)` in `tst_setup_netns`; `unshare` returns `ENOSYS`. Namespace support, not a socket defect. |
+| `sendmsg01` | BROKEN | The legacy test shells out to `ip`/`ifconfig` to bring up `lo`; the guest image has no such tools. |
+| `bind04`, `bind05`, `sendto02` | PARTIAL/SKIP | `SCTP`/`UDP-Lite` protocols are not implemented; native Linux runs them. |
+| `accept03`, `epoll_ctl06`, `epoll_pwait06` | PARTIAL | Remaining variants need `pidfd`, `fanotify`, `userfaultfd`, `io_uring`, `bpf`, `fsopen`/`fspick` fd types. |
 
 ## Verification
 
-- Podish net-io batch: **52 PASS / 4 PARTIAL / 4 FAIL / 5 BROKEN / 7 TIMEOUT / 1 SKIP** (from 25 PASS).
+- Podish net-io batch: **62 PASS / 5 PARTIAL / 0 FAIL / 5 BROKEN / 0 TIMEOUT / 1 SKIP** (from 25 PASS).
 - `Fiberish.Tests`: **1860 passed, 0 failed, 1 skipped**.
+- `tests/ltp/test_runner.py`: **20 tests passed**.

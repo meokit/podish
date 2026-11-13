@@ -331,7 +331,9 @@ public partial class SyscallManager
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
-        if ((file.Flags & FileFlags.O_PATH) != 0) return -(int)Errno.EBADF;
+        // O_PATH descriptors and open_tree(2) mounts carry no struct file to accept from,
+        // so Linux fails them with EBADF before the socket check.
+        if ((file.Flags & FileFlags.O_PATH) != 0 || file is MountFile) return -(int)Errno.EBADF;
 
         if (file.TryGetSocketEndpointOps(out var ops))
         {

@@ -39,6 +39,8 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
     private int _socketError;
     private LoopbackNetNamespace.TcpStreamSocket? _stream;
     private LoopbackNetNamespace.UdpDatagramSocket? _udp;
+    private byte[]? _pendingDatagram;
+    private int _pendingDatagramLength;
 
     public NetstackSocketInode(ulong ino, SuperBlock sb, LoopbackNetNamespace @namespace, SocketType socketType)
     {
@@ -789,9 +791,13 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
             return -(int)Errno.ENETUNREACH;
         if (_stream != null)
         {
-            if (_stream.State == 4)
+            var state = _stream.State;
+            // Established and closing states all mean the socket still has a connection;
+            // a peer that already sent FIN leaves us in CLOSE_WAIT and connect() reports
+            // EISCONN rather than starting a new handshake.
+            if (state is >= 4 and <= 10)
                 return -(int)Errno.EISCONN;
-            if (_stream.State is 2 or 3)
+            if (state is 2 or 3)
                 return -(int)Errno.EALREADY;
         }
 
@@ -812,7 +818,9 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
         var ok = await WaitForAsync(task, PollEvents.POLLOUT, () =>
         {
             var st = _stream.State;
-            if (st == 4)
+            // Established and every later state (FIN_WAIT..TIME_WAIT) prove the handshake
+            // completed; a peer that closes immediately leaves us in CLOSE_WAIT.
+            if (st >= 4)
                 sawEstablished = true;
             return sawEstablished || st == 0;
         });
@@ -835,6 +843,28 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
             return -(int)Errno.EISCONN;
         if (!IsValidConnectAddress(endpoint.Address))
             return -(int)Errno.ENETUNREACH;
+
+        // Linux corks MSG_MORE datagrams: the payload is appended to a pending datagram and
+        // actually sent by the next send()/sendto()/sendmsg() without MSG_MORE.
+        if ((flags & LinuxConstants.MSG_MORE) != 0)
+        {
+            AppendPendingDatagram(buffer.Span);
+            return buffer.Length;
+        }
+
+        byte[]? combined = null;
+        ReadOnlyMemory<byte> payloadMemory = buffer;
+        var pendingLength = _pendingDatagramLength;
+        if (pendingLength > 0)
+        {
+            var merged = new byte[pendingLength + buffer.Length];
+            _pendingDatagram.AsSpan(0, pendingLength).CopyTo(merged);
+            buffer.Span.CopyTo(merged.AsSpan(pendingLength));
+            combined = merged;
+            payloadMemory = merged;
+            _pendingDatagramLength = 0;
+        }
+
         _udp ??= _namespace.CreateUdpSocket();
         if (_boundEndPoint == null)
         {
@@ -860,13 +890,15 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
         }
 
         _lastDatagramPeer = endpoint;
-        var rc = _udp.TrySendTo(ToIpv4Be(endpoint.Address), (ushort)endpoint.Port, buffer.Span, out var written);
+        var rc = _udp.TrySendTo(ToIpv4Be(endpoint.Address), (ushort)endpoint.Port, payloadMemory.Span,
+            out var written);
         if (rc == 0)
         {
             DriveAndNotify();
             if (!_udp.CanWrite)
                 ClearEdgeBits(PollEvents.POLLOUT);
-            return written;
+            // When a corked datagram was flushed, send() reports only the caller's bytes.
+            return combined != null ? buffer.Length : written;
         }
 
         if (rc == NetErrMsgSize)
@@ -877,6 +909,27 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
             return -(int)Errno.EAGAIN;
         }
         return -(int)Errno.EINVAL;
+    }
+
+    private void AppendPendingDatagram(ReadOnlySpan<byte> data)
+    {
+        // Keep the corked payload bounded like a single datagram would be.
+        const int MaxPendingDatagramBytes = 65507;
+        var allowed = Math.Min(data.Length, MaxPendingDatagramBytes - _pendingDatagramLength);
+        if (allowed <= 0)
+            return;
+
+        if (_pendingDatagram == null || _pendingDatagram.Length < _pendingDatagramLength + allowed)
+        {
+            var next = new byte[Math.Min(MaxPendingDatagramBytes,
+                Math.Max(1024, (_pendingDatagramLength + allowed) * 2))];
+            if (_pendingDatagramLength > 0)
+                _pendingDatagram.AsSpan(0, _pendingDatagramLength).CopyTo(next);
+            _pendingDatagram = next;
+        }
+
+        data[..allowed].CopyTo(_pendingDatagram.AsSpan(_pendingDatagramLength));
+        _pendingDatagramLength += allowed;
     }
 
     private async ValueTask<(int Bytes, IPEndPoint? RemoteEndPoint)> RecvFromAsyncImpl(LinuxFile file, FiberTask task,
@@ -1097,10 +1150,12 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
 
     private void Drive()
     {
+        // One iface.poll() advances a single step of the loopback handshake/data path, so a
+        // connect needs several of them. Keep polling while a deadline is already due.
         var nowMs = Environment.TickCount64;
-        for (var i = 0; i < 4; i++)
+        for (var i = 0; i < 8; i++)
         {
-            if (_namespace.Poll(nowMs) != 0)
+            if (_namespace.Poll(nowMs) > 0)
                 break;
         }
     }
@@ -1122,7 +1177,10 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
             if (currentTask.HasInterruptingPendingSignal())
                 return false;
 
-            var delay = Math.Max(1, _namespace.Poll(Environment.TickCount64));
+            // The netstack reports its next internal deadline, which can be hundreds of
+            // milliseconds away (TCP RTO). A readiness poll must not sleep that long, or a
+            // loopback handshake takes as long as a retransmission timeout.
+            var delay = Math.Clamp(_namespace.Poll(Environment.TickCount64), 1, 2);
             var result = await new SleepAwaitable(delay, currentTask);
             if (result == AwaitResult.Interrupted)
                 return false;

@@ -138,10 +138,15 @@ def execute(command, cwd, env, timeout):
 
 def source_state():
     """Identify local code as well as committed code; artifacts are git-ignored."""
-    revision = subprocess.check_output(["git", "-C", str(REPO), "rev-parse", "HEAD"], text=True).strip()
-    diff = subprocess.check_output(["git", "-C", str(REPO), "diff", "--binary", "HEAD"], text=True)
+    revision = subprocess.check_output(["git", "-C", str(REPO), "rev-parse", "HEAD"],
+                                       encoding="utf-8", errors="replace").strip()
+    # A --binary diff carries arbitrary bytes; decode as UTF-8 so the host locale
+    # (for example GBK on Windows) cannot make this report step fail.
+    diff = subprocess.check_output(["git", "-C", str(REPO), "diff", "--binary", "HEAD"],
+                                   encoding="utf-8", errors="replace")
     untracked = subprocess.check_output(
-        ["git", "-C", str(REPO), "ls-files", "--others", "--exclude-standard"], text=True).splitlines()
+        ["git", "-C", str(REPO), "ls-files", "--others", "--exclude-standard"],
+        encoding="utf-8", errors="replace").splitlines()
     digest = hashlib.sha256(diff.encode("utf-8"))
     for name in sorted(untracked):
         path = REPO / name

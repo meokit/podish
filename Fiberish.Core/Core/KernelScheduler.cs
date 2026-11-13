@@ -49,12 +49,15 @@ public class KernelScheduler
     private readonly KernelSyncContext _synchronizationContext;
     private readonly Dictionary<int, FiberTask> _tasks = [];
     private readonly TimeWheel _timerSystem = new();
-    private readonly ManualResetEventSlim _wakeEvent = new(false);
+    private readonly AutoResetEvent _wakeSignal = new(false);
+    private readonly HighResolutionWait _preciseWait = new();
     private int _engineInitReaperEnabled;
     private int _initPid;
     private bool _isInsideRunLoop = true;
     private int _nextTaskId;
     private int _ownerThreadId;
+    private long _runStartTick;
+    private int _waitingForWake;
 
     private long _foregroundLatencyGraceUntilTick;
     private int _wakePending;
@@ -701,17 +704,25 @@ public class KernelScheduler
 
     public Timer ScheduleTimer(long delayMs, Action callback)
     {
-        var beforeTick = _timerSystem.CurrentTick;
-        var targetTick = _timerSystem.CurrentTick + delayMs;
-        // Adjust for any lag between CurrentTick and real time
-        var realNow = _sw.ElapsedMilliseconds;
-        if (targetTick < realNow + delayMs) targetTick = realNow + delayMs;
+        // Map the request onto the scheduler tick axis. Advance() fires the timers of tick T
+        // when it moves the clock past T, so the tick that wakes at ceil(deadline) is one less.
+        // This never fires before the requested delay and does not lose a whole millisecond.
+        var elapsedMs = _sw.Elapsed.TotalMilliseconds;
+        var targetTick = _runStartTick + (long)Math.Ceiling(elapsedMs + delayMs) - 1;
+        // Keep the wheel's own tick axis authoritative too: a test or a caller may advance
+        // the timer wheel ahead of wall time, and the delay must still be honoured there.
+        var wheelTick = _timerSystem.CurrentTick + delayMs;
+        if (targetTick < wheelTick) targetTick = wheelTick;
+        // A timer placed in the tick that Advance() is currently firing would sit in an
+        // already-drained slot and only fire on the next wheel wrap (256 ticks later).
+        var earliestTick = _timerSystem.CurrentTick + 1;
+        if (targetTick < earliestTick) targetTick = earliestTick;
 
         if (Logger.IsEnabled(LogLevel.Trace))
         {
             Logger.LogTrace(
-                "[Scheduler] ScheduleTimer delayMs={DelayMs} currentTick={CurrentTick} realNow={RealNow} targetTick={TargetTick}",
-                delayMs, beforeTick, realNow, targetTick);
+                "[Scheduler] ScheduleTimer delayMs={DelayMs} currentTick={CurrentTick} elapsedMs={ElapsedMs} targetTick={TargetTick}",
+                delayMs, _timerSystem.CurrentTick, elapsedMs, targetTick);
         }
         var timer = _timerSystem.ScheduleAbsolute(targetTick, callback);
         // If this timer is the new earliest one, or if we were sleeping, we should wake up
@@ -740,6 +751,7 @@ public class KernelScheduler
         var exitReason = "running=false";
 
         var startTick = _timerSystem.CurrentTick;
+        _runStartTick = startTick;
         var winTimerActive = false;
         if (OperatingSystem.IsWindows())
         {
@@ -790,32 +802,37 @@ public class KernelScheduler
                     }
 
                     // Calculate wait time
-                    long waitTime = -1;
+                    var infiniteWait = false;
+                    var waitTimeMs = 0.0;
                     if (_timerSystem.HasTimers)
                     {
                         var nextTick = _timerSystem.GetNextExpiration();
                         if (nextTick.HasValue)
                         {
-                            waitTime = nextTick.Value - _timerSystem.CurrentTick;
-                            if (waitTime < 0) waitTime = 0;
+                            // Advance() fires a tick's timers while it moves the clock past that
+                            // tick, so the wakeup lands on the wall-clock instant at which the
+                            // next tick begins. Waiting for that exact instant avoids both the
+                            // system timer tick (15.6ms) and a whole missed millisecond.
+                            var elapsedMs = _sw.Elapsed.TotalMilliseconds;
+                            waitTimeMs = nextTick.Value - _runStartTick + 1 - elapsedMs;
+                            if (waitTimeMs <= 0)
+                                // Timer belongs to the tick that is already current: wait for
+                                // the next millisecond boundary so Advance() can move past it.
+                                waitTimeMs = Math.Max(0.05, Math.Floor(elapsedMs) + 1 - elapsedMs);
                         }
                     }
                     else
                     {
                         // If anyWaiting is true, we must wait indefinitely for external wakeups.
-                        if (anyWaiting) waitTime = -1;
+                        if (anyWaiting) infiniteWait = true;
                         else
                             // Should not happen if anyAlive is true but runQueue empty (ValidateSchedulerState handles Ready tasks)
                             // Maybe just yield?
-                            waitTime = 0;
+                            waitTimeMs = 0.5;
                     }
 
-                    // If waitTime is 0 (timer due now), we must wait at least 1ms to let wall clock advance
-                    // otherwise we busy loop until _sw.ElapsedMilliseconds increases.
-                    if (waitTime == 0) waitTime = 1;
-
                     _isInsideRunLoop = false;
-                    WaitForEvent((int)waitTime);
+                    WaitForEvent(waitTimeMs, infiniteWait);
                     continue;
                 }
 
@@ -893,9 +910,6 @@ public class KernelScheduler
         var drained = false;
         drained |= DrainEventChannelWithBudget(_urgentEvents, int.MaxValue);
         drained |= DrainEventChannelWithBudget(_events, maxItems);
-
-        if (drained && !_urgentEvents.Reader.TryPeek(out _) && !_events.Reader.TryPeek(out _))
-            _wakeEvent.Reset();
         return drained;
     }
 
@@ -931,17 +945,29 @@ public class KernelScheduler
         return false;
     }
 
-    private void WaitForEvent(int timeoutMs)
+    private void WaitForEvent(double timeoutMs, bool infinite)
     {
         if (OperatingSystem.IsBrowser() && BrowserSchedulerHostBridge.IsConfigured)
         {
-            BrowserSchedulerHostBridge.WaitForEvent(timeoutMs);
-            _wakeEvent.Reset();
+            BrowserSchedulerHostBridge.WaitForEvent(infinite ? -1 : (int)Math.Max(1, Math.Ceiling(timeoutMs)));
             return;
         }
 
-        _wakeEvent.Wait(timeoutMs);
-        _wakeEvent.Reset();
+        // Publish the wait before re-checking the channels: EnqueueWake() only raises the OS
+        // signal while a waiter is registered, and this re-check closes the race with a wake
+        // that lands between the drain above and the wait below.
+        Volatile.Write(ref _waitingForWake, 1);
+        try
+        {
+            if (_urgentEvents.Reader.TryPeek(out _) || _events.Reader.TryPeek(out _))
+                return;
+
+            _preciseWait.Wait(_wakeSignal, timeoutMs, infinite);
+        }
+        finally
+        {
+            Volatile.Write(ref _waitingForWake, 0);
+        }
     }
 
     private void ExecuteEvent(SchedulerWorkItem item)
@@ -1004,15 +1030,16 @@ public class KernelScheduler
 
     private void EnqueueWake()
     {
-        // Always signal event
-        _wakeEvent.Set();
-
         if (OperatingSystem.IsBrowser() && BrowserSchedulerHostBridge.IsConfigured)
             BrowserSchedulerHostBridge.SignalSchedulerWake();
 
-        if (Interlocked.Exchange(ref _wakePending, 1) != 0) return;
+        // Publish pending work before reading the waiter flag: a waiter that already peeked
+        // past this item must observe the flag and be roused by the OS signal below.
+        if (Interlocked.Exchange(ref _wakePending, 1) == 0)
+            _events.Writer.TryWrite(SchedulerWorkItem.WakeScheduler());
 
-        _events.Writer.TryWrite(SchedulerWorkItem.WakeScheduler());
+        if (Volatile.Read(ref _waitingForWake) != 0)
+            _wakeSignal.Set();
     }
 
     private (bool anyAlive, bool anyWaiting) GetTaskLiveness()

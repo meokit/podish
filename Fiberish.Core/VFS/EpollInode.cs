@@ -399,15 +399,35 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
     {
         foreach (var item in _watches.Values)
         {
-            if (item.IsReady || item.NeedsEdgeRearm || item.IsEdgeArmed) continue;
             var watchEvents = (short)(item.Events & 0xFFFF);
             if (watchEvents == 0) continue;
-            var inode = item.File.OpenedInode;
-            if (inode == null) continue;
 
-            var current = (short)(inode.Poll(item.File, watchEvents) & item.Mask);
-            item.LastObservedEvents = current;
-            if (current == 0) continue;
+            if ((item.Events & LinuxConstants.EPOLLET) != 0)
+            {
+                // Edge-triggered: the async re-poll may not have run yet when epoll_wait is
+                // entered, so sample the state here too and report a rising edge exactly once.
+                if (item.IsReady || item.NeedsEdgeRearm) continue;
+                var inode = item.File.OpenedInode;
+                if (inode == null) continue;
+                var current = (short)(inode.Poll(item.File, watchEvents) & item.Mask);
+                var rising = (short)(current & ~item.LastObservedEvents);
+                item.LastObservedEvents = current;
+                if (rising == 0) continue;
+
+                item.WaitRegistration?.Dispose();
+                item.WaitRegistration = null;
+                item.IsEdgeArmed = false;
+                item.NeedsEdgeRearm = false;
+            }
+            else
+            {
+                if (item.IsReady || item.NeedsEdgeRearm || item.IsEdgeArmed) continue;
+                var inode = item.File.OpenedInode;
+                if (inode == null) continue;
+                var current = (short)(inode.Poll(item.File, watchEvents) & item.Mask);
+                item.LastObservedEvents = current;
+                if (current == 0) continue;
+            }
 
             item.IsReady = true;
             _readyList.Add(item);
@@ -452,18 +472,20 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
     private int HarvestEvents(Span<byte> buffer, int maxEvents)
     {
         AssertSchedulerThread();
-        var count = Math.Min(_readyList.Count, maxEvents);
+        var capacity = _readyList.Count;
         EpollItem[]? reEvalItems = null;
         var reEvalCount = 0;
         EpollItem[]? edgeRearmItems = null;
         var edgeRearmCount = 0;
 
         var harvested = 0;
+        var consumed = 0;
         try
         {
-            for (var i = 0; i < count; i++)
+            for (var i = 0; i < capacity && harvested < maxEvents; i++)
             {
                 var item = _readyList[i];
+                consumed = i + 1;
 
                 // Re-poll the underlying FD one last time exactly at harvest to get the precise mask
                 var watchEvents = (short)(item.Events & 0xFFFF);
@@ -478,10 +500,11 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
 
                 if (finalEvents == 0)
                 {
-                    // False alarm or event cleared before we harvested
+                    // False alarm or event cleared before we harvested. It must not consume
+                    // one of the caller's maxevents slots.
                     item.IsReady = false;
                     if ((item.Events & 0xFFFF) != 0)
-                        AddScratchItem(ref reEvalItems, ref reEvalCount, count, item);
+                        AddScratchItem(ref reEvalItems, ref reEvalCount, capacity, item);
                     continue;
                 }
 
@@ -496,14 +519,15 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
                     // Oneshot means it's disabled after triggering
                     item.Events &= ~(uint)0xFFFF; // Clear watch events, keep data
                 else if ((item.Events & LinuxConstants.EPOLLET) != 0)
-                    AddScratchItem(ref edgeRearmItems, ref edgeRearmCount, count, item);
+                    AddScratchItem(ref edgeRearmItems, ref edgeRearmCount, capacity, item);
                 else if ((item.Events & LinuxConstants.EPOLLET) == 0)
                     // Level-triggered: it should keep firing if data is still available.
                     // We'll re-evaluate it immediately after slicing the read queue.
-                    AddScratchItem(ref reEvalItems, ref reEvalCount, count, item);
+                    AddScratchItem(ref reEvalItems, ref reEvalCount, capacity, item);
             }
 
-            _readyList.RemoveRange(0, count);
+            if (consumed > 0)
+                _readyList.RemoveRange(0, consumed);
 
             // Re-arm LT events implicitly by re-checking them
             for (var i = 0; i < reEvalCount; i++)
