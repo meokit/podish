@@ -307,6 +307,26 @@ public sealed partial class LtpRegressionTests
     }
 
     [Fact]
+    public async Task Mincore_UntouchedAnonymousReportsNonResident()
+    {
+        using var env = new TestEnv();
+        var addr = (uint)await env.Call("SysMmap2", MemoryBase, 3 * Page, 3, 0x32, uint.MaxValue);
+        Assert.Equal(MemoryBase, addr);
+        var vma = env.Vma.FindVmArea(addr);
+        Assert.NotNull(vma);
+        Assert.False(vma!.IsFileBacked);
+        Assert.Null(vma.VmAnonVma);
+
+        var vecAddr = 0x14000u;
+        var rc = await env.Call("SysMincore", addr, 3 * Page, vecAddr);
+        Assert.Equal(0, rc);
+        var vec = env.Read(vecAddr, 3);
+        Assert.Equal(0, vec[0]);
+        Assert.Equal(0, vec[1]);
+        Assert.Equal(0, vec[2]);
+    }
+
+    [Fact]
     public async Task Mremap_GrowingIntoOwnVmaTailWithoutMayMoveFails()
     {
         using var env = new TestEnv();

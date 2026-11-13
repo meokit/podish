@@ -724,6 +724,24 @@ public partial class SyscallManager
             case X86SyscallNumbers.msync:
                 handled = true;
                 return SysMsync(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.mlock:
+                handled = true;
+                return SysMlock(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.munlock:
+                handled = true;
+                return SysMunlock(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.mlockall:
+                handled = true;
+                return SysMlockall(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.munlockall:
+                handled = true;
+                return SysMunlockall(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.mincore:
+                handled = true;
+                return SysMincore(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.mlock2:
+                handled = true;
+                return SysMlock2(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.mremap:
                 handled = true;
                 return SysMremap(engine, ebx, ecx, edx, esi, edi, ebp);

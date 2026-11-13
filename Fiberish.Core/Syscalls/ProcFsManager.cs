@@ -1,6 +1,7 @@
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
+using Fiberish.Native;
 
 namespace Fiberish.Syscalls;
 
@@ -122,7 +123,17 @@ public static class ProcFsManager
             'X' => "X (dead)",
             _ => "R (running)"
         };
-        return $"Name:\t{process.Comm}\nState:\t{stateMsg}\nPid:\t{process.TGID}\nPPid:\t{process.PPID}\n";
+
+        var lockedKb = 0L;
+        var vmSizeKb = 0L;
+        foreach (var vma in process.Mem.VMAs)
+        {
+            vmSizeKb += vma.Length / 1024;
+            if ((vma.Flags & MapFlags.Locked) != 0)
+                lockedKb += vma.Length / 1024;
+        }
+
+        return $"Name:\t{process.Comm}\nState:\t{stateMsg}\nPid:\t{process.TGID}\nPPid:\t{process.PPID}\nVmSize:\t{vmSizeKb,8} kB\nVmLck:\t{lockedKb,8} kB\nVmRSS:\t{vmSizeKb,8} kB\n";
     }
 
     public static string GenerateCmdline(Process process)
@@ -345,6 +356,117 @@ public static class ProcFsManager
     public static string GenerateSysVmOvercommitMemory()
     {
         return "0\n";
+    }
+
+    public static string GenerateMaps(Process? process)
+    {
+        if (process == null) return string.Empty;
+        var sb = new StringBuilder();
+        foreach (var vma in process.Mem.VMAs)
+        {
+            var perms = $"{((vma.Perms & Protection.Read) != 0 ? 'r' : '-')}" +
+                        $"{((vma.Perms & Protection.Write) != 0 ? 'w' : '-')}" +
+                        $"{((vma.Perms & Protection.Exec) != 0 ? 'x' : '-')}" +
+                        $"{((vma.Flags & MapFlags.Shared) != 0 ? 's' : 'p')}";
+            var dev = vma.LogicalInode?.SuperBlock?.Dev ?? 0;
+            var devStr = $"{dev >> 20:x2}:{dev & 0xFFFFF:x2}";
+            var ino = vma.LogicalInode?.Ino ?? 0;
+            var name = vma.Name;
+            sb.Append($"{vma.Start:x8}-{vma.End:x8} {perms} {vma.Offset:x8} {devStr} {ino,-8} {name}\n");
+        }
+        return sb.ToString();
+    }
+
+    public static string GenerateSmaps(Process? process)
+    {
+        if (process == null) return string.Empty;
+        var sb = new StringBuilder();
+        foreach (var vma in process.Mem.VMAs)
+        {
+            var perms = $"{((vma.Perms & Protection.Read) != 0 ? 'r' : '-')}" +
+                        $"{((vma.Perms & Protection.Write) != 0 ? 'w' : '-')}" +
+                        $"{((vma.Perms & Protection.Exec) != 0 ? 'x' : '-')}" +
+                        $"{((vma.Flags & MapFlags.Shared) != 0 ? 's' : 'p')}";
+            var dev = vma.LogicalInode?.SuperBlock?.Dev ?? 0;
+            var devStr = $"{dev >> 20:x2}:{dev & 0xFFFFF:x2}";
+            var ino = vma.LogicalInode?.Ino ?? 0;
+            var name = vma.Name;
+            var sizeKb = vma.Length / 1024;
+            var isLocked = (vma.Flags & MapFlags.Locked) != 0;
+            var residentKb = 0L;
+            for (var p = vma.Start; p < vma.End; p += LinuxConstants.PageSize)
+            {
+                if (process.Mem.PageMapping.TryGet(p, out _))
+                    residentKb += 4;
+                else if (vma.VmAnonVma?.PeekPage(vma.GetPageIndex(p)) != IntPtr.Zero)
+                    residentKb += 4;
+                else if (vma.VmMapping?.PeekPage(vma.GetPageIndex(p)) != IntPtr.Zero)
+                    residentKb += 4;
+            }
+            var lockedKb = isLocked ? sizeKb : 0;
+            if (isLocked && residentKb < sizeKb) residentKb = sizeKb;
+
+            sb.Append($"{vma.Start:x8}-{vma.End:x8} {perms} {vma.Offset:x8} {devStr} {ino,-8} {name}\n");
+            sb.Append($"Size:               {sizeKb,8} kB\n");
+            sb.Append($"KernelPageSize:            4 kB\n");
+            sb.Append($"MMUPageSize:               4 kB\n");
+            sb.Append($"Rss:                {residentKb,8} kB\n");
+            sb.Append($"Pss:                {residentKb,8} kB\n");
+            sb.Append($"Shared_Clean:              0 kB\n");
+            sb.Append($"Shared_Dirty:              0 kB\n");
+            sb.Append($"Private_Clean:             0 kB\n");
+            sb.Append($"Private_Dirty:      {residentKb,8} kB\n");
+            sb.Append($"Referenced:         {residentKb,8} kB\n");
+            sb.Append($"Anonymous:          {residentKb,8} kB\n");
+            sb.Append($"LazyFree:                  0 kB\n");
+            sb.Append($"AnonHugePages:             0 kB\n");
+            sb.Append($"ShmemPmdMapped:            0 kB\n");
+            sb.Append($"FilePmdMapped:             0 kB\n");
+            sb.Append($"Shared_Hugetlb:            0 kB\n");
+            sb.Append($"Private_Hugetlb:           0 kB\n");
+            sb.Append($"Locked:             {lockedKb,8} kB\n");
+            sb.Append("VmFlags: rd wr mr mw me ac\n");
+        }
+        return sb.ToString();
+    }
+
+    public static byte[] ReadPagemap(Process? process, long offset, int length)
+    {
+        if (process == null || length <= 0 || offset < 0) return [];
+        var result = new byte[length];
+        var taskSize = process.Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
+        var startPage = (uint)(offset / 8);
+        var pageCount = (length + 7) / 8;
+
+        for (var i = 0; i < pageCount; i++)
+        {
+            var pageIndex = startPage + (uint)i;
+            var pageAddr = (ulong)pageIndex * LinuxConstants.PageSize;
+            if (pageAddr >= taskSize) break;
+
+            var addr = (uint)pageAddr;
+            var vma = process.Mem.FindVmArea(addr);
+            var isPresent = false;
+            if (vma != null)
+            {
+                if (process.Mem.PageMapping.TryGet(addr, out _))
+                    isPresent = true;
+                else if (vma.VmAnonVma?.PeekPage(vma.GetPageIndex(addr)) != IntPtr.Zero)
+                    isPresent = true;
+                else if (vma.VmMapping?.PeekPage(vma.GetPageIndex(addr)) != IntPtr.Zero)
+                    isPresent = true;
+            }
+
+            if (isPresent)
+            {
+                var entry = 1UL << 63; // PAGE_PRESENT
+                var byteOffset = i * 8;
+                if (byteOffset + 8 <= result.Length)
+                    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(result.AsSpan(byteOffset, 8), entry);
+            }
+        }
+
+        return result;
     }
 
     public static string GenerateSysVmSwappiness()
