@@ -110,6 +110,31 @@ public class PosixTimerTests
     }
 
     [Fact]
+    public async Task TimerSetTime64_AbsoluteMonotonicDeadline_UsesMonotonicClock()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x10000);
+        env.MapUserPage(0x11000);
+        env.MapUserPage(0x12000);
+        await CallSysTimerCreate(env, LinuxConstants.CLOCK_MONOTONIC, 0, 0x10000);
+
+        var idBuf = new byte[4];
+        env.Engine.CopyFromUser(0x10000, idBuf);
+        var timerId = (uint)BitConverter.ToInt32(idBuf);
+
+        var targetMs = MonotonicClock.Milliseconds + 50;
+        WriteItimerSpec64(env, 0x11000, 0, 0, targetMs / 1000, targetMs % 1000 * 1_000_000);
+        Assert.Equal(0, await CallSysTimerSetTime64(env, timerId, 1, 0x11000, 0));
+
+        Assert.Equal(0, await CallSysTimerGetTime64(env, timerId, 0x12000));
+        var current = new byte[32];
+        Assert.True(env.Engine.CopyFromUser(0x12000, current));
+        var remainingMs = BinaryPrimitives.ReadInt64LittleEndian(current.AsSpan(16, 8)) * 1000L +
+                          BinaryPrimitives.ReadInt64LittleEndian(current.AsSpan(24, 8)) / 1_000_000L;
+        Assert.InRange(remainingMs, 1, 60);
+    }
+
+    [Fact]
     public async Task TimerSetTime_ParsesValues_Correctly()
     {
         using var env = new TestEnv();

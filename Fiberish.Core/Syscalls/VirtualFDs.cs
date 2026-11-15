@@ -413,13 +413,16 @@ public class TimerFdInode : TmpfsInode
     private readonly List<Action> _waiters = [];
     private ulong _expirations;
 
+    private readonly int _clockId;
     private long _intervalTicks;
     private KernelScheduler? _scheduler;
     private Timer? _timer;
-    private long _valueTicks; // Absolute expiration tick
+    private long _valueTicks; // Absolute expiration tick in the scheduler's real-time domain
 
-    public TimerFdInode(ulong ino, SuperBlock superBlock) : base(ino, superBlock)
+    public TimerFdInode(ulong ino, SuperBlock superBlock, int clockId = LinuxConstants.CLOCK_MONOTONIC)
+        : base(ino, superBlock)
     {
+        _clockId = clockId;
     }
 
     public void SetTime(FiberTask task, long intervalTicks, long valueTicks, bool isAbsolute)
@@ -434,9 +437,10 @@ public class TimerFdInode : TmpfsInode
 
             if (valueTicks > 0)
             {
-                _valueTicks = isAbsolute ? valueTicks : scheduler.CurrentTick + valueTicks;
-
-                var delay = Math.Max(0, _valueTicks - scheduler.CurrentTick);
+                var delay = isAbsolute
+                    ? Math.Max(0, valueTicks - AbsoluteNowMs())
+                    : valueTicks;
+                _valueTicks = scheduler.CurrentRealTick + delay;
                 _timer = scheduler.ScheduleTimer(delay, TimerCallback);
             }
             else
@@ -445,6 +449,10 @@ public class TimerFdInode : TmpfsInode
             }
         }
     }
+
+    private long AbsoluteNowMs() => _clockId == LinuxConstants.CLOCK_REALTIME
+        ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        : MonotonicClock.Milliseconds;
 
     public void GetTime(FiberTask task, out long intervalTicks, out long valueTicks)
     {
@@ -458,7 +466,7 @@ public class TimerFdInode : TmpfsInode
             }
 
             var scheduler = _scheduler ?? task.CommonKernel;
-            var remain = _valueTicks - scheduler.CurrentTick;
+            var remain = _valueTicks - scheduler.CurrentRealTick;
             valueTicks = remain < 0 ? 0 : remain;
         }
     }
@@ -476,7 +484,7 @@ public class TimerFdInode : TmpfsInode
                 var scheduler = _scheduler;
                 if (scheduler != null)
                 {
-                    var delay = Math.Max(0, _valueTicks - scheduler.CurrentTick);
+                    var delay = Math.Max(0, _valueTicks - scheduler.CurrentRealTick);
                     _timer = scheduler.ScheduleTimer(delay, TimerCallback);
                 }
             }

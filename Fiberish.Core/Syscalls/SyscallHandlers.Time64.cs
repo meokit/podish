@@ -12,6 +12,15 @@ public partial class SyscallManager
     private const int ITIMER_PROF = 2;
     private const int USEC_PER_SEC = 1_000_000;
 
+    private static long AbsoluteClockDelayMs(int clockId, long absoluteMs)
+    {
+        var nowMs = clockId == LinuxConstants.CLOCK_REALTIME
+            ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            : MonotonicClock.Milliseconds;
+        var delay = absoluteMs - nowMs;
+        return delay < 0 ? 0 : delay;
+    }
+
     private static long GetProcessCpuMs(Process proc, bool userOnly, bool roundUp = false)
     {
         var snap = proc.GetSelfCpuTimeSnapshot();
@@ -178,6 +187,11 @@ public partial class SyscallManager
         if ((int)which is < ITIMER_REAL or > ITIMER_PROF) return -(int)Errno.EINVAL;
         if (newValuePtr == 0) return -(int)Errno.EFAULT;
 
+        // Linux validates the new value before touching old_value; an EINVAL must not
+        // clobber the caller's output buffer.
+        if (!TryReadItimerval32(engine, newValuePtr, out var newIntervalMs, out var newValueMs))
+            return -(int)Errno.EINVAL;
+
         var proc = task.Process;
         if (oldValuePtr != 0)
         {
@@ -185,9 +199,6 @@ public partial class SyscallManager
             if (!WriteItimerval32(engine, oldValuePtr, oldIntervalMs, oldRemainingMs))
                 return -(int)Errno.EFAULT;
         }
-
-        if (!TryReadItimerval32(engine, newValuePtr, out var newIntervalMs, out var newValueMs))
-            return -(int)Errno.EINVAL;
 
         if ((int)which == ITIMER_REAL)
             ArmItimerReal(proc, scheduler, newValueMs, newIntervalMs);
@@ -331,7 +342,10 @@ public partial class SyscallManager
         if (timer.ActiveTimer != null && !timer.ActiveTimer.Canceled)
         {
             var scheduler = (engine.Owner as FiberTask)?.CommonKernel;
-            var remainingMs = timer.ActiveTimer.ExpirationTick - (scheduler?.CurrentTick ?? 0);
+            var nowMs = scheduler == null
+                ? 0
+                : Math.Max(scheduler.CurrentTick, scheduler.CurrentRealTick);
+            var remainingMs = timer.ActiveTimer.ExpirationTick - nowMs;
             if (remainingMs < 0) remainingMs = 0;
             valueSec = remainingMs / 1000;
             valueNsec = remainingMs % 1000 * 1000000;
@@ -366,7 +380,10 @@ public partial class SyscallManager
         if (timer.ActiveTimer != null && !timer.ActiveTimer.Canceled)
         {
             var scheduler = (engine.Owner as FiberTask)?.CommonKernel;
-            var remainingMs = timer.ActiveTimer.ExpirationTick - (scheduler?.CurrentTick ?? 0);
+            var nowMs = scheduler == null
+                ? 0
+                : Math.Max(scheduler.CurrentTick, scheduler.CurrentRealTick);
+            var remainingMs = timer.ActiveTimer.ExpirationTick - nowMs;
             if (remainingMs < 0) remainingMs = 0;
             valueSec = remainingMs / 1000;
             valueNsec = remainingMs % 1000 * 1000000;
@@ -405,10 +422,14 @@ public partial class SyscallManager
         var valueSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
         var valueNsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
 
+        if (intervalSec < 0 || valueSec < 0 ||
+            intervalNsec is < 0 or >= 1_000_000_000 || valueNsec is < 0 or >= 1_000_000_000)
+            return -(int)Errno.EINVAL;
+
         var intervalMs = (ulong)(intervalSec * 1000L + intervalNsec / 1000000L);
         var valueMs = (ulong)(valueSec * 1000L + valueNsec / 1000000L);
 
-        // Fetch old if needed
+        // Fetch old after validation; a rejected value must not clobber old_value.
         if (oldPtr != 0) await SysTimerGetTime32(engine, timerId, oldPtr, 0, 0, 0, 0);
 
         // Apply new
@@ -433,19 +454,7 @@ public partial class SyscallManager
 
             var targetDelayMs = (long)valueMs;
             if ((flags & 1) != 0) // TIMER_ABSTIME
-            {
-                if (timer.ClockId == LinuxConstants.CLOCK_REALTIME)
-                {
-                    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    targetDelayMs = (long)valueMs - now;
-                    if (targetDelayMs < 0) targetDelayMs = 0;
-                }
-                else
-                {
-                    targetDelayMs = (long)valueMs - scheduler.CurrentTick;
-                    if (targetDelayMs < 0) targetDelayMs = 0;
-                }
-            }
+                targetDelayMs = AbsoluteClockDelayMs(timer.ClockId, (long)valueMs);
 
             if (targetDelayMs == 0 && valueMs > 0) targetDelayMs = 1; // Fire ASAP
 
@@ -475,10 +484,15 @@ public partial class SyscallManager
         var valueSec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(16, 8));
         var valueNsec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(24, 8));
 
+        if (intervalSec < 0 || valueSec < 0 ||
+            intervalNsec is < 0 or >= 1_000_000_000 || valueNsec is < 0 or >= 1_000_000_000 ||
+            intervalSec > long.MaxValue / 1000 || valueSec > long.MaxValue / 1000)
+            return -(int)Errno.EINVAL;
+
         var intervalMs = (ulong)(intervalSec * 1000 + intervalNsec / 1000000);
         var valueMs = (ulong)(valueSec * 1000 + valueNsec / 1000000);
 
-        // Fetch old if needed
+        // Fetch old after validation; a rejected value must not clobber old_value.
         if (oldPtr != 0) await SysTimerGetTime64(engine, timerId, oldPtr, 0, 0, 0, 0);
 
         // Apply new
@@ -501,25 +515,10 @@ public partial class SyscallManager
                 }
             }
 
-            // Note: TIMER_ABSTIME (1) means valueMs is absolute time, otherwise relative
-            // For now, we assume relative or simulate relative delta if absolute is requested.
-            // A perfect implementation would parse `flags & TIMER_ABSTIME`.
+            // TIMER_ABSTIME (1): valueMs is an absolute CLOCK_REALTIME/MONOTONIC value.
             var targetDelayMs = (long)valueMs;
-            if ((flags & 1) != 0) // TIMER_ABSTIME
-            {
-                // Simple approx: valueMs - current physical time (Assuming CLOCK_REALTIME/MONOTONIC matching)
-                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); // Hack fallback if clocks misaligned
-                if (timer.ClockId == LinuxConstants.CLOCK_REALTIME)
-                {
-                    targetDelayMs = (long)valueMs - now;
-                    if (targetDelayMs < 0) targetDelayMs = 0;
-                }
-                else // CLOCK_MONOTONIC uses (KernelScheduler?)nullTick
-                {
-                    targetDelayMs = (long)valueMs - scheduler.CurrentTick;
-                    if (targetDelayMs < 0) targetDelayMs = 0;
-                }
-            }
+            if ((flags & 1) != 0)
+                targetDelayMs = AbsoluteClockDelayMs(timer.ClockId, (long)valueMs);
 
             if (targetDelayMs == 0 && valueMs > 0) targetDelayMs = 1; // Fire ASAP
 
@@ -645,7 +644,8 @@ public partial class SyscallManager
         var valueNsec = BinaryPrimitives.ReadInt64LittleEndian(buf.Slice(24, 8));
 
         if (intervalSec < 0 || valueSec < 0 ||
-            intervalNsec is < 0 or >= 1_000_000_000 || valueNsec is < 0 or >= 1_000_000_000)
+            intervalNsec is < 0 or >= 1_000_000_000 || valueNsec is < 0 or >= 1_000_000_000 ||
+            intervalSec > long.MaxValue / 1000 || valueSec > long.MaxValue / 1000)
             return -(int)Errno.EINVAL;
 
         if (oldValuePtr != 0)

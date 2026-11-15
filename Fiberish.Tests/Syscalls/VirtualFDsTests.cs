@@ -85,7 +85,22 @@ public class VirtualFDsTests
         inode.GetTime(env.Task, out var interval, out var value);
 
         Assert.Equal(2000L, interval);
-        Assert.Equal(5000L, value);
+        // A few scheduler ticks may elapse between arming and reading; the value
+        // must not be the original request forever.
+        Assert.InRange(value, 4_900L, 5_000L);
+    }
+
+    [Fact]
+    public void TimerFd_AbsoluteDeadline_UsesMonotonicClock()
+    {
+        using var env = new TestEnv();
+        var inode = new TimerFdInode(0, env.MemfdSuperBlock, LinuxConstants.CLOCK_MONOTONIC);
+        var targetMs = MonotonicClock.Milliseconds + 50;
+
+        inode.SetTime(env.Task, 0, targetMs, isAbsolute: true);
+        inode.GetTime(env.Task, out _, out var valueMs);
+
+        Assert.InRange(valueMs, 1, 60);
     }
 
     [Fact]

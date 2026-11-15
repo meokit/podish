@@ -47,7 +47,7 @@ public partial class SyscallManager
         if ((flags & LinuxConstants.TFD_NONBLOCK) != 0) eflags |= FileFlags.O_NONBLOCK;
         if ((flags & LinuxConstants.TFD_CLOEXEC) != 0) eflags |= FileFlags.O_CLOEXEC;
 
-        var inode = new TimerFdInode(0, MemfdSuperBlock);
+        var inode = new TimerFdInode(0, MemfdSuperBlock, (int)clockId);
         var dentry = new Dentry(FsName.FromString("anon_inode:[timerfd]"), inode, null, MemfdSuperBlock);
         var file = new LinuxFile(dentry, eflags, AnonMount);
 
@@ -88,8 +88,10 @@ public partial class SyscallManager
 
         var isAbsolute = (flags & LinuxConstants.TFD_TIMER_ABSTIME) != 0;
 
-        var intervalMs = (ulong)(intervalSec * 1000 + intervalNsec / 1000000);
-        var valueMs = (ulong)(valueSec * 1000 + valueNsec / 1000000);
+        var intervalMs = (ulong)((long)intervalSec * 1000 + intervalNsec / 1_000_000);
+        var valueMs = (ulong)((long)valueSec * 1000 + valueNsec / 1_000_000);
+        if (intervalMs > long.MaxValue || valueMs > long.MaxValue)
+            return -(int)Errno.EINVAL;
 
         timerFd.SetTime(task, (long)intervalMs, (long)valueMs, isAbsolute);
 

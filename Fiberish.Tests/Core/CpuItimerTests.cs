@@ -1,10 +1,10 @@
+using System.Buffers.Binary;
 using System.Reflection;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.Tests.Syscalls;
-using System.Buffers.Binary;
 using Xunit;
 
 namespace Fiberish.Tests.Core;
@@ -15,6 +15,26 @@ namespace Fiberish.Tests.Core;
 /// </summary>
 public class CpuItimerTests
 {
+    [Fact]
+    public void Setitimer_InvalidNewValue_DoesNotClobberOldValue()
+    {
+        using var env = new SyscallTestEnv();
+        Span<byte> invalid = stackalloc byte[16];
+        invalid.Clear();
+        BinaryPrimitives.WriteInt32LittleEndian(invalid[4..], 1_000_000); // invalid interval usec
+        Assert.True(env.Engine.CopyToUser(0x10000, invalid));
+
+        Span<byte> sentinel = stackalloc byte[16];
+        sentinel.Fill(0x5A);
+        Assert.True(env.Engine.CopyToUser(0x11000, sentinel));
+
+        Assert.Equal(-(int)Errno.EINVAL, env.Invoke("SysSetitimer", 1, 0x10000, 0x11000));
+
+        Span<byte> oldValue = stackalloc byte[16];
+        Assert.True(env.Engine.CopyFromUser(0x11000, oldValue));
+        Assert.Equal(sentinel.ToArray(), oldValue.ToArray());
+    }
+
     [Theory]
     [InlineData(1U)]
     [InlineData(2U)]
