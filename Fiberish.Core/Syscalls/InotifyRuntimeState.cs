@@ -200,6 +200,11 @@ public sealed class InotifyRuntimeState
     /// </summary>
     internal FinalizationSuspendScope SuspendFinalization(Inode inode)
     {
+        // Unlink/rmdir/rename run on the scheduler thread; without any watch there is
+        // nothing to defer, so keep the common no-inotify path allocation- and lock-free.
+        if (Volatile.Read(ref _activeTargetCount) == 0)
+            return default;
+
         lock (_finalizationGate)
         {
             _deferredFinalizations.TryGetValue(inode, out var state);
@@ -210,6 +215,9 @@ public sealed class InotifyRuntimeState
 
     internal void NotifyInodeFinalized(Inode inode)
     {
+        if (Volatile.Read(ref _activeTargetCount) == 0)
+            return;
+
         lock (_finalizationGate)
         {
             if (_deferredFinalizations.TryGetValue(inode, out var state))
