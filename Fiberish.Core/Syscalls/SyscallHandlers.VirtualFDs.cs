@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using Fiberish.Auth.Permission;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
@@ -39,6 +40,8 @@ public partial class SyscallManager
     {
         if (clockId != LinuxConstants.CLOCK_REALTIME && clockId != LinuxConstants.CLOCK_MONOTONIC)
             return -(int)Errno.EINVAL;
+        if ((flags & ~(uint)(LinuxConstants.TFD_NONBLOCK | LinuxConstants.TFD_CLOEXEC)) != 0)
+            return -(int)Errno.EINVAL;
 
         var eflags = FileFlags.O_RDWR;
         if ((flags & LinuxConstants.TFD_NONBLOCK) != 0) eflags |= FileFlags.O_NONBLOCK;
@@ -57,23 +60,33 @@ public partial class SyscallManager
     private async ValueTask<int> SysTimerFdSetTime(Engine engine, uint fd, uint flags, uint newValuePtr,
         uint oldValuePtr, uint a5, uint a6)
     {
-        if (!FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
-            return -(int)Errno.EBADF;
+        if (!FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
+        if (file.OpenedInode is not TimerFdInode timerFd) return -(int)Errno.EINVAL;
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        if ((flags & ~(uint)(LinuxConstants.TFD_TIMER_ABSTIME | LinuxConstants.TFD_TIMER_CANCEL_ON_SET)) != 0) return -(int)Errno.EINVAL;
 
         if (newValuePtr == 0) return -(int)Errno.EFAULT;
 
-        var buf = new byte[16];
+        Span<byte> buf = stackalloc byte[16];
         if (!engine.CopyFromUser(newValuePtr, buf)) return -(int)Errno.EFAULT;
 
-        var intervalSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
-        var intervalNsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
-        var valueSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
-        var valueNsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
+        var intervalSec = BinaryPrimitives.ReadInt32LittleEndian(buf[..4]);
+        var intervalNsec = BinaryPrimitives.ReadInt32LittleEndian(buf.Slice(4, 4));
+        var valueSec = BinaryPrimitives.ReadInt32LittleEndian(buf.Slice(8, 4));
+        var valueNsec = BinaryPrimitives.ReadInt32LittleEndian(buf.Slice(12, 4));
 
-        if (oldValuePtr != 0) await SysTimerFdGetTime(engine, fd, oldValuePtr, 0, 0, 0, 0);
+        if (intervalSec < 0 || valueSec < 0 ||
+            (uint)intervalNsec >= 1_000_000_000 || (uint)valueNsec >= 1_000_000_000)
+            return -(int)Errno.EINVAL;
 
-        var isAbsolute = (flags & 1) != 0; // TFD_TIMER_ABSTIME
+        if (oldValuePtr != 0)
+        {
+            var oldRc = await SysTimerFdGetTime(engine, fd, oldValuePtr, 0, 0, 0, 0);
+            if (oldRc != 0) return oldRc;
+        }
+
+        var isAbsolute = (flags & LinuxConstants.TFD_TIMER_ABSTIME) != 0;
 
         var intervalMs = (ulong)(intervalSec * 1000 + intervalNsec / 1000000);
         var valueMs = (ulong)(valueSec * 1000 + valueNsec / 1000000);
@@ -86,19 +99,19 @@ public partial class SyscallManager
     private async ValueTask<int> SysTimerFdGetTime(Engine engine, uint fd, uint curValuePtr, uint a3, uint a4,
         uint a5, uint a6)
     {
-        if (!FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
-            return -(int)Errno.EBADF;
+        if (!FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
+        if (file.OpenedInode is not TimerFdInode timerFd) return -(int)Errno.EINVAL;
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         if (curValuePtr == 0) return -(int)Errno.EFAULT;
 
         timerFd.GetTime(task, out var intervalMs, out var valueMs);
 
-        var buf = new byte[16];
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)(intervalMs / 1000));
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)(intervalMs % 1000 * 1000000));
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), (int)(valueMs / 1000));
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), (int)(valueMs % 1000 * 1000000));
+        Span<byte> buf = stackalloc byte[16];
+        BinaryPrimitives.WriteInt32LittleEndian(buf[..4], (int)(intervalMs / 1000));
+        BinaryPrimitives.WriteInt32LittleEndian(buf.Slice(4, 4), (int)(intervalMs % 1000 * 1000000));
+        BinaryPrimitives.WriteInt32LittleEndian(buf.Slice(8, 4), (int)(valueMs / 1000));
+        BinaryPrimitives.WriteInt32LittleEndian(buf.Slice(12, 4), (int)(valueMs % 1000 * 1000000));
 
         if (!engine.CopyToUser(curValuePtr, buf)) return -(int)Errno.EFAULT;
 
@@ -168,7 +181,11 @@ public partial class SyscallManager
         if ((flags & LinuxConstants.IN_NONBLOCK) != 0) eflags |= FileFlags.O_NONBLOCK;
         if ((flags & LinuxConstants.IN_CLOEXEC) != 0) eflags |= FileFlags.O_CLOEXEC;
 
-        var inode = new InotifyInode(0, MemfdSuperBlock);
+        var ownerUid = (engine.Owner as FiberTask)?.Process.UID ?? 0;
+        var inode = new InotifyInode(0, MemfdSuperBlock, ownerUid);
+        if (!inode.InstanceSlotHeld)
+            return -(int)Errno.EMFILE;
+
         var dentry = new Dentry(Inotify, inode, null, MemfdSuperBlock);
         var file = new LinuxFile(dentry, eflags, AnonMount);
 
@@ -182,6 +199,18 @@ public partial class SyscallManager
         if (file == null) return -(int)Errno.EBADF;
         if (file.OpenedInode is not InotifyInode inotify) return -(int)Errno.EINVAL;
 
+        // inotify_add_watch(2): the mask must contain at least one event bit, and
+        // IN_MASK_CREATE cannot be combined with IN_MASK_ADD.
+        const uint validMask = LinuxConstants.IN_ALL_EVENTS | LinuxConstants.IN_ONLYDIR |
+                               LinuxConstants.IN_DONT_FOLLOW | LinuxConstants.IN_EXCL_UNLINK |
+                               LinuxConstants.IN_MASK_CREATE | LinuxConstants.IN_MASK_ADD |
+                               LinuxConstants.IN_ONESHOT | LinuxConstants.IN_ISDIR |
+                               LinuxConstants.IN_UNMOUNT | LinuxConstants.IN_Q_OVERFLOW | LinuxConstants.IN_IGNORED;
+        if ((mask & ~validMask) != 0) return -(int)Errno.EINVAL;
+        if ((mask & LinuxConstants.IN_ALL_EVENTS) == 0) return -(int)Errno.EINVAL;
+        if ((mask & LinuxConstants.IN_MASK_CREATE) != 0 && (mask & LinuxConstants.IN_MASK_ADD) != 0)
+            return -(int)Errno.EINVAL;
+
         var pathErr = ReadPathArgumentBytes(pathPtr, out var path);
         if (pathErr != 0) return pathErr;
         using var _ = path;
@@ -194,11 +223,20 @@ public partial class SyscallManager
 
         var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
-        if ((mask & LinuxConstants.IN_ONLYDIR) != 0 && loc.Dentry.Inode.Type != InodeType.Directory)
+        var watchedInode = loc.Dentry.Inode;
+        if ((mask & LinuxConstants.IN_ONLYDIR) != 0 && watchedInode.Type != InodeType.Directory)
             return -(int)Errno.ENOTDIR;
 
-        var pathKey = GetAbsolutePath(loc);
-        return inotify.AddWatch(pathKey, mask, loc.Dentry.Inode.Type == InodeType.Directory);
+        // inotify_add_watch(2) requires read permission on the watched object.
+        var task = engine.Owner as FiberTask;
+        if (task?.Process != null)
+        {
+            var accessRc = DacPolicy.CheckPathAccess(task.Process, watchedInode, AccessMode.MayRead, true);
+            if (accessRc < 0) return accessRc;
+        }
+
+        return inotify.AddWatch(mask, watchedInode.Type == InodeType.Directory,
+            watchedInode.SuperBlock, watchedInode.Ino, watchedInode);
     }
 
     private async ValueTask<int> SysInotifyRmWatch(Engine engine, uint fd, uint wd, uint a3, uint a4, uint a5,

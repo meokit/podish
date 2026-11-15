@@ -298,8 +298,15 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysGetPgid(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var task = engine.Owner as FiberTask;
-        return task?.Process.PGID ?? -1;
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        var targetPid = (int)a1;
+        if (targetPid < 0) return -(int)Errno.ESRCH;
+        if (targetPid == 0) return task.Process.PGID;
+
+        var targetProc = task.CommonKernel.GetProcess(targetPid);
+        if (targetProc == null) return -(int)Errno.ESRCH;
+        return targetProc.PGID;
     }
 
     private async ValueTask<int> SysUmask(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -554,9 +561,27 @@ public partial class SyscallManager
         var remPtr = a4;
 
         if ((flags & ~1) != 0) return -(int)Errno.EINVAL;
-        if (clockId != LinuxConstants.CLOCK_REALTIME && clockId != LinuxConstants.CLOCK_MONOTONIC &&
-            clockId != LinuxConstants.CLOCK_BOOTTIME)
-            return -(int)Errno.EINVAL;
+        switch (clockId)
+        {
+            case LinuxConstants.CLOCK_REALTIME:
+            case LinuxConstants.CLOCK_MONOTONIC:
+            case LinuxConstants.CLOCK_BOOTTIME:
+            case LinuxConstants.CLOCK_TAI:
+                break;
+            case LinuxConstants.CLOCK_REALTIME_ALARM:
+            case LinuxConstants.CLOCK_BOOTTIME_ALARM:
+                // Valid alarm clocks, but sleeping on them requires CAP_WAKE_ALARM.
+                return -(int)Errno.EPERM;
+            case LinuxConstants.CLOCK_PROCESS_CPUTIME_ID:
+            case LinuxConstants.CLOCK_THREAD_CPUTIME_ID:
+            case LinuxConstants.CLOCK_MONOTONIC_RAW:
+            case LinuxConstants.CLOCK_REALTIME_COARSE:
+            case LinuxConstants.CLOCK_MONOTONIC_COARSE:
+                // Valid clocks that cannot be slept on.
+                return -(int)Errno.EOPNOTSUPP;
+            default:
+                return -(int)Errno.EINVAL;
+        }
 
         var reqBuf = new byte[time64 ? 16 : 8];
         if (!engine.CopyFromUser(reqPtr, reqBuf)) return -(int)Errno.EFAULT;
@@ -600,7 +625,7 @@ public partial class SyscallManager
 
     private static long GetSleepClockNs(int clockId)
     {
-        if (clockId == LinuxConstants.CLOCK_REALTIME)
+        if (clockId is LinuxConstants.CLOCK_REALTIME or LinuxConstants.CLOCK_TAI)
         {
             var ticks = DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks;
             return ticks * 100;
@@ -619,7 +644,9 @@ public partial class SyscallManager
         {
             case LinuxConstants.CLOCK_REALTIME:
             case LinuxConstants.CLOCK_REALTIME_COARSE:
+            case LinuxConstants.CLOCK_TAI:
             {
+                // The emulator has no leap-second table, so TAI == REALTIME.
                 var ticks = DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks;
                 secs = ticks / TimeSpan.TicksPerSecond;
                 nsecs = ticks % TimeSpan.TicksPerSecond * 100;
@@ -677,6 +704,7 @@ public partial class SyscallManager
             // not enable creating alarm timers or waking a suspended host.
             case LinuxConstants.CLOCK_REALTIME_ALARM:
             case LinuxConstants.CLOCK_BOOTTIME_ALARM:
+            case LinuxConstants.CLOCK_TAI:
                 resolutionNs = 1_000_000;
                 return true;
             case LinuxConstants.CLOCK_PROCESS_CPUTIME_ID:
@@ -818,27 +846,155 @@ public partial class SyscallManager
 
         switch (option)
         {
-            case LinuxConstants.PR_SET_NAME:
-                var name = ReadString(a2);
-                if (name != null)
-                {
-                    task.Process.Name = name;
-                    return 0;
-                }
+            case LinuxConstants.PR_SET_PDEATHSIG:
+            {
+                var sig = (int)a2;
+                if (sig < 0 || sig > 64)
+                    return -(int)Errno.EINVAL;
+                task.Process.ParentDeathSignal = sig;
+                return 0;
+            }
 
-                return -(int)Errno.EFAULT;
+            case LinuxConstants.PR_GET_PDEATHSIG:
+            {
+                if (a2 == 0) return -(int)Errno.EFAULT;
+                Span<byte> pdeathBuf = stackalloc byte[4];
+                BinaryPrimitives.WriteInt32LittleEndian(pdeathBuf, task.Process.ParentDeathSignal);
+                return engine.CopyToUser(a2, pdeathBuf) ? 0 : -(int)Errno.EFAULT;
+            }
+
+            case LinuxConstants.PR_GET_DUMPABLE:
+                return task.Process.Dumpable;
+
+            case LinuxConstants.PR_SET_DUMPABLE:
+            {
+                var dumpable = (int)a2;
+                if (dumpable is not (0 or 1))
+                    return -(int)Errno.EINVAL;
+                task.Process.Dumpable = dumpable;
+                return 0;
+            }
+
+            case LinuxConstants.PR_GET_TIMING:
+                return 0; // PR_TIMING_STATISTICAL
+
+            case LinuxConstants.PR_SET_TIMING:
+                return a2 == 0 ? 0 : -(int)Errno.EINVAL;
+
+            case LinuxConstants.PR_SET_NAME:
+            {
+                if (a2 == 0) return -(int)Errno.EFAULT;
+                var rawName = new byte[16];
+                if (!ReadNullTerminatedUserBytes(a2, rawName, out var len, out _))
+                    return -(int)Errno.EFAULT;
+                var nameLen = Math.Min(len, 15);
+                var procName = Encoding.UTF8.GetString(rawName, 0, nameLen);
+                task.Process.Name = string.IsNullOrEmpty(procName) ? "process" : procName;
+                return 0;
+            }
 
             case LinuxConstants.PR_GET_NAME:
-                var procName = task.Process.Name ?? "fiberish";
+            {
+                if (a2 == 0) return -(int)Errno.EFAULT;
+                var procName = task.Process.Name ?? task.Process.Comm ?? "fiberish";
                 var bytes = Encoding.ASCII.GetBytes(procName);
                 var buf = new byte[16];
                 Array.Copy(bytes, buf, Math.Min(bytes.Length, 15));
                 if (!engine.CopyToUser(a2, buf)) return -(int)Errno.EFAULT;
                 return 0;
+            }
+
+            case LinuxConstants.PR_GET_TSC:
+            {
+                if (a2 == 0) return -(int)Errno.EFAULT;
+                Span<byte> tscBuf = stackalloc byte[4];
+                BinaryPrimitives.WriteInt32LittleEndian(tscBuf, task.Process.TscMode);
+                return engine.CopyToUser(a2, tscBuf) ? 0 : -(int)Errno.EFAULT;
+            }
+
+            case LinuxConstants.PR_SET_TSC:
+            {
+                var tscMode = (int)a2;
+                if (tscMode is not (LinuxConstants.PR_TSC_ENABLE or LinuxConstants.PR_TSC_SIGSEGV))
+                    return -(int)Errno.EINVAL;
+                task.Process.TscMode = tscMode;
+                return 0;
+            }
+
+            case LinuxConstants.PR_SET_TIMERSLACK:
+            {
+                long slack = a2 == 0 ? task.Process.DefaultTimerSlackNs : (long)a2;
+                task.Process.TimerSlackNs = slack;
+                return 0;
+            }
+
+            case LinuxConstants.PR_GET_TIMERSLACK:
+                return task.Process.TimerSlackNs > int.MaxValue ? int.MaxValue : (int)task.Process.TimerSlackNs;
+
+            case LinuxConstants.PR_SET_CHILD_SUBREAPER:
+                task.Process.IsChildSubreaper = a2 != 0;
+                return 0;
+
+            case LinuxConstants.PR_GET_CHILD_SUBREAPER:
+            {
+                if (a2 == 0) return -(int)Errno.EFAULT;
+                Span<byte> subBuf = stackalloc byte[4];
+                BinaryPrimitives.WriteInt32LittleEndian(subBuf, task.Process.IsChildSubreaper ? 1 : 0);
+                return engine.CopyToUser(a2, subBuf) ? 0 : -(int)Errno.EFAULT;
+            }
+
+            case LinuxConstants.PR_SET_NO_NEW_PRIVS:
+                if (a2 != 1 || a3 != 0 || a4 != 0 || a5 != 0)
+                    return -(int)Errno.EINVAL;
+                task.Process.NoNewPrivs = true;
+                return 0;
+
+            case LinuxConstants.PR_GET_NO_NEW_PRIVS:
+                if (a2 != 0 || a3 != 0 || a4 != 0 || a5 != 0)
+                    return -(int)Errno.EINVAL;
+                return task.Process.NoNewPrivs ? 1 : 0;
+
+            case LinuxConstants.PR_SET_THP_DISABLE:
+                if (a3 != 0 || a4 != 0 || a5 != 0)
+                    return -(int)Errno.EINVAL;
+                task.Process.ThpDisabled = a2 != 0;
+                return 0;
+
+            case LinuxConstants.PR_GET_THP_DISABLE:
+                if (a2 != 0 || a3 != 0 || a4 != 0 || a5 != 0)
+                    return -(int)Errno.EINVAL;
+                return task.Process.ThpDisabled ? 1 : 0;
+
+            case LinuxConstants.PR_GET_SECCOMP:
+            case LinuxConstants.PR_SET_SECCOMP:
+            case LinuxConstants.PR_GET_SPECULATION_CTRL:
+                return -(int)Errno.EINVAL;
+
+            case LinuxConstants.PR_SET_SECUREBITS:
+                if (a3 != 0 || a4 != 0 || a5 != 0)
+                    return -(int)Errno.EINVAL;
+                return task.Process.HasEffectiveCapability(Process.CapabilitySetPcap)
+                    ? -(int)Errno.EINVAL
+                    : -(int)Errno.EPERM;
+
+            case LinuxConstants.PR_CAPBSET_READ:
+                if (a2 > Process.CapabilityLast)
+                    return -(int)Errno.EINVAL;
+                return task.Process.HasBoundingCapability((int)a2) ? 1 : 0;
+
+            case LinuxConstants.PR_CAPBSET_DROP:
+                if (a3 != 0 || a4 != 0 || a5 != 0)
+                    return -(int)Errno.EINVAL;
+                if (!task.Process.HasEffectiveCapability(Process.CapabilitySetPcap))
+                    return -(int)Errno.EPERM;
+                if (a2 > Process.CapabilityLast)
+                    return -(int)Errno.EINVAL;
+                task.Process.DropBoundingCapability((int)a2);
+                return 0;
 
             default:
                 LogUnhandledPrctlOption(option);
-                return 0; // Success for many non-critical options
+                return -(int)Errno.EINVAL;
         }
     }
 
@@ -976,6 +1132,21 @@ public partial class SyscallManager
 
         var data = new byte[count * 12];
         if (!engine.CopyFromUser(a2, data)) return -(int)Errno.EFAULT;
+
+        // Validate every word before changing any set. Dropping the bounding set must
+        // not be bypassable by capset restoring permitted bits or adding inheritable bits.
+        var process = task.Process;
+        var canSetPcap = process.HasEffectiveCapability(Process.CapabilitySetPcap);
+        for (var i = 0; i < count; i++)
+        {
+            var effective = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(i * 12, 4));
+            var permitted = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(i * 12 + 4, 4));
+            var inheritable = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(i * 12 + 8, 4));
+            if ((effective & ~permitted) != 0 || (permitted & ~process.CapPermitted[i]) != 0 ||
+                (inheritable & ~(process.CapInheritable[i] | process.CapBounding[i])) != 0 ||
+                (!canSetPcap && (inheritable & ~(process.CapInheritable[i] | process.CapPermitted[i])) != 0))
+                return -(int)Errno.EPERM;
+        }
 
         for (var i = 0; i < count; i++)
         {

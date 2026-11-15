@@ -156,7 +156,9 @@ public class VirtualFDsTests
         var file = new LinuxFile(new Dentry(FsName.FromString("inotify"), inode, null, env.MemfdSuperBlock),
             FileFlags.O_NONBLOCK, null!);
 
-        var wd = inode.AddWatch("/watched", LinuxConstants.IN_CREATE | LinuxConstants.IN_DELETE, true);
+        var watched = env.MemfdSuperBlock.Root.Inode!;
+        var wd = inode.AddWatch(LinuxConstants.IN_CREATE | LinuxConstants.IN_DELETE, true,
+            watched.SuperBlock, watched.Ino, watched);
         Assert.True(wd > 0);
         Assert.Equal(0, inode.RemoveWatch(wd));
 

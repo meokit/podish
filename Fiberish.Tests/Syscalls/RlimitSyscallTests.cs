@@ -23,7 +23,9 @@ public class RlimitSyscallTests
         Assert.True(handled);
         Assert.Equal(0, rc);
         Assert.Equal(8U * 1024 * 1024, env.ReadUInt32(limitPtr));
-        Assert.Equal(LinuxConstants.RLIM32_INFINITY, env.ReadUInt32(limitPtr + 4));
+        // i386 legacy getrlimit(2) is the signed variant: RLIM_INFINITY surfaces as LONG_MAX,
+        // matching the LTP getrlimit03 comparison against __NR_ugetrlimit / prlimit64.
+        Assert.Equal(LinuxConstants.RLIM32_SIGNED_INFINITY, env.ReadUInt32(limitPtr + 4));
     }
 
     [Fact]

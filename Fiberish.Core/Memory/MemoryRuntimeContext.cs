@@ -37,6 +37,13 @@ public sealed class MemoryRuntimeContext : IDisposable
     internal HostMemoryLockTracker HostLocks { get; } = new();
     public AddressSpacePolicy AddressSpacePolicy { get; }
     public MemoryPressureCoordinator MemoryPressure { get; }
+
+    /// <summary>Inotify registry, per-user quotas and sysctl limits for this guest runtime.</summary>
+    public InotifyRuntimeState Inotify { get; } = new();
+
+    /// <summary>Per-runtime network sysctl values (for example net.ipv4.conf.*.tag).</summary>
+    public NetworkSysctlState NetworkSysctls { get; } = new();
+
     public ulong? DeterministicAslrSeed { get; set; }
     public int MaxMapCount { get; set; } = 65530;
 
@@ -92,6 +99,7 @@ public sealed class MemoryRuntimeContext : IDisposable
             _shmSuperBlock = null;
         }
 
+        Inotify.Clear();
         AddressSpacePolicy.Dispose();
         HostLocks.Dispose();
         HostPages.Dispose();

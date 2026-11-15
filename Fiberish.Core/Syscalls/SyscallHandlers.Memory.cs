@@ -181,7 +181,18 @@ public partial class SyscallManager
         try
         {
             if (f != null)
-                mmapFile = new LinuxFile(f.LivePath, f.Flags, LinuxFile.ReferenceKind.MmapHold, f.OpenedInode);
+            {
+                // The mapping keeps its own inode FileMmap reference (as before), but its
+                // IN_CLOSE notification is deferred through a barrier shared with the fd's
+                // open file description.
+                var barrier = f.CloseBarrier ??= new LinuxFile.CloseNotificationBarrier(
+                    f.Dentry, f.OpenedInode, ((int)f.Flags & 3) != 0);
+                barrier.AddMapping();
+                mmapFile = new LinuxFile(f.LivePath, f.Flags, LinuxFile.ReferenceKind.MmapHold, f.OpenedInode)
+                {
+                    CloseBarrier = barrier
+                };
+            }
 
             var res = ProcessAddressSpaceSync.Mmap(Mem, engine, addr, len, (Protection)prot, (MapFlags)flags,
                 mmapFile, offset, "MMAP2");
@@ -221,7 +232,11 @@ public partial class SyscallManager
         }
         finally
         {
-            mmapFile?.Close();
+            if (mmapFile != null)
+            {
+                mmapFile.Close();
+                mmapFile.CloseBarrier?.OnMappingReleased();
+            }
         }
     }
 

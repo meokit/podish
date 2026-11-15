@@ -361,7 +361,8 @@ def main():
                                      {**common_env, "TMPDIR": "/tmp", "LTPROOT": "/opt/ltp"},
                                      f"/opt/ltp/testcases/bin/{name}", image_ref, args.trace)
         try:
-            code, text, timed_out, elapsed = execute(command, cwd, env, args.timeout)
+            case_timeout = case.get("timeoutSeconds") or args.timeout
+            code, text, timed_out, elapsed = execute(command, cwd, env, case_timeout)
             status, counts = classify(code, text, timed_out)
             if status == "PASS" and args.backend == "podish" and counts != baseline[name]["counts"]:
                 native_counts = baseline[name]["counts"]

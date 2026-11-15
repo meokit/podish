@@ -43,6 +43,14 @@ public readonly record struct CpuTimeSnapshot(long UserNs, long SystemNs)
     }
 }
 
+/// <summary>State of a CPU-time interval timer (ITIMER_VIRTUAL / ITIMER_PROF).</summary>
+public sealed class CpuItimerState
+{
+    public long ValueMs;
+    public long IntervalMs;
+    public long NextFireCpuMs;
+}
+
 public class UTSNamespace
 {
     public string SysName { get; set; } = "Linux";
@@ -69,7 +77,9 @@ public struct SigAction
 public class Process
 {
     public const int CapabilityKill = 5;
+    public const int CapabilitySetPcap = 8;
     public const int CapabilitySysAdmin = 21;
+    public const int CapabilityLast = 40; // CAP_CHECKPOINT_RESTORE
     private static readonly byte[] EmptyCmdline = [];
     private static readonly ResourceLimit[] DefaultResourceLimits = CreateDefaultResourceLimits();
 
@@ -118,6 +128,7 @@ public class Process
     public uint[] CapEffective { get; } = [0U, 0U];
     public uint[] CapPermitted { get; } = [0U, 0U];
     public uint[] CapInheritable { get; } = [0U, 0U];
+    public uint[] CapBounding { get; } = [uint.MaxValue, (1U << (CapabilityLast - 31)) - 1];
 
     // Namespaces
     public UTSNamespace UTS { get; set; }
@@ -149,6 +160,39 @@ public class Process
     public bool HasWaitableContinue { get; set; }
     public bool MemoryReleased { get; set; }
     public int MembarrierRegisteredCommands { get; set; }
+    public int ParentDeathSignal { get; set; }
+    public bool IsChildSubreaper { get; set; }
+    public int Dumpable { get; set; } = 1; // SUID_DUMP_USER
+    public bool NoNewPrivs { get; set; }
+    public int TscMode { get; set; } = LinuxConstants.PR_TSC_ENABLE;
+    public bool ThpDisabled { get; set; }
+    public long TimerSlackNs { get; set; } = 50_000;
+    public long DefaultTimerSlackNs { get; set; } = 50_000;
+    public long LastCpuSoftWarningSec { get; set; } = -1;
+    public bool HasExeced { get; set; }
+    public CpuItimerState?[] CpuItimers { get; } = new CpuItimerState?[2];
+
+    /// <summary>Cheap guard so the scheduler skips CPU accounting on the common path.</summary>
+    public bool HasArmedCpuItimer => CpuItimers[0] != null || CpuItimers[1] != null;
+
+    public bool HasFiniteCpuLimit
+    {
+        get
+        {
+            if (!TryGetResourceLimit(LinuxConstants.RLIMIT_CPU, out var limit))
+                return false;
+            return limit.Soft != LinuxConstants.RLIM64_INFINITY ||
+                   limit.Hard != LinuxConstants.RLIM64_INFINITY;
+        }
+    }
+
+    public bool NeedsCpuTimeAccounting => HasFiniteCpuLimit || HasArmedCpuItimer;
+
+    // The scheduler refreshes at most once per real millisecond and shares the result
+    // between the rlimit check and the CPU itimers; otherwise every slice walked every
+    // thread twice for a process with many threads.
+    internal long CpuAccountingSnapshotMs = -1;
+    internal CpuTimeSnapshot CpuAccountingSnapshot;
     public byte[] ExecutablePathRaw { get; private set; } = [];
     public string ExecutablePath => FsEncoding.DecodeUtf8Lossy(ExecutablePathRaw);
     public byte[][] CommandLineArgumentBytes { get; private set; } = [];
@@ -175,6 +219,11 @@ public class Process
     public Locked<List<SigInfo>> PendingProcessSignalQueue { get; } = new(new List<SigInfo>());
     public long ExitedThreadsUserCpuTimeNs { get; private set; }
     public long ExitedThreadsSystemCpuTimeNs { get; private set; }
+    private long _accumulatedLiveUserCpuNs;
+    private long _accumulatedLiveSystemCpuNs;
+
+    /// <summary>The thread currently executing guest code for this process (scheduler-owned).</summary>
+    internal FiberTask? RunningTask { get; set; }
     public long ChildrenUserCpuTimeNs { get; private set; }
     public long ChildrenSystemCpuTimeNs { get; private set; }
 
@@ -304,6 +353,20 @@ public class Process
         ExitedThreadsSystemCpuTimeNs += snapshot.SystemNs;
     }
 
+    internal void AccumulateLiveCpuTime(long userNs, long systemNs)
+    {
+        _accumulatedLiveUserCpuNs += userNs;
+        _accumulatedLiveSystemCpuNs += systemNs;
+    }
+
+    internal void RemoveAccumulatedLiveCpuTime(CpuTimeSnapshot snapshot)
+    {
+        _accumulatedLiveUserCpuNs -= snapshot.UserNs;
+        _accumulatedLiveSystemCpuNs -= snapshot.SystemNs;
+        if (_accumulatedLiveUserCpuNs < 0) _accumulatedLiveUserCpuNs = 0;
+        if (_accumulatedLiveSystemCpuNs < 0) _accumulatedLiveSystemCpuNs = 0;
+    }
+
     internal void AccumulateChildrenCpuTime(CpuTimeSnapshot snapshot)
     {
         ChildrenUserCpuTimeNs += snapshot.UserNs;
@@ -325,9 +388,14 @@ public class Process
 
     private CpuTimeSnapshot GetLiveSelfCpuTimeSnapshot()
     {
-        var snapshot = new CpuTimeSnapshot(ExitedThreadsUserCpuTimeNs, ExitedThreadsSystemCpuTimeNs);
-        foreach (var task in Threads)
-            snapshot += task.SnapshotThreadCpuTime();
+        // O(1): completed slices of every live thread are accumulated, and only the
+        // currently running thread has an uncommitted live delta.
+        var snapshot = new CpuTimeSnapshot(
+            ExitedThreadsUserCpuTimeNs + _accumulatedLiveUserCpuNs,
+            ExitedThreadsSystemCpuTimeNs + _accumulatedLiveSystemCpuNs);
+        var running = RunningTask;
+        if (running != null)
+            snapshot += running.SnapshotLiveCpuDelta();
         return snapshot;
     }
 
@@ -345,6 +413,17 @@ public class Process
         if ((uint)word >= (uint)CapEffective.Length) return false;
         var bit = capability % 32;
         return (CapEffective[word] & (1u << bit)) != 0;
+    }
+
+    public bool HasBoundingCapability(int capability)
+    {
+        return capability >= 0 && capability <= CapabilityLast &&
+               (CapBounding[capability / 32] & (1U << (capability % 32))) != 0;
+    }
+
+    internal void DropBoundingCapability(int capability)
+    {
+        SetCapabilityBit(CapBounding, capability, false);
     }
 
     public bool HasEffectiveCapabilityOrRoot(int capability)

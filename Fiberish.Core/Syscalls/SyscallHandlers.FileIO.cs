@@ -579,6 +579,9 @@ public partial class SyscallManager
             var f = new LinuxFile(dentry, (FileFlags)openFlags, mount ?? sm.RootMount!);
             if (task != null && f.OpenedInode is ITaskContextBoundInode taskBoundInode)
                 taskBoundInode.BindTaskContext(f, task);
+            if (createdHere && dentry.Parent?.Inode != null)
+                InotifyEvents.Raise(dentry.Parent.Inode, LinuxConstants.IN_CREATE, dentry.Name.Bytes);
+            InotifyEvents.RaiseChild(dentry, f.OpenedInode, LinuxConstants.IN_OPEN);
             return sm.AllocFD(f);
         }
         catch (Exception ex)
@@ -715,7 +718,11 @@ public partial class SyscallManager
         if (f.OpenedInode.Type == InodeType.Directory)
             return -(int)Errno.EISDIR;
 
-        return await f.OpenedInode.ReadV(engine, f, task, new ArraySegment<Iovec>(iovs, 0, iovCnt), offset, flags);
+        var readRc = await f.OpenedInode.ReadV(engine, f, task, new ArraySegment<Iovec>(iovs, 0, iovCnt), offset,
+            flags);
+        if (readRc > 0)
+            InotifyEvents.RaiseChild(f.Dentry, f.OpenedInode, LinuxConstants.IN_ACCESS);
+        return readRc;
     }
 
     private static async ValueTask<int> DoWriteV(SyscallManager sm, Engine engine, int fd, Iovec[] iovs, int iovCnt,
@@ -734,10 +741,59 @@ public partial class SyscallManager
 
         var writeStartOffset = offset == -1 ? f.Position : offset;
         var sizeBeforeWrite = (long)f.OpenedInode.Size;
-        var rc = await f.OpenedInode.WriteV(engine, f, task, new ArraySegment<Iovec>(iovs, 0, iovCnt), offset, flags);
+
+        var effectiveIovCnt = iovCnt;
+        if (f.OpenedInode.Type == InodeType.File && task != null &&
+            task.Process.TryGetResourceLimit(LinuxConstants.RLIMIT_FSIZE, out var fsizeLimit) &&
+            fsizeLimit.Soft != LinuxConstants.RLIM64_INFINITY)
+        {
+            var effectiveOffset = offset == -1
+                ? ((f.Flags & FileFlags.O_APPEND) != 0 ? sizeBeforeWrite : f.Position)
+                : offset;
+            var softLimit = (long)Math.Min(fsizeLimit.Soft, (ulong)long.MaxValue);
+            long totalRequested = 0;
+            for (var i = 0; i < iovCnt; i++)
+                totalRequested += iovs[i].Len;
+
+            if (totalRequested > 0)
+            {
+                if (effectiveOffset >= softLimit)
+                {
+                    task.PostSignal((int)Signal.SIGXFSZ);
+                    return -(int)Errno.EFBIG;
+                }
+
+                var allowed = softLimit - effectiveOffset;
+                if (totalRequested > allowed)
+                {
+                    var remaining = allowed;
+                    var newCount = 0;
+                    for (var i = 0; i < iovCnt && remaining > 0; i++)
+                    {
+                        if (iovs[i].Len <= remaining)
+                        {
+                            remaining -= iovs[i].Len;
+                            newCount = i + 1;
+                        }
+                        else
+                        {
+                            iovs[i].Len = (uint)remaining;
+                            remaining = 0;
+                            newCount = i + 1;
+                        }
+                    }
+
+                    effectiveIovCnt = newCount;
+                }
+            }
+        }
+
+        var rc = await f.OpenedInode.WriteV(engine, f, task, new ArraySegment<Iovec>(iovs, 0, effectiveIovCnt), offset,
+            flags);
 
         if (rc > 0 && f.OpenedInode is Inode inode)
         {
+            InotifyEvents.RaiseChild(f.Dentry, inode, LinuxConstants.IN_MODIFY);
             ProcessAddressSpaceSync.NotifyFileContentChanged(sm.Mem, engine, inode, writeStartOffset, rc);
 
             var sizeAfterWrite = (long)inode.Size;
@@ -1021,6 +1077,8 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysClose(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
+        // IN_CLOSE happens when the last reference to the open file description goes
+        // away, which LinuxFile.Close reports; closing one dup'd descriptor must not.
         if (!TryFreeFD((int)a1)) return -(int)Errno.EBADF;
         return 0;
     }

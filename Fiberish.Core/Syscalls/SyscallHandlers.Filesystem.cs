@@ -156,7 +156,11 @@ public partial class SyscallManager
         var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
         var create = DacPolicy.ComputeCreationMetadata((engine.Owner as FiberTask)?.Process, parentLoc.Dentry.Inode!,
             (int)mode, true);
-        return parentLoc.Dentry.Inode!.Mkdir(dentry, create.Mode, create.Uid, create.Gid);
+        var mkdirRc = parentLoc.Dentry.Inode!.Mkdir(dentry, create.Mode, create.Uid, create.Gid);
+        if (mkdirRc == 0)
+            InotifyEvents.Raise(parentLoc.Dentry.Inode, LinuxConstants.IN_CREATE | LinuxConstants.IN_ISDIR,
+                dentry.Name.Bytes);
+        return mkdirRc;
     }
 
     private async ValueTask<int> SysTruncate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -308,6 +312,9 @@ public partial class SyscallManager
         if (targetLoc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
         if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
 
+        // Capture the inode identity before the backend unbinds the dentry.
+        var removedInode = targetLoc.Dentry!.Inode;
+
         // Check if empty (only . and .. entries)
         var task = engine.Owner as FiberTask;
         var entries = task != null && targetLoc.Dentry.Inode is IContextualDirectoryInode contextualDirectory
@@ -321,9 +328,16 @@ public partial class SyscallManager
             if (stickyRc != 0) return stickyRc;
         }
 
+        var runtime = removedInode.SuperBlock?.MemoryContext?.Inotify;
+        using var suppress = runtime?.SuspendFinalization(removedInode) ?? default;
         var rmdirRc = parentLoc.Dentry!.Inode!.Rmdir(name);
         if (rmdirRc < 0)
             return rmdirRc;
+        targetLoc.Dentry.MarkUnlinkedFromNamespace();
+        InotifyEvents.Raise(parentLoc.Dentry.Inode, LinuxConstants.IN_DELETE | LinuxConstants.IN_ISDIR,
+            name.Bytes);
+        // Rmdir unbinds the dentry, so Dentry.Inode is already null here.
+        InotifyEvents.MarkUnlinked(removedInode);
         _ = parentLoc.Dentry.TryUncacheChild(name, "SysRmdir", out _);
         return 0;
     }
@@ -685,6 +699,8 @@ public partial class SyscallManager
             if (targetLoc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
             if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
 
+            // Rmdir unbinds the dentry, so keep the inode before the mutation.
+            var removedDirInode = targetLoc.Dentry.Inode;
             var task = engine.Owner as FiberTask;
             var entries = task != null && targetLoc.Dentry.Inode is IContextualDirectoryInode contextualDirectory
                 ? contextualDirectory.GetEntries(task)
@@ -697,15 +713,22 @@ public partial class SyscallManager
                 if (stickyRc != 0) return stickyRc;
             }
 
+            var runtime = removedDirInode.SuperBlock?.MemoryContext?.Inotify;
+            using var suppress = runtime?.SuspendFinalization(removedDirInode) ?? default;
             var rmdirRc = parentLoc.Dentry!.Inode!.Rmdir(name);
             if (rmdirRc < 0)
                 return rmdirRc;
+            targetLoc.Dentry.MarkUnlinkedFromNamespace();
+            InotifyEvents.Raise(parentLoc.Dentry.Inode, LinuxConstants.IN_DELETE | LinuxConstants.IN_ISDIR,
+                name.Bytes);
+            InotifyEvents.MarkUnlinked(removedDirInode);
             _ = parentLoc.Dentry.TryUncacheChild(name, "SysUnlinkAt.Rmdir", out _);
             return 0;
         }
 
         if (targetLoc.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
         if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
+        var removedFileInodeAt = targetLoc.Dentry.Inode;
         var taskForUnlinkAt = engine.Owner as FiberTask;
         if (taskForUnlinkAt?.Process != null)
         {
@@ -715,9 +738,21 @@ public partial class SyscallManager
             if (stickyRc != 0) return stickyRc;
         }
 
+        var unlinkRuntime = removedFileInodeAt.SuperBlock?.MemoryContext?.Inotify;
+        using var unlinkSuppress = unlinkRuntime?.SuspendFinalization(removedFileInodeAt) ?? default;
         var unlinkRc = parentLoc.Dentry!.Inode!.Unlink(name);
         if (unlinkRc < 0)
             return unlinkRc;
+        targetLoc.Dentry.MarkUnlinkedFromNamespace();
+        InotifyEvents.Raise(parentLoc.Dentry.Inode, LinuxConstants.IN_DELETE, name.Bytes);
+        if (removedFileInodeAt != null)
+        {
+            // Removing a link changes the inode attributes; the watch is only dropped
+            // once the last hard link is gone and the last reference is released.
+            InotifyEvents.Raise(removedFileInodeAt, LinuxConstants.IN_ATTRIB);
+            if (removedFileInodeAt.GetLinkCountForStat() == 0)
+                InotifyEvents.MarkUnlinked(removedFileInodeAt);
+        }
         _ = parentLoc.Dentry.TryUncacheChild(name, "SysUnlinkAt.Unlink", out _);
         return 0;
     }
@@ -1260,6 +1295,9 @@ LocResolvedUtimens64:
             : sm.PathWalker.PathWalk(newPath.UnsafeBuffer, newPath.Length, LookupFlags.None);
         var targetExists = targetLoc.IsValid && targetLoc.Dentry?.Inode != null;
         var replacedTargetInode = targetExists ? targetLoc.Dentry!.Inode : null;
+        var replacedTargetDentry = targetExists ? targetLoc.Dentry : null;
+        var movedInode = oldLoc.Dentry!.Inode;
+        var moveCookie = InotifyEvents.NextCookie();
         if (targetExists && !ReferenceEquals(newParentLoc.Mount, targetLoc.Mount))
             return -(int)Errno.EBUSY;
         if (targetExists &&
@@ -1343,12 +1381,55 @@ LocResolvedUtimens64:
                     _ = pDentry.TryUncacheChild(oldName.Bytes, "SysRename.exchange.cleanup-new-old", out _);
             }
 
+            // Both names exchange their inodes: two independent move pairs. The source
+            // inode moves old-name -> new-name and the target inode new-name -> old-name.
+            var sourceIsDir = sourceInode.Type == InodeType.Directory;
+            var targetIsDir = replacedTargetInode!.Type == InodeType.Directory;
+            var firstCookie = InotifyEvents.NextCookie();
+            var secondCookie = InotifyEvents.NextCookie();
+            var sourceMask = sourceIsDir ? LinuxConstants.IN_ISDIR : 0;
+            var targetMask = targetIsDir ? LinuxConstants.IN_ISDIR : 0;
+
+            InotifyEvents.Raise(oldParentLoc.Dentry.Inode, LinuxConstants.IN_MOVED_FROM | sourceMask,
+                oldName.Bytes, firstCookie);
+            InotifyEvents.Raise(newParentLoc.Dentry.Inode, LinuxConstants.IN_MOVED_TO | sourceMask,
+                newName.Bytes, firstCookie);
+            InotifyEvents.Raise(newParentLoc.Dentry.Inode, LinuxConstants.IN_MOVED_FROM | targetMask,
+                newName.Bytes, secondCookie);
+            InotifyEvents.Raise(oldParentLoc.Dentry.Inode, LinuxConstants.IN_MOVED_TO | targetMask,
+                oldName.Bytes, secondCookie);
+
+            InotifyEvents.Raise(sourceInode, LinuxConstants.IN_MOVE_SELF);
+            InotifyEvents.Raise(replacedTargetInode, LinuxConstants.IN_MOVE_SELF);
+
             return 0;
         }
 
+        var runtime = replacedTargetInode?.SuperBlock?.MemoryContext?.Inotify;
+        using var suppress = replacedTargetInode != null && runtime != null
+            ? runtime.SuspendFinalization(replacedTargetInode) : default;
         var renameRc = oldParentLoc.Dentry!.Inode!.Rename(oldName.Bytes, newParentLoc.Dentry!.Inode!, newName.Bytes);
         if (renameRc < 0)
             return renameRc;
+
+        var movedMask = sourceIsDirectory ? LinuxConstants.IN_MOVED_FROM | LinuxConstants.IN_ISDIR
+            : LinuxConstants.IN_MOVED_FROM;
+        var movedToMask = sourceIsDirectory ? LinuxConstants.IN_MOVED_TO | LinuxConstants.IN_ISDIR
+            : LinuxConstants.IN_MOVED_TO;
+        InotifyEvents.Raise(oldParentLoc.Dentry.Inode, movedMask, oldName.Bytes, moveCookie);
+        InotifyEvents.Raise(newParentLoc.Dentry.Inode, movedToMask, newName.Bytes, moveCookie);
+        if (movedInode != null)
+            InotifyEvents.Raise(movedInode, LinuxConstants.IN_MOVE_SELF);
+
+        // Rename-overwrite drops one of the target's links. The replaced inode reports
+        // IN_ATTRIB now; DELETE_SELF/IN_IGNORED waits for the last open/mmap reference.
+        if (replacedTargetInode != null)
+        {
+            InotifyEvents.Raise(replacedTargetInode, LinuxConstants.IN_ATTRIB);
+            if (replacedTargetInode.GetLinkCountForStat() == 0)
+                InotifyEvents.MarkUnlinked(replacedTargetInode);
+        }
+        replacedTargetDentry?.MarkUnlinkedFromNamespace();
 
         // Update the VFS wrapper dentry cache across all views of the parent inodes.
         // This is critical because multiple Dentries might exist for the same Inode
@@ -1551,7 +1632,10 @@ LocResolvedUtimens64:
         var allowed = DacPolicy.CanChmod(t.Process, loc.Dentry.Inode);
         if (allowed != 0) return allowed;
 
-        return ApplyModeChange(loc.Dentry.Inode, (int)mode, t.Process);
+        var chmodRc = ApplyModeChange(loc.Dentry.Inode, (int)mode, t.Process);
+        if (chmodRc == 0)
+            InotifyEvents.RaiseChild(loc.Dentry, loc.Dentry.Inode, LinuxConstants.IN_ATTRIB);
+        return chmodRc;
     }
 
     private async ValueTask<int> SysFchmod(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1698,6 +1782,7 @@ LocResolvedUtimens64:
         if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (targetLoc.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
         if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
+        var removedFileInode = targetLoc.Dentry.Inode;
         var task = engine.Owner as FiberTask;
         if (task?.Process != null)
         {
@@ -1706,9 +1791,21 @@ LocResolvedUtimens64:
             if (stickyRc != 0) return stickyRc;
         }
 
+        var runtime = removedFileInode.SuperBlock?.MemoryContext?.Inotify;
+        using var suppress = runtime?.SuspendFinalization(removedFileInode) ?? default;
         var unlinkRc2 = parentLoc.Dentry!.Inode!.Unlink(name);
         if (unlinkRc2 < 0)
             return unlinkRc2;
+        targetLoc.Dentry.MarkUnlinkedFromNamespace();
+        InotifyEvents.Raise(parentLoc.Dentry.Inode, LinuxConstants.IN_DELETE, name.Bytes);
+        // Unlink decrements the link count; IN_DELETE_SELF only fires for the last link
+        // and only after the last open/mmap reference is gone.
+        if (removedFileInode != null)
+        {
+            InotifyEvents.Raise(removedFileInode, LinuxConstants.IN_ATTRIB);
+            if (removedFileInode.GetLinkCountForStat() == 0)
+                InotifyEvents.MarkUnlinked(removedFileInode);
+        }
         _ = parentLoc.Dentry.TryUncacheChild(name, "SysUnlink", out _);
         return 0;
     }

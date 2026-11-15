@@ -712,6 +712,20 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     public bool IsCacheEvicted { get; private set; }
     public bool IsFinalized { get; private set; }
 
+    private int _namespaceUnlinked;
+
+    /// <summary>
+    ///     True once the inode lost its last namespace link. The inode object may stay alive
+    ///     through open descriptors, so this state lives with the inode rather than in a
+    ///     global registry (which would pin the owning SuperBlock forever).
+    /// </summary>
+    internal bool IsNamespaceUnlinked => Volatile.Read(ref _namespaceUnlinked) != 0;
+
+    internal void MarkNamespaceUnlinked()
+    {
+        Volatile.Write(ref _namespaceUnlinked, 1);
+    }
+
     /// <summary>
     ///     Whether this inode supports file-backed mmap.
     ///     Most inodes (devices, sockets, proc dynamic files, anon inodes) do not.
@@ -1167,6 +1181,9 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
 
     protected virtual void OnFinalizeDelete()
     {
+        // LINK_COUNT == 0 and REF_COUNT == 0: this is the point where Linux delivers the
+        // final IN_DELETE_SELF/IN_IGNORED to watches on the inode.
+        InotifyEvents.NotifyInodeFinalized(this);
     }
 
     protected void SetLookupFailureError(int errno)
@@ -3886,6 +3903,20 @@ public class Dentry
     public bool IsHashed { get; private set; }
     public bool IsNegative { get; private set; }
 
+    private int _unlinkedFromNamespace;
+
+    /// <summary>
+    ///     True once this dentry was removed from its parent namespace. Events raised
+    ///     through a parent directory watch for this child are then subject to
+    ///     IN_EXCL_UNLINK. The flag is per dentry, so a surviving hard link is unaffected.
+    /// </summary>
+    public bool IsUnlinkedFromNamespace => Volatile.Read(ref _unlinkedFromNamespace) != 0;
+
+    internal void MarkUnlinkedFromNamespace()
+    {
+        Volatile.Write(ref _unlinkedFromNamespace, 1);
+    }
+
     // Mount point support
     public bool IsMounted
     {
@@ -4107,9 +4138,13 @@ public class Dentry
         }
 
         SuperBlock.UnregisterDentry(this);
-        if (IsTrackedBySuperBlock)
-            VfsDebugTrace.FailInvariant(
-                $"Dentry untrack failed dentry={Name.ToDebugString()} dentryId={Id} reason={reason}");
+        if (!IsTrackedBySuperBlock) return;
+
+        // Cleanup paths (unlink, cache eviction and address-space release) can race; repair
+        // the registration instead of tearing down the whole guest VM.
+        VfsDebugTrace.Warn(
+            $"Dentry untrack repaired dentry={Name.ToDebugString()} dentryId={Id} reason={reason}");
+        MarkUntrackedBySuperBlock();
     }
 
     internal void SetLruState(bool onLru)
@@ -4379,6 +4414,11 @@ public static partial class VfsDebugTrace
         if (StrictInvariants)
             throw new InvalidOperationException(message);
     }
+
+    public static void Warn(string message)
+    {
+        Logger.LogWarning("[VFS-Invariant] {Message}", message);
+    }
 }
 
 public class LinuxFile : IDisposable
@@ -4467,6 +4507,68 @@ public class LinuxFile : IDisposable
     public object? PrivateData { get; set; }
     public bool IsTmpFile { get; set; }
     public ReferenceKind Kind { get; }
+    internal CloseNotificationBarrier? CloseBarrier { get; set; }
+
+    /// <summary>
+    ///     Coordinates IN_CLOSE between an open file description (fd) and its mappings.
+    ///     The event fires once, only after both the fd's last reference and the last
+    ///     mapping have gone away.
+    /// </summary>
+    internal sealed class CloseNotificationBarrier
+    {
+        private readonly Dentry _dentry;
+        private readonly Inode? _inode;
+        private readonly bool _writable;
+        private readonly object _gate = new();
+        private int _mappings;
+        private bool _fileClosed;
+        private bool _emitted;
+
+        public CloseNotificationBarrier(Dentry dentry, Inode? inode, bool writable)
+        {
+            _dentry = dentry;
+            _inode = inode;
+            _writable = writable;
+        }
+
+        public void AddMapping()
+        {
+            lock (_gate)
+                _mappings++;
+        }
+
+        public void OnFileClosed()
+        {
+            bool emit;
+            lock (_gate)
+            {
+                _fileClosed = true;
+                emit = _mappings == 0 && !_emitted;
+                if (emit) _emitted = true;
+            }
+
+            if (emit) Raise();
+        }
+
+        public void OnMappingReleased()
+        {
+            bool emit;
+            lock (_gate)
+            {
+                if (_mappings > 0) _mappings--;
+                emit = _fileClosed && _mappings == 0 && !_emitted;
+                if (emit) _emitted = true;
+            }
+
+            if (emit) Raise();
+        }
+
+        private void Raise()
+        {
+            InotifyEvents.RaiseChild(_dentry, _inode,
+                _writable ? LinuxConstants.IN_CLOSE_WRITE : LinuxConstants.IN_CLOSE_NOWRITE);
+        }
+    }
 
     public void Dispose()
     {
@@ -4501,7 +4603,20 @@ public class LinuxFile : IDisposable
 
     public virtual void Close()
     {
-        if (Interlocked.Decrement(ref _refCount) > 0) return;
+        if (Interlocked.Decrement(ref _refCount) != 0) return;
+
+        // IN_CLOSE is tied to the open file description, not to an individual fd:
+        // report it once, on the final close, including CLOEXEC/dup2/exit paths.
+        // An mmap hold is not a close(2); a shared barrier defers the event until the
+        // last mapping is gone as well.
+        if (Kind != ReferenceKind.MmapHold)
+        {
+            if (CloseBarrier != null)
+                CloseBarrier.OnFileClosed();
+            else
+                InotifyEvents.RaiseChild(Dentry, OpenedInode,
+                    ((int)Flags & 3) != 0 ? LinuxConstants.IN_CLOSE_WRITE : LinuxConstants.IN_CLOSE_NOWRITE);
+        }
 
         if (IsTmpFile && Dentry.Parent?.Inode != null)
             try

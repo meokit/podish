@@ -8,12 +8,76 @@ namespace Fiberish.Syscalls;
 public partial class SyscallManager
 {
     private const int ITIMER_REAL = 0;
+    private const int ITIMER_VIRTUAL = 1;
+    private const int ITIMER_PROF = 2;
     private const int USEC_PER_SEC = 1_000_000;
+
+    private static long GetProcessCpuMs(Process proc, bool userOnly, bool roundUp = false)
+    {
+        var snap = proc.GetSelfCpuTimeSnapshot();
+        var ns = userOnly ? snap.UserNs : snap.UserNs + snap.SystemNs;
+        return ns / 1_000_000L + (roundUp && ns % 1_000_000L != 0 ? 1 : 0);
+    }
+
+    internal static void CheckCpuItimers(Process proc, KernelScheduler scheduler, CpuTimeSnapshot snapshot)
+    {
+        var userMs = snapshot.UserNs / 1_000_000L;
+        var totalMs = (snapshot.UserNs + snapshot.SystemNs) / 1_000_000L;
+
+        for (var which = ITIMER_VIRTUAL; which <= ITIMER_PROF; which++)
+        {
+            var state = proc.CpuItimers[which - 1];
+            if (state == null || state.ValueMs <= 0)
+                continue;
+
+            // ITIMER_VIRTUAL counts user time only; ITIMER_PROF counts user + system.
+            var cpuMs = which == ITIMER_VIRTUAL ? userMs : totalMs;
+            if (cpuMs < state.NextFireCpuMs)
+                continue;
+
+            scheduler.SignalProcess(proc.TGID,
+                which == ITIMER_VIRTUAL ? (int)Signal.SIGVTALRM : (int)Signal.SIGPROF);
+
+            if (state.IntervalMs > 0)
+            {
+                // Signals coalesce, so collapse every missed period into one advance
+                // instead of looping once per elapsed interval.
+                var periods = (cpuMs - state.NextFireCpuMs) / state.IntervalMs + 1;
+                state.NextFireCpuMs += periods * state.IntervalMs;
+            }
+            else
+            {
+                proc.CpuItimers[which - 1] = null;
+            }
+        }
+    }
+
+    private static void ArmCpuItimer(Process proc, int which, long valueMs, long intervalMs)
+    {
+        if (valueMs <= 0)
+        {
+            proc.CpuItimers[which - 1] = null;
+            return;
+        }
+
+        // ITIMER_VIRTUAL counts user CPU only; ITIMER_PROF counts user + system.
+        var userOnly = which == ITIMER_VIRTUAL;
+        proc.CpuItimers[which - 1] = new CpuItimerState
+        {
+            ValueMs = valueMs,
+            IntervalMs = intervalMs,
+            NextFireCpuMs = GetProcessCpuMs(proc, userOnly, roundUp: true) + valueMs
+        };
+    }
 
     private static long GetRemainingMs(Timer? timer, KernelScheduler scheduler)
     {
         if (timer == null || timer.Canceled) return 0;
-        var remaining = timer.ExpirationTick - scheduler.CurrentTick;
+        // ScheduleTimer compensates for scheduler lag against the real clock, so the
+        // deadline must be compared with the same reference or remaining time is
+        // reported larger than requested.
+        var now = Math.Max(scheduler.CurrentTick, scheduler.CurrentRealTick);
+        var remaining = timer.ExpirationTick - now;
         return remaining > 0 ? remaining : 0;
     }
 
@@ -33,8 +97,10 @@ public partial class SyscallManager
         if (intervalSec < 0 || valueSec < 0) return false;
         if ((uint)intervalUsec >= USEC_PER_SEC || (uint)valueUsec >= USEC_PER_SEC) return false;
 
-        intervalMs = intervalSec * 1000L + intervalUsec / 1000L;
-        valueMs = valueSec * 1000L + valueUsec / 1000L;
+        // The scheduler's granularity is milliseconds. Never turn a positive timeval
+        // into zero (disarmed), or shorten a positive interval by truncating it.
+        intervalMs = intervalSec * 1000L + (intervalUsec + 999L) / 1000L;
+        valueMs = valueSec * 1000L + (valueUsec + 999L) / 1000L;
         return true;
     }
 
@@ -87,10 +153,8 @@ public partial class SyscallManager
         var remainingSeconds = 0;
         var remainingMs = GetRemainingMs(proc.AlarmTimer, scheduler);
         if (remainingMs > 0)
-        {
-            remainingSeconds = (int)(remainingMs / 1000);
-            if (remainingSeconds == 0) remainingSeconds = 1;
-        }
+            // Linux alarm(2) rounds the remaining time up to whole seconds.
+            remainingSeconds = (int)((remainingMs + 999) / 1000);
 
         if (seconds > 0)
         {
@@ -109,24 +173,26 @@ public partial class SyscallManager
         uint a4, uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
-        var scheduler = (engine.Owner as FiberTask)?.CommonKernel;
-        if (scheduler == null) return -(int)Errno.ENOSYS;
+        var scheduler = task.CommonKernel;
 
-        if ((int)which != ITIMER_REAL) return -(int)Errno.EINVAL;
+        if ((int)which is < ITIMER_REAL or > ITIMER_PROF) return -(int)Errno.EINVAL;
         if (newValuePtr == 0) return -(int)Errno.EFAULT;
 
         var proc = task.Process;
         if (oldValuePtr != 0)
         {
-            var oldRemainingMs = GetRemainingMs(proc.AlarmTimer, scheduler);
-            if (!WriteItimerval32(engine, oldValuePtr, proc.ItimerRealIntervalMs, oldRemainingMs))
+            var (oldIntervalMs, oldRemainingMs) = ReadItimerState(proc, scheduler, (int)which);
+            if (!WriteItimerval32(engine, oldValuePtr, oldIntervalMs, oldRemainingMs))
                 return -(int)Errno.EFAULT;
         }
 
         if (!TryReadItimerval32(engine, newValuePtr, out var newIntervalMs, out var newValueMs))
             return -(int)Errno.EINVAL;
 
-        ArmItimerReal(proc, scheduler, newValueMs, newIntervalMs);
+        if ((int)which == ITIMER_REAL)
+            ArmItimerReal(proc, scheduler, newValueMs, newIntervalMs);
+        else
+            ArmCpuItimer(proc, (int)which, newValueMs, newIntervalMs);
         return 0;
     }
 
@@ -134,17 +200,30 @@ public partial class SyscallManager
         uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
-        var scheduler = (engine.Owner as FiberTask)?.CommonKernel;
-        if (scheduler == null) return -(int)Errno.ENOSYS;
+        var scheduler = task.CommonKernel;
 
-        if ((int)which != ITIMER_REAL) return -(int)Errno.EINVAL;
+        if ((int)which is < ITIMER_REAL or > ITIMER_PROF) return -(int)Errno.EINVAL;
         if (currValuePtr == 0) return -(int)Errno.EFAULT;
 
-        var proc = task.Process;
-        var remainingMs = GetRemainingMs(proc.AlarmTimer, scheduler);
-        if (!WriteItimerval32(engine, currValuePtr, proc.ItimerRealIntervalMs, remainingMs))
+        var (intervalMs, remainingMs) = ReadItimerState(task.Process, scheduler, (int)which);
+        if (!WriteItimerval32(engine, currValuePtr, intervalMs, remainingMs))
             return -(int)Errno.EFAULT;
         return 0;
+    }
+
+    private static (long IntervalMs, long RemainingMs) ReadItimerState(Process proc, KernelScheduler scheduler,
+        int which)
+    {
+        if (which == ITIMER_REAL)
+            return (proc.ItimerRealIntervalMs, GetRemainingMs(proc.AlarmTimer, scheduler));
+
+        var state = proc.CpuItimers[which - 1];
+        if (state == null || state.ValueMs <= 0)
+            return (0, 0);
+
+        var cpuMs = GetProcessCpuMs(proc, which == ITIMER_VIRTUAL);
+        var remaining = state.NextFireCpuMs - cpuMs;
+        return (state.IntervalMs, remaining > 0 ? remaining : 0);
     }
 
     private async ValueTask<int> SysClockSetTime64(Engine engine, uint clockId, uint tsPtr, uint a3, uint a4,
@@ -527,19 +606,19 @@ public partial class SyscallManager
     private async ValueTask<int> SysTimerFdGetTime64(Engine engine, uint fd, uint curValuePtr, uint a3, uint a4,
         uint a5, uint a6)
     {
-        if (!FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
-            return -(int)Errno.EBADF;
+        if (!FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
+        if (file.OpenedInode is not TimerFdInode timerFd) return -(int)Errno.EINVAL;
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         if (curValuePtr == 0) return -(int)Errno.EFAULT;
 
         timerFd.GetTime(task, out var intervalMs, out var valueMs);
 
-        var buf = new byte[32];
-        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), intervalMs / 1000);
-        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(8, 8), intervalMs % 1000 * 1000000);
-        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(16, 8), valueMs / 1000);
-        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(24, 8), valueMs % 1000 * 1000000);
+        Span<byte> buf = stackalloc byte[32];
+        BinaryPrimitives.WriteInt64LittleEndian(buf[..8], intervalMs / 1000);
+        BinaryPrimitives.WriteInt64LittleEndian(buf.Slice(8, 8), intervalMs % 1000 * 1000000);
+        BinaryPrimitives.WriteInt64LittleEndian(buf.Slice(16, 8), valueMs / 1000);
+        BinaryPrimitives.WriteInt64LittleEndian(buf.Slice(24, 8), valueMs % 1000 * 1000000);
 
         if (!engine.CopyToUser(curValuePtr, buf)) return -(int)Errno.EFAULT;
 
@@ -549,23 +628,33 @@ public partial class SyscallManager
     private async ValueTask<int> SysTimerFdSetTime64(Engine engine, uint fd, uint flags, uint newValuePtr,
         uint oldValuePtr, uint a5, uint a6)
     {
-        if (!FDs.TryGetValue((int)fd, out var file) || file.OpenedInode is not TimerFdInode timerFd)
-            return -(int)Errno.EBADF;
+        if (!FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
+        if (file.OpenedInode is not TimerFdInode timerFd) return -(int)Errno.EINVAL;
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+
+        if ((flags & ~(uint)(LinuxConstants.TFD_TIMER_ABSTIME | LinuxConstants.TFD_TIMER_CANCEL_ON_SET)) != 0) return -(int)Errno.EINVAL;
 
         if (newValuePtr == 0) return -(int)Errno.EFAULT;
 
-        var buf = new byte[32];
+        Span<byte> buf = stackalloc byte[32];
         if (!engine.CopyFromUser(newValuePtr, buf)) return -(int)Errno.EFAULT;
 
-        var intervalSec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(0, 8));
-        var intervalNsec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(8, 8));
-        var valueSec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(16, 8));
-        var valueNsec = BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(24, 8));
+        var intervalSec = BinaryPrimitives.ReadInt64LittleEndian(buf[..8]);
+        var intervalNsec = BinaryPrimitives.ReadInt64LittleEndian(buf.Slice(8, 8));
+        var valueSec = BinaryPrimitives.ReadInt64LittleEndian(buf.Slice(16, 8));
+        var valueNsec = BinaryPrimitives.ReadInt64LittleEndian(buf.Slice(24, 8));
 
-        if (oldValuePtr != 0) await SysTimerFdGetTime64(engine, fd, oldValuePtr, 0, 0, 0, 0);
+        if (intervalSec < 0 || valueSec < 0 ||
+            intervalNsec is < 0 or >= 1_000_000_000 || valueNsec is < 0 or >= 1_000_000_000)
+            return -(int)Errno.EINVAL;
 
-        var isAbsolute = (flags & 1) != 0; // TFD_TIMER_ABSTIME
+        if (oldValuePtr != 0)
+        {
+            var oldRc = await SysTimerFdGetTime64(engine, fd, oldValuePtr, 0, 0, 0, 0);
+            if (oldRc != 0) return oldRc;
+        }
+
+        var isAbsolute = (flags & LinuxConstants.TFD_TIMER_ABSTIME) != 0;
 
         var intervalMs = (ulong)(intervalSec * 1000 + intervalNsec / 1000000);
         var valueMs = (ulong)(valueSec * 1000 + valueNsec / 1000000);

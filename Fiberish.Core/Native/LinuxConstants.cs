@@ -180,7 +180,13 @@ public static class LinuxConstants
     public const int RLIMIT_RTTIME = 15;
     public const int RLIMIT_NLIMITS = 16;
 
+    public const int ITIMER_REAL = 0;
+    public const int ITIMER_VIRTUAL = 1;
+    public const int ITIMER_PROF = 2;
+    public const uint TFD_TIMER_ABSTIME = 1;
+    public const uint TFD_TIMER_CANCEL_ON_SET = 2;
     public const uint RLIM32_INFINITY = 0xFFFFFFFF;
+    public const uint RLIM32_SIGNED_INFINITY = 0x7FFFFFFF;
     public const ulong RLIM64_INFINITY = ulong.MaxValue;
 
     // Auxv types
@@ -230,6 +236,12 @@ public static class LinuxConstants
     public const uint CLONE_DETACHED = 0x00400000;
     public const uint CLONE_UNTRACED = 0x00800000;
     public const uint CLONE_CHILD_SETTID = 0x01000000;
+    public const uint CLONE_NEWCGROUP = 0x02000000;
+    public const uint CLONE_NEWUTS = 0x04000000;
+    public const uint CLONE_NEWIPC = 0x08000000;
+    public const uint CLONE_NEWUSER = 0x10000000;
+    public const uint CLONE_NEWPID = 0x20000000;
+    public const uint CLONE_NEWNET = 0x40000000;
 
     // epoll op codes
     public const int EPOLL_CTL_ADD = 1;
@@ -342,8 +354,34 @@ public static class LinuxConstants
     public const uint AT_STATX_DONT_SYNC = 0x4000;
 
     // prctl
+    public const int PR_SET_PDEATHSIG = 1;
+    public const int PR_GET_PDEATHSIG = 2;
+    public const int PR_GET_DUMPABLE = 3;
+    public const int PR_SET_DUMPABLE = 4;
+    public const int PR_GET_TIMING = 13;
+    public const int PR_SET_TIMING = 14;
     public const int PR_SET_NAME = 15;
     public const int PR_GET_NAME = 16;
+    public const int PR_GET_SECCOMP = 21;
+    public const int PR_SET_SECCOMP = 22;
+    public const int PR_CAPBSET_READ = 23;
+    public const int PR_CAPBSET_DROP = 24;
+    public const int PR_GET_TSC = 25;
+    public const int PR_SET_TSC = 26;
+    public const int PR_GET_SECUREBITS = 27;
+    public const int PR_SET_SECUREBITS = 28;
+    public const int PR_SET_TIMERSLACK = 29;
+    public const int PR_GET_TIMERSLACK = 30;
+    public const int PR_SET_CHILD_SUBREAPER = 36;
+    public const int PR_GET_CHILD_SUBREAPER = 37;
+    public const int PR_SET_NO_NEW_PRIVS = 38;
+    public const int PR_GET_NO_NEW_PRIVS = 39;
+    public const int PR_SET_THP_DISABLE = 41;
+    public const int PR_GET_THP_DISABLE = 42;
+    public const int PR_CAP_AMBIENT = 47;
+    public const int PR_GET_SPECULATION_CTRL = 52;
+    public const int PR_TSC_ENABLE = 1;
+    public const int PR_TSC_SIGSEGV = 2;
 
     // membarrier commands (linux/membarrier.h)
     public const int MEMBARRIER_CMD_QUERY = 0;
@@ -389,6 +427,7 @@ public static class LinuxConstants
     public const int CLOCK_BOOTTIME = 7;
     public const int CLOCK_REALTIME_ALARM = 8;
     public const int CLOCK_BOOTTIME_ALARM = 9;
+    public const int CLOCK_TAI = 11;
 
     // TTY IOCTLs
     public const uint TCGETS = 0x5401;

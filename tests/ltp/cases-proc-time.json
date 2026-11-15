@@ -1,0 +1,500 @@
+{
+  "schemaVersion": 1,
+  "description": "Process lifecycle (fork, vfork, clone, exec, waitpid, waitid), process groups, rlimit/rusage/prctl, timers (nanosleep, alarm, itimer, timerfd), and inotify.",
+  "requiresRoot": true,
+  "podishFsBackend": "tmpfs",
+  "cases": [
+    {
+      "name": "fork03",
+      "directory": "fork",
+      "group": "process"
+    },
+    {
+      "name": "fork04",
+      "directory": "fork",
+      "group": "process"
+    },
+    {
+      "name": "fork05",
+      "directory": "fork",
+      "group": "process"
+    },
+    {
+      "name": "fork07",
+      "directory": "fork",
+      "group": "process"
+    },
+    {
+      "name": "fork08",
+      "directory": "fork",
+      "group": "process"
+    },
+    {
+      "name": "fork09",
+      "directory": "fork",
+      "group": "process"
+    },
+    {
+      "name": "fork10",
+      "directory": "fork",
+      "group": "process"
+    },
+    {
+      "name": "fork_procs",
+      "directory": "fork",
+      "group": "process"
+    },
+    {
+      "name": "vfork01",
+      "directory": "vfork",
+      "group": "process"
+    },
+    {
+      "name": "vfork02",
+      "directory": "vfork",
+      "group": "process"
+    },
+    {
+      "name": "clone01",
+      "directory": "clone",
+      "group": "process"
+    },
+    {
+      "name": "clone02",
+      "directory": "clone",
+      "group": "process"
+    },
+    {
+      "name": "clone03",
+      "directory": "clone",
+      "group": "process"
+    },
+    {
+      "name": "clone04",
+      "directory": "clone",
+      "group": "process"
+    },
+    {
+      "name": "clone05",
+      "directory": "clone",
+      "group": "process"
+    },
+    {
+      "name": "clone06",
+      "directory": "clone",
+      "group": "process"
+    },
+    {
+      "name": "clone07",
+      "directory": "clone",
+      "group": "process"
+    },
+    {
+      "name": "clone08",
+      "directory": "clone",
+      "group": "process"
+    },
+    {
+      "name": "clone09",
+      "directory": "clone",
+      "group": "process"
+    },
+    {
+      "name": "clone11",
+      "directory": "clone",
+      "group": "process"
+    },
+    {
+      "name": "execve03",
+      "directory": "execve",
+      "group": "exec"
+    },
+    {
+      "name": "waitpid01",
+      "directory": "waitpid",
+      "group": "wait"
+    },
+    {
+      "name": "waitpid04",
+      "directory": "waitpid",
+      "group": "wait"
+    },
+    {
+      "name": "waitpid06",
+      "directory": "waitpid",
+      "group": "wait"
+    },
+    {
+      "name": "waitpid07",
+      "directory": "waitpid",
+      "group": "wait"
+    },
+    {
+      "name": "waitpid08",
+      "directory": "waitpid",
+      "group": "wait"
+    },
+    {
+      "name": "waitpid09",
+      "directory": "waitpid",
+      "group": "wait"
+    },
+    {
+      "name": "waitpid10",
+      "directory": "waitpid",
+      "group": "wait"
+    },
+    {
+      "name": "waitpid11",
+      "directory": "waitpid",
+      "group": "wait"
+    },
+    {
+      "name": "waitpid12",
+      "directory": "waitpid",
+      "group": "wait"
+    },
+    {
+      "name": "waitpid13",
+      "directory": "waitpid",
+      "group": "wait"
+    },
+    {
+      "name": "waitid01",
+      "directory": "waitid",
+      "group": "wait"
+    },
+    {
+      "name": "waitid02",
+      "directory": "waitid",
+      "group": "wait"
+    },
+    {
+      "name": "waitid03",
+      "directory": "waitid",
+      "group": "wait"
+    },
+    {
+      "name": "waitid04",
+      "directory": "waitid",
+      "group": "wait"
+    },
+    {
+      "name": "waitid05",
+      "directory": "waitid",
+      "group": "wait"
+    },
+    {
+      "name": "waitid06",
+      "directory": "waitid",
+      "group": "wait"
+    },
+    {
+      "name": "waitid07",
+      "directory": "waitid",
+      "group": "wait"
+    },
+    {
+      "name": "waitid08",
+      "directory": "waitid",
+      "group": "wait"
+    },
+    {
+      "name": "waitid09",
+      "directory": "waitid",
+      "group": "wait"
+    },
+    {
+      "name": "waitid10",
+      "directory": "waitid",
+      "group": "wait"
+    },
+    {
+      "name": "waitid11",
+      "directory": "waitid",
+      "group": "wait"
+    },
+    {
+      "name": "setpgid01",
+      "directory": "setpgid",
+      "group": "pgid-sid"
+    },
+    {
+      "name": "setpgid02",
+      "directory": "setpgid",
+      "group": "pgid-sid"
+    },
+    {
+      "name": "getpgid01",
+      "directory": "getpgid",
+      "group": "pgid-sid"
+    },
+    {
+      "name": "getpgid02",
+      "directory": "getpgid",
+      "group": "pgid-sid"
+    },
+    {
+      "name": "setsid01",
+      "directory": "setsid",
+      "group": "pgid-sid"
+    },
+    {
+      "name": "getsid01",
+      "directory": "getsid",
+      "group": "pgid-sid"
+    },
+    {
+      "name": "getsid02",
+      "directory": "getsid",
+      "group": "pgid-sid"
+    },
+    {
+      "name": "getrlimit01",
+      "directory": "getrlimit",
+      "group": "rlimit"
+    },
+    {
+      "name": "getrlimit02",
+      "directory": "getrlimit",
+      "group": "rlimit"
+    },
+    {
+      "name": "getrlimit03",
+      "directory": "getrlimit",
+      "group": "rlimit"
+    },
+    {
+      "name": "setrlimit01",
+      "directory": "setrlimit",
+      "group": "rlimit"
+    },
+    {
+      "name": "setrlimit02",
+      "directory": "setrlimit",
+      "group": "rlimit"
+    },
+    {
+      "name": "setrlimit03",
+      "directory": "setrlimit",
+      "group": "rlimit"
+    },
+    {
+      "name": "setrlimit04",
+      "directory": "setrlimit",
+      "group": "rlimit"
+    },
+    {
+      "name": "setrlimit05",
+      "directory": "setrlimit",
+      "group": "rlimit"
+    },
+    {
+      "name": "setrlimit06",
+      "directory": "setrlimit",
+      "group": "rlimit"
+    },
+    {
+      "name": "getrusage01",
+      "directory": "getrusage",
+      "group": "rlimit"
+    },
+    {
+      "name": "getrusage02",
+      "directory": "getrusage",
+      "group": "rlimit"
+    },
+    {
+      "name": "prctl01",
+      "directory": "prctl",
+      "group": "prctl"
+    },
+    {
+      "name": "prctl02",
+      "directory": "prctl",
+      "group": "prctl"
+    },
+    {
+      "name": "prctl03",
+      "directory": "prctl",
+      "group": "prctl"
+    },
+    {
+      "name": "prctl05",
+      "directory": "prctl",
+      "group": "prctl"
+    },
+    {
+      "name": "prctl08",
+      "directory": "prctl",
+      "group": "prctl"
+    },
+    {
+      "name": "prctl09",
+      "directory": "prctl",
+      "group": "prctl"
+    },
+    {
+      "name": "prctl10",
+      "directory": "prctl",
+      "group": "prctl"
+    },
+    {
+      "name": "nanosleep01",
+      "directory": "nanosleep",
+      "group": "timers"
+    },
+    {
+      "name": "nanosleep02",
+      "directory": "nanosleep",
+      "group": "timers"
+    },
+    {
+      "name": "clock_nanosleep01",
+      "directory": "clock_nanosleep",
+      "group": "timers"
+    },
+    {
+      "name": "clock_nanosleep02",
+      "directory": "clock_nanosleep",
+      "group": "timers"
+    },
+    {
+      "name": "clock_nanosleep03",
+      "directory": "clock_nanosleep",
+      "group": "timers"
+    },
+    {
+      "name": "clock_nanosleep04",
+      "directory": "clock_nanosleep",
+      "group": "timers"
+    },
+    {
+      "name": "alarm02",
+      "directory": "alarm",
+      "group": "timers"
+    },
+    {
+      "name": "alarm03",
+      "directory": "alarm",
+      "group": "timers"
+    },
+    {
+      "name": "alarm05",
+      "directory": "alarm",
+      "group": "timers"
+    },
+    {
+      "name": "alarm06",
+      "directory": "alarm",
+      "group": "timers"
+    },
+    {
+      "name": "alarm07",
+      "directory": "alarm",
+      "group": "timers"
+    },
+    {
+      "name": "setitimer01",
+      "directory": "setitimer",
+      "group": "timers"
+    },
+    {
+      "name": "setitimer02",
+      "directory": "setitimer",
+      "group": "timers"
+    },
+    {
+      "name": "getitimer01",
+      "directory": "getitimer",
+      "group": "timers"
+    },
+    {
+      "name": "getitimer02",
+      "directory": "getitimer",
+      "group": "timers"
+    },
+    {
+      "name": "timerfd02",
+      "directory": "timerfd",
+      "group": "timerfd"
+    },
+    {
+      "name": "timerfd04",
+      "directory": "timerfd",
+      "group": "timerfd"
+    },
+    {
+      "name": "timerfd_create01",
+      "directory": "timerfd",
+      "group": "timerfd"
+    },
+    {
+      "name": "timerfd_gettime01",
+      "directory": "timerfd",
+      "group": "timerfd"
+    },
+    {
+      "name": "timerfd_settime01",
+      "directory": "timerfd",
+      "group": "timerfd"
+    },
+    {
+      "name": "timerfd_settime02",
+      "directory": "timerfd",
+      "group": "timerfd",
+      "timeoutSeconds": 150
+    },
+    {
+      "name": "inotify01",
+      "directory": "inotify",
+      "group": "inotify"
+    },
+    {
+      "name": "inotify02",
+      "directory": "inotify",
+      "group": "inotify"
+    },
+    {
+      "name": "inotify03",
+      "directory": "inotify",
+      "group": "inotify"
+    },
+    {
+      "name": "inotify04",
+      "directory": "inotify",
+      "group": "inotify"
+    },
+    {
+      "name": "inotify05",
+      "directory": "inotify",
+      "group": "inotify"
+    },
+    {
+      "name": "inotify06",
+      "directory": "inotify",
+      "group": "inotify"
+    },
+    {
+      "name": "inotify09",
+      "directory": "inotify",
+      "group": "inotify",
+      "timeoutSeconds": 150
+    },
+    {
+      "name": "inotify10",
+      "directory": "inotify",
+      "group": "inotify"
+    },
+    {
+      "name": "inotify11",
+      "directory": "inotify",
+      "group": "inotify"
+    },
+    {
+      "name": "inotify12",
+      "directory": "inotify",
+      "group": "inotify"
+    }
+  ]
+}

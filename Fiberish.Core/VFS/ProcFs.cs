@@ -317,6 +317,18 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
                 var p = task.CommonKernel.GetProcess(_pid);
                 return p == null ? string.Empty : ProcFsManager.GenerateStat(p);
             });
+        else if (name.SequenceEqual("comm"u8))
+            created = CreateFile(dir, childName, 0x1A4, _ =>
+            {
+                var p = task.CommonKernel.GetProcess(_pid);
+                return p == null ? string.Empty : $"{p.Comm}\n";
+            }, HandleProcCommWrite);
+        else if (name.SequenceEqual("timerslack_ns"u8))
+            created = CreateFile(dir, childName, 0x1A4, _ =>
+            {
+                var p = task.CommonKernel.GetProcess(_pid);
+                return p == null ? string.Empty : $"{p.TimerSlackNs}\n";
+            }, HandleProcTimerSlackWrite);
         else if (name.SequenceEqual("mountinfo"u8))
             created = CreateFile(dir, childName, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager));
         else if (name.SequenceEqual("mounts"u8))
@@ -383,6 +395,8 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         entries.Add(new DirectoryEntry { Name = FsName.FromString("status"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("cmdline"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("stat"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("comm"), Ino = 0, Type = InodeType.File });
+        entries.Add(new DirectoryEntry { Name = FsName.FromString("timerslack_ns"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("mountinfo"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("mounts"), Ino = 0, Type = InodeType.File });
         entries.Add(new DirectoryEntry { Name = FsName.FromString("maps"), Ino = 0, Type = InodeType.File });
@@ -416,10 +430,37 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
         ];
     }
 
-    private Dentry CreateFile(Dentry parent, FsName name, int mode, Func<ProcOpenContext, string> contentFactory)
+    private Dentry CreateFile(Dentry parent, FsName name, int mode, Func<ProcOpenContext, string> contentFactory,
+        ProcWriteHandler? writeHandler = null)
     {
-        var inode = new ProcDynamicFileInode(_sb, mode, contentFactory);
+        var inode = new ProcDynamicFileInode(_sb, mode, contentFactory, writeHandler);
         return new Dentry(name, inode, parent, _sb);
+    }
+
+    private int HandleProcCommWrite(ProcOpenContext context, ReadOnlySpan<byte> buffer, long offset)
+    {
+        var process = context.Scheduler?.GetProcess(_pid);
+        if (process == null) return -(int)Errno.ESRCH;
+
+        var trimmed = buffer;
+        var nl = trimmed.IndexOf((byte)'\n');
+        if (nl >= 0) trimmed = trimmed[..nl];
+        if (trimmed.Length > 15) trimmed = trimmed[..15];
+        var text = Encoding.UTF8.GetString(trimmed);
+        process.Name = string.IsNullOrEmpty(text) ? "process" : text;
+        return buffer.Length;
+    }
+
+    private int HandleProcTimerSlackWrite(ProcOpenContext context, ReadOnlySpan<byte> buffer, long offset)
+    {
+        var process = context.Scheduler?.GetProcess(_pid);
+        if (process == null) return -(int)Errno.ESRCH;
+
+        var text = Encoding.UTF8.GetString(buffer).Trim();
+        if (!long.TryParse(text, out var val) || val < 0)
+            return -(int)Errno.EINVAL;
+        process.TimerSlackNs = val == 0 ? process.DefaultTimerSlackNs : val;
+        return buffer.Length;
     }
 
     private Dentry CreateRawFile(Dentry parent, FsName name, int mode, Func<ProcOpenContext, byte[]> contentFactory)
@@ -1067,7 +1108,8 @@ file sealed class ProcPidFdInfoFileInode : Inode, ITaskContextBoundInode
         {
             var flags = Convert.ToString((int)file.Flags, 8) ?? "0";
             var mntId = file.Mount?.Id ?? 0;
-            text = $"pos:\t{file.Position}\nflags:\t0{flags}\nmnt_id:\t{mntId}\n";
+            var inotifyLines = file.OpenedInode is InotifyInode inotifyInode ? inotifyInode.GetFdInfoLines() : string.Empty;
+            text = $"pos:\t{file.Position}\nflags:\t0{flags}\nmnt_id:\t{mntId}\n{inotifyLines}";
         }
 
         var bytes = Encoding.UTF8.GetBytes(text);
@@ -1080,7 +1122,15 @@ file enum ProcSysKind
 {
     Root,
     Kernel,
-    Vm
+    Vm,
+    Fs,
+    FsInotify,
+    Net,
+    NetIpv4,
+    NetIpv4Conf,
+    NetIpv4ConfLo,
+    NetIpv4ConfDefault,
+    NetIpv4ConfAll
 }
 
 file sealed class ProcSysRootInode : Inode
@@ -1119,6 +1169,58 @@ file sealed class ProcSysRootInode : Inode
             created = CreateDir(dir, childName, ProcSysKind.Kernel);
         else if (_kind == ProcSysKind.Root && name.SequenceEqual("vm"u8))
             created = CreateDir(dir, childName, ProcSysKind.Vm);
+        else if (_kind == ProcSysKind.Root && name.SequenceEqual("fs"u8))
+            created = CreateDir(dir, childName, ProcSysKind.Fs);
+        else if (_kind == ProcSysKind.Fs && name.SequenceEqual("nr_open"u8))
+            created = CreateFile(dir, childName, _ => "1048576\n");
+        else if (_kind == ProcSysKind.Fs && name.SequenceEqual("inotify"u8))
+            created = CreateDir(dir, childName, ProcSysKind.FsInotify);
+        else if (_kind == ProcSysKind.FsInotify && name.SequenceEqual("max_queued_events"u8))
+        {
+            var state = _sb.MemoryContext.Inotify;
+            created = CreateFile(dir, childName, _ => $"{state.MaxQueuedEvents}\n", 0x1A4,
+                (ctx, data, _) => HandleInotifySysctlWrite(ctx, data, v => state.MaxQueuedEvents = v, 1, int.MaxValue));
+        }
+        else if (_kind == ProcSysKind.FsInotify && name.SequenceEqual("max_user_instances"u8))
+        {
+            var state = _sb.MemoryContext.Inotify;
+            created = CreateFile(dir, childName, _ => $"{state.MaxUserInstances}\n", 0x1A4,
+                (ctx, data, _) => HandleInotifySysctlWrite(ctx, data, v => state.MaxUserInstances = v, 1, int.MaxValue));
+        }
+        else if (_kind == ProcSysKind.FsInotify && name.SequenceEqual("max_user_watches"u8))
+        {
+            var state = _sb.MemoryContext.Inotify;
+            created = CreateFile(dir, childName, _ => $"{state.MaxUserWatches}\n", 0x1A4,
+                (ctx, data, _) => HandleInotifySysctlWrite(ctx, data, v => state.MaxUserWatches = v, 1, int.MaxValue));
+        }
+        else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("core_pattern"u8))
+            created = CreateFile(dir, childName, _ => "core\n");
+        else if (_kind == ProcSysKind.Root && name.SequenceEqual("net"u8))
+            created = CreateDir(dir, childName, ProcSysKind.Net);
+        else if (_kind == ProcSysKind.Net && name.SequenceEqual("ipv4"u8))
+            created = CreateDir(dir, childName, ProcSysKind.NetIpv4);
+        else if (_kind == ProcSysKind.NetIpv4 && name.SequenceEqual("conf"u8))
+            created = CreateDir(dir, childName, ProcSysKind.NetIpv4Conf);
+        else if (_kind == ProcSysKind.NetIpv4Conf && name.SequenceEqual("lo"u8))
+            created = CreateDir(dir, childName, ProcSysKind.NetIpv4ConfLo);
+        else if (_kind == ProcSysKind.NetIpv4Conf && name.SequenceEqual("default"u8))
+            created = CreateDir(dir, childName, ProcSysKind.NetIpv4ConfDefault);
+        else if (_kind == ProcSysKind.NetIpv4Conf && name.SequenceEqual("all"u8))
+            created = CreateDir(dir, childName, ProcSysKind.NetIpv4ConfAll);
+        else if ((_kind is ProcSysKind.NetIpv4ConfLo or ProcSysKind.NetIpv4ConfDefault or ProcSysKind.NetIpv4ConfAll) &&
+                 name.SequenceEqual("tag"u8))
+        {
+            var tagKind = _kind switch
+            {
+                ProcSysKind.NetIpv4ConfLo => ProcSysNetworkInterface.Lo,
+                ProcSysKind.NetIpv4ConfDefault => ProcSysNetworkInterface.Default,
+                _ => ProcSysNetworkInterface.All
+            };
+            var tags = _sb.MemoryContext.NetworkSysctls;
+            created = CreateFile(dir, childName, _ => $"{tags.GetTag(tagKind)}\n", 0x1A4,
+                (ctx, data, _) => HandleSysctlWrite(ctx, data, 0, int.MaxValue,
+                    value => tags.SetTag(tagKind, value)));
+        }
         else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("hostname"u8))
             created = CreateFile(dir, childName, ctx => ProcFsManager.GenerateSysKernelHostname(ctx.Process));
         else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("osrelease"u8))
@@ -1172,8 +1274,36 @@ file sealed class ProcSysRootInode : Inode
             case ProcSysKind.Root:
                 entries.Add(new DirectoryEntry { Name = "kernel", Ino = 0, Type = InodeType.Directory });
                 entries.Add(new DirectoryEntry { Name = "vm", Ino = 0, Type = InodeType.Directory });
+                entries.Add(new DirectoryEntry { Name = "fs", Ino = 0, Type = InodeType.Directory });
+                entries.Add(new DirectoryEntry { Name = "net", Ino = 0, Type = InodeType.Directory });
+                break;
+            case ProcSysKind.Fs:
+                entries.Add(new DirectoryEntry { Name = "nr_open", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "inotify", Ino = 0, Type = InodeType.Directory });
+                break;
+            case ProcSysKind.FsInotify:
+                entries.Add(new DirectoryEntry { Name = "max_queued_events", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "max_user_instances", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "max_user_watches", Ino = 0, Type = InodeType.File });
+                break;
+            case ProcSysKind.Net:
+                entries.Add(new DirectoryEntry { Name = "ipv4", Ino = 0, Type = InodeType.Directory });
+                break;
+            case ProcSysKind.NetIpv4:
+                entries.Add(new DirectoryEntry { Name = "conf", Ino = 0, Type = InodeType.Directory });
+                break;
+            case ProcSysKind.NetIpv4Conf:
+                entries.Add(new DirectoryEntry { Name = "lo", Ino = 0, Type = InodeType.Directory });
+                entries.Add(new DirectoryEntry { Name = "default", Ino = 0, Type = InodeType.Directory });
+                entries.Add(new DirectoryEntry { Name = "all", Ino = 0, Type = InodeType.Directory });
+                break;
+            case ProcSysKind.NetIpv4ConfLo:
+            case ProcSysKind.NetIpv4ConfDefault:
+            case ProcSysKind.NetIpv4ConfAll:
+                entries.Add(new DirectoryEntry { Name = "tag", Ino = 0, Type = InodeType.File });
                 break;
             case ProcSysKind.Kernel:
+                entries.Add(new DirectoryEntry { Name = "core_pattern", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "hostname", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "osrelease", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "ostype", Ino = 0, Type = InodeType.File });
@@ -1205,6 +1335,30 @@ file sealed class ProcSysRootInode : Inode
     {
         var inode = new ProcDynamicFileInode(_sb, mode, contentFactory, writeHandler);
         return new Dentry(name, inode, parent, _sb);
+    }
+
+    private static int HandleInotifySysctlWrite(ProcOpenContext context, ReadOnlySpan<byte> buffer,
+        Action<int> setter, int minValue, int maxValue)
+    {
+        if (context.Process == null || !context.Process.HasEffectiveCapability(Process.CapabilitySysAdmin))
+            return -(int)Errno.EPERM;
+        var text = Encoding.UTF8.GetString(buffer).Trim();
+        if (!int.TryParse(text, out var val) || val < minValue || val > maxValue)
+            return -(int)Errno.EINVAL;
+        setter(val);
+        return buffer.Length;
+    }
+
+    private static int HandleSysctlWrite(ProcOpenContext context, ReadOnlySpan<byte> buffer,
+        int minValue, int maxValue, Action<int>? setter = null)
+    {
+        if (context.Process == null || !context.Process.HasEffectiveCapability(Process.CapabilitySysAdmin))
+            return -(int)Errno.EPERM;
+        var text = Encoding.UTF8.GetString(buffer).Trim();
+        if (!int.TryParse(text, out var val) || val < minValue || val > maxValue)
+            return -(int)Errno.EINVAL;
+        setter?.Invoke(val);
+        return buffer.Length;
     }
 
     private static int HandleDropCachesWrite(ProcOpenContext context, ReadOnlySpan<byte> buffer, long offset)

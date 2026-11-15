@@ -219,19 +219,24 @@ public partial class FiberTask
     {
         UserCpuTimeNs += userCpuTimeNs;
         SystemCpuTimeNs += systemCpuTimeNs;
+        Process.AccumulateLiveCpuTime(userCpuTimeNs, systemCpuTimeNs);
     }
 
     internal CpuTimeSnapshot SnapshotThreadCpuTime()
     {
-        var userCpuTimeNs = UserCpuTimeNs;
-        if (_runningGuestCpuSinceTimestamp != 0)
-        {
-            var elapsedTicks = Stopwatch.GetTimestamp() - _runningGuestCpuSinceTimestamp;
-            if (elapsedTicks > 0)
-                userCpuTimeNs += ConvertStopwatchTicksToNanoseconds(elapsedTicks);
-        }
+        var live = SnapshotLiveCpuDelta();
+        return new CpuTimeSnapshot(UserCpuTimeNs + live.UserNs, SystemCpuTimeNs + live.SystemNs);
+    }
 
-        return new CpuTimeSnapshot(userCpuTimeNs, SystemCpuTimeNs);
+    internal CpuTimeSnapshot SnapshotLiveCpuDelta()
+    {
+        if (_runningGuestCpuSinceTimestamp == 0)
+            return default;
+
+        var elapsedTicks = Stopwatch.GetTimestamp() - _runningGuestCpuSinceTimestamp;
+        return elapsedTicks > 0
+            ? new CpuTimeSnapshot(ConvertStopwatchTicksToNanoseconds(elapsedTicks), 0)
+            : default;
     }
 
     internal void BeginGuestCpuAccounting()
@@ -250,7 +255,11 @@ public partial class FiberTask
 
         var elapsedTicks = Stopwatch.GetTimestamp() - startedAt;
         if (elapsedTicks > 0)
-            UserCpuTimeNs += ConvertStopwatchTicksToNanoseconds(elapsedTicks);
+        {
+            var delta = ConvertStopwatchTicksToNanoseconds(elapsedTicks);
+            UserCpuTimeNs += delta;
+            Process.AccumulateLiveCpuTime(delta, 0);
+        }
 
         _runningGuestCpuSinceTimestamp = 0;
     }
@@ -1248,7 +1257,10 @@ public partial class FiberTask
             case DefaultSignalAction.Core:
                 Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: core/terminate", sig);
                 LogGuestExecutionDiagnostics($"default action for fatal signal {sig}");
-                TerminateBySignal(sig, true);
+                var canDumpCore = Process.Dumpable != 0 &&
+                                  Process.TryGetResourceLimit(LinuxConstants.RLIMIT_CORE, out var coreLim) &&
+                                  coreLim.Soft > 0;
+                TerminateBySignal(sig, canDumpCore);
                 break;
             case DefaultSignalAction.Stop:
                 Logger.LogInformation("[DeliverSignal] Signal {Sig} default action: stop", sig);
@@ -2039,6 +2051,7 @@ public partial class FiberTask
         const int CLONE_FS = (int)LinuxConstants.CLONE_FS;
         const int CLONE_FILES = 0x00000400;
         const int CLONE_VFORK = 0x00004000;
+        const int CLONE_PARENT = (int)LinuxConstants.CLONE_PARENT;
         const int CLONE_THREAD = 0x00010000;
         const int CLONE_SETTLS = 0x00080000;
         const int CLONE_PARENT_SETTID = (int)LinuxConstants.CLONE_PARENT_SETTID;
@@ -2049,6 +2062,7 @@ public partial class FiberTask
         var cloneFs = (flags & CLONE_FS) != 0;
         var cloneFiles = (flags & CLONE_FILES) != 0;
         var cloneVfork = (flags & CLONE_VFORK) != 0;
+        var cloneParent = (flags & CLONE_PARENT) != 0;
         var cloneThread = (flags & CLONE_THREAD) != 0;
         var cloneSetTls = (flags & CLONE_SETTLS) != 0;
         var cloneParentSetTid = (flags & CLONE_PARENT_SETTID) != 0;
@@ -2058,6 +2072,7 @@ public partial class FiberTask
         Engine? newCpu = null;
         FiberTask? child = null;
         Process? createdProcess = null;
+        Process? parentChildrenOwner = null;
         List<VMAManager.NativeRange>? skippedDontForkRanges = null;
         var linkedToParentChildren = false;
 
@@ -2108,13 +2123,23 @@ public partial class FiberTask
                 }
 
                 var newSys = Process.Syscalls.Clone(newMem, cloneFiles, cloneFs);
+                var targetParent = cloneParent
+                    ? CommonKernel.GetProcess(Process.PPID) ?? Process
+                    : Process;
+                parentChildrenOwner = targetParent;
                 // UTS namespace is shared by default in fork/clone unless CLONE_NEWUTS
                 newProc = new Process(CommonKernel.AllocateTaskId(), newMem, newSys, Process.UTS)
                 {
-                    PPID = Process.TGID,
+                    PPID = targetParent.TGID,
                     PGID = Process.PGID,
                     SID = Process.SID,
-                    ControllingTty = Process.ControllingTty // Inherit controlling tty
+                    ControllingTty = Process.ControllingTty, // Inherit controlling tty
+                    NoNewPrivs = Process.NoNewPrivs,
+                    Dumpable = Process.Dumpable,
+                    TscMode = Process.TscMode,
+                    ThpDisabled = Process.ThpDisabled,
+                    TimerSlackNs = Process.TimerSlackNs,
+                    DefaultTimerSlackNs = Process.TimerSlackNs
                 };
                 createdProcess = newProc;
                 newProc.CopyImageFrom(Process);
@@ -2184,7 +2209,7 @@ public partial class FiberTask
 
             if (!cloneThread)
             {
-                Process.Children.Add(child.Process.TGID);
+                (parentChildrenOwner ?? Process).Children.Add(child.Process.TGID);
                 linkedToParentChildren = true;
             }
 
@@ -2221,7 +2246,7 @@ public partial class FiberTask
             if (!cloneThread && createdProcess != null)
             {
                 if (linkedToParentChildren)
-                    Process.Children.Remove(createdProcess.TGID);
+                    (parentChildrenOwner ?? Process).Children.Remove(createdProcess.TGID);
 
                 try
                 {

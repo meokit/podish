@@ -67,7 +67,7 @@ public partial class SyscallManager
         var tlsPtr = a4;
         var ctidPtr = a5;
 
-        var flagError = ValidateCloneFlags(flags);
+        var flagError = ValidateCloneFlags(current, flags);
         if (flagError != 0) return flagError;
 
         FiberTask child;
@@ -95,19 +95,47 @@ public partial class SyscallManager
         return child.TID;
     }
 
-    private static int ValidateCloneFlags(uint flags)
+    private static int ValidateCloneFlags(FiberTask current, uint flags)
     {
         var exitSignal = flags & 0xffu;
         var cloneVm = (flags & LinuxConstants.CLONE_VM) != 0;
         var cloneThread = (flags & LinuxConstants.CLONE_THREAD) != 0;
         var cloneSighand = (flags & LinuxConstants.CLONE_SIGHAND) != 0;
         var cloneVfork = (flags & LinuxConstants.CLONE_VFORK) != 0;
+        var cloneParent = (flags & LinuxConstants.CLONE_PARENT) != 0;
+
+        const uint namespaceFlags = LinuxConstants.CLONE_NEWNS |
+                                    LinuxConstants.CLONE_NEWUTS |
+                                    LinuxConstants.CLONE_NEWIPC |
+                                    LinuxConstants.CLONE_NEWUSER |
+                                    LinuxConstants.CLONE_NEWPID |
+                                    LinuxConstants.CLONE_NEWNET |
+                                    LinuxConstants.CLONE_NEWCGROUP;
+
+        if (cloneThread && !cloneVm) return -(int)Errno.EINVAL;
+        if (cloneSighand && !cloneVm) return -(int)Errno.EINVAL;
+        if (cloneThread && !cloneSighand) return -(int)Errno.EINVAL;
+        if (cloneVfork && !cloneVm) return -(int)Errno.EINVAL;
+        if (cloneParent && current.Process.TGID == current.CommonKernel.InitPid)
+            return -(int)Errno.EINVAL;
+
+        if ((flags & namespaceFlags) != 0)
+        {
+            if (cloneThread || (cloneParent && (flags & (LinuxConstants.CLONE_NEWPID | LinuxConstants.CLONE_NEWUSER)) != 0))
+                return -(int)Errno.EINVAL;
+            if ((flags & ~LinuxConstants.CLONE_NEWUSER) != 0 &&
+                !current.Process.HasEffectiveCapability(Process.CapabilitySysAdmin))
+                return -(int)Errno.EPERM;
+            return -(int)Errno.EINVAL;
+        }
+
         var supportedFlags = LinuxConstants.CLONE_VM |
                              LinuxConstants.CLONE_FS |
                              LinuxConstants.CLONE_FILES |
                              LinuxConstants.CLONE_SIGHAND |
                              LinuxConstants.CLONE_PTRACE |
                              LinuxConstants.CLONE_VFORK |
+                             LinuxConstants.CLONE_PARENT |
                              LinuxConstants.CLONE_THREAD |
                              LinuxConstants.CLONE_SYSVSEM |
                              LinuxConstants.CLONE_SETTLS |
@@ -119,11 +147,6 @@ public partial class SyscallManager
 
         if ((flags & ~(supportedFlags | exitSignal)) != 0)
             return -(int)Errno.EINVAL;
-
-        if (cloneThread && !cloneVm) return -(int)Errno.EINVAL;
-        if (cloneSighand && !cloneVm) return -(int)Errno.EINVAL;
-        if (cloneThread && !cloneSighand) return -(int)Errno.EINVAL;
-        if (cloneVfork && !cloneVm) return -(int)Errno.EINVAL;
 
         // CLONE_PTRACE / CLONE_UNTRACED are ptrace-facing hints; ptrace itself is not modeled,
         // so we accept them as no-ops for compatibility. CLONE_DETACHED is obsolete and ignored
@@ -147,7 +170,17 @@ public partial class SyscallManager
     private async ValueTask<int> SysWait4(Engine engine, uint pid, uint statusPtr, uint options, uint rusagePtr,
         uint a5, uint a6)
     {
+        // Linux wait4 valid options: WNOHANG(1) | WUNTRACED(2) | WCONTINUED(8) | __WNOTHREAD(0x20000000) | __WALL(0x40000000) | __WCLONE(0x80000000)
+        // Linux accepts WNOHANG/WUNTRACED/WCONTINUED plus the __W* flags; keep our
+        // existing WNOWAIT extension so callers relying on non-reaping waits still work.
+        const uint ValidWait4Options = 0xE100000Bu;
+        if ((options & ~ValidWait4Options) != 0)
+            return -(int)Errno.EINVAL;
+
         var pidVal = (int)pid;
+        if (pidVal == int.MinValue)
+            return -(int)Errno.ESRCH;
+
         var optVal = (int)options;
         var hang = (optVal & 1) != 0; // WNOHANG
         var wantStopped = (optVal & 2) != 0; // WUNTRACED/WSTOPPED
@@ -264,17 +297,36 @@ public partial class SyscallManager
     {
         if (engine.Owner is not FiberTask fiberTask) return -(int)Errno.ECHILD;
 
+        const uint ValidWaitIdOptions = 0x0100000Fu; // WNOHANG(1) | WSTOPPED(2) | WEXITED(4) | WCONTINUED(8) | WNOWAIT(0x01000000)
+        if ((options & ~ValidWaitIdOptions) != 0)
+            return -(int)Errno.EINVAL;
+
+        var wnohang = (options & 1) != 0;
+        var wstopped = (options & 2) != 0;
+        var wexited = (options & 4) != 0;
+        var wcontinued = (options & 8) != 0;
+        var wnowait = (options & 0x01000000) != 0;
+        if (!wexited && !wstopped && !wcontinued)
+            return -(int)Errno.EINVAL;
+
+        var idType = (IdType)idtype;
+        if (idType is not (IdType.P_ALL or IdType.P_PID or IdType.P_PGID))
+            return -(int)Errno.EINVAL;
+        switch (idType)
+        {
+            // P_ALL ignores id (waitid04 passes a child pid with P_ALL).
+            case IdType.P_PID when (int)id <= 0:
+                return -(int)Errno.EINVAL;
+            case IdType.P_PGID when (int)id < 0:
+                return -(int)Errno.EINVAL;
+        }
+
         // Logic similar to SysWait4 but with idtype
         var currentProc = fiberTask.Process;
         var task = (FiberTask)engine.Owner!;
         var kernel = task.CommonKernel;
-
-        var wnohang = ((int)options & 1) != 0;
-        var wexited = ((int)options & 4) != 0;
-        var wstopped = ((int)options & 2) != 0;
-        var wcontinued = ((int)options & 8) != 0;
-        var wnowait = ((int)options & 0x01000000) != 0;
-        if (options == 0) wexited = true; // Default?
+        // P_PGID with id 0 targets the caller's process group, not pid/pgid 0.
+        var waitPgid = (int)id == 0 ? currentProc.PGID : (int)id;
 
         while (true)
         {
@@ -286,9 +338,9 @@ public partial class SyscallManager
                 if (childProc == null) continue;
 
                 var match = false;
-                if ((IdType)idtype == IdType.P_ALL) match = true;
-                else if ((IdType)idtype == IdType.P_PID && childPid == (int)id) match = true;
-                else if ((IdType)idtype == IdType.P_PGID && childProc.PGID == (int)id) match = true;
+                if (idType == IdType.P_ALL) match = true;
+                else if (idType == IdType.P_PID && childPid == (int)id) match = true;
+                else if (idType == IdType.P_PGID && childProc.PGID == waitPgid) match = true;
 
                 if (match)
                 {
@@ -358,13 +410,18 @@ public partial class SyscallManager
             }
 
             if (!hasChildren) return -(int)Errno.ECHILD;
-            if (wnohang) return 0;
+            if (wnohang)
+            {
+                if (infop != 0 && !WriteSigInfo(engine, infop, default))
+                    return -(int)Errno.EFAULT;
+                return 0;
+            }
 
-            var targetPid = (IdType)idtype switch
+            var targetPid = idType switch
             {
                 IdType.P_ALL => -1,
                 IdType.P_PID => (int)id,
-                IdType.P_PGID => -(int)id,
+                IdType.P_PGID => -waitPgid,
                 _ => -1
             };
 
@@ -537,19 +594,27 @@ public partial class SyscallManager
         if (pathErr != 0) return pathErr;
         using var _ = filename;
 
-        var (loc, guestPathRaw, displayPath) = ResolvePathBytes(filename.Span);
+        var lookup = PathWalker.PathWalkWithData(filename.UnsafeBuffer, filename.Length, null, LookupFlags.FollowSymlink);
+        if (lookup.HasError)
+        {
+            Logger.LogDebug("[SysExecve] Could not resolve '{Filename}' (rc={Rc})",
+                FsEncoding.DecodeUtf8Lossy(filename.Span), lookup.ErrorCode);
+            return lookup.ErrorCode;
+        }
+
+        var loc = lookup.Path;
+        var guestPathRaw = filename.Span.ToArray();
+        var displayPath = FsEncoding.DecodeUtf8Lossy(guestPathRaw);
 
         if (!loc.IsValid)
-        {
-            Logger.LogDebug("[SysExecve] Could not resolve '{Filename}' to a valid Dentry (Guest: {GuestPath})",
-                filename, displayPath);
             return -(int)Errno.ENOENT;
-        }
 
         var dentry = loc.Dentry!;
         var mount = loc.Mount!;
         if (dentry.Inode == null)
             return -(int)Errno.ENOENT;
+        if (dentry.Inode.Type == InodeType.Directory)
+            return -(int)Errno.EACCES;
         if (dentry.Inode is HostInode hostInode)
             hostInode.RefreshProjectedMetadata(task.Process.EUID, task.Process.EGID);
 
@@ -625,6 +690,7 @@ public partial class SyscallManager
             try
             {
                 task.Process.Exec(interpLoc.Dentry!, interpPathRaw, [.. newArgs], origEnvs, interpLoc.Mount!);
+                task.Process.HasExeced = true;
                 CredentialService.ApplyExecSetIdOnExec(task.Process, interpLoc.Dentry!.Inode!);
                 ProcFsManager.OnProcessExec(this, task.Process);
                 task.SignalVforkDone();
@@ -675,6 +741,7 @@ public partial class SyscallManager
         try
         {
             task.Process.Exec(dentry, guestPathRaw, args, envs, mount);
+            task.Process.HasExeced = true;
             CredentialService.ApplyExecSetIdOnExec(task.Process, dentry.Inode!);
             ProcFsManager.OnProcessExec(this, task.Process);
             task.SignalVforkDone();
@@ -706,8 +773,13 @@ public partial class SyscallManager
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
         var proc = task.Process;
 
-        // If caller is a process group leader, return EPERM
+        // If caller is a process group leader, or any live process has PGID == caller's PID, return EPERM.
         if (proc.PGID == proc.TGID) return -(int)Errno.EPERM;
+        foreach (var other in task.CommonKernel.GetProcessesSnapshot())
+        {
+            if (other.State != ProcessState.Dead && other.PGID == proc.TGID)
+                return -(int)Errno.EPERM;
+        }
 
         proc.SID = proc.TGID;
         proc.PGID = proc.TGID;
@@ -725,6 +797,8 @@ public partial class SyscallManager
         // setpgid(pid, pgid)
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
+        if ((int)pgid < 0) return -(int)Errno.EINVAL;
+
         var kernel = task.CommonKernel;
         var targetPid = (int)pid == 0 ? task.Process.TGID : (int)pid;
         var targetPgid = (int)pgid == 0 ? targetPid : (int)pgid;
@@ -732,18 +806,36 @@ public partial class SyscallManager
         var targetProc = kernel.GetProcess(targetPid);
         if (targetProc == null) return -(int)Errno.ESRCH;
 
-        // Permission checks
-        // 1. Target must be calling process or child of calling process
+        // Target must be calling process or child of calling process; otherwise ESRCH on Linux.
         if (targetProc.TGID != task.Process.TGID && targetProc.PPID != task.Process.TGID)
-            return -(int)Errno.EPERM;
+            return -(int)Errno.ESRCH;
 
-        // 2. Target must be in same session
+        // Cannot change child's PGID after it has exec'd.
+        if (targetProc.TGID != task.Process.TGID && targetProc.HasExeced)
+            return -(int)Errno.EACCES;
+
+        // Target must be in same session.
         if (targetProc.SID != task.Process.SID) return -(int)Errno.EPERM;
 
-        // 3. Cannot change if session leader
+        // Cannot change if session leader.
         if (targetProc.SID == targetProc.TGID) return -(int)Errno.EPERM;
 
-        // TODO: Check if child has already exec'd (should return EACCES)
+        // When moving into a different PGID, a process group with targetPgid must already exist in the same session.
+        if (targetPgid != targetProc.TGID)
+        {
+            var foundGroup = false;
+            foreach (var p in kernel.GetProcessesSnapshot())
+            {
+                if (p.State != ProcessState.Dead && p.PGID == targetPgid && p.SID == task.Process.SID)
+                {
+                    foundGroup = true;
+                    break;
+                }
+            }
+
+            if (!foundGroup)
+                return -(int)Errno.EPERM;
+        }
 
         targetProc.PGID = targetPgid;
         return 0;
@@ -779,12 +871,14 @@ public partial class SyscallManager
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
         if (!task.Process.TryGetResourceLimit((int)a1, out var limit)) return -(int)Errno.EINVAL;
-        return WriteRlimit32(engine, a2, limit) ? 0 : -(int)Errno.EFAULT;
+        return WriteRlimit32Signed(engine, a2, limit) ? 0 : -(int)Errno.EFAULT;
     }
 
     private async ValueTask<int> SysUGetRlimit(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        return await SysGetRlimit(engine, a1, a2, a3, a4, a5, a6);
+        if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
+        if (!task.Process.TryGetResourceLimit((int)a1, out var limit)) return -(int)Errno.EINVAL;
+        return WriteRlimit32(engine, a2, limit) ? 0 : -(int)Errno.EFAULT;
     }
 
     private async ValueTask<int> SysPrlimit64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -814,8 +908,13 @@ public partial class SyscallManager
 
     private static int ApplyResourceLimit(Process process, int resource, ResourceLimit newLimit)
     {
+        const ulong SysctlNrOpen = 1048576;
         if (!process.TryGetResourceLimit(resource, out var currentLimit)) return -(int)Errno.EINVAL;
         if (newLimit.Soft > newLimit.Hard) return -(int)Errno.EINVAL;
+
+        if (resource == LinuxConstants.RLIMIT_NOFILE &&
+            (newLimit.Soft > SysctlNrOpen || newLimit.Hard > SysctlNrOpen))
+            return -(int)Errno.EPERM;
 
         // CAP_SYS_RESOURCE is not modeled; root can still raise hard limits.
         if (process.EUID != 0 && newLimit.Hard > currentLimit.Hard) return -(int)Errno.EPERM;
@@ -867,6 +966,14 @@ public partial class SyscallManager
         return true;
     }
 
+    private static bool WriteRlimit32Signed(Engine engine, uint ptr, ResourceLimit limit)
+    {
+        var buf = new byte[8];
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0, 4), NarrowSignedLegacyRlimit(limit.Soft));
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4, 4), NarrowSignedLegacyRlimit(limit.Hard));
+        return engine.CopyToUser(ptr, buf);
+    }
+
     private static bool WriteRlimit32(Engine engine, uint ptr, ResourceLimit limit)
     {
         var buf = new byte[8];
@@ -891,6 +998,13 @@ public partial class SyscallManager
     private static ulong ExpandRlimit64(ulong value)
     {
         return value == LinuxConstants.RLIM64_INFINITY ? LinuxConstants.RLIM64_INFINITY : value;
+    }
+
+    private static uint NarrowSignedLegacyRlimit(ulong value)
+    {
+        return value == LinuxConstants.RLIM64_INFINITY || value >= LinuxConstants.RLIM32_SIGNED_INFINITY
+            ? LinuxConstants.RLIM32_SIGNED_INFINITY
+            : (uint)value;
     }
 
     private static uint NarrowLegacyRlimit(ulong value)

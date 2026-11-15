@@ -29,11 +29,15 @@ Hostfs remains available only for comparison and forces mode
 
 `cases.json` is the basic syscall batch. `cases-permissions.json` is the
 permission/identity batch, `cases-sync.json` is the futex + SysV semaphore
-batch, `cases-signals.json` is the signal + event notification batch, and
-`cases-memory.json` is the memory management + address-space mapping batch. The
-permission, sync, signal and memory manifests require a root native baseline
-and default to tmpfs. Build and run each batch into its own artifact directory
-so `build.json` and baselines do not mix with the basic batch:
+batch, `cases-signals.json` is the signal + event notification batch,
+`cases-memory.json` is the memory management + address-space mapping batch,
+`cases-net-io.json` is the network sockets + I/O multiplexing batch,
+`cases-fs-fd.json` is the filesystem metadata + fcntl/flock + zero-copy I/O
+batch, and `cases-proc-time.json` is the process lifecycle + rlimit/prctl +
+timers/inotify batch. The permission, sync, signal, memory, net-io, fs-fd and
+proc-time manifests require a root native baseline and default to tmpfs. Build
+and run each batch into its own artifact directory so `build.json` and baselines
+do not mix with the basic batch:
 
 ```sh
 git submodule update --init tests/ltp/upstream
@@ -52,7 +56,13 @@ python tests/ltp/run.py --backend podish --artifacts artifacts/ltp-permissions \
 The synchronization batch uses the same workflow with
 `cases-sync.json` and `artifacts/ltp-sync`. The signal and event batch uses
 `cases-signals.json` and `artifacts/ltp-signals`. The memory management batch
-uses `cases-memory.json` and `artifacts/ltp-memory`.
+uses `cases-memory.json` and `artifacts/ltp-memory`. The three newer baseline
+batches use `cases-net-io.json` (`artifacts/ltp-net-io`, see
+[NET_IO_BASELINE.md](NET_IO_BASELINE.md)), `cases-fs-fd.json`
+(`artifacts/ltp-fs-fd`, see [FS_FD_BASELINE.md](FS_FD_BASELINE.md)), and
+`cases-proc-time.json` (`artifacts/ltp-proc-time`, see
+[PROC_TIME_BASELINE.md](PROC_TIME_BASELINE.md)). A manifest case may also set
+`"timeoutSeconds"` to override the host timeout for long-running race tests.
 
 The `tmpfs` backend imports one generated image containing all selected
 binaries under `/opt/ltp/testcases/bin`, then runs each binary in a separate

@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Channels;
+using Microsoft.Win32.SafeHandles;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
 using Fiberish.Memory;
@@ -12,7 +13,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Fiberish.Core;
 
-public class KernelScheduler
+public class KernelScheduler : IDisposable
 {
     private const int DefaultInstructionLimit = 10_000_000;
     private const int InteractiveBurstBudget = 3;
@@ -50,6 +51,7 @@ public class KernelScheduler
     private readonly Dictionary<int, FiberTask> _tasks = [];
     private readonly TimeWheel _timerSystem = new();
     private readonly ManualResetEventSlim _wakeEvent = new(false);
+    private ManualResetEvent? _preciseWakeEvent;
     private int _engineInitReaperEnabled;
     private int _initPid;
     private bool _isInsideRunLoop = true;
@@ -58,15 +60,67 @@ public class KernelScheduler
 
     private long _foregroundLatencyGraceUntilTick;
     private int _wakePending;
+    private int _eventWaiters;
+    private long _wakeSetCount;
+
+    private const int PreciseWaitMaxMs = 2000;
+    private const uint CreateWaitableTimerHighResolution = 0x00000002;
+    private const uint TimerAllAccess = 0x1F0003;
+    private const uint WaitObject0 = 0;
+    private const uint WaitFailed = 0xFFFFFFFF;
+    private const uint WaitInfinite = 0xFFFFFFFF;
+
+    private SafeWaitHandle? _preciseTimerHandle;
+    private IntPtr[]? _preciseWaitHandles;
+    private bool _preciseWaitUnavailable;
+    private volatile bool _disposed;
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateWaitableTimerExW(IntPtr attributes, string? name, uint flags, uint access);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetWaitableTimer(IntPtr handle, ref long dueTime, int period,
+        IntPtr completionRoutine, IntPtr argument, bool resume);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CancelWaitableTimer(IntPtr handle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForMultipleObjects(uint count, IntPtr[] handles, bool waitAll, uint timeoutMs);
 
     public KernelScheduler()
     {
         _synchronizationContext = new KernelSyncContext(this);
     }
 
+    /// <summary>
+    ///     Releases the native high-resolution timer. Managed events keep their own
+    ///     SafeWaitHandle finalizers, but the waitable timer is a raw kernel object and
+    ///     would otherwise survive every container teardown until process exit. Call this
+    ///     after <see cref="Run" /> returns, when no wait is in progress on the scheduler thread.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _preciseWaitUnavailable = true;
+        _preciseWaitHandles = null;
+        _preciseTimerHandle?.Dispose();
+        _preciseTimerHandle = null;
+        _preciseWakeEvent?.Dispose();
+        _wakeEvent.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
     public KernelRuntime? Runtime { get; set; }
 
     public long CurrentTick => _timerSystem.CurrentTick;
+
+    /// <summary>Milliseconds since scheduler start; matches the reference used by timer deadlines.</summary>
+    public long CurrentRealTick => _sw.ElapsedMilliseconds;
+
+    /// <summary>Number of native wait-handle Set calls issued by the scheduler.</summary>
+    internal long WakeSetCount => Interlocked.Read(ref _wakeSetCount);
     internal TimeWheel TimerSystem => _timerSystem;
     public bool Running { get; set; } = true;
 
@@ -220,7 +274,10 @@ public class KernelScheduler
     private void ReleaseDetachedTask(FiberTask task)
     {
         task.EndGuestCpuAccounting();
-        task.Process.AccumulateExitedThreadCpuTime(task.SnapshotThreadCpuTime());
+        var cpu = task.SnapshotThreadCpuTime();
+        // The task's slices are already in the live bucket; move them to the exited bucket.
+        task.Process.RemoveAccumulatedLiveCpuTime(cpu);
+        task.Process.AccumulateExitedThreadCpuTime(cpu);
         task.CancelAsyncSyscallForRetirement();
         task.BeginTaskRetirement();
         task.Process.Syscalls?.UnregisterEngine(task.CPU);
@@ -278,7 +335,34 @@ public class KernelScheduler
     {
         var initPid = InitPid;
         if (initPid <= 0 || exitingPid <= 0 || exitingPid == initPid) return 0;
-        return ReparentChildren(exitingPid, initPid);
+
+        foreach (var proc in _processes.Values)
+        {
+            if (proc.PPID == exitingPid && proc.ParentDeathSignal > 0 &&
+                proc.State is not ProcessState.Zombie and not ProcessState.Dead)
+            {
+                SignalProcess(proc.TGID, proc.ParentDeathSignal);
+            }
+        }
+
+        var targetPid = initPid;
+        if (_processes.TryGetValue(exitingPid, out var exitingProc))
+        {
+            var cursor = exitingProc.PPID;
+            var hops = 0;
+            while (cursor > 0 && cursor != initPid && hops++ < 1024 && _processes.TryGetValue(cursor, out var ancestor))
+            {
+                if (ancestor.IsChildSubreaper && ancestor.State is not ProcessState.Zombie and not ProcessState.Dead)
+                {
+                    targetPid = ancestor.TGID;
+                    break;
+                }
+
+                cursor = ancestor.PPID;
+            }
+        }
+
+        return ReparentChildren(exitingPid, targetPid);
     }
 
     public int ReparentChildren(int fromPid, int toPid)
@@ -290,6 +374,7 @@ public class KernelScheduler
         Process? toProc;
         List<int> adoptedPids = [];
         HashSet<int> affectedProcessGroups = [];
+        var adoptedHasZombie = false;
 
         _processes.TryGetValue(fromPid, out fromProc);
         if (!_processes.TryGetValue(toPid, out toProc)) return 0;
@@ -299,6 +384,8 @@ public class KernelScheduler
             if (proc.PPID != fromPid) continue;
             proc.PPID = toPid;
             adoptedPids.Add(proc.TGID);
+            if (proc.State == ProcessState.Zombie)
+                adoptedHasZombie = true;
             if (proc.PGID > 0)
                 affectedProcessGroups.Add(proc.PGID);
         }
@@ -313,12 +400,12 @@ public class KernelScheduler
             if (!toProc!.Children.Contains(pid))
                 toProc.Children.Add(pid);
 
-        var initTask = GetTask(toPid);
-        if (initTask != null)
+        var targetTask = GetTask(toPid);
+        if (targetTask != null && (toPid == InitPid || adoptedHasZombie))
         {
-            SignalProcess(initTask.Process.TGID, (int)Signal.SIGCHLD);
-            initTask.TrySetActiveWaitReason(WakeReason.Event);
-            Schedule(initTask);
+            SignalProcess(targetTask.Process.TGID, (int)Signal.SIGCHLD);
+            targetTask.TrySetActiveWaitReason(WakeReason.Event);
+            Schedule(targetTask);
         }
 
         foreach (var pgid in affectedProcessGroups)
@@ -838,6 +925,8 @@ public class KernelScheduler
                     var previous = SynchronizationContext.Current;
                     var previousTask = CurrentTask;
                     CurrentTask = task;
+                    var process = task.Process;
+                    process.RunningTask = task;
                     SynchronizationContext.SetSynchronizationContext(GetSynchronizationContextFor(task));
                     try
                     {
@@ -850,9 +939,13 @@ public class KernelScheduler
                     }
                     finally
                     {
+                        if (ReferenceEquals(process.RunningTask, task))
+                            process.RunningTask = null;
                         SynchronizationContext.SetSynchronizationContext(previous);
                         CurrentTask = previousTask;
                     }
+
+                    CheckProcessCpuAccounting(task.Process);
 
                     // Time accounting (simplified)
                     // _timerSystem.Advance(1); // Removed: Time is driven by _sw.ElapsedMilliseconds
@@ -885,6 +978,55 @@ public class KernelScheduler
             SynchronizationContext.SetSynchronizationContext(previousSyncContext);
             Logger.LogInformation("KernelScheduler stopped. reason={Reason} running={Running} tick={Tick}", exitReason,
                 Running, CurrentTick);
+        }
+    }
+
+    private void CheckProcessCpuAccounting(Process process)
+    {
+        if (!process.NeedsCpuTimeAccounting)
+            return;
+
+        // Refreshing at most once per real millisecond keeps the rlimit (seconds) and the
+        // CPU itimers (milliseconds) accurate while avoiding one O(threads) walk per slice
+        // per running thread.
+        var nowMs = _sw.ElapsedMilliseconds;
+        if (process.CpuAccountingSnapshotMs != nowMs)
+        {
+            process.CpuAccountingSnapshot = process.GetSelfCpuTimeSnapshot();
+            process.CpuAccountingSnapshotMs = nowMs;
+        }
+
+        var snapshot = process.CpuAccountingSnapshot;
+        EnforceCpuTimeLimit(process, snapshot);
+        Fiberish.Syscalls.SyscallManager.CheckCpuItimers(process, this, snapshot);
+    }
+
+    private void EnforceCpuTimeLimit(Process process, CpuTimeSnapshot snap)
+    {
+        if (process.State is ProcessState.Zombie or ProcessState.Dead)
+            return;
+
+        if (!process.TryGetResourceLimit(LinuxConstants.RLIMIT_CPU, out var cpuLimit))
+            return;
+
+        if (cpuLimit.Soft == LinuxConstants.RLIM64_INFINITY && cpuLimit.Hard == LinuxConstants.RLIM64_INFINITY)
+            return;
+
+        var cpuSec = (snap.UserNs + snap.SystemNs) / 1_000_000_000L;
+
+        if (cpuLimit.Hard != LinuxConstants.RLIM64_INFINITY && (ulong)cpuSec >= cpuLimit.Hard)
+        {
+            SignalProcess(process.TGID, (int)Signal.SIGKILL);
+            return;
+        }
+
+        if (cpuLimit.Soft != LinuxConstants.RLIM64_INFINITY && (ulong)cpuSec >= cpuLimit.Soft)
+        {
+            if (cpuSec > process.LastCpuSoftWarningSec)
+            {
+                process.LastCpuSoftWarningSec = cpuSec;
+                SignalProcess(process.TGID, (int)Signal.SIGXCPU);
+            }
         }
     }
 
@@ -933,6 +1075,9 @@ public class KernelScheduler
 
     private void WaitForEvent(int timeoutMs)
     {
+        if (_disposed)
+            return;
+
         if (OperatingSystem.IsBrowser() && BrowserSchedulerHostBridge.IsConfigured)
         {
             BrowserSchedulerHostBridge.WaitForEvent(timeoutMs);
@@ -940,8 +1085,108 @@ public class KernelScheduler
             return;
         }
 
-        _wakeEvent.Wait(timeoutMs);
+        // Publish the waiter flag, then recheck the work queues. A waker publishes work
+        // before reading this flag, so either it sees the waiter and sets the event, or
+        // the recheck below sees the work and skips the wait.
+        Interlocked.Increment(ref _eventWaiters);
+        try
+        {
+            if (HasPendingWakeWork())
+            {
+                _wakeEvent.Reset();
+                _preciseWakeEvent?.Reset();
+                return;
+            }
+
+            if (timeoutMs > 0 && timeoutMs <= PreciseWaitMaxMs && TryWaitPrecise(timeoutMs))
+                return;
+
+            _wakeEvent.Wait(timeoutMs);
+            _wakeEvent.Reset();
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _eventWaiters);
+        }
+    }
+
+    private bool HasPendingWakeWork()
+    {
+        return _foregroundRunQueue.Count > 0 || _runQueue.Count > 0 ||
+               _events.Reader.TryPeek(out _) || _urgentEvents.Reader.TryPeek(out _);
+    }
+
+    /// <summary>
+    ///     Waits for either the deadline or an external wake using a Windows
+    ///     high-resolution waitable timer. The legacy ManualResetEventSlim path quantizes
+    ///     short waits by several milliseconds even with timeBeginPeriod(1), which made
+    ///     guest nanosleep land outside Linux timer tolerances.
+    /// </summary>
+    private bool TryWaitPrecise(int timeoutMs)
+    {
+        if (!OperatingSystem.IsWindows() || _preciseWaitUnavailable || _disposed)
+            return false;
+
+        if (_preciseTimerHandle == null)
+        {
+            var rawHandle = CreateWaitableTimerExW(IntPtr.Zero, null,
+                CreateWaitableTimerHighResolution, TimerAllAccess);
+            if (rawHandle == IntPtr.Zero)
+            {
+                _preciseWaitUnavailable = true;
+                return false;
+            }
+
+            _preciseTimerHandle = new SafeWaitHandle(rawHandle, ownsHandle: true);
+        }
+
+        var timerHandle = _preciseTimerHandle;
+        if (timerHandle.IsInvalid || timerHandle.IsClosed)
+        {
+            _preciseWaitUnavailable = true;
+            return false;
+        }
+
+        var rawTimerHandle = timerHandle.DangerousGetHandle();
+        var dueTime = -(long)timeoutMs * 10_000L; // 100ns units, negative = relative
+        if (!SetWaitableTimer(rawTimerHandle, ref dueTime, 0, IntPtr.Zero, IntPtr.Zero, false))
+        {
+            _preciseWaitUnavailable = true;
+            return false;
+        }
+
+        // Only Windows precise waits need this native event. A wake can arrive before
+        // its first creation; recheck published work after making the event visible.
+        var wakeEvent = _preciseWakeEvent;
+        if (wakeEvent == null)
+        {
+            wakeEvent = new ManualResetEvent(false);
+            Volatile.Write(ref _preciseWakeEvent, wakeEvent);
+        }
+        if (HasPendingWakeWork())
+        {
+            CancelWaitableTimer(rawTimerHandle);
+            return true;
+        }
+
+        var handles = _preciseWaitHandles ??=
+        [
+            rawTimerHandle,
+            wakeEvent.SafeWaitHandle.DangerousGetHandle()
+        ];
+        var result = WaitForMultipleObjects(2, handles, false, WaitInfinite);
+        if (result == WaitFailed)
+        {
+            _preciseWaitUnavailable = true;
+            return false;
+        }
+
+        if (result != WaitObject0)
+            CancelWaitableTimer(rawTimerHandle);
+
+        wakeEvent.Reset();
         _wakeEvent.Reset();
+        return true;
     }
 
     private void ExecuteEvent(SchedulerWorkItem item)
@@ -1004,15 +1249,34 @@ public class KernelScheduler
 
     private void EnqueueWake()
     {
-        // Always signal event
-        _wakeEvent.Set();
+        if (_disposed)
+            return;
+
+        // Publish before observing the waiter flag. In particular WakeUp() itself has
+        // no earlier work item: checking the flag first can lose its only notification.
+        if (Interlocked.Exchange(ref _wakePending, 1) == 0)
+            _events.Writer.TryWrite(SchedulerWorkItem.WakeScheduler());
+
+        // Only enter the kernel when a waiter is actually blocked. The waiter rechecks
+        // the work queues after publishing _eventWaiters, so work published before this
+        // read cannot be lost even when no Set is issued.
+        if (Volatile.Read(ref _eventWaiters) != 0)
+        {
+            Interlocked.Increment(ref _wakeSetCount);
+            // Signal both wait primitives. A wake racing with Dispose may observe the
+            // handle after it was closed; the scheduler is already gone in that case.
+            try
+            {
+                _wakeEvent.Set();
+                Volatile.Read(ref _preciseWakeEvent)?.Set();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
 
         if (OperatingSystem.IsBrowser() && BrowserSchedulerHostBridge.IsConfigured)
             BrowserSchedulerHostBridge.SignalSchedulerWake();
-
-        if (Interlocked.Exchange(ref _wakePending, 1) != 0) return;
-
-        _events.Writer.TryWrite(SchedulerWorkItem.WakeScheduler());
     }
 
     private (bool anyAlive, bool anyWaiting) GetTaskLiveness()

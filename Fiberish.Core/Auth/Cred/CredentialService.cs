@@ -43,7 +43,9 @@ public static class CredentialService
         Array.Copy(source.CapEffective, destination.CapEffective, destination.CapEffective.Length);
         Array.Copy(source.CapPermitted, destination.CapPermitted, destination.CapPermitted.Length);
         Array.Copy(source.CapInheritable, destination.CapInheritable, destination.CapInheritable.Length);
-        NormalizeCapabilityState(destination);
+        Array.Copy(source.CapBounding, destination.CapBounding, destination.CapBounding.Length);
+        // Do not normalize here: a root process that deliberately dropped its
+        // capabilities must not silently regain CAP_SYS_ADMIN in a forked child.
     }
 
     public static Cred Get(Process process)
@@ -87,7 +89,7 @@ public static class CredentialService
         Array.Clear(process.CapPermitted, 0, process.CapPermitted.Length);
         Array.Clear(process.CapInheritable, 0, process.CapInheritable.Length);
 
-        if (process.EUID == 0)
+        if (process.EUID == 0 && process.HasBoundingCapability(Process.CapabilitySysAdmin))
             process.SetCapability(Process.CapabilitySysAdmin, true, true, false);
     }
 
@@ -347,11 +349,23 @@ public static class CredentialService
     {
         var newEuid = process.EUID;
         var newEgid = process.EGID;
+        var gainedSetId = false;
 
-        if (allowPrivilegeGain && executable.Type == InodeType.File)
+        // PR_SET_NO_NEW_PRIVS: execve must not grant privileges, so setuid/setgid bits
+        // (and, in Linux, file capabilities) are ignored for the transition.
+        if (allowPrivilegeGain && !process.NoNewPrivs && executable.Type == InodeType.File)
         {
-            if ((executable.Mode & 0x800) != 0) newEuid = executable.Uid; // S_ISUID
-            if ((executable.Mode & 0x400) != 0) newEgid = executable.Gid; // S_ISGID
+            if ((executable.Mode & 0x800) != 0)
+            {
+                newEuid = executable.Uid; // S_ISUID
+                gainedSetId = true;
+            }
+
+            if ((executable.Mode & 0x400) != 0)
+            {
+                newEgid = executable.Gid; // S_ISGID
+                gainedSetId = true;
+            }
         }
 
         process.EUID = newEuid;
@@ -362,6 +376,10 @@ public static class CredentialService
         process.SGID = newEgid;
         process.FSUID = newEuid;
         process.FSGID = newEgid;
-        NormalizeCapabilityState(process);
+
+        // A plain exec must preserve the capability sets. Only a setid transition
+        // recomputes them from the new credentials; NoNewPrivs never gains anything.
+        if (gainedSetId)
+            NormalizeCapabilityState(process);
     }
 }

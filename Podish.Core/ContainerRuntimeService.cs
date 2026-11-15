@@ -703,6 +703,15 @@ public sealed class ContainerRuntimeService
                 }
             }
 
+            try
+            {
+                scheduler.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to dispose scheduler during container teardown");
+            }
+
             _logger.LogDebug("Container teardown finished containerId={ContainerId}", request.ContainerId);
         }
     }

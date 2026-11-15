@@ -221,6 +221,9 @@ public sealed class VmaFileMapping
         if (remaining > 0) return;
         if (remaining == 0)
         {
+            // Emit IN_CLOSE before releasing the last FileMmap inode reference; otherwise
+            // the inode could be finalized (DELETE_SELF) ahead of the close event.
+            File.CloseBarrier?.OnMappingReleased();
             File.Close();
             return;
         }

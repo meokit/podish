@@ -631,11 +631,20 @@ public class Engine : IDisposable
 
     private bool TryResolveUserAccessFault(uint addr, bool isWrite)
     {
-        // While servicing a guest syscall, invalid user pointers should surface as
+        // While servicing a guest syscall, invalid user pointers must surface as
         // -EFAULT to the guest rather than posting SIGSEGV via FiberTask's regular
         // page-fault path. We still fault in valid-but-not-yet-mapped pages here.
-        if (CurrentSyscallManager?.Mem != null)
-            return CurrentSyscallManager.Mem.HandleFaultDetailed(addr, isWrite, this) == FaultResult.Handled;
+        var mem = CurrentSyscallManager?.Mem;
+
+        // SyscallManager.Handle restores the engine's syscall context when the handler
+        // suspends on an awaiter, but the handler's continuation later runs from a
+        // scheduler callback while the syscall is still in flight. No guest instruction
+        // is executing then, so a guest signal can never be the right answer.
+        if (mem == null && Owner is FiberTask { PendingSyscall: not null } owner)
+            mem = owner.Process.Mem;
+
+        if (mem != null)
+            return mem.HandleFaultDetailed(addr, isWrite, this) == FaultResult.Handled;
 
         return PageFaultResolver != null && PageFaultResolver(addr, isWrite);
     }

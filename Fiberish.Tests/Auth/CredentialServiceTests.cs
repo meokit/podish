@@ -143,6 +143,69 @@ public class CredentialServiceTests
     }
 
     [Fact]
+    public void ApplyExecSetId_NoNewPrivs_IgnoresSetUidAndSetGidBits()
+    {
+        var p = new TestProcess(1000, 1000) { NoNewPrivs = true };
+        // Mode 06755 (S_ISUID | S_ISGID | rwxr-xr-x) owned by root (0:0).
+        var inode = new TestInode(0, 0, 0xFED);
+
+        CredentialService.ApplyExecSetIdOnExec(p, inode);
+
+        Assert.Equal(1000, p.EUID);
+        Assert.Equal(1000, p.EGID);
+        Assert.Equal(1000, p.SUID);
+        Assert.Equal(1000, p.FSUID);
+        Assert.False(p.HasEffectiveCapability(Process.CapabilitySysAdmin));
+    }
+
+    [Fact]
+    public void ApplyExecSetId_NoNewPrivs_PreservesDroppedRootCapabilities()
+    {
+        var p = new TestProcess(0, 0) { NoNewPrivs = true };
+        ClearCapabilities(p);
+        var inode = new TestInode(0, 0, 0x1ED); // 0755, no setid bits
+
+        CredentialService.ApplyExecSetIdOnExec(p, inode);
+
+        Assert.Equal(0, p.EUID);
+        Assert.False(p.HasEffectiveCapability(Process.CapabilitySysAdmin));
+        Assert.All(p.CapPermitted, value => Assert.Equal(0u, value));
+    }
+
+    [Fact]
+    public void CopyCredentials_DoesNotRestoreDroppedRootCapabilities()
+    {
+        var source = new TestProcess(0, 0);
+        ClearCapabilities(source);
+        var destination = new TestProcess(0, 0);
+
+        CredentialService.CopyCredentials(source, destination);
+
+        Assert.Equal(0, destination.EUID);
+        Assert.False(destination.HasEffectiveCapability(Process.CapabilitySysAdmin));
+        Assert.All(destination.CapPermitted, value => Assert.Equal(0u, value));
+    }
+
+    [Fact]
+    public void ApplyExecSetId_SetUidBit_StillGainsCapabilitiesWithoutNoNewPrivs()
+    {
+        var p = new TestProcess(1000, 1000);
+        var inode = new TestInode(0, 0, 0x9ED); // 04755
+
+        CredentialService.ApplyExecSetIdOnExec(p, inode);
+
+        Assert.Equal(0, p.EUID);
+        Assert.True(p.HasEffectiveCapability(Process.CapabilitySysAdmin));
+    }
+
+    private static void ClearCapabilities(Process process)
+    {
+        Array.Clear(process.CapEffective);
+        Array.Clear(process.CapPermitted);
+        Array.Clear(process.CapInheritable);
+    }
+
+    [Fact]
     public void ApplyExecSetId_RestoringRoot_RebuildsMinimalCapabilitySet()
     {
         var p = new TestProcess(1000, 1000);
