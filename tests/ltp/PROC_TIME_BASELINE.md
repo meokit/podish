@@ -216,6 +216,33 @@ Added 33 regression cases, including `CapabilityBoundingSetTests` and
 `InotifyFinalizationTests`, plus extensions to the scheduler, itimer and inotify
 test classes. Upstream LTP tests and assertions remain unchanged.
 
+### 13. Fourth review follow-up: attribute events, timer clocks and error paths
+- `chmod`, `fchmod`, `fchmodat`, `chown`, `fchown`, `fchownat`, `lchown` and
+  both `utimensat` variants emit `IN_ATTRIB` through one helper, so a watch on an
+  open file sees metadata changes regardless of the syscall used.
+- `setitimer(2)` validates the new `itimerval` before writing `old_value`; an
+  `EINVAL` no longer clobbers the caller's output buffer.
+- Absolute `timerfd` and POSIX timer deadlines use the same monotonic clock as
+  `CLOCK_MONOTONIC` guest reads instead of scheduler-relative ticks. `timerfd`
+  also stores its `clockid` and reports remaining time against the real clock.
+  POSIX timer `itimerspec` values are validated before old-value output, and
+  32/64-bit second-to-millisecond conversions are overflow-checked.
+- `/proc/<pid>/comm` and `timerslack_ns` writes require the caller to target its
+  own thread group or hold `CAP_SYS_RESOURCE` / `CAP_SYS_NICE`.
+- `execve` clears `PR_SET_PDEATHSIG`; `setsid` clears the caller's controlling
+  terminal association.
+- A failed `VMAManager.Mmap` removes a partially inserted VMA, unregisters its
+  rmap attachments and releases acquired mapping/anon references while leaving
+  the caller's file ownership intact.
+- The inotify finalization scope has a no-watch fast path (benchmarked at
+  0.6 ns/op instead of roughly 106 ns/op), and `Podish.Benchmarks` covers the
+  inotify, VFS, scheduler, CPU-accounting and mmap hot paths.
+
+Added 10 regression cases in the owning modules: `CpuItimerTests`,
+`InotifyLifecycleTests`, `ProcFsTests`, `ExecRawBytesTests`,
+`LtpRegressionTests`, `VirtualFDsTests` and `PosixTimerTests`. Upstream LTP
+tests and assertions remain unchanged.
+
 ## Remaining differences (not defects in the emulated ABI)
 
 | Case | Status | Why |
@@ -236,9 +263,14 @@ threshold on one sample group.
 - LTP proc-time batch: `89 PASS / 2 PARTIAL / 2 SKIP / 1 FAIL / 4 BROKEN`
   (0 timeouts) with `--timeout 15`; `timerfd_settime02` and `inotify09` carry a
   per-case `timeoutSeconds: 150` because they are multi-second race tests.
-- `Fiberish.Tests`: 1932 passed, 0 failed, 1 skipped (includes
+- `Fiberish.Tests`: 1941 passed, 0 failed, 1 skipped (includes
   `UserCopyFaultTests`, `InotifyEventTests`, `InotifyLifecycleTests`,
   `InotifyAddWatchValidationTests`, `RuntimeStateIsolationTests`,
   `CpuItimerTests`, `CpuAccountingTests`, `KernelSchedulerDisposeTests`,
-  `CapabilityBoundingSetTests` and `InotifyFinalizationTests`).
+  `CapabilityBoundingSetTests`, `InotifyFinalizationTests`, `ProcFsTests`,
+  `ExecRawBytesTests`, `LtpRegressionTests`, `VirtualFDsTests` and
+  `PosixTimerTests`).
+- Targeted LTP rerun after the fixes: 11 PASS / 1 PARTIAL
+  (`setsid01`, `prctl01/02/03/05/08/09`, `timerfd02`, `timerfd_create01`,
+  `timerfd_gettime01`, `timerfd_settime01/02`).
 - LTP runner self-tests: 20/20.
