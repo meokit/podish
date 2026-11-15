@@ -72,6 +72,17 @@ file static class ProcContext
     }
 }
 
+internal static class ProcTaskPermission
+{
+    /// <summary>
+    ///     Linux allows a process to change its own comm/timerslack; changing another
+    ///     task requires the capability associated with that procfs attribute.
+    /// </summary>
+    internal static bool CanWriteTask(Process? caller, Process target, int capability) =>
+        caller != null &&
+        (caller.TGID == target.TGID || caller.HasEffectiveCapability(capability));
+}
+
 file sealed class ProcOpenContext
 {
     public ProcOpenContext(KernelScheduler? scheduler, FiberTask? task, Process? process,
@@ -441,6 +452,8 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
     {
         var process = context.Scheduler?.GetProcess(_pid);
         if (process == null) return -(int)Errno.ESRCH;
+        if (!ProcTaskPermission.CanWriteTask(context.Process, process, Process.CapabilitySysResource))
+            return -(int)Errno.EPERM;
 
         var trimmed = buffer;
         var nl = trimmed.IndexOf((byte)'\n');
@@ -455,6 +468,8 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
     {
         var process = context.Scheduler?.GetProcess(_pid);
         if (process == null) return -(int)Errno.ESRCH;
+        if (!ProcTaskPermission.CanWriteTask(context.Process, process, Process.CapabilitySysNice))
+            return -(int)Errno.EPERM;
 
         var text = Encoding.UTF8.GetString(buffer).Trim();
         if (!long.TryParse(text, out var val) || val < 0)

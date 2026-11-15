@@ -79,6 +79,8 @@ public class Process
     public const int CapabilityKill = 5;
     public const int CapabilitySetPcap = 8;
     public const int CapabilitySysAdmin = 21;
+    public const int CapabilitySysNice = 23;
+    public const int CapabilitySysResource = 24;
     public const int CapabilityLast = 40; // CAP_CHECKPOINT_RESTORE
     private static readonly byte[] EmptyCmdline = [];
     private static readonly ResourceLimit[] DefaultResourceLimits = CreateDefaultResourceLimits();
@@ -577,6 +579,8 @@ public class Process
 
     private void ResetSignalDispositionsForExec()
     {
+        // Linux clears the parent-death signal in execve; it must be re-armed explicitly.
+        ParentDeathSignal = 0;
         if (SignalActions.Count == 0) return;
 
         var reset = new List<int>();

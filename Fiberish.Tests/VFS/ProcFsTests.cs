@@ -1157,6 +1157,22 @@ public class ProcFsTests
             taskBoundInode.BindTaskContext(file, task);
     }
 
+    [Fact]
+    public void ProcTaskPermission_RequiresSelfOrCapability()
+    {
+        using var context = new MemoryRuntimeContext();
+        var caller = new Process(100, new VMAManager(context), null!);
+        var target = new Process(200, new VMAManager(context), null!);
+
+        Assert.False(ProcTaskPermission.CanWriteTask(caller, target, Process.CapabilitySysResource));
+        Assert.True(ProcTaskPermission.CanWriteTask(caller, caller, Process.CapabilitySysResource));
+        Assert.False(ProcTaskPermission.CanWriteTask(null, target, Process.CapabilitySysNice));
+
+        caller.SetCapability(Process.CapabilitySysResource, true, true, false);
+        Assert.True(ProcTaskPermission.CanWriteTask(caller, target, Process.CapabilitySysResource));
+        Assert.False(ProcTaskPermission.CanWriteTask(caller, target, Process.CapabilitySysNice));
+    }
+
     private sealed class NoOpInode : Inode
     {
     }

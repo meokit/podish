@@ -35,7 +35,7 @@ public class ExecRawBytesTests
         sm.MountStandardProc();
 
         var scheduler = new KernelScheduler();
-        var process = new Process(9301, mm, sm);
+        var process = new Process(9301, mm, sm) { ParentDeathSignal = 15 };
         scheduler.RegisterProcess(process);
         var task = new FiberTask(process.TGID, process, engine, scheduler);
         engine.Owner = task;
@@ -60,6 +60,7 @@ public class ExecRawBytesTests
 
             var rc = await Call(sm, "SysExecve", pathAddr);
             Assert.Equal(0, rc);
+            Assert.Equal(0, process.ParentDeathSignal);
         }
         finally
         {
