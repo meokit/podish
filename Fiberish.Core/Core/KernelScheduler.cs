@@ -71,6 +71,7 @@ public class KernelScheduler
 
     public long CurrentTick => _timerSystem.CurrentTick;
     internal TimeWheel TimerSystem => _timerSystem;
+    public int PipeMaxSize { get; set; } = 1048576;
     public bool Running { get; set; } = true;
 
     public ILoggerFactory LoggerFactory { get; set; } = new NullLoggerFactory();
@@ -226,6 +227,9 @@ public class KernelScheduler
         task.Process.AccumulateExitedThreadCpuTime(task.SnapshotThreadCpuTime());
         task.CancelAsyncSyscallForRetirement();
         task.BeginTaskRetirement();
+        if (task.Process.Threads.Count == 1)
+            task.Process.Syscalls?.ReleasePosixLocksForProcess(task.Process);
+        task.Process.Syscalls?.ReleaseTaskFileDescriptors(task);
         task.Process.Syscalls?.UnregisterEngine(task.CPU);
         task.Status = FiberTaskStatus.Terminated;
         task.ExecutionMode = TaskExecutionMode.Terminated;

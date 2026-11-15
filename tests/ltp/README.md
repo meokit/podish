@@ -33,8 +33,9 @@ batch, `cases-signals.json` is the signal + event notification batch,
 `cases-memory.json` is the memory management + address-space mapping batch,
 `cases-net-io.json` is the network sockets + I/O multiplexing batch,
 `cases-fs-fd.json` is the filesystem metadata + fcntl/flock + zero-copy I/O
-batch, and `cases-proc-time.json` is the process lifecycle + rlimit/prctl +
-timers/inotify batch. The permission, sync, signal, memory, net-io, fs-fd and
+batch (115 cases; three `needs_device` cases are excluded because the tmpfs
+image has no block device), and `cases-proc-time.json` is the process lifecycle
++ rlimit/prctl + timers/inotify batch. The permission, sync, signal, memory, net-io, fs-fd and
 proc-time manifests require a root native baseline and default to tmpfs. Build
 and run each batch into its own artifact directory so `build.json` and baselines
 do not mix with the basic batch:

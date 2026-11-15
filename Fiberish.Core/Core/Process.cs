@@ -72,6 +72,7 @@ public class Process
     public const int CapabilityNetBindService = 10;
     public const int CapabilityNetAdmin = 12;
     public const int CapabilitySysAdmin = 21;
+    public const int CapabilitySysResource = 24;
     private static readonly byte[] EmptyCmdline = [];
     private static readonly ResourceLimit[] DefaultResourceLimits = CreateDefaultResourceLimits();
 
@@ -94,6 +95,7 @@ public class Process
         UID = GID = EUID = EGID = SUID = SGID = FSUID = FSGID = 0;
         // Minimal capability model: root starts with CAP_SYS_ADMIN effective+permitted.
         SetCapability(CapabilitySysAdmin, true, true, false);
+        SetCapability(CapabilitySysResource, true, true, false);
         ResourceLimits = (ResourceLimit[])DefaultResourceLimits.Clone();
     }
 

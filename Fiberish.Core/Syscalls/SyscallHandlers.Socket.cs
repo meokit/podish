@@ -352,7 +352,7 @@ public partial class SyscallManager
                 }
             }
 
-            return AllocFD(newFile);
+            return AllocFD(newFile, task: task);
         }
 
         return -(int)Errno.ENOTSOCK;
@@ -992,11 +992,10 @@ public partial class SyscallManager
             var consumed = 0;
             for (var i = 0; i < numFds; i++)
             {
-                var fd = AllocFD(fds[i]);
+                var fd = AllocFD(fds[i], closeOnExec: cloexec, task: engine.Owner as FiberTask);
                 consumed++; // AllocFD consumes even an EMFILE reference.
                 if (fd < 0) break;
                 installedFds.Add(fd);
-                if (cloexec) SetFdCloseOnExec(fd, true);
                 BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(12 + i * 4, 4), fd);
             }
             for (var i = consumed; i < fds.Count; i++) fds[i].Close();
@@ -1035,7 +1034,7 @@ public partial class SyscallManager
 
         if (writtenBytes > 0 && !engine.CopyToUser(controlPtr, cmRaw.AsSpan(0, writtenBytes)))
         {
-            foreach (var fd in installedFds) FreeFD(fd);
+            foreach (var fd in installedFds) TryFreeFD(fd, engine.Owner as FiberTask);
             return -(int)Errno.EFAULT;
         }
         return 0;

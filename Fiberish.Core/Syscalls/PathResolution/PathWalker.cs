@@ -247,7 +247,9 @@ public class PathWalker
 
         if (current == null || mount == null)
             return nd.SetError(-(int)Errno.ENOENT);
-        if (current.Inode == null || current.Inode.Type != InodeType.Directory)
+        if (current.Inode == null)
+            return nd.SetError(-(int)Errno.ENOENT);
+        if (current.Inode.Type != InodeType.Directory)
             return nd.SetError(-(int)Errno.ENOTDIR);
 
         if (currentTask != null)
@@ -416,7 +418,7 @@ public class PathWalker
     public bool FollowSymlink(NameData nd, Dentry symlink, Mount? currentMount, FiberTask? task = null,
         bool forceFollowFinal = false)
     {
-        if (nd.Depth >= NameData.MaxSymlinkDepth)
+        if (nd.Depth >= NameData.MaxSymlinkDepth || nd.TotalLinkCount >= NameData.MaxSymlinkDepth)
             return nd.SetError(-(int)Errno.ELOOP);
 
         byte[]? target = null;

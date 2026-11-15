@@ -10,6 +10,7 @@ public struct SigInfo
     // Internal queue bookkeeping; neither field is serialized to guest siginfo_t.
     internal int? QueueOwnerUid;
     internal bool PendingWithoutInfo;
+    internal bool HasFdPayload;
 
     // Payload (Depends on the signal type)
     // POSIX says many of these are unionized. We'll flatten them for C# ease of use.

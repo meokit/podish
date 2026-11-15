@@ -53,6 +53,7 @@ public partial class SyscallManager
         }
 
         if (!ReferenceEquals(oldLoc.Mount, dirLoc.Mount)) return -(int)Errno.EXDEV;
+        if (dirLoc.Mount != null && dirLoc.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
         var newDentry = new Dentry(name, null, dirLoc.Dentry, dirLoc.Dentry.SuperBlock);
         return dirLoc.Dentry.Inode.Link(newDentry, oldLoc.Dentry.Inode);
@@ -76,6 +77,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(olddirfd);
             if (fdir == null) return -(int)Errno.EBADF;
+            if (fdir.OpenedInode?.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
             oldStartLoc = fdir.LivePath;
         }
 
@@ -84,6 +86,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(newdirfd);
             if (fdir == null) return -(int)Errno.EBADF;
+            if (fdir.OpenedInode?.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
             newStartLoc = fdir.LivePath;
         }
 
@@ -110,6 +113,7 @@ public partial class SyscallManager
         }
 
         if (!ReferenceEquals(oldLoc.Mount, dirLoc.Mount)) return -(int)Errno.EXDEV;
+        if (dirLoc.Mount != null && dirLoc.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
         var newDentry = new Dentry(name, null, dirLoc.Dentry, dirLoc.Dentry.SuperBlock);
         return dirLoc.Dentry.Inode.Link(newDentry, oldLoc.Dentry.Inode);
@@ -137,6 +141,14 @@ public partial class SyscallManager
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         if (f.OpenedInode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
+        var task = engine.Owner as FiberTask;
+        if (task?.Process != null)
+        {
+            RefreshHostfsProjectionForCaller(this, f.OpenedInode);
+            var accessRc = DacPolicy.CheckPathAccess(task.Process, f.OpenedInode, AccessMode.MayExec, true);
+            if (accessRc < 0) return accessRc;
+        }
+
         UpdateCurrentWorkingDirectory(f.LivePath, "SysFchdir");
         return 0;
     }
@@ -152,6 +164,7 @@ public partial class SyscallManager
 
         var (parentLoc, name, err) = PathWalker.PathWalkForCreate(path.UnsafeBuffer, path.Length);
         if (err != 0) return err;
+        if (parentLoc.Mount != null && parentLoc.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
         var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
         var create = DacPolicy.ComputeCreationMetadata((engine.Owner as FiberTask)?.Process, parentLoc.Dentry.Inode!,
@@ -211,7 +224,7 @@ public partial class SyscallManager
         var length = (long)(int)a2;
         if (length < 0) return -(int)Errno.EINVAL;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         if (f.OpenedInode.Type != InodeType.File) return -(int)Errno.EINVAL;
         if ((f.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EINVAL;
@@ -226,7 +239,7 @@ public partial class SyscallManager
         var length = (long)(((ulong)a3 << 32) | a2);
         if (length < 0) return -(int)Errno.EINVAL;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         if (f.OpenedInode.Type != InodeType.File) return -(int)Errno.EINVAL;
         if ((f.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EINVAL;
@@ -250,7 +263,7 @@ public partial class SyscallManager
         if (offset < 0 || length <= 0)
             return -(int)Errno.EINVAL;
 
-        var file = GetFD(fd);
+        var file = GetIoFD(fd);
         if (file?.OpenedInode == null)
             return -(int)Errno.EBADF;
         if (file.OpenedInode.Type == InodeType.Directory)
@@ -307,6 +320,7 @@ public partial class SyscallManager
         if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (targetLoc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
         if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
+        if (parentLoc.Mount != null && parentLoc.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
         // Check if empty (only . and .. entries)
         var task = engine.Owner as FiberTask;
@@ -343,12 +357,14 @@ public partial class SyscallManager
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
+            if (fdir.OpenedInode?.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
             startLoc = fdir.LivePath;
         }
 
         var (parentLoc, name, err) =
             PathWalker.PathWalkForCreate(path.UnsafeBuffer, path.Length, startLoc.IsValid ? startLoc : null);
         if (err != 0) return err;
+        if (parentLoc.Mount != null && parentLoc.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
         var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
         var create = DacPolicy.ComputeCreationMetadata((engine.Owner as FiberTask)?.Process, parentLoc.Dentry.Inode!,
@@ -440,7 +456,7 @@ public partial class SyscallManager
         if (name.IsEmpty) return -(int)Errno.EINVAL;
         if (a4 > int.MaxValue) return -(int)Errno.EINVAL;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
         var readErr = ReadUserBuffer(engine, a3, (int)a4, out var valueBytes);
@@ -469,7 +485,7 @@ public partial class SyscallManager
         var size = (int)a4;
         if (name.IsEmpty) return -(int)Errno.EINVAL;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         return CopyXAttrToUser(engine, f.OpenedInode, name.Span, valueAddr, size);
     }
@@ -493,7 +509,7 @@ public partial class SyscallManager
         if (a3 > int.MaxValue) return -(int)Errno.EINVAL;
         var size = (int)a3;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         return CopyXAttrListToUser(engine, f.OpenedInode, listAddr, size);
     }
@@ -519,7 +535,7 @@ public partial class SyscallManager
         using var nameLease = name;
         if (name.IsEmpty) return -(int)Errno.EINVAL;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         return f.OpenedInode.RemoveXAttr(name.Span);
     }
@@ -666,6 +682,7 @@ public partial class SyscallManager
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
+            if (fdir.OpenedInode?.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
             startLoc = fdir.LivePath;
         }
 
@@ -684,6 +701,7 @@ public partial class SyscallManager
             if (IsDotPath(path.Span) || EndsWithSlashDot(path.Span)) return -(int)Errno.EINVAL;
             if (targetLoc.Dentry.Inode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
             if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
+            if (parentLoc.Mount != null && parentLoc.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
             var task = engine.Owner as FiberTask;
             var entries = task != null && targetLoc.Dentry.Inode is IContextualDirectoryInode contextualDirectory
@@ -706,6 +724,7 @@ public partial class SyscallManager
 
         if (targetLoc.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
         if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
+        if (parentLoc.Mount != null && parentLoc.Mount.IsReadOnly) return -(int)Errno.EROFS;
         var taskForUnlinkAt = engine.Owner as FiberTask;
         if (taskForUnlinkAt?.Process != null)
         {
@@ -728,7 +747,7 @@ public partial class SyscallManager
         var bufAddr = a2;
         var count = (int)a3;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
         if (f.OpenedInode.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
 
@@ -1252,6 +1271,9 @@ LocResolvedUtimens64:
 
         if (!ReferenceEquals(oldParentLoc.Mount, newParentLoc.Mount))
             return -(int)Errno.EXDEV;
+        if ((oldParentLoc.Mount != null && oldParentLoc.Mount.IsReadOnly) ||
+            (newParentLoc.Mount != null && newParentLoc.Mount.IsReadOnly))
+            return -(int)Errno.EROFS;
         if (!ReferenceEquals(oldParentLoc.Mount, oldLoc.Mount))
             return -(int)Errno.EBUSY;
 
@@ -1377,6 +1399,10 @@ LocResolvedUtimens64:
         // the next Lookup will create a fresh Dentry pointing to the correct Inode.
         // This ensures maximum correctness across all possible "views" of the FS.
 
+        // dnotify: DN_RENAME applies only when old and new parents match.
+        if (ReferenceEquals(oldParentInode, newParentInode))
+            oldParentInode?.NotifyDnotifyWatchers(0x10); // DN_RENAME
+
         return 0;
     }
 
@@ -1446,6 +1472,7 @@ LocResolvedUtimens64:
                          LinuxConstants.AT_NO_AUTOMOUNT |
                          LinuxConstants.AT_STATX_SYNC_TYPE;
         if ((flags & ~knownFlags) != 0) return ValueTask.FromResult(-(int)Errno.EINVAL);
+        if ((mask & 0x80000000u) != 0) return ValueTask.FromResult(-(int)Errno.EINVAL);
 
         var syncFlags = flags & LinuxConstants.AT_STATX_SYNC_TYPE;
         if (syncFlags != LinuxConstants.AT_STATX_SYNC_AS_STAT &&
@@ -1509,6 +1536,8 @@ LocResolvedUtimens64:
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return ValueTask.FromResult(-(int)Errno.EBADF);
+            if (fdir.OpenedInode?.Type != InodeType.Directory)
+                return ValueTask.FromResult(-(int)Errno.ENOTDIR);
             startLoc = fdir.LivePath;
         }
 
@@ -1551,7 +1580,13 @@ LocResolvedUtimens64:
         var allowed = DacPolicy.CanChmod(t.Process, loc.Dentry.Inode);
         if (allowed != 0) return allowed;
 
-        return ApplyModeChange(loc.Dentry.Inode, (int)mode, t.Process);
+        var chmodRc = ApplyModeChange(loc.Dentry.Inode, (int)mode, t.Process);
+        if (chmodRc == 0)
+        {
+            loc.Dentry.Inode.NotifyDnotifyWatchers(0x20); // DN_ATTRIB
+            loc.Dentry.Parent?.Inode?.NotifyDnotifyWatchers(0x20);
+        }
+        return chmodRc;
     }
 
     private async ValueTask<int> SysFchmod(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1559,7 +1594,7 @@ LocResolvedUtimens64:
         var fd = (int)a1;
         var mode = a2;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -9; // EBADF
 
         RefreshHostfsProjectionForCaller(this, f.OpenedInode);
@@ -1568,7 +1603,13 @@ LocResolvedUtimens64:
         var allowed = DacPolicy.CanChmod(t.Process, f.OpenedInode);
         if (allowed != 0) return allowed;
 
-        return ApplyModeChange(f.OpenedInode, (int)mode, t.Process);
+        var fchmodRc = ApplyModeChange(f.OpenedInode, (int)mode, t.Process);
+        if (fchmodRc == 0)
+        {
+            f.OpenedInode.NotifyDnotifyWatchers(0x20); // DN_ATTRIB
+            f.Dentry.Parent?.Inode?.NotifyDnotifyWatchers(0x20);
+        }
+        return fchmodRc;
     }
 
     private async ValueTask<int> SysChown(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1599,7 +1640,7 @@ LocResolvedUtimens64:
         var uid = (int)a2;
         var gid = (int)a3;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -9; // EBADF
 
         RefreshHostfsProjectionForCaller(this, f.OpenedInode);
@@ -1655,7 +1696,7 @@ LocResolvedUtimens64:
 
     private async ValueTask<int> SysFsync(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var file = GetFD((int)a1);
+        var file = GetIoFD((int)a1);
         if (file == null) return -(int)Errno.EBADF;
         var inode = file.OpenedInode;
         if (inode == null) return -(int)Errno.EBADF;
@@ -1698,6 +1739,7 @@ LocResolvedUtimens64:
         if (!targetLoc.IsValid || targetLoc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (targetLoc.Dentry.Inode.Type == InodeType.Directory) return -(int)Errno.EISDIR;
         if (!ReferenceEquals(parentLoc.Mount, targetLoc.Mount)) return -(int)Errno.EBUSY;
+        if (parentLoc.Mount != null && parentLoc.Mount.IsReadOnly) return -(int)Errno.EROFS;
         var task = engine.Owner as FiberTask;
         if (task?.Process != null)
         {
@@ -1744,7 +1786,7 @@ LocResolvedUtimens64:
         var bufAddr = a2;
         var count = (int)a3;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return ValueTask.FromResult(-(int)Errno.EBADF);
 
         try
@@ -1955,7 +1997,7 @@ LocResolvedUtimens64:
         buf.Clear();
 
         var actualMask = LinuxConstants.STATX_BASIC_STATS;
-        if ((mask & LinuxConstants.STATX_MNT_ID) != 0 && mount != null)
+        if (mount != null)
             actualMask |= LinuxConstants.STATX_MNT_ID;
 
         BinaryPrimitives.WriteUInt32LittleEndian(buf.Slice(0x00), actualMask);
@@ -2179,6 +2221,7 @@ LocResolvedUtimens64:
 
         var (parentLoc, name, err) = PathWalker.PathWalkForCreate(linkpath.UnsafeBuffer, linkpath.Length);
         if (err != 0) return err;
+        if (parentLoc.Mount != null && parentLoc.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
         var dentry = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
         var create = DacPolicy.ComputeCreationMetadata((engine.Owner as FiberTask)?.Process, parentLoc.Dentry.Inode!,
@@ -2188,11 +2231,12 @@ LocResolvedUtimens64:
 
     private async ValueTask<int> SysReadlink(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
+        var bufAddr = a2;
+        var bufSize = (int)a3;
+        if (bufSize <= 0) return -(int)Errno.EINVAL;
         var pathErr = ReadPathArgumentBytes(a1, out var path);
         if (pathErr != 0) return pathErr;
         using var _ = path;
-        var bufAddr = a2;
-        var bufSize = (int)a3;
 
         var lookup = PathWalker.PathWalkWithData(path.UnsafeBuffer, path.Length, null, LookupFlags.None);
         if (lookup.HasError) return lookup.ErrorCode;
@@ -2225,24 +2269,39 @@ LocResolvedUtimens64:
         uint a6)
     {
         var dirfd = (int)a1;
-        var pathErr = ReadPathArgumentBytes(a2, out var path);
-        if (pathErr != 0) return pathErr;
-        using var _ = path;
         var bufAddr = a3;
         var bufSize = (int)a4;
+        if (bufSize <= 0) return -(int)Errno.EINVAL;
+        var pathErr = ReadPathArgumentBytes(a2, out var path, allowEmpty: true);
+        if (pathErr != 0) return pathErr;
+        using var _ = path;
 
-        PathLocation? startAt = null;
-        if (dirfd != -100 && !path.IsAbsolute)
+        PathLocation loc;
+        if (path.IsEmpty)
         {
+            if (dirfd == unchecked((int)LinuxConstants.AT_FDCWD))
+                return -(int)Errno.ENOENT;
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
-            startAt = fdir.LivePath;
+            loc = fdir.LivePath;
+        }
+        else
+        {
+            PathLocation? startAt = null;
+            if (dirfd != unchecked((int)LinuxConstants.AT_FDCWD) && !path.IsAbsolute)
+            {
+                var fdir = GetFD(dirfd);
+                if (fdir == null) return -(int)Errno.EBADF;
+                if (fdir.OpenedInode?.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
+                startAt = fdir.LivePath;
+            }
+
+            var lookup = PathWalker.PathWalkWithData(path.UnsafeBuffer, path.Length, startAt ?? CurrentWorkingDirectory,
+                LookupFlags.None);
+            if (lookup.HasError) return lookup.ErrorCode;
+            loc = lookup.Path;
         }
 
-        var lookup = PathWalker.PathWalkWithData(path.UnsafeBuffer, path.Length, startAt ?? CurrentWorkingDirectory,
-            LookupFlags.None);
-        if (lookup.HasError) return lookup.ErrorCode;
-        var loc = lookup.Path;
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
         if (loc.Dentry.Inode.Type != InodeType.Symlink) return -(int)Errno.EINVAL;
 
@@ -2282,11 +2341,13 @@ LocResolvedUtimens64:
         {
             var fdir = GetFD(dirfd);
             if (fdir == null) return -(int)Errno.EBADF;
+            if (fdir.OpenedInode?.Type != InodeType.Directory) return -(int)Errno.ENOTDIR;
             startAt = fdir.LivePath;
         }
 
         var (parentLoc, name, err) = PathWalker.PathWalkForCreate(linkpath.UnsafeBuffer, linkpath.Length, startAt);
         if (err != 0) return err;
+        if (parentLoc.Mount != null && parentLoc.Mount.IsReadOnly) return -(int)Errno.EROFS;
 
         var dentry2 = new Dentry(name, null, parentLoc.Dentry, parentLoc.Dentry!.SuperBlock);
         var create = DacPolicy.ComputeCreationMetadata((engine.Owner as FiberTask)?.Process, parentLoc.Dentry.Inode!,
@@ -2477,10 +2538,10 @@ LocResolvedUtimens64:
         var fd = (int)a1;
         var op = (int)a2;
 
-        var f = GetFD(fd);
+        var f = GetIoFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
-        return f.OpenedInode.Flock(f, op);
+        return await f.OpenedInode.FlockAsync(f, engine.Owner as FiberTask, op);
     }
 
     #region New Mount API (open_tree, move_mount, mount_setattr)

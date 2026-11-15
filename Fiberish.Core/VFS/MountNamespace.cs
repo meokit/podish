@@ -241,9 +241,11 @@ public class MountNamespace
         {
             var target = BuildMountPath(mount);
             var parentId = mount.Parent?.Id ?? 0;
+            var dev = mount.Root?.Inode?.Dev ?? mount.Root?.SuperBlock?.Dev ?? 0;
             yield return new MountInfoEntry(
                 mount.Id,
                 parentId,
+                dev,
                 mount.Source ?? "none",
                 target,
                 mount.FsType ?? "unknown",
@@ -262,6 +264,7 @@ public class MountNamespace
                 var target = "/";
                 if (!containsRoot && !TryBuildPath(new PathLocation(mount.Root, mount), root, out target)) continue;
                 entries.Add(new MountInfoEntry(mount.Id, mount.Parent?.Id ?? 0,
+                    mount.Root.Inode?.Dev ?? mount.SB.Dev,
                     mount.Source ?? "none", target, mount.FsType ?? "unknown", mount.Options ?? "rw",
                     BuildFileSystemRoot(containsRoot ? root.Dentry! : mount.Root, mount.SB.Root)));
             }
@@ -337,6 +340,7 @@ public class MountNamespace
     public readonly record struct MountInfoEntry(
         long Id,
         long ParentId,
+        uint Dev,
         string Source,
         string Target,
         string FsType,

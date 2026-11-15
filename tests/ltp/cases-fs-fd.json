@@ -1,0 +1,583 @@
+{
+  "schemaVersion": 1,
+  "description": "Filesystem metadata, directories, links, fcntl/flock descriptor control, vectored positioned I/O, and pipe/file zero-copy transfers.",
+  "requiresRoot": true,
+  "podishFsBackend": "tmpfs",
+  "cases": [
+    {
+      "name": "stat01",
+      "directory": "stat",
+      "group": "metadata"
+    },
+    {
+      "name": "stat02",
+      "directory": "stat",
+      "group": "metadata"
+    },
+    {
+      "name": "stat03",
+      "directory": "stat",
+      "group": "metadata"
+    },
+    {
+      "name": "lstat01",
+      "directory": "lstat",
+      "group": "metadata"
+    },
+    {
+      "name": "lstat02",
+      "directory": "lstat",
+      "group": "metadata"
+    },
+    {
+      "name": "fstat02",
+      "directory": "fstat",
+      "group": "metadata"
+    },
+    {
+      "name": "fstat03",
+      "directory": "fstat",
+      "group": "metadata"
+    },
+    {
+      "name": "fstatat01",
+      "directory": "fstatat",
+      "group": "metadata"
+    },
+    {
+      "name": "statx01",
+      "directory": "statx",
+      "group": "metadata"
+    },
+    {
+      "name": "statx02",
+      "directory": "statx",
+      "group": "metadata"
+    },
+    {
+      "name": "statx03",
+      "directory": "statx",
+      "group": "metadata"
+    },
+    {
+      "name": "getcwd01",
+      "directory": "getcwd",
+      "group": "dir"
+    },
+    {
+      "name": "getcwd02",
+      "directory": "getcwd",
+      "group": "dir"
+    },
+    {
+      "name": "getcwd03",
+      "directory": "getcwd",
+      "group": "dir"
+    },
+    {
+      "name": "getcwd04",
+      "directory": "getcwd",
+      "group": "dir"
+    },
+    {
+      "name": "chdir02",
+      "directory": "chdir",
+      "group": "dir"
+    },
+    {
+      "name": "chdir04",
+      "directory": "chdir",
+      "group": "dir"
+    },
+    {
+      "name": "fchdir01",
+      "directory": "fchdir",
+      "group": "dir"
+    },
+    {
+      "name": "fchdir02",
+      "directory": "fchdir",
+      "group": "dir"
+    },
+    {
+      "name": "fchdir03",
+      "directory": "fchdir",
+      "group": "dir"
+    },
+    {
+      "name": "mkdirat01",
+      "directory": "mkdirat",
+      "group": "dir"
+    },
+    {
+      "name": "mkdirat02",
+      "directory": "mkdirat",
+      "group": "dir"
+    },
+    {
+      "name": "rmdir01",
+      "directory": "rmdir",
+      "group": "dir"
+    },
+    {
+      "name": "rmdir02",
+      "directory": "rmdir",
+      "group": "dir"
+    },
+    {
+      "name": "rmdir03",
+      "directory": "rmdir",
+      "group": "dir"
+    },
+    {
+      "name": "unlink05",
+      "directory": "unlink",
+      "group": "dir"
+    },
+    {
+      "name": "unlink07",
+      "directory": "unlink",
+      "group": "dir"
+    },
+    {
+      "name": "unlink08",
+      "directory": "unlink",
+      "group": "dir"
+    },
+    {
+      "name": "unlink10",
+      "directory": "unlink",
+      "group": "dir"
+    },
+    {
+      "name": "unlinkat01",
+      "directory": "unlinkat",
+      "group": "dir"
+    },
+    {
+      "name": "rename09",
+      "directory": "rename",
+      "group": "dir"
+    },
+    {
+      "name": "rename14",
+      "directory": "rename",
+      "group": "dir"
+    },
+    {
+      "name": "renameat201",
+      "directory": "renameat2",
+      "group": "dir"
+    },
+    {
+      "name": "renameat202",
+      "directory": "renameat2",
+      "group": "dir"
+    },
+    {
+      "name": "link02",
+      "directory": "link",
+      "group": "links"
+    },
+    {
+      "name": "link04",
+      "directory": "link",
+      "group": "links"
+    },
+    {
+      "name": "link05",
+      "directory": "link",
+      "group": "links"
+    },
+    {
+      "name": "link08",
+      "directory": "link",
+      "group": "links"
+    },
+    {
+      "name": "linkat01",
+      "directory": "linkat",
+      "group": "links"
+    },
+    {
+      "name": "symlink02",
+      "directory": "symlink",
+      "group": "links"
+    },
+    {
+      "name": "symlink04",
+      "directory": "symlink",
+      "group": "links"
+    },
+    {
+      "name": "symlinkat01",
+      "directory": "symlinkat",
+      "group": "links"
+    },
+    {
+      "name": "readlinkat01",
+      "directory": "readlinkat",
+      "group": "links"
+    },
+    {
+      "name": "readlinkat02",
+      "directory": "readlinkat",
+      "group": "links"
+    },
+    {
+      "name": "fcntl02",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl03",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl04",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl05",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl08",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl09",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl10",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl12",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl13",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl14",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl15",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl17",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl18",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl22",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl23",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl24",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl25",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl26",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl27",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl29",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl30",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl31",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl32",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl33",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl34",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl35",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl36",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl37",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl38",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "fcntl39",
+      "directory": "fcntl",
+      "group": "fcntl"
+    },
+    {
+      "name": "flock01",
+      "directory": "flock",
+      "group": "fcntl"
+    },
+    {
+      "name": "flock02",
+      "directory": "flock",
+      "group": "fcntl"
+    },
+    {
+      "name": "flock03",
+      "directory": "flock",
+      "group": "fcntl"
+    },
+    {
+      "name": "flock04",
+      "directory": "flock",
+      "group": "fcntl"
+    },
+    {
+      "name": "flock06",
+      "directory": "flock",
+      "group": "fcntl"
+    },
+    {
+      "name": "flock07",
+      "directory": "flock",
+      "group": "fcntl"
+    },
+    {
+      "name": "lseek07",
+      "directory": "lseek",
+      "group": "io"
+    },
+    {
+      "name": "lseek11",
+      "directory": "lseek",
+      "group": "io"
+    },
+    {
+      "name": "llseek01",
+      "directory": "llseek",
+      "group": "io"
+    },
+    {
+      "name": "llseek02",
+      "directory": "llseek",
+      "group": "io"
+    },
+    {
+      "name": "llseek03",
+      "directory": "llseek",
+      "group": "io"
+    },
+    {
+      "name": "preadv01",
+      "directory": "preadv",
+      "group": "io"
+    },
+    {
+      "name": "preadv02",
+      "directory": "preadv",
+      "group": "io"
+    },
+    {
+      "name": "pwritev01",
+      "directory": "pwritev",
+      "group": "io"
+    },
+    {
+      "name": "pwritev02",
+      "directory": "pwritev",
+      "group": "io"
+    },
+    {
+      "name": "preadv201",
+      "directory": "preadv2",
+      "group": "io"
+    },
+    {
+      "name": "preadv202",
+      "directory": "preadv2",
+      "group": "io"
+    },
+    {
+      "name": "pwritev201",
+      "directory": "pwritev2",
+      "group": "io"
+    },
+    {
+      "name": "pwritev202",
+      "directory": "pwritev2",
+      "group": "io"
+    },
+    {
+      "name": "sendfile02",
+      "directory": "sendfile",
+      "group": "zero-copy"
+    },
+    {
+      "name": "sendfile03",
+      "directory": "sendfile",
+      "group": "zero-copy"
+    },
+    {
+      "name": "sendfile04",
+      "directory": "sendfile",
+      "group": "zero-copy"
+    },
+    {
+      "name": "sendfile05",
+      "directory": "sendfile",
+      "group": "zero-copy"
+    },
+    {
+      "name": "sendfile06",
+      "directory": "sendfile",
+      "group": "zero-copy"
+    },
+    {
+      "name": "sendfile07",
+      "directory": "sendfile",
+      "group": "zero-copy"
+    },
+    {
+      "name": "sendfile08",
+      "directory": "sendfile",
+      "group": "zero-copy"
+    },
+    {
+      "name": "splice01",
+      "directory": "splice",
+      "group": "zero-copy"
+    },
+    {
+      "name": "splice02",
+      "directory": "splice",
+      "group": "zero-copy"
+    },
+    {
+      "name": "splice03",
+      "directory": "splice",
+      "group": "zero-copy"
+    },
+    {
+      "name": "splice04",
+      "directory": "splice",
+      "group": "zero-copy"
+    },
+    {
+      "name": "splice05",
+      "directory": "splice",
+      "group": "zero-copy"
+    },
+    {
+      "name": "splice06",
+      "directory": "splice",
+      "group": "zero-copy"
+    },
+    {
+      "name": "splice07",
+      "directory": "splice",
+      "group": "zero-copy"
+    },
+    {
+      "name": "tee01",
+      "directory": "tee",
+      "group": "zero-copy"
+    },
+    {
+      "name": "tee02",
+      "directory": "tee",
+      "group": "zero-copy"
+    },
+    {
+      "name": "vmsplice01",
+      "directory": "vmsplice",
+      "group": "zero-copy"
+    },
+    {
+      "name": "vmsplice02",
+      "directory": "vmsplice",
+      "group": "zero-copy"
+    },
+    {
+      "name": "vmsplice03",
+      "directory": "vmsplice",
+      "group": "zero-copy"
+    },
+    {
+      "name": "vmsplice04",
+      "directory": "vmsplice",
+      "group": "zero-copy"
+    },
+    {
+      "name": "copy_file_range03",
+      "directory": "copy_file_range",
+      "group": "zero-copy"
+    },
+    {
+      "name": "close_range02",
+      "directory": "close_range",
+      "group": "fd"
+    }
+  ]
+}

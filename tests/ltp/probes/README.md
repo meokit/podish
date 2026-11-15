@@ -9,6 +9,9 @@ These are independent i386 oracles, not edits to upstream LTP. Build with
   events=0 still reports ERR.
 - `udp_cork.c` uses loopback UDP. It asserts that MSG_MORE overflow returns
   EMSGSIZE, discards the pending datagram, and does not contaminate the next send.
+  It also checks that a cork keeps the first send's destination (even for a
+  zero-byte first send), rather than redirecting the accumulated payload to the
+  final sendto destination.
 - `recvmsg_flags.c` uses loopback UDP. It asserts that name capacities 128/4096
   are accepted, the output name length is the actual sockaddr length, and input
   msg_flags=0/MSG_PEEK|MSG_OOB does not alter receive behavior. Receives wait with

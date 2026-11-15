@@ -40,6 +40,7 @@ public enum Errno
     EDOM = 33, /* Math argument out of domain of func */
     ERANGE = 34, /* Math result not representable */
     ENOSYS = 38, /* Invalid system call number */
+    EOVERFLOW = 75, /* Value too large for defined data type */
     ENOTEMPTY = 39, /* Directory not empty */
     ELOOP = 40, /* Too many levels of symbolic links */
     EIDRM = 43, /* Identifier removed */

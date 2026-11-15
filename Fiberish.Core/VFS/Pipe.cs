@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Native;
@@ -12,14 +13,13 @@ namespace Fiberish.VFS;
 public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatcherEdgeWaitSource,
     IPollNotificationSource
 {
-    private const int BufferSize = 65536; // 64KB pipe buffer
-    private const int MinPipeCapacity = 4096;
-    private const int MaxPipeCapacity = 1024 * 1024;
+    private const int DefaultCapacity = 65536; // 64KB default pipe buffer
     public const int PipeBuf = 4096;
+    private int _capacity;
     private byte[] _buffer;
-    private int _capacity = BufferSize;
     private readonly bool _packetMode;
     private readonly Queue<int> _packetLengths = new();
+    private readonly HashSet<LinuxFile> _openFiles = new(ReferenceEqualityComparer.Instance);
 
     // Notification handles
     private readonly WaitHandle _readHandle;
@@ -40,12 +40,86 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         _waitQueues = new PooledReadWriteWaitQueues(scheduler);
         _readHandle = _waitQueues.ReadQueue;
         _writeHandle = _waitQueues.WriteQueue;
+        var isUnpriv = scheduler.CurrentTask?.Process != null && scheduler.CurrentTask.Process.EUID != 0;
+        var initialCap = DefaultCapacity;
+        if (isUnpriv && scheduler.PipeMaxSize < initialCap)
+            initialCap = Math.Max(4096, NormalizePipeCapacity(scheduler.PipeMaxSize));
+        _capacity = initialCap;
         Type = InodeType.Fifo;
         Mode = 0x1000 | 0x1FF; // FIFO + 777
         AnonymousInodeLifecycle.Initialize(this, "PipeInode.ctor");
-        _buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+        _buffer = ArrayPool<byte>.Shared.Rent(_capacity);
         // Initially writable (empty)
         _writeHandle.Set();
+    }
+
+    private static int NormalizePipeCapacity(int requested)
+    {
+        if (requested <= 4096)
+            return 4096;
+        var rounded = BitOperations.RoundUpToPowerOf2((uint)requested);
+        return rounded > (1u << 30) ? -1 : (int)rounded;
+    }
+
+    public int GetPipeSize()
+    {
+        using (EnterStateScope())
+        {
+            return _capacity;
+        }
+    }
+
+    public int SetPipeSize(int requestedSize, bool isPrivileged)
+    {
+        if (requestedSize < 0)
+            return -(int)Errno.EINVAL;
+
+        // Round on a wide axis: INT_MAX rounds to 2 GiB, not an invalid negative size.
+        // Linux applies the unprivileged limit before attempting the allocation.
+        var targetBytes = (long)BitOperations.RoundUpToPowerOf2((uint)Math.Max(requestedSize, PipeBuf));
+        var pipeMax = _waitQueues.Scheduler.PipeMaxSize;
+        if (!isPrivileged && targetBytes > pipeMax)
+            return -(int)Errno.EPERM;
+        // This backend needs a contiguous managed byte array, unlike Linux's page-slot ring.
+        if (targetBytes > Array.MaxLength)
+            return -(int)Errno.ENOMEM;
+        var target = (int)targetBytes;
+
+        using (EnterStateScope())
+        {
+            if (_lifecycleClosed)
+                return -(int)Errno.EBADF;
+            if (target < _count)
+                return -(int)Errno.EBUSY;
+            if (target == _capacity)
+                return _capacity;
+
+            byte[] newBuffer;
+            try { newBuffer = ArrayPool<byte>.Shared.Rent(target); }
+            catch (OutOfMemoryException) { return -(int)Errno.ENOMEM; }
+            if (_count > 0)
+            {
+                var firstChunk = Math.Min(_count, _capacity - _tail);
+                new ReadOnlySpan<byte>(_buffer, _tail, firstChunk).CopyTo(newBuffer.AsSpan(0, firstChunk));
+                if (_count > firstChunk)
+                {
+                    var secondChunk = _count - firstChunk;
+                    new ReadOnlySpan<byte>(_buffer, 0, secondChunk).CopyTo(newBuffer.AsSpan(firstChunk, secondChunk));
+                }
+            }
+
+            if (_buffer.Length > 0)
+                ArrayPool<byte>.Shared.Return(_buffer, clearArray: false);
+            _buffer = newBuffer;
+            _capacity = target;
+            _tail = 0;
+            _head = _count % target;
+            if (HasWritableBuffer())
+                _writeHandle.Set();
+            else
+                _writeHandle.Reset();
+            return _capacity;
+        }
     }
 
     bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
@@ -239,6 +313,12 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
     public override void Open(LinuxFile linuxFile)
     {
+        base.Open(linuxFile);
+        using (EnterStateScope())
+        {
+            _openFiles.Add(linuxFile);
+        }
+
         const int O_ACCMODE = 3;
         var mode = (int)linuxFile.Flags & O_ACCMODE;
         if (mode == (int)FileFlags.O_RDONLY)
@@ -377,11 +457,55 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 // Update handles
                 if (_count >= _capacity) _writeHandle.Reset();
                 _readHandle.Set(); // Data available
+                NotifyAsyncReadersLocked();
 
                 return toWrite;
             }
 
             return -(int)Errno.EAGAIN;
+        }
+    }
+
+    private void NotifyAsyncReadersLocked()
+    {
+        const int O_ASYNC = 0x2000;
+        const int O_ACCMODE = 3;
+        if (_openFiles.Count == 0)
+            return;
+
+        var scheduler = _waitQueues.Scheduler;
+        foreach (var file in _openFiles)
+        {
+            if (((int)file.Flags & O_ASYNC) == 0)
+                continue;
+            var mode = (int)file.Flags & O_ACCMODE;
+            if (mode == (int)FileFlags.O_WRONLY)
+                continue;
+
+            var ownerId = file.AsyncOwnerId;
+            if (ownerId <= 0)
+                continue;
+
+            var sig = file.AsyncSignal > 0 ? file.AsyncSignal : (int)Signal.SIGIO;
+            var info = new SigInfo { Signo = sig, Code = -4 /* SI_ASYNCIO */, Pid = 0, Uid = 0 };
+            switch (file.AsyncOwnerType)
+            {
+                case 0: // F_OWNER_TID
+                {
+                    var targetTask = scheduler.GetTask(ownerId);
+                    if (targetTask != null)
+                        targetTask.PostSignal(sig);
+                    break;
+                }
+                case 1: // F_OWNER_PID
+                    scheduler.SignalProcessInfo(ownerId, sig, info);
+                    break;
+                case 2: // F_OWNER_PGRP
+                    foreach (var proc in scheduler.GetProcessesSnapshot())
+                        if (proc.PGID == ownerId)
+                            scheduler.SignalProcessInfo(proc.TGID, sig, info);
+                    break;
+            }
         }
     }
 
@@ -534,7 +658,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         }
     }
 
-    public int Capacity => _capacity;
+    public int Capacity => GetPipeSize();
 
     /// <summary>
     ///     Linux tracks pipe fill in page-sized buffers: a pipe with a partially consumed
@@ -543,33 +667,8 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     /// </summary>
     private bool HasWritableBuffer() => _capacity - _count >= PipeBuf;
 
-    public int TrySetCapacity(int requested)
-    {
-        using (EnterStateScope())
-        {
-            if (_lifecycleClosed) return -(int)Errno.EBADF;
-            if (requested < 0) return -(int)Errno.EINVAL;
-            // The backend has a bounded memory budget; never silently clamp and report a
-            // smaller successful allocation, or overflow the rounding arithmetic.
-            if (requested > MaxPipeCapacity) return -(int)Errno.ENOMEM;
-            var size = (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)Math.Max(requested, MinPipeCapacity));
-            if (size < _count) return -(int)Errno.EBUSY;
-            if (size != _capacity)
-            {
-                var next = ArrayPool<byte>.Shared.Rent(size);
-                var first = Math.Min(_count, _capacity - _tail);
-                _buffer.AsSpan(_tail, first).CopyTo(next);
-                _buffer.AsSpan(0, _count - first).CopyTo(next.AsSpan(first));
-                ArrayPool<byte>.Shared.Return(_buffer);
-                _buffer = next;
-                _tail = 0;
-                _head = _count % size;
-            }
-            _capacity = size;
-            if (HasWritableBuffer()) _writeHandle.Set();
-            return _capacity;
-        }
-    }
+    public int TrySetCapacity(int requested) => SetPipeSize(requested,
+        _waitQueues.Scheduler.CurrentTask?.Process.HasEffectiveCapability(Process.CapabilitySysResource) ?? false);
 
     public override short Poll(LinuxFile linuxFile, short events)
     {
@@ -651,6 +750,12 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
     public override void Release(LinuxFile linuxFile)
     {
+        base.Release(linuxFile);
+        using (EnterStateScope())
+        {
+            _openFiles.Remove(linuxFile);
+        }
+
         const int O_ACCMODE = 3;
         var mode = (int)linuxFile.Flags & O_ACCMODE;
         if (mode == (int)FileFlags.O_RDONLY)

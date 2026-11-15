@@ -1079,7 +1079,8 @@ file enum ProcSysKind
 {
     Root,
     Kernel,
-    Vm
+    Vm,
+    Fs
 }
 
 file sealed class ProcSysRootInode : Inode
@@ -1118,6 +1119,8 @@ file sealed class ProcSysRootInode : Inode
             created = CreateDir(dir, childName, ProcSysKind.Kernel);
         else if (_kind == ProcSysKind.Root && name.SequenceEqual("vm"u8))
             created = CreateDir(dir, childName, ProcSysKind.Vm);
+        else if (_kind == ProcSysKind.Root && name.SequenceEqual("fs"u8))
+            created = CreateDir(dir, childName, ProcSysKind.Fs);
         else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("hostname"u8))
             created = CreateFile(dir, childName, ctx => ProcFsManager.GenerateSysKernelHostname(ctx.Process));
         else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("osrelease"u8))
@@ -1151,6 +1154,28 @@ file sealed class ProcSysRootInode : Inode
                     }
                     return -(int)Errno.EINVAL;
                 });
+        else if (_kind == ProcSysKind.Fs && name.SequenceEqual("lease-break-time"u8))
+            created = CreateFile(dir, childName, _ => "45\n", 0x1A4,
+                (_, data, _) =>
+                {
+                    var text = FsEncoding.DecodeUtf8Lossy(data).Trim();
+                    return int.TryParse(text, out _) ? (int)data.Length : -(int)Errno.EINVAL;
+                });
+        else if (_kind == ProcSysKind.Fs && name.SequenceEqual("pipe-max-size"u8))
+            created = CreateFile(dir, childName, ctx => $"{ctx.Scheduler?.PipeMaxSize ?? 1048576}\n", 0x1A4,
+                (ctx, data, _) =>
+                {
+                    if (ctx.Process != null && ctx.Process.EUID != 0)
+                        return -(int)Errno.EACCES;
+                    var text = FsEncoding.DecodeUtf8Lossy(data).Trim();
+                    if (int.TryParse(text, out var val) && val >= 4096)
+                    {
+                        if (ctx.Scheduler != null)
+                            ctx.Scheduler.PipeMaxSize = val;
+                        return (int)data.Length;
+                    }
+                    return -(int)Errno.EINVAL;
+                });
 
         if (created != null)
             dir.CacheChild(created, "ProcSysRootInode.Lookup");
@@ -1171,6 +1196,11 @@ file sealed class ProcSysRootInode : Inode
             case ProcSysKind.Root:
                 entries.Add(new DirectoryEntry { Name = "kernel", Ino = 0, Type = InodeType.Directory });
                 entries.Add(new DirectoryEntry { Name = "vm", Ino = 0, Type = InodeType.Directory });
+                entries.Add(new DirectoryEntry { Name = "fs", Ino = 0, Type = InodeType.Directory });
+                break;
+            case ProcSysKind.Fs:
+                entries.Add(new DirectoryEntry { Name = "pipe-max-size", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "lease-break-time", Ino = 0, Type = InodeType.File });
                 break;
             case ProcSysKind.Kernel:
                 entries.Add(new DirectoryEntry { Name = "hostname", Ino = 0, Type = InodeType.File });

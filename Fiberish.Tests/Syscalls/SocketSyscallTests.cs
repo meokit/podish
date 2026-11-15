@@ -79,9 +79,12 @@ public class SocketSyscallTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Socket_PrivateNetwork_ListenerTcpOptionsApplyToEveryAcceptedBackend(bool setAfterListen)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Socket_PrivateNetwork_ListenerTcpOptionsApplyToEveryAcceptedBackend(
+        bool setAfterListen, bool disableBeforeAccept)
     {
         using var env = new TestEnv();
         env.SyscallManager.NetworkMode = NetworkMode.Private;
@@ -107,6 +110,15 @@ public class SocketSyscallTests
             var client = Assert.IsType<NetstackSocketInode>(clientFile.OpenedInode);
             var connect = await client.ConnectAsync(clientFile, env.Task, server.LocalEndPoint!);
             Assert.True(connect == 0 || connect == -(int)Errno.EINPROGRESS);
+            for (var poll = 0; poll < 100 && (server.Poll(serverFile, PollEvents.POLLIN) & PollEvents.POLLIN) == 0; poll++) { }
+            Assert.NotEqual(0, server.Poll(serverFile, PollEvents.POLLIN) & PollEvents.POLLIN);
+            if (disableBeforeAccept)
+            {
+                Assert.Equal(0, server.SetSocketOption(serverFile, env.Task, LinuxConstants.IPPROTO_TCP,
+                    LinuxConstants.TCP_NODELAY, BitConverter.GetBytes(0)));
+                Assert.Equal(0, server.SetSocketOption(serverFile, env.Task, LinuxConstants.SOL_SOCKET,
+                    LinuxConstants.SO_KEEPALIVE, BitConverter.GetBytes(0)));
+            }
             var result = await server.AcceptAsync(serverFile, env.Task, 0);
             Assert.Equal(0, result.Rc);
             var accepted = Assert.IsType<NetstackSocketInode>(result.Inode);
@@ -123,6 +135,13 @@ public class SocketSyscallTests
             Assert.Equal(0, accepted.GetSocketOption(acceptedFile, env.Task, LinuxConstants.SOL_SOCKET,
                 LinuxConstants.SO_KEEPALIVE, value, out _));
             Assert.Equal(1, BinaryPrimitives.ReadInt32LittleEndian(value));
+            if (disableBeforeAccept)
+            {
+                Assert.Equal(0, server.SetSocketOption(serverFile, env.Task, LinuxConstants.IPPROTO_TCP,
+                    LinuxConstants.TCP_NODELAY, BitConverter.GetBytes(1)));
+                Assert.Equal(0, server.SetSocketOption(serverFile, env.Task, LinuxConstants.SOL_SOCKET,
+                    LinuxConstants.SO_KEEPALIVE, BitConverter.GetBytes(1)));
+            }
         }
     }
 

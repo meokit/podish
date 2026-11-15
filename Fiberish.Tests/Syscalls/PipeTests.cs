@@ -12,6 +12,18 @@ namespace Fiberish.Tests.Syscalls;
 public class PipeTests
 {
     [Theory]
+    [InlineData(false, -(int)Errno.EPERM)]
+    [InlineData(true, -(int)Errno.ENOMEM)]
+    public void Pipe_HugeResizeChecksPrivilegeBeforeManagedAllocationLimit(bool privileged, int expected)
+    {
+        using var env = new TestEnv();
+        var pipe = new PipeInode(env.Scheduler!) { SuperBlock = env.SyscallManager.MemfdSuperBlock };
+        using var read = new LinuxFile(new Dentry("pipe", pipe, null, pipe.SuperBlock), FileFlags.O_RDONLY, null);
+        Assert.Equal(expected, pipe.SetPipeSize(int.MaxValue, privileged));
+        Assert.Equal(65536, pipe.Capacity);
+    }
+
+    [Theory]
     [InlineData(4096, 131072)]
     [InlineData(131072, 4096)]
     public async Task Pipe_ResizeWrappedUnreadData_PeekAndReadPreserveOrder(int oldCapacity, int newCapacity)
@@ -64,7 +76,8 @@ public class PipeTests
         Assert.Equal(extra, readBack.AsSpan(10000).ToArray());
         Assert.Equal(16384, pipe.TrySetCapacity(12289));
         Assert.Equal(4096, pipe.TrySetCapacity(0));
-        Assert.Equal(-(int)Errno.ENOMEM, pipe.TrySetCapacity(int.MaxValue));
+        // Linux checks CAP_SYS_RESOURCE/pipe-max-size before attempting a huge allocation.
+        Assert.Equal(-(int)Errno.EPERM, pipe.TrySetCapacity(int.MaxValue));
     }
 
     private static readonly FieldInfo AsyncWaitQueuePoolField =

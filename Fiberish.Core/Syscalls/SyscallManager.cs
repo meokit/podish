@@ -28,7 +28,14 @@ public partial class SyscallManager
     /// </summary>
     private readonly MountNamespace _mountNamespace;
 
-    private readonly SharedFdTable _sharedFdTable;
+    private SharedFdTable _sharedFdTable;
+    private bool _ownsInitialFdTable = true;
+    private readonly Dictionary<FiberTask, SharedFdTable> _taskFdTables = [];
+
+    private SharedFdTable CurrentFdTable => CurrentTask is { Exited: false } task && !IsClosed &&
+                                            task.Status != FiberTaskStatus.Terminated
+        ? GetTaskFdTable(task)
+        : _taskFdTables.Values.FirstOrDefault() ?? _sharedFdTable;
 
     private readonly SharedFsState _sharedFsState;
     private readonly SharedUnixSocketNamespace _sharedUnixSocketNamespace;
@@ -181,7 +188,7 @@ public partial class SyscallManager
     // Ambient engine for the currently executing synchronous syscall only.
     // Do not capture or depend on this across await/callback boundaries.
     public Engine CurrentSyscallEngine { get; set; } = null!;
-    internal FiberTask? CurrentTask => CurrentSyscallEngine.Owner as FiberTask;
+    internal FiberTask? CurrentTask => CurrentSyscallEngine?.Owner as FiberTask;
     internal Process? CurrentProcess => CurrentTask?.Process;
     internal MemoryRuntimeContext MemoryContext { get; }
 
@@ -218,7 +225,7 @@ public partial class SyscallManager
     public SysVSemManager SysVSem { get; }
 
     // File Descriptors (Shared if CLONE_FILES)
-    public Dictionary<int, LinuxFile> FDs => _sharedFdTable.Fds;
+    public Dictionary<int, LinuxFile> FDs => CurrentFdTable.Fds;
 
     public FutexManager Futex { get; }
 
@@ -252,7 +259,7 @@ public partial class SyscallManager
     public uint SigReturnAddr { get; private set; }
     public uint RtSigReturnAddr { get; private set; }
 
-    private HashSet<int> FdCloseOnExecSet => _sharedFdTable.CloseOnExec;
+    private HashSet<int> FdCloseOnExecSet => CurrentFdTable.CloseOnExec;
 
     public LoopbackNetNamespace GetOrCreatePrivateNetNamespace()
     {
@@ -1243,6 +1250,8 @@ public partial class SyscallManager
 
     public void RegisterEngine(Engine engine)
     {
+        if (engine.Owner is FiberTask task)
+            RegisterTaskFileDescriptors(task);
         engine.PageFaultResolver ??= (addr, isWrite) => Mem.HandleFault(addr, isWrite, engine);
         try
         {
@@ -1261,27 +1270,10 @@ public partial class SyscallManager
         ProcessAddressSpaceSync.UnregisterEngineAddressSpace(Mem, engine);
     }
 
-    public SyscallManager Clone(VMAManager newMem, bool shareFiles, bool shareFs)
+    public SyscallManager Clone(VMAManager newMem, bool shareFiles, bool shareFs, FiberTask? caller = null)
     {
-        SharedFdTable newSharedFdTable;
-        if (shareFiles)
-        {
-            newSharedFdTable = _sharedFdTable.AddRef();
-        }
-        else
-        {
-            newSharedFdTable = new SharedFdTable();
-            foreach (var kv in FDs)
-            {
-                // fork/clone (without CLONE_FILES) should duplicate fd table entries,
-                // but still reference the same open file description.
-                kv.Value.Get();
-                newSharedFdTable.Fds[kv.Key] = kv.Value;
-            }
-
-            foreach (var fd in FdCloseOnExecSet)
-                newSharedFdTable.CloseOnExec.Add(fd);
-        }
+        var sourceTable = caller == null ? CurrentFdTable : GetTaskFdTable(caller);
+        var newSharedFdTable = shareFiles ? sourceTable.AddRef() : sourceTable.Copy();
 
         // Share the mount namespace (mounts are shared across fork/clone by default)
         var sharedNamespace = _mountNamespace.Share();
@@ -1481,6 +1473,72 @@ public partial class SyscallManager
         }
     }
 
+    private SharedFdTable GetTaskFdTable(FiberTask task)
+    {
+        if (_taskFdTables.TryGetValue(task, out var table)) return table;
+        if (_ownsInitialFdTable)
+        {
+            // Transfer the bootstrap/process-clone reference to the first task.
+            _ownsInitialFdTable = false;
+            table = _sharedFdTable;
+        }
+        else
+            table = (_taskFdTables.Values.FirstOrDefault() ?? _sharedFdTable).AddRef();
+        _taskFdTables.Add(task, table);
+        return table;
+    }
+
+    internal void RegisterTaskFileDescriptors(FiberTask task)
+    {
+        _ = GetTaskFdTable(task);
+    }
+
+    internal void InheritTaskFileDescriptors(FiberTask parent, FiberTask child, bool shareFiles)
+    {
+        var source = GetTaskFdTable(parent);
+        var inherited = shareFiles ? source.AddRef() : source.Copy();
+        if (_taskFdTables.Remove(child, out var old))
+            ReleaseFdTable(old, child.Process);
+        _taskFdTables[child] = inherited;
+    }
+
+    internal void ReleaseTaskFileDescriptors(FiberTask task)
+    {
+        if (_taskFdTables.Remove(task, out var table))
+            ReleaseFdTable(table, task.Process);
+    }
+
+    private static void ReleaseFdTable(SharedFdTable table, Process? owner)
+    {
+        if (!table.ReleaseRef()) return;
+        foreach (var file in table.Fds.Values)
+        {
+            if (owner != null) file.OpenedInode?.ReleasePosixLocks(owner);
+            file.Close();
+        }
+        table.Fds.Clear();
+        table.CloseOnExec.Clear();
+    }
+
+    /// <summary>Detach only the calling task's descriptor table (not its siblings').</summary>
+    public void UnshareFdTable(FiberTask? task = null)
+    {
+        task ??= CurrentTask;
+        if (task == null)
+        {
+            var old = _sharedFdTable;
+            _sharedFdTable = old.Copy();
+            ReleaseFdTable(old, null);
+            return;
+        }
+
+        var oldTable = GetTaskFdTable(task);
+        _taskFdTables[task] = oldTable.Copy();
+        // Copying the table does not close any descriptor from the task's view.
+        // In particular it must not release that process's POSIX locks.
+        ReleaseFdTable(oldTable, null);
+    }
+
     public void Close()
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0)
@@ -1489,12 +1547,13 @@ public partial class SyscallManager
         if (CurrentSyscallEngine is not null)
             UnregisterEngine(CurrentSyscallEngine);
 
-        if (_sharedFdTable.ReleaseRef())
+        foreach (var (task, table) in _taskFdTables)
+            ReleaseFdTable(table, task.Process);
+        _taskFdTables.Clear();
+        if (_ownsInitialFdTable)
         {
-            foreach (var fd in FDs.Values)
-                fd.Close();
-            FDs.Clear();
-            FdCloseOnExecSet.Clear();
+            ReleaseFdTable(_sharedFdTable, null);
+            _ownsInitialFdTable = false;
         }
 
         // Release explicit container-owned mount pins (e.g. resolv.conf detached mount).
@@ -1565,6 +1624,18 @@ public partial class SyscallManager
         public bool ReleaseRef()
         {
             return Interlocked.Decrement(ref _refCount) == 0;
+        }
+
+        public SharedFdTable Copy()
+        {
+            var copy = new SharedFdTable();
+            foreach (var (fd, file) in Fds)
+            {
+                file.Get();
+                copy.Fds.Add(fd, file);
+            }
+            copy.CloseOnExec.UnionWith(CloseOnExec);
+            return copy;
         }
     }
 
