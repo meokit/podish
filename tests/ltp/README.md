@@ -18,7 +18,11 @@ the synchronization batch (futex and SysV semaphores; 3 PASS, 12 PARTIAL,
 batch (66 cases; first baseline: 22 PASS). See
 [MEMORY_FIX_REPORT.md](MEMORY_FIX_REPORT.md) for bounded repairs
 (36 PASS, 11 FAIL, 14 BROKEN, 0 TIMEOUT, 5 SKIP) and deferred memory-model work.
-The proposed next series is documented in the
+[PIPE_BASELINE.md](PIPE_BASELINE.md) selects the next batch: pipes and FIFOs
+(17 cases; first Podish baseline 14 PASS, 1 FAIL, 2 BROKEN). SysV IPC remains
+available as a lower-usage compatibility reference in
+[IPC_BASELINE.md](IPC_BASELINE.md) (39 cases; first Podish baseline 4 PASS,
+6 FAIL, 26 BROKEN, 3 SKIP). The proposed next series is documented in the
 [direct-mapped memory refactor plan](../../docs/direct-mapped-memory-refactor-plan.md)
 and [hostfs/SilkFS test plan](MAPPED_FILESYSTEM_TEST_PLAN.md). These are plans,
 not implemented runner support or new backend results.
@@ -34,9 +38,12 @@ batch, `cases-signals.json` is the signal + event notification batch,
 `cases-net-io.json` is the network sockets + I/O multiplexing batch,
 `cases-fs-fd.json` is the filesystem metadata + fcntl/flock + zero-copy I/O
 batch (115 cases; three `needs_device` cases are excluded because the tmpfs
-image has no block device), and `cases-proc-time.json` is the process lifecycle
-+ rlimit/prctl + timers/inotify batch. The permission, sync, signal, memory, net-io, fs-fd and
-proc-time manifests require a root native baseline and default to tmpfs. Build
+image has no block device), `cases-proc-time.json` is the process lifecycle
++ rlimit/prctl + timers/inotify batch, `cases-pipe.json` is the pipe and FIFO
+batch (17 cases), and `cases-ipc.json` is the deferred SysV shared memory +
+message queue batch (39 cases; SysV semaphores remain in the sync batch). The
+permission, sync, signal, memory, net-io, fs-fd, proc-time, pipe and IPC
+manifests require a root native baseline and default to tmpfs. Build
 and run each batch into its own artifact directory so `build.json` and baselines
 do not mix with the basic batch:
 
@@ -57,12 +64,15 @@ python tests/ltp/run.py --backend podish --artifacts artifacts/ltp-permissions \
 The synchronization batch uses the same workflow with
 `cases-sync.json` and `artifacts/ltp-sync`. The signal and event batch uses
 `cases-signals.json` and `artifacts/ltp-signals`. The memory management batch
-uses `cases-memory.json` and `artifacts/ltp-memory`. The three newer baseline
+uses `cases-memory.json` and `artifacts/ltp-memory`. The newer baseline
 batches use `cases-net-io.json` (`artifacts/ltp-net-io`, see
 [NET_IO_BASELINE.md](NET_IO_BASELINE.md)), `cases-fs-fd.json`
-(`artifacts/ltp-fs-fd`, see [FS_FD_BASELINE.md](FS_FD_BASELINE.md)), and
+(`artifacts/ltp-fs-fd`, see [FS_FD_BASELINE.md](FS_FD_BASELINE.md)),
 `cases-proc-time.json` (`artifacts/ltp-proc-time`, see
-[PROC_TIME_BASELINE.md](PROC_TIME_BASELINE.md)). A manifest case may also set
+[PROC_TIME_BASELINE.md](PROC_TIME_BASELINE.md)), `cases-pipe.json`
+(`artifacts/ltp-pipe`, see [PIPE_BASELINE.md](PIPE_BASELINE.md)), and the
+deferred `cases-ipc.json` (`artifacts/ltp-ipc`, see
+[IPC_BASELINE.md](IPC_BASELINE.md)). A manifest case may also set
 `"timeoutSeconds"` to override the host timeout for long-running race tests.
 
 The `tmpfs` backend imports one generated image containing all selected

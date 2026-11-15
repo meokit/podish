@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "description": "Pipes and FIFOs: broken-pipe/SIGPIPE, nonblocking capacity, EMFILE/ENFILE, reader wakeup, EOF, pipe2 sizing and FIFO descriptor checks. The basic batch already covers pipe01 and pipe2_01.",
+  "requiresRoot": true,
+  "podishFsBackend": "tmpfs",
+  "cases": [
+    {"name": "pipe02", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe03", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe04", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe05", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe06", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe07", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe08", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe09", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe10", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe11", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe12", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe13", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe14", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe15", "directory": "pipe", "group": "pipe"},
+    {"name": "pipe2_04", "directory": "pipe2", "group": "pipe2"},
+    {"name": "dup05", "directory": "dup", "group": "fifo"},
+    {"name": "fsync03", "directory": "fsync", "group": "fifo"}
+  ]
+}
