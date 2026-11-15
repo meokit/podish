@@ -927,7 +927,9 @@ LocResolvedUtimens32:
             var permissionRc = CheckUtimensPermissions(engine, loc, true);
             if (permissionRc < 0) return permissionRc;
             var resolved = ResolveRequestedTimes(loc.Dentry.Inode.ATime, loc.Dentry.Inode.MTime, true);
-            return loc.Dentry.Inode.UpdateTimes(resolved.Atime, resolved.Mtime, resolved.Ctime);
+            var rc = loc.Dentry.Inode.UpdateTimes(resolved.Atime, resolved.Mtime, resolved.Ctime);
+            if (rc == 0) RaiseAttrib(loc);
+            return rc;
         }
 
         var buf = new byte[16];
@@ -1009,7 +1011,9 @@ LocResolvedUtimens64:
             var permissionRc = CheckUtimensPermissions(engine, loc, true);
             if (permissionRc < 0) return permissionRc;
             var resolved = ResolveRequestedTimes(loc.Dentry.Inode.ATime, loc.Dentry.Inode.MTime, true);
-            return loc.Dentry.Inode.UpdateTimes(resolved.Atime, resolved.Mtime, resolved.Ctime);
+            var rc = loc.Dentry.Inode.UpdateTimes(resolved.Atime, resolved.Mtime, resolved.Ctime);
+            if (rc == 0) RaiseAttrib(loc);
+            return rc;
         }
 
         // 64-bit timespec: 16 bytes per timespec (8-byte sec + 8-byte nsec)
@@ -1046,8 +1050,20 @@ LocResolvedUtimens64:
             mtimeSec,
             mtimeNsec);
         if (requested.Error.HasValue) return requested.Error.Value;
-        return inode.UpdateTimes(requested.Atime, requested.Mtime, requested.Ctime);
+        var rc = inode.UpdateTimes(requested.Atime, requested.Mtime, requested.Ctime);
+        if (rc == 0)
+            RaiseAttrib(loc);
+        return rc;
     }
+
+    private static void RaiseAttrib(PathLocation loc)
+    {
+        var dentry = loc.Dentry;
+        if (dentry?.Inode is { } inode)
+            InotifyEvents.RaiseChild(dentry, inode, LinuxConstants.IN_ATTRIB);
+    }
+
+    private static void RaiseAttrib(LinuxFile file) => RaiseAttrib(file.LivePath);
 
     private int CheckUtimensPermissions(Engine engine, PathLocation loc, bool useCurrentTimeShortcut,
         int? atimeNsec = null,
@@ -1104,7 +1120,9 @@ LocResolvedUtimens64:
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
         var allowed = DacPolicy.CanChown(task.Process, loc.Dentry.Inode, uid, gid);
         if (allowed != 0) return allowed;
-        return ApplyOwnershipChange(loc.Dentry.Inode, uid, gid);
+        var rc = ApplyOwnershipChange(loc.Dentry.Inode, uid, gid);
+        if (rc == 0) RaiseAttrib(loc);
+        return rc;
     }
 
     private async ValueTask<int> SysFchmodAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1139,7 +1157,9 @@ LocResolvedUtimens64:
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
         var allowed = DacPolicy.CanChmod(task.Process, loc.Dentry.Inode);
         if (allowed != 0) return allowed;
-        return ApplyModeChange(loc.Dentry.Inode, (int)mode, task.Process);
+        var rc = ApplyModeChange(loc.Dentry.Inode, (int)mode, task.Process);
+        if (rc == 0) RaiseAttrib(loc);
+        return rc;
     }
 
     private async ValueTask<int> SysFaccessAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1634,7 +1654,7 @@ LocResolvedUtimens64:
 
         var chmodRc = ApplyModeChange(loc.Dentry.Inode, (int)mode, t.Process);
         if (chmodRc == 0)
-            InotifyEvents.RaiseChild(loc.Dentry, loc.Dentry.Inode, LinuxConstants.IN_ATTRIB);
+            RaiseAttrib(loc);
         return chmodRc;
     }
 
@@ -1652,7 +1672,9 @@ LocResolvedUtimens64:
         var allowed = DacPolicy.CanChmod(t.Process, f.OpenedInode);
         if (allowed != 0) return allowed;
 
-        return ApplyModeChange(f.OpenedInode, (int)mode, t.Process);
+        var rc = ApplyModeChange(f.OpenedInode, (int)mode, t.Process);
+        if (rc == 0) RaiseAttrib(f);
+        return rc;
     }
 
     private async ValueTask<int> SysChown(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1674,7 +1696,9 @@ LocResolvedUtimens64:
         var allowed = DacPolicy.CanChown(t.Process, loc.Dentry.Inode, uid, gid);
         if (allowed != 0) return allowed;
 
-        return ApplyOwnershipChange(loc.Dentry.Inode, uid, gid);
+        var rc = ApplyOwnershipChange(loc.Dentry.Inode, uid, gid);
+        if (rc == 0) RaiseAttrib(loc);
+        return rc;
     }
 
     private async ValueTask<int> SysFchown(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1692,7 +1716,9 @@ LocResolvedUtimens64:
         var allowed = DacPolicy.CanChown(t.Process, f.OpenedInode, uid, gid);
         if (allowed != 0) return allowed;
 
-        return ApplyOwnershipChange(f.OpenedInode, uid, gid);
+        var rc = ApplyOwnershipChange(f.OpenedInode, uid, gid);
+        if (rc == 0) RaiseAttrib(f);
+        return rc;
     }
 
     private async ValueTask<int> SysLchown(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1714,7 +1740,9 @@ LocResolvedUtimens64:
         var allowed = DacPolicy.CanChown(t.Process, loc.Dentry.Inode, uid, gid);
         if (allowed != 0) return allowed;
 
-        return ApplyOwnershipChange(loc.Dentry.Inode, uid, gid);
+        var rc = ApplyOwnershipChange(loc.Dentry.Inode, uid, gid);
+        if (rc == 0) RaiseAttrib(loc);
+        return rc;
     }
 
     private async ValueTask<int> SysGetCwd(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

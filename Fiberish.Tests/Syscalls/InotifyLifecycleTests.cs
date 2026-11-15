@@ -185,6 +185,71 @@ public class InotifyLifecycleTests
         Assert.Equal(moveSelf, env.ReadMasks(watchB.Inode));
     }
 
+    [Fact]
+    public void Fchmod_EmitsInAttrib()
+    {
+        using var env = new SyscallTestEnv();
+        env.Sm.WriteGuestFile("/fchmod", "x"u8);
+        using var watch = new WatchHandle(env.Watch(InodeOf(env, "/fchmod"), LinuxConstants.IN_ATTRIB));
+        var fd = Open(env, "/fchmod", FileFlags.O_RDWR);
+        Assert.True(fd >= 0);
+
+        Assert.Equal(0, env.Invoke("SysFchmod", (uint)fd, 0x1A4));
+        uint[] expected = [LinuxConstants.IN_ATTRIB];
+        Assert.Equal(expected, env.ReadMasks(watch.Inode));
+        env.Sm.FreeFD(fd);
+    }
+
+    [Fact]
+    public void FchmodAt_EmitsInAttrib()
+    {
+        using var env = new SyscallTestEnv();
+        env.Sm.WriteGuestFile("/fchmodat", "x"u8);
+        using var watch = new WatchHandle(env.Watch(InodeOf(env, "/fchmodat"), LinuxConstants.IN_ATTRIB));
+        env.PutString(0x10000, "/fchmodat");
+
+        Assert.Equal(0, env.Invoke("SysFchmodAt", unchecked((uint)-100), 0x10000, 0x1A4, 0));
+        uint[] expected = [LinuxConstants.IN_ATTRIB];
+        Assert.Equal(expected, env.ReadMasks(watch.Inode));
+    }
+
+    [Fact]
+    public void Fchown_EmitsInAttrib()
+    {
+        using var env = new SyscallTestEnv();
+        env.Sm.WriteGuestFile("/fchown", "x"u8);
+        using var watch = new WatchHandle(env.Watch(InodeOf(env, "/fchown"), LinuxConstants.IN_ATTRIB));
+        var fd = Open(env, "/fchown", FileFlags.O_RDWR);
+        Assert.True(fd >= 0);
+
+        Assert.Equal(0, env.Invoke("SysFchown", (uint)fd, 0, 0));
+        uint[] expected = [LinuxConstants.IN_ATTRIB];
+        Assert.Equal(expected, env.ReadMasks(watch.Inode));
+        env.Sm.FreeFD(fd);
+    }
+
+    [Fact]
+    public void UtimensAt_EmitsInAttrib()
+    {
+        using var env = new SyscallTestEnv();
+        env.Sm.WriteGuestFile("/utimens", "x"u8);
+        using var watch = new WatchHandle(env.Watch(InodeOf(env, "/utimens"), LinuxConstants.IN_ATTRIB));
+        env.PutString(0x10000, "/utimens");
+
+        Assert.Equal(0, env.Invoke("SysUtimensAt", unchecked((uint)-100), 0x10000, 0, 0));
+        uint[] expected = [LinuxConstants.IN_ATTRIB];
+        Assert.Equal(expected, env.ReadMasks(watch.Inode));
+    }
+
+    private static Inode InodeOf(SyscallTestEnv env, string path) =>
+        env.Sm.PathWalk(path).Dentry!.Inode!;
+
+    private static int Open(SyscallTestEnv env, string path, FileFlags flags)
+    {
+        env.PutString(0x10000, path);
+        return env.Invoke("SysOpen", 0x10000, (uint)flags);
+    }
+
     private sealed class WatchHandle(InotifyInode inode) : IDisposable
     {
         public InotifyInode Inode { get; } = inode;
