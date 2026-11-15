@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Core.Net;
@@ -15,6 +16,150 @@ namespace Fiberish.Tests.Syscalls;
 
 public class SocketSyscallTests
 {
+    [Fact]
+    public async Task Socket_HostNetwork_SoErrorReturnsPositiveErrno()
+    {
+        using var env = new TestEnv();
+        // Select an unused local port. Windows can silently drop SYNs to a bound-but-not-
+        // listening port, so release the reservation before requesting an active refusal.
+        using var reserved = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        reserved.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        var fd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        var file = env.SyscallManager.GetFD(fd)!;
+        var inode = Assert.IsType<HostSocketInode>(file.OpenedInode);
+        // Bypass both managed connect caches: Socket.Connect itself can consume SO_ERROR
+        // on an immediately refused connection. Issue the nonblocking native syscall instead.
+        var address = new byte[16];
+        BinaryPrimitives.WriteUInt16LittleEndian(address, (ushort)AddressFamily.InterNetwork);
+        if (OperatingSystem.IsMacOS()) { address[0] = 16; address[1] = 2; } // Darwin sin_len/sin_family
+        BinaryPrimitives.WriteUInt16BigEndian(address.AsSpan(2), (ushort)((IPEndPoint)reserved.LocalEndPoint!).Port);
+        IPAddress.Loopback.TryWriteBytes(address.AsSpan(4), out _);
+        reserved.Dispose();
+        var handle = inode.NativeSocket.SafeHandle.DangerousGetHandle();
+        var connectRc = OperatingSystem.IsWindows()
+            ? WindowsConnect(handle, address, address.Length)
+            : UnixConnect(handle, address, address.Length);
+        var nativeError = Marshal.GetLastPInvokeError();
+        Assert.Equal(-1, connectRc);
+        if (OperatingSystem.IsWindows())
+            Assert.True(nativeError is 10035 or 10061, $"Native connect failed with unexpected WSA error {nativeError}");
+        inode.NativeSocket.Poll(3_000_000,
+            OperatingSystem.IsWindows() ? SelectMode.SelectError : SelectMode.SelectWrite);
+        var value = new byte[4];
+        Assert.Equal(0, inode.GetSocketOption(file, env.Task, LinuxConstants.SOL_SOCKET,
+            LinuxConstants.SO_ERROR, value, out _));
+        Assert.Equal((int)Errno.ECONNREFUSED, BinaryPrimitives.ReadInt32LittleEndian(value));
+    }
+
+    [DllImport("ws2_32.dll", EntryPoint = "connect", SetLastError = true)]
+    private static extern int WindowsConnect(nint socket, byte[] address, int length);
+
+    [DllImport("libc", EntryPoint = "connect", SetLastError = true)]
+    private static extern int UnixConnect(nint socket, byte[] address, int length);
+
+    [Theory]
+    [InlineData(LinuxConstants.SO_SNDBUF)]
+    [InlineData(LinuxConstants.SO_RCVBUF)]
+    public async Task Socket_PrivateNetwork_UdpBufferOptionSurvivesBind(int option)
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        var fd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        var file = env.SyscallManager.GetFD(fd)!;
+        var inode = Assert.IsType<NetstackSocketInode>(file.OpenedInode);
+        var value = BitConverter.GetBytes(65536);
+        Assert.Equal(0, inode.SetSocketOption(file, env.Task, LinuxConstants.SOL_SOCKET, option, value));
+        Assert.Equal(0, inode.Bind(file, env.Task, new IPEndPoint(IPAddress.Loopback, 0)));
+        Assert.Equal(0, inode.GetSocketOption(file, env.Task, LinuxConstants.SOL_SOCKET, option, value, out _));
+        Assert.Equal(131072, BinaryPrimitives.ReadInt32LittleEndian(value));
+        var udp = (LoopbackNetNamespace.UdpDatagramSocket)typeof(NetstackSocketInode)
+            .GetField("_udp", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(inode)!;
+        var sizes = udp.GetBufferSizes();
+        Assert.Equal(131072, option == LinuxConstants.SO_SNDBUF ? sizes.SendBytes : sizes.RecvBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Socket_PrivateNetwork_ListenerTcpOptionsApplyToEveryAcceptedBackend(bool setAfterListen)
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        var serverFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_STREAM, 0);
+        var serverFile = env.SyscallManager.GetFD(serverFd)!;
+        var server = Assert.IsType<NetstackSocketInode>(serverFile.OpenedInode);
+        Assert.Equal(0, server.Bind(serverFile, env.Task, new IPEndPoint(IPAddress.Loopback, 0)));
+        if (setAfterListen) Assert.Equal(0, server.Listen(serverFile, env.Task, 4));
+        Assert.Equal(0, server.SetSocketOption(serverFile, env.Task, LinuxConstants.IPPROTO_TCP,
+            LinuxConstants.TCP_NODELAY, BitConverter.GetBytes(1)));
+        Assert.Equal(0, server.SetSocketOption(serverFile, env.Task, LinuxConstants.IPPROTO_TCP,
+            LinuxConstants.TCP_KEEPIDLE, BitConverter.GetBytes(100)));
+        Assert.Equal(0, server.SetSocketOption(serverFile, env.Task, LinuxConstants.SOL_SOCKET,
+            LinuxConstants.SO_KEEPALIVE, BitConverter.GetBytes(1)));
+        if (!setAfterListen) Assert.Equal(0, server.Listen(serverFile, env.Task, 4));
+
+        // The second accept also checks the replacement listener created by smoltcp promotion.
+        for (var i = 0; i < 2; i++)
+        {
+            var clientFd = await CallSysSocket(env, LinuxConstants.AF_INET,
+                LinuxConstants.SOCK_STREAM | LinuxConstants.SOCK_NONBLOCK, 0);
+            var clientFile = env.SyscallManager.GetFD(clientFd)!;
+            var client = Assert.IsType<NetstackSocketInode>(clientFile.OpenedInode);
+            var connect = await client.ConnectAsync(clientFile, env.Task, server.LocalEndPoint!);
+            Assert.True(connect == 0 || connect == -(int)Errno.EINPROGRESS);
+            var result = await server.AcceptAsync(serverFile, env.Task, 0);
+            Assert.Equal(0, result.Rc);
+            var accepted = Assert.IsType<NetstackSocketInode>(result.Inode);
+            using var acceptedFile = new LinuxFile(new Dentry("accepted", accepted, null, accepted.SuperBlock),
+                FileFlags.O_RDWR, null);
+            var native = (LoopbackNetNamespace.TcpStreamSocket)typeof(NetstackSocketInode)
+                .GetField("_stream", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(accepted)!;
+            Assert.True(native.NoDelay);
+            Assert.Equal(100_000, native.KeepAliveIntervalMillis);
+            var value = new byte[4];
+            Assert.Equal(0, accepted.GetSocketOption(acceptedFile, env.Task, LinuxConstants.IPPROTO_TCP,
+                LinuxConstants.TCP_NODELAY, value, out _));
+            Assert.Equal(1, BinaryPrimitives.ReadInt32LittleEndian(value));
+            Assert.Equal(0, accepted.GetSocketOption(acceptedFile, env.Task, LinuxConstants.SOL_SOCKET,
+                LinuxConstants.SO_KEEPALIVE, value, out _));
+            Assert.Equal(1, BinaryPrimitives.ReadInt32LittleEndian(value));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Socket_PrivateNetwork_UdpCorkKeepsFirstDestinationEvenForEmptyFirstSend(bool emptyFirst)
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.NetworkMode = NetworkMode.Private;
+        var aFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        var bFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        var senderFd = await CallSysSocket(env, LinuxConstants.AF_INET, LinuxConstants.SOCK_DGRAM, 0);
+        var aFile = env.SyscallManager.GetFD(aFd)!;
+        var bFile = env.SyscallManager.GetFD(bFd)!;
+        var senderFile = env.SyscallManager.GetFD(senderFd)!;
+        var a = Assert.IsType<NetstackSocketInode>(aFile.OpenedInode);
+        var b = Assert.IsType<NetstackSocketInode>(bFile.OpenedInode);
+        var sender = Assert.IsType<NetstackSocketInode>(senderFile.OpenedInode);
+        Assert.Equal(0, a.Bind(aFile, env.Task, new IPEndPoint(IPAddress.Loopback, 0)));
+        Assert.Equal(0, b.Bind(bFile, env.Task, new IPEndPoint(IPAddress.Loopback, 0)));
+        var first = emptyFirst ? Array.Empty<byte>() : new byte[] { 0x41 };
+        Assert.Equal(first.Length, await sender.SendToAsync(senderFile, env.Task, first,
+            LinuxConstants.MSG_MORE, a.LocalEndPoint!));
+        Assert.Equal(1, await sender.SendToAsync(senderFile, env.Task, new byte[] { 0x42 }, 0, b.LocalEndPoint!));
+        var data = new byte[8];
+        Assert.Equal(first.Length + 1,
+            (await a.RecvFromAsync(aFile, env.Task, data, LinuxConstants.MSG_DONTWAIT)).BytesRead);
+        Assert.Equal(first.Concat(new byte[] { 0x42 }), data.Take(first.Length + 1));
+        Assert.Equal(-(int)Errno.EAGAIN,
+            (await b.RecvFromAsync(bFile, env.Task, data, LinuxConstants.MSG_DONTWAIT)).BytesRead);
+        // A new datagram must not retain the previous cork's destination.
+        Assert.Equal(1, await sender.SendToAsync(senderFile, env.Task, new byte[] { 0x43 }, 0, b.LocalEndPoint!));
+        Assert.Equal(1, (await b.RecvFromAsync(bFile, env.Task, data, LinuxConstants.MSG_DONTWAIT)).BytesRead);
+        Assert.Equal(0x43, data[0]);
+    }
+
     [Fact]
     public async Task RecvMsg_LargeAddressCapacityAndInputMsgFlags_DoNotRejectOrPeekTheDatagram()
     {

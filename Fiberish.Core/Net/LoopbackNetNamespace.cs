@@ -335,6 +335,18 @@ public sealed class LoopbackNetNamespace : IDisposable
             return (checked((int)send), checked((int)recv));
         }
 
+        public int TrySetNoDelay(bool enabled)
+        {
+            ThrowIfDisposed();
+            return NetstackNative.TcpStreamSetNoDelay(_namespace.Handle, _handle, enabled ? 1 : 0);
+        }
+
+        public int TrySetKeepAlive(int intervalMillis)
+        {
+            ThrowIfDisposed();
+            return NetstackNative.TcpStreamSetKeepAlive(_namespace.Handle, _handle, intervalMillis);
+        }
+
         private void ThrowIfDisposed()
         {
             if (_handle == 0)

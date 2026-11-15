@@ -408,9 +408,9 @@ fn promote_pending_accept(state: &mut NamespaceState, listener_handle: u64) -> b
         return false;
     };
 
-    let (send_capacity, recv_capacity) = {
+    let (send_capacity, recv_capacity, nagle_enabled, keep_alive) = {
         let socket = state.sockets.get::<TcpSocket>(listener.handle);
-        (socket.send_capacity(), socket.recv_capacity())
+        (socket.send_capacity(), socket.recv_capacity(), socket.nagle_enabled(), socket.keep_alive())
     };
 
     let accepted_handle = alloc_handle();
@@ -428,6 +428,8 @@ fn promote_pending_accept(state: &mut NamespaceState, listener_handle: u64) -> b
     let replacement_socket_handle = add_tcp_socket_sized(state, send_capacity, recv_capacity);
     {
         let replacement = state.sockets.get_mut::<TcpSocket>(replacement_socket_handle);
+        replacement.set_nagle_enabled(nagle_enabled);
+        replacement.set_keep_alive(keep_alive);
         if replacement.listen(local_port).is_err() {
             let _ = state.objects.remove(&accepted_handle);
             state.sockets.remove(replacement_socket_handle);
@@ -695,13 +697,23 @@ pub extern "C" fn fiber_socket_get_buffers(
     .unwrap_or_else(|rc| rc)
 }
 
+// TCP options also apply to listening sockets; smoltcp promotes that very socket to an
+// accepted stream, so applying them here preserves the handshake-time option snapshot.
+fn tcp_socket_handle(state: &NamespaceState, object_handle: u64) -> Option<SocketHandle> {
+    match state.objects.get(&object_handle) {
+        Some(SocketObject::TcpStream(stream)) => Some(stream.handle),
+        Some(SocketObject::TcpListener(listener)) => Some(listener.handle),
+        _ => None,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn fiber_tcp_stream_set_nodelay(ns_handle: u64, socket_handle: u64, enabled: i32) -> i32 {
     with_namespace(ns_handle, |state| {
-        let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
+        let Some(handle) = tcp_socket_handle(state, socket_handle) else {
             return ERR_NOT_FOUND;
         };
-        let socket = state.sockets.get_mut::<TcpSocket>(stream.handle);
+        let socket = state.sockets.get_mut::<TcpSocket>(handle);
         socket.set_nagle_enabled(enabled == 0);
         0
     })
@@ -711,10 +723,10 @@ pub extern "C" fn fiber_tcp_stream_set_nodelay(ns_handle: u64, socket_handle: u6
 #[no_mangle]
 pub extern "C" fn fiber_tcp_stream_get_nodelay(ns_handle: u64, socket_handle: u64) -> i32 {
     with_namespace(ns_handle, |state| {
-        let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
+        let Some(handle) = tcp_socket_handle(state, socket_handle) else {
             return ERR_NOT_FOUND;
         };
-        let socket = state.sockets.get::<TcpSocket>(stream.handle);
+        let socket = state.sockets.get::<TcpSocket>(handle);
         if socket.nagle_enabled() { 0 } else { 1 }
     })
     .unwrap_or_else(|rc| rc)
@@ -731,10 +743,10 @@ pub extern "C" fn fiber_tcp_stream_set_keepalive(
     }
 
     with_namespace(ns_handle, |state| {
-        let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
+        let Some(handle) = tcp_socket_handle(state, socket_handle) else {
             return ERR_NOT_FOUND;
         };
-        let socket = state.sockets.get_mut::<TcpSocket>(stream.handle);
+        let socket = state.sockets.get_mut::<TcpSocket>(handle);
         socket.set_keep_alive(if interval_millis == 0 {
             None
         } else {
@@ -756,10 +768,10 @@ pub extern "C" fn fiber_tcp_stream_get_keepalive(
     }
 
     with_namespace(ns_handle, |state| {
-        let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
+        let Some(handle) = tcp_socket_handle(state, socket_handle) else {
             return ERR_NOT_FOUND;
         };
-        let socket = state.sockets.get::<TcpSocket>(stream.handle);
+        let socket = state.sockets.get::<TcpSocket>(handle);
         let millis = socket.keep_alive().map(|d| d.total_millis() as i64).unwrap_or(0);
         unsafe { ptr::write(out_interval_millis, millis) };
         0

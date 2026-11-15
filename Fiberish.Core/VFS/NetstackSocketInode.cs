@@ -58,6 +58,7 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
     private LoopbackNetNamespace.UdpDatagramSocket? _udp;
     private byte[]? _pendingDatagram;
     private int _pendingDatagramLength;
+    private IPEndPoint? _pendingDatagramPeer;
 
     public NetstackSocketInode(ulong ino, SuperBlock sb, LoopbackNetNamespace @namespace, SocketType socketType)
     {
@@ -83,8 +84,13 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
         return stream;
     }
 
-    private LoopbackNetNamespace.TcpListenerSocket CreateListenerSocket() =>
-        _namespace.CreateTcpListener(_sendBufferBytes, _recvBufferBytes);
+    private LoopbackNetNamespace.TcpListenerSocket CreateListenerSocket()
+    {
+        var listener = _namespace.CreateTcpListener(_sendBufferBytes, _recvBufferBytes);
+        if (_noDelay) listener.TrySetNoDelay(true);
+        if (_keepAlive) listener.TrySetKeepAlive(checked(_keepAliveIdleSeconds * 1000));
+        return listener;
+    }
 
     private LoopbackNetNamespace.UdpDatagramSocket CreateUdpSocket() =>
         _namespace.CreateUdpSocket(_sendBufferBytes, _recvBufferBytes);
@@ -97,13 +103,16 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
 
     private void CopyInheritedOptionsTo(NetstackSocketInode accepted)
     {
-        // Linux clones the listening sk settings that affect the accepted stream. The native
-        // socket already keeps Nagle/keepalive and capacities; keep the C# view consistent.
-        accepted._sendBufferBytes = _sendBufferBytes;
-        accepted._recvBufferBytes = _recvBufferBytes;
-        accepted._noDelay = _noDelay;
-        accepted._keepAlive = _keepAlive;
-        accepted._keepAliveIdleSeconds = _keepAliveIdleSeconds;
+        // Read the established backend's snapshot, not the listener's current flags: options
+        // changed after a connection entered the accept queue must not affect that connection.
+        var stream = accepted._stream!;
+        var sizes = stream.GetBufferSizes();
+        accepted._sendBufferBytes = sizes.SendBytes;
+        accepted._recvBufferBytes = sizes.RecvBytes;
+        accepted._noDelay = stream.NoDelay;
+        var keepAliveMillis = stream.KeepAliveIntervalMillis;
+        accepted._keepAlive = keepAliveMillis != 0;
+        accepted._keepAliveIdleSeconds = keepAliveMillis != 0 ? keepAliveMillis / 1000 : _keepAliveIdleSeconds;
     }
 
     public bool IsListener => _listener != null;
@@ -663,7 +672,7 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
                 {
                     if (value.Length < 4) return -(int)Errno.EINVAL;
                     _keepAlive = BitConverter.ToInt32(value[..4]) != 0;
-                    return _stream == null || ApplyKeepAlive() ? 0 : -(int)Errno.EOPNOTSUPP;
+                    return ApplyKeepAlive() ? 0 : -(int)Errno.EOPNOTSUPP;
                 }
                 case LinuxConstants.SO_OOBINLINE:
                     if (value.Length < 4) return -(int)Errno.EINVAL;
@@ -715,9 +724,8 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
                 {
                     if (value.Length < 4) return -(int)Errno.EINVAL;
                     _noDelay = BitConverter.ToInt32(value[..4]) != 0;
-                    return _stream == null || _stream.TrySetNoDelay(_noDelay) == 0
-                        ? 0
-                        : -(int)Errno.EOPNOTSUPP;
+                    var rc = _stream?.TrySetNoDelay(_noDelay) ?? _listener?.TrySetNoDelay(_noDelay) ?? 0;
+                    return rc == 0 ? 0 : -(int)Errno.EOPNOTSUPP;
                 }
                 case LinuxConstants.TCP_KEEPIDLE:
                 {
@@ -725,7 +733,7 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
                     var seconds = BitConverter.ToInt32(value[..4]);
                     if (seconds is < 1 or > 32767) return -(int)Errno.EINVAL;
                     _keepAliveIdleSeconds = seconds;
-                    return _stream == null || ApplyKeepAlive() ? 0 : -(int)Errno.EOPNOTSUPP;
+                    return ApplyKeepAlive() ? 0 : -(int)Errno.EOPNOTSUPP;
                 }
                 case LinuxConstants.TCP_KEEPINTVL:
                 case LinuxConstants.TCP_KEEPCNT:
@@ -908,8 +916,8 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
 
     private bool ApplyKeepAlive()
     {
-        if (_stream == null) return true;
-        return _stream.TrySetKeepAlive(_keepAlive ? checked(_keepAliveIdleSeconds * 1000) : 0) == 0;
+        var millis = _keepAlive ? checked(_keepAliveIdleSeconds * 1000) : 0;
+        return (_stream?.TrySetKeepAlive(millis) ?? _listener?.TrySetKeepAlive(millis) ?? 0) == 0;
     }
 
     private static int ParseMulticastGroup(ReadOnlySpan<byte> value, out uint group)
@@ -949,7 +957,7 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
 
         if (_socketType == SocketType.Dgram)
         {
-            _udp ??= _namespace.CreateUdpSocket();
+            _udp ??= CreateUdpSocket();
             var rc = _udp.TryBind((ushort)endpoint.Port);
             if (rc != 0)
                 return MapBindError(rc);
@@ -1055,6 +1063,9 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
     {
         if (_socketType != SocketType.Dgram)
             return -(int)Errno.EISCONN;
+        // A cork owns its route, including when the first MSG_MORE send has zero bytes.
+        // Later sendto destinations must not redirect data already acknowledged to the caller.
+        endpoint = _pendingDatagramPeer ?? endpoint;
         if (!IsValidConnectAddress(endpoint.Address))
             return -(int)Errno.ENETUNREACH;
 
@@ -1064,13 +1075,24 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
             // Linux aborts the cork on overflow. Never acknowledge bytes that were truncated,
             // including when the overflowing send also carries MSG_MORE.
             _pendingDatagramLength = 0;
+            _pendingDatagramPeer = null;
             return -(int)Errno.EMSGSIZE;
+        }
+
+        _udp ??= CreateUdpSocket();
+        if (_boundEndPoint == null)
+        {
+            var bindRc = _udp.TryBind(0);
+            if (bindRc != 0)
+                return MapBindError(bindRc);
+            _boundEndPoint = _udp.LocalEndPoint;
         }
 
         // Linux corks MSG_MORE datagrams: the payload is appended to a pending datagram and
         // actually sent by the next send()/sendto()/sendmsg() without MSG_MORE.
         if ((flags & LinuxConstants.MSG_MORE) != 0)
         {
+            _pendingDatagramPeer ??= new IPEndPoint(endpoint.Address, endpoint.Port);
             AppendPendingDatagram(buffer.Span);
             return buffer.Length;
         }
@@ -1087,15 +1109,7 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
             payloadMemory = merged;
             _pendingDatagramLength = 0;
         }
-
-        _udp ??= CreateUdpSocket();
-        if (_boundEndPoint == null)
-        {
-            var bindRc = _udp.TryBind(0);
-            if (bindRc != 0)
-                return MapBindError(bindRc);
-            _boundEndPoint = _udp.LocalEndPoint;
-        }
+        _pendingDatagramPeer = null;
 
         Drive();
         if (IsNonBlocking(file, flags) && !_udp.CanWrite)
@@ -1322,6 +1336,9 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
         _listener = null;
         _stream = null;
         _udp = null;
+        _pendingDatagram = null;
+        _pendingDatagramLength = 0;
+        _pendingDatagramPeer = null;
         if (_namespace.Handle != 0)
         {
             foreach (var group in _multicastGroups)

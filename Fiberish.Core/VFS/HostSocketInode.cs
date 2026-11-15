@@ -842,7 +842,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
                             int i => (SocketError)i, SocketError se => se, _ => SocketError.Success
                         };
                         // Linux getsockopt(SO_ERROR) reports a positive errno value.
-                        var linuxErr = soError == SocketError.Success ? 0 : MapSocketError(soError);
+                        var linuxErr = soError == SocketError.Success ? 0 : -MapSocketError(soError);
                         BinaryPrimitives.WriteInt32LittleEndian(optval, linuxErr);
                         return 0;
                     case LinuxConstants.SO_SNDBUF:
