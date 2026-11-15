@@ -5,6 +5,10 @@ Manifest: `tests/ltp/cases-permissions.json` (71 cases)
 LTP: `e74f6d6f1c09e6be1aee0a09d347d818be3a36e8`
 Branch: `fix/ltp-permission-semantics`
 
+> BusyBox image update (2026-11-15): `access02` now passes with the static
+> BusyBox `/bin/sh`; the current all-batch result is **71/71 PASS**. See
+> [BUSYBOX_IMAGE.md](BUSYBOX_IMAGE.md).
+
 ## Results
 
 | Backend | PASS | FAIL | BROKEN |

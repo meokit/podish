@@ -1,8 +1,8 @@
 # LTP pipe and FIFO batch — selection and baseline
 
 Date: 2026-11-15
-Manifest: `tests/ltp/cases-pipe.json` (17 cases)
-Backend: Windows Podish, tmpfs image, guest root
+Manifest: `tests/ltp/cases-pipe.json` (18 cases)
+Backend: Windows Podish, tmpfs image, guest root, BusyBox tools
 Native reference: WSL Linux 5.15.153.1, root, i386 static executables
 LTP: `e74f6d6f1c09e6be1aee0a09d347d818be3a36e8`
 Scope: selection and first baseline only; no runtime fixes are included.
@@ -21,23 +21,24 @@ This batch adds the practical failure modes that userland actually depends on:
   behavior, and reader wakeup when the last writer closes;
 - `EMFILE`/`ENFILE` descriptor exhaustion and `RLIMIT_NOFILE` interaction;
 - `FIONREAD` on a pipe, `F_GETPIPE_SZ`/`F_SETPIPE_SZ`, and EOF after close;
+- `pipe2(O_CLOEXEC)` propagation across `exec`;
 - FIFO descriptor operations (`dup` on a FIFO, `fsync` rejecting a FIFO).
 
-`pipe2_02` was excluded because it requires the separate `pipe2_02_child`
-executable, which LTP copies with `system("cp ...")`; the guest image has no
-`/bin/sh` or `cp`, so the resource copy fails before the pipe assertions run.
-Adding a shell/coreutils to the test image is a separate harness change.
-`pipe01` and `pipe2_01` remain in the basic batch and were not duplicated here.
+`pipe2_02` needs the separate `pipe2_02_child` executable. LTP copies it with
+`system("cp ...")`, which now works because the guest image has BusyBox
+`/bin/sh` and `/bin/cp`; the resource binary itself is declared in the manifest
+and included by the runner. `pipe01` and `pipe2_01` remain in the basic batch
+and were not duplicated here.
 
 ## Results
 
 | Backend | PASS | FAIL | BROKEN | SKIP | TIMEOUT | PARTIAL |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Native Linux | 17 | 0 | 0 | 0 | 0 | 0 |
-| Windows Podish, tmpfs | 14 | 1 | 2 | 0 | 0 | 0 |
+| Native Linux | 18 | 0 | 0 | 0 | 0 | 0 |
+| Windows Podish, tmpfs, BusyBox | 14 | 1 | 3 | 0 | 0 | 0 |
 
-Assertion totals: native 102 passed; Podish 93 passed / 3 failed / 2 broken.
-The batch is largely green already, which makes the three remaining findings
+Assertion totals: native 103 passed; Podish 93 passed / 3 failed / 3 broken.
+The batch is largely green already, which makes the four remaining findings
 high-signal rather than broad missing implementation.
 
 ## Remaining non-PASS after the baseline
@@ -46,6 +47,7 @@ high-signal rather than broad missing implementation.
 | --- | --- | --- |
 | `pipe12` | BROKEN | `ioctl(fd, FIONREAD, ...)` on a pipe returns `ENOTTY`; Linux reports the number of bytes available. The nonblocking-full and `PIPE_BUF` write assertions pass before this. |
 | `pipe15` | BROKEN | `/proc/sys/fs/pipe-user-pages-soft` is missing (`ENOENT`), so the test cannot compute the per-user pipe budget. |
+| `pipe2_02` | BROKEN | The BusyBox `cp` resource copy now succeeds, but the forked child `exec`s `pipe2_02_child` and that child faults at its first stack access after `fcntl(F_GETFL)` (`SIGSEGV`). Directly executing the same static binary succeeds; the failure is in Podish's fork/exec path, not in the pipe assertion. |
 | `fsync03` | FAIL | `fsync()` on a pipe, a Unix socket and a FIFO returns 0; Linux returns `EINVAL` for all three. The closed/invalid-descriptor variants pass. |
 
 ## Other modern IPC and shared-memory gaps
@@ -72,13 +74,17 @@ needs more support first.
    needs it later.
 3. Reject `fsync`/`fdatasync` on pipes, Unix sockets and FIFOs with `EINVAL`;
    keep `EBADF` for invalid descriptors.
-4. Re-run this batch and the basic `pipe01`/`pipe2_01` cases. Then decide
+4. Fix the fork/exec crash seen by `pipe2_02_child`: direct exec works, but a
+   child forked from an LTP test faults on its first stack read after
+   `fcntl(F_GETFL)`.
+5. Re-run this batch and the basic `pipe01`/`pipe2_01` cases. Then decide
    whether to add a POSIX shared-memory batch by extending the runner for the
    `open_posix_testsuite` format.
 
 ## Verification
 
 ```powershell
+python tests/ltp/build_busybox_image.py
 wsl -d Ubuntu -- bash /mnt/c/Users/Jiang/repos/podish/tests/ltp/build.sh \
   /mnt/c/Users/Jiang/repos/podish/artifacts/ltp-pipe \
   /mnt/c/Users/Jiang/repos/podish/tests/ltp/cases-pipe.json

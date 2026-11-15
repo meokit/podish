@@ -16,17 +16,29 @@ import platform
 import re
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
+import urllib.request
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 SUMMARY_KEYS = ("passed", "failed", "broken", "skipped", "warnings")
 FS_BACKENDS = ("hostfs", "tmpfs", "silkfs")
 IMAGE_BACKENDS = ("tmpfs", "silkfs")
+BUSYBOX_URL = "https://busybox.net/downloads/binaries/1.35.0-i686-linux-musl/busybox"
+BUSYBOX_SHA256 = "27e409705b29937b9a6105038d9c2e3eb8dc3e2c8d606d22872dbde7f47c000f"
+APPLETS_FILE = HERE / "busybox-applets.txt"
+SBIN_APPLETS = {
+    "blockdev", "brctl", "chattr", "fdisk", "fsck", "halt", "hwclock",
+    "ifconfig", "ifdown", "ifup", "init", "insmod", "ip", "losetup", "lsmod",
+    "mdev", "mkfs.ext2", "mkfs.vfat", "mknod", "mkswap", "modprobe",
+    "mount", "pivot_root", "poweroff", "reboot", "rmmod", "route", "setfattr",
+    "swapoff", "swapon", "switch_root", "sysctl", "tunctl", "umount", "vconfig",
+}
 
 
 def classify(returncode, text, timed_out=False):
@@ -91,11 +103,65 @@ def write_guest_identity_files(root):
     (root / "etc/nsswitch.conf").write_text("passwd: files\ngroup: files\n")
 
 
-def build_image_tar(root, tar_path, binaries):
+def is_elf32_i386_static(path):
+    data = path.read_bytes()
+    if data[:5] != b"\x7fELF\x01" or len(data) < 52:
+        return False
+    if struct.unpack_from("<H", data, 18)[0] != 3:
+        return False
+    offset = struct.unpack_from("<I", data, 28)[0]
+    size, count = struct.unpack_from("<HH", data, 42)
+    return not any(struct.unpack_from("<I", data, offset + i * size)[0] == 3
+                   for i in range(count))
+
+
+def ensure_busybox(path, url=BUSYBOX_URL, sha256=BUSYBOX_SHA256):
+    """Download the pinned static i386 BusyBox once and verify its identity."""
+    if path.is_file():
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual == sha256 and is_elf32_i386_static(path):
+            return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading BusyBox from {url}", file=sys.stderr)
+    urllib.request.urlretrieve(url, path)
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != sha256:
+        path.unlink(missing_ok=True)
+        raise SystemExit(f"BusyBox checksum mismatch: {actual}")
+    if not is_elf32_i386_static(path):
+        path.unlink(missing_ok=True)
+        raise SystemExit("BusyBox is not a static i386 executable")
+    return path
+
+
+def read_applets(path):
+    applets = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        name = line.strip()
+        if not name:
+            continue
+        if "/" in name or name in applets:
+            raise SystemExit(f"Invalid BusyBox applet name: {name!r}")
+        applets.append(name)
+    if not applets:
+        raise SystemExit(f"No BusyBox applets in {path}")
+    return applets
+
+
+def busybox_symlinks(applets):
+    links = [(f"bin/{name}", "busybox") for name in applets]
+    links.extend((f"sbin/{name}", "../bin/busybox")
+                 for name in applets if name in SBIN_APPLETS)
+    return links
+
+
+def build_image_tar(root, tar_path, binaries, symlinks=()):
     """Create an OCI rootfs tar with explicit Unix metadata.
 
     Windows tar tools commonly leave executable files at 0644; the image
     loader correctly rejects that. Do not rely on the host filesystem mode.
+    Symlinks are represented directly in the archive so the Windows host does
+    not need to create them on disk.
     """
     with tarfile.open(tar_path, "w", format=tarfile.PAX_FORMAT) as archive:
         for dirpath, dirnames, filenames in os.walk(root):
@@ -115,6 +181,13 @@ def build_image_tar(root, tar_path, binaries):
                 info.uid = info.gid = 0
                 with path.open("rb") as source:
                     archive.addfile(info, source)
+        for name, target in symlinks:
+            info = tarfile.TarInfo(name)
+            info.type = tarfile.SYMTYPE
+            info.linkname = target
+            info.mode = 0o777
+            info.uid = info.gid = 0
+            archive.addfile(info)
 
 
 def execute(command, cwd, env, timeout):
@@ -238,6 +311,10 @@ def main():
                         help="Override the manifest's Podish filesystem (hostfs, tmpfs or silkfs)")
     parser.add_argument("--fs-probe", type=Path,
                         help="Optional static-i386 backend probe; mount failures block the run")
+    parser.add_argument("--busybox", type=Path,
+                        help="Static i386 BusyBox to install in the guest image; defaults to artifacts/ltp-busybox/busybox")
+    parser.add_argument("--busybox-applets", type=Path, default=APPLETS_FILE,
+                        help="Applet list used to create BusyBox symlinks")
     parser.add_argument("--trace", action="store_true", help="Enable Podish syscall tracing")
     parser.add_argument("--native-work-root", type=Path, default=Path("/tmp"),
                         help="Linux scratch filesystem, not WSL's /mnt/c (32-bit inode overflow/FIFO limitations)")
@@ -259,8 +336,27 @@ def main():
         args.fs_probe = args.fs_probe.resolve()
         if args.backend != "podish" or not args.fs_probe.is_file():
             parser.error("--fs-probe requires Podish and an existing probe binary")
+    if args.backend == "native" and args.busybox is not None:
+        parser.error("--busybox applies only to the Podish backend")
     if args.backend == "native" and manifest.get("requiresRoot") and os.geteuid() != 0:
         parser.error("This manifest requires a root native baseline (use WSL as root)")
+    busybox = None
+    busybox_applets = []
+    if args.backend == "podish":
+        candidate = args.busybox
+        if candidate is None:
+            candidate = Path(os.environ.get("LTP_BUSYBOX",
+                                            REPO / "artifacts/ltp-busybox/busybox"))
+        if candidate.is_file():
+            if not is_elf32_i386_static(candidate):
+                parser.error(f"--busybox must be a static i386 executable: {candidate}")
+            busybox = candidate.resolve()
+            busybox_applets = read_applets(args.busybox_applets)
+        elif args.busybox is not None:
+            parser.error(f"BusyBox not found: {candidate}")
+        else:
+            print("warning: static BusyBox not found in artifacts/ltp-busybox; "
+                  "command-dependent LTP cases may fail", file=sys.stderr)
     out = args.artifacts.resolve()
     metadata = json.loads((out / "build.json").read_text())
     if metadata.get("manifest", "cases.json") != args.manifest.name:
@@ -273,6 +369,10 @@ def main():
     cases = [case for case in cases if any(fnmatch.fnmatchcase(case["name"], pattern) for pattern in patterns)]
     if not cases:
         parser.error("No cases matched --filter")
+    resources = {}
+    for case in cases:
+        for resource in case.get("resources", []):
+            resources.setdefault(resource, case["name"])
     baseline = {}
     if args.backend == "podish":
         args.cli = args.cli.resolve()
@@ -290,6 +390,13 @@ def main():
             parser.error(f"Binary hash mismatch: {name}; rebuild")
         if args.backend == "podish" and (name not in baseline or baseline[name]["status"] != "PASS"):
             parser.error(f"No passing native baseline for {name}")
+    for resource, owner in resources.items():
+        binary = out / "bin" / resource
+        expected = metadata.get("resources", {}).get(resource)
+        if not binary.is_file() or expected is None:
+            parser.error(f"Missing resource binary {resource} for {owner}; rebuild")
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != expected:
+            parser.error(f"Resource hash mismatch: {resource}; rebuild")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     run_dir = out / "runs" / f"{stamp}-{args.backend}-{fs_backend}"
     run_dir.mkdir(parents=True)
@@ -307,7 +414,9 @@ def main():
         image_work = run_dir / "image-store"
         image_work.mkdir()
         image_root = run_dir / "image-root"
-        for directory in ("opt/ltp/testcases/bin", "tmp", "dev", "proc", "etc", "run"):
+        for directory in ("opt/ltp/testcases/bin", "tmp", "dev", "proc", "etc", "run",
+                          "bin", "sbin", "usr/bin", "usr/sbin", "root", "home",
+                          "mnt", "media", "sys", "var"):
             (image_root / directory).mkdir(parents=True, exist_ok=True)
         write_guest_identity_files(image_root)
         binary_names = set()
@@ -315,6 +424,16 @@ def main():
             relative = f"opt/ltp/testcases/bin/{case['name']}"
             shutil.copy2(out / "bin" / case["name"], image_root / relative)
             binary_names.add(relative)
+        for resource in resources:
+            relative = f"opt/ltp/testcases/bin/{resource}"
+            shutil.copy2(out / "bin" / resource, image_root / relative)
+            binary_names.add(relative)
+        symlinks = []
+        if busybox is not None:
+            relative = "bin/busybox"
+            shutil.copy2(busybox, image_root / relative)
+            binary_names.add(relative)
+            symlinks = busybox_symlinks(busybox_applets)
         if args.fs_probe is not None:
             relative = f"opt/ltp/testcases/bin/{args.fs_probe.name}"
             if args.fs_probe.name in {case["name"] for case in cases}:
@@ -322,7 +441,7 @@ def main():
             shutil.copy2(args.fs_probe, image_root / relative)
             binary_names.add(relative)
         tar_path = run_dir / "image.tar"
-        build_image_tar(image_root, tar_path, binary_names)
+        build_image_tar(image_root, tar_path, binary_names, symlinks)
         import_code, import_text, import_timed_out, _ = execute(
             ["dotnet", str(args.cli), "import", str(tar_path), image_ref],
             image_work, base_env, 120)
@@ -362,11 +481,13 @@ def main():
             tmp = cwd / "tmp"
             tmp.mkdir()
             env.update(TMPDIR=str(tmp), LTPROOT=str(out))
+            env["PATH"] = f"{out / 'testcases/bin'}:{out / 'bin'}:{env.get('PATH', '')}"
             command = [str(out / "bin" / name)]
         else:
             cwd = image_work or work
             command = podish_command(args.cli, fs_backend, work, [out / "bin" / name],
-                                     {**common_env, "TMPDIR": "/tmp", "LTPROOT": "/opt/ltp"},
+                                     {**common_env, "TMPDIR": "/tmp", "LTPROOT": "/opt/ltp",
+                                      "PATH": "/opt/ltp/testcases/bin:/bin:/sbin:/usr/bin:/usr/sbin"},
                                      f"/opt/ltp/testcases/bin/{name}", image_ref, args.trace)
         try:
             case_timeout = case.get("timeoutSeconds") or args.timeout

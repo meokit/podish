@@ -1,15 +1,14 @@
 # LTP syscall integration tests
 
-This is a selected **50-binary** LTP suite, not all of LTP. The upstream source
+This is a selected LTP suite, not all of LTP. The upstream source
 is the `upstream` git submodule; the superproject's gitlink pins its revision.
 Build scripts, selection and host runner live here, outside the submodule.
 No upstream tests or assertions are patched. See [RESULTS.md](RESULTS.md) for
 the initial Windows Podish results, [FIX_REPORT.md](FIX_REPORT.md) for the
 subsequent fixes (50/50 passing on the repair branch), and
 [PERMISSIONS_BASELINE.md](PERMISSIONS_BASELINE.md) for the separate permission
-and identity batch (70/71 passing on the tmpfs image backend after the
-permission fixes; the remaining `access02` failure is a missing `/bin/sh` test
-asset, not a syscall assertion), [SYNC_BASELINE.md](SYNC_BASELINE.md) for
+and identity batch (71/71 passing on the tmpfs image backend with the BusyBox
+image; `access02` needed a real `/bin/sh`), [SYNC_BASELINE.md](SYNC_BASELINE.md) for
 the synchronization batch (futex and SysV semaphores; 3 PASS, 12 PARTIAL,
 10 FAIL, 2 TIMEOUT, 2 BROKEN and 3 SKIP), and
 [SIGNALS_BASELINE.md](SIGNALS_BASELINE.md) for the signal and event batch
@@ -19,10 +18,12 @@ batch (66 cases; first baseline: 22 PASS). See
 [MEMORY_FIX_REPORT.md](MEMORY_FIX_REPORT.md) for bounded repairs
 (36 PASS, 11 FAIL, 14 BROKEN, 0 TIMEOUT, 5 SKIP) and deferred memory-model work.
 [PIPE_BASELINE.md](PIPE_BASELINE.md) selects the next batch: pipes and FIFOs
-(17 cases; first Podish baseline 14 PASS, 1 FAIL, 2 BROKEN). SysV IPC remains
+(18 cases; Podish 14 PASS, 1 FAIL, 3 BROKEN). SysV IPC remains
 available as a lower-usage compatibility reference in
 [IPC_BASELINE.md](IPC_BASELINE.md) (39 cases; first Podish baseline 4 PASS,
-6 FAIL, 26 BROKEN, 3 SKIP). The proposed next series is documented in the
+6 FAIL, 26 BROKEN, 3 SKIP). [BUSYBOX_IMAGE.md](BUSYBOX_IMAGE.md) records the
+static BusyBox guest image and the all-batch status; with it, permissions is
+71/71 and proc-time reaches 90 PASS. The proposed next series is documented in the
 [direct-mapped memory refactor plan](../../docs/direct-mapped-memory-refactor-plan.md)
 and [hostfs/SilkFS test plan](MAPPED_FILESYSTEM_TEST_PLAN.md). These are plans,
 not implemented runner support or new backend results.
@@ -40,7 +41,7 @@ batch, `cases-signals.json` is the signal + event notification batch,
 batch (115 cases; three `needs_device` cases are excluded because the tmpfs
 image has no block device), `cases-proc-time.json` is the process lifecycle
 + rlimit/prctl + timers/inotify batch, `cases-pipe.json` is the pipe and FIFO
-batch (17 cases), and `cases-ipc.json` is the deferred SysV shared memory +
+batch (18 cases), and `cases-ipc.json` is the deferred SysV shared memory +
 message queue batch (39 cases; SysV semaphores remain in the sync batch). The
 permission, sync, signal, memory, net-io, fs-fd, proc-time, pipe and IPC
 manifests require a root native baseline and default to tmpfs. Build
@@ -49,6 +50,7 @@ do not mix with the basic batch:
 
 ```sh
 git submodule update --init tests/ltp/upstream
+python3 tests/ltp/build_busybox_image.py
 bash tests/ltp/build.sh artifacts/ltp-permissions tests/ltp/cases-permissions.json
 # Windows/WSL native reference:
 wsl -d Ubuntu -u root -- python3 /mnt/c/Users/Jiang/repos/podish/tests/ltp/run.py \
@@ -76,11 +78,15 @@ deferred `cases-ipc.json` (`artifacts/ltp-ipc`, see
 `"timeoutSeconds"` to override the host timeout for long-running race tests.
 
 The `tmpfs` backend imports one generated image containing all selected
-binaries under `/opt/ltp/testcases/bin`, then runs each binary in a separate
-container. Unix modes are written explicitly into the image tar; do not use a
-Windows `tar` command, which commonly loses execute bits. The older `hostfs`
-mode remains available with `--fs-backend hostfs` for comparison, but it
-forces mode `0755` on Windows and is not suitable for permission assertions.
+binaries under `/opt/ltp/testcases/bin`, a static i386 BusyBox under `/bin`,
+and applet symlinks under `/bin` and `/sbin`, then runs each binary in a
+separate container. Unix modes are written explicitly into the image tar; do
+not use a Windows `tar` command, which commonly loses execute bits. The older
+`hostfs` mode remains available with `--fs-backend hostfs` for comparison, but
+it forces mode `0755` on Windows, does not include the BusyBox image, and is
+not suitable for permission assertions. See
+[BUSYBOX_IMAGE.md](BUSYBOX_IMAGE.md) for the pinned asset, applet list, image
+layout and all-batch status.
 
 The Podish guest rootfs used by the runner contains root, daemon, bin, two
 unprivileged test users (1000/1001) and nobody, plus matching groups. Do not
@@ -93,7 +99,8 @@ fixtures will abort or produce a non-comparable baseline.
 operations, pipes, truncation, processes/wait, clocks, poll/select/eventfd/epoll,
 uname and getrandom. Individual programs may contain multiple assertions and
 libc/raw-syscall variants. There are deliberately no device, privileged,
-namespace, network-configuration, stress or external-helper tests.
+namespace, network-configuration or stress tests. BusyBox supplies the common
+userland commands that selected cases invoke.
 
 Do **not** use a wildcard over upstream's syscall directory: some LTP cases
 format devices, alter system settings, or have large resource demands.
@@ -110,10 +117,11 @@ From the repository root:
 
 ```sh
 git submodule update --init tests/ltp/upstream
+python3 tests/ltp/build_busybox_image.py   # once: download/verify BusyBox
 bash tests/ltp/build.sh
 ```
 
-On Windows, run the build through WSL, for example from PowerShell:
+On Windows, run the LTP build through WSL, for example from PowerShell:
 
 ```powershell
 wsl -d Ubuntu -- bash /mnt/c/Users/Jiang/repos/podish/tests/ltp/build.sh
@@ -126,9 +134,11 @@ Git uses CRLF. `LTP_BUILD_CACHE` chooses the scratch parent, `LTP_JOBS` defaults
 to 4, and the first argument overrides `artifacts/ltp` as the output directory.
 The temporary source/build directory is removed on exit.
 
-Assets use `gcc -m32 -static -O2 -g -march=i686 -mno-avx` and glibc, not musl.
-The script rejects non-i386 or interpreter-dependent ELF files and records
-the upstream commit, compiler, flags and every binary's SHA-256 in `build.json`.
+LTP assets use `gcc -m32 -static -O2 -g -march=i686 -mno-avx` and glibc, not
+musl. BusyBox is a separate pinned static i386 musl binary. The LTP build
+script rejects non-i386 or interpreter-dependent ELF files and records the
+upstream commit, compiler, flags and every binary's SHA-256 in `build.json`;
+the runner verifies the same hashes before every guest run.
 Static glibc emits NSS linker warnings; these selected tests do not require
 network NSS services. This does not promise that arbitrary future NSS tests
 will work in a minimal rootfs.

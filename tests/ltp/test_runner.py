@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -42,6 +43,43 @@ class SourceStateTests(unittest.TestCase):
                 second = run.source_state()
             self.assertTrue(first["dirty"])
             self.assertNotEqual(first["changesSha256"], second["changesSha256"])
+
+
+class BusyboxImageTests(unittest.TestCase):
+    def test_applet_list_rejects_paths_and_duplicates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "applets.txt"
+            path.write_text("sh\ncp\n")
+            self.assertEqual(run.read_applets(path), ["sh", "cp"])
+            path.write_text("sh\n../cp\n")
+            with self.assertRaises(SystemExit):
+                run.read_applets(path)
+            path.write_text("sh\nsh\n")
+            with self.assertRaises(SystemExit):
+                run.read_applets(path)
+
+    def test_busybox_symlinks_cover_bin_and_sbin(self):
+        links = dict(run.busybox_symlinks(["sh", "ip", "definitely-not-an-applet"]))
+        self.assertEqual(links["bin/sh"], "busybox")
+        self.assertEqual(links["sbin/ip"], "../bin/busybox")
+        self.assertNotIn("sbin/definitely-not-an-applet", links)
+
+    def test_image_tar_contains_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "rootfs"
+            (root / "bin").mkdir(parents=True)
+            (root / "bin/busybox").write_bytes(b"busybox")
+            tar_path = Path(directory) / "image.tar"
+            run.build_image_tar(root, tar_path, {"bin/busybox"},
+                                [("bin/sh", "busybox"), ("sbin/ip", "../bin/busybox")])
+            with tarfile.open(tar_path) as archive:
+                shell = archive.getmember("bin/sh")
+                ip = archive.getmember("sbin/ip")
+                self.assertTrue(shell.issym())
+                self.assertEqual(shell.linkname, "busybox")
+                self.assertTrue(ip.issym())
+                self.assertEqual(ip.linkname, "../bin/busybox")
+                self.assertEqual(archive.getmember("bin/busybox").mode, 0o755)
 
 
 class ResultTests(unittest.TestCase):

@@ -7,6 +7,10 @@ Native reference: WSL Linux 5.15.153.1, root, i386 static executables
 LTP: `e74f6d6f1c09e6be1aee0a09d347d818be3a36e8`
 Branch: `fix/ltp-proc-time`
 
+> BusyBox image update (2026-11-15): `setrlimit04` now passes with
+> `/bin/true`; the current all-batch result is **90 PASS / 2 PARTIAL / 2 SKIP /
+> 1 FAIL / 3 BROKEN**. See [BUSYBOX_IMAGE.md](BUSYBOX_IMAGE.md).
+
 ## Results
 
 | Backend | PASS | PARTIAL | SKIP | FAIL | BROKEN | TIMEOUT |

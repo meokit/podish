@@ -32,21 +32,33 @@ make autotools
 CC='gcc -m32' CFLAGS='-O2 -g -march=i686 -mno-avx' LDFLAGS='-static' \
     ./configure --host=i686-linux-gnu --prefix=/opt/ltp --without-numa
 make -j"${LTP_JOBS:-4}" include-all lib-all
-mkdir -p "$out/bin"
+mkdir -p "$out/bin" "$out/testcases/bin"
 python3 - "$manifest" > "$work/selection" <<'PY'
 import json, re, sys
 cases = json.load(open(sys.argv[1]))['cases']
 seen = set()
+resources = set()
 for case in cases:
     for key in ('name', 'directory'):
         if not re.fullmatch(r'[A-Za-z0-9_]+', case[key]):
             raise SystemExit('Invalid selection: ' + repr(case))
     if case['name'] in seen:
         raise SystemExit('Duplicate case: ' + case['name'])
+    if case['name'] in resources:
+        raise SystemExit('Case name collides with resource: ' + case['name'])
     seen.add(case['name'])
-    print(case['directory'], case['name'])
+    print('case', case['directory'], case['name'])
+    for resource in case.get('resources', []):
+        if not re.fullmatch(r'[A-Za-z0-9_]+', resource):
+            raise SystemExit('Invalid resource: ' + repr(resource))
+        if resource in seen:
+            raise SystemExit('Resource name collides with case: ' + resource)
+        if resource in resources:
+            continue
+        resources.add(resource)
+        print('resource', case['directory'], resource)
 PY
-while read -r directory name; do
+while read -r kind directory name; do
     make -C "testcases/kernel/syscalls/$directory" -j"${LTP_JOBS:-4}" "$name"
     # Reject accidental host-architecture or dynamically linked binaries.
     python3 - "testcases/kernel/syscalls/$directory/$name" <<'PY'
@@ -60,11 +72,15 @@ if any(struct.unpack_from('<I', data, offset + i * size)[0] == 3 for i in range(
     raise SystemExit('Unexpected ELF interpreter: ' + sys.argv[1])
 PY
     cp "testcases/kernel/syscalls/$directory/$name" "$out/bin/$name"
+    if [[ "$kind" == resource ]]; then
+        cp "testcases/kernel/syscalls/$directory/$name" "$out/testcases/bin/$name"
+    fi
 done < "$work/selection"
 python3 - "$out" "$commit" "$manifest" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 out = pathlib.Path(sys.argv[1])
 cases = json.load(open(sys.argv[3]))['cases']
+resources = sorted({r for c in cases for r in c.get('resources', [])})
 metadata = {
     'ltpCommit': sys.argv[2],
     'manifest': pathlib.Path(sys.argv[3]).name,
@@ -72,6 +88,7 @@ metadata = {
     'compiler': subprocess.check_output(['gcc', '--version'], text=True).splitlines()[0],
     'flags': '-m32 -static -O2 -g -march=i686 -mno-avx',
     'binaries': {c['name']: hashlib.sha256((out / 'bin' / c['name']).read_bytes()).hexdigest() for c in cases},
+    'resources': {r: hashlib.sha256((out / 'bin' / r).read_bytes()).hexdigest() for r in resources},
 }
 (out / 'build.json').write_text(json.dumps(metadata, indent=2) + '\n')
 print(f"Built {len(cases)} static i386 LTP executables: {out}")

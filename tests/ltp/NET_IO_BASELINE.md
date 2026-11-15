@@ -1,5 +1,11 @@
 # LTP network sockets and I/O multiplexing batch — baseline and fixes
 
+> BusyBox image update (2026-11-15): `sendmsg01` now runs (BusyBox
+> `ip`/`ifconfig`) and is **FAIL**: invalid `MSG_*` flags return success instead
+> of `EOPNOTSUPP`, and an invalid control-message pointer returns `EINVAL`
+> instead of `EFAULT`. The batch is now 63 PASS / 5 PARTIAL / 1 FAIL / 3 BROKEN
+> / 1 SKIP. See [BUSYBOX_IMAGE.md](BUSYBOX_IMAGE.md).
+
 > Final review/integration checkpoint: see [NET_IO_MERGE_VERIFICATION.md](NET_IO_MERGE_VERIFICATION.md)
 > for the four reproduced semantic fixes, reconciliation with main's fs-fd work, and fresh guest regression
 > results. Historical checkpoint counts below do not replace that final record.
