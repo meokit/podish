@@ -784,9 +784,9 @@ public partial class SyscallManager
         proc.SID = proc.TGID;
         proc.PGID = proc.TGID;
 
-        // Detach CTTY implies we are no longer associated with TTY's session?
-        // In our simple model, TtyDiscipline.SessionId holds the active session.
-        // If we were part of it, we are not anymore.
+        // A new session has no controlling terminal. The tty keeps its old session
+        // association for the processes that stayed behind.
+        proc.ControllingTty = null;
 
         return proc.SID;
     }

@@ -2,16 +2,30 @@ using System.Buffers.Binary;
 using System.Reflection;
 using System.Text;
 using Fiberish.Core;
+using Fiberish.Core.VFS.TTY;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Fiberish.Tests.Syscalls;
 
 public sealed partial class LtpRegressionTests
 {
+    [Fact]
+    public async Task Setsid_ClearsControllingTty()
+    {
+        using var env = new TestEnv();
+        env.Process.ControllingTty = new TtyDiscipline(null!, null!, NullLogger.Instance, env.Scheduler);
+
+        Assert.Equal(env.Process.TGID, await env.Call("SysSetSid"));
+        Assert.Null(env.Process.ControllingTty);
+        Assert.Equal(env.Process.TGID, env.Process.SID);
+        Assert.Equal(env.Process.TGID, env.Process.PGID);
+    }
+
     [Theory]
     [InlineData("SysUname")]
     [InlineData("SysGetTimeOfDay")]
