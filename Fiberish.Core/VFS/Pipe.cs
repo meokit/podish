@@ -9,7 +9,8 @@ using WaitHandle = Fiberish.Core.AsyncWaitQueue;
 
 namespace Fiberish.VFS;
 
-public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatcherEdgeWaitSource
+public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatcherEdgeWaitSource,
+    IPollNotificationSource
 {
     private const int BufferSize = 65536; // 64KB pipe buffer
     private const int MinPipeCapacity = 4096;
@@ -75,6 +76,17 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         }
 
         return registered;
+    }
+
+    IDisposable IPollNotificationSource.SubscribePoll(LinuxFile file, IReadyDispatcher dispatcher,
+        Func<short, bool> notify, short interests, bool exclusive)
+    {
+        // End direction matters even when ERR/HUP are implicit in the interest mask.
+        var read = ((int)file.Flags & 3) != (int)FileFlags.O_WRONLY
+            ? _readHandle.SubscribePoll(dispatcher, notify, interests, exclusive) : null;
+        var write = ((int)file.Flags & 3) != (int)FileFlags.O_RDONLY
+            ? _writeHandle.SubscribePoll(dispatcher, notify, interests, exclusive) : null;
+        return new PollSubscriptions(read, write);
     }
 
     IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher,
@@ -259,7 +271,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 // Read data
                 var consumed = _packetMode ? _packetLengths.Peek() : Math.Min(buffer.Length, _count);
                 var available = Math.Min(buffer.Length, consumed);
-                var firstChunk = Math.Min(available, BufferSize - _tail);
+                var firstChunk = Math.Min(available, _capacity - _tail);
 
                 if (firstChunk > 0)
                     new ReadOnlySpan<byte>(_buffer, _tail, firstChunk).CopyTo(buffer[..firstChunk]);
@@ -271,7 +283,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 }
 
                 // A short packet read discards the unread tail of that packet.
-                _tail = (_tail + consumed) % BufferSize;
+                _tail = (_tail + consumed) % _capacity;
                 _count -= consumed;
                 if (_packetMode) _packetLengths.Dequeue();
 
@@ -298,7 +310,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             if (_count > 0)
             {
                 var available = Math.Min(buffer.Length, _packetMode ? _packetLengths.Peek() : _count);
-                var firstChunk = Math.Min(available, BufferSize - _tail);
+                var firstChunk = Math.Min(available, _capacity - _tail);
 
                 if (firstChunk > 0)
                     new ReadOnlySpan<byte>(_buffer, _tail, firstChunk).CopyTo(buffer[..firstChunk]);
@@ -344,19 +356,19 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                     return -(int)Errno.EAGAIN;
 
                 var toWrite = Math.Min(requested, space);
-                var firstChunk = Math.Min(toWrite, BufferSize - _head);
+                var firstChunk = Math.Min(toWrite, _capacity - _head);
 
                 if (firstChunk > 0)
                 {
                     buffer[..firstChunk].CopyTo(new Span<byte>(_buffer, _head, firstChunk));
-                    _head = (_head + firstChunk) % BufferSize;
+                    _head = (_head + firstChunk) % _capacity;
                 }
 
                 if (toWrite > firstChunk)
                 {
                     var secondChunk = toWrite - firstChunk;
                     buffer.Slice(firstChunk, secondChunk).CopyTo(new Span<byte>(_buffer, _head, secondChunk));
-                    _head = (_head + secondChunk) % BufferSize;
+                    _head = (_head + secondChunk) % _capacity;
                 }
 
                 _count += toWrite;
@@ -536,10 +548,23 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         using (EnterStateScope())
         {
             if (_lifecycleClosed) return -(int)Errno.EBADF;
-            if (requested <= 0) return -(int)Errno.EINVAL;
-            var size = Math.Clamp((requested + MinPipeCapacity - 1) / MinPipeCapacity * MinPipeCapacity,
-                MinPipeCapacity, MaxPipeCapacity);
+            if (requested < 0) return -(int)Errno.EINVAL;
+            // The backend has a bounded memory budget; never silently clamp and report a
+            // smaller successful allocation, or overflow the rounding arithmetic.
+            if (requested > MaxPipeCapacity) return -(int)Errno.ENOMEM;
+            var size = (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)Math.Max(requested, MinPipeCapacity));
             if (size < _count) return -(int)Errno.EBUSY;
+            if (size != _capacity)
+            {
+                var next = ArrayPool<byte>.Shared.Rent(size);
+                var first = Math.Min(_count, _capacity - _tail);
+                _buffer.AsSpan(_tail, first).CopyTo(next);
+                _buffer.AsSpan(0, _count - first).CopyTo(next.AsSpan(first));
+                ArrayPool<byte>.Shared.Return(_buffer);
+                _buffer = next;
+                _tail = 0;
+                _head = _count % size;
+            }
             _capacity = size;
             if (HasWritableBuffer()) _writeHandle.Set();
             return _capacity;

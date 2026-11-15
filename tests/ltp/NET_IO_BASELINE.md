@@ -7,6 +7,13 @@ Native reference: WSL Linux 5.15.153.1, root, i386 static executables
 LTP: `e74f6d6f1c09e6be1aee0a09d347d818be3a36e8`
 Branch: `fix/ltp-net-io` (baseline, first repair round, timer and readiness round)
 
+> Review update (2026-11-15): the 62-PASS row below is the historical `5bff69f`
+> result; the new full run is recorded in the next row. Whole-branch review
+> found successful no-op socket options and incomplete readiness/namespace
+> semantics; see `NET_IO_BRANCH_REVIEW.md`. Passing option-validation tests does
+> not establish that those options affect the data plane. No upstream assertions
+> have been changed.
+
 ## Results
 
 | Backend | PASS | PARTIAL | FAIL | BROKEN | TIMEOUT | SKIP |
@@ -14,11 +21,51 @@ Branch: `fix/ltp-net-io` (baseline, first repair round, timer and readiness roun
 | Native Linux | 73 | 0 | 0 | 0 | 0 | 0 |
 | Windows Podish, tmpfs (before) | 25 | 1 | 25 | 18 | 4 | 0 |
 | Windows Podish, tmpfs (first round) | 52 | 4 | 4 | 5 | 7 | 1 |
-| **Windows Podish, tmpfs (current)** | **62** | **5** | **0** | **5** | **0** | **1** |
+| Windows Podish, tmpfs (`5bff69f`, historical) | 62 | 5 | 0 | 5 | 0 | 1 |
+| Windows Podish, tmpfs (2026-11-15, uncommitted review checkpoint) | 63 | 5 | 0 | 4 | 0 | 1 |
+| Windows Podish, tmpfs (2026-11-15, P1 lifecycle/cancellation follow-up) | 63 | 5 | 0 | 4 | 0 | 1 |
+| Windows Podish, tmpfs (2026-11-15, socket option semantics) | 63 | 5 | 0 | 4 | 0 | 1 |
+
+The new 73-case run used the current-worktree CLI, unchanged upstream executables
+and a 40-second per-case timeout. `epoll_wait10` moved from BROKEN to PASS;
+`epoll_wait16`, `setsockopt05`, `setsockopt08`, and `sendmsg01` remain BROKEN.
+Report: `artifacts/ltp-net-io/results/podish-tmpfs.json`, source revision
+`5bff69f9a2433b8c0fa387ccdca69edaaee0a1d8` + dirty changes digest
+`46507a6f8a86a35ab30df84f5e544a94e5265a0089fd344771c77255dfbc86d7`.
+Later documentation/probe-only edits may change that digest without changing the
+tested runtime. The runner's nonzero exit reflects PARTIAL/BROKEN/SKIP, not FAIL.
+
+Checkpoint regression gates: `Fiberish.Tests` 1882 PASS / 0 FAIL / 1 SKIP;
+SilkFS/Pulse/Wayland 13/49/19 PASS; LTP runner 22/22 PASS; Node matrix 24/24 PASS
+across tmpfs/silkfs (each: `6 3000 32768` ×10, `12 3000 32768` ×1,
+`12 200000 64` ×1), all with actual exit 0 plus completion marker. Node summary:
+`artifacts/verification/node-matrix.json`. Harness-only exit/marker/timeout/path
+tests also pass 6/6; they are not counted as guest Node runs.
+
+P1 follow-up: cancellable foreign-dispatcher deliveries/trampoline and owner-routed
+epoll close cleanup add nine regressions. Latest C# core is **1891 PASS / 0 FAIL /
+1 SKIP**, other suites remain 13/49/19 PASS, runner 22/22. All 73 net-io case
+statuses are unchanged; Node was rerun and again passed **24/24** with genuine
+exit 0 plus marker (`artifacts/verification/node-matrix-p1.json`). Latest LTP JSON
+source digest is `e68c2a29680fa18ca106c6965df95f6811b90a10d5418ad7db7d9ff4199b876e`;
+the preceding JSON is retained at `artifacts/verification/net-io-pre-p1.json`.
+These fixes do not enable EPOLLEXCLUSIVE or finish the remaining source/namespace
+implementation. See the review report for unresolved scope.
+
+Socket-option round: netstack buffers/Nagle/keepalive/linger/multicast now act on the
+backend, and unsupported knobs return real errno (matrix: `NET_IO_SOCKET_OPTION_MATRIX.md`).
+Native `probes/sockopts.c` confirms Linux doubling/clamp values and the options that Linux
+accepts but this backend cannot fully implement. Full net-io statuses are unchanged
+(63/5/0/4/0/1), and Node passed 24/24 again (`node-matrix-sockopts.json`). The first guest
+run exposed an optlen-ordering regression in `setsockopt01`; it was fixed (EINVAL before
+ENOPROTOOPT) and the case is PASS. Latest LTP digest:
+`7fe518f46ef3ad69877ac5d504ddf6d2d2f251a9473ab9b47fe44ff054ce9451`.
+Final gates for this round: `Fiberish.Tests` **1900 PASS / 0 FAIL / 1 SKIP**; SilkFS 13,
+Pulse 49, Wayland 19 PASS; runner 22/22; Node 24/24 (`node-matrix-sockopts.json`).
 
 `PARTIAL`/`SKIP` mean the case ran with a supported subset (unsupported
 `SCTP`/`UDP-Lite` protocol or unavailable fd types), not a fabricated pass.
-No case fails or times out any more; the remaining `BROKEN` cases need kernel
+In that historical run no case failed or timed out; the remaining `BROKEN` cases need kernel
 features or guest tooling that this batch does not provide (see below).
 
 ## Excluded before the comparison
@@ -35,14 +82,17 @@ features or guest tooling that this batch does not provide (see below).
   `SO_RCVBUF`), `SO_RCVBUF` 9 (really `SO_KEEPALIVE`), `SO_KEEPALIVE` 6 (really
   `SO_BROADCAST`) and `SO_OOBINLINE` 7 (really `SO_SNDBUF`). Corrected to
   7/8/9/10; this alone fixed `setsockopt01` and several option tests.
-- `NetstackSocketInode` now validates/serves `SO_REUSEADDR`, `SO_REUSEPORT`,
+- The first repair round added validation/acceptance for `SO_REUSEADDR`, `SO_REUSEPORT`,
   `SO_KEEPALIVE`, `SO_OOBINLINE`, `SO_SNDBUF`, `SO_RCVBUF`, `SO_LINGER`,
   `SO_RCVTIMEO`/`SO_SNDTIMEO`, `TCP_NODELAY`/keepalive knobs, and rejects
-  `IPPROTO_UDP`/unknown levels with `ENOPROTOOPT` or `EOPNOTSUPP` as Linux does.
+  `IPPROTO_UDP`/unknown levels with `ENOPROTOOPT` or `EOPNOTSUPP`.
+  **Review caveat:** several accepted options are still no-ops with fixed getter
+  defaults. This is an unresolved ABI defect, not completed option support.
 - `SO_SNDBUFFORCE`/`SO_RCVBUFFORCE` accept the value only for callers with
   `CAP_NET_ADMIN` (root model), otherwise `EPERM` (CVE-2016-9793 shape).
-- `MCAST_JOIN_GROUP`/`MCAST_LEAVE_GROUP` track joined groups per socket so a
+- `MCAST_JOIN_GROUP`/`MCAST_LEAVE_GROUP` track group metadata per socket so a
   group is not inherited by an accepted socket (`accept02`, CVE-2017-8890).
+  This does not implement actual multicast reception membership.
 
 ### 2. Address parsing, endpoint copy-out and descriptor limits
 - `ReadSockaddr`/`ReadAnySockaddr` now return the proper errno (`EFAULT` for a

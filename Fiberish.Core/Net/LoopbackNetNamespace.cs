@@ -182,31 +182,54 @@ public sealed class LoopbackNetNamespace : IDisposable
         }
     }
 
-    public TcpListenerSocket CreateTcpListener()
+    public TcpListenerSocket CreateTcpListener(int sendBytes = 0, int recvBytes = 0)
     {
         ThrowIfDisposed();
-        var socket = NetstackNative.CreateTcpListener(Handle);
+        var socket = sendBytes > 0 && recvBytes > 0
+            ? NetstackNative.CreateTcpListenerSized(Handle, (nuint)sendBytes, (nuint)recvBytes)
+            : NetstackNative.CreateTcpListener(Handle);
         if (socket == 0)
             throw new InvalidOperationException("Failed to create TCP listener socket.");
         return new TcpListenerSocket(this, socket);
     }
 
-    public TcpStreamSocket CreateTcpStream()
+    public TcpStreamSocket CreateTcpStream(int sendBytes = 0, int recvBytes = 0)
     {
         ThrowIfDisposed();
-        var socket = NetstackNative.CreateTcpStream(Handle);
+        var socket = sendBytes > 0 && recvBytes > 0
+            ? NetstackNative.CreateTcpStreamSized(Handle, (nuint)sendBytes, (nuint)recvBytes)
+            : NetstackNative.CreateTcpStream(Handle);
         if (socket == 0)
             throw new InvalidOperationException("Failed to create TCP stream socket.");
         return new TcpStreamSocket(this, socket);
     }
 
-    public UdpDatagramSocket CreateUdpSocket()
+    public UdpDatagramSocket CreateUdpSocket(int sendBytes = 0, int recvBytes = 0)
     {
         ThrowIfDisposed();
-        var socket = NetstackNative.CreateUdpSocket(Handle);
+        var socket = sendBytes > 0 && recvBytes > 0
+            ? NetstackNative.CreateUdpSocketSized(Handle, (nuint)sendBytes, (nuint)recvBytes)
+            : NetstackNative.CreateUdpSocket(Handle);
         if (socket == 0)
             throw new InvalidOperationException("Failed to create UDP socket.");
         return new UdpDatagramSocket(this, socket);
+    }
+
+    /// <summary>
+    ///     Joins an IPv4 multicast group on the namespace interface. Membership is reference
+    ///     counted by the caller's per-socket registrations; the packet filter is shared.
+    /// </summary>
+    public int JoinMulticast(uint groupIpv4Be)
+    {
+        ThrowIfDisposed();
+        return NetstackNative.JoinMulticast(Handle, groupIpv4Be);
+    }
+
+    /// <summary>Leaves a group; returns the last local error, 0 on success.</summary>
+    public int LeaveMulticast(uint groupIpv4Be)
+    {
+        ThrowIfDisposed();
+        return NetstackNative.LeaveMulticast(Handle, groupIpv4Be);
     }
 
     private void ThrowIfDisposed()
@@ -291,6 +314,25 @@ public sealed class LoopbackNetNamespace : IDisposable
             if (rc != 0 || accepted == null)
                 throw new InvalidOperationException($"Failed to accept TCP socket (rc={rc}).");
             return accepted;
+        }
+
+        /// <summary>
+        ///     Applies buffer capacities while the listener has no bound port and no pending
+        ///     accepted connections. Returns the native error code.
+        /// </summary>
+        public int TrySetBuffers(int sendBytes, int recvBytes)
+        {
+            ThrowIfDisposed();
+            return NetstackNative.SocketSetBuffers(_namespace.Handle, _handle, (nuint)sendBytes, (nuint)recvBytes);
+        }
+
+        public (int SendBytes, int RecvBytes) GetBufferSizes()
+        {
+            ThrowIfDisposed();
+            var rc = NetstackNative.SocketGetBuffers(_namespace.Handle, _handle, out var send, out var recv);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to query listener buffer sizes (rc={rc}).");
+            return (checked((int)send), checked((int)recv));
         }
 
         private void ThrowIfDisposed()
@@ -495,6 +537,65 @@ public sealed class LoopbackNetNamespace : IDisposable
                 throw new InvalidOperationException($"Failed to close TCP send side (rc={rc}).");
         }
 
+        public int TrySetBuffers(int sendBytes, int recvBytes)
+        {
+            ThrowIfDisposed();
+            return NetstackNative.SocketSetBuffers(_namespace.Handle, _handle, (nuint)sendBytes, (nuint)recvBytes);
+        }
+
+        public (int SendBytes, int RecvBytes) GetBufferSizes()
+        {
+            ThrowIfDisposed();
+            var rc = NetstackNative.SocketGetBuffers(_namespace.Handle, _handle, out var send, out var recv);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to query TCP buffer sizes (rc={rc}).");
+            return (checked((int)send), checked((int)recv));
+        }
+
+        public int TrySetNoDelay(bool enabled)
+        {
+            ThrowIfDisposed();
+            return NetstackNative.TcpStreamSetNoDelay(_namespace.Handle, _handle, enabled ? 1 : 0);
+        }
+
+        public bool NoDelay
+        {
+            get
+            {
+                ThrowIfDisposed();
+                var rc = NetstackNative.TcpStreamGetNoDelay(_namespace.Handle, _handle);
+                if (rc < 0)
+                    throw new InvalidOperationException($"Failed to query TCP_NODELAY (rc={rc}).");
+                return rc != 0;
+            }
+        }
+
+        public int TrySetKeepAlive(int intervalMillis)
+        {
+            ThrowIfDisposed();
+            return NetstackNative.TcpStreamSetKeepAlive(_namespace.Handle, _handle, intervalMillis);
+        }
+
+        public int KeepAliveIntervalMillis
+        {
+            get
+            {
+                ThrowIfDisposed();
+                var rc = NetstackNative.TcpStreamGetKeepAlive(_namespace.Handle, _handle, out var millis);
+                if (rc != 0)
+                    throw new InvalidOperationException($"Failed to query keepalive interval (rc={rc}).");
+                return checked((int)millis);
+            }
+        }
+
+        public void Abort()
+        {
+            ThrowIfDisposed();
+            var rc = NetstackNative.TcpStreamAbort(_namespace.Handle, _handle);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to abort TCP stream (rc={rc}).");
+        }
+
         private void ThrowIfDisposed()
         {
             if (_handle == 0)
@@ -560,6 +661,21 @@ public sealed class LoopbackNetNamespace : IDisposable
             var handle = _handle;
             _handle = 0;
             NetstackNative.CloseSocket(_namespace.Handle, handle);
+        }
+
+        public int TrySetBuffers(int sendBytes, int recvBytes)
+        {
+            ThrowIfDisposed();
+            return NetstackNative.SocketSetBuffers(_namespace.Handle, _handle, (nuint)sendBytes, (nuint)recvBytes);
+        }
+
+        public (int SendBytes, int RecvBytes) GetBufferSizes()
+        {
+            ThrowIfDisposed();
+            var rc = NetstackNative.SocketGetBuffers(_namespace.Handle, _handle, out var send, out var recv);
+            if (rc != 0)
+                throw new InvalidOperationException($"Failed to query UDP buffer sizes (rc={rc}).");
+            return (checked((int)send), checked((int)recv));
         }
 
         public int TryBind(ushort localPort)

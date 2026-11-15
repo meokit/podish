@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Fiberish.VFS;
 
 namespace Fiberish.Core;
 
@@ -17,6 +18,15 @@ public class AsyncWaitQueue
     private long _nextWaiterId;
     private long _signalSequence;
     private KernelScheduler? _ownerScheduler;
+    private PollNotificationQueue? _pollNotifications;
+
+    internal IDisposable SubscribePoll(IReadyDispatcher dispatcher, Func<short, bool> notify,
+        short interests, bool exclusive)
+    {
+        AssertSchedulerThread(dispatcher.Scheduler);
+        if (dispatcher.Scheduler != null) AssertSchedulerOwnership(dispatcher.Scheduler);
+        return (_pollNotifications ??= new PollNotificationQueue()).Subscribe(dispatcher, notify, interests, exclusive);
+    }
 
     public AsyncWaitQueue(KernelScheduler ownerScheduler)
     {
@@ -45,8 +55,6 @@ public class AsyncWaitQueue
             _isSignaled = true;
             _signalSequence++;
             signalSequence = _signalSequence;
-            if (_waiters.Count == 0) return;
-
             toWake = _drainBuffer;
             toWake.Clear();
             for (var i = _waiters.Count - 1; i >= 0; i--)
@@ -59,14 +67,13 @@ public class AsyncWaitQueue
                 _waiters.RemoveAt(i);
             }
 
-            if (toWake.Count == 0)
-                return;
         }
 
         foreach (var waiter in toWake)
             waiter.Schedule();
 
         toWake.Clear();
+        _pollNotifications?.Signal();
     }
 
     public void Reset()

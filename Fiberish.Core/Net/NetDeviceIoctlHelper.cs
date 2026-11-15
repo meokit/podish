@@ -123,7 +123,7 @@ public static class NetDeviceIoctlHelper
         {
             if (string.Equals(snapshot.Devices[i].Name, name, StringComparison.Ordinal))
             {
-                BinaryPrimitives.WriteInt32LittleEndian(ifreq.AsSpan(16, 4), i + 1);
+                BinaryPrimitives.WriteInt32LittleEndian(ifreq.AsSpan(16, 4), snapshot.Devices[i].IfIndex);
                 return engine.CopyToUser(arg, ifreq) ? 0 : -(int)Errno.EFAULT;
             }
         }

@@ -1,5 +1,21 @@
 # Node.js crash reproducer (Alpine 3.12 x86 / Node.js 14.5.0)
 
+## Regression gate (current)
+
+`run-repro.ps1` now resolves the CLI from its own worktree (or an explicit `-Cli`)
+and exits 0 only when **every** run exits 0 and prints `[repro] done`. Logs and a
+JSON report are retained under `artifacts/verification/node-*`. Run the documented
+parameter sets on both `-FsBackend tmpfs` and `-FsBackend silkfs`.
+
+The failure examples below describe the historical defect. Add `-ExpectCrash`
+only when intentionally reproducing that defect; never use it as a regression gate.
+
+`powershell -NoProfile -ExecutionPolicy Bypass -File tests/node-crash/test-harness.ps1`
+checks the host harness with a separate fake .NET CLI: marker+exit0 passes;
+marker+nonzero, missing marker and timeout fail. It also checks explicit historical
+crash mode and a CLI path containing spaces. These are harness tests, not guest
+Node results. The fake CLI stays under `%LOCALAPPDATA%\Temp\opencode`.
+
 A stable reproducer for the Node.js crash seen when a moderately heavy Node
 program runs inside Podish.
 
@@ -89,10 +105,14 @@ its shared libraries, installs `repro.js` at `/app/repro.js`, and writes
 
 ### 2. Import the image
 
+Run import from the repository root: the image store is relative to that folder.
+Alternatively supply `-RootfsTar <absolute-path>` to the harness, which imports
+and runs in the same worktree automatically.
+
 ```powershell
-cd $env:TEMP\podish-node-crash
-dotnet <repo>\Podish.Cli\bin\Debug\net10.0\Podish.Cli.dll import `
-    node-rootfs.tar localhost/podish-node:latest
+cd <repo>
+dotnet .\Podish.Cli\bin\Debug\net10.0\Podish.Cli.dll import `
+    <absolute-path>\node-rootfs.tar localhost/podish-node:latest
 ```
 
 ### 3. Run the reproducer
@@ -102,7 +122,16 @@ powershell -ExecutionPolicy Bypass -File <repo>\tests\node-crash\run-repro.ps1 `
     -Repeats 5 -TimeoutSeconds 60
 ```
 
-Expected output (one line per attempt):
+Current regression output (one line per attempt, all must succeed):
+
+```
+attempt 1: COMPLETED, 3s
+...
+5 / 5 accepted; report: <repo>\artifacts\verification\node-...\report.json
+```
+
+Historical output from before the brk fix (use `-ExpectCrash` only when
+intentionally testing an affected version):
 
 ```
 attempt 1: CRASH (exit 139), 2.9s

@@ -126,7 +126,7 @@ public partial class SyscallManager
 
     private static bool IsEpollSupportedInode(Inode? inode)
     {
-        return inode is IDispatcherWaitSource or ITaskWaitSource or InotifyInode or TimerFdInode;
+        return inode is IPollNotificationSource or IDispatcherWaitSource or ITaskWaitSource or InotifyInode or TimerFdInode;
     }
 
     private ValueTask<int> SysEpollWait(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) =>

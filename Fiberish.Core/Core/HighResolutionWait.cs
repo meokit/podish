@@ -74,7 +74,10 @@ internal sealed class HighResolutionWait : IDisposable
                 _handles[0] = wake.SafeWaitHandle.DangerousGetHandle();
                 _handles[1] = _timer!.DangerousGetHandle();
                 var result = WaitForMultipleObjects(2, _handles, false, Infinite);
-                return result == WaitObject0;
+                if (result == WaitObject0) return true;
+                if (result == WaitObject0 + 1) return false;
+                // WAIT_FAILED is not a timer expiration. Fall back to the managed wait,
+                // which also reports an invalid/disposed wake handle instead of busy-spinning.
             }
         }
 

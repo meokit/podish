@@ -2328,6 +2328,7 @@ LocResolvedUtimens64:
             var remountClear = ~flags & MountFlagMask;
             targetMount.Flags = ApplyMountFlagUpdate(targetMount.Flags, remountSet, remountClear);
             RefreshMountOptions(targetMount);
+            _mountNamespace.NotifyChanged();
 
             // Update MountList
             var targetPath = GetAbsolutePath(targetLoc);
@@ -2771,6 +2772,8 @@ LocResolvedUtimens64:
         var clearMask = MapMountAttrToMountFlags(attrClr);
         mount.Flags = ApplyMountFlagUpdate(mount.Flags, setMask, clearMask);
         RefreshMountOptions(mount);
+
+        if (_mountNamespace.Mounts.Contains(mount)) _mountNamespace.NotifyChanged();
 
         return 0;
     }

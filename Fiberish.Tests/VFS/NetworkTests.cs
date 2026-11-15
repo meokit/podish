@@ -12,6 +12,231 @@ namespace Fiberish.Tests.VFS;
 
 public class NetworkTests
 {
+    [Fact]
+    public async Task EpollInode_ConsumingPoll_BlockedWaitDoesNotPollInNotificationOrLtRequeue()
+    {
+        using var env = new TestEnv();
+        var source = new ConsumingPollInode { SuperBlock = env.MemfdSuperBlock, Type = InodeType.File };
+        var epoll = new EpollInode(1, env.MemfdSuperBlock, env.Scheduler);
+        var result = await env.StartOnScheduler(async () =>
+        {
+            // Open/close watches on their owning scheduler, including exception cleanup.
+            using var file = new LinuxFile(new Dentry("consume-poll", source, null, env.MemfdSuperBlock),
+                FileFlags.O_RDONLY, null);
+            using var epFile = new LinuxFile(new Dentry("epoll", epoll, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null);
+            Assert.Equal(0, epoll.Ctl(env.Task, LinuxConstants.EPOLL_CTL_ADD, 8, file, LinuxConstants.EPOLLPRI, 17));
+            env.Scheduler.ScheduleTimer(1, source.Change);
+            var buffer = new byte[12];
+            var count = await epoll.WaitAsync(env.Task, buffer, 1, 100);
+            var pollsAtDelivery = source.PollCount;
+            Assert.Equal(0, epoll.TryHarvestNow(new byte[12], 1));
+            return (count, pollsAtDelivery, buffer);
+        }).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, result.count);
+        Assert.Equal(2, result.pollsAtDelivery); // ADD + final delivery, no callback/requeue Poll.
+        AssertEpollEvent(result.buffer, LinuxConstants.EPOLLPRI | LinuxConstants.EPOLLERR, 17);
+    }
+
+    private sealed class ConsumingPollInode : Inode, IPollNotificationSource
+    {
+        private readonly PollNotificationQueue _notifications = new();
+        private bool _changed;
+        public bool KeepReady { get; init; }
+        public bool Released { get; private set; }
+        public Action? BeforePoll { get; set; }
+        public int PollCount { get; private set; }
+        public void Change()
+        {
+            _changed = true;
+            _notifications.Signal(PollEvents.POLLPRI | PollEvents.POLLERR);
+        }
+        public override short Poll(LinuxFile file, short events)
+        {
+            BeforePoll?.Invoke();
+            if (Released) throw new InvalidOperationException("Poll after final inode release");
+            PollCount++;
+            if (!_changed) return 0;
+            if (!KeepReady) _changed = false;
+            return PollEvents.POLLPRI | PollEvents.POLLERR;
+        }
+        public IDisposable SubscribePoll(LinuxFile file, IReadyDispatcher dispatcher, Func<short, bool> notify,
+            short interests, bool exclusive) => _notifications.Subscribe(dispatcher, notify, interests, exclusive);
+        public override void Release(LinuxFile file) => Released = true;
+        public IDisposable SubscribeProbe(Func<short, bool> callback) =>
+            _notifications.Subscribe(new SchedulerReadyDispatcher(null), callback, PollEvents.POLLPRI, false);
+    }
+
+    [Fact]
+    public void EpollInode_ForeignFinalTargetClose_DefersListCleanupButNeverPollsReleasedTarget()
+    {
+        using var env = new TestEnv();
+        BindSchedulerForCloseTest(env.Scheduler);
+        var source = new ConsumingPollInode { SuperBlock = env.MemfdSuperBlock, Type = InodeType.File };
+        var file = new LinuxFile(new Dentry("close-target", source, null, env.MemfdSuperBlock), FileFlags.O_RDONLY, null);
+        var epoll = new EpollInode(1, env.MemfdSuperBlock, env.Scheduler);
+        using var epFile = new LinuxFile(new Dentry("epoll", epoll, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null);
+        Assert.Equal(0, epoll.Ctl(env.Task, LinuxConstants.EPOLL_CTL_ADD, 8, file, LinuxConstants.EPOLLPRI, 17));
+        file.Get(); // A dup's close is not the last open-file close.
+        CloseOnForeignThread(file);
+        Assert.False(source.Released);
+        source.Change();
+        Assert.Equal(1, epoll.TryHarvestNow(new byte[12], 1));
+        source.Change();
+        CloseOnForeignThread(file);
+        Assert.True(source.Released);
+        var polls = source.PollCount;
+        Assert.Equal(0, epoll.TryHarvestNow(new byte[12], 1));
+        Assert.Equal(polls, source.PollCount);
+        env.DrainEvents();
+        Assert.Equal(0, WatchCount(epoll));
+        Assert.Equal(0, epoll.TryHarvestNow(new byte[12], 1));
+    }
+
+    [Fact]
+    public void EpollInode_ForeignFinalEpollClose_CancelsLeaseEvenWhenItsDispatcherIsStopped()
+    {
+        using var env = new TestEnv();
+        BindSchedulerForCloseTest(env.Scheduler);
+        var source = new ConsumingPollInode { SuperBlock = env.MemfdSuperBlock, Type = InodeType.File };
+        using var file = new LinuxFile(new Dentry("epoll-close-source", source, null, env.MemfdSuperBlock), FileFlags.O_RDONLY, null);
+        var epoll = new EpollInode(1, env.MemfdSuperBlock, env.Scheduler);
+        var epFile = new LinuxFile(new Dentry("epoll", epoll, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null);
+        Assert.Equal(0, epoll.Ctl(env.Task, LinuxConstants.EPOLL_CTL_ADD, 8, file, LinuxConstants.EPOLLPRI, 17));
+        var liveCalls = 0;
+        using var live = source.SubscribeProbe(_ => { liveCalls++; return false; });
+        typeof(KernelScheduler).GetField("_isInsideRunLoop", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(env.Scheduler, false);
+        source.Change(); // Publication is now waiting for epoll's stopped dispatcher.
+        Assert.Equal(0, liveCalls);
+        CloseOnForeignThread(epFile);
+        Assert.Equal(1, liveCalls); // Closing cancels without needing the stopped dispatcher.
+        var polls = source.PollCount;
+        typeof(KernelScheduler).GetField("_isInsideRunLoop", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(env.Scheduler, true);
+        env.DrainEvents(); // Includes the stale notification posted before close.
+        Assert.Equal(0, WatchCount(epoll));
+        Assert.Equal(polls, source.PollCount);
+        Assert.Equal(0, epoll.TryHarvestNow(new byte[12], 1));
+        source.Change();
+        Assert.Equal(2, liveCalls);
+    }
+
+    private static void BindSchedulerForCloseTest(KernelScheduler scheduler) =>
+        typeof(KernelScheduler).GetField("_ownerThreadId", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(scheduler, Environment.CurrentManagedThreadId);
+
+    private static int WatchCount(EpollInode epoll) =>
+        ((System.Collections.IDictionary)typeof(EpollInode).GetField("_watches", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(epoll)!).Count;
+
+    private static void CloseOnForeignThread(LinuxFile file)
+    {
+        Exception? error = null;
+        var thread = new Thread(() =>
+        {
+            try { file.Close(); }
+            catch (Exception exception) { error = exception; }
+        }) { IsBackground = true };
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(5)));
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public void EpollInode_TargetFinalClose_WaitsForInFlightPollBeforeReleasingTheInode()
+    {
+        using var env = new TestEnv();
+        using var entered = new ManualResetEventSlim();
+        using var resume = new ManualResetEventSlim();
+        using var closeStarted = new ManualResetEventSlim();
+        using var closed = new ManualResetEventSlim();
+        var source = new ConsumingPollInode { SuperBlock = env.MemfdSuperBlock, Type = InodeType.File };
+        var file = new LinuxFile(new Dentry("in-flight-poll", source, null, env.MemfdSuperBlock), FileFlags.O_RDONLY, null);
+        Exception? ownerError = null;
+        Exception? closeError = null;
+        var owner = new Thread(() =>
+        {
+            try
+            {
+                BindSchedulerForCloseTest(env.Scheduler);
+                var epoll = new EpollInode(1, env.MemfdSuperBlock, env.Scheduler);
+                using var epFile = new LinuxFile(new Dentry("epoll", epoll, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null);
+                Assert.Equal(0, epoll.Ctl(env.Task, LinuxConstants.EPOLL_CTL_ADD, 8, file, LinuxConstants.EPOLLPRI, 17));
+                source.BeforePoll = () =>
+                {
+                    entered.Set();
+                    Assert.True(resume.Wait(TimeSpan.FromSeconds(5)));
+                    Assert.False(source.Released);
+                };
+                source.Change();
+                Assert.Equal(1, epoll.TryHarvestNow(new byte[12], 1));
+            }
+            catch (Exception error) { ownerError = error; }
+        }) { IsBackground = true };
+        var closer = new Thread(() =>
+        {
+            closeStarted.Set();
+            try { file.Close(); }
+            catch (Exception error) { closeError = error; }
+            finally { closed.Set(); }
+        }) { IsBackground = true };
+        owner.Start();
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            closer.Start();
+            Assert.True(closeStarted.Wait(TimeSpan.FromSeconds(5)));
+            Assert.False(closed.Wait(TimeSpan.FromMilliseconds(50)));
+            Assert.False(source.Released);
+        }
+        finally
+        {
+            resume.Set();
+            Assert.True(owner.Join(TimeSpan.FromSeconds(5)));
+            if ((closer.ThreadState & System.Threading.ThreadState.Unstarted) != 0) closer.Start();
+            Assert.True(closer.Join(TimeSpan.FromSeconds(5)));
+        }
+        Assert.Null(ownerError);
+        Assert.Null(closeError);
+        Assert.True(source.Released);
+    }
+
+    [Theory]
+    [InlineData(false, 2)]
+    [InlineData(true, 1)]
+    public void EpollInode_SharedWaiters_LevelReadinessHandsOffButEdgeDoesNotBroadcast(bool edge, int expected)
+    {
+        using var env = new TestEnv();
+        var source = new ConsumingPollInode
+            { SuperBlock = env.MemfdSuperBlock, Type = InodeType.File, KeepReady = true };
+        using var file = new LinuxFile(new Dentry("level-source", source, null, env.MemfdSuperBlock),
+            FileFlags.O_RDONLY, null);
+        var epoll = new EpollInode(1, env.MemfdSuperBlock, env.Scheduler);
+        using var epFile = new LinuxFile(new Dentry("epoll", epoll, null, env.MemfdSuperBlock), FileFlags.O_RDWR, null);
+        var interests = LinuxConstants.EPOLLPRI | (edge ? LinuxConstants.EPOLLET : 0);
+        Assert.Equal(0, epoll.Ctl(env.Task, LinuxConstants.EPOLL_CTL_ADD, 8, file, interests, 17));
+        var runtime = new TestRuntimeFactory();
+        var first = new FiberTask(101, env.Process, runtime.CreateEngine(), env.Scheduler);
+        var second = new FiberTask(102, env.Process, runtime.CreateEngine(), env.Scheduler);
+        var one = new EpollInode.EpollAwaitState(first, epoll, new byte[12], 1, -1, 0);
+        var two = new EpollInode.EpollAwaitState(second, epoll, new byte[12], 1, -1, 0);
+        var delivered = new List<int>();
+        try
+        {
+            one.OnCompleted(() => delivered.Add(one.GetResult()));
+            two.OnCompleted(() => delivered.Add(two.GetResult()));
+            source.Change();
+            // Run the actual ingress continuations, without executing the fake tasks' empty CPUs.
+            env.DrainEvents();
+            Assert.Equal(Enumerable.Repeat(1, expected), delivered);
+        }
+        finally
+        {
+            first.BeginTaskRetirement();
+            second.BeginTaskRetirement();
+        }
+    }
+
     private static readonly MethodInfo DrainEventsMethod =
         typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
@@ -704,7 +929,8 @@ public class NetworkTests
                 Task.Continuation = Entry;
                 Scheduler.Running = true;
                 Scheduler.Schedule(Task);
-                Scheduler.Run();
+                try { Scheduler.Run(); }
+                catch (Exception ex) { tcs.TrySetException(ex); }
             });
 
             return tcs.Task;

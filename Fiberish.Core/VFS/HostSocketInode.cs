@@ -729,7 +729,8 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
                         NativeSocket.LingerState = new LingerOption(lingerOn, lingerSec);
                         return 0;
                     case LinuxConstants.SO_REUSEPORT:
-                        return 0;
+                        // Windows has no Linux-style per-port socket distribution.
+                        return -(int)Errno.ENOPROTOOPT;
                     case LinuxConstants.SO_RCVTIMEO:
                         if (optval.Length >= 8)
                         {
@@ -759,8 +760,19 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
                         NativeSocket.NoDelay = BinaryPrimitives.ReadInt32LittleEndian(optval) != 0;
                         return 0;
                     case LinuxConstants.TCP_KEEPIDLE:
+                        if (optval.Length < 4) return -(int)Errno.EINVAL;
+                        NativeSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime,
+                            BinaryPrimitives.ReadInt32LittleEndian(optval));
+                        return 0;
                     case LinuxConstants.TCP_KEEPINTVL:
+                        if (optval.Length < 4) return -(int)Errno.EINVAL;
+                        NativeSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval,
+                            BinaryPrimitives.ReadInt32LittleEndian(optval));
+                        return 0;
                     case LinuxConstants.TCP_KEEPCNT:
+                        if (optval.Length < 4) return -(int)Errno.EINVAL;
+                        NativeSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount,
+                            BinaryPrimitives.ReadInt32LittleEndian(optval));
                         return 0;
                     default:
                         return -(int)Errno.ENOPROTOOPT;
@@ -779,13 +791,18 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
             }
 
             if (level == LinuxConstants.IPPROTO_ICMPV6 && optname == LinuxConstants.ICMPV6_FILTER)
-                return 0;
+                // The host stack has no ICMPv6 filter-control equivalent to install.
+                return -(int)Errno.ENOPROTOOPT;
 
             return -(int)Errno.ENOPROTOOPT;
         }
         catch (SocketException ex)
         {
             return MapSocketError(ex.SocketErrorCode);
+        }
+        catch (PlatformNotSupportedException)
+        {
+            return -(int)Errno.ENOPROTOOPT;
         }
     }
 
@@ -824,7 +841,8 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
                         {
                             int i => (SocketError)i, SocketError se => se, _ => SocketError.Success
                         };
-                        var linuxErr = soError == SocketError.Success ? 0 : -MapSocketError(soError);
+                        // Linux getsockopt(SO_ERROR) reports a positive errno value.
+                        var linuxErr = soError == SocketError.Success ? 0 : MapSocketError(soError);
                         BinaryPrimitives.WriteInt32LittleEndian(optval, linuxErr);
                         return 0;
                     case LinuxConstants.SO_SNDBUF:
@@ -837,6 +855,16 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
                         var linger = NativeSocket.LingerState ?? new LingerOption(false, 0);
                         BinaryPrimitives.WriteInt32LittleEndian(optval.Slice(0, 4), linger.Enabled ? 1 : 0);
                         BinaryPrimitives.WriteInt32LittleEndian(optval.Slice(4, 4), linger.LingerTime);
+                        written = 8;
+                        return 0;
+                    case LinuxConstants.SO_RCVTIMEO:
+                        if (optval.Length < 8) return -(int)Errno.EINVAL;
+                        WriteTimevalMs(optval, _receiveTimeoutMs);
+                        written = 8;
+                        return 0;
+                    case LinuxConstants.SO_SNDTIMEO:
+                        if (optval.Length < 8) return -(int)Errno.EINVAL;
+                        WriteTimevalMs(optval, _sendTimeoutMs);
                         written = 8;
                         return 0;
                     case LinuxConstants.SO_TYPE:
@@ -859,6 +887,18 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
                     case LinuxConstants.TCP_NODELAY:
                         BinaryPrimitives.WriteInt32LittleEndian(optval, NativeSocket.NoDelay ? 1 : 0);
                         return 0;
+                    case LinuxConstants.TCP_KEEPIDLE:
+                        BinaryPrimitives.WriteInt32LittleEndian(optval,
+                            GetTcpKeepAliveOption(SocketOptionName.TcpKeepAliveTime));
+                        return 0;
+                    case LinuxConstants.TCP_KEEPINTVL:
+                        BinaryPrimitives.WriteInt32LittleEndian(optval,
+                            GetTcpKeepAliveOption(SocketOptionName.TcpKeepAliveInterval));
+                        return 0;
+                    case LinuxConstants.TCP_KEEPCNT:
+                        BinaryPrimitives.WriteInt32LittleEndian(optval,
+                            GetTcpKeepAliveOption(SocketOptionName.TcpKeepAliveRetryCount));
+                        return 0;
                     default:
                         return -(int)Errno.ENOPROTOOPT;
                 }
@@ -869,6 +909,20 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
         {
             return MapSocketError(ex.SocketErrorCode);
         }
+        catch (PlatformNotSupportedException)
+        {
+            return -(int)Errno.ENOPROTOOPT;
+        }
+    }
+
+    private int GetTcpKeepAliveOption(SocketOptionName option) =>
+        NativeSocket.GetSocketOption(SocketOptionLevel.Tcp, option) is int value ? value : 0;
+
+    private static void WriteTimevalMs(Span<byte> destination, int? millis)
+    {
+        var value = millis ?? 0;
+        BinaryPrimitives.WriteInt32LittleEndian(destination, value / 1000);
+        BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(4, 4), value % 1000 * 1000);
     }
 
     public override short Poll(LinuxFile file, short events)

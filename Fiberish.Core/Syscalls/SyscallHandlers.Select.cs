@@ -155,7 +155,11 @@ public partial class SyscallManager
             return ready;
         }
 
-        if (timeoutMs == 0) return 0;
+        if (timeoutMs == 0)
+        {
+            WriteSelectResults(engine, inp, outp, exp, resIn, resOut, resEx);
+            return 0;
+        }
 
         // 2. Await
         var task = engine.Owner as FiberTask;
@@ -163,22 +167,9 @@ public partial class SyscallManager
 
         try
         {
-            var ret = await new SelectAwaitable(task, sm.FDs, n, inp, outp, exp, timeoutMs);
-            // If success, we assume SelectAwaiter re-scanned and returned the count?
-            // Actually SelectAwaiter.GetResult() logic needs to handle re-scan or partial result.
-            // But standard Select returns the count and modifies the sets.
-            // Typically after wakeup, we scan again.
-
-            // Re-scan to populate sets
-            if (ret >= 0)
-            {
-                ready = ScanSelect(sm, engine, n, inp, outp, exp, engine.Owner as FiberTask, out resIn, out resOut,
-                    out resEx);
-                WriteSelectResults(engine, inp, outp, exp, resIn, resOut, resEx);
-                return ready;
-            }
-
-            return ret; // Error (EINTR)
+            // The awaiter copies the masks from its successful scan. A second scan here would
+            // consume procfs poll notifications twice and return a count inconsistent with the sets.
+            return await new SelectAwaitable(task, sm.FDs, n, inp, outp, exp, timeoutMs);
         }
         catch (Exception)
         {
@@ -428,6 +419,7 @@ public partial class SyscallManager
                         ITaskPollSource taskPollSource when task != null => taskPollSource.Poll(file, task, pfd.Events),
                         _ => file.OpenedInode!.Poll(file, pfd.Events)
                     };
+                    revents &= (short)(pfd.Events | PollEvents.POLLERR | PollEvents.POLLHUP | PollEvents.POLLNVAL);
                     Logger.LogTrace("[ScanPoll] FD={Fd} Events={Events} Revents={Revents} Type={Type}", pfd.Fd,
                         pfd.Events, revents, file.OpenedInode!.GetType().Name);
 
@@ -643,10 +635,12 @@ public partial class SyscallManager
                 return;
             }
 
-            var ready = ScanSelect(_task.CPU, _fds, _n, _inp, _outp, _exp, _task, out _, out _, out _);
-            if (ready > 0)
+            var ready = ScanSelect(_task.CPU, _fds, _n, _inp, _outp, _exp, _task,
+                out var resIn, out var resOut, out var resEx);
+            if (ready != 0)
             {
                 _timer?.Cancel();
+                if (ready > 0) WriteSelectResults(_task.CPU, _inp, _outp, _exp, resIn, resOut, resEx);
                 _result = ready;
                 _completed = true;
                 _operation?.TryComplete(WakeReason.Event);
@@ -655,6 +649,7 @@ public partial class SyscallManager
 
             if (_hasTimedOut)
             {
+                WriteSelectResults(_task.CPU, _inp, _outp, _exp, resIn, resOut, resEx);
                 _result = 0; // Timeout
                 _completed = true;
                 _operation?.TryComplete(WakeReason.Timer);

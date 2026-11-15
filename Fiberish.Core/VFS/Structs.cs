@@ -4395,6 +4395,11 @@ public class LinuxFile : IDisposable
 
     private int _refCount = 1;
 
+    // Weak watch ownership: epoll must unregister before the last open-file reference is released,
+    // not keep the target alive forever and not remove the watch when only one dup is closed.
+    internal event Action? FinalClosing;
+    internal bool IsClosed => Volatile.Read(ref _refCount) <= 0;
+
     public LinuxFile(PathLocation livePath, FileFlags flags, ReferenceKind referenceKind = ReferenceKind.Normal,
         Inode? openedInode = null,
         [CallerMemberName] string callerMember = "",
@@ -4503,6 +4508,10 @@ public class LinuxFile : IDisposable
     public virtual void Close()
     {
         if (Interlocked.Decrement(ref _refCount) > 0) return;
+
+        var closing = FinalClosing;
+        FinalClosing = null;
+        closing?.Invoke();
 
         if (IsTmpFile && Dentry.Parent?.Inode != null)
             try

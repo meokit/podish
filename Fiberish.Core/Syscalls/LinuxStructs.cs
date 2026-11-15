@@ -18,6 +18,7 @@ public static class PollEvents
     public const short POLLERR = 0x0008;
     public const short POLLHUP = 0x0010;
     public const short POLLNVAL = 0x0020;
+    public const short POLLRDNORM = 0x0040;
     public const short POLLRDHUP = 0x2000;
 }
 

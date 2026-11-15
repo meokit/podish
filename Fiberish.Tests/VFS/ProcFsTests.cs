@@ -12,6 +12,119 @@ namespace Fiberish.Tests.VFS;
 [Collection("ExternalPageManagerSerial")]
 public class ProcFsTests
 {
+    [Theory]
+    [InlineData("/proc/mounts")]
+    [InlineData("/proc/self/mounts")]
+    [InlineData("/proc/self/mountinfo")]
+    public void ProcMounts_PollConsumesButReadAndSeekDoNot(string path)
+    {
+        using var runtime = CreateTmpfsProcRuntime();
+        var task = AttachTaskContext(runtime, 0, true);
+        var sm = runtime.Syscalls;
+        var loc = sm.PathWalkWithFlags(path, LookupFlags.FollowSymlink);
+        Assert.True(loc.IsValid);
+        using var file = new LinuxFile(loc, FileFlags.O_RDONLY);
+        using var other = new LinuxFile(loc, FileFlags.O_RDONLY);
+        BindTaskContext(file, task);
+        BindTaskContext(other, task);
+        var inode = file.OpenedInode!;
+        const short priority = PollEvents.POLLPRI | PollEvents.POLLERR;
+        Assert.Equal(0, inode.Poll(file, 0) & priority);
+        MountPollTmpfs(sm);
+        var bytes = new byte[128];
+        long offset = 0;
+        int n;
+        do
+        {
+            n = inode.ReadToHost(task, file, bytes, offset);
+            Assert.True(n >= 0);
+            offset += n;
+        } while (n != 0);
+        file.Position = 0;
+        Assert.Equal(priority, inode.Poll(file, 0) & priority);
+        Assert.Equal(0, inode.Poll(file, 0) & priority);
+        Assert.Equal(priority, inode.Poll(other, 0) & priority);
+        file.Get();
+        file.Close(); // A surviving dup still uses the SAME poll cursor.
+        Assert.Equal(0, inode.Poll(file, 0) & priority);
+    }
+
+    [Theory]
+    [InlineData(LinuxConstants.EPOLLPRI, LinuxConstants.EPOLLPRI | LinuxConstants.EPOLLERR)]
+    [InlineData(0u, LinuxConstants.EPOLLERR)]
+    [InlineData(LinuxConstants.EPOLLPRI | LinuxConstants.EPOLLET, LinuxConstants.EPOLLPRI | LinuxConstants.EPOLLERR)]
+    public void ProcMounts_EpollDeliversExactlyOneConsumingPollPerChange(uint interests, uint expected)
+    {
+        using var runtime = CreateTmpfsProcRuntime();
+        var task = AttachTaskContext(runtime, 0, true);
+        var sm = runtime.Syscalls;
+        var file = new LinuxFile(sm.PathWalkWithFlags("/proc/mounts", LookupFlags.FollowSymlink), FileFlags.O_RDONLY);
+        var closed = false;
+        try
+        {
+            BindTaskContext(file, task);
+            var epoll = new EpollInode(800, sm.MemfdSuperBlock, task.CommonKernel);
+            using var epFile = new LinuxFile(new Dentry("[test-epoll]", epoll, null, sm.MemfdSuperBlock), FileFlags.O_RDWR, null);
+            Assert.Equal(0, epoll.Ctl(task, LinuxConstants.EPOLL_CTL_ADD, 8, file, interests, 42));
+            var buffer = new byte[12];
+            Assert.Equal(0, epoll.TryHarvestNow(buffer, 1));
+            var mounted = MountPollTmpfs(sm);
+            DrainPollNotifications(task);
+            Assert.Equal(1, epoll.TryHarvestNow(buffer, 1));
+            Assert.Equal(expected, System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(buffer));
+            Assert.Equal(0, epoll.TryHarvestNow(buffer, 1));
+            sm.UnregisterMount(mounted);
+            DrainPollNotifications(task);
+            Assert.Equal(1, epoll.TryHarvestNow(buffer, 1));
+            Assert.Equal(expected, System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(buffer));
+            Assert.Equal(0, epoll.TryHarvestNow(buffer, 1));
+            sm.MountNamespace.NotifyChanged();
+            file.Close(); // Unsubscribe even if a publication was already queued.
+            closed = true;
+            DrainPollNotifications(task);
+            Assert.Equal(0, epoll.TryHarvestNow(buffer, 1));
+        }
+        finally
+        {
+            if (!closed) file.Close();
+        }
+    }
+
+    [Fact]
+    public void ProcMounts_OpenPinsNamespaceAndOriginalRootUntilLastClose()
+    {
+        using var runtime = CreateTmpfsProcRuntime();
+        var task = AttachTaskContext(runtime, 0, true);
+        var sm = runtime.Syscalls;
+        EnsureDirectory(sm, "/confined");
+        var ns = sm.MountNamespace;
+        var originalRefs = ns.RefCount;
+        using var file = new LinuxFile(sm.PathWalkWithFlags("/proc/mounts", LookupFlags.FollowSymlink), FileFlags.O_RDONLY);
+        BindTaskContext(file, task);
+        Assert.Equal(originalRefs + 1, ns.RefCount);
+        sm.UpdateProcessRoot(sm.PathWalkWithFlags("/confined", LookupFlags.FollowSymlink), "test-chroot");
+        var bytes = new byte[4096];
+        var count = file.OpenedInode!.ReadToHost(task, file, bytes, 0);
+        Assert.Contains(" /proc proc ", Encoding.UTF8.GetString(bytes, 0, count));
+        file.Get();
+        file.Close();
+        Assert.Equal(originalRefs + 1, ns.RefCount);
+    }
+
+    private static Mount MountPollTmpfs(SyscallManager sm)
+    {
+        EnsureDirectory(sm, "/poll-mount");
+        var type = FileSystemRegistry.Get("tmpfs")!;
+        var sb = type.CreateAnonymousFileSystem(sm.MemoryContext).ReadSuper(type, 0, "poll-tmpfs", null);
+        var mount = new Mount(sb, sb.Root) { Source = "poll-tmpfs", FsType = "tmpfs", Options = "rw" };
+        Assert.Equal(0, sm.AttachDetachedMount(mount, sm.PathWalkWithFlags("/poll-mount", LookupFlags.FollowSymlink)));
+        return mount;
+    }
+
+    private static void DrainPollNotifications(FiberTask task) =>
+        typeof(KernelScheduler).GetMethod("DrainEvents", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(task.CommonKernel, null);
+
     [Fact]
     public void DefaultByteRevalidate_ShouldNotAllocate()
     {
@@ -77,7 +190,7 @@ public class ProcFsTests
             Assert.True(
                 mountsAfter.Contains(" /tests hostfs ", StringComparison.Ordinal) ||
                 mountsAfter.Contains(" //tests hostfs ", StringComparison.Ordinal));
-            Assert.Contains(hostMountDir, mountsAfter);
+            Assert.Contains(hostMountDir.Replace("\\", "\\134").Replace(" ", "\\040"), mountsAfter);
         }
         finally
         {

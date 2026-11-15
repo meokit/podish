@@ -7,4 +7,4 @@ edition = "2021"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-smoltcp = { version = "0.12", default-features = false, features = ["alloc", "std", "medium-ip", "proto-ipv4", "socket-tcp", "socket-udp"] }
+smoltcp = { version = "0.12", default-features = false, features = ["alloc", "std", "medium-ip", "proto-ipv4", "socket-tcp", "socket-udp", "multicast"] }

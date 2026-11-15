@@ -9,7 +9,7 @@ use smoltcp::socket::tcp::{self, Socket as TcpSocket, SocketBuffer as TcpSocketB
 use smoltcp::socket::udp::{
     PacketBuffer as UdpPacketBuffer, PacketMetadata as UdpPacketMetadata, Socket as UdpSocket,
 };
-use smoltcp::time::Instant;
+use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{HardwareAddress, IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, Ipv4Address};
 
 type NotifyCallback = extern "C" fn(usize);
@@ -17,6 +17,8 @@ type NotifyCallback = extern "C" fn(usize);
 const TCP_BUFFER_SIZE: usize = 16 * 1024;
 const UDP_BUFFER_SIZE: usize = 16 * 1024;
 const UDP_METADATA_COUNT: usize = 16;
+const MIN_SOCKET_BUFFER_SIZE: usize = 1024;
+const MAX_SOCKET_BUFFER_SIZE: usize = 16 * 1024 * 1024;
 const ERR_INVALID_ARG: i32 = -1;
 const ERR_NOT_FOUND: i32 = -2;
 const ERR_INVALID_STATE: i32 = -3;
@@ -77,6 +79,7 @@ struct NamespaceState {
     udp_ports: HashMap<u16, u32>,
     all_ports: HashMap<u16, u32>,
     closing_streams: Vec<ClosingStreamEntry>,
+    multicast_refs: HashMap<u32, u32>,
     objects: HashMap<u64, SocketObject>,
     notify_cb: Option<NotifyCallback>,
     notify_userdata: usize,
@@ -136,6 +139,7 @@ fn build_namespace(ipv4_be: u32, prefix_len: u8) -> NamespaceState {
         udp_ports: HashMap::new(),
         all_ports: HashMap::new(),
         closing_streams: Vec::new(),
+        multicast_refs: HashMap::new(),
         objects: HashMap::new(),
         notify_cb: None,
         notify_userdata: 0,
@@ -143,28 +147,28 @@ fn build_namespace(ipv4_be: u32, prefix_len: u8) -> NamespaceState {
     }
 }
 
-fn add_tcp_socket(state: &mut NamespaceState) -> SocketHandle {
-    let rx = TcpSocketBuffer::new(vec![0; TCP_BUFFER_SIZE]);
-    let tx = TcpSocketBuffer::new(vec![0; TCP_BUFFER_SIZE]);
+fn add_tcp_socket_sized(state: &mut NamespaceState, send_bytes: usize, recv_bytes: usize) -> SocketHandle {
+    let rx = TcpSocketBuffer::new(vec![0; recv_bytes]);
+    let tx = TcpSocketBuffer::new(vec![0; send_bytes]);
     let socket = TcpSocket::new(rx, tx);
     state.sockets.add(socket)
 }
 
-fn add_udp_socket(state: &mut NamespaceState) -> SocketHandle {
+fn add_udp_socket_sized(state: &mut NamespaceState, send_bytes: usize, recv_bytes: usize) -> SocketHandle {
     let rx = UdpPacketBuffer::new(
         vec![UdpPacketMetadata::EMPTY; UDP_METADATA_COUNT],
-        vec![0; UDP_BUFFER_SIZE],
+        vec![0; recv_bytes],
     );
     let tx = UdpPacketBuffer::new(
         vec![UdpPacketMetadata::EMPTY; UDP_METADATA_COUNT],
-        vec![0; UDP_BUFFER_SIZE],
+        vec![0; send_bytes],
     );
     let socket = UdpSocket::new(rx, tx);
     state.sockets.add(socket)
 }
 
-fn tcp_stream_create_internal(state: &mut NamespaceState) -> u64 {
-    let handle = add_tcp_socket(state);
+fn tcp_stream_create_sized_internal(state: &mut NamespaceState, send_bytes: usize, recv_bytes: usize) -> u64 {
+    let handle = add_tcp_socket_sized(state, send_bytes, recv_bytes);
     let object_handle = alloc_handle();
     state.objects.insert(
         object_handle,
@@ -177,8 +181,8 @@ fn tcp_stream_create_internal(state: &mut NamespaceState) -> u64 {
     object_handle
 }
 
-fn tcp_listener_create_internal(state: &mut NamespaceState) -> u64 {
-    let handle = add_tcp_socket(state);
+fn tcp_listener_create_sized_internal(state: &mut NamespaceState, send_bytes: usize, recv_bytes: usize) -> u64 {
+    let handle = add_tcp_socket_sized(state, send_bytes, recv_bytes);
     let object_handle = alloc_handle();
     state.objects.insert(
         object_handle,
@@ -192,8 +196,8 @@ fn tcp_listener_create_internal(state: &mut NamespaceState) -> u64 {
     object_handle
 }
 
-fn udp_socket_create_internal(state: &mut NamespaceState) -> u64 {
-    let handle = add_udp_socket(state);
+fn udp_socket_create_sized_internal(state: &mut NamespaceState, send_bytes: usize, recv_bytes: usize) -> u64 {
+    let handle = add_udp_socket_sized(state, send_bytes, recv_bytes);
     let object_handle = alloc_handle();
     state.objects.insert(
         object_handle,
@@ -228,6 +232,75 @@ fn release_stream_port(state: &mut NamespaceState, local_port: Option<u16>, is_a
         }
         dec_port(&mut state.all_ports, port);
     }
+}
+
+fn normalize_buffer_sizes(send_bytes: usize, recv_bytes: usize) -> (usize, usize) {
+    (
+        send_bytes.clamp(MIN_SOCKET_BUFFER_SIZE, MAX_SOCKET_BUFFER_SIZE),
+        recv_bytes.clamp(MIN_SOCKET_BUFFER_SIZE, MAX_SOCKET_BUFFER_SIZE),
+    )
+}
+
+fn resize_object_buffers(
+    state: &mut NamespaceState,
+    object_handle: u64,
+    send_bytes: usize,
+    recv_bytes: usize,
+) -> i32 {
+    enum Kind {
+        Stream,
+        Listener,
+        Udp,
+    }
+
+    let (kind, socket_handle) = match state.objects.get(&object_handle) {
+        Some(SocketObject::TcpStream(stream)) => (Kind::Stream, stream.handle),
+        Some(SocketObject::TcpListener(listener)) => {
+            if listener.local_port.is_some() || !listener.pending_accepts.is_empty() {
+                return ERR_INVALID_STATE;
+            }
+            (Kind::Listener, listener.handle)
+        }
+        Some(SocketObject::UdpSocket(udp)) => {
+            if udp.local_port.is_some() {
+                return ERR_INVALID_STATE;
+            }
+            (Kind::Udp, udp.handle)
+        }
+        None => return ERR_NOT_FOUND,
+    };
+
+    match kind {
+        Kind::Stream | Kind::Listener => {
+            let socket = state.sockets.get::<TcpSocket>(socket_handle);
+            if socket.state() != TcpState::Closed {
+                return ERR_INVALID_STATE;
+            }
+            let old = state.sockets.remove(socket_handle);
+            let new_handle = add_tcp_socket_sized(state, send_bytes, recv_bytes);
+            drop(old);
+            match state.objects.get_mut(&object_handle) {
+                Some(SocketObject::TcpStream(stream)) => stream.handle = new_handle,
+                Some(SocketObject::TcpListener(listener)) => listener.handle = new_handle,
+                _ => return ERR_NOT_FOUND,
+            }
+        }
+        Kind::Udp => {
+            let socket = state.sockets.get::<UdpSocket>(socket_handle);
+            if socket.is_open() {
+                return ERR_INVALID_STATE;
+            }
+            let old = state.sockets.remove(socket_handle);
+            let new_handle = add_udp_socket_sized(state, send_bytes, recv_bytes);
+            drop(old);
+            match state.objects.get_mut(&object_handle) {
+                Some(SocketObject::UdpSocket(udp)) => udp.handle = new_handle,
+                _ => return ERR_NOT_FOUND,
+            }
+        }
+    }
+
+    0
 }
 
 fn with_namespace<R>(ns_handle: u64, f: impl FnOnce(&mut NamespaceState) -> R) -> Result<R, i32> {
@@ -335,6 +408,11 @@ fn promote_pending_accept(state: &mut NamespaceState, listener_handle: u64) -> b
         return false;
     };
 
+    let (send_capacity, recv_capacity) = {
+        let socket = state.sockets.get::<TcpSocket>(listener.handle);
+        (socket.send_capacity(), socket.recv_capacity())
+    };
+
     let accepted_handle = alloc_handle();
     state.objects.insert(
         accepted_handle,
@@ -345,7 +423,9 @@ fn promote_pending_accept(state: &mut NamespaceState, listener_handle: u64) -> b
         }),
     );
 
-    let replacement_socket_handle = add_tcp_socket(state);
+    // The accepted stream keeps the established TCP buffers; the replacement listener
+    // preserves the capacities the user configured for this listening socket.
+    let replacement_socket_handle = add_tcp_socket_sized(state, send_capacity, recv_capacity);
     {
         let replacement = state.sockets.get_mut::<TcpSocket>(replacement_socket_handle);
         if replacement.listen(local_port).is_err() {
@@ -525,17 +605,223 @@ pub extern "C" fn fiber_netns_poll(handle: u64, now_millis: i64, out_next_poll_m
 
 #[no_mangle]
 pub extern "C" fn fiber_tcp_stream_create(ns_handle: u64) -> u64 {
-    with_namespace(ns_handle, tcp_stream_create_internal).unwrap_or(0)
+    fiber_tcp_stream_create_sized(ns_handle, TCP_BUFFER_SIZE, TCP_BUFFER_SIZE)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_tcp_stream_create_sized(ns_handle: u64, send_bytes: usize, recv_bytes: usize) -> u64 {
+    let (send_bytes, recv_bytes) = normalize_buffer_sizes(send_bytes, recv_bytes);
+    with_namespace(ns_handle, |state| {
+        tcp_stream_create_sized_internal(state, send_bytes, recv_bytes)
+    })
+    .unwrap_or(0)
 }
 
 #[no_mangle]
 pub extern "C" fn fiber_tcp_listener_create(ns_handle: u64) -> u64 {
-    with_namespace(ns_handle, tcp_listener_create_internal).unwrap_or(0)
+    fiber_tcp_listener_create_sized(ns_handle, TCP_BUFFER_SIZE, TCP_BUFFER_SIZE)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_tcp_listener_create_sized(ns_handle: u64, send_bytes: usize, recv_bytes: usize) -> u64 {
+    let (send_bytes, recv_bytes) = normalize_buffer_sizes(send_bytes, recv_bytes);
+    with_namespace(ns_handle, |state| {
+        tcp_listener_create_sized_internal(state, send_bytes, recv_bytes)
+    })
+    .unwrap_or(0)
 }
 
 #[no_mangle]
 pub extern "C" fn fiber_udp_socket_create(ns_handle: u64) -> u64 {
-    with_namespace(ns_handle, udp_socket_create_internal).unwrap_or(0)
+    fiber_udp_socket_create_sized(ns_handle, UDP_BUFFER_SIZE, UDP_BUFFER_SIZE)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_udp_socket_create_sized(ns_handle: u64, send_bytes: usize, recv_bytes: usize) -> u64 {
+    let (send_bytes, recv_bytes) = normalize_buffer_sizes(send_bytes, recv_bytes);
+    with_namespace(ns_handle, |state| {
+        udp_socket_create_sized_internal(state, send_bytes, recv_bytes)
+    })
+    .unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_socket_set_buffers(
+    ns_handle: u64,
+    socket_handle: u64,
+    send_bytes: usize,
+    recv_bytes: usize,
+) -> i32 {
+    let (send_bytes, recv_bytes) = normalize_buffer_sizes(send_bytes, recv_bytes);
+    with_namespace(ns_handle, |state| {
+        resize_object_buffers(state, socket_handle, send_bytes, recv_bytes)
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_socket_get_buffers(
+    ns_handle: u64,
+    socket_handle: u64,
+    out_send_bytes: *mut usize,
+    out_recv_bytes: *mut usize,
+) -> i32 {
+    if out_send_bytes.is_null() || out_recv_bytes.is_null() {
+        return ERR_INVALID_ARG;
+    }
+
+    with_namespace(ns_handle, |state| {
+        let (send, recv) = match state.objects.get(&socket_handle) {
+            Some(SocketObject::TcpStream(stream)) => {
+                let socket = state.sockets.get::<TcpSocket>(stream.handle);
+                (socket.send_capacity(), socket.recv_capacity())
+            }
+            Some(SocketObject::TcpListener(listener)) => {
+                let socket = state.sockets.get::<TcpSocket>(listener.handle);
+                (socket.send_capacity(), socket.recv_capacity())
+            }
+            Some(SocketObject::UdpSocket(udp)) => {
+                let socket = state.sockets.get::<UdpSocket>(udp.handle);
+                (socket.payload_send_capacity(), socket.payload_recv_capacity())
+            }
+            None => return ERR_NOT_FOUND,
+        };
+        unsafe {
+            ptr::write(out_send_bytes, send);
+            ptr::write(out_recv_bytes, recv);
+        }
+        0
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_tcp_stream_set_nodelay(ns_handle: u64, socket_handle: u64, enabled: i32) -> i32 {
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+        let socket = state.sockets.get_mut::<TcpSocket>(stream.handle);
+        socket.set_nagle_enabled(enabled == 0);
+        0
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_tcp_stream_get_nodelay(ns_handle: u64, socket_handle: u64) -> i32 {
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+        let socket = state.sockets.get::<TcpSocket>(stream.handle);
+        if socket.nagle_enabled() { 0 } else { 1 }
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_tcp_stream_set_keepalive(
+    ns_handle: u64,
+    socket_handle: u64,
+    interval_millis: i64,
+) -> i32 {
+    if interval_millis < 0 {
+        return ERR_INVALID_ARG;
+    }
+
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+        let socket = state.sockets.get_mut::<TcpSocket>(stream.handle);
+        socket.set_keep_alive(if interval_millis == 0 {
+            None
+        } else {
+            Some(Duration::from_millis(interval_millis as u64))
+        });
+        0
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_tcp_stream_get_keepalive(
+    ns_handle: u64,
+    socket_handle: u64,
+    out_interval_millis: *mut i64,
+) -> i32 {
+    if out_interval_millis.is_null() {
+        return ERR_INVALID_ARG;
+    }
+
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+        let socket = state.sockets.get::<TcpSocket>(stream.handle);
+        let millis = socket.keep_alive().map(|d| d.total_millis() as i64).unwrap_or(0);
+        unsafe { ptr::write(out_interval_millis, millis) };
+        0
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_tcp_stream_abort(ns_handle: u64, socket_handle: u64) -> i32 {
+    with_namespace(ns_handle, |state| {
+        let Some(SocketObject::TcpStream(stream)) = state.objects.get(&socket_handle).cloned() else {
+            return ERR_NOT_FOUND;
+        };
+        let socket = state.sockets.get_mut::<TcpSocket>(stream.handle);
+        socket.abort();
+        state.notify();
+        0
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_netns_join_multicast(ns_handle: u64, group_ipv4_be: u32) -> i32 {
+    with_namespace(ns_handle, |state| {
+        let [a, b, c, d] = group_ipv4_be.to_be_bytes();
+        let group = Ipv4Address::new(a, b, c, d);
+        if !group.is_multicast() {
+            return ERR_INVALID_ARG;
+        }
+
+        let count = state.multicast_refs.get(&group_ipv4_be).copied().unwrap_or(0);
+        if count == 0 && state.iface.join_multicast_group(IpAddress::Ipv4(group)).is_err() {
+            return ERR_INVALID_ARG;
+        }
+        state.multicast_refs.insert(group_ipv4_be, count.saturating_add(1));
+        0
+    })
+    .unwrap_or_else(|rc| rc)
+}
+
+#[no_mangle]
+pub extern "C" fn fiber_netns_leave_multicast(ns_handle: u64, group_ipv4_be: u32) -> i32 {
+    with_namespace(ns_handle, |state| {
+        let [a, b, c, d] = group_ipv4_be.to_be_bytes();
+        let group = Ipv4Address::new(a, b, c, d);
+        if !group.is_multicast() {
+            return ERR_INVALID_ARG;
+        }
+
+        let count = state.multicast_refs.get(&group_ipv4_be).copied().unwrap_or(0);
+        if count == 0 {
+            return ERR_INVALID_STATE;
+        }
+        if count == 1 {
+            let _ = state.iface.leave_multicast_group(IpAddress::Ipv4(group));
+            state.multicast_refs.remove(&group_ipv4_be);
+        } else {
+            state.multicast_refs.insert(group_ipv4_be, count - 1);
+        }
+        0
+    })
+    .unwrap_or_else(|rc| rc)
 }
 
 #[no_mangle]
@@ -1070,7 +1356,8 @@ pub extern "C" fn fiber_udp_socket_bind(ns_handle: u64, socket_handle: u64, loca
         }
 
         state.notify();
-        0    })
+        0
+    })
     .unwrap_or_else(|rc| rc)
 }
 

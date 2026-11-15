@@ -103,14 +103,7 @@ public partial class SyscallManager
 
             var dentry = new Dentry($"socket:[{inode.Ino}]", inode, null, MemfdSuperBlock);
             var file = new LinuxFile(dentry, fileFlags, AnonMount);
-            var fd = AllocFD(file);
-            if (fd < 0)
-            {
-                file.Close();
-                return fd;
-            }
-
-            return fd;
+            return AllocFD(file); // AllocFD consumes the file reference on success AND failure.
         }
 
         if (OperatingSystem.IsMacOS() && sockType == SocketType.Raw)
@@ -359,14 +352,7 @@ public partial class SyscallManager
                 }
             }
 
-            var newFd = AllocFD(newFile);
-            if (newFd < 0)
-            {
-                newFile.Close();
-                return newFd;
-            }
-
-            return newFd;
+            return AllocFD(newFile);
         }
 
         return -(int)Errno.ENOTSOCK;
@@ -410,7 +396,8 @@ public partial class SyscallManager
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
         if (len < 0) return -(int)Errno.EINVAL;
-        if ((flags & LinuxConstants.MSG_OOB) != 0) return -(int)Errno.EOPNOTSUPP;
+        if ((flags & LinuxConstants.MSG_OOB) != 0 && file.OpenedInode is not HostSocketInode)
+            return -(int)Errno.EOPNOTSUPP;
         var buf = new byte[len];
         if (len > 0 && !task.CPU.CopyFromUser(bufPtr, buf)) return -(int)Errno.EFAULT;
 
@@ -452,7 +439,8 @@ public partial class SyscallManager
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
         if (len < 0) return -(int)Errno.EINVAL;
-        if ((flags & LinuxConstants.MSG_OOB) != 0) return -(int)Errno.EINVAL;
+        if ((flags & LinuxConstants.MSG_OOB) != 0 && file.OpenedInode is not HostSocketInode)
+            return -(int)Errno.EINVAL;
         if ((flags & LinuxConstants.MSG_ERRQUEUE) != 0) return -(int)Errno.EAGAIN;
         if (addrLenPtr != 0)
         {
@@ -607,9 +595,11 @@ public partial class SyscallManager
         if (msgRes.Error < 0) return msgRes.Error;
         var msg = msgRes.Value;
 
-        if ((flags & LinuxConstants.MSG_OOB) != 0) return -(int)Errno.EINVAL;
+        if ((flags & LinuxConstants.MSG_OOB) != 0 && file.OpenedInode is not HostSocketInode)
+            return -(int)Errno.EINVAL;
         if ((flags & LinuxConstants.MSG_ERRQUEUE) != 0) return -(int)Errno.EAGAIN;
-        if (msg.msg_name != 0 && msg.msg_namelen > 128) return -(int)Errno.EINVAL;
+        // This is output capacity, not an input sockaddr to copy/allocate. Large buffers are legal.
+        if (msg.msg_name != 0 && msg.msg_namelen < 0) return -(int)Errno.EINVAL;
 
         var totalLen = 0;
         var iovsRes = ReadIovecsDef(engine, msg.msg_iov, msg.msg_iovlen);
@@ -622,7 +612,8 @@ public partial class SyscallManager
 
         if (file.TryGetSocketDataOps(out var ops))
         {
-            var res = await ops.RecvMsgAsync(file, task, buf, flags | msg.msg_flags, totalLen);
+            // msg_flags is output-only for recvmsg; only the syscall's flags control the receive.
+            var res = await ops.RecvMsgAsync(file, task, buf, flags, totalLen);
             var bytes = res.BytesRead;
             if (bytes < 0) return bytes;
 
@@ -638,7 +629,12 @@ public partial class SyscallManager
             if (msg.msg_name != 0 && msg.msg_namelen > 0)
             {
                 var addrRes = new SocketAddressResult(res.SourceEndPoint, res.SourceSunPathRaw);
-                WriteAnySockaddr(engine, file, msg.msg_name, msgPtr + 4, addrRes);
+                var addressRc = WriteAnySockaddr(engine, file, msg.msg_name, msgPtr + 4, addrRes);
+                if (addressRc < 0)
+                {
+                    if (res.Fds != null) foreach (var received in res.Fds) received.Close();
+                    return addressRc;
+                }
             }
 
             var outMsgFlags = 0;
@@ -647,8 +643,9 @@ public partial class SyscallManager
                 msg.msg_controllen >= 16)
             {
                 var cloexec = (flags & LinuxConstants.MSG_CMSG_CLOEXEC) != 0;
-                WriteCmsg(engine, msg.msg_control, msg.msg_controllen, res.Fds, res.Credentials, out var outCtlLen,
+                var cmsgRc = WriteCmsg(engine, msg.msg_control, msg.msg_controllen, res.Fds, res.Credentials, out var outCtlLen,
                     out var truncated, cloexec);
+                if (cmsgRc < 0) return cmsgRc;
                 if (truncated)
                     outMsgFlags |= LinuxConstants.MSG_CTRUNC;
                 WriteBackMsgControllen(engine, msgPtr, outCtlLen);
@@ -724,7 +721,6 @@ public partial class SyscallManager
         var fd1 = AllocFD(file1);
         if (fd1 < 0)
         {
-            file1.Close();
             file2.Close();
             return fd1;
         }
@@ -733,7 +729,6 @@ public partial class SyscallManager
         if (fd2 < 0)
         {
             FreeFD(fd1);
-            file2.Close();
             return fd2;
         }
 
@@ -982,38 +977,38 @@ public partial class SyscallManager
         return (true, sendFds.Count > 0 ? sendFds : null);
     }
 
-    private void WriteCmsg(Engine engine, uint controlPtr, int controlLen, List<LinuxFile>? fds,
+    private int WriteCmsg(Engine engine, uint controlPtr, int controlLen, List<LinuxFile>? fds,
         UnixCredentials? credentials, out int writtenBytes, out bool truncated, bool cloexec = false)
     {
         writtenBytes = 0;
         truncated = false;
         var cmRaw = new byte[controlLen];
+        var installedFds = new List<int>();
 
         if (fds is { Count: > 0 })
         {
-            var maxFds = (controlLen - 12) / 4;
+            var maxFds = Math.Max(0, (controlLen - 12) / 4);
             var numFds = Math.Min(fds.Count, maxFds);
-            var reqLen = 12 + numFds * 4;
-            if (reqLen > controlLen)
-            {
-                truncated = true;
-                return;
-            }
-
-            BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(0, 4), reqLen);
-            BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(4, 4), LinuxConstants.SOL_SOCKET);
-            BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(8, 4), LinuxConstants.SCM_RIGHTS);
-
+            var consumed = 0;
             for (var i = 0; i < numFds; i++)
             {
                 var fd = AllocFD(fds[i]);
+                consumed++; // AllocFD consumes even an EMFILE reference.
+                if (fd < 0) break;
+                installedFds.Add(fd);
                 if (cloexec) SetFdCloseOnExec(fd, true);
                 BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(12 + i * 4, 4), fd);
             }
-
-            writtenBytes = (reqLen + 3) & ~3;
-            if (numFds < fds.Count)
-                truncated = true;
+            for (var i = consumed; i < fds.Count; i++) fds[i].Close();
+            if (installedFds.Count != 0)
+            {
+                var reqLen = 12 + installedFds.Count * 4;
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(0, 4), reqLen);
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(4, 4), LinuxConstants.SOL_SOCKET);
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(8, 4), LinuxConstants.SCM_RIGHTS);
+                writtenBytes = reqLen;
+            }
+            truncated = installedFds.Count < fds.Count;
         }
 
         if (credentials != null)
@@ -1038,8 +1033,12 @@ public partial class SyscallManager
             }
         }
 
-        if (writtenBytes > 0)
-            engine.CopyToUser(controlPtr, cmRaw.AsSpan(0, writtenBytes));
+        if (writtenBytes > 0 && !engine.CopyToUser(controlPtr, cmRaw.AsSpan(0, writtenBytes)))
+        {
+            foreach (var fd in installedFds) FreeFD(fd);
+            return -(int)Errno.EFAULT;
+        }
+        return 0;
     }
 
     private void WriteBackMsgFlags(Engine engine, uint msgPtr, int msgFlags)
@@ -1148,7 +1147,7 @@ public partial class SyscallManager
     private static (EndPoint? Endpoint, int Error) ReadSockaddr(Engine engine, uint addrPtr, int addrLen)
     {
         if (addrPtr == 0) return (null, -(int)Errno.EFAULT);
-        if (addrLen < 2) return (null, -(int)Errno.EINVAL);
+        if (addrLen < 2 || addrLen > 128) return (null, -(int)Errno.EINVAL);
         var buf = new byte[addrLen];
         if (!engine.CopyFromUser(addrPtr, buf)) return (null, -(int)Errno.EFAULT);
 

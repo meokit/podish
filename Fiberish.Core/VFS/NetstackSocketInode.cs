@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -20,6 +21,15 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
     private const int NetErrAddrInUse = -6;
     private const int NetErrMsgSize = -7;
 
+    // Linux reports sk_sndbuf/sk_rcvbuf, which are twice the requested value and have
+    // protocol minima. The backend honors those byte capacities for real queueing.
+    private const int DefaultBufferBytes = 16 * 1024;
+    private const int SocketMinSendBuffer = 4608;
+    private const int SocketMinReceiveBuffer = 2304;
+    private const int AutomaticBufferCeiling = 2 * 212992;
+    private const int MaximumForcedBufferBytes = 8 * 1024 * 1024;
+    private const int DefaultKeepAliveIdleSeconds = 7200;
+
     private readonly LoopbackNetNamespace _namespace;
     private readonly SocketType _socketType;
     private readonly Lock _edgeWaitGate = new();
@@ -34,6 +44,13 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
     private ushort _reservedTcpPort;
     private bool _reuseAddress;
     private int? _sendTimeoutMs;
+    private int _sendBufferBytes = DefaultBufferBytes;
+    private int _recvBufferBytes = DefaultBufferBytes;
+    private bool _noDelay;
+    private bool _keepAlive;
+    private int _keepAliveIdleSeconds = DefaultKeepAliveIdleSeconds;
+    private bool _lingerEnabled;
+    private int _lingerSeconds;
     private bool _shutdownRead;
     private bool _shutdownWrite;
     private int _socketError;
@@ -57,6 +74,36 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
         : this(ino, sb, @namespace, SocketType.Stream)
     {
         _stream = stream;
+    }
+
+    private LoopbackNetNamespace.TcpStreamSocket CreateStreamSocket()
+    {
+        var stream = _namespace.CreateTcpStream(_sendBufferBytes, _recvBufferBytes);
+        ApplyTcpOptions(stream);
+        return stream;
+    }
+
+    private LoopbackNetNamespace.TcpListenerSocket CreateListenerSocket() =>
+        _namespace.CreateTcpListener(_sendBufferBytes, _recvBufferBytes);
+
+    private LoopbackNetNamespace.UdpDatagramSocket CreateUdpSocket() =>
+        _namespace.CreateUdpSocket(_sendBufferBytes, _recvBufferBytes);
+
+    private void ApplyTcpOptions(LoopbackNetNamespace.TcpStreamSocket stream)
+    {
+        if (_noDelay) stream.TrySetNoDelay(true);
+        if (_keepAlive) stream.TrySetKeepAlive(checked(_keepAliveIdleSeconds * 1000));
+    }
+
+    private void CopyInheritedOptionsTo(NetstackSocketInode accepted)
+    {
+        // Linux clones the listening sk settings that affect the accepted stream. The native
+        // socket already keeps Nagle/keepalive and capacities; keep the C# view consistent.
+        accepted._sendBufferBytes = _sendBufferBytes;
+        accepted._recvBufferBytes = _recvBufferBytes;
+        accepted._noDelay = _noDelay;
+        accepted._keepAlive = _keepAlive;
+        accepted._keepAliveIdleSeconds = _keepAliveIdleSeconds;
     }
 
     public bool IsListener => _listener != null;
@@ -487,7 +534,7 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
         _stream?.Dispose();
         _stream = null;
 
-        _listener ??= _namespace.CreateTcpListener();
+        _listener ??= CreateListenerSocket();
         var rc = _listener.TryListen((ushort)_boundEndPoint.Port, (uint)Math.Max(backlog, 1));
         if (rc != 0)
             return MapListenError(rc);
@@ -542,6 +589,7 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
         if (!_listener.AcceptPending)
             ClearEdgeBits(PollEvents.POLLIN);
         var newIno = new NetstackSocketInode(0, SuperBlock, _namespace, accepted);
+        CopyInheritedOptionsTo(newIno);
         return new AcceptedSocketResult(0, newIno, newIno.RemoteEndPoint);
     }
 
@@ -602,24 +650,50 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
             {
                 case LinuxConstants.SO_REUSEADDR:
                     if (value.Length < 4) return -(int)Errno.EINVAL;
+                    // The backend has no listener TIME_WAIT state, so this flag has no bind
+                    // conflict to relax; Linux also accepts it unconditionally.
                     _reuseAddress = BitConverter.ToInt32(value[..4]) != 0;
                     return 0;
                 case LinuxConstants.SO_REUSEPORT:
+                    // Linux validates optlen before the option handler; keep EINVAL first.
+                    if (value.Length < 4) return -(int)Errno.EINVAL;
+                    // There is no per-port load distribution between sockets.
+                    return -(int)Errno.ENOPROTOOPT;
                 case LinuxConstants.SO_KEEPALIVE:
+                {
+                    if (value.Length < 4) return -(int)Errno.EINVAL;
+                    _keepAlive = BitConverter.ToInt32(value[..4]) != 0;
+                    return _stream == null || ApplyKeepAlive() ? 0 : -(int)Errno.EOPNOTSUPP;
+                }
                 case LinuxConstants.SO_OOBINLINE:
+                    if (value.Length < 4) return -(int)Errno.EINVAL;
+                    // smoltcp has no TCP urgent-data path, so accepting this would be a no-op.
+                    return -(int)Errno.ENOPROTOOPT;
                 case LinuxConstants.SO_SNDBUF:
+                    if (value.Length < 4) return -(int)Errno.EINVAL;
+                    return SetBufferSize(send: true, BitConverter.ToInt32(value[..4]), force: false);
                 case LinuxConstants.SO_RCVBUF:
                     if (value.Length < 4) return -(int)Errno.EINVAL;
-                    return 0;
+                    return SetBufferSize(send: false, BitConverter.ToInt32(value[..4]), force: false);
                 case LinuxConstants.SO_SNDBUFFORCE:
+                    if (!task.Process.HasEffectiveCapabilityOrRoot(Fiberish.Core.Process.CapabilityNetAdmin))
+                        return -(int)Errno.EPERM;
+                    if (value.Length < 4) return -(int)Errno.EINVAL;
+                    return SetBufferSize(send: true, BitConverter.ToInt32(value[..4]), force: true);
                 case LinuxConstants.SO_RCVBUFFORCE:
                     if (!task.Process.HasEffectiveCapabilityOrRoot(Fiberish.Core.Process.CapabilityNetAdmin))
                         return -(int)Errno.EPERM;
                     if (value.Length < 4) return -(int)Errno.EINVAL;
-                    return 0;
+                    return SetBufferSize(send: false, BitConverter.ToInt32(value[..4]), force: true);
                 case LinuxConstants.SO_LINGER:
+                {
                     if (value.Length < 8) return -(int)Errno.EINVAL;
+                    var seconds = BitConverter.ToInt32(value.Slice(4, 4));
+                    if (seconds < 0) return -(int)Errno.EINVAL;
+                    _lingerEnabled = BitConverter.ToInt32(value[..4]) != 0;
+                    _lingerSeconds = seconds;
                     return 0;
+                }
                 case LinuxConstants.SO_RCVTIMEO:
                     if (value.Length < 8) return -(int)Errno.EINVAL;
                     _receiveTimeoutMs = ParseTimevalMs(value);
@@ -638,11 +712,26 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
             switch (optname)
             {
                 case LinuxConstants.TCP_NODELAY:
+                {
+                    if (value.Length < 4) return -(int)Errno.EINVAL;
+                    _noDelay = BitConverter.ToInt32(value[..4]) != 0;
+                    return _stream == null || _stream.TrySetNoDelay(_noDelay) == 0
+                        ? 0
+                        : -(int)Errno.EOPNOTSUPP;
+                }
                 case LinuxConstants.TCP_KEEPIDLE:
+                {
+                    if (value.Length < 4) return -(int)Errno.EINVAL;
+                    var seconds = BitConverter.ToInt32(value[..4]);
+                    if (seconds is < 1 or > 32767) return -(int)Errno.EINVAL;
+                    _keepAliveIdleSeconds = seconds;
+                    return _stream == null || ApplyKeepAlive() ? 0 : -(int)Errno.EOPNOTSUPP;
+                }
                 case LinuxConstants.TCP_KEEPINTVL:
                 case LinuxConstants.TCP_KEEPCNT:
-                    if (value.Length < 4) return -(int)Errno.EINVAL;
-                    return 0;
+                    // smoltcp has one keepalive interval and does not expose probe count or
+                    // a separate post-probe interval; do not pretend these were applied.
+                    return -(int)Errno.ENOPROTOOPT;
                 default:
                     return -(int)Errno.ENOPROTOOPT;
             }
@@ -654,16 +743,20 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
             {
                 case LinuxConstants.MCAST_JOIN_GROUP:
                 {
-                    if (value.Length < 20) return -(int)Errno.EINVAL;
-                    _multicastGroups.Add(BitConverter.ToUInt32(value.Slice(4, 4)));
-                    return 0;
+                    var parse = ParseMulticastGroup(value, out var group);
+                    if (parse != 0) return parse;
+                    if (!_multicastGroups.Add(group)) return 0; // Repeated joins are idempotent.
+                    if (_namespace.Handle == 0 || _namespace.JoinMulticast(group) == 0) return 0;
+                    _multicastGroups.Remove(group);
+                    return -(int)Errno.EINVAL;
                 }
                 case LinuxConstants.MCAST_LEAVE_GROUP:
                 {
-                    if (value.Length < 20) return -(int)Errno.EINVAL;
-                    return _multicastGroups.Remove(BitConverter.ToUInt32(value.Slice(4, 4)))
-                        ? 0
-                        : -(int)Errno.EADDRNOTAVAIL;
+                    var parse = ParseMulticastGroup(value, out var group);
+                    if (parse != 0) return parse;
+                    if (!_multicastGroups.Remove(group)) return -(int)Errno.EADDRNOTAVAIL;
+                    if (_namespace.Handle != 0) _namespace.LeaveMulticast(group);
+                    return 0;
                 }
                 default:
                     return -(int)Errno.ENOPROTOOPT;
@@ -701,24 +794,145 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
                     return 0;
                 case LinuxConstants.SO_SNDBUF:
                 case LinuxConstants.SO_RCVBUF:
+                {
                     if (destination.Length < 4) return -(int)Errno.EINVAL;
-                    BitConverter.TryWriteBytes(destination, 16 * 1024);
+                    var sizes = CurrentBufferSizes();
+                    BitConverter.TryWriteBytes(destination,
+                        optname == LinuxConstants.SO_SNDBUF ? sizes.Send : sizes.Recv);
                     return 0;
+                }
                 case LinuxConstants.SO_KEEPALIVE:
+                    if (destination.Length < 4) return -(int)Errno.EINVAL;
+                    BitConverter.TryWriteBytes(destination, _keepAlive ? 1 : 0);
+                    return 0;
                 case LinuxConstants.SO_OOBINLINE:
                 case LinuxConstants.SO_REUSEPORT:
-                    if (destination.Length < 4) return -(int)Errno.EINVAL;
-                    BitConverter.TryWriteBytes(destination, 0);
+                    return -(int)Errno.ENOPROTOOPT;
+                case LinuxConstants.SO_LINGER:
+                {
+                    if (destination.Length < 8) return -(int)Errno.EINVAL;
+                    BitConverter.TryWriteBytes(destination, _lingerEnabled ? 1 : 0);
+                    BitConverter.TryWriteBytes(destination.Slice(4, 4), _lingerSeconds);
+                    written = 8;
+                    return 0;
+                }
+                case LinuxConstants.SO_RCVTIMEO:
+                    if (destination.Length < 8) return -(int)Errno.EINVAL;
+                    WriteTimevalMs(destination, _receiveTimeoutMs);
+                    written = 8;
+                    return 0;
+                case LinuxConstants.SO_SNDTIMEO:
+                    if (destination.Length < 8) return -(int)Errno.EINVAL;
+                    WriteTimevalMs(destination, _sendTimeoutMs);
+                    written = 8;
                     return 0;
                 default:
                     return -(int)Errno.ENOPROTOOPT;
             }
         }
 
-        if (level == LinuxConstants.IPPROTO_IP || (level == LinuxConstants.IPPROTO_TCP && _socketType == SocketType.Stream))
+        if (level == LinuxConstants.IPPROTO_TCP && _socketType == SocketType.Stream)
+        {
+            switch (optname)
+            {
+                case LinuxConstants.TCP_NODELAY:
+                    if (destination.Length < 4) return -(int)Errno.EINVAL;
+                    BitConverter.TryWriteBytes(destination, ReadNoDelay() ? 1 : 0);
+                    return 0;
+                case LinuxConstants.TCP_KEEPIDLE:
+                    if (destination.Length < 4) return -(int)Errno.EINVAL;
+                    BitConverter.TryWriteBytes(destination, _keepAliveIdleSeconds);
+                    return 0;
+                case LinuxConstants.TCP_KEEPINTVL:
+                case LinuxConstants.TCP_KEEPCNT:
+                    return -(int)Errno.ENOPROTOOPT;
+                default:
+                    return -(int)Errno.ENOPROTOOPT;
+            }
+        }
+
+        if (level == LinuxConstants.IPPROTO_IP)
             return -(int)Errno.ENOPROTOOPT;
 
         return -(int)Errno.EOPNOTSUPP;
+    }
+
+    private int SetBufferSize(bool send, int requested, bool force)
+    {
+        var minimum = send ? SocketMinSendBuffer : SocketMinReceiveBuffer;
+        var doubled = requested > int.MaxValue / 2 ? int.MaxValue : requested * 2;
+        var size = (long)Math.Max(doubled, minimum);
+        if (!force) size = Math.Min(size, AutomaticBufferCeiling);
+        if (size > MaximumForcedBufferBytes) return -(int)Errno.ENOMEM;
+
+        var bytes = (int)size;
+        var nextSend = send ? bytes : _sendBufferBytes;
+        var nextRecv = send ? _recvBufferBytes : bytes;
+        var rc = ApplyBufferSizes(nextSend, nextRecv);
+        if (rc != 0) return rc;
+        _sendBufferBytes = nextSend;
+        _recvBufferBytes = nextRecv;
+        return 0;
+    }
+
+    private int ApplyBufferSizes(int sendBytes, int recvBytes)
+    {
+        int rc;
+        if (_stream != null) rc = _stream.TrySetBuffers(sendBytes, recvBytes);
+        else if (_listener != null) rc = _listener.TrySetBuffers(sendBytes, recvBytes);
+        else if (_udp != null) rc = _udp.TrySetBuffers(sendBytes, recvBytes);
+        else return 0; // Stored and applied when the backend object is created.
+
+        if (rc == 0) return 0;
+        return rc switch
+        {
+            NetErrInvalidState => -(int)Errno.EOPNOTSUPP,
+            NetErrNotFound => -(int)Errno.EBADF,
+            _ => -(int)Errno.EINVAL
+        };
+    }
+
+    private (int Send, int Recv) CurrentBufferSizes()
+    {
+        if (_stream != null) return _stream.GetBufferSizes();
+        if (_listener != null) return _listener.GetBufferSizes();
+        if (_udp != null) return _udp.GetBufferSizes();
+        return (_sendBufferBytes, _recvBufferBytes);
+    }
+
+    private bool ReadNoDelay()
+    {
+        if (_stream != null) return _stream.NoDelay;
+        return _noDelay;
+    }
+
+    private bool ApplyKeepAlive()
+    {
+        if (_stream == null) return true;
+        return _stream.TrySetKeepAlive(_keepAlive ? checked(_keepAliveIdleSeconds * 1000) : 0) == 0;
+    }
+
+    private static int ParseMulticastGroup(ReadOnlySpan<byte> value, out uint group)
+    {
+        group = 0;
+        // struct group_req: __u32 interface index, then sockaddr_storage.
+        if (value.Length < 20) return -(int)Errno.EINVAL;
+        var interfaceIndex = BinaryPrimitives.ReadInt32LittleEndian(value[..4]);
+        var family = BinaryPrimitives.ReadUInt16LittleEndian(value.Slice(4, 2));
+        if (family != LinuxConstants.AF_INET) return -(int)Errno.EAFNOSUPPORT;
+        // The empty network namespace has only lo (index 1); 0 selects the default interface.
+        if (interfaceIndex is not (0 or 1)) return -(int)Errno.ENODEV;
+        group = BinaryPrimitives.ReadUInt32BigEndian(value.Slice(8, 4));
+        var firstOctet = (byte)(group >> 24);
+        if (firstOctet is < 224 or > 239) return -(int)Errno.EINVAL;
+        return 0;
+    }
+
+    private static void WriteTimevalMs(Span<byte> destination, int? millis)
+    {
+        var value = millis ?? 0;
+        BinaryPrimitives.WriteInt32LittleEndian(destination, value / 1000);
+        BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(4, 4), value % 1000 * 1000);
     }
 
     private async ValueTask<RecvMessageResult> RecvStreamAsRecvResult(LinuxFile file, FiberTask task, byte[] buffer,
@@ -773,7 +987,7 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
                 return -(int)Errno.ENETUNREACH;
             if (_boundEndPoint == null)
             {
-                _udp ??= _namespace.CreateUdpSocket();
+                _udp ??= CreateUdpSocket();
                 var udpBindRc = _udp.TryBind(0);
                 if (udpBindRc != 0)
                     return MapBindError(udpBindRc);
@@ -805,7 +1019,7 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
         _listener = null;
 
         var targetIp = NormalizeConnectAddress(endpoint.Address);
-        _stream ??= _namespace.CreateTcpStream();
+        _stream ??= CreateStreamSocket();
         var rc = _stream.TryConnect(ToIpv4Be(targetIp), (ushort)endpoint.Port);
         if (rc != 0)
             return MapConnectError(rc);
@@ -844,6 +1058,15 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
         if (!IsValidConnectAddress(endpoint.Address))
             return -(int)Errno.ENETUNREACH;
 
+        const int maxDatagramBytes = 65507;
+        if (buffer.Length > maxDatagramBytes - _pendingDatagramLength)
+        {
+            // Linux aborts the cork on overflow. Never acknowledge bytes that were truncated,
+            // including when the overflowing send also carries MSG_MORE.
+            _pendingDatagramLength = 0;
+            return -(int)Errno.EMSGSIZE;
+        }
+
         // Linux corks MSG_MORE datagrams: the payload is appended to a pending datagram and
         // actually sent by the next send()/sendto()/sendmsg() without MSG_MORE.
         if ((flags & LinuxConstants.MSG_MORE) != 0)
@@ -865,7 +1088,7 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
             _pendingDatagramLength = 0;
         }
 
-        _udp ??= _namespace.CreateUdpSocket();
+        _udp ??= CreateUdpSocket();
         if (_boundEndPoint == null)
         {
             var bindRc = _udp.TryBind(0);
@@ -915,21 +1138,20 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
     {
         // Keep the corked payload bounded like a single datagram would be.
         const int MaxPendingDatagramBytes = 65507;
-        var allowed = Math.Min(data.Length, MaxPendingDatagramBytes - _pendingDatagramLength);
-        if (allowed <= 0)
+        if (data.IsEmpty)
             return;
 
-        if (_pendingDatagram == null || _pendingDatagram.Length < _pendingDatagramLength + allowed)
+        if (_pendingDatagram == null || _pendingDatagram.Length < _pendingDatagramLength + data.Length)
         {
             var next = new byte[Math.Min(MaxPendingDatagramBytes,
-                Math.Max(1024, (_pendingDatagramLength + allowed) * 2))];
+                Math.Max(1024, (_pendingDatagramLength + data.Length) * 2))];
             if (_pendingDatagramLength > 0)
                 _pendingDatagram.AsSpan(0, _pendingDatagramLength).CopyTo(next);
             _pendingDatagram = next;
         }
 
-        data[..allowed].CopyTo(_pendingDatagram.AsSpan(_pendingDatagramLength));
-        _pendingDatagramLength += allowed;
+        data.CopyTo(_pendingDatagram.AsSpan(_pendingDatagramLength));
+        _pendingDatagramLength += data.Length;
     }
 
     private async ValueTask<(int Bytes, IPEndPoint? RemoteEndPoint)> RecvFromAsyncImpl(LinuxFile file, FiberTask task,
@@ -1085,12 +1307,27 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
 
     private void CloseSocketHandles()
     {
+        if (_stream != null && _lingerEnabled && _lingerSeconds == 0)
+        {
+            // SO_LINGER {on,0}: abort with RST instead of a graceful FIN handshake.
+            // A positive timeout still performs the backend's bounded graceful drain;
+            // close(2) does not block the scheduler waiting for it.
+            try { _stream.Abort(); }
+            catch (ObjectDisposedException) { }
+        }
+
         _listener?.Dispose();
         _stream?.Dispose();
         _udp?.Dispose();
         _listener = null;
         _stream = null;
         _udp = null;
+        if (_namespace.Handle != 0)
+        {
+            foreach (var group in _multicastGroups)
+                _namespace.LeaveMulticast(group);
+        }
+        _multicastGroups.Clear();
         if (_reservedTcpPort != 0)
         {
             _namespace.ReleaseTcpPort(_reservedTcpPort);

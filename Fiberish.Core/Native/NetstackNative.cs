@@ -45,11 +45,50 @@ internal static partial class NetstackNative
     [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_create")]
     internal static partial ulong CreateTcpStream(ulong netnsHandle);
 
+    [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_create_sized")]
+    internal static partial ulong CreateTcpStreamSized(ulong netnsHandle, nuint sendBytes, nuint recvBytes);
+
     [LibraryImport(LibName, EntryPoint = "fiber_tcp_listener_create")]
     internal static partial ulong CreateTcpListener(ulong netnsHandle);
 
+    [LibraryImport(LibName, EntryPoint = "fiber_tcp_listener_create_sized")]
+    internal static partial ulong CreateTcpListenerSized(ulong netnsHandle, nuint sendBytes, nuint recvBytes);
+
     [LibraryImport(LibName, EntryPoint = "fiber_udp_socket_create")]
     internal static partial ulong CreateUdpSocket(ulong netnsHandle);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_udp_socket_create_sized")]
+    internal static partial ulong CreateUdpSocketSized(ulong netnsHandle, nuint sendBytes, nuint recvBytes);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_socket_set_buffers")]
+    internal static partial int SocketSetBuffers(ulong netnsHandle, ulong socketHandle, nuint sendBytes,
+        nuint recvBytes);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_socket_get_buffers")]
+    internal static partial int SocketGetBuffers(ulong netnsHandle, ulong socketHandle, out nuint sendBytes,
+        out nuint recvBytes);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_set_nodelay")]
+    internal static partial int TcpStreamSetNoDelay(ulong netnsHandle, ulong socketHandle, int enabled);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_get_nodelay")]
+    internal static partial int TcpStreamGetNoDelay(ulong netnsHandle, ulong socketHandle);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_set_keepalive")]
+    internal static partial int TcpStreamSetKeepAlive(ulong netnsHandle, ulong socketHandle, long intervalMillis);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_get_keepalive")]
+    internal static partial int TcpStreamGetKeepAlive(ulong netnsHandle, ulong socketHandle,
+        out long intervalMillis);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_tcp_stream_abort")]
+    internal static partial int TcpStreamAbort(ulong netnsHandle, ulong socketHandle);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_netns_join_multicast")]
+    internal static partial int JoinMulticast(ulong netnsHandle, uint groupIpv4Be);
+
+    [LibraryImport(LibName, EntryPoint = "fiber_netns_leave_multicast")]
+    internal static partial int LeaveMulticast(ulong netnsHandle, uint groupIpv4Be);
 
     [LibraryImport(LibName, EntryPoint = "fiber_tcp_listener_listen")]
     internal static partial int

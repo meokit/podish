@@ -21,6 +21,12 @@ internal sealed class EpollItem
     public short Mask;
     public bool NeedsEdgeRearm;
     public IDisposable? WaitRegistration;
+    public Action? TargetClosing;
+    public bool PersistentNotifications;
+    public bool OneShotDisarmed;
+    public readonly Lock LifetimeGate = new();
+    public int TargetClosed;
+    public IDisposable? NotificationRegistration;
 }
 
 public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWaitSource
@@ -33,6 +39,9 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
     private readonly KernelScheduler _scheduler;
     private readonly AsyncWaitQueue _waitQueue;
     private readonly Dictionary<LinuxFile, EpollItem> _watches = new();
+    private readonly LinkedList<EpollAwaitState> _blockedWaiters = new();
+    private readonly Lock _lifetimeGate = new();
+    private int _released;
 
     public EpollInode(ulong ino, SuperBlock sb, KernelScheduler scheduler) : base(ino, sb)
     {
@@ -44,6 +53,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
 
     public override short Poll(LinuxFile linuxFile, short events)
     {
+        if (Volatile.Read(ref _released) != 0) return 0;
         const short POLLIN = 0x0001;
 
         if ((events & POLLIN) == 0)
@@ -128,7 +138,8 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
     public int Ctl(FiberTask task, int op, int fd, LinuxFile targetFile, uint events, ulong data)
     {
         AssertSchedulerThread();
-        var dispatcher = new SchedulerReadyDispatcher(task.CommonKernel);
+        if (Volatile.Read(ref _released) != 0 || targetFile.IsClosed) return -(int)Errno.EBADF;
+        var dispatcher = new SchedulerReadyDispatcher(_scheduler);
         if (op == LinuxConstants.EPOLL_CTL_ADD)
         {
             if (_watches.ContainsKey(targetFile)) return -(int)Errno.EEXIST;
@@ -139,42 +150,40 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
                     return -(int)Errno.ELOOP;
                 if (GetMaxAncestorEdges() + 1 + childEpoll.GetMaxDescendantEdges() > MaxEpollNestingEdges)
                     return -(int)Errno.EINVAL;
-                childEpoll._parents.Add(this);
             }
 
             var item = new EpollItem
                 { Fd = fd, File = targetFile, Events = events, Data = data, Dispatcher = dispatcher };
-            _watches[targetFile] = item;
+            lock (_lifetimeGate)
+            {
+                if (_released != 0) return -(int)Errno.EBADF;
+                _watches[targetFile] = item;
+                item.TargetClosing = () => OnTargetClosing(item);
+                targetFile.FinalClosing += item.TargetClosing;
+            }
+            if (targetFile.OpenedInode is EpollInode child) child._parents.Add(this);
 
             // Add initial poll and callback registration
             CheckAndRegister(item);
         }
         else if (op == LinuxConstants.EPOLL_CTL_DEL)
         {
-            if (!_watches.ContainsKey(targetFile)) return -(int)Errno.ENOENT;
-            if (_watches.TryGetValue(targetFile, out var oldItem))
-            {
-                oldItem.NeedsEdgeRearm = false;
-                oldItem.IsEdgeArmed = false;
-                oldItem.WaitRegistration?.Dispose();
-            }
-            if (targetFile.OpenedInode is EpollInode childEpoll)
-                childEpoll._parents.Remove(this);
-            _watches.Remove(targetFile);
-            _readyList.RemoveAll(x => x.File == targetFile);
-            if (_readyList.Count == 0)
-                _waitQueue.Reset();
+            if (!_watches.TryGetValue(targetFile, out var oldItem)) return -(int)Errno.ENOENT;
+            RemoveWatch(oldItem);
         }
         else if (op == LinuxConstants.EPOLL_CTL_MOD)
         {
             if (!_watches.TryGetValue(targetFile, out var item)) return -(int)Errno.ENOENT;
+            if ((item.Events & LinuxConstants.EPOLLEXCLUSIVE) != 0) return -(int)Errno.EINVAL;
             item.Events = events;
+            item.OneShotDisarmed = false;
             item.Data = data;
             item.Dispatcher = dispatcher;
             item.NeedsEdgeRearm = false;
             item.IsEdgeArmed = false;
             item.WaitRegistration?.Dispose();
             item.WaitRegistration = null;
+            Interlocked.Exchange(ref item.NotificationRegistration, null)?.Dispose();
 
             // For MOD, we re-evaluate readiness
             if (item.IsReady)
@@ -198,6 +207,35 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
     private void CheckAndRegister(EpollItem item)
     {
         AssertSchedulerThread();
+        lock (item.LifetimeGate) CheckAndRegisterAlive(item);
+    }
+
+    private void CheckAndRegisterAlive(EpollItem item)
+    {
+        if (!IsWatchActive(item)) return;
+        if (item.File.IsClosed)
+        {
+            OnTargetClosing(item);
+            return;
+        }
+        var openedInode = item.File.OpenedInode
+            ?? throw new InvalidOperationException("Epoll watch target inode is unavailable.");
+        if (openedInode is IPollNotificationSource source)
+        {
+            item.PersistentNotifications = true;
+            item.Mask = (short)(item.Events | LinuxConstants.EPOLLERR | LinuxConstants.EPOLLHUP);
+            if (item.NotificationRegistration == null)
+            {
+                var registration = source.SubscribePoll(item.File, item.Dispatcher!,
+                    _ => !item.OneShotDisarmed && NotifyReady(item),
+                    item.Mask, (item.Events & LinuxConstants.EPOLLEXCLUSIVE) != 0);
+                Interlocked.Exchange(ref item.NotificationRegistration, registration)?.Dispose();
+                if (!IsWatchActive(item))
+                    Interlocked.Exchange(ref item.NotificationRegistration, null)?.Dispose();
+            }
+            if ((PollWatch(item, item.Mask) & item.Mask) != 0) NotifyReady(item);
+            return;
+        }
         item.WaitRegistration?.Dispose();
         item.WaitRegistration = null;
 
@@ -205,7 +243,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
         // EPOLLIN == POLLIN, EPOLLOUT == POLLOUT, etc.
         var watchEvents = (short)(item.Events & 0xFFFF);
 
-        var currentEvents = item.File.OpenedInode!.Poll(item.File, watchEvents);
+        var currentEvents = PollWatch(item, watchEvents);
 
         // Always include EPOLLERR and EPOLLHUP even if not explicitly requested
         var mask = (short)(watchEvents | LinuxConstants.EPOLLERR |
@@ -229,9 +267,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
 
         if (!item.IsReady)
         {
-            item.IsReady = true;
-            _readyList.Add(item);
-            _waitQueue.Signal(); // Wake up an awaiting FiberTask (epoll_wait)
+            NotifyReady(item);
         }
 
         // Item is already ready - no need to register a wait callback.
@@ -244,21 +280,21 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
         void RePoll()
         {
             AssertSchedulerThread();
-            if (IsWatchRegistered(item))
+            if (IsWatchActive(item))
                 CheckAndRegister(item);
         }
 
         if ((item.Events & LinuxConstants.EPOLLET) != 0 &&
-            item.File.OpenedInode is IDispatcherEdgeWaitSource edgeWaitSource)
+            openedInode is IDispatcherEdgeWaitSource edgeWaitSource)
             item.WaitRegistration = edgeWaitSource.RegisterEdgeTriggeredWaitHandle(item.File,
                 item.Dispatcher ?? throw new InvalidOperationException("Epoll host socket watch requires dispatcher."),
                 RePoll, watchEvents);
-        else if (item.File.OpenedInode is IDispatcherWaitSource dispatcherWaitSource)
+        else if (openedInode is IDispatcherWaitSource dispatcherWaitSource)
             item.WaitRegistration = dispatcherWaitSource.RegisterWaitHandle(item.File,
                 item.Dispatcher ?? throw new InvalidOperationException("Epoll host socket watch requires dispatcher."),
                 RePoll, watchEvents);
         else
-            item.WaitRegistration = item.File.OpenedInode.RegisterWaitHandle(item.File, RePoll, watchEvents);
+            item.WaitRegistration = openedInode.RegisterWaitHandle(item.File, RePoll, watchEvents);
     }
 
     private void RefreshDeferredEdgeRearms()
@@ -273,7 +309,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
             if (!item.NeedsEdgeRearm || item.IsReady || item.WaitRegistration != null)
                 continue;
 
-            if (!IsWatchRegistered(item))
+            if (!IsWatchActive(item))
                 continue;
 
             if ((item.Events & 0xFFFF) == 0)
@@ -291,6 +327,12 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
     private void RearmEdgeTriggeredItem(EpollItem item)
     {
         AssertSchedulerThread();
+        lock (item.LifetimeGate) RearmLiveEdgeTriggeredItem(item);
+    }
+
+    private void RearmLiveEdgeTriggeredItem(EpollItem item)
+    {
+        if (!IsWatchActive(item)) return;
         item.WaitRegistration?.Dispose();
         item.WaitRegistration = null;
         item.NeedsEdgeRearm = false;
@@ -333,7 +375,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
         void RePollForEdge()
         {
             AssertSchedulerThread();
-            if (!IsWatchRegistered(item))
+            if (!IsWatchActive(item))
                 return;
 
             item.IsEdgeArmed = false;
@@ -377,17 +419,80 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
 
     public override void Release(LinuxFile linuxFile)
     {
-        foreach (var item in _watches.Values)
+        EpollItem[] watches;
+        lock (_lifetimeGate)
         {
-            item.WaitRegistration?.Dispose();
-            item.WaitRegistration = null;
-            if (item.File.OpenedInode is EpollInode child)
-                child._parents.Remove(this);
+            if (Interlocked.Exchange(ref _released, 1) != 0) return;
+            watches = _watches.Values.ToArray();
         }
-
-        _watches.Clear();
-        _readyList.Clear();
+        // Cancel source leases now, even when the owner scheduler has stopped. Mutable epoll
+        // lists and scheduler-bound legacy registrations are cleaned only on the owner.
+        foreach (var item in watches) RetireWatch(item);
+        RunOnOwner(() =>
+        {
+            foreach (var item in watches) RemoveWatch(item);
+            _readyList.Clear();
+            _deferredEdgeRearms.Clear();
+        });
         base.Release(linuxFile);
+    }
+
+    private void RunOnOwner(Action action)
+    {
+        if (_scheduler.IsSchedulerThread) action();
+        else _scheduler.ScheduleFromAnyThread(action);
+    }
+
+    private static void RetireWatch(EpollItem item)
+    {
+        // FinalClosing waits for an in-flight Poll before allowing Inode.Release/PrivateData
+        // teardown. It does NOT wait for the owner scheduler to process its ingress queue.
+        lock (item.LifetimeGate) Volatile.Write(ref item.TargetClosed, 1);
+        Interlocked.Exchange(ref item.NotificationRegistration, null)?.Dispose();
+    }
+
+    private void OnTargetClosing(EpollItem item)
+    {
+        RetireWatch(item);
+        RunOnOwner(() => RemoveWatch(item));
+    }
+
+    private void RemoveWatch(EpollItem item)
+    {
+        if (!IsWatchRegistered(item)) return;
+        lock (_lifetimeGate) _watches.Remove(item.File);
+        item.File.FinalClosing -= item.TargetClosing;
+        item.TargetClosing = null;
+        item.WaitRegistration?.Dispose();
+        item.WaitRegistration = null;
+        Interlocked.Exchange(ref item.NotificationRegistration, null)?.Dispose();
+        item.NeedsEdgeRearm = item.IsEdgeArmed = false;
+        _readyList.Remove(item);
+        item.IsReady = false;
+        if (item.File.OpenedInode is EpollInode child) child._parents.Remove(this);
+        if (_readyList.Count == 0) _waitQueue.Reset();
+    }
+
+    private bool NotifyReady(EpollItem item)
+    {
+        if (!IsWatchActive(item)) return false;
+        if (!item.IsReady)
+        {
+            item.IsReady = true;
+            _readyList.Add(item);
+        }
+        _waitQueue.Signal(); // poll/select/nested-epoll listeners, not the epoll_wait threads.
+        return WakeBlockedWaiter();
+    }
+
+    private bool WakeBlockedWaiter()
+    {
+        while (_blockedWaiters.First is { } node)
+        {
+            node.Value.UnregisterWaiter();
+            if (node.Value.TryWakeForReady()) return true;
+        }
+        return false;
     }
 
     private bool IsWatchRegistered(EpollItem item)
@@ -395,10 +500,21 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
         return _watches.TryGetValue(item.File, out var current) && ReferenceEquals(current, item);
     }
 
+    private bool IsWatchActive(EpollItem item) => Volatile.Read(ref _released) == 0 &&
+        Volatile.Read(ref item.TargetClosed) == 0 && IsWatchRegistered(item);
+
+    private short PollWatch(EpollItem item, short events)
+    {
+        lock (item.LifetimeGate)
+            return IsWatchActive(item) ? item.File.OpenedInode!.Poll(item.File, events) : (short)0;
+    }
+
     private void RefreshPendingWatches()
     {
         foreach (var item in _watches.Values)
         {
+            if (!IsWatchActive(item)) continue;
+            if (item.PersistentNotifications) continue;
             var watchEvents = (short)(item.Events & 0xFFFF);
             if (watchEvents == 0) continue;
 
@@ -409,7 +525,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
                 if (item.IsReady || item.NeedsEdgeRearm) continue;
                 var inode = item.File.OpenedInode;
                 if (inode == null) continue;
-                var current = (short)(inode.Poll(item.File, watchEvents) & item.Mask);
+                var current = (short)(PollWatch(item, watchEvents) & item.Mask);
                 var rising = (short)(current & ~item.LastObservedEvents);
                 item.LastObservedEvents = current;
                 if (rising == 0) continue;
@@ -424,14 +540,12 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
                 if (item.IsReady || item.NeedsEdgeRearm || item.IsEdgeArmed) continue;
                 var inode = item.File.OpenedInode;
                 if (inode == null) continue;
-                var current = (short)(inode.Poll(item.File, watchEvents) & item.Mask);
+                var current = (short)(PollWatch(item, watchEvents) & item.Mask);
                 item.LastObservedEvents = current;
                 if (current == 0) continue;
             }
 
-            item.IsReady = true;
-            _readyList.Add(item);
-            _waitQueue.Signal();
+            NotifyReady(item);
         }
     }
 
@@ -455,6 +569,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
 
     public int TryHarvestNow(Span<byte> eventsBuffer, int maxEvents)
     {
+        if (Volatile.Read(ref _released) != 0) return 0;
         AssertSchedulerThread();
         RefreshDeferredEdgeRearms();
         RefreshPendingWatches();
@@ -489,7 +604,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
 
                 // Re-poll the underlying FD one last time exactly at harvest to get the precise mask
                 var watchEvents = (short)(item.Events & 0xFFFF);
-                var currentEvents = item.File.OpenedInode!.Poll(item.File, watchEvents);
+                var currentEvents = PollWatch(item, watchEvents);
                 var mask = (short)(watchEvents | LinuxConstants.EPOLLERR |
                                    LinuxConstants.EPOLLHUP);
 
@@ -503,7 +618,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
                     // False alarm or event cleared before we harvested. It must not consume
                     // one of the caller's maxevents slots.
                     item.IsReady = false;
-                    if ((item.Events & 0xFFFF) != 0)
+                    if (!item.PersistentNotifications && (item.Events & 0xFFFF) != 0)
                         AddScratchItem(ref reEvalItems, ref reEvalCount, capacity, item);
                     continue;
                 }
@@ -516,8 +631,16 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
                 harvested++;
 
                 if ((item.Events & LinuxConstants.EPOLLONESHOT) != 0)
+                {
                     // Oneshot means it's disabled after triggering
                     item.Events &= ~(uint)0xFFFF; // Clear watch events, keep data
+                    item.OneShotDisarmed = true;
+                }
+                else if (item.PersistentNotifications)
+                {
+                    if ((item.Events & LinuxConstants.EPOLLET) == 0)
+                        AddScratchItem(ref reEvalItems, ref reEvalCount, capacity, item);
+                }
                 else if ((item.Events & LinuxConstants.EPOLLET) != 0)
                     AddScratchItem(ref edgeRearmItems, ref edgeRearmCount, capacity, item);
                 else if ((item.Events & LinuxConstants.EPOLLET) == 0)
@@ -533,19 +656,36 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
             for (var i = 0; i < reEvalCount; i++)
             {
                 var item = reEvalItems![i];
-                if (IsWatchRegistered(item))
-                    CheckAndRegister(item);
+                if (IsWatchActive(item))
+                {
+                    if (item.PersistentNotifications)
+                    {
+                        // Keep LT as a candidate for the NEXT harvest. Poll may consume a procfs
+                        // event, so neither notifications nor this requeue may call Poll again.
+                        item.IsReady = true;
+                        _readyList.Add(item);
+                    }
+                    else CheckAndRegister(item);
+                }
             }
 
             for (var i = 0; i < edgeRearmCount; i++)
             {
                 var item = edgeRearmItems![i];
-                if (IsWatchRegistered(item))
+                if (IsWatchActive(item))
                     RearmEdgeTriggeredItem(item);
             }
 
             if (_readyList.Count == 0)
                 _waitQueue.Reset();
+            else
+            {
+                // A successful LT delivery (or maxevents leaving queued candidates) must
+                // hand readiness to the next blocked thread even without another source edge.
+                // Do not Poll here: a queued procfs candidate may consume its event on recheck.
+                _waitQueue.Signal();
+                WakeBlockedWaiter();
+            }
 
             return harvested;
         }
@@ -626,6 +766,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
         private bool _hasTimedOut;
         private TaskAsyncOperationHandle? _operation;
         private IDisposable? _queueWaitRegistration;
+        private LinkedListNode<EpollAwaitState>? _waiterNode;
         private int _reschedulePending;
         private int _result;
         private Timer? _timer;
@@ -677,6 +818,30 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
                 _scheduler.ScheduleContinuation(OnRePollScheduled, _task);
         }
 
+        internal bool TryWakeForReady()
+        {
+            if (_completed || _hasTimedOut || _operation is not { IsActive: true } ||
+                _task.IsRetiring || _task.HasInterruptingPendingSignal() ||
+                Interlocked.Exchange(ref _reschedulePending, 1) != 0) return false;
+            // Do not consume the operation's wait token until a final result is available:
+            // a stale-ready recheck must be able to block and wake again with the same operation.
+            _scheduler.NoteInteractiveWake(_task);
+            _scheduler.ScheduleContinuation(OnRePollScheduled, _task);
+            return true;
+        }
+
+        internal void UnregisterWaiter()
+        {
+            if (_waiterNode == null) return;
+            _inode._blockedWaiters.Remove(_waiterNode);
+            _waiterNode = null;
+        }
+
+        private sealed class WaiterRegistration(EpollAwaitState state) : IDisposable
+        {
+            public void Dispose() => state.UnregisterWaiter();
+        }
+
         private void OnTimeout()
         {
             _hasTimedOut = true;
@@ -699,7 +864,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
         private void DoPoll()
         {
             _scheduler.AssertSchedulerThread();
-            if (_completed) return;
+            if (_completed || _operation is not { IsActive: true }) return;
             _queueWaitRegistration?.Dispose();
             _queueWaitRegistration = null;
 
@@ -736,7 +901,8 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
                 return;
             }
 
-            _queueWaitRegistration = _inode._waitQueue.RegisterCancelable(ScheduleRePoll, _task, _token);
+            _waiterNode = _inode._blockedWaiters.AddLast(this);
+            _queueWaitRegistration = new WaiterRegistration(this);
             _operation?.TryAddRegistration(TaskAsyncRegistration.From(_queueWaitRegistration));
         }
     }
