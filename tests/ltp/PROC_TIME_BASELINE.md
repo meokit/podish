@@ -273,4 +273,8 @@ threshold on one sample group.
 - Targeted LTP rerun after the fixes: 11 PASS / 1 PARTIAL
   (`setsid01`, `prctl01/02/03/05/08/09`, `timerfd02`, `timerfd_create01`,
   `timerfd_gettime01`, `timerfd_settime01/02`).
+- After merging main's net-io/fs-fd batches (merge `cc20f69`): 2029 passed,
+  0 failed, 1 skipped. The full proc-time batch kept the same statuses; net-io
+  (63 PASS / 5 PARTIAL / 4 BROKEN / 1 SKIP) and fs-fd (106 PASS / 8 SKIP /
+  1 PARTIAL) matched their branch baselines case by case.
 - LTP runner self-tests: 20/20.
