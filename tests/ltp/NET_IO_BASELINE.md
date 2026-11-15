@@ -1,5 +1,9 @@
 # LTP network sockets and I/O multiplexing batch — baseline and fixes
 
+> Final review/integration checkpoint: see [NET_IO_MERGE_VERIFICATION.md](NET_IO_MERGE_VERIFICATION.md)
+> for the four reproduced semantic fixes, reconciliation with main's fs-fd work, and fresh guest regression
+> results. Historical checkpoint counts below do not replace that final record.
+
 Date: 2026-11-14
 Manifest: `tests/ltp/cases-net-io.json` (73 cases)
 Backend: Windows Podish, tmpfs image, guest root, `--network private`

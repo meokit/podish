@@ -1,5 +1,9 @@
 # net-io 全分支 Code Review（进行中）
 
+> 历史检查点：本轮外部审查发现的四项 socket 缺陷已经修复，并已完成与 main 的语义整合。
+> 最新验收、代码版本、回归结果和仍未支持的功能边界见
+> [NET_IO_MERGE_VERIFICATION.md](NET_IO_MERGE_VERIFICATION.md)。下文保留原检查点原貌。
+
 范围：基线 `c321caa`（不含）到 `5bff69f`（含）以及当前工作区全部修改、新增文件。
 包括 `690e94e`、`5bff69f`，不是只审查最后一轮补丁。未提交、合并或推送。
 
