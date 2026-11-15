@@ -1397,6 +1397,7 @@ public class VMAManager
         VmaFileMapping? fileMapping = null;
 
         LinuxFile? anonymousSharedFile = null;
+        VmArea? createdVma = null;
         try
         {
             if (file == null)
@@ -1448,6 +1449,7 @@ public class VMAManager
                 VmMapping = sharedObj,
                 VmAnonVma = privateObj
             };
+            createdVma = vma;
 
             InsertVmaSorted(vma);
             RegisterVmAreaAttachments(vma, tbCohWorkSet);
@@ -1456,6 +1458,28 @@ public class VMAManager
         }
         catch
         {
+            // The caller still owns `file` when Mmap fails, so do not release
+            // fileMapping here. Remove a partially inserted VMA and balance every
+            // object/mapping reference acquired above instead.
+            if (createdVma != null &&
+                TryGetVmAreaWindow(createdVma.Start, createdVma.End, out var removeIndex, out _) &&
+                ReferenceEquals(_vmas[removeIndex], createdVma))
+            {
+                try
+                {
+                    UnregisterVmAreaAttachments(createdVma);
+                }
+                catch
+                {
+                    // Preserve the original mapping failure; cleanup is best effort.
+                }
+
+                _vmas.RemoveRange(removeIndex, 1);
+                TrackMappedInodeOnVmaRemoved(createdVma);
+            }
+
+            privateObj?.Release();
+            sharedObj?.Release();
             anonymousSharedFile?.Close();
             throw;
         }
