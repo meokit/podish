@@ -80,7 +80,20 @@ public partial class SyscallManager
         if (NetworkMode == NetworkMode.Private)
         {
             if (af != AddressFamily.InterNetwork) return -(int)Errno.EAFNOSUPPORT;
-            if (sockType != SocketType.Stream && sockType != SocketType.Dgram) return -(int)Errno.ESOCKTNOSUPPORT;
+            if (sockType == SocketType.Stream)
+            {
+                if (protocol != 0 && protocol != LinuxConstants.IPPROTO_TCP)
+                    return -(int)Errno.EPROTONOSUPPORT;
+            }
+            else if (sockType == SocketType.Dgram)
+            {
+                if (protocol != 0 && protocol != LinuxConstants.IPPROTO_UDP)
+                    return -(int)Errno.EPROTONOSUPPORT;
+            }
+            else
+            {
+                return -(int)Errno.ESOCKTNOSUPPORT;
+            }
 
             var inode = new NetstackSocketInode(0, MemfdSuperBlock, GetOrCreatePrivateNetNamespace(),
                 sockType);
@@ -90,7 +103,7 @@ public partial class SyscallManager
 
             var dentry = new Dentry($"socket:[{inode.Ino}]", inode, null, MemfdSuperBlock);
             var file = new LinuxFile(dentry, fileFlags, AnonMount);
-            return AllocFD(file);
+            return AllocFD(file); // AllocFD consumes the file reference on success AND failure.
         }
 
         if (OperatingSystem.IsMacOS() && sockType == SocketType.Raw)
@@ -189,7 +202,7 @@ public partial class SyscallManager
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
 
-        var (endpoint, err) = ReadAnySockaddr(engine, file, addrPtr, addrLen);
+        var (endpoint, err) = ReadAnySockaddr(engine, file, addrPtr, addrLen, requireNonNull: true);
         if (err < 0) return err;
         if (endpoint == null) return -(int)Errno.EINVAL;
 
@@ -210,7 +223,7 @@ public partial class SyscallManager
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
 
-        var (endpoint, err) = ReadAnySockaddr(engine, file, addrPtr, addrLen);
+        var (endpoint, err) = ReadAnySockaddr(engine, file, addrPtr, addrLen, requireNonNull: true);
         if (err < 0) return err;
         if (endpoint == null) return -(int)Errno.EINVAL;
 
@@ -255,22 +268,20 @@ public partial class SyscallManager
         var addrPtr = a2;
         var addrLenPtr = a3;
 
-        if (addrPtr == 0 || addrLenPtr == 0) return -(int)Errno.EFAULT;
-
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
 
         if (file.TryGetSocketEndpointOps(out var ops))
         {
+            if (addrPtr == 0 || addrLenPtr == 0) return -(int)Errno.EFAULT;
             var res = ops.GetSockName(file, engine.Owner as FiberTask ?? throw new InvalidOperationException());
-            WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, res);
-            return 0;
+            return WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, res);
         }
 
         if (file.OpenedInode is NetlinkRouteSocketInode)
         {
-            WriteSockaddrNetlink(engine, addrPtr, addrLenPtr);
-            return 0;
+            if (addrPtr == 0 || addrLenPtr == 0) return -(int)Errno.EFAULT;
+            return WriteSockaddrNetlink(engine, addrPtr, addrLenPtr);
         }
 
         return -(int)Errno.ENOTSOCK;
@@ -283,8 +294,6 @@ public partial class SyscallManager
         var addrPtr = a2;
         var addrLenPtr = a3;
 
-        if (addrPtr == 0 || addrLenPtr == 0) return -(int)Errno.EFAULT;
-
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
 
@@ -292,8 +301,8 @@ public partial class SyscallManager
         {
             var res = ops.GetPeerName(file, engine.Owner as FiberTask ?? throw new InvalidOperationException());
             if (res.Rc < 0) return res.Rc;
-            WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, res);
-            return 0;
+            if (addrPtr == 0 || addrLenPtr == 0) return -(int)Errno.EFAULT;
+            return WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, res);
         }
 
         if (file.OpenedInode is NetlinkRouteSocketInode) return -(int)Errno.ENOTCONN;
@@ -315,6 +324,9 @@ public partial class SyscallManager
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
+        // O_PATH descriptors and open_tree(2) mounts carry no struct file to accept from,
+        // so Linux fails them with EBADF before the socket check.
+        if ((file.Flags & FileFlags.O_PATH) != 0 || file is MountFile) return -(int)Errno.EBADF;
 
         if (file.TryGetSocketEndpointOps(out var ops))
         {
@@ -332,10 +344,15 @@ public partial class SyscallManager
             if (addrPtr != 0 && addrLenPtr != 0)
             {
                 var addrRes = new SocketAddressResult(accepted.PeerEndPoint, accepted.PeerUnixAddressRaw);
-                WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, addrRes);
+                var writeRc = WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, addrRes);
+                if (writeRc < 0)
+                {
+                    newFile.Close();
+                    return writeRc;
+                }
             }
 
-            return AllocFD(newFile);
+            return AllocFD(newFile, task: task);
         }
 
         return -(int)Errno.ENOTSOCK;
@@ -378,14 +395,18 @@ public partial class SyscallManager
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
+        if (len < 0) return -(int)Errno.EINVAL;
+        if ((flags & LinuxConstants.MSG_OOB) != 0 && file.OpenedInode is not HostSocketInode)
+            return -(int)Errno.EOPNOTSUPP;
         var buf = new byte[len];
-        if (!task.CPU.CopyFromUser(bufPtr, buf)) return -(int)Errno.EFAULT;
+        if (len > 0 && !task.CPU.CopyFromUser(bufPtr, buf)) return -(int)Errno.EFAULT;
 
         if (file.TryGetSocketDataOps(out var ops))
         {
-            if (destAddrPtr != 0)
+            // Linux ignores the destination address for a connected stream socket.
+            if (destAddrPtr != 0 && file.OpenedInode is not ISocketStreamInfo { IsStreamSocket: true })
             {
-                var (endpoint, err) = ReadAnySockaddr(engine, file, destAddrPtr, destAddrLen);
+                var (endpoint, err) = ReadAnySockaddr(engine, file, destAddrPtr, destAddrLen, requireNonNull: true);
                 if (err < 0) return err;
                 if (endpoint == null) return -(int)Errno.EINVAL;
                 return await ops.SendToAsync(file, task, buf, flags, endpoint);
@@ -417,6 +438,16 @@ public partial class SyscallManager
 
         var file = GetFD(fd);
         if (file == null) return -(int)Errno.EBADF;
+        if (len < 0) return -(int)Errno.EINVAL;
+        if ((flags & LinuxConstants.MSG_OOB) != 0 && file.OpenedInode is not HostSocketInode)
+            return -(int)Errno.EINVAL;
+        if ((flags & LinuxConstants.MSG_ERRQUEUE) != 0) return -(int)Errno.EAGAIN;
+        if (addrLenPtr != 0)
+        {
+            Span<byte> lenBuf = stackalloc byte[4];
+            if (!engine.CopyFromUser(addrLenPtr, lenBuf)) return -(int)Errno.EFAULT;
+            if (BinaryPrimitives.ReadInt32LittleEndian(lenBuf) < 0) return -(int)Errno.EINVAL;
+        }
 
         if (file.TryGetSocketDataOps(out var ops))
         {
@@ -485,7 +516,12 @@ public partial class SyscallManager
             if (recvSrcAddrPtr != 0 && recvAddrLenPtr != 0)
             {
                 var addrRes = new SocketAddressResult(res.SourceEndPoint, res.SourceSunPathRaw);
-                WriteAnySockaddr(recvEngine, recvFile, recvSrcAddrPtr, recvAddrLenPtr, addrRes);
+                var addrRc = WriteAnySockaddr(recvEngine, recvFile, recvSrcAddrPtr, recvAddrLenPtr, addrRes);
+                if (addrRc < 0)
+                {
+                    CloseReceivedFiles(res.Fds);
+                    return addrRc;
+                }
             }
 
             CloseReceivedFiles(res.Fds);
@@ -559,6 +595,12 @@ public partial class SyscallManager
         if (msgRes.Error < 0) return msgRes.Error;
         var msg = msgRes.Value;
 
+        if ((flags & LinuxConstants.MSG_OOB) != 0 && file.OpenedInode is not HostSocketInode)
+            return -(int)Errno.EINVAL;
+        if ((flags & LinuxConstants.MSG_ERRQUEUE) != 0) return -(int)Errno.EAGAIN;
+        // This is output capacity, not an input sockaddr to copy/allocate. Large buffers are legal.
+        if (msg.msg_name != 0 && msg.msg_namelen < 0) return -(int)Errno.EINVAL;
+
         var totalLen = 0;
         var iovsRes = ReadIovecsDef(engine, msg.msg_iov, msg.msg_iovlen);
         if (iovsRes.Error < 0) return iovsRes.Error;
@@ -570,7 +612,8 @@ public partial class SyscallManager
 
         if (file.TryGetSocketDataOps(out var ops))
         {
-            var res = await ops.RecvMsgAsync(file, task, buf, flags | msg.msg_flags, totalLen);
+            // msg_flags is output-only for recvmsg; only the syscall's flags control the receive.
+            var res = await ops.RecvMsgAsync(file, task, buf, flags, totalLen);
             var bytes = res.BytesRead;
             if (bytes < 0) return bytes;
 
@@ -586,7 +629,12 @@ public partial class SyscallManager
             if (msg.msg_name != 0 && msg.msg_namelen > 0)
             {
                 var addrRes = new SocketAddressResult(res.SourceEndPoint, res.SourceSunPathRaw);
-                WriteAnySockaddr(engine, file, msg.msg_name, msgPtr + 4, addrRes);
+                var addressRc = WriteAnySockaddr(engine, file, msg.msg_name, msgPtr + 4, addrRes);
+                if (addressRc < 0)
+                {
+                    if (res.Fds != null) foreach (var received in res.Fds) received.Close();
+                    return addressRc;
+                }
             }
 
             var outMsgFlags = 0;
@@ -595,8 +643,9 @@ public partial class SyscallManager
                 msg.msg_controllen >= 16)
             {
                 var cloexec = (flags & LinuxConstants.MSG_CMSG_CLOEXEC) != 0;
-                WriteCmsg(engine, msg.msg_control, msg.msg_controllen, res.Fds, res.Credentials, out var outCtlLen,
+                var cmsgRc = WriteCmsg(engine, msg.msg_control, msg.msg_controllen, res.Fds, res.Credentials, out var outCtlLen,
                     out var truncated, cloexec);
+                if (cmsgRc < 0) return cmsgRc;
                 if (truncated)
                     outMsgFlags |= LinuxConstants.MSG_CTRUNC;
                 WriteBackMsgControllen(engine, msgPtr, outCtlLen);
@@ -670,7 +719,18 @@ public partial class SyscallManager
             fileFlags, AnonMount);
 
         var fd1 = AllocFD(file1);
+        if (fd1 < 0)
+        {
+            file2.Close();
+            return fd1;
+        }
+
         var fd2 = AllocFD(file2);
+        if (fd2 < 0)
+        {
+            FreeFD(fd1);
+            return fd2;
+        }
 
         var buf = new byte[8];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), fd1);
@@ -737,9 +797,10 @@ public partial class SyscallManager
 
 
     private static (object? Endpoint, int Error) ReadAnySockaddr(Engine engine, LinuxFile file, uint addrPtr,
-        int addrLen)
+        int addrLen, bool requireNonNull = false)
     {
-        if (addrPtr == 0) return (null, 0); // valid for some calls
+        if (addrPtr == 0) return (null, requireNonNull ? -(int)Errno.EFAULT : 0);
+        if (addrLen < 0) return (null, -(int)Errno.EINVAL);
         if ((file.TryGetSocketEndpointOps(out var ops) &&
              ops.SocketAddressFamily == AddressFamily.Unix) ||
             file.OpenedInode is NetlinkRouteSocketInode)
@@ -748,21 +809,20 @@ public partial class SyscallManager
             return (res.Address, res.Error);
         }
 
-        var ep = ReadSockaddr(engine, addrPtr, addrLen);
-        if (ep == null) return (null, -(int)Errno.EINVAL);
-        return (ep, 0);
+        return ReadSockaddr(engine, addrPtr, addrLen);
     }
 
-    private static void WriteAnySockaddr(Engine engine, LinuxFile file, uint addrPtr, uint addrLenPtr,
+    private static int WriteAnySockaddr(Engine engine, LinuxFile file, uint addrPtr, uint addrLenPtr,
         SocketAddressResult res)
     {
-        if (addrPtr == 0 || addrLenPtr == 0) return;
+        if (addrPtr == 0 || addrLenPtr == 0) return -(int)Errno.EFAULT;
         if (res.UnixAddressRaw != null ||
             (file.TryGetSocketEndpointOps(out var ops) &&
              ops.SocketAddressFamily == AddressFamily.Unix) ||
             file.OpenedInode is NetlinkRouteSocketInode)
-            WriteSockaddrUnix(engine, addrPtr, addrLenPtr, res.UnixAddressRaw);
-        else if (res.EndPoint != null) WriteSockaddr(engine, addrPtr, addrLenPtr, res.EndPoint);
+            return WriteSockaddrUnix(engine, addrPtr, addrLenPtr, res.UnixAddressRaw);
+        if (res.EndPoint != null) return WriteSockaddr(engine, addrPtr, addrLenPtr, res.EndPoint);
+        return 0;
     }
 
     private static int GetSocketCallArgCount(int call)
@@ -819,7 +879,8 @@ public partial class SyscallManager
             msg_controllen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4)),
             msg_flags = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(24, 4))
         };
-        if (msg.msg_iovlen < 0 || msg.msg_iovlen > 1024) return (msg, -(int)Errno.EINVAL);
+        if (msg.msg_iovlen != 0 && msg.msg_iovlen < 0) return (msg, -(int)Errno.EMSGSIZE);
+        if (msg.msg_iovlen > 1024) return (msg, -(int)Errno.EMSGSIZE);
         if (msg.msg_controllen < 0 || msg.msg_controllen > 1 << 20) return (msg, -(int)Errno.EINVAL);
         return (msg, 0);
     }
@@ -916,38 +977,37 @@ public partial class SyscallManager
         return (true, sendFds.Count > 0 ? sendFds : null);
     }
 
-    private void WriteCmsg(Engine engine, uint controlPtr, int controlLen, List<LinuxFile>? fds,
+    private int WriteCmsg(Engine engine, uint controlPtr, int controlLen, List<LinuxFile>? fds,
         UnixCredentials? credentials, out int writtenBytes, out bool truncated, bool cloexec = false)
     {
         writtenBytes = 0;
         truncated = false;
         var cmRaw = new byte[controlLen];
+        var installedFds = new List<int>();
 
         if (fds is { Count: > 0 })
         {
-            var maxFds = (controlLen - 12) / 4;
+            var maxFds = Math.Max(0, (controlLen - 12) / 4);
             var numFds = Math.Min(fds.Count, maxFds);
-            var reqLen = 12 + numFds * 4;
-            if (reqLen > controlLen)
-            {
-                truncated = true;
-                return;
-            }
-
-            BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(0, 4), reqLen);
-            BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(4, 4), LinuxConstants.SOL_SOCKET);
-            BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(8, 4), LinuxConstants.SCM_RIGHTS);
-
+            var consumed = 0;
             for (var i = 0; i < numFds; i++)
             {
-                var fd = AllocFD(fds[i]);
-                if (cloexec) SetFdCloseOnExec(fd, true);
+                var fd = AllocFD(fds[i], closeOnExec: cloexec, task: engine.Owner as FiberTask);
+                consumed++; // AllocFD consumes even an EMFILE reference.
+                if (fd < 0) break;
+                installedFds.Add(fd);
                 BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(12 + i * 4, 4), fd);
             }
-
-            writtenBytes = (reqLen + 3) & ~3;
-            if (numFds < fds.Count)
-                truncated = true;
+            for (var i = consumed; i < fds.Count; i++) fds[i].Close();
+            if (installedFds.Count != 0)
+            {
+                var reqLen = 12 + installedFds.Count * 4;
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(0, 4), reqLen);
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(4, 4), LinuxConstants.SOL_SOCKET);
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(8, 4), LinuxConstants.SCM_RIGHTS);
+                writtenBytes = reqLen;
+            }
+            truncated = installedFds.Count < fds.Count;
         }
 
         if (credentials != null)
@@ -972,8 +1032,12 @@ public partial class SyscallManager
             }
         }
 
-        if (writtenBytes > 0)
-            engine.CopyToUser(controlPtr, cmRaw.AsSpan(0, writtenBytes));
+        if (writtenBytes > 0 && !engine.CopyToUser(controlPtr, cmRaw.AsSpan(0, writtenBytes)))
+        {
+            foreach (var fd in installedFds) TryFreeFD(fd, engine.Owner as FiberTask);
+            return -(int)Errno.EFAULT;
+        }
+        return 0;
     }
 
     private void WriteBackMsgFlags(Engine engine, uint msgPtr, int msgFlags)
@@ -1036,12 +1100,12 @@ public partial class SyscallManager
         }, 0);
     }
 
-    internal static void WriteSockaddrUnix(Engine engine, uint addrPtr, uint addrLenPtr, byte[]? sunPathRaw)
+    internal static int WriteSockaddrUnix(Engine engine, uint addrPtr, uint addrLenPtr, byte[]? sunPathRaw)
     {
         Span<byte> lenBuf = stackalloc byte[4];
-        if (!engine.CopyFromUser(addrLenPtr, lenBuf)) return;
+        if (!engine.CopyFromUser(addrLenPtr, lenBuf)) return -(int)Errno.EFAULT;
         var maxLen = BinaryPrimitives.ReadInt32LittleEndian(lenBuf);
-        if (maxLen < 0) maxLen = 0;
+        if (maxLen < 0) return -(int)Errno.EINVAL;
 
         var raw = sunPathRaw ?? [];
         var fullLen = 2 + raw.Length;
@@ -1051,11 +1115,11 @@ public partial class SyscallManager
             raw.CopyTo(buf.AsSpan(2));
 
         var toCopy = Math.Min(maxLen, fullLen);
-        if (toCopy > 0)
-            engine.CopyToUser(addrPtr, buf.AsSpan(0, toCopy));
+        if (toCopy > 0 && !engine.CopyToUser(addrPtr, buf.AsSpan(0, toCopy)))
+            return -(int)Errno.EFAULT;
 
         BinaryPrimitives.WriteInt32LittleEndian(lenBuf, fullLen);
-        engine.CopyToUser(addrLenPtr, lenBuf);
+        return engine.CopyToUser(addrLenPtr, lenBuf) ? 0 : -(int)Errno.EFAULT;
     }
 
     private static bool WriteInt32ToUser(Engine engine, uint ptr, int value)
@@ -1079,44 +1143,46 @@ public partial class SyscallManager
             file.Close();
     }
 
-    private static EndPoint? ReadSockaddr(Engine engine, uint addrPtr, int addrLen)
+    private static (EndPoint? Endpoint, int Error) ReadSockaddr(Engine engine, uint addrPtr, int addrLen)
     {
-        if (addrLen < 2) return null;
+        if (addrPtr == 0) return (null, -(int)Errno.EFAULT);
+        if (addrLen < 2 || addrLen > 128) return (null, -(int)Errno.EINVAL);
         var buf = new byte[addrLen];
-        if (!engine.CopyFromUser(addrPtr, buf)) return null;
+        if (!engine.CopyFromUser(addrPtr, buf)) return (null, -(int)Errno.EFAULT);
 
         var family = BinaryPrimitives.ReadInt16LittleEndian(buf.AsSpan(0, 2));
 
         if (family == 2) // AF_INET
         {
-            if (addrLen < 16) return null;
+            if (addrLen < 16) return (null, -(int)Errno.EINVAL);
             var port = BinaryPrimitives.ReadUInt16BigEndian(buf.AsSpan(2, 2)); // Network byte order!
             var ipBuf = buf.AsSpan(4, 4).ToArray();
             var ip = new IPAddress(ipBuf);
-            return new IPEndPoint(ip, port);
+            return (new IPEndPoint(ip, port), 0);
         }
 
         if (family == 10) // AF_INET6
         {
-            if (addrLen < 28) return null;
+            if (addrLen < 28) return (null, -(int)Errno.EINVAL);
             var port = BinaryPrimitives.ReadUInt16BigEndian(buf.AsSpan(2, 2));
             // flowinfo = 4..8
             var ipBuf = buf.AsSpan(8, 16).ToArray();
             var ip = new IPAddress(ipBuf);
             // scope_id = 24..28
-            return new IPEndPoint(ip, port);
+            return (new IPEndPoint(ip, port), 0);
         }
 
-        return null;
+        return (null, -(int)Errno.EAFNOSUPPORT);
     }
 
-    private static void WriteSockaddr(Engine engine, uint addrPtr, uint addrLenPtr, EndPoint? ep)
+    private static int WriteSockaddr(Engine engine, uint addrPtr, uint addrLenPtr, EndPoint? ep)
     {
-        if (ep == null) return;
+        if (ep == null) return 0;
 
-        var lenBuf = new byte[4];
-        if (!engine.CopyFromUser(addrLenPtr, lenBuf)) return;
+        Span<byte> lenBuf = stackalloc byte[4];
+        if (!engine.CopyFromUser(addrLenPtr, lenBuf)) return -(int)Errno.EFAULT;
         var maxLen = BinaryPrimitives.ReadInt32LittleEndian(lenBuf);
+        if (maxLen < 0) return -(int)Errno.EINVAL;
 
         if (ep is IPEndPoint ipEp)
         {
@@ -1128,10 +1194,11 @@ public partial class SyscallManager
                 ipEp.Address.TryWriteBytes(buf.AsSpan(4, 4), out _);
 
                 var toCopy = Math.Min(maxLen, 16);
-                engine.CopyToUser(addrPtr, buf.AsSpan(0, toCopy));
+                if (toCopy > 0 && !engine.CopyToUser(addrPtr, buf.AsSpan(0, toCopy)))
+                    return -(int)Errno.EFAULT;
 
                 BinaryPrimitives.WriteInt32LittleEndian(lenBuf, 16);
-                engine.CopyToUser(addrLenPtr, lenBuf);
+                return engine.CopyToUser(addrLenPtr, lenBuf) ? 0 : -(int)Errno.EFAULT;
             }
             else if (ipEp.AddressFamily == AddressFamily.InterNetworkV6)
             {
@@ -1141,28 +1208,33 @@ public partial class SyscallManager
                 ipEp.Address.TryWriteBytes(buf.AsSpan(8, 16), out _);
 
                 var toCopy = Math.Min(maxLen, 28);
-                engine.CopyToUser(addrPtr, buf.AsSpan(0, toCopy));
+                if (toCopy > 0 && !engine.CopyToUser(addrPtr, buf.AsSpan(0, toCopy)))
+                    return -(int)Errno.EFAULT;
 
                 BinaryPrimitives.WriteInt32LittleEndian(lenBuf, 28);
-                engine.CopyToUser(addrLenPtr, lenBuf);
+                return engine.CopyToUser(addrLenPtr, lenBuf) ? 0 : -(int)Errno.EFAULT;
             }
         }
+
+        return 0;
     }
 
-    private static void WriteSockaddrNetlink(Engine engine, uint addrPtr, uint addrLenPtr)
+    private static int WriteSockaddrNetlink(Engine engine, uint addrPtr, uint addrLenPtr)
     {
         Span<byte> lenBuf = stackalloc byte[4];
-        if (!engine.CopyFromUser(addrLenPtr, lenBuf)) return;
+        if (!engine.CopyFromUser(addrLenPtr, lenBuf)) return -(int)Errno.EFAULT;
         var maxLen = BinaryPrimitives.ReadInt32LittleEndian(lenBuf);
+        if (maxLen < 0) return -(int)Errno.EINVAL;
 
         Span<byte> addr = stackalloc byte[12];
         addr.Clear();
         BinaryPrimitives.WriteUInt16LittleEndian(addr.Slice(0, 2), LinuxConstants.AF_NETLINK);
         var toCopy = Math.Min(maxLen, 12);
-        engine.CopyToUser(addrPtr, addr.Slice(0, toCopy));
+        if (toCopy > 0 && !engine.CopyToUser(addrPtr, addr.Slice(0, toCopy)))
+            return -(int)Errno.EFAULT;
 
         BinaryPrimitives.WriteInt32LittleEndian(lenBuf, 12);
-        engine.CopyToUser(addrLenPtr, lenBuf);
+        return engine.CopyToUser(addrLenPtr, lenBuf) ? 0 : -(int)Errno.EFAULT;
     }
 
     private static int LinuxToWindowsSocketError(SocketError err)

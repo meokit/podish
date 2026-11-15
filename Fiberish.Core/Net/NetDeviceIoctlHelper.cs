@@ -18,6 +18,7 @@ public static class NetDeviceIoctlHelper
             LinuxConstants.SIOCGIFADDR => HandleGetIfAddr(engine, arg, snapshot),
             LinuxConstants.SIOCGIFNETMASK => HandleGetIfNetmask(engine, arg, snapshot),
             LinuxConstants.SIOCGIFMTU => HandleGetIfMtu(engine, arg, snapshot),
+            LinuxConstants.SIOCGIFINDEX => HandleGetIfIndex(engine, arg, snapshot),
             LinuxConstants.SIOCGIFTXQLEN => HandleGetIfTxQueueLen(engine, arg, snapshot),
             _ => -(int)Errno.ENOTTY
         };
@@ -110,6 +111,24 @@ public static class NetDeviceIoctlHelper
 
         BinaryPrimitives.WriteInt32LittleEndian(ifreq.AsSpan(16, 4), dev.Mtu);
         return engine.CopyToUser(arg, ifreq) ? 0 : -(int)Errno.EFAULT;
+    }
+
+    private static int HandleGetIfIndex(Engine engine, uint arg, NetDeviceSetSnapshot snapshot)
+    {
+        var ifreq = new byte[32];
+        if (!engine.CopyFromUser(arg, ifreq))
+            return -(int)Errno.EFAULT;
+        var name = ReadName(ifreq);
+        for (var i = 0; i < snapshot.Devices.Count; i++)
+        {
+            if (string.Equals(snapshot.Devices[i].Name, name, StringComparison.Ordinal))
+            {
+                BinaryPrimitives.WriteInt32LittleEndian(ifreq.AsSpan(16, 4), snapshot.Devices[i].IfIndex);
+                return engine.CopyToUser(arg, ifreq) ? 0 : -(int)Errno.EFAULT;
+            }
+        }
+
+        return -(int)Errno.ENODEV;
     }
 
     private static int HandleGetIfTxQueueLen(Engine engine, uint arg, NetDeviceSetSnapshot snapshot)

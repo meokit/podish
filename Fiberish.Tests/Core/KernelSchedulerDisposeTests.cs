@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Threading.Channels;
 using Fiberish.Core;
@@ -7,19 +8,24 @@ namespace Fiberish.Tests.Core;
 
 public class KernelSchedulerDisposeTests
 {
+    private static readonly FieldInfo PreciseWaitField =
+        typeof(KernelScheduler).GetField("_preciseWait", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+    private static readonly FieldInfo WakeSignalField =
+        typeof(KernelScheduler).GetField("_wakeSignal", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+    private static readonly FieldInfo WaitingForWakeField =
+        typeof(KernelScheduler).GetField("_waitingForWake", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
     [Fact]
     public void IdleSchedulers_DoNotAllocatePreciseWaitHandles()
     {
-        var eventField = typeof(KernelScheduler).GetField("_preciseWakeEvent",
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var timerField = typeof(KernelScheduler).GetField("_preciseTimerHandle",
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
         for (var i = 0; i < 200; i++)
         {
             using var scheduler = new KernelScheduler();
             scheduler.WakeUp();
-            Assert.Null(eventField.GetValue(scheduler));
-            Assert.Null(timerField.GetValue(scheduler));
+            var preciseWait = (HighResolutionWait)PreciseWaitField.GetValue(scheduler)!;
+            Assert.False(preciseWait.HasTimer);
         }
     }
 
@@ -33,16 +39,14 @@ public class KernelSchedulerDisposeTests
         using var continuePublishing = new ManualResetEventSlim();
         field.SetValue(scheduler, new PausedChannel(channel, publishing, continuePublishing));
         var wait = typeof(KernelScheduler).GetMethod("WaitForEvent",
-            BindingFlags.NonPublic | BindingFlags.Instance)!.CreateDelegate<Action<int>>(scheduler);
-        var waiters = typeof(KernelScheduler).GetField("_eventWaiters",
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
+            BindingFlags.NonPublic | BindingFlags.Instance)!.CreateDelegate<Action<double, bool>>(scheduler);
         var waker = Task.Run(scheduler.WakeUp);
         Task? waiter = null;
         try
         {
             Assert.True(publishing.Wait(TimeSpan.FromSeconds(5)));
-            waiter = Task.Factory.StartNew(() => wait(5000), TaskCreationOptions.LongRunning);
-            Assert.True(SpinWait.SpinUntil(() => (int)waiters.GetValue(scheduler)! != 0,
+            waiter = Task.Factory.StartNew(() => wait(5000, false), TaskCreationOptions.LongRunning);
+            Assert.True(SpinWait.SpinUntil(() => (int)WaitingForWakeField.GetValue(scheduler)! != 0,
                 TimeSpan.FromSeconds(5)));
             continuePublishing.Set();
             await waker.WaitAsync(TimeSpan.FromSeconds(2));
@@ -53,8 +57,7 @@ public class KernelSchedulerDisposeTests
         {
             continuePublishing.Set();
             // Release the waiter even when the assertion fails, before disposing its handles.
-            ((ManualResetEventSlim)typeof(KernelScheduler).GetField("_wakeEvent",
-                BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(scheduler)!).Set();
+            ((AutoResetEvent)WakeSignalField.GetValue(scheduler)!).Set();
             await waker;
             if (waiter != null) await waiter;
         }
@@ -66,15 +69,13 @@ public class KernelSchedulerDisposeTests
         using var scheduler = new KernelScheduler();
         var enqueue = typeof(KernelScheduler).GetMethod("EnqueueWake",
             BindingFlags.NonPublic | BindingFlags.Instance)!.CreateDelegate<Action>(scheduler);
-        var waiters = typeof(KernelScheduler).GetField("_eventWaiters",
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
 
-        waiters.SetValue(scheduler, 0);
+        WaitingForWakeField.SetValue(scheduler, 0);
         for (var i = 0; i < 1000; i++)
             enqueue();
         Assert.Equal(0, scheduler.WakeSetCount);
 
-        waiters.SetValue(scheduler, 1);
+        WaitingForWakeField.SetValue(scheduler, 1);
         enqueue();
         Assert.Equal(1, scheduler.WakeSetCount);
     }
@@ -84,19 +85,17 @@ public class KernelSchedulerDisposeTests
     {
         using var scheduler = new KernelScheduler();
         var wait = typeof(KernelScheduler).GetMethod("WaitForEvent",
-            BindingFlags.NonPublic | BindingFlags.Instance)!.CreateDelegate<Action<int>>(scheduler);
+            BindingFlags.NonPublic | BindingFlags.Instance)!.CreateDelegate<Action<double, bool>>(scheduler);
         var enqueue = typeof(KernelScheduler).GetMethod("EnqueueWake",
             BindingFlags.NonPublic | BindingFlags.Instance)!.CreateDelegate<Action>(scheduler);
-        var waiters = typeof(KernelScheduler).GetField("_eventWaiters",
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
 
-        var started = new Task(() => wait(5000), TaskCreationOptions.LongRunning);
+        var started = new Task(() => wait(5000, false), TaskCreationOptions.LongRunning);
         started.Start();
 
         var deadline = DateTime.UtcNow.AddSeconds(2);
-        while ((int)waiters.GetValue(scheduler)! == 0 && DateTime.UtcNow < deadline)
+        while ((int)WaitingForWakeField.GetValue(scheduler)! == 0 && DateTime.UtcNow < deadline)
             await Task.Delay(1);
-        Assert.NotEqual(0, (int)waiters.GetValue(scheduler)!);
+        Assert.NotEqual(0, (int)WaitingForWakeField.GetValue(scheduler)!);
 
         enqueue();
         await started.WaitAsync(TimeSpan.FromSeconds(2));
@@ -109,16 +108,17 @@ public class KernelSchedulerDisposeTests
             return;
 
         var scheduler = new KernelScheduler();
-        var precise = typeof(KernelScheduler).GetMethod("TryWaitPrecise",
-            BindingFlags.NonPublic | BindingFlags.Instance)!.CreateDelegate<Func<int, bool>>(scheduler);
-        Assert.True(precise(1));
+        var wakeSignal = (AutoResetEvent)WakeSignalField.GetValue(scheduler)!;
+        var preciseWait = (HighResolutionWait)PreciseWaitField.GetValue(scheduler)!;
+        var wakeHandle = wakeSignal.SafeWaitHandle;
 
-        var preciseEvent = (ManualResetEvent)typeof(KernelScheduler).GetField("_preciseWakeEvent",
-            BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(scheduler)!;
-        Assert.False(preciseEvent.SafeWaitHandle.IsClosed);
+        _ = preciseWait.Wait(wakeSignal, 1.0, false);
+        Assert.True(preciseWait.HasTimer);
+        Assert.False(wakeHandle.IsClosed);
 
         scheduler.Dispose();
-        Assert.True(preciseEvent.SafeWaitHandle.IsClosed);
+        Assert.True(wakeHandle.IsClosed);
+        Assert.False(preciseWait.HasTimer);
 
         var enqueue = typeof(KernelScheduler).GetMethod("EnqueueWake",
             BindingFlags.NonPublic | BindingFlags.Instance)!.CreateDelegate<Action>(scheduler);
@@ -126,16 +126,19 @@ public class KernelSchedulerDisposeTests
     }
 
     [Fact]
-    public void FirstPreciseWait_RechecksWorkPublishedBeforeEventCreation()
+    public void WaitForEvent_RechecksPublishedWorkBeforeArmingTimer()
     {
         if (!OperatingSystem.IsWindows()) return;
         using var scheduler = new KernelScheduler();
         scheduler.WakeUp();
-        var precise = typeof(KernelScheduler).GetMethod("TryWaitPrecise",
-            BindingFlags.NonPublic | BindingFlags.Instance)!.CreateDelegate<Func<int, bool>>(scheduler);
-        var elapsed = System.Diagnostics.Stopwatch.StartNew();
-        Assert.True(precise(2000));
+        var wait = typeof(KernelScheduler).GetMethod("WaitForEvent",
+            BindingFlags.NonPublic | BindingFlags.Instance)!.CreateDelegate<Action<double, bool>>(scheduler);
+        var preciseWait = (HighResolutionWait)PreciseWaitField.GetValue(scheduler)!;
+
+        var elapsed = Stopwatch.StartNew();
+        wait(2000, false);
         Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(1));
+        Assert.False(preciseWait.HasTimer);
     }
 
     private sealed class PausedChannel : Channel<SchedulerWorkItem>

@@ -355,10 +355,8 @@ public sealed class SilkInode : MappingBackedInode, IHostMappedCacheDropper
     private MappedFilePageCache? _mappedPageCache;
     private DateTime _atime = DateTime.Now;
     private DateTime _ctime = DateTime.Now;
-    private LinuxFile? _exclusiveHolder;
     private int _metadataDirty;
     private int _metadataMutationSuppressionDepth;
-    private int _lockType;
     private int _mode;
     private DateTime _mtime = DateTime.Now;
     private uint _rdev;
@@ -821,62 +819,6 @@ public sealed class SilkInode : MappingBackedInode, IHostMappedCacheDropper
 
             target = _symlinkData;
             return 0;
-        }
-    }
-
-    public override int Flock(LinuxFile linuxFile, int operation)
-    {
-        var nonBlock = (operation & LinuxConstants.LOCK_NB) != 0;
-        var op = operation & ~LinuxConstants.LOCK_NB;
-
-        lock (_flockGate)
-        {
-            while (true)
-            {
-                if (op == LinuxConstants.LOCK_UN)
-                {
-                    if (_exclusiveHolder == linuxFile) _exclusiveHolder = null;
-                    _sharedHolders.Remove(linuxFile);
-                    if (_exclusiveHolder == null && _sharedHolders.Count == 0) _lockType = 0;
-                    Monitor.PulseAll(_flockGate);
-                    return 0;
-                }
-
-                var canAcquire = false;
-                if (op == LinuxConstants.LOCK_SH)
-                {
-                    if (_exclusiveHolder == null || _exclusiveHolder == linuxFile) canAcquire = true;
-                }
-                else if (op == LinuxConstants.LOCK_EX)
-                {
-                    if (_lockType == 0) canAcquire = true;
-                    else if (_exclusiveHolder == linuxFile) canAcquire = true;
-                    else if (_sharedHolders.Count == 1 && _sharedHolders.Contains(linuxFile) &&
-                             _exclusiveHolder == null)
-                        canAcquire = true;
-                }
-
-                if (canAcquire)
-                {
-                    if (op == LinuxConstants.LOCK_SH)
-                    {
-                        if (_exclusiveHolder == linuxFile) _exclusiveHolder = null;
-                        _sharedHolders.Add(linuxFile);
-                        _lockType = 1;
-                    }
-                    else
-                    {
-                        _sharedHolders.Remove(linuxFile);
-                        _exclusiveHolder = linuxFile;
-                        _lockType = 2;
-                    }
-
-                    return 0;
-                }
-
-                if (nonBlock) return -(int)Errno.EAGAIN;
-                Monitor.Wait(_flockGate);
-            }
         }
     }
 

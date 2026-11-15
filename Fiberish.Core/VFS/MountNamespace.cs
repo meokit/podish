@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Fiberish.Syscalls;
 
 namespace Fiberish.VFS;
 
@@ -19,6 +20,20 @@ public class MountNamespace
     ///     List of all Mount objects in this namespace.
     /// </summary>
     private readonly List<Mount> _mounts = [];
+    private readonly Lock _gate = new();
+    private readonly PollNotificationQueue _pollNotifications = new();
+    private long _event;
+
+    internal long Event => Interlocked.Read(ref _event);
+
+    internal IDisposable SubscribePoll(IReadyDispatcher dispatcher, Func<short, bool> notify, short interests,
+        bool exclusive) => _pollNotifications.Subscribe(dispatcher, notify, interests, exclusive);
+
+    internal void NotifyChanged()
+    {
+        lock (_gate) Interlocked.Increment(ref _event);
+        _pollNotifications.Signal(PollEvents.POLLPRI | PollEvents.POLLERR);
+    }
 
     private int _refCount = 1;
     private Mount? _rootMount;
@@ -53,7 +68,7 @@ public class MountNamespace
         {
             using (EnterNamespaceScope())
             {
-                return _mounts;
+                return _mounts.ToArray();
             }
         }
     }
@@ -74,9 +89,9 @@ public class MountNamespace
         }
     }
 
-    private static NamespaceScope EnterNamespaceScope([CallerMemberName] string? caller = null)
+    private Lock.Scope EnterNamespaceScope([CallerMemberName] string? caller = null)
     {
-        return default;
+        return _gate.EnterScope();
     }
 
     /// <summary>
@@ -94,7 +109,9 @@ public class MountNamespace
 
             _mounts.Add(mount);
             _mountHash[(parent, mountPoint)] = mount;
+            Interlocked.Increment(ref _event);
         }
+        _pollNotifications.Signal(PollEvents.POLLPRI | PollEvents.POLLERR);
     }
 
     /// <summary>
@@ -104,6 +121,7 @@ public class MountNamespace
     {
         using (EnterNamespaceScope())
         {
+            if (!_mounts.Contains(mount)) return;
             var parent = mount.Parent;
             var mountPoint = mount.MountPoint;
 
@@ -115,7 +133,9 @@ public class MountNamespace
 
             // Drop mount namespace ownership.
             mount.Put();
+            Interlocked.Increment(ref _event);
         }
+        _pollNotifications.Signal(PollEvents.POLLPRI | PollEvents.POLLERR);
     }
 
     /// <summary>
@@ -221,14 +241,75 @@ public class MountNamespace
         {
             var target = BuildMountPath(mount);
             var parentId = mount.Parent?.Id ?? 0;
+            var dev = mount.Root?.Inode?.Dev ?? mount.Root?.SuperBlock?.Dev ?? 0;
             yield return new MountInfoEntry(
                 mount.Id,
                 parentId,
+                dev,
                 mount.Source ?? "none",
                 target,
                 mount.FsType ?? "unknown",
                 mount.Options ?? "rw");
         }
+    }
+
+    internal IEnumerable<MountInfoEntry> GetMountInfoEntries(PathLocation root)
+    {
+        lock (_gate)
+        {
+            var entries = new List<MountInfoEntry>();
+            foreach (var mount in _mounts)
+            {
+                var containsRoot = ReferenceEquals(mount, root.Mount);
+                var target = "/";
+                if (!containsRoot && !TryBuildPath(new PathLocation(mount.Root, mount), root, out target)) continue;
+                entries.Add(new MountInfoEntry(mount.Id, mount.Parent?.Id ?? 0,
+                    mount.Root.Inode?.Dev ?? mount.SB.Dev,
+                    mount.Source ?? "none", target, mount.FsType ?? "unknown", mount.Options ?? "rw",
+                    BuildFileSystemRoot(containsRoot ? root.Dentry! : mount.Root, mount.SB.Root)));
+            }
+            return entries;
+        }
+    }
+
+    private static string BuildFileSystemRoot(Dentry dentry, Dentry fsRoot)
+    {
+        var parts = new List<string>();
+        while (!ReferenceEquals(dentry, fsRoot))
+        {
+            if (dentry.Parent == null || ReferenceEquals(dentry.Parent, dentry)) break;
+            parts.Add(dentry.Name.ToString());
+            dentry = dentry.Parent;
+        }
+        parts.Reverse();
+        return "/" + string.Join('/', parts);
+    }
+
+    private static bool TryBuildPath(PathLocation location, PathLocation root, out string path)
+    {
+        var parts = new List<string>();
+        var dentry = location.Dentry;
+        var mount = location.Mount;
+        while (dentry != null)
+        {
+            if (ReferenceEquals(dentry, root.Dentry) && ReferenceEquals(mount, root.Mount))
+            {
+                parts.Reverse();
+                path = "/" + string.Join('/', parts);
+                return true;
+            }
+            if (mount != null && ReferenceEquals(dentry, mount.Root) && mount.Parent != null)
+            {
+                dentry = mount.MountPoint;
+                mount = mount.Parent;
+                continue;
+            }
+            if (dentry.Parent == null || ReferenceEquals(dentry.Parent, dentry)) break;
+            parts.Add(dentry.Name.ToString());
+            dentry = dentry.Parent;
+        }
+        path = string.Empty;
+        return false; // Outside the root captured at open, not a path relative to the new caller.
     }
 
     public void Get()
@@ -259,15 +340,11 @@ public class MountNamespace
     public readonly record struct MountInfoEntry(
         long Id,
         long ParentId,
+        uint Dev,
         string Source,
         string Target,
         string FsType,
-        string Options);
+        string Options,
+        string Root = "/");
 
-    private readonly struct NamespaceScope : IDisposable
-    {
-        public void Dispose()
-        {
-        }
-    }
 }

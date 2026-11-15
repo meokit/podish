@@ -101,6 +101,9 @@ public partial class SyscallManager
         if (targetFile == null) return -(int)Errno.EBADF;
 
         if (epFile == targetFile) return -(int)Errno.EINVAL; // Cannot watch itself
+        if (targetFile is MountFile) return -(int)Errno.EBADF;
+        if ((targetFile.Flags & FileFlags.O_PATH) != 0) return -(int)Errno.EBADF;
+        if (!IsEpollSupportedInode(targetFile.OpenedInode)) return -(int)Errno.EPERM;
 
         uint events = 0;
         ulong data = 0;
@@ -119,6 +122,11 @@ public partial class SyscallManager
         }
 
         return epollInode.Ctl(task, op, fd, targetFile, events, data);
+    }
+
+    private static bool IsEpollSupportedInode(Inode? inode)
+    {
+        return inode is IPollNotificationSource or IDispatcherWaitSource or ITaskWaitSource or InotifyInode or TimerFdInode;
     }
 
     private ValueTask<int> SysEpollWait(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) =>

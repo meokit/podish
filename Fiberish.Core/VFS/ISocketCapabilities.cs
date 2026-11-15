@@ -60,6 +60,11 @@ public interface ISocketUserBufferOps
         int maxBytes = -1);
 }
 
+public interface ISocketStreamInfo
+{
+    bool IsStreamSocket { get; }
+}
+
 public interface ISocketOptionOps
 {
     int SetSocketOption(LinuxFile file, FiberTask task, int level, int optname, ReadOnlySpan<byte> optval);

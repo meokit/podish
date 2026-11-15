@@ -1397,8 +1397,17 @@ public partial class FiberTask
         BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(8, 4), info.Code);
 
         // Payload (e.g. Pid/Uid for SI_USER, or TimerId for POSIX Timer)
-        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(12, 4), info.Pid);
-        BinaryPrimitives.WriteUInt32LittleEndian(siBuf.AsSpan(16, 4), info.Uid);
+        if (info.HasFdPayload)
+        {
+            // SIGPOLL/SIGIO: si_band (long, 4 bytes) then si_fd.
+            BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(12, 4), (int)info.Band);
+            BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(16, 4), info.Fd);
+        }
+        else
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(12, 4), info.Pid);
+            BinaryPrimitives.WriteUInt32LittleEndian(siBuf.AsSpan(16, 4), info.Uid);
+        }
 
         // Write the unionized payload value (e.g. SIGRT)
         BinaryPrimitives.WriteUInt64LittleEndian(siBuf.AsSpan(20, 8), info.Value);
@@ -2122,7 +2131,7 @@ public partial class FiberTask
                     }
                 }
 
-                var newSys = Process.Syscalls.Clone(newMem, cloneFiles, cloneFs);
+                var newSys = Process.Syscalls.Clone(newMem, cloneFiles, cloneFs, this);
                 var targetParent = cloneParent
                     ? CommonKernel.GetProcess(Process.PPID) ?? Process
                     : Process;
@@ -2154,6 +2163,8 @@ public partial class FiberTask
 
             var newTid = cloneThread ? CommonKernel.AllocateTaskId() : newProc.TGID;
             child = new FiberTask(newTid, newProc, newCpu, CommonKernel);
+            if (cloneThread)
+                Process.Syscalls.InheritTaskFileDescriptors(this, child, cloneFiles);
             child.SignalMask = SignalMask;
             child.PendingSignals = 0;
             child.InterruptingSignal = null;
@@ -2591,7 +2602,7 @@ public partial class FiberTask
         if (!TryResolveSocketSyscall(task, syscallNr, syscallArg1, out var fd, out var kind))
             return false;
 
-        var file = task.Process.Syscalls.GetFD(fd);
+        var file = task.Process.Syscalls.GetFD(fd, task);
         if (file?.OpenedInode is not HostSocketInode hostSocket)
             return false;
 

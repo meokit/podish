@@ -73,6 +73,8 @@ public class OverlaySuperBlock : SuperBlock
     private readonly Dictionary<InodeKey, OverlayFileLockState> _flocks = new();
     private readonly object _flockSync = new();
     private readonly Dictionary<OverlayNodeStateKey, OverlayNodeState> _nodeStates = new();
+    private readonly Dictionary<InodeKey, FileLockState> _fileLocks = new();
+    private readonly Lock _fileLocksGate = new();
     private readonly HashSet<InodeKey> _opaqueDirs = new();
     private readonly List<SuperBlock> _ownedBackings = [];
     private readonly Dictionary<InodeKey, FsNameSet> _whiteouts = new();
@@ -97,6 +99,28 @@ public class OverlaySuperBlock : SuperBlock
     public SuperBlock LowerSB { get; }
     public SuperBlock UpperSB { get; }
     public IOverlayWhiteoutCodec WhiteoutCodec { get; }
+
+    internal FileLockState? GetFileLockState(OverlayNodeState state, bool create)
+    {
+        lock (_fileLocksGate)
+        {
+            var lower = state.LowerDentries.FirstOrDefault()?.Inode;
+            var upper = state.UpperDentry?.Inode;
+            var locks = state.FileLocks;
+            if (locks == null && lower != null)
+                _fileLocks.TryGetValue(new InodeKey(lower.Dev, lower.Ino), out locks);
+            if (locks == null && upper != null)
+                _fileLocks.TryGetValue(new InodeKey(upper.Dev, upper.Ino), out locks);
+            if (locks == null && !create) return null;
+            locks ??= new FileLockState();
+            state.FileLocks = locks;
+            // Register both identities after copy-up, so a new upper-only alias
+            // (e.g. a hardlink after dentry eviction) finds the original locks.
+            if (lower != null) _fileLocks[new InodeKey(lower.Dev, lower.Ino)] = locks;
+            if (upper != null) _fileLocks[new InodeKey(upper.Dev, upper.Ino)] = locks;
+            return locks;
+        }
+    }
 
     public OverlayNodeState GetOrCreateNodeState(IReadOnlyList<Dentry>? lowers, Dentry? upper)
     {
@@ -304,6 +328,7 @@ public readonly record struct OverlayNodeStateKey(int Identity)
 
 public sealed class OverlayNodeState
 {
+    internal FileLockState? FileLocks { get; set; }
     private readonly HashSet<OverlayInode> _aliases = [];
     private readonly FsNameMap<OverlayNodeState> _children = new();
     private List<DirectoryEntry>? _cachedEntries;
@@ -826,6 +851,7 @@ public class OverlayInode : MappingBackedInode
             if (existing != null)
             {
                 _state.SetUpperDentry(existing);
+                _ = GetFileLockState(false);
                 PromoteStateBackings(existing.Inode, linuxFile);
                 return 0;
             }
@@ -834,6 +860,7 @@ public class OverlayInode : MappingBackedInode
             if (mkdirRc < 0)
                 return mkdirRc;
             _state.SetUpperDentry(upperDentry);
+            _ = GetFileLockState(false);
             PromoteStateBackings(UpperInode, linuxFile);
             return 0;
         }
@@ -865,6 +892,7 @@ public class OverlayInode : MappingBackedInode
                 if (existing != null)
                 {
                     _state.SetUpperDentry(existing);
+                    _ = GetFileLockState(false);
                     PromoteStateBackings(existing.Inode, linuxFile);
                     return 0;
                 }
@@ -922,6 +950,7 @@ public class OverlayInode : MappingBackedInode
         }
 
         _state.SetUpperDentry(upperDentry);
+        _ = GetFileLockState(false);
         PromoteStateBackings(UpperInode, linuxFile);
         return 0;
     }
@@ -1115,6 +1144,7 @@ public class OverlayInode : MappingBackedInode
             return ensureRc;
 
         _state.SetUpperDentry(upperDir);
+        _ = GetFileLockState(false);
         return 0;
     }
 
@@ -1154,17 +1184,11 @@ public class OverlayInode : MappingBackedInode
         return 0;
     }
 
-    public override int Flock(LinuxFile linuxFile, int operation)
+    protected override FileLockState? GetFileLockState(bool create)
     {
-        if (UpperInode != null) return UpperInode.Flock(linuxFile, operation);
-        if (LowerInode != null)
-        {
-            var rc = LowerInode.Flock(linuxFile, operation);
-            if (rc != -(int)Errno.ENOSYS) return rc;
-            return ((OverlaySuperBlock)SuperBlock).Flock(new InodeKey(Dev, Ino), linuxFile, operation);
-        }
-
-        return -(int)Errno.ENOSYS;
+        // Aliases share the logical overlay node, not the current backing inode.
+        // Copy-up must neither discard locks nor expose them to another overlay.
+        return ((OverlaySuperBlock)SuperBlock).GetFileLockState(_state, create);
     }
 
     public override int Readlink(out byte[]? target)

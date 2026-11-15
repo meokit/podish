@@ -11,6 +11,75 @@ namespace Fiberish.Tests.Syscalls;
 
 public class PipeTests
 {
+    [Theory]
+    [InlineData(false, -(int)Errno.EPERM)]
+    [InlineData(true, -(int)Errno.ENOMEM)]
+    public void Pipe_HugeResizeChecksPrivilegeBeforeManagedAllocationLimit(bool privileged, int expected)
+    {
+        using var env = new TestEnv();
+        var pipe = new PipeInode(env.Scheduler!) { SuperBlock = env.SyscallManager.MemfdSuperBlock };
+        using var read = new LinuxFile(new Dentry("pipe", pipe, null, pipe.SuperBlock), FileFlags.O_RDONLY, null);
+        Assert.Equal(expected, pipe.SetPipeSize(int.MaxValue, privileged));
+        Assert.Equal(65536, pipe.Capacity);
+    }
+
+    [Theory]
+    [InlineData(4096, 131072)]
+    [InlineData(131072, 4096)]
+    public async Task Pipe_ResizeWrappedUnreadData_PeekAndReadPreserveOrder(int oldCapacity, int newCapacity)
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x10000);
+        Assert.Equal(0, await CallSysPipe(env, 0x10000));
+        var (rfd, wfd) = env.ReadPipeFds(0x10000);
+        var readFile = env.SyscallManager.GetFD(rfd)!;
+        var writeFile = env.SyscallManager.GetFD(wfd)!;
+        var pipe = Assert.IsType<PipeInode>(readFile.OpenedInode);
+        Assert.Equal(oldCapacity, pipe.TrySetCapacity(oldCapacity));
+        var initial = Enumerable.Range(0, oldCapacity - 100).Select(i => (byte)(i % 251)).ToArray();
+        Assert.Equal(initial.Length, pipe.WriteFromHost(env.Task, writeFile, initial, 0));
+        Assert.Equal(oldCapacity - 500,
+            pipe.ReadToHost(env.Task, readFile, new byte[oldCapacity - 500], 0));
+        var wrapped = Enumerable.Range(0, 1000).Select(i => (byte)(i % 173)).ToArray();
+        Assert.Equal(wrapped.Length, pipe.WriteFromHost(env.Task, writeFile, wrapped, 0));
+        var expected = initial.Skip(oldCapacity - 500).Concat(wrapped).ToArray();
+        var actual = new byte[expected.Length];
+        Assert.Equal(actual.Length, pipe.Peek(actual));
+        Assert.Equal(expected, actual);
+        Assert.Equal(newCapacity, pipe.TrySetCapacity(newCapacity));
+        Assert.Equal(actual.Length, pipe.Peek(actual));
+        Assert.Equal(expected, actual);
+        Assert.Equal(actual.Length, pipe.ReadToHost(env.Task, readFile, actual, 0));
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public async Task Pipe_ResizeGrowsBackingStorageAndPreservesUnreadWrappedData()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x10000);
+        Assert.Equal(0, await CallSysPipe(env, 0x10000));
+        var (rfd, wfd) = env.ReadPipeFds(0x10000);
+        var readFile = env.SyscallManager.GetFD(rfd)!;
+        var writeFile = env.SyscallManager.GetFD(wfd)!;
+        var pipe = Assert.IsType<PipeInode>(readFile.OpenedInode);
+        var original = Enumerable.Range(0, 60000).Select(i => (byte)(i % 251)).ToArray();
+        Assert.Equal(original.Length, pipe.WriteFromHost(env.Task, writeFile, original, 0));
+        Assert.Equal(50000, pipe.ReadToHost(env.Task, readFile, new byte[50000], 0));
+        Assert.Equal(131072, pipe.TrySetCapacity(100000));
+        var extra = Enumerable.Range(0, 90000).Select(i => (byte)(i % 173)).ToArray();
+        Assert.Equal(extra.Length, pipe.WriteFromHost(env.Task, writeFile, extra, 0));
+        Assert.Equal(-(int)Errno.EBUSY, pipe.TrySetCapacity(4096));
+        var readBack = new byte[100000];
+        Assert.Equal(readBack.Length, pipe.ReadToHost(env.Task, readFile, readBack, 0));
+        Assert.Equal(original.AsSpan(50000).ToArray(), readBack.AsSpan(0, 10000).ToArray());
+        Assert.Equal(extra, readBack.AsSpan(10000).ToArray());
+        Assert.Equal(16384, pipe.TrySetCapacity(12289));
+        Assert.Equal(4096, pipe.TrySetCapacity(0));
+        // Linux checks CAP_SYS_RESOURCE/pipe-max-size before attempting a huge allocation.
+        Assert.Equal(-(int)Errno.EPERM, pipe.TrySetCapacity(int.MaxValue));
+    }
+
     private static readonly FieldInfo AsyncWaitQueuePoolField =
         typeof(KernelScheduler).GetField("_asyncWaitQueuePool", BindingFlags.Instance | BindingFlags.NonPublic)!;
 

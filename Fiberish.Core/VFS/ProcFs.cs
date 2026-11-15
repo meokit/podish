@@ -144,9 +144,9 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
         var childName = FsName.FromBytes(name);
         Dentry? created = null;
         if (name.SequenceEqual("mounts"u8))
-            created = CreateFile(root, childName, 0x124, ctx => ProcFsManager.GenerateMounts(ctx.SyscallManager));
+            created = new Dentry(childName, new ProcMountsFileInode(_sb, null, false), root, _sb);
         else if (name.SequenceEqual("mountinfo"u8))
-            created = CreateFile(root, childName, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager));
+            created = new Dentry(childName, new ProcMountsFileInode(_sb, null, true), root, _sb);
         else if (name.SequenceEqual("cpuinfo"u8))
             created = CreateFile(root, childName, 0x124, _ => ProcFsManager.GenerateCpuInfo());
         else if (name.SequenceEqual("meminfo"u8))
@@ -341,10 +341,9 @@ file sealed class ProcPidDirectoryInode : Inode, IContextualDirectoryInode
                 return p == null ? string.Empty : $"{p.TimerSlackNs}\n";
             }, HandleProcTimerSlackWrite);
         else if (name.SequenceEqual("mountinfo"u8))
-            created = CreateFile(dir, childName, 0x124, ctx => ProcFsManager.GenerateMountInfo(ctx.SyscallManager));
+            created = new Dentry(childName, new ProcMountsFileInode(_sb, _pid, true), dir, _sb);
         else if (name.SequenceEqual("mounts"u8))
-            created = CreateFile(dir, childName, 0x124, _ =>
-                ProcFsManager.GenerateMounts(task.CommonKernel.GetProcess(_pid)?.Syscalls));
+            created = new Dentry(childName, new ProcMountsFileInode(_sb, _pid, false), dir, _sb);
         else if (name.SequenceEqual("maps"u8))
             created = CreateFile(dir, childName, 0x124, _ =>
                 ProcFsManager.GenerateMaps(task.CommonKernel.GetProcess(_pid)));
@@ -1269,6 +1268,28 @@ file sealed class ProcSysRootInode : Inode
                     }
                     return -(int)Errno.EINVAL;
                 });
+        else if (_kind == ProcSysKind.Fs && name.SequenceEqual("lease-break-time"u8))
+            created = CreateFile(dir, childName, _ => "45\n", 0x1A4,
+                (_, data, _) =>
+                {
+                    var text = FsEncoding.DecodeUtf8Lossy(data).Trim();
+                    return int.TryParse(text, out _) ? (int)data.Length : -(int)Errno.EINVAL;
+                });
+        else if (_kind == ProcSysKind.Fs && name.SequenceEqual("pipe-max-size"u8))
+            created = CreateFile(dir, childName, ctx => $"{ctx.Scheduler?.PipeMaxSize ?? 1048576}\n", 0x1A4,
+                (ctx, data, _) =>
+                {
+                    if (ctx.Process != null && ctx.Process.EUID != 0)
+                        return -(int)Errno.EACCES;
+                    var text = FsEncoding.DecodeUtf8Lossy(data).Trim();
+                    if (int.TryParse(text, out var val) && val >= 4096)
+                    {
+                        if (ctx.Scheduler != null)
+                            ctx.Scheduler.PipeMaxSize = val;
+                        return (int)data.Length;
+                    }
+                    return -(int)Errno.EINVAL;
+                });
 
         if (created != null)
             dir.CacheChild(created, "ProcSysRootInode.Lookup");
@@ -1293,6 +1314,8 @@ file sealed class ProcSysRootInode : Inode
                 entries.Add(new DirectoryEntry { Name = "net", Ino = 0, Type = InodeType.Directory });
                 break;
             case ProcSysKind.Fs:
+                entries.Add(new DirectoryEntry { Name = "pipe-max-size", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "lease-break-time", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "nr_open", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "inotify", Ino = 0, Type = InodeType.Directory });
                 break;
@@ -1440,6 +1463,123 @@ file sealed class ProcSelfSymlinkInode : Inode, IContextualSymlinkInode
         ArraySegment<Iovec> iovs, long offset, int flags)
     {
         return WriteVViaHostBuffer(engine, file, task, iovs, offset, flags);
+    }
+}
+
+file sealed class ProcMountsFileInode : Inode, ITaskContextBoundInode, IPollNotificationSource, ITaskWaitSource
+{
+    private readonly int? _pid;
+    private readonly bool _mountInfo;
+
+    internal ProcMountsFileInode(ProcSuperBlock sb, int? pid, bool mountInfo)
+    {
+        SuperBlock = sb;
+        Ino = sb.AllocateIno();
+        Type = InodeType.File;
+        Mode = 0x124;
+        SetInitialLinkCount(1, "ProcMountsFileInode.ctor");
+        _pid = pid;
+        _mountInfo = mountInfo;
+    }
+
+    public void BindTaskContext(LinuxFile file, FiberTask task)
+    {
+        if (file.PrivateData is MountsOpenState) return;
+        var target = _pid.HasValue ? task.CommonKernel.GetProcess(_pid.Value) : task.Process;
+        if (target == null) throw new FileNotFoundException("The procfs target process no longer exists.");
+        file.PrivateData = new MountsOpenState(target.Syscalls.MountNamespace, target.Syscalls.ProcessRoot);
+    }
+
+    public override short Poll(LinuxFile file, short events)
+    {
+        if (file.PrivateData is not MountsOpenState state) return PollEvents.POLLERR;
+        lock (state.Gate)
+        {
+            var current = state.Namespace.Event;
+            // Linux mounts_poll consumes the sequence, independently of reads and seq_lseek.
+            var changed = Interlocked.Exchange(ref state.SeenEvent, current) != current;
+            return (short)(PollEvents.POLLIN | PollEvents.POLLRDNORM |
+                (changed ? PollEvents.POLLPRI | PollEvents.POLLERR : 0));
+        }
+    }
+
+    IDisposable IPollNotificationSource.SubscribePoll(LinuxFile file, IReadyDispatcher dispatcher,
+        Func<short, bool> notify, short interests, bool exclusive)
+    {
+        var state = (MountsOpenState)file.PrivateData!;
+        return state.Namespace.SubscribePoll(dispatcher, notify,
+            (short)(interests | PollEvents.POLLERR | PollEvents.POLLHUP), exclusive);
+    }
+
+    public bool RegisterWait(LinuxFile file, FiberTask task, Action callback, short events) =>
+        RegisterWaitHandle(file, task, callback, events) != null;
+
+    public IDisposable? RegisterWaitHandle(LinuxFile file, FiberTask task, Action callback, short events)
+    {
+        var state = (MountsOpenState)file.PrivateData!;
+        var dispatcher = new SchedulerReadyDispatcher(task.CommonKernel);
+        var registration = ((IPollNotificationSource)this).SubscribePoll(file, dispatcher, _ =>
+        {
+            callback();
+            return false;
+        }, events, false);
+        // Close the scan/subscribe window without calling the consuming Poll operation again.
+        if (Interlocked.Read(ref state.SeenEvent) != state.Namespace.Event) dispatcher.Post(callback);
+        return registration;
+    }
+
+    public override int ReadToHost(FiberTask? task, LinuxFile file, Span<byte> buffer, long offset)
+    {
+        if (offset < 0) return -(int)Errno.EINVAL;
+        if (buffer.IsEmpty) return 0;
+        if (file.PrivateData is not MountsOpenState state) return -(int)Errno.EIO;
+        if (offset == 0 || state.Content == null)
+            state.Content = Encoding.UTF8.GetBytes(_mountInfo
+                ? ProcFsManager.GenerateMountInfo(state.Namespace, state.Root)
+                : ProcFsManager.GenerateMounts(state.Namespace, state.Root));
+        if (offset >= state.Content.Length) return 0;
+        var count = Math.Min(buffer.Length, state.Content.Length - (int)offset);
+        state.Content.AsSpan((int)offset, count).CopyTo(buffer);
+        return count;
+    }
+
+    public override ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task,
+        ArraySegment<Iovec> iovs, long offset, int flags) =>
+        ReadVViaHostBuffer(engine, file, task, iovs, offset, flags);
+
+    public override void Release(LinuxFile file)
+    {
+        if (file.PrivateData is MountsOpenState state) state.Dispose();
+        file.PrivateData = null;
+    }
+
+    private sealed class MountsOpenState : IDisposable
+    {
+        internal readonly MountNamespace Namespace;
+        internal readonly PathLocation Root;
+        internal readonly Lock Gate = new();
+        internal long SeenEvent;
+        internal byte[]? Content;
+        private int _disposed;
+
+        internal MountsOpenState(MountNamespace ns, PathLocation root)
+        {
+            Namespace = ns.Share();
+            Root = root;
+            root.Mount?.Get();
+            root.Dentry?.Get("proc-mounts:open");
+            root.Dentry?.Inode?.AcquireRef(InodeRefKind.PathPin, "proc-mounts:open");
+            SeenEvent = ns.Event;
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            Root.Dentry?.Inode?.ReleaseRef(InodeRefKind.PathPin, "proc-mounts:close");
+            Root.Dentry?.Put("proc-mounts:close");
+            Root.Mount?.Put();
+            Namespace.Put();
+        }
     }
 }
 

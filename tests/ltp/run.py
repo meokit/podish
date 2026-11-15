@@ -138,16 +138,24 @@ def execute(command, cwd, env, timeout):
 
 def source_state():
     """Identify local code as well as committed code; artifacts are git-ignored."""
-    revision = subprocess.check_output(["git", "-C", str(REPO), "rev-parse", "HEAD"], text=True).strip()
-    diff = subprocess.check_output(["git", "-C", str(REPO), "diff", "--binary", "HEAD"], text=True)
+    revision = subprocess.check_output(["git", "-C", str(REPO), "rev-parse", "HEAD"],
+                                       encoding="utf-8", errors="replace").strip()
+    # Hash the raw diff: replacement decoding can map DIFFERENT changes to the same digest.
+    diff = subprocess.check_output(["git", "-C", str(REPO), "diff", "--binary", "HEAD"])
     untracked = subprocess.check_output(
-        ["git", "-C", str(REPO), "ls-files", "--others", "--exclude-standard"], text=True).splitlines()
-    digest = hashlib.sha256(diff.encode("utf-8"))
+        ["git", "-C", str(REPO), "ls-files", "--others", "--exclude-standard", "-z"],
+        encoding="utf-8").split("\0")
+    untracked = [name for name in untracked if name]
+    digest = hashlib.sha256(diff)
     for name in sorted(untracked):
         path = REPO / name
         if path.is_file():
-            digest.update(name.encode("utf-8"))
-            digest.update(path.read_bytes())
+            name_bytes = name.encode("utf-8")
+            contents = path.read_bytes()
+            digest.update(len(name_bytes).to_bytes(8, "little"))
+            digest.update(name_bytes)
+            digest.update(len(contents).to_bytes(8, "little"))
+            digest.update(contents)
     return {"revision": revision, "dirty": bool(diff or untracked), "changesSha256": digest.hexdigest()}
 
 

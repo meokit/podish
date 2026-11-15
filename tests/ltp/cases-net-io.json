@@ -1,0 +1,373 @@
+{
+  "schemaVersion": 1,
+  "description": "Network sockets (AF_INET/AF_UNIX stream & datagram, sockopt, send/recv, shutdown) and I/O multiplexing (epoll, poll/ppoll, select/pselect).",
+  "requiresRoot": true,
+  "podishFsBackend": "tmpfs",
+  "cases": [
+    {
+      "name": "socket02",
+      "directory": "socket",
+      "group": "socket"
+    },
+    {
+      "name": "socketpair02",
+      "directory": "socketpair",
+      "group": "socket"
+    },
+    {
+      "name": "bind01",
+      "directory": "bind",
+      "group": "socket"
+    },
+    {
+      "name": "bind02",
+      "directory": "bind",
+      "group": "socket"
+    },
+    {
+      "name": "bind03",
+      "directory": "bind",
+      "group": "socket"
+    },
+    {
+      "name": "bind04",
+      "directory": "bind",
+      "group": "socket"
+    },
+    {
+      "name": "bind05",
+      "directory": "bind",
+      "group": "socket"
+    },
+    {
+      "name": "listen01",
+      "directory": "listen",
+      "group": "socket"
+    },
+    {
+      "name": "accept01",
+      "directory": "accept",
+      "group": "socket"
+    },
+    {
+      "name": "accept02",
+      "directory": "accept",
+      "group": "socket"
+    },
+    {
+      "name": "accept03",
+      "directory": "accept",
+      "group": "socket"
+    },
+    {
+      "name": "accept4_01",
+      "directory": "accept4",
+      "group": "socket"
+    },
+    {
+      "name": "connect01",
+      "directory": "connect",
+      "group": "socket"
+    },
+    {
+      "name": "connect03",
+      "directory": "connect",
+      "group": "socket"
+    },
+    {
+      "name": "getsockname01",
+      "directory": "getsockname",
+      "group": "socket"
+    },
+    {
+      "name": "getpeername01",
+      "directory": "getpeername",
+      "group": "socket"
+    },
+    {
+      "name": "setsockopt01",
+      "directory": "setsockopt",
+      "group": "sockopt"
+    },
+    {
+      "name": "setsockopt03",
+      "directory": "setsockopt",
+      "group": "sockopt"
+    },
+    {
+      "name": "setsockopt04",
+      "directory": "setsockopt",
+      "group": "sockopt"
+    },
+    {
+      "name": "setsockopt05",
+      "directory": "setsockopt",
+      "group": "sockopt"
+    },
+    {
+      "name": "setsockopt08",
+      "directory": "setsockopt",
+      "group": "sockopt"
+    },
+    {
+      "name": "getsockopt01",
+      "directory": "getsockopt",
+      "group": "sockopt"
+    },
+    {
+      "name": "getsockopt02",
+      "directory": "getsockopt",
+      "group": "sockopt"
+    },
+    {
+      "name": "send01",
+      "directory": "send",
+      "group": "data"
+    },
+    {
+      "name": "send02",
+      "directory": "send",
+      "group": "data"
+    },
+    {
+      "name": "sendto01",
+      "directory": "sendto",
+      "group": "data"
+    },
+    {
+      "name": "sendto02",
+      "directory": "sendto",
+      "group": "data"
+    },
+    {
+      "name": "sendmsg01",
+      "directory": "sendmsg",
+      "group": "data"
+    },
+    {
+      "name": "sendmsg02",
+      "directory": "sendmsg",
+      "group": "data"
+    },
+    {
+      "name": "recv01",
+      "directory": "recv",
+      "group": "data"
+    },
+    {
+      "name": "recvfrom01",
+      "directory": "recvfrom",
+      "group": "data"
+    },
+    {
+      "name": "recvmsg01",
+      "directory": "recvmsg",
+      "group": "data"
+    },
+    {
+      "name": "shutdown01",
+      "directory": "shutdown",
+      "group": "socket"
+    },
+    {
+      "name": "shutdown02",
+      "directory": "shutdown",
+      "group": "socket"
+    },
+    {
+      "name": "epoll_create03",
+      "directory": "epoll_create",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_ctl01",
+      "directory": "epoll_ctl",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_ctl02",
+      "directory": "epoll_ctl",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_ctl03",
+      "directory": "epoll_ctl",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_ctl04",
+      "directory": "epoll_ctl",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_ctl05",
+      "directory": "epoll_ctl",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_ctl06",
+      "directory": "epoll_ctl",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_ctl07",
+      "directory": "epoll_ctl",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait01",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait02",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait03",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait04",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait05",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait06",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait07",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait08",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait09",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait10",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait11",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait12",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait13",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait14",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait15",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_wait16",
+      "directory": "epoll_wait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_pwait01",
+      "directory": "epoll_pwait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_pwait02",
+      "directory": "epoll_pwait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_pwait03",
+      "directory": "epoll_pwait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_pwait04",
+      "directory": "epoll_pwait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_pwait05",
+      "directory": "epoll_pwait",
+      "group": "epoll"
+    },
+    {
+      "name": "epoll_pwait06",
+      "directory": "epoll_pwait",
+      "group": "epoll"
+    },
+    {
+      "name": "poll02",
+      "directory": "poll",
+      "group": "poll-select"
+    },
+    {
+      "name": "poll03",
+      "directory": "poll",
+      "group": "poll-select"
+    },
+    {
+      "name": "poll04",
+      "directory": "poll",
+      "group": "poll-select"
+    },
+    {
+      "name": "ppoll01",
+      "directory": "ppoll",
+      "group": "poll-select"
+    },
+    {
+      "name": "select03",
+      "directory": "select",
+      "group": "poll-select"
+    },
+    {
+      "name": "select04",
+      "directory": "select",
+      "group": "poll-select"
+    },
+    {
+      "name": "pselect01",
+      "directory": "pselect",
+      "group": "poll-select"
+    },
+    {
+      "name": "pselect02",
+      "directory": "pselect",
+      "group": "poll-select"
+    },
+    {
+      "name": "pselect03",
+      "directory": "pselect",
+      "group": "poll-select"
+    }
+  ]
+}

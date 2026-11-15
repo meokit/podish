@@ -9,11 +9,14 @@ internal static class SchedulerBenchmarks
     private static readonly MethodInfo WaitForEventMethod =
         typeof(KernelScheduler).GetMethod("WaitForEvent", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
-    private static readonly MethodInfo TryWaitPreciseMethod =
-        typeof(KernelScheduler).GetMethod("TryWaitPrecise", BindingFlags.NonPublic | BindingFlags.Instance)!;
+    private static readonly FieldInfo WaitingForWakeField =
+        typeof(KernelScheduler).GetField("_waitingForWake", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
-    private static readonly FieldInfo EventWaitersField =
-        typeof(KernelScheduler).GetField("_eventWaiters", BindingFlags.NonPublic | BindingFlags.Instance)!;
+    private static readonly FieldInfo WakeSignalField =
+        typeof(KernelScheduler).GetField("_wakeSignal", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+    private static readonly FieldInfo PreciseWaitField =
+        typeof(KernelScheduler).GetField("_preciseWait", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
     public static IEnumerable<IThroughputBenchmark> CreateThroughput()
     {
@@ -52,7 +55,7 @@ internal static class SchedulerBenchmarks
                 RunOneMicroseconds = scope =>
                 {
                     var sw = Stopwatch.StartNew();
-                    if (!scope.Wait(captured)) throw new InvalidOperationException("precise wait failed");
+                    scope.Wait(captured);
                     sw.Stop();
                     return sw.Elapsed.TotalMicroseconds;
                 },
@@ -64,12 +67,12 @@ internal static class SchedulerBenchmarks
     private static double MeasureWakeLatency()
     {
         using var scheduler = new KernelScheduler();
-        var wait = WaitForEventMethod.CreateDelegate<Action<int>>(scheduler);
-        var thread = new Thread(() => wait(5000)) { IsBackground = true };
+        var wait = WaitForEventMethod.CreateDelegate<Action<double, bool>>(scheduler);
+        var thread = new Thread(() => wait(5000, false)) { IsBackground = true };
         thread.Start();
         try
         {
-            if (!SpinWait.SpinUntil(() => (int)EventWaitersField.GetValue(scheduler)! != 0, 5000))
+            if (!SpinWait.SpinUntil(() => (int)WaitingForWakeField.GetValue(scheduler)! != 0, 5000))
                 throw new TimeoutException("scheduler waiter did not start");
 
             var sw = Stopwatch.StartNew();
@@ -99,17 +102,19 @@ internal static class SchedulerBenchmarks
 
     private sealed class PreciseScope : IDisposable
     {
-        private readonly Func<int, bool> _wait;
+        private readonly AutoResetEvent _wake;
+        private readonly HighResolutionWait _preciseWait;
 
         public PreciseScope(int _)
         {
             Scheduler = new KernelScheduler();
-            _wait = TryWaitPreciseMethod.CreateDelegate<Func<int, bool>>(Scheduler);
+            _wake = (AutoResetEvent)WakeSignalField.GetValue(Scheduler)!;
+            _preciseWait = (HighResolutionWait)PreciseWaitField.GetValue(Scheduler)!;
         }
 
         public KernelScheduler Scheduler { get; }
 
-        public bool Wait(int timeoutMs) => _wait(timeoutMs);
+        public void Wait(int timeoutMs) => _preciseWait.Wait(_wake, timeoutMs, false);
 
         public void Dispose() => Scheduler.Dispose();
     }

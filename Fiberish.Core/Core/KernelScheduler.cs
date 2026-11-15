@@ -50,43 +50,20 @@ public class KernelScheduler : IDisposable
     private readonly KernelSyncContext _synchronizationContext;
     private readonly Dictionary<int, FiberTask> _tasks = [];
     private readonly TimeWheel _timerSystem = new();
-    private readonly ManualResetEventSlim _wakeEvent = new(false);
-    private ManualResetEvent? _preciseWakeEvent;
+    private readonly AutoResetEvent _wakeSignal = new(false);
+    private readonly HighResolutionWait _preciseWait = new();
     private int _engineInitReaperEnabled;
     private int _initPid;
     private bool _isInsideRunLoop = true;
     private int _nextTaskId;
     private int _ownerThreadId;
+    private long _runStartTick;
+    private int _waitingForWake;
 
     private long _foregroundLatencyGraceUntilTick;
     private int _wakePending;
-    private int _eventWaiters;
     private long _wakeSetCount;
-
-    private const int PreciseWaitMaxMs = 2000;
-    private const uint CreateWaitableTimerHighResolution = 0x00000002;
-    private const uint TimerAllAccess = 0x1F0003;
-    private const uint WaitObject0 = 0;
-    private const uint WaitFailed = 0xFFFFFFFF;
-    private const uint WaitInfinite = 0xFFFFFFFF;
-
-    private SafeWaitHandle? _preciseTimerHandle;
-    private IntPtr[]? _preciseWaitHandles;
-    private bool _preciseWaitUnavailable;
     private volatile bool _disposed;
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern IntPtr CreateWaitableTimerExW(IntPtr attributes, string? name, uint flags, uint access);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool SetWaitableTimer(IntPtr handle, ref long dueTime, int period,
-        IntPtr completionRoutine, IntPtr argument, bool resume);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CancelWaitableTimer(IntPtr handle);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint WaitForMultipleObjects(uint count, IntPtr[] handles, bool waitAll, uint timeoutMs);
 
     public KernelScheduler()
     {
@@ -94,21 +71,15 @@ public class KernelScheduler : IDisposable
     }
 
     /// <summary>
-    ///     Releases the native high-resolution timer. Managed events keep their own
-    ///     SafeWaitHandle finalizers, but the waitable timer is a raw kernel object and
-    ///     would otherwise survive every container teardown until process exit. Call this
-    ///     after <see cref="Run" /> returns, when no wait is in progress on the scheduler thread.
+    ///     Releases the wake event and the native high-resolution timer. Call this after
+    ///     <see cref="Run" /> returns, when no wait is in progress on the scheduler thread.
     /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        _preciseWaitUnavailable = true;
-        _preciseWaitHandles = null;
-        _preciseTimerHandle?.Dispose();
-        _preciseTimerHandle = null;
-        _preciseWakeEvent?.Dispose();
-        _wakeEvent.Dispose();
+        _preciseWait.Dispose();
+        _wakeSignal.Dispose();
         GC.SuppressFinalize(this);
     }
 
@@ -122,6 +93,7 @@ public class KernelScheduler : IDisposable
     /// <summary>Number of native wait-handle Set calls issued by the scheduler.</summary>
     internal long WakeSetCount => Interlocked.Read(ref _wakeSetCount);
     internal TimeWheel TimerSystem => _timerSystem;
+    public int PipeMaxSize { get; set; } = 1048576;
     public bool Running { get; set; } = true;
 
     public ILoggerFactory LoggerFactory { get; set; } = new NullLoggerFactory();
@@ -280,6 +252,9 @@ public class KernelScheduler : IDisposable
         task.Process.AccumulateExitedThreadCpuTime(cpu);
         task.CancelAsyncSyscallForRetirement();
         task.BeginTaskRetirement();
+        if (task.Process.Threads.Count == 1)
+            task.Process.Syscalls?.ReleasePosixLocksForProcess(task.Process);
+        task.Process.Syscalls?.ReleaseTaskFileDescriptors(task);
         task.Process.Syscalls?.UnregisterEngine(task.CPU);
         task.Status = FiberTaskStatus.Terminated;
         task.ExecutionMode = TaskExecutionMode.Terminated;
@@ -788,17 +763,25 @@ public class KernelScheduler : IDisposable
 
     public Timer ScheduleTimer(long delayMs, Action callback)
     {
-        var beforeTick = _timerSystem.CurrentTick;
-        var targetTick = _timerSystem.CurrentTick + delayMs;
-        // Adjust for any lag between CurrentTick and real time
-        var realNow = _sw.ElapsedMilliseconds;
-        if (targetTick < realNow + delayMs) targetTick = realNow + delayMs;
+        // Map the request onto the scheduler tick axis. Advance() fires the timers of tick T
+        // when it moves the clock past T, so the tick that wakes at ceil(deadline) is one less.
+        // This never fires before the requested delay and does not lose a whole millisecond.
+        var elapsedMs = _sw.Elapsed.TotalMilliseconds;
+        var targetTick = _runStartTick + (long)Math.Ceiling(elapsedMs + delayMs) - 1;
+        // Keep the wheel's own tick axis authoritative too: a test or a caller may advance
+        // the timer wheel ahead of wall time, and the delay must still be honoured there.
+        var wheelTick = _timerSystem.CurrentTick + delayMs;
+        if (targetTick < wheelTick) targetTick = wheelTick;
+        // A timer placed in the tick that Advance() is currently firing would sit in an
+        // already-drained slot and only fire on the next wheel wrap (256 ticks later).
+        var earliestTick = _timerSystem.CurrentTick + 1;
+        if (targetTick < earliestTick) targetTick = earliestTick;
 
         if (Logger.IsEnabled(LogLevel.Trace))
         {
             Logger.LogTrace(
-                "[Scheduler] ScheduleTimer delayMs={DelayMs} currentTick={CurrentTick} realNow={RealNow} targetTick={TargetTick}",
-                delayMs, beforeTick, realNow, targetTick);
+                "[Scheduler] ScheduleTimer delayMs={DelayMs} currentTick={CurrentTick} elapsedMs={ElapsedMs} targetTick={TargetTick}",
+                delayMs, _timerSystem.CurrentTick, elapsedMs, targetTick);
         }
         var timer = _timerSystem.ScheduleAbsolute(targetTick, callback);
         // If this timer is the new earliest one, or if we were sleeping, we should wake up
@@ -827,6 +810,7 @@ public class KernelScheduler : IDisposable
         var exitReason = "running=false";
 
         var startTick = _timerSystem.CurrentTick;
+        _runStartTick = startTick;
         var winTimerActive = false;
         if (OperatingSystem.IsWindows())
         {
@@ -877,32 +861,37 @@ public class KernelScheduler : IDisposable
                     }
 
                     // Calculate wait time
-                    long waitTime = -1;
+                    var infiniteWait = false;
+                    var waitTimeMs = 0.0;
                     if (_timerSystem.HasTimers)
                     {
                         var nextTick = _timerSystem.GetNextExpiration();
                         if (nextTick.HasValue)
                         {
-                            waitTime = nextTick.Value - _timerSystem.CurrentTick;
-                            if (waitTime < 0) waitTime = 0;
+                            // Advance() fires a tick's timers while it moves the clock past that
+                            // tick, so the wakeup lands on the wall-clock instant at which the
+                            // next tick begins. Waiting for that exact instant avoids both the
+                            // system timer tick (15.6ms) and a whole missed millisecond.
+                            var elapsedMs = _sw.Elapsed.TotalMilliseconds;
+                            waitTimeMs = nextTick.Value - _runStartTick + 1 - elapsedMs;
+                            if (waitTimeMs <= 0)
+                                // Timer belongs to the tick that is already current: wait for
+                                // the next millisecond boundary so Advance() can move past it.
+                                waitTimeMs = Math.Max(0.05, Math.Floor(elapsedMs) + 1 - elapsedMs);
                         }
                     }
                     else
                     {
                         // If anyWaiting is true, we must wait indefinitely for external wakeups.
-                        if (anyWaiting) waitTime = -1;
+                        if (anyWaiting) infiniteWait = true;
                         else
                             // Should not happen if anyAlive is true but runQueue empty (ValidateSchedulerState handles Ready tasks)
                             // Maybe just yield?
-                            waitTime = 0;
+                            waitTimeMs = 0.5;
                     }
 
-                    // If waitTime is 0 (timer due now), we must wait at least 1ms to let wall clock advance
-                    // otherwise we busy loop until _sw.ElapsedMilliseconds increases.
-                    if (waitTime == 0) waitTime = 1;
-
                     _isInsideRunLoop = false;
-                    WaitForEvent((int)waitTime);
+                    WaitForEvent(waitTimeMs, infiniteWait);
                     continue;
                 }
 
@@ -1035,9 +1024,6 @@ public class KernelScheduler : IDisposable
         var drained = false;
         drained |= DrainEventChannelWithBudget(_urgentEvents, int.MaxValue);
         drained |= DrainEventChannelWithBudget(_events, maxItems);
-
-        if (drained && !_urgentEvents.Reader.TryPeek(out _) && !_events.Reader.TryPeek(out _))
-            _wakeEvent.Reset();
         return drained;
     }
 
@@ -1073,40 +1059,31 @@ public class KernelScheduler : IDisposable
         return false;
     }
 
-    private void WaitForEvent(int timeoutMs)
+    private void WaitForEvent(double timeoutMs, bool infinite)
     {
         if (_disposed)
             return;
 
         if (OperatingSystem.IsBrowser() && BrowserSchedulerHostBridge.IsConfigured)
         {
-            BrowserSchedulerHostBridge.WaitForEvent(timeoutMs);
-            _wakeEvent.Reset();
+            BrowserSchedulerHostBridge.WaitForEvent(infinite ? -1 : (int)Math.Max(1, Math.Ceiling(timeoutMs)));
             return;
         }
 
-        // Publish the waiter flag, then recheck the work queues. A waker publishes work
-        // before reading this flag, so either it sees the waiter and sets the event, or
-        // the recheck below sees the work and skips the wait.
-        Interlocked.Increment(ref _eventWaiters);
+        // Publish the waiter flag before re-checking the work queues. A waker
+        // publishes work before reading this flag, so either it sees the waiter
+        // and sets the event, or the recheck below sees the work and skips the wait.
+        Volatile.Write(ref _waitingForWake, 1);
         try
         {
             if (HasPendingWakeWork())
-            {
-                _wakeEvent.Reset();
-                _preciseWakeEvent?.Reset();
-                return;
-            }
-
-            if (timeoutMs > 0 && timeoutMs <= PreciseWaitMaxMs && TryWaitPrecise(timeoutMs))
                 return;
 
-            _wakeEvent.Wait(timeoutMs);
-            _wakeEvent.Reset();
+            _preciseWait.Wait(_wakeSignal, timeoutMs, infinite);
         }
         finally
         {
-            Interlocked.Decrement(ref _eventWaiters);
+            Volatile.Write(ref _waitingForWake, 0);
         }
     }
 
@@ -1114,79 +1091,6 @@ public class KernelScheduler : IDisposable
     {
         return _foregroundRunQueue.Count > 0 || _runQueue.Count > 0 ||
                _events.Reader.TryPeek(out _) || _urgentEvents.Reader.TryPeek(out _);
-    }
-
-    /// <summary>
-    ///     Waits for either the deadline or an external wake using a Windows
-    ///     high-resolution waitable timer. The legacy ManualResetEventSlim path quantizes
-    ///     short waits by several milliseconds even with timeBeginPeriod(1), which made
-    ///     guest nanosleep land outside Linux timer tolerances.
-    /// </summary>
-    private bool TryWaitPrecise(int timeoutMs)
-    {
-        if (!OperatingSystem.IsWindows() || _preciseWaitUnavailable || _disposed)
-            return false;
-
-        if (_preciseTimerHandle == null)
-        {
-            var rawHandle = CreateWaitableTimerExW(IntPtr.Zero, null,
-                CreateWaitableTimerHighResolution, TimerAllAccess);
-            if (rawHandle == IntPtr.Zero)
-            {
-                _preciseWaitUnavailable = true;
-                return false;
-            }
-
-            _preciseTimerHandle = new SafeWaitHandle(rawHandle, ownsHandle: true);
-        }
-
-        var timerHandle = _preciseTimerHandle;
-        if (timerHandle.IsInvalid || timerHandle.IsClosed)
-        {
-            _preciseWaitUnavailable = true;
-            return false;
-        }
-
-        var rawTimerHandle = timerHandle.DangerousGetHandle();
-        var dueTime = -(long)timeoutMs * 10_000L; // 100ns units, negative = relative
-        if (!SetWaitableTimer(rawTimerHandle, ref dueTime, 0, IntPtr.Zero, IntPtr.Zero, false))
-        {
-            _preciseWaitUnavailable = true;
-            return false;
-        }
-
-        // Only Windows precise waits need this native event. A wake can arrive before
-        // its first creation; recheck published work after making the event visible.
-        var wakeEvent = _preciseWakeEvent;
-        if (wakeEvent == null)
-        {
-            wakeEvent = new ManualResetEvent(false);
-            Volatile.Write(ref _preciseWakeEvent, wakeEvent);
-        }
-        if (HasPendingWakeWork())
-        {
-            CancelWaitableTimer(rawTimerHandle);
-            return true;
-        }
-
-        var handles = _preciseWaitHandles ??=
-        [
-            rawTimerHandle,
-            wakeEvent.SafeWaitHandle.DangerousGetHandle()
-        ];
-        var result = WaitForMultipleObjects(2, handles, false, WaitInfinite);
-        if (result == WaitFailed)
-        {
-            _preciseWaitUnavailable = true;
-            return false;
-        }
-
-        if (result != WaitObject0)
-            CancelWaitableTimer(rawTimerHandle);
-
-        wakeEvent.Reset();
-        _wakeEvent.Reset();
-        return true;
     }
 
     private void ExecuteEvent(SchedulerWorkItem item)
@@ -1252,31 +1156,28 @@ public class KernelScheduler : IDisposable
         if (_disposed)
             return;
 
-        // Publish before observing the waiter flag. In particular WakeUp() itself has
-        // no earlier work item: checking the flag first can lose its only notification.
+        if (OperatingSystem.IsBrowser() && BrowserSchedulerHostBridge.IsConfigured)
+            BrowserSchedulerHostBridge.SignalSchedulerWake();
+
+        // Publish pending work before reading the waiter flag: a waiter that already peeked
+        // past this item must observe the flag and be roused by the OS signal below.
         if (Interlocked.Exchange(ref _wakePending, 1) == 0)
             _events.Writer.TryWrite(SchedulerWorkItem.WakeScheduler());
 
         // Only enter the kernel when a waiter is actually blocked. The waiter rechecks
-        // the work queues after publishing _eventWaiters, so work published before this
-        // read cannot be lost even when no Set is issued.
-        if (Volatile.Read(ref _eventWaiters) != 0)
+        // the work queues after publishing _waitingForWake, so work published before
+        // this read cannot be lost even when no Set is issued.
+        if (Volatile.Read(ref _waitingForWake) != 0)
         {
             Interlocked.Increment(ref _wakeSetCount);
-            // Signal both wait primitives. A wake racing with Dispose may observe the
-            // handle after it was closed; the scheduler is already gone in that case.
             try
             {
-                _wakeEvent.Set();
-                Volatile.Read(ref _preciseWakeEvent)?.Set();
+                _wakeSignal.Set();
             }
             catch (ObjectDisposedException)
             {
             }
         }
-
-        if (OperatingSystem.IsBrowser() && BrowserSchedulerHostBridge.IsConfigured)
-            BrowserSchedulerHostBridge.SignalSchedulerWake();
     }
 
     private (bool anyAlive, bool anyWaiting) GetTaskLiveness()

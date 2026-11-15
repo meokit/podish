@@ -2,6 +2,7 @@ using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
+using Fiberish.VFS;
 
 namespace Fiberish.Syscalls;
 
@@ -179,9 +180,14 @@ public static class ProcFsManager
     public static string GenerateMounts(SyscallManager? sm)
     {
         if (sm == null) return string.Empty;
+        return GenerateMounts(sm.MountNamespace, sm.ProcessRoot);
+    }
+
+    internal static string GenerateMounts(MountNamespace mountNamespace, PathLocation root)
+    {
         var sb = new StringBuilder();
-        foreach (var (source, target, fsType, options) in sm.MountInfos)
-            sb.Append($"{source} {target} {fsType} {options} 0 0\n");
+        foreach (var m in mountNamespace.GetMountInfoEntries(root))
+            sb.Append($"{EscapeMountField(m.Source)} {EscapeMountField(m.Target)} {m.FsType} {m.Options} 0 0\n");
         return sb.ToString();
     }
 
@@ -272,19 +278,31 @@ public static class ProcFsManager
     public static string GenerateMountInfo(SyscallManager? sm)
     {
         if (sm == null) return string.Empty;
+        return GenerateMountInfo(sm.MountNamespace, sm.ProcessRoot);
+    }
 
+    internal static string GenerateMountInfo(MountNamespace mountNamespace, PathLocation root)
+    {
         var sb = new StringBuilder();
-        foreach (var m in sm.MountInfoEntries)
+        foreach (var m in mountNamespace.GetMountInfoEntries(root))
         {
             // Minimal mountinfo format:
             // id parent major:minor root mountpoint options - fstype source superopts
             var mountPoint = EscapeMountField(m.Target);
             var source = EscapeMountField(m.Source);
             var options = string.IsNullOrWhiteSpace(m.Options) ? "rw,relatime" : m.Options;
+            var devMajor = (m.Dev >> 8) & 0xFF;
+            var devMinor = m.Dev & 0xFF;
             sb.Append(m.Id)
                 .Append(' ')
                 .Append(m.ParentId)
-                .Append(" 0:0 / ")
+                .Append(' ')
+                .Append(devMajor)
+                .Append(':')
+                .Append(devMinor)
+                .Append(' ')
+                .Append(EscapeMountField(m.Root))
+                .Append(' ')
                 .Append(mountPoint)
                 .Append(' ')
                 .Append(options)

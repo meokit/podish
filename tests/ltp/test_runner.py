@@ -18,6 +18,32 @@ def summary(passed=1, failed=0, broken=0, skipped=0, warnings=0):
             f"skipped  {skipped}\nwarnings {warnings}\n")
 
 
+class SourceStateTests(unittest.TestCase):
+    def test_diff_digest_preserves_invalid_utf8_bytes(self):
+        digests = []
+        for diff in (b"\xff", b"\xfe"):
+            with patch.object(run.subprocess, "check_output", side_effect=["pinned\n", diff, ""]):
+                state = run.source_state()
+            self.assertTrue(state["dirty"])
+            digests.append(state["changesSha256"])
+        self.assertNotEqual(*digests)
+
+    def test_untracked_quoted_and_multiline_names_are_hashed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            name = 'space and "quote".txt' if sys.platform != "win32" else "space and unicode-文.txt"
+            (root / name).write_bytes(b"first")
+            with patch.object(run, "REPO", root), patch.object(run.subprocess, "check_output",
+                    side_effect=["pinned\n", b"", name + "\0"]):
+                first = run.source_state()
+            (root / name).write_bytes(b"second")
+            with patch.object(run, "REPO", root), patch.object(run.subprocess, "check_output",
+                    side_effect=["pinned\n", b"", name + "\0"]):
+                second = run.source_state()
+            self.assertTrue(first["dirty"])
+            self.assertNotEqual(first["changesSha256"], second["changesSha256"])
+
+
 class ResultTests(unittest.TestCase):
     def test_pass_requires_assertions_and_summary(self):
         self.assertEqual(classify(0, summary())[0], "PASS")
@@ -123,8 +149,15 @@ class BackendRoutingTests(unittest.TestCase):
             self.commands.append((command, cwd, timeout))
             return (0, "", False, .01) if "import" in command else (code, text or summary(), False, .01)
 
+        def fake_git_output(command, **kwargs):
+            if "diff" in command:
+                return b""
+            if "ls-files" in command:
+                return ""
+            return "pinned\n"
+
         with patch.object(sys, "argv", argv), patch.object(run, "execute", side_effect=fake_execute), \
-                patch.object(run.subprocess, "check_output", return_value="pinned\n"), \
+                patch.object(run.subprocess, "check_output", side_effect=fake_git_output), \
                 redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             return run.main()
 
