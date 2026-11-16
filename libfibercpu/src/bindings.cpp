@@ -707,6 +707,13 @@ int X86_EngineAttachMmu(EmuState* state, X86_MmuHandle* mmu) {
     return state->mmu.attach_core(mmu->core, true) ? 1 : 0;
 }
 
+// execve commits a new address space from inside a running guest syscall. The
+// old core is kept referenced until the current native run unwinds.
+int X86_EngineAttachMmuForExec(EmuState* state, X86_MmuHandle* mmu) {
+    if (!state || !mmu || !mmu->core) return 0;
+    return state->mmu.attach_core_for_exec(mmu->core, true) ? 1 : 0;
+}
+
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
     auto host_page_bases = state->mmu.collect_host_page_bases_for_guest_range(addr, size);
     state->mmu.munmap(addr, size);

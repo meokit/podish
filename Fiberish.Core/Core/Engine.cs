@@ -341,7 +341,7 @@ public class Engine : IDisposable
         AttachOwnedMmuHandle(handle);
     }
 
-    internal void AttachOwnedMmuHandle(MmuHandle mmu)
+    internal void AttachOwnedMmuHandle(MmuHandle mmu, bool forExec = false)
     {
         AssertSchedulerThread();
         ArgumentNullException.ThrowIfNull(mmu);
@@ -353,13 +353,17 @@ public class Engine : IDisposable
         try
         {
             nextOwned = mmu.AddRefHandle();
-            var attached = X86Native.EngineAttachMmu(State, mmu.DangerousMmuHandle());
+            var attached = forExec
+                ? X86Native.EngineAttachMmuForExec(State, mmu.DangerousMmuHandle())
+                : X86Native.EngineAttachMmu(State, mmu.DangerousMmuHandle());
             if (attached == 0)
                 throw new InvalidOperationException("Failed to attach MMU to engine.");
 
             if (!TrySwapCurrentMmu(nextOwned, out var swapError))
             {
-                var rollbackRc = X86Native.EngineAttachMmu(State, previous.DangerousMmuHandle());
+                var rollbackRc = forExec
+                    ? X86Native.EngineAttachMmuForExec(State, previous.DangerousMmuHandle())
+                    : X86Native.EngineAttachMmu(State, previous.DangerousMmuHandle());
                 if (rollbackRc == 0)
                     throw new InvalidOperationException(
                         $"MMU attach swap failed and rollback failed: {swapError}");

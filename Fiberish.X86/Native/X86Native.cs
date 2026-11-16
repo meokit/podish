@@ -229,6 +229,10 @@ public unsafe partial class X86Native
     [SuppressGCTransition]
     public static partial int EngineAttachMmu(IntPtr state, IntPtr mmuHandle);
 
+    [LibraryImport(LibName, EntryPoint = "X86_EngineAttachMmuForExec")]
+    [SuppressGCTransition]
+    public static partial int EngineAttachMmuForExec(IntPtr state, IntPtr mmuHandle);
+
     [LibraryImport(LibName, EntryPoint = "X86_ResetAllCodeCache")]
     public static partial void ResetAllCodeCache(IntPtr state);
 

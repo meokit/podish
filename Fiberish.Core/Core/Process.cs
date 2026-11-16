@@ -683,7 +683,7 @@ public class Process
             ExecCommitFaultForTesting?.Invoke(ExecCommitCheckpoint.BeforeAddressSpaceSwitch);
             ProcessAddressSpaceSync.RebindEngineAddressSpace(oldMem, stagedMem, oldEngine);
             oldMem.ReleaseSharedRef(oldEngine);
-            stagedMem.AddressSpaceHandle!.AttachEngine(oldEngine);
+            stagedMem.AddressSpaceHandle!.AttachEngine(oldEngine, forExec: true);
 
             Mem = stagedMem;
             Syscalls.Mem = stagedMem;

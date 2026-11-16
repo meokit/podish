@@ -99,6 +99,8 @@ uintptr_t X86_MmuGetIdentity(X86_MmuHandle* mmu);
 X86_MmuHandle* X86_EngineGetMmu(EmuState* state);
 X86_MmuHandle* X86_EngineDetachMmu(EmuState* state);
 int X86_EngineAttachMmu(EmuState* state, X86_MmuHandle* mmu);
+// Attach during an execve commit (allowed while guest execution is active).
+int X86_EngineAttachMmuForExec(EmuState* state, X86_MmuHandle* mmu);
 
 // Execution
 // Returns zero if a host callback attempts to re-enter native execution.

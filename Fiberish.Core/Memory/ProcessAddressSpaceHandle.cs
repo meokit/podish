@@ -33,10 +33,10 @@ internal sealed class ProcessAddressSpaceHandle : IDisposable
         return new ProcessAddressSpaceHandle(engine.CaptureCurrentMmuHandle());
     }
 
-    internal void AttachEngine(Engine engine)
+    internal void AttachEngine(Engine engine, bool forExec = false)
     {
         ArgumentNullException.ThrowIfNull(engine);
-        engine.AttachOwnedMmuHandle(_mmu);
+        engine.AttachOwnedMmuHandle(_mmu, forExec);
     }
 
     internal bool IsAttachedTo(Engine engine)

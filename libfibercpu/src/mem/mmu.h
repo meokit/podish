@@ -665,6 +665,10 @@ public:
 
 private:
     MmuCore* core_ = nullptr;
+    // Core that an execve replaced while a native run was active. Kept alive
+    // (and marked non-executing) until that run unwinds, so translated blocks
+    // still on the host stack remain readable.
+    MmuCore* deferred_exec_core_ = nullptr;
     SoftTlb tlb;
     struct BlockLookupCacheEntry {
         uintptr_t host_page_base = 0;
@@ -1334,7 +1338,34 @@ public:
     [[nodiscard]] bool code_cache_flush_pending() const { return code_cache().pending_flush; }
 
     void begin_execution() { core_->execution_active = true; }
-    void end_execution() { core_->execution_active = false; }
+    void end_execution() {
+        if (core_) core_->execution_active = false;
+        if (deferred_exec_core_ != nullptr) {
+            // The run that borrowed the old core's blocks is over.
+            deferred_exec_core_->execution_active = false;
+            release_core(deferred_exec_core_);
+            deferred_exec_core_ = nullptr;
+        }
+    }
+
+    // execve replaces the address space from inside a guest syscall. The old
+    // core cannot be released yet because the currently executing block chain
+    // still lives in its code cache, so keep it referenced until end_execution.
+    [[nodiscard]] bool attach_core_for_exec(MmuCore* core, bool add_ref = true) {
+        if (core == nullptr) return false;
+        if (core == core_) return true;
+
+        MmuCore* old_core = core_;
+        if (old_core != nullptr && old_core->execution_active) {
+            retain_core(old_core);
+            if (deferred_exec_core_ != nullptr && deferred_exec_core_ != old_core)
+                release_core(deferred_exec_core_);
+            deferred_exec_core_ = old_core;
+        }
+
+        bind_core(core, add_ref);
+        return true;
+    }
 
     void flush_pending_code_cache_before_run() {
         auto& cache = code_cache();
