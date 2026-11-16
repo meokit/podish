@@ -1533,12 +1533,14 @@ public partial class SyscallManager
         if (task == null)
         {
             var old = _sharedFdTable;
+            if (!old.IsShared) return;
             _sharedFdTable = old.Copy();
             ReleaseFdTable(old, null);
             return;
         }
 
         var oldTable = GetTaskFdTable(task);
+        if (!oldTable.IsShared) return;
         _taskFdTables[task] = oldTable.Copy();
         // Copying the table does not close any descriptor from the task's view.
         // In particular it must not release that process's POSIX locks.
@@ -1618,6 +1620,8 @@ public partial class SyscallManager
     {
         private int _refCount = 1;
 
+        public bool IsShared => Volatile.Read(ref _refCount) > 1;
+
         public Dictionary<int, LinuxFile> Fds { get; } = [];
         public HashSet<int> CloseOnExec { get; } = [];
 
@@ -1635,12 +1639,15 @@ public partial class SyscallManager
         public SharedFdTable Copy()
         {
             var copy = new SharedFdTable();
+            // Reserve before acquiring references: allocation failure must leave
+            // the old table and every file refcount unchanged.
+            copy.Fds.EnsureCapacity(Fds.Count);
+            copy.CloseOnExec.UnionWith(CloseOnExec);
             foreach (var (fd, file) in Fds)
             {
-                file.Get();
                 copy.Fds.Add(fd, file);
+                file.Get();
             }
-            copy.CloseOnExec.UnionWith(CloseOnExec);
             return copy;
         }
     }

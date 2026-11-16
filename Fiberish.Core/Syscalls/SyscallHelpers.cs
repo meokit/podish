@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Fiberish.Core;
 using Fiberish.Memory;
@@ -192,16 +193,21 @@ public partial class SyscallManager
     public (byte[][] Values, int Error) ReadUserCStringVectorBytes(uint vectorPtr,
         int maxStringLength = LinuxConstants.MaxArgStrlen)
     {
+        var remaining = GetExecArgMaxBytes();
+        return ReadUserCStringVectorBytes(vectorPtr, ref remaining, maxStringLength);
+    }
+
+    private (byte[][] Values, int Error) ReadUserCStringVectorBytes(uint vectorPtr,
+        ref int remaining, int maxStringLength = LinuxConstants.MaxArgStrlen)
+    {
         if (vectorPtr == 0)
             return ([], 0);
         if (maxStringLength <= 0)
             return ([], -(int)Errno.EINVAL);
 
-        var maxTotalBytes = GetExecArgMaxBytes();
-        var result = new List<byte[]>();
-        var ptrBuf = new byte[4];
+        List<byte[]>? result = null;
+        Span<byte> ptrBuf = stackalloc byte[4];
         var curr = vectorPtr;
-        var totalBytes = 0;
 
         while (true)
         {
@@ -212,19 +218,22 @@ public partial class SyscallManager
             if (strPtr == 0)
                 break;
 
-            var rc = ReadUserCStringBytes(strPtr, maxStringLength, out var value);
+            if (remaining <= 4)
+                return ([], -(int)Errno.E2BIG);
+            // Bound the read before materializing a string that cannot fit.
+            var rc = ReadUserCStringBytes(strPtr, Math.Min(maxStringLength, remaining - 4), out var value);
             if (rc != 0)
                 return ([], rc);
 
-            totalBytes += value.Length + 1 + 4;
-            if (totalBytes > maxTotalBytes)
-                return ([], -(int)Errno.E2BIG);
-            result.Add(value);
+            remaining -= value.Length + 1 + 4;
+            (result ??= new List<byte[]>()).Add(value);
 
+            if (curr > uint.MaxValue - 4)
+                return ([], -(int)Errno.EFAULT);
             curr += 4;
         }
 
-        return ([.. result], 0);
+        return (result?.ToArray() ?? [], 0);
     }
 
     /// <summary>
@@ -232,10 +241,25 @@ public partial class SyscallManager
     ///     MAX_ARG_STRLEN is the exception, not the common case; grows only when the
     ///     string does not fit.
     /// </summary>
+    [SkipLocalsInit] // Every consumed probe byte was written by a successful CopyFromUser.
     private int ReadUserCStringBytes(uint addr, int maxLength, out byte[] value)
     {
         value = [];
         var probeLength = Math.Min(256, maxLength);
+        // Most arguments fit in one short probe. Keep that buffer on the stack:
+        // hundreds of short argv/envp entries need no ArrayPool rent/return pair
+        // per string. Only the final owned string bytes are allocated.
+        Span<byte> probe = stackalloc byte[256];
+        if (!ReadNullTerminatedUserBytes(addr, probe[..probeLength], out var length, out var terminated))
+            return -(int)Errno.EFAULT;
+        if (terminated)
+        {
+            value = probe[..length].ToArray();
+            return 0;
+        }
+        if (probeLength >= maxLength)
+            return -(int)Errno.E2BIG;
+        probeLength = Math.Min(probeLength * 2, maxLength);
         while (true)
         {
             var rc = ReadUserBytes(addr, out var rented, probeLength);
@@ -262,18 +286,17 @@ public partial class SyscallManager
         }
     }
 
-    private int GetExecArgMaxBytes()
+    internal int GetExecArgMaxBytes(Process? process = null)
     {
         const int FallbackStackBytes = 8 * 1024 * 1024;
         const int MaxArgBytes = 6 * 1024 * 1024;
         var stackBytes = (ulong)FallbackStackBytes;
-        if (CurrentTask?.Process is { } process &&
-            process.TryGetResourceLimit(LinuxConstants.RLIMIT_STACK, out var limit) &&
-            limit.Soft != LinuxConstants.RLIM64_INFINITY)
+        process ??= CurrentProcess;
+        if (process != null && process.TryGetResourceLimit(LinuxConstants.RLIMIT_STACK, out var limit))
             stackBytes = limit.Soft;
 
         var quarter = stackBytes / 4;
-        return (int)Math.Min(quarter, MaxArgBytes);
+        return (int)Math.Max(LinuxConstants.MaxArgStrlen, Math.Min(quarter, MaxArgBytes));
     }
 
     /// <summary>
@@ -448,6 +471,25 @@ public partial class SyscallManager
     public IReadOnlyList<int> GetCloseOnExecFds()
     {
         return FdCloseOnExecSet.ToList();
+    }
+
+    internal void CloseExecDescriptors()
+    {
+        var set = FdCloseOnExecSet;
+        if (set.Count == 0) return;
+        int[]? rented = null;
+        Span<int> fds = set.Count <= 64 ? stackalloc int[set.Count] :
+            (rented = ArrayPool<int>.Shared.Rent(set.Count)).AsSpan(0, set.Count);
+        try
+        {
+            var i = 0;
+            foreach (var fd in set) fds[i++] = fd;
+            foreach (var fd in fds) FreeFD(fd);
+        }
+        finally
+        {
+            if (rented != null) ArrayPool<int>.Shared.Return(rented);
+        }
     }
 
     public void FreeFD(int fd)

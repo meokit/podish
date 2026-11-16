@@ -43,11 +43,18 @@ public class VfsStream : Stream
 
     public override int Read(byte[] buffer, int offset, int count)
     {
+        return Read(buffer.AsSpan(offset, count));
+    }
+
+    public override int Read(Span<byte> buffer)
+    {
         if (_file.OpenedInode == null) return 0;
 
-        var n = _file.OpenedInode!.ReadToHost(null, _file, buffer.AsSpan(offset, count), _position);
+        // ELF header/program-header stack buffers can be read directly, instead
+        // of Stream.Read(Span)'s pooled array and additional copy.
+        var n = _file.OpenedInode!.ReadToHost(null, _file, buffer, _position);
         if (n < 0)
-            throw new IOException(BuildIoFailureMessage("read", n, count));
+            throw new IOException(BuildIoFailureMessage("read", n, buffer.Length));
         if (n > 0) _position += n;
         return n;
     }

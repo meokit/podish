@@ -13,7 +13,7 @@ using LinuxFile = Fiberish.VFS.LinuxFile;
 
 namespace Fiberish.Loader;
 
-public class LoaderResult
+public struct LoaderResult
 {
     public uint Entry { get; set; }
     public uint SP { get; set; }
@@ -23,7 +23,7 @@ public class LoaderResult
     /// </summary>
     public ArraySegment<byte> InitialStack { get; set; }
     public uint BrkAddr { get; set; }
-    public GuestAddressSpaceLayout Layout { get; set; } = null!;
+    public GuestAddressSpaceLayout Layout { get; set; }
 }
 
 public class ElfLoader
@@ -40,7 +40,8 @@ public class ElfLoader
     }
 
     public static LoaderResult Load(Dentry dentry, byte[] guestPathRaw, byte[] execFnPathRaw, SyscallManager sys,
-        byte[][] argsRaw, byte[][] envsRaw, Mount mount, GuestAddressSpaceLayout layout, ExecIdentity identity)
+        byte[][] argsRaw, byte[][] envsRaw, Mount mount, GuestAddressSpaceLayout layout, ExecIdentity identity,
+        Process? process = null)
     {
         var mm = sys.Mem;
         var engine = sys.CurrentSyscallEngine;
@@ -50,6 +51,8 @@ public class ElfLoader
             var mainFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
             using var mainStream = new VfsStream(mainFile);
             var elf = Elf32Reader.Read(mainStream);
+            if (elf.FileType is not (ElfFileType.Executable or ElfFileType.Dynamic))
+                throw new InvalidDataException("ELF is not an executable image.");
 
             var loadBase = elf.FileType == ElfFileType.Executable ? 0u : layout.PieBase;
             if (Logger.IsEnabled(LogLevel.Debug))
@@ -64,24 +67,39 @@ public class ElfLoader
 
         if (mainInfo.InterpPathRaw != null)
         {
-            var (interpLoc, _, _) = sys.ResolvePathBytes(mainInfo.InterpPathRaw);
+            var lookup = sys.PathWalker.PathWalkWithData(mainInfo.InterpPathRaw,
+                mainInfo.InterpPathRaw.Length, null, LookupFlags.FollowSymlink);
+            if (lookup.HasError)
+                throw new ExecFileException((Errno)(-lookup.ErrorCode), "ELF interpreter path lookup failed.");
+            var interpLoc = lookup.Path;
             if (!interpLoc.IsValid)
-                throw new FileNotFoundException(
-                    $"Interpreter not found in VFS: {FsEncoding.DecodeUtf8Lossy(mainInfo.InterpPathRaw)}");
+                throw new ExecFileException(Errno.ENOENT, "ELF interpreter not found.");
 
             var interpDentry = interpLoc.Dentry!;
             var interpMount = interpLoc.Mount!;
+            var accessRc = (process ?? sys.CurrentProcess)?.CheckExecutableAccess(interpDentry, interpMount) ?? 0;
+            if (accessRc < 0)
+                throw new ExecFileException((Errno)(-accessRc), "ELF interpreter execute access denied.");
 
             var interpFile = new LinuxFile(interpDentry, FileFlags.O_RDONLY, interpMount);
             using var interpStream = new VfsStream(interpFile);
-            var interpElf = Elf32Reader.Read(interpStream);
+            ElfFile interpElf;
+            try
+            {
+                interpElf = Elf32Reader.Read(interpStream);
+                if (interpElf.FileType is not (ElfFileType.Executable or ElfFileType.Dynamic))
+                    throw new InvalidDataException("ELF interpreter is not an executable image.");
+            }
+            catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException or NotSupportedException)
+            {
+                throw new ExecFileException(Errno.ELIBBAD, "Invalid ELF interpreter format.", ex);
+            }
 
             if (interpElf.FileType == ElfFileType.Dynamic)
                 interpBase = layout.InterpreterBaseHint;
-            else
-                throw new NotSupportedException($"Unsupported interpreter type: {interpElf.FileType}");
 
-            Logger.LogDebug("ElfLoader: Loading interpreter at base=0x{InterpBase:x}", interpBase);
+            if (Logger.IsEnabled(LogLevel.Debug))
+                Logger.LogDebug("ElfLoader: Loading interpreter at base=0x{InterpBase:x}", interpBase);
             var interpInfo = LoadSegments(interpElf, interpBase, mm, engine, interpDentry, mainInfo.InterpPathRaw,
                 interpStream, interpFile, interpMount);
             interpEntry = interpInfo.EntryPoint;
@@ -94,8 +112,25 @@ public class ElfLoader
         var totalSize = totalWords * 4;
 
         uint variableDataSize = 16;
-        foreach (var arg in argsRaw) variableDataSize += checked((uint)arg.Length + 1u);
-        foreach (var env in envsRaw) variableDataSize += checked((uint)env.Length + 1u);
+        long argumentBytes = ((long)argsRaw.Length + envsRaw.Length) * 4 + execFnPathRaw.Length + 1;
+        foreach (var arg in argsRaw)
+        {
+            if (arg.Length >= LinuxConstants.MaxArgStrlen)
+                throw new OverflowException("Exec argument exceeds MAX_ARG_STRLEN.");
+            variableDataSize += checked((uint)arg.Length + 1u);
+            argumentBytes += arg.Length + 1;
+        }
+        foreach (var env in envsRaw)
+        {
+            if (env.Length >= LinuxConstants.MaxArgStrlen)
+                throw new OverflowException("Exec environment exceeds MAX_ARG_STRLEN.");
+            variableDataSize += checked((uint)env.Length + 1u);
+            argumentBytes += env.Length + 1;
+        }
+        // Recheck rewritten shebang vectors/public loader inputs in the same pass
+        // used to size the stack. The syscall reader already shares its budget.
+        if (argumentBytes > sys.GetExecArgMaxBytes(process))
+            throw new OverflowException("Combined exec vector budget exceeded.");
         variableDataSize += 5;
         // AT_EXECFN is the path passed to execve: for a script that is the script path,
         // not the resolved interpreter path used for EXECUTABLE_PATH/AT_PHDR.
@@ -129,11 +164,19 @@ public class ElfLoader
             BinaryPrimitives.WriteUInt32LittleEndian(stackData.AsSpan((int)(sp - finalSp), 4), value);
         }
 
-        var argPtrs = new uint[argsRaw.Length];
-        for (var i = argsRaw.Length - 1; i >= 0; i--) argPtrs[i] = PushCStringBytes(argsRaw[i]);
-
-        var envPtrs = new uint[envsRaw.Length];
-        for (var i = envsRaw.Length - 1; i >= 0; i--) envPtrs[i] = PushCStringBytes(envsRaw[i]);
+        // Write vector slots directly into the final stack buffer. No temporary
+        // uint[argc]/uint[envc] allocations, even for very large exec vectors.
+        for (var i = argsRaw.Length - 1; i >= 0; i--)
+        {
+            var ptr = PushCStringBytes(argsRaw[i]);
+            BinaryPrimitives.WriteUInt32LittleEndian(stackData.AsSpan(4 + i * 4, 4), ptr);
+        }
+        var envpOffset = (argsRaw.Length + 2) * 4;
+        for (var i = envsRaw.Length - 1; i >= 0; i--)
+        {
+            var ptr = PushCStringBytes(envsRaw[i]);
+            BinaryPrimitives.WriteUInt32LittleEndian(stackData.AsSpan(envpOffset + i * 4, 4), ptr);
+        }
 
         var platPtr = PushCStringBytes("i686"u8);
         var execFnPtr = PushCStringBytes(execFnPathRaw);
@@ -173,13 +216,9 @@ public class ElfLoader
 
         for (var i = auxv.Length - 1; i >= 0; i--) PushUint32(auxv[i]);
 
-        PushUint32(0);
-        for (var i = envPtrs.Length - 1; i >= 0; i--) PushUint32(envPtrs[i]);
-
-        PushUint32(0);
-        for (var i = argPtrs.Length - 1; i >= 0; i--) PushUint32(argPtrs[i]);
-
-        PushUint32((uint)argsRaw.Length);
+        // Vector terminators are already zero in the freshly allocated buffer.
+        BinaryPrimitives.WriteUInt32LittleEndian(stackData, (uint)argsRaw.Length);
+        sp = finalSp;
 
         var stackMapStart = finalSp & LinuxConstants.PageMask;
         if (stackMapStart < layout.StackLowerBound)
@@ -208,9 +247,10 @@ public class ElfLoader
             BrkAddr = mainInfo.BrkAddr,
             Layout = layout
         };
-        Logger.LogInformation(
-            "ElfLoader Entry=0x{Entry:x} SP=0x{SP:x} Brk=0x{Brk:x} InitialStackLen={StackLen} InterpBase=0x{InterpBase:x}",
-            res.Entry, res.SP, res.BrkAddr, res.InitialStack.Count, interpBase);
+        if (Logger.IsEnabled(LogLevel.Information))
+            Logger.LogInformation(
+                "ElfLoader Entry=0x{Entry:x} SP=0x{SP:x} Brk=0x{Brk:x} InitialStackLen={StackLen} InterpBase=0x{InterpBase:x}",
+                res.Entry, res.SP, res.BrkAddr, res.InitialStack.Count, interpBase);
         return res;
     }
 
@@ -219,6 +259,8 @@ public class ElfLoader
     {
         static byte[]? ReadNulTerminatedBytes(Stream stream, long position, int size)
         {
+            if (size < 2 || size > LinuxConstants.PathMax)
+                throw new InvalidDataException("Invalid PT_INTERP path length.");
             stream.Seek(position, SeekOrigin.Begin);
             byte[]? rented = null;
             var buffer = size <= 256
@@ -227,8 +269,9 @@ public class ElfLoader
             try
             {
                 stream.ReadExactly(buffer);
-                var nulIndex = buffer.IndexOf((byte)0);
-                return nulIndex >= 0 ? buffer[..nulIndex].ToArray() : buffer.ToArray();
+                if (buffer[^1] != 0)
+                    throw new InvalidDataException("PT_INTERP path is not NUL terminated.");
+                return buffer[..buffer.IndexOf((byte)0)].ToArray();
             }
             finally
             {
@@ -269,6 +312,11 @@ public class ElfLoader
         {
             if (segment.Type == ElfSegmentType.Load)
             {
+                var taskSize = mm.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
+                if (segment.Size > segment.SizeInMemory ||
+                    (ulong)segment.VirtualAddress + loadBase + segment.SizeInMemory > taskSize ||
+                    ((segment.VirtualAddress ^ segment.Position) & LinuxConstants.PageOffsetMask) != 0)
+                    throw new FatalExecException("Invalid ELF PT_LOAD after Linux's point of no return.");
                 if (!foundFirstLoad)
                 {
                     firstLoadVaddr = segment.VirtualAddress;
@@ -354,7 +402,7 @@ public class ElfLoader
         return info;
     }
 
-    private class ElfLoadInfo
+    private struct ElfLoadInfo
     {
         public uint PhdrAddr { get; set; }
         public uint PhNum { get; set; }

@@ -12,7 +12,7 @@ using Xunit;
 namespace Fiberish.Tests.Syscalls;
 
 [Collection("ExternalPageManagerSerial")]
-public class ExecSemanticsRegressionTests
+public partial class ExecSemanticsRegressionTests
 {
     private const uint PathAddr = 0x61000000;
     private const uint ArgvAddr = 0x61001000;

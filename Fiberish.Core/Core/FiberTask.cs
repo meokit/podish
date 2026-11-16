@@ -1273,6 +1273,27 @@ public partial class FiberTask
         }
     }
 
+    internal void TerminateFailedExec()
+    {
+        if (Exited) return;
+        // Publish non-runnable state first, even if a cleanup invariant also fails.
+        // Unlike Signal(SIGSEGV), this cannot be blocked, caught, or ignored.
+        Exited = true;
+        ExitStatus = 128 + (int)Signal.SIGSEGV;
+        Status = FiberTaskStatus.Terminated;
+        ExecutionMode = TaskExecutionMode.Terminated;
+        SignalVforkDone();
+        try
+        {
+            ExitRobustList();
+            ClearChildTidAndWake();
+        }
+        finally
+        {
+            SyscallManager.FinalizeProcessExit(this, ExitStatus, true, (int)Signal.SIGSEGV, false);
+        }
+    }
+
     private void TerminateBySignal(int sig, bool coreDumped)
     {
         if (Exited) return;

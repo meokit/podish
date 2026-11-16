@@ -13,7 +13,6 @@ public static class CredentialService
     {
         var newEuid = process.EUID;
         var newEgid = process.EGID;
-        var secure = false;
 
         // PR_SET_NO_NEW_PRIVS: execve must not grant privileges, so setuid/setgid bits
         // (and, in Linux, file capabilities) are ignored for the transition.
@@ -21,13 +20,12 @@ public static class CredentialService
         {
             if ((executable.Mode & 0x800) != 0)
                 newEuid = executable.Uid; // S_ISUID
-            if ((executable.Mode & 0x400) != 0)
+            if ((executable.Mode & 0x408) == 0x408)
                 newEgid = executable.Gid; // S_ISGID
-
-            secure = newEuid != process.EUID || newEgid != process.EGID;
         }
 
-        return new ExecIdentity(process.UID, newEuid, process.GID, newEgid, secure);
+        return new ExecIdentity(process.UID, newEuid, process.GID, newEgid,
+            newEuid != process.UID || newEgid != process.GID);
     }
     public static void InitializeCredentials(Process process, int uid, int gid, IReadOnlyList<int>? supplementaryGroups = null)
     {
@@ -370,7 +368,12 @@ public static class CredentialService
 
     public static void ApplyExecSetIdOnExec(Process process, Inode executable, bool allowPrivilegeGain = true)
     {
-        var identity = ComputeExecIdentity(process, executable, allowPrivilegeGain);
+        ApplyExecIdentity(process, ComputeExecIdentity(process, executable, allowPrivilegeGain));
+    }
+
+    internal static void ApplyExecIdentity(Process process, ExecIdentity identity)
+    {
+        var changed = identity.Euid != process.EUID || identity.Egid != process.EGID;
 
         process.EUID = identity.Euid;
         process.EGID = identity.Egid;
@@ -383,7 +386,7 @@ public static class CredentialService
 
         // A plain exec must preserve the capability sets. Only a setid transition
         // recomputes them from the new credentials; NoNewPrivs never gains anything.
-        if (identity.Secure)
+        if (changed)
             NormalizeCapabilityState(process);
     }
 }

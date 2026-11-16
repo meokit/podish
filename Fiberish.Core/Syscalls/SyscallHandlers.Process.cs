@@ -597,9 +597,10 @@ public partial class SyscallManager
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
-        Logger.LogDebug(
-            "[SysExecve] engine==task.CPU? {Same}, engine.State=0x{EngState:x}, task.CPU.State=0x{CpuState:x}",
-            ReferenceEquals(engine, task.CPU), engine.State, task.CPU.State);
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug(
+                "[SysExecve] engine==task.CPU? {Same}, engine.State=0x{EngState:x}, task.CPU.State=0x{CpuState:x}",
+                ReferenceEquals(engine, task.CPU), engine.State, task.CPU.State);
 
         var pathErr = ReadPathArgumentBytes(a1, out var filename);
         if (pathErr != 0) return pathErr;
@@ -607,9 +608,10 @@ public partial class SyscallManager
 
         // Linux copies argv/envp before it opens the executable, so EFAULT/E2BIG take
         // precedence over ENOENT/EACCES/ETXTBSY. Keep the same ordering here.
-        var (args, argsError) = ReadUserCStringVectorBytes(a2);
+        var argumentBudget = GetExecArgMaxBytes() - filename.Length - 1;
+        var (args, argsError) = ReadUserCStringVectorBytes(a2, ref argumentBudget);
         if (argsError < 0) return argsError;
-        var (envs, envsError) = ReadUserCStringVectorBytes(a3);
+        var (envs, envsError) = ReadUserCStringVectorBytes(a3, ref argumentBudget);
         if (envsError < 0) return envsError;
 
         var lookup = PathWalker.PathWalkWithData(filename.UnsafeBuffer, filename.Length, null, LookupFlags.FollowSymlink);
@@ -631,23 +633,20 @@ public partial class SyscallManager
         var mount = loc.Mount!;
         if (dentry.Inode == null)
             return -(int)Errno.ENOENT;
-        if (dentry.Inode is HostInode hostInode)
-            hostInode.RefreshProjectedMetadata(task.Process.EUID, task.Process.EGID);
-
-        var execAccessRc = CheckExecutableFile(task.Process, dentry, mount);
+        var execAccessRc = task.Process.CheckExecutableAccess(dentry, mount);
         if (execAccessRc < 0)
             return execAccessRc;
 
-        var headerBuf = new byte[256];
+        Span<byte> headerBuf = stackalloc byte[256];
         var headerLen = 0;
         if (dentry.Inode != null)
         {
             using var tmpFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
-            headerLen = dentry.Inode.ReadToHost(task, tmpFile, headerBuf.AsSpan(), 0);
+            headerLen = dentry.Inode.ReadToHost(task, tmpFile, headerBuf, 0);
             if (headerLen < 0) headerLen = 0;
         }
 
-        if (ShebangParser.TryParse(headerBuf.AsSpan(0, headerLen), out var interpPathRaw, out var interpArgRaw))
+        if (ShebangParser.TryParse(headerBuf[..headerLen], out var interpPathRaw, out var interpArgRaw))
         {
             if (Logger.IsEnabled(LogLevel.Information))
                 Logger.LogInformation(
@@ -668,39 +667,40 @@ public partial class SyscallManager
             var interpMount = interpLoc.Mount!;
             if (interpDentry.Inode == null)
                 return -(int)Errno.ENOENT;
-            if (interpDentry.Inode is HostInode interpHostInode)
-                interpHostInode.RefreshProjectedMetadata(task.Process.EUID, task.Process.EGID);
-
-            var interpAccessRc = CheckExecutableFile(task.Process, interpDentry, interpMount);
+            var interpAccessRc = task.Process.CheckExecutableAccess(interpDentry, interpMount);
             if (interpAccessRc < 0)
                 return interpAccessRc;
 
-            var newArgs = new List<byte[]> { interpPathRaw };
-            if (interpArgRaw != null)
-                newArgs.Add(interpArgRaw);
-            newArgs.Add(guestPathRaw);
-            if (args.Length > 1)
-                newArgs.AddRange(args.Skip(1));
+            var newArgs = Process.RewriteShebangArguments(interpPathRaw, interpArgRaw, guestPathRaw, args);
 
             if (Logger.IsEnabled(LogLevel.Information))
                 Logger.LogInformation("[SysExecve] Re-executing as: {Args}",
                     string.Join(" ", newArgs.Select(a => FsEncoding.DecodeUtf8Lossy(a))));
-            Logger.LogDebug("[SysExecve] Shebang re-exec argc={ArgCount} envc={EnvCount}",
-                newArgs.Count, envs.Length);
+            if (Logger.IsEnabled(LogLevel.Debug))
+                Logger.LogDebug("[SysExecve] Shebang re-exec argc={ArgCount} envc={EnvCount}",
+                    newArgs.Length, envs.Length);
 
+            var installed = false;
             try
             {
-                task.Process.Exec(interpLoc.Dentry!, interpPathRaw, [.. newArgs], envs, interpLoc.Mount!,
+                var identity = task.Process.Exec(interpLoc.Dentry!, interpPathRaw, newArgs, envs, interpLoc.Mount!,
                     guestPathRaw);
+                installed = true;
                 ApplyExecSuccessState(task);
                 task.Process.HasExeced = true;
-                CredentialService.ApplyExecSetIdOnExec(task.Process, interpLoc.Dentry!.Inode!);
+                CredentialService.ApplyExecIdentity(task.Process, identity);
                 ProcFsManager.OnProcessExec(this, task.Process);
                 task.SignalVforkDone();
                 return 0;
             }
             catch (Exception ex)
             {
+                if (installed || ex is FatalExecException)
+                {
+                    Logger.LogError(ex, "Fatal shebang exec failure");
+                    task.TerminateFailedExec();
+                    return 0;
+                }
                 var rc = MapExecveExceptionToErrno(ex);
                 Logger.LogWarning(ex, "[SysExecve] Shebang exec failed: rc={Rc} message={Message}", rc, ex.Message);
                 return rc;
@@ -717,46 +717,37 @@ public partial class SyscallManager
             return -(int)Errno.ENOEXEC;
         }
 
-        Logger.LogInformation("[SysExecve] Loading {GuestPath} with {ArgCount} args, {EnvCount} envs via Process.Exec",
-            displayPath, args.Length, envs.Length);
+        if (Logger.IsEnabled(LogLevel.Information))
+            Logger.LogInformation("[SysExecve] Loading {GuestPath} with {ArgCount} args, {EnvCount} envs via Process.Exec",
+                displayPath, args.Length, envs.Length);
         if (Logger.IsEnabled(LogLevel.Debug))
             foreach (var arg in args)
                 Logger.LogDebug("  arg: {Arg}", FsEncoding.DecodeUtf8Lossy(arg));
 
+        var imageInstalled = false;
         try
         {
-            task.Process.Exec(dentry, guestPathRaw, args, envs, mount, guestPathRaw);
+            var identity = task.Process.Exec(dentry, guestPathRaw, args, envs, mount, guestPathRaw, knownElf: true);
+            imageInstalled = true;
             ApplyExecSuccessState(task);
             task.Process.HasExeced = true;
-            CredentialService.ApplyExecSetIdOnExec(task.Process, dentry.Inode!);
+            CredentialService.ApplyExecIdentity(task.Process, identity);
             ProcFsManager.OnProcessExec(this, task.Process);
             task.SignalVforkDone();
             return 0;
         }
         catch (Exception ex)
         {
+            if (imageInstalled || ex is FatalExecException)
+            {
+                Logger.LogError(ex, "Fatal exec failure");
+                task.TerminateFailedExec();
+                return 0;
+            }
             var rc = MapExecveExceptionToErrno(ex);
             Logger.LogWarning(ex, "Execve failed: rc={Rc} message={Message}", rc, ex.Message);
             return rc;
         }
-    }
-
-    private static int CheckExecutableFile(Process process, Dentry dentry, Mount mount)
-    {
-        var inode = dentry.Inode;
-        if (inode == null) return -(int)Errno.ENOENT;
-        if (inode.Type != InodeType.File) return -(int)Errno.EACCES;
-        if ((mount.Flags & LinuxConstants.MS_NOEXEC) != 0) return -(int)Errno.EACCES;
-        if (inode is TmpfsInode { IsMemfdNoExecSealed: true }) return -(int)Errno.EACCES;
-
-        var accessRc = DacPolicy.CheckPathAccess(process, inode, AccessMode.MayExec, true);
-        if (accessRc < 0) return accessRc;
-
-        // Linux does not apply deny_write_access() to anonymous memfd inodes;
-        // /proc/self/fd/N remains executable while the memfd is open O_RDWR.
-        if (inode is not TmpfsInode { IsMemfd: true } && inode.HasWritableOpenFile)
-            return -(int)Errno.ETXTBSY;
-        return 0;
     }
 
     private static void ApplyExecSuccessState(FiberTask task)
@@ -766,8 +757,7 @@ public partial class SyscallManager
         // Linux applies these only after the new image has been installed. On a
         // failed execve the descriptor table, signal dispositions and altstack must
         // remain exactly as they were.
-        foreach (var fd in task.Process.Syscalls.GetCloseOnExecFds())
-            task.Process.Syscalls.FreeFD(fd);
+        task.Process.Syscalls.CloseExecDescriptors();
 
         task.Process.ResetSignalDispositionsForExec();
         task.ResetAltStack();
@@ -780,6 +770,7 @@ public partial class SyscallManager
     {
         return ex switch
         {
+            ExecFileException exec => -(int)exec.Error,
             OutOfMemoryException => -(int)Errno.ENOMEM,
             TextFileBusyException => -(int)Errno.ETXTBSY,
             EndOfStreamException or InvalidDataException or NotSupportedException or InvalidOperationException =>
