@@ -11,6 +11,7 @@ dotnet run --project Podish.Benchmarks -c Release -- --list
 dotnet run --project Podish.Benchmarks -c Release -- --category inotify
 dotnet run --project Podish.Benchmarks -c Release -- --sample-ms 50
 dotnet run --project Podish.Benchmarks -c Release -- --filter mmap --no-latency
+dotnet run --project Podish.Benchmarks -c Release -- --category exec --no-latency
 ```
 
 Results are printed as Markdown and written to
@@ -46,6 +47,18 @@ Close other CPU-heavy applications when collecting a baseline.
 | `scheduler` | wake publication without a waiter, wake-to-run latency, Windows high-resolution sleep overshoot |
 | `cpu` | O(1) process CPU snapshot with 1 and 16 threads, including a running task's live delta |
 | `mmap` | anonymous and file-backed map/unmap, fixed and auto-selected addresses, dense VMA list |
+| `exec` | full static execve (small and 128 argv + 128 env entries), exclusive FD unshare, empty and 128-entry vector reads |
+
+The execve cases invoke a cached typed syscall delegate, not reflection Invoke,
+and keep their paths/vectors inside a tiny ELF fixture that is remapped by each
+exec. Fixture creation, runtime construction, and input-array preparation are
+outside measurements. Full exec still allocates its staged address space and
+image/stack data; the two small fast-path cases can separately detect accidental
+per-call allocation. On a net11-only host set `DOTNET_ROLL_FORWARD=LatestMajor`.
+For controlled before/after comparisons, keep native/dependency DLL hashes and
+JIT-tiering settings identical; Debug and Release share a native build directory.
+The exec repair comparison uses `DOTNET_TieredCompilation=0` to avoid tier
+transitions during short samples; see `tests/ltp/EXEC_FIX_REPORT.md`.
 
 ## Adding a case
 

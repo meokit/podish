@@ -119,7 +119,7 @@ internal static class Program
 
                           Options:
                             --filter <text>    Only benchmarks whose name contains text.
-                            --category <name>  Only one category (inotify, vfs, scheduler, cpu, mmap).
+                            --category <name>  Only one category (inotify, vfs, scheduler, cpu, mmap, exec).
                             --sample-ms <n>    Target duration of one throughput sample (default 30).
                             --no-latency       Skip latency benchmarks.
                             --json <path>      Write results here (default artifacts/benchmarks/<utc>/results.json).

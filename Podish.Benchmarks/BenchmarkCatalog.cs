@@ -10,6 +10,7 @@ internal static class BenchmarkCatalog
         throughput.AddRange(SchedulerBenchmarks.CreateThroughput());
         throughput.AddRange(CpuBenchmarks.Create());
         throughput.AddRange(MemoryBenchmarks.Create());
+        throughput.AddRange(ExecBenchmarks.Create());
         latency.AddRange(SchedulerBenchmarks.CreateLatency());
         return (throughput, latency);
     }
