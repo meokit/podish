@@ -1273,39 +1273,73 @@ FORCE_INLINE LogicFlow OpXchg_EvGv(LogicFuncParams) {
 // String Operations (LODS, SCAS, CMPS) - Use Blocking (fail_on_tlb_miss=false)
 // ------------------------------------------------------------------------------------------------
 
+// Address-size override (0x67) selects SI/DI/CX instead of ESI/EDI/ECX and
+// wraps offsets at 0xFFFF while preserving the upper halves. String
+// destinations always use ES, independent of any segment override.
+FORCE_INLINE uint32_t GetStringOffset(EmuState* state, int reg, bool addr16) {
+    const uint32_t value = GetReg(state, reg);
+    return addr16 ? (value & 0xFFFFu) : value;
+}
+
+FORCE_INLINE void SetStringOffset(EmuState* state, int reg, uint32_t value, bool addr16) {
+    if (addr16) {
+        const uint32_t current = GetReg(state, reg);
+        SetReg(state, reg, (current & 0xFFFF0000u) | (value & 0xFFFFu));
+    } else {
+        SetReg(state, reg, value);
+    }
+}
+
+FORCE_INLINE uint32_t GetStringCount(EmuState* state, bool addr16) {
+    const uint32_t value = GetReg(state, ECX);
+    return addr16 ? (value & 0xFFFFu) : value;
+}
+
+FORCE_INLINE void SetStringCount(EmuState* state, uint32_t value, bool addr16) {
+    if (addr16) {
+        const uint32_t current = GetReg(state, ECX);
+        SetReg(state, ECX, (current & 0xFFFF0000u) | (value & 0xFFFFu));
+    } else {
+        SetReg(state, ECX, value);
+    }
+}
+
+FORCE_INLINE uint32_t StringDestinationAddress(EmuState* state, uint32_t offset) {
+    return offset + state->ctx.seg_base[1];  // ES
+}
+
 template <typename T>
 bool Helper_Movs(LogicFuncParams) {
-    bool df = TestFlagBits(flags_cache, 0x400);  // DF
-    int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
+    const bool addr16 = op->prefixes.flags.addrsize;
+    const bool df = TestFlagBits(flags_cache, 0x400);  // DF
+    const int32_t step = df ? -static_cast<int32_t>(sizeof(T)) : static_cast<int32_t>(sizeof(T));
 
-    auto perform = [&](uint32_t& ecx_ref) -> bool {
-        uint32_t esi = GetReg(state, ESI);
-        uint32_t edi = GetReg(state, EDI);
+    auto perform = [&]() -> bool {
+        const uint32_t esi = GetStringOffset(state, ESI, addr16);
+        const uint32_t edi = GetStringOffset(state, EDI, addr16);
 
-        uint32_t src_addr = esi + GetSegmentBase(state, op);
+        const uint32_t src_addr = esi + GetSegmentBase(state, op);
         auto val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, src_addr, utlb, op);
         if (!val_res) return false;  // Fault
         T val = *val_res;
 
-        if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, edi, val, utlb, op)) return false;  // Fault
+        if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, StringDestinationAddress(state, edi), val, utlb, op))
+            return false;  // Fault
 
-        SetReg(state, ESI, esi + step);
-        SetReg(state, EDI, edi + step);
+        SetStringOffset(state, ESI, esi + step, addr16);
+        SetStringOffset(state, EDI, edi + step, addr16);
         return true;
     };
 
     if (op->prefixes.flags.rep) {
-        while (GetReg(state, ECX) > 0) {
-            uint32_t ecx = GetReg(state, ECX);
-            if (!perform(ecx)) return false;
+        while (GetStringCount(state, addr16) > 0) {
+            if (!perform()) return false;
 
             if (state->status != EmuStatus::Running) return false;
-            ecx--;
-            SetReg(state, ECX, ecx);
+            SetStringCount(state, GetStringCount(state, addr16) - 1, addr16);
         }
     } else {
-        uint32_t ecx_dummy = 0;
-        if (!perform(ecx_dummy)) return false;
+        if (!perform()) return false;
     }
     return true;
 }
@@ -1326,22 +1360,22 @@ FORCE_INLINE LogicFlow OpMovs_Word(LogicFuncParams) {
 }
 
 FORCE_INLINE LogicFlow OpStos_Byte(LogicFuncParams) {
+    const bool addr16 = op->prefixes.flags.addrsize;
     bool df = TestFlagBits(flags_cache, 0x400);
     int32_t step = df ? -1 : 1;
     auto perform = [&]() -> bool {
-        uint32_t edi = GetReg(state, EDI);
+        uint32_t edi = GetStringOffset(state, EDI, addr16);
         uint8_t val = (uint8_t)GetReg(state, EAX);
-        if (!WriteMem<uint8_t, OpOnTLBMiss::Blocking>(state, edi, val, utlb, op)) return false;
-        SetReg(state, EDI, edi + step);
+        if (!WriteMem<uint8_t, OpOnTLBMiss::Blocking>(state, StringDestinationAddress(state, edi), val, utlb, op))
+            return false;
+        SetStringOffset(state, EDI, edi + step, addr16);
         return true;
     };
     if (op->prefixes.flags.rep) {
-        while (GetReg(state, ECX) > 0) {
+        while (GetStringCount(state, addr16) > 0) {
             if (!perform()) return LogicFlow::ExitOnCurrentEIP;
             if (state->status != EmuStatus::Running) break;
-            uint32_t ecx = GetReg(state, ECX);
-            ecx--;
-            SetReg(state, ECX, ecx);
+            SetStringCount(state, GetStringCount(state, addr16) - 1, addr16);
         }
     } else {
         if (!perform()) return LogicFlow::ExitOnCurrentEIP;
@@ -1350,29 +1384,29 @@ FORCE_INLINE LogicFlow OpStos_Byte(LogicFuncParams) {
 }
 
 FORCE_INLINE LogicFlow OpStos_Word(LogicFuncParams) {
+    const bool addr16 = op->prefixes.flags.addrsize;
     bool df = TestFlagBits(flags_cache, 0x400);
     int32_t step = (op->prefixes.flags.opsize ? 2 : 4);
     if (df) step = -step;
 
     auto perform = [&]() -> bool {
-        uint32_t edi = GetReg(state, EDI);
+        uint32_t edi = GetStringOffset(state, EDI, addr16);
+        const uint32_t destination = StringDestinationAddress(state, edi);
         if (op->prefixes.flags.opsize) {
             uint16_t val = (uint16_t)GetReg(state, EAX);
-            if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, edi, val, utlb, op)) return false;
+            if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, destination, val, utlb, op)) return false;
         } else {
             uint32_t val = GetReg(state, EAX);
-            if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, edi, val, utlb, op)) return false;
+            if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, destination, val, utlb, op)) return false;
         }
-        SetReg(state, EDI, edi + step);
+        SetStringOffset(state, EDI, edi + step, addr16);
         return true;
     };
     if (op->prefixes.flags.rep) {
-        while (GetReg(state, ECX) > 0) {
+        while (GetStringCount(state, addr16) > 0) {
             if (!perform()) return LogicFlow::ExitOnCurrentEIP;
             if (state->status != EmuStatus::Running) break;
-            uint32_t ecx = GetReg(state, ECX);
-            ecx--;
-            SetReg(state, ECX, ecx);
+            SetStringCount(state, GetStringCount(state, addr16) - 1, addr16);
         }
     } else {
         if (!perform()) return LogicFlow::ExitOnCurrentEIP;
@@ -1382,11 +1416,12 @@ FORCE_INLINE LogicFlow OpStos_Word(LogicFuncParams) {
 
 template <typename T>
 bool Helper_Lods(LogicFuncParams) {
+    const bool addr16 = op->prefixes.flags.addrsize;
     bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
-    auto perform = [&](uint32_t& ecx_ref) -> bool {
-        uint32_t esi = GetReg(state, ESI);
+    auto perform = [&]() -> bool {
+        uint32_t esi = GetStringOffset(state, ESI, addr16);
         uint32_t src_addr = esi + GetSegmentBase(state, op);
         auto val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, src_addr, utlb, op);
         if (!val_res) return false;
@@ -1401,21 +1436,18 @@ bool Helper_Lods(LogicFuncParams) {
             SetReg(state, EAX, val);
         }
 
-        SetReg(state, ESI, esi + step);
+        SetStringOffset(state, ESI, esi + step, addr16);
         return true;
     };
 
     if (op->prefixes.flags.rep) {
-        while (GetReg(state, ECX) > 0) {
-            uint32_t ecx = GetReg(state, ECX);
-            if (!perform(ecx)) return false;
+        while (GetStringCount(state, addr16) > 0) {
+            if (!perform()) return false;
             if (state->status != EmuStatus::Running) return false;
-            ecx--;
-            SetReg(state, ECX, ecx);
+            SetStringCount(state, GetStringCount(state, addr16) - 1, addr16);
         }
     } else {
-        uint32_t ecx_dummy = 0;
-        if (!perform(ecx_dummy)) return false;
+        if (!perform()) return false;
     }
     return true;
 }
@@ -1437,13 +1469,15 @@ FORCE_INLINE LogicFlow OpLods_Word(LogicFuncParams) {
 
 template <typename T>
 bool Helper_Scas(LogicFuncParams) {
+    const bool addr16 = op->prefixes.flags.addrsize;
     bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
     auto perform = [&]() -> bool {
-        uint32_t edi = GetReg(state, EDI);
+        uint32_t edi = GetStringOffset(state, EDI, addr16);
         // ES:[EDI]
-        auto mem_val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, edi, utlb, op);
+        auto mem_val_res =
+            ReadMem<T, OpOnTLBMiss::Blocking>(state, StringDestinationAddress(state, edi), utlb, op);
         if (!mem_val_res) return false;
         T mem_val = *mem_val_res;
 
@@ -1457,18 +1491,16 @@ bool Helper_Scas(LogicFuncParams) {
 
         AluSub<T>(state, flags_cache, acc, mem_val);  // CMP uses Sub.
 
-        SetReg(state, EDI, edi + step);
+        SetStringOffset(state, EDI, edi + step, addr16);
         return true;
     };
 
     if (op->prefixes.flags.rep || op->prefixes.flags.repne) {
-        while (GetReg(state, ECX) > 0) {
+        while (GetStringCount(state, addr16) > 0) {
             if (!perform()) return false;
             if (state->status != EmuStatus::Running) return false;
 
-            uint32_t ecx = GetReg(state, ECX);
-            ecx--;
-            SetReg(state, ECX, ecx);
+            SetStringCount(state, GetStringCount(state, addr16) - 1, addr16);
 
             bool zf = TestFlagBits(flags_cache, ZF_MASK);
             if (op->prefixes.flags.rep) {
@@ -1501,37 +1533,37 @@ FORCE_INLINE LogicFlow OpScas_Word(LogicFuncParams) {
 
 template <typename T>
 bool Helper_Cmps(LogicFuncParams) {
+    const bool addr16 = op->prefixes.flags.addrsize;
     bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
     auto perform = [&]() -> bool {
-        uint32_t esi = GetReg(state, ESI);
-        uint32_t edi = GetReg(state, EDI);
+        uint32_t esi = GetStringOffset(state, ESI, addr16);
+        uint32_t edi = GetStringOffset(state, EDI, addr16);
 
         uint32_t src_addr = esi + GetSegmentBase(state, op);
         auto src_val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, src_addr, utlb, op);
         if (!src_val_res) return false;
         T src_val = *src_val_res;
 
-        auto dst_val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, edi, utlb, op);  // ES:EDI
+        auto dst_val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, StringDestinationAddress(state, edi), utlb,
+                                                             op);  // ES:EDI
         if (!dst_val_res) return false;
         T dst_val = *dst_val_res;
 
         AluSub<T>(state, flags_cache, src_val, dst_val);
 
-        SetReg(state, ESI, esi + step);
-        SetReg(state, EDI, edi + step);
+        SetStringOffset(state, ESI, esi + step, addr16);
+        SetStringOffset(state, EDI, edi + step, addr16);
         return true;
     };
 
     if (op->prefixes.flags.rep || op->prefixes.flags.repne) {
-        while (GetReg(state, ECX) > 0) {
+        while (GetStringCount(state, addr16) > 0) {
             if (!perform()) return false;
             if (state->status != EmuStatus::Running) return false;
 
-            uint32_t ecx = GetReg(state, ECX);
-            ecx--;
-            SetReg(state, ECX, ecx);
+            SetStringCount(state, GetStringCount(state, addr16) - 1, addr16);
 
             bool zf = TestFlagBits(flags_cache, ZF_MASK);
             if (op->prefixes.flags.rep) {
