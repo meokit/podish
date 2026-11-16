@@ -19,6 +19,22 @@ def summary(passed=1, failed=0, broken=0, skipped=0, warnings=0):
             f"skipped  {skipped}\nwarnings {warnings}\n")
 
 
+class LocalExecSuiteTests(unittest.TestCase):
+    def test_manifest_has_independent_sources_and_no_helper_resources(self):
+        manifest = json.loads((run.HERE / "cases-exec.json").read_text())
+        self.assertEqual(manifest["localSuite"], "exec")
+        self.assertTrue(manifest["requiresRoot"])
+        self.assertEqual(manifest["podishFsBackend"], "tmpfs")
+        names = [case["name"] for case in manifest["cases"]]
+        self.assertEqual(len(names), 5)
+        self.assertEqual(len(set(names)), 5)
+        for case in manifest["cases"]:
+            self.assertEqual(case["directory"], "podish_exec")
+            self.assertFalse(case.get("resources"))
+            source = run.HERE / "exec" / (case["name"] + ".c")
+            self.assertTrue(source.is_file(), source)
+
+
 class SourceStateTests(unittest.TestCase):
     def test_diff_digest_preserves_invalid_utf8_bytes(self):
         digests = []

@@ -3,3 +3,6 @@
 *.json text eol=lf
 *.md text eol=lf
 *.txt text eol=lf
+exec/*.c text eol=lf
+exec/*.h text eol=lf
+exec/Makefile text eol=lf

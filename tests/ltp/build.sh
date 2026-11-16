@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build only the selected, unmodified LTP programs, never the entire suite.
+# Build selected upstream programs or the explicitly selected local exec suite.
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd -- "$here/../.." && pwd)
@@ -25,6 +25,21 @@ mkdir -p "$cache"
 work=$(mktemp -d "$cache/build-XXXXXXXX")
 trap 'rm -rf -- "$work"' EXIT
 git -C "$upstream" archive HEAD | tar -x -C "$work"
+local_suite=$(python3 - "$manifest" <<'PY'
+import json, sys
+suite = json.load(open(sys.argv[1])).get('localSuite', '')
+if suite not in ('', 'exec'):
+    raise SystemExit('Unsupported local suite: ' + repr(suite))
+print(suite)
+PY
+)
+if [[ "$local_suite" == exec ]]; then
+    # Add our own directory only in the disposable build tree. No upstream
+    # source, test assertion or checked-out submodule is modified.
+    mkdir -p "$work/testcases/kernel/syscalls/podish_exec"
+    cp "$here/exec/Makefile" "$here"/exec/*.c "$here"/exec/*.h \
+        "$work/testcases/kernel/syscalls/podish_exec/"
+fi
 printf 'int main(void) { return 0; }\n' > "$work/probe.c"
 gcc -m32 -static -o "$work/probe" "$work/probe.c"
 cd -- "$work"
@@ -76,7 +91,7 @@ PY
         cp "testcases/kernel/syscalls/$directory/$name" "$out/testcases/bin/$name"
     fi
 done < "$work/selection"
-python3 - "$out" "$commit" "$manifest" <<'PY'
+python3 - "$out" "$commit" "$manifest" "$work" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 out = pathlib.Path(sys.argv[1])
 cases = json.load(open(sys.argv[3]))['cases']
@@ -90,6 +105,13 @@ metadata = {
     'binaries': {c['name']: hashlib.sha256((out / 'bin' / c['name']).read_bytes()).hexdigest() for c in cases},
     'resources': {r: hashlib.sha256((out / 'bin' / r).read_bytes()).hexdigest() for r in resources},
 }
+if json.load(open(sys.argv[3])).get('localSuite') == 'exec':
+    sources = pathlib.Path(sys.argv[4]) / 'testcases/kernel/syscalls/podish_exec'
+    metadata['localSources'] = {
+        p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(sources.iterdir())
+        if p.is_file() and (p.name == 'Makefile' or p.suffix in ('.c', '.h'))
+    }
 (out / 'build.json').write_text(json.dumps(metadata, indent=2) + '\n')
 print(f"Built {len(cases)} static i386 LTP executables: {out}")
 PY

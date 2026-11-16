@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "description": "Local standalone LTP execve oracles: PT_INTERP access, mapping-held writers, nosuid/setgid, combined argument budgets, and pre/post point-of-no-return failures.",
+  "localSuite": "exec",
+  "requiresRoot": true,
+  "podishFsBackend": "tmpfs",
+  "cases": [
+    {"name": "exec_interp01", "directory": "podish_exec", "group": "exec"},
+    {"name": "exec_mmap01", "directory": "podish_exec", "group": "exec"},
+    {"name": "exec_creds01", "directory": "podish_exec", "group": "exec"},
+    {"name": "exec_args01", "directory": "podish_exec", "group": "exec"},
+    {"name": "exec_commit01", "directory": "podish_exec", "group": "exec"}
+  ]
+}
