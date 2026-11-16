@@ -86,6 +86,34 @@ private:
 #endif
 };
 
+// Guest execution and all its callbacks share one host thread. Do not let a
+// callback run another engine (or Step) while block pointers are borrowed.
+static thread_local bool g_native_execution_active = false;
+
+class ScopedNativeExecution {
+public:
+    explicit ScopedNativeExecution(EmuState* state) : state_(state) {
+        if (!state_ || g_native_execution_active || state_->native_execution_active) return;
+        g_native_execution_active = true;
+        state_->native_execution_active = true;
+        state_->mmu.begin_execution();
+        entered_ = true;
+    }
+
+    ~ScopedNativeExecution() {
+        if (!entered_) return;
+        state_->mmu.end_execution();
+        state_->native_execution_active = false;
+        g_native_execution_active = false;
+    }
+
+    explicit operator bool() const { return entered_; }
+
+private:
+    EmuState* state_;
+    bool entered_ = false;
+};
+
 extern "C" {
 
 // ----------------------------------------------------------------------------
@@ -182,13 +210,6 @@ static BasicBlock* CacheDecodedBlock(EmuState* state, uint32_t cache_eip, BasicB
     return state->mmu.cache_decoded_block(cache_eip, block);
 }
 
-static BasicBlock* DecodeAndCacheBlockWithoutConcat(EmuState* state, uint32_t eip, uint32_t end_eip,
-                                                    BasicBlock* cached_block = nullptr) {
-    BasicBlock* block = DecodeBlock(state, eip, end_eip, 0, cached_block);
-    if (!block) return nullptr;
-    return CacheDecodedBlock(state, eip, block);
-}
-
 static BasicBlock* LookupOrDecodeBlockConcatSuccessor(EmuState* state, uint32_t eip, uint32_t end_eip) {
     BasicBlock* cached_block = state->mmu.lookup_cached_block(eip);
     if (cached_block && cached_block->is_valid()) return cached_block;
@@ -254,7 +275,8 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
     }
     staged_ops[out] = *b->Sentinel();
 
-    void* mem = state->mmu.allocate_block_bytes(BasicBlock::CalculateSize(concat_slot_count), start_eip);
+    void* mem = state->mmu.try_allocate_block_bytes(BasicBlock::CalculateSize(concat_slot_count), start_eip);
+    if (!mem) return nullptr;
     BasicBlock* concat = new (mem) BasicBlock;
     state->mmu.remember_allocated_block(concat);
 
@@ -299,7 +321,8 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
     }
     staged_ops[out] = *b->Sentinel();
 
-    void* mem = state->mmu.allocate_block_bytes(BasicBlock::CalculateSize(concat_slot_count), start_eip);
+    void* mem = state->mmu.try_allocate_block_bytes(BasicBlock::CalculateSize(concat_slot_count), start_eip);
+    if (!mem) return nullptr;
     BasicBlock* concat = new (mem) BasicBlock;
     state->mmu.remember_allocated_block(concat);
 
@@ -323,10 +346,13 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
 }
 
 static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuState* state, uint32_t eip,
-                                                                          uint32_t end_eip, BasicBlock* cached_block) {
-    BasicBlock* new_block = DecodeBlock(state, eip, end_eip, 0, cached_block);
+                                                                          uint32_t end_eip, BasicBlock* cached_block,
+                                                                          bool* use_single_step) {
+    const uint64_t reset_request_epoch = state->mmu.code_cache().reset_request_epoch;
+    BasicBlock* new_block = DecodeBlock(state, eip, end_eip, 0, cached_block, use_single_step);
 
     if (!new_block) {
+        if (*use_single_step) return nullptr;
         if (FaultTraceEnabled()) {
             fprintf(stderr, "[RunDbg] DecodeBlock returned null eip=%08X status=%d fault_vector=%u fault_addr=%08X\n",
                     eip, (int)state->status, (unsigned)state->fault_vector, state->fault_addr);
@@ -352,13 +378,17 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
 
     const uint64_t new_block_generation = state->mmu.code_cache().generation;
     BasicBlock* successor_block = LookupOrDecodeBlockConcatSuccessor(state, successor_eip, end_eip);
+    if (state->mmu.code_cache().reset_request_epoch != reset_request_epoch) {
+        *use_single_step = true;
+        return nullptr;
+    }
     if (!successor_block) {
         state->block_stats.block_concat_reject_target_missing++;
         return CacheDecodedBlock(state, eip, new_block);
     }
     if (state->mmu.code_cache().generation != new_block_generation) {
-        // Successor decode flushed the shared code cache, so the original candidate may already be freed.
-        return DecodeAndCacheBlockWithoutConcat(state, eip, end_eip, state->mmu.lookup_cached_block(eip));
+        *use_single_step = true;
+        return nullptr;
     }
 
     if (!CanBlockConcatWithSuccessor(new_block, successor_block, is_direct_jmp, &state->block_stats)) {
@@ -367,6 +397,13 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
 
     BasicBlock* concat_block = is_direct_jmp ? BuildDirectJmpBlockConcat(state, new_block, successor_block)
                                              : BuildJccFallthroughBlockConcat(state, new_block, successor_block);
+    // The budget warning itself invokes a host log callback. An explicit
+    // reset from that callback must not publish the pre-reset source block.
+    if (state->mmu.code_cache().reset_request_epoch != reset_request_epoch) {
+        *use_single_step = true;
+        return nullptr;
+    }
+    if (!concat_block) return CacheDecodedBlock(state, eip, new_block);
     state->block_stats.block_concat_success++;
     if (is_direct_jmp) {
         state->block_stats.block_concat_success_direct_jmp++;
@@ -453,11 +490,11 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
     // 2. Memory Handling
     if (share_mem) {
         // Shared Memory (CLONE_VM) -> Threads
-        state->mmu.attach_core(parent->mmu.core_handle(), true);
+        (void)state->mmu.attach_core(parent->mmu.core_handle(), true);
     } else {
         // Independent Memory (Fork)
         // Clone MMU with fork semantics: copy owned pages, preserve external mappings.
-        state->mmu.attach_core(mem::Mmu::CloneCorePreserveExternal(parent->mmu.core_handle()), false);
+        (void)state->mmu.attach_core(mem::Mmu::CloneCorePreserveExternal(parent->mmu.core_handle()), false);
     }
 
     // 3. Set Callbacks (Bridge to same handlers, but new 'state' passed)
@@ -500,12 +537,14 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
     return state;
 }
 
-void X86_Destroy(EmuState* state) {
+int X86_Destroy(EmuState* state) {
+    if (state && state->native_execution_active) return 0;
     if (state) {
         // MmuCore owns the block pool/code cache lifetime and will release it
         // when the last attached engine or external MMU handle goes away.
         delete state;
     }
+    return 1;
 }
 
 // ----------------------------------------------------------------------------
@@ -659,13 +698,13 @@ X86_MmuHandle* X86_EngineGetMmu(EmuState* state) {
 X86_MmuHandle* X86_EngineDetachMmu(EmuState* state) {
     if (!state) return nullptr;
     auto* detached_core = state->mmu.detach_core();
+    if (!detached_core) return nullptr;
     return X86_NewMmuHandle(detached_core, false);
 }
 
 int X86_EngineAttachMmu(EmuState* state, X86_MmuHandle* mmu) {
     if (!state || !mmu || !mmu->core) return 0;
-    state->mmu.attach_core(mmu->core, true);
-    return 1;
+    return state->mmu.attach_core(mmu->core, true) ? 1 : 0;
 }
 
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
@@ -761,7 +800,58 @@ size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86
 // Execution
 // ----------------------------------------------------------------------------
 
-void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
+// Unlike DecodeBlock(..., 1), this has no block-pool allocation. Keep the
+// caller's status, counters, and SMC policy intact (X86_Step resets those at
+// its public API boundary, so it cannot be called from inside X86_Run).
+static bool ExecuteSingleInstructionOnStack(EmuState* state) {
+    uint8_t buf[15] = {};
+    DecodedInstTmp inst{};
+    uint16_t handler_index = 0;
+    const auto decode_result = FetchAndDecodeInstruction(state, state->ctx.eip, buf, &inst, &handler_index);
+    if (decode_result == InstructionDecodeResult::FetchFault) return false;
+    if (decode_result != InstructionDecodeResult::Success) {
+        inst = {};
+        inst.head.SetLength(0);
+        inst.head.handler = g_Handlers[0x10B];
+        inst.head.next_eip = state->ctx.eip;
+    } else {
+        FinalizeDecodedInstruction(state, state->ctx.eip, handler_index, &inst.head);
+    }
+
+    alignas(16) std::byte op_storage[sizeof(DecodedOp) * 2]{};
+    auto* head = reinterpret_cast<DecodedOp*>(op_storage);
+    std::memcpy(head, &inst.head, sizeof(inst.head));
+    DecodedOp sentinel{};
+    const uint8_t subop = (head->modrm >> 3) & 7;
+    const bool indirect_branch = handler_index == 0xFF && (subop == 2 || subop == 4);
+    sentinel.handler = indirect_branch ? g_ExitHandlersBranch[0] : g_ExitHandlersFallthrough[0];
+    sentinel.next_eip = head->next_eip;
+    SetNextBlock(&sentinel, state->mmu.invalid_code_block());
+    std::memcpy(head + 1, &sentinel, sizeof(sentinel));
+
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+    state->current_block_head = head;
+#endif
+    if (head->handler) {
+        state->clear_pending_mem_op();
+        uint64_t utlb_tags = mem::InvalidMicroTlbAbiTags();
+        uint64_t utlb_addend = 0;
+        uint64_t flags_cache = GetStateFlagsCache(state);
+        head->handler(state, head, 0, utlb_tags, utlb_addend, std::numeric_limits<uint32_t>::max(), flags_cache);
+    } else if (!state->hooks.on_invalid_opcode(state)) {
+        state->status = EmuStatus::Fault;
+        state->fault_vector = 6;
+    }
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+    state->current_block_head = nullptr;
+#endif
+    return true;
+}
+
+int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
+    if (!state || g_native_execution_active || state->native_execution_active) return 0;
+    state->mmu.flush_pending_code_cache_before_run();
+    ScopedNativeExecution execution(state);
     ScopedFloatEnvironment float_environment(state);
     state->status = EmuStatus::Running;
     state->fault_vector = 0xFF;
@@ -796,6 +886,10 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             state->status = EmuStatus::Stopped;
             break;
         }
+        if (state->mmu.code_cache_flush_pending() && !smc_single_step) {
+            state->status = EmuStatus::CachePressure;
+            break;
+        }
         auto execute_block = [&](BasicBlock* block_ptr) {
 #if defined(FIBERCPU_ENABLE_BLOCK_PROFILE) || defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
             block_ptr->exec_count++;
@@ -815,7 +909,7 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             if (block_ptr->entry) {
                 state->clear_pending_mem_op();
                 state->intercept_exec_write_for_smc = true;
-                int64_t batch_limit = 100000;
+                int64_t batch_limit = state->mmu.code_cache_flush_pending() ? block_ptr->inst_count() : 100000;
                 if (max_insts != 0) {
                     uint64_t remaining_budget = max_insts - total_run_insts;
                     if (remaining_budget < (uint64_t)batch_limit) {
@@ -854,36 +948,56 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             state->smc_write_to_exec = false;
             state->allow_write_exec_page = true;
             state->last_block = state->mmu.invalid_code_block();
-            BasicBlock* single_block = DecodeBlock(state, eip, end_eip, 1);
-            if (!single_block) {
-                state->allow_write_exec_page = false;
-                if (state->status == EmuStatus::Running) {
-                    state->status = EmuStatus::Fault;
-                }
-                break;
-            }
-            execute_block(single_block);
+            state->intercept_exec_write_for_smc = true;
+            const bool executed = ExecuteSingleInstructionOnStack(state);
+            state->intercept_exec_write_for_smc = false;
             state->allow_write_exec_page = false;
             state->last_block = state->mmu.invalid_code_block();
+            if (executed) ++total_run_insts;
+            if (state->status != EmuStatus::Running) break;
+            if (state->mmu.code_cache_flush_pending()) {
+                state->status = EmuStatus::CachePressure;
+                break;
+            }
             continue;
         }
 
         BasicBlock* block_ptr = state->mmu.lookup_cached_block(eip);
+        bool use_single_step = false;
         if (!block_ptr || !block_ptr->is_valid()) {
-            block_ptr = ResolveBlockForRunSlow(state, eip, end_eip, block_ptr);
+            block_ptr = ResolveBlockForRunSlow(state, eip, end_eip, block_ptr, &use_single_step);
         }
         if (!block_ptr) {
+            if (use_single_step && state->status == EmuStatus::Running) {
+                state->last_block = state->mmu.invalid_code_block();
+                state->allow_write_exec_page = true;
+                state->intercept_exec_write_for_smc = true;
+                const bool executed = ExecuteSingleInstructionOnStack(state);
+                state->intercept_exec_write_for_smc = false;
+                state->allow_write_exec_page = false;
+                if (executed) ++total_run_insts;
+                if (state->status == EmuStatus::Running) {
+                    state->status = end_eip != 0 && state->ctx.eip == end_eip ? EmuStatus::Stopped
+                                                                                 : EmuStatus::CachePressure;
+                }
+            }
             break;
         }
 
         execute_block(block_ptr);
         if (state->status != EmuStatus::Running) break;
+        if (state->mmu.code_cache_flush_pending() && (end_eip == 0 || state->ctx.eip != end_eip) &&
+            (max_insts == 0 || total_run_insts < max_insts)) {
+            state->status = EmuStatus::CachePressure;
+            break;
+        }
     }
 
     // Sync FPU state back
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     state->current_block_head = nullptr;
 #endif
+    return 1;
 }
 
 void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats) {
@@ -991,6 +1105,8 @@ void X86_EmuYield(EmuState* state) {
 }
 
 int X86_Step(EmuState* state) {
+    ScopedNativeExecution execution(state);
+    if (!execution) return -1;
     ScopedFloatEnvironment float_environment(state);
     state->status = EmuStatus::Running;
     state->fault_vector = 0xFF;
@@ -1007,65 +1123,7 @@ int X86_Step(EmuState* state) {
     state->mmu.sync_runtime_tlb_shootdowns();
     [[maybe_unused]] auto runtime_tlb_batch = state->mmu.scoped_runtime_tlb_publish_batch();
 
-    uint8_t buf[15] = {};
-    DecodedInstTmp inst{};
-    uint16_t handler_index = 0;
-    const auto decode_result = FetchAndDecodeInstruction(state, state->ctx.eip, buf, &inst, &handler_index);
-    if (decode_result == InstructionDecodeResult::FetchFault) {
-        state->allow_write_exec_page = prev_allow_write_exec_page;
-        state->intercept_exec_write_for_smc = prev_intercept_exec_write_for_smc;
-        return (int)state->status;
-    }
-    if (decode_result != InstructionDecodeResult::Success) {
-        inst = {};
-        inst.head.SetLength(0);
-        HandlerFunc ud2 = g_Handlers[0x10B];
-        inst.head.handler = ud2;
-        inst.head.next_eip = state->ctx.eip;
-    } else {
-        FinalizeDecodedInstruction(state, state->ctx.eip, handler_index, &inst.head);
-    }
-
-    alignas(16) std::byte op_storage[sizeof(DecodedOp) * 2];
-    std::byte* op_storage_bytes = op_storage;
-    std::fill_n(op_storage_bytes, sizeof(op_storage), std::byte{0});
-    auto* head = reinterpret_cast<DecodedOp*>(op_storage);
-    std::memcpy(head, &inst.head, sizeof(inst.head));
-
-    DecodedOp sentinel{};
-    // FF /2 and /4 return their target through the dispatch branch argument.
-    // They need the same branch-carrying sentinel used by decoded blocks.
-    const uint8_t subop = (head->modrm >> 3) & 7;
-    const bool indirect_branch = handler_index == 0xFF && (subop == 2 || subop == 4);
-    HandlerFunc exit_h = indirect_branch ? g_ExitHandlersBranch[0] : g_ExitHandlersFallthrough[0];
-    sentinel.handler = exit_h;
-    sentinel.next_eip = head->next_eip;
-    SetNextBlock(&sentinel, state->mmu.invalid_code_block());
-    std::memcpy(head + 1, &sentinel, sizeof(sentinel));
-
-    HandlerFunc h = head->handler;
-#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
-    state->current_block_head = head;
-#endif
-
-    if (h) {
-        state->clear_pending_mem_op();
-        uint64_t utlb_tags = mem::InvalidMicroTlbAbiTags();
-        uint64_t utlb_addend = 0;
-        uint64_t flags_cache = GetStateFlagsCache(state);
-        h(state, head, 0, utlb_tags, utlb_addend, std::numeric_limits<uint32_t>::max(),
-          flags_cache);  // Limit 0 ensures it returns after 1 inst + sentinel
-    } else {
-        if (!state->hooks.on_invalid_opcode(state)) {
-            state->status = EmuStatus::Fault;
-            state->fault_vector = 6;
-        }
-    }
-
-    // Sync FPU state back
-#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
-    state->current_block_head = nullptr;
-#endif
+    (void)ExecuteSingleInstructionOnStack(state);
     state->allow_write_exec_page = prev_allow_write_exec_page;
     state->intercept_exec_write_for_smc = prev_intercept_exec_write_for_smc;
 
@@ -1133,9 +1191,9 @@ void X86_ResetAllCodeCache(EmuState* state) {
     if (state) state->mmu.reset_code_cache();
 }
 
-void X86_ResetMemory(EmuState* state) {
-    if (state) state->mmu.reset_memory();
-}
+int X86_ResetMemory(EmuState* state) { return state && state->mmu.reset_memory() ? 1 : 0; }
+
+int X86_IsExecuting(EmuState* state) { return state && state->native_execution_active ? 1 : 0; }
 
 void X86_ResetCodeCacheByRange(EmuState* state, uint32_t addr, uint32_t size) {
     if (!state) return;

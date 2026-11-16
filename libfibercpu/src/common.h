@@ -35,7 +35,7 @@
 
 namespace fiberish {
 
-enum class EmuStatus { Running, Stopped, Fault, Yield };
+enum class EmuStatus { Running, Stopped, Fault, Yield, CachePressure };
 
 // General Purpose Registers (Index mapping)
 enum Reg {

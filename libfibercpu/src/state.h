@@ -89,6 +89,7 @@ struct EmuState {
 
     // Chaining Info
     BasicBlock* last_block = nullptr;
+    bool native_execution_active = false;
 
     // Callback Storage
     FaultHandler fault_handler = nullptr;

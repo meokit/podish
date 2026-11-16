@@ -187,12 +187,18 @@ public sealed unsafe class CpuSandbox : IDisposable
         fixed (byte* pointer = value) X86Native.WriteFPUReg(State, logicalIndex, pointer);
     }
 
-    public EmuStatus Step() => (EmuStatus)X86Native.Step(State);
+    public EmuStatus Step()
+    {
+        var status = X86Native.Step(State);
+        if (status < 0) throw new InvalidOperationException("Guest execution cannot be re-entered from a callback.");
+        return (EmuStatus)status;
+    }
 
     public void Run(uint endEip, ulong maxInstructions = 10000)
     {
         if (maxInstructions == 0) throw new ArgumentOutOfRangeException(nameof(maxInstructions), "Tests need a finite budget.");
-        X86Native.Run(State, endEip, maxInstructions);
+        if (X86Native.Run(State, endEip, maxInstructions) == 0)
+            throw new InvalidOperationException("Guest execution cannot be re-entered from a callback.");
     }
 
     public CpuSnapshot Snapshot() => new(

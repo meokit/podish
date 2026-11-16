@@ -321,7 +321,7 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
-    public void CodeCacheBudgetFlush_ConcatSuccessorDecodeRestartStillRuns()
+    public void CodeCacheBudgetFlush_SuccessorDecodeDefersReclamationUntilNextRun()
     {
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
@@ -331,13 +331,18 @@ public class EngineMmuTransferTests
         engine.Eip = BudgetTestCodeBaseAddr;
         engine.Run(BudgetTestCodeBaseAddr + 6, 32);
 
+        Assert.Equal(EmuStatus.CachePressure, engine.Status);
+        Assert.Equal(BudgetTestCodeBaseAddr + 4, engine.Eip);
+        Assert.Equal(0ul, ReadCodeCacheStats(engine).CodeCacheFlushCount);
+
+        engine.Run(BudgetTestCodeBaseAddr + 6, 32);
         Assert.Equal(EmuStatus.Stopped, engine.Status);
         Assert.Equal(BudgetTestCodeBaseAddr + 6, engine.Eip);
         Assert.True(ReadCodeCacheStats(engine).CodeCacheFlushCount > 0);
     }
 
     [Fact]
-    public void CodeCacheBudgetFlush_DirectJmpConcatFlushStillBuildsReusableBlock()
+    public void CodeCacheBudgetFlush_ConcatAllocationFallsBackToSourceBlock()
     {
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
@@ -347,19 +352,220 @@ public class EngineMmuTransferTests
         engine.Eip = BudgetTestCodeBaseAddr;
         engine.Run(BudgetTestCodeBaseAddr + 6, 32);
 
-        Assert.Equal(EmuStatus.Stopped, engine.Status);
-        Assert.Equal(BudgetTestCodeBaseAddr + 6, engine.Eip);
-
+        Assert.Equal(EmuStatus.CachePressure, engine.Status);
+        Assert.Equal(BudgetTestCodeBaseAddr + 4, engine.Eip);
         var afterFirstRun = ReadCodeCacheStats(engine);
-        Assert.True(afterFirstRun.CodeCacheFlushCount > 0);
+        Assert.Equal(0ul, afterFirstRun.CodeCacheFlushCount);
         Assert.True(afterFirstRun.BlockCacheSize > 0);
+        Assert.True(afterFirstRun.CodeCacheBytesRequested <= afterFirstRun.CodeCacheLimitBytes);
+        Assert.Equal(0ul, engine.GetBlockStats().BlockConcatSuccess);
 
-        engine.Eip = BudgetTestCodeBaseAddr;
         engine.Run(BudgetTestCodeBaseAddr + 6, 32);
 
         Assert.Equal(EmuStatus.Stopped, engine.Status);
         Assert.Equal(BudgetTestCodeBaseAddr + 6, engine.Eip);
-        Assert.Equal(afterFirstRun.CodeCacheFlushCount, ReadCodeCacheStats(engine).CodeCacheFlushCount);
+        Assert.Equal(afterFirstRun.CodeCacheFlushCount + 1, ReadCodeCacheStats(engine).CodeCacheFlushCount);
+    }
+
+    [Fact]
+    public void ResetFromBudgetWarning_DuringConcatDoesNotPublishOldSource()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        InstallConcatDirectJmpCode(engine, BudgetTestCodeBaseAddr);
+        engine.SetCodeCacheBudgetBytesForTesting(320);
+        var resetInWarning = false;
+        engine.LogHandler = (cpu, _, message) =>
+        {
+            if (!message.Contains("CodeCacheBudgetFlush", StringComparison.Ordinal)) return;
+            resetInWarning = true;
+            cpu.ResetAllCodeCache();
+        };
+
+        engine.Eip = BudgetTestCodeBaseAddr;
+        var generationBefore = ReadCodeCacheStats(engine).CodeCacheGeneration;
+        engine.Run(BudgetTestCodeBaseAddr + 6, 32);
+
+        Assert.True(resetInWarning);
+        Assert.Equal(EmuStatus.CachePressure, engine.Status);
+        Assert.Equal(BudgetTestCodeBaseAddr + 4, engine.Eip);
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+        Assert.Equal(generationBefore, ReadCodeCacheStats(engine).CodeCacheGeneration);
+
+        engine.LogHandler = null;
+        engine.Run(BudgetTestCodeBaseAddr + 6, 32);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(BudgetTestCodeBaseAddr + 6, engine.Eip);
+        Assert.True(ReadCodeCacheStats(engine).CodeCacheGeneration > generationBefore);
+    }
+
+    [Fact]
+    public void CodeCacheBudgetBelowOneBlock_ExecutesOnStackWithoutRepeatedlyFlushingEmptyPool()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        InstallSimpleCode(engine);
+        engine.SetCodeCacheBudgetBytesForTesting(64);
+        engine.Eip = CodeAddr;
+
+        engine.Run(CodeAddr + 2, 16);
+        Assert.Equal(EmuStatus.CachePressure, engine.Status);
+        Assert.Equal(CodeAddr + 1, engine.Eip);
+        engine.Run(CodeAddr + 2, 16);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(CodeAddr + 2, engine.Eip);
+        Assert.Equal(0ul, ReadCodeCacheStats(engine).CodeCacheFlushCount);
+        Assert.Equal(0, engine.GetBlockCount());
+    }
+
+    [Theory]
+    [InlineData(false, 4u)]
+    [InlineData(true, 2u)]
+    public void CodeCacheBudgetFlush_JccConcatRejectsAllocationForBothPaths(bool branchTaken, uint expectedIncrements)
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        const uint addr = BudgetTestCodeBaseAddr;
+        var page = engine.AllocatePage(addr, (byte)(Protection.Read | Protection.Write | Protection.Exec));
+        Marshal.Copy(new byte[] { 0x74, 0x02, 0x40, 0x40, 0x40, 0x40 }, 0, page, 6);
+        engine.SetCodeCacheBudgetBytesForTesting(320);
+        engine.Eflags = branchTaken ? 0x40u : 0u;
+        engine.Eip = addr;
+
+        engine.Run(addr + 6, 32);
+        Assert.Equal(EmuStatus.CachePressure, engine.Status);
+        Assert.Equal(branchTaken ? addr + 4 : addr + 2, engine.Eip);
+        Assert.Equal(0ul, engine.GetBlockStats().BlockConcatSuccess);
+        Assert.Equal(0ul, ReadCodeCacheStats(engine).CodeCacheFlushCount);
+
+        engine.Run(addr + 6, 32);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(expectedIncrements, engine.RegRead(Reg.EAX));
+        Assert.Equal(1ul, ReadCodeCacheStats(engine).CodeCacheFlushCount);
+    }
+
+    [Fact]
+    public void ResetDuringExecutableFetch_DiscardsInvalidatedCandidateAndDefersPoolRelease()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        InstallSimpleCode(engine);
+        WarmSimpleCode(engine);
+        engine.ResetCodeCacheByRange(CodeAddr, (uint)SimpleCode.Length);
+        engine.ReprotectMappedRange(CodeAddr, LinuxConstants.PageSize, (byte)Protection.Read);
+
+        var resetDuringFetch = false;
+        engine.FaultHandler = (cpu, addr, _) =>
+        {
+            if (addr != CodeAddr) return false;
+            cpu.ResetAllCodeCache();
+            resetDuringFetch = true;
+            cpu.ReprotectMappedRange(CodeAddr, LinuxConstants.PageSize, (byte)(Protection.Read | Protection.Exec));
+            return true;
+        };
+
+        var generationBefore = ReadCodeCacheStats(engine).CodeCacheGeneration;
+        engine.Eip = CodeAddr;
+        engine.Run(CodeAddr + 2, 16);
+        Assert.True(resetDuringFetch);
+        Assert.Equal(EmuStatus.CachePressure, engine.Status);
+        Assert.Equal(CodeAddr + 1, engine.Eip);
+        Assert.Equal(generationBefore, ReadCodeCacheStats(engine).CodeCacheGeneration);
+
+        engine.Run(CodeAddr + 2, 16);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(CodeAddr + 2, engine.Eip);
+        Assert.True(ReadCodeCacheStats(engine).CodeCacheGeneration > generationBefore);
+    }
+
+    [Fact]
+    public void ResetDuringFailedSpeculativeSuccessor_DoesNotCacheTheOldSource()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        const uint source = BudgetTestCodeBaseAddr;
+        const uint missingSuccessor = source + LinuxConstants.PageSize;
+        var page = engine.AllocatePage(source, (byte)(Protection.Read | Protection.Write | Protection.Exec));
+        // JMP rel32 to the unmapped next page.
+        Marshal.Copy(new byte[] { 0xE9, 0xFB, 0x0F, 0x00, 0x00 }, 0, page, 5);
+        var resetDuringSuccessor = false;
+        engine.FaultHandler = (cpu, addr, _) =>
+        {
+            if (addr == missingSuccessor && !resetDuringSuccessor)
+            {
+                resetDuringSuccessor = true;
+                cpu.ResetAllCodeCache();
+            }
+            return false;
+        };
+
+        engine.Eip = source;
+        var generationBefore = ReadCodeCacheStats(engine).CodeCacheGeneration;
+        engine.Run(maxInsts: 16);
+        Assert.True(resetDuringSuccessor);
+        Assert.Equal(EmuStatus.CachePressure, engine.Status);
+        Assert.Equal(missingSuccessor, engine.Eip);
+        Assert.Equal(0, ReadCodeCacheStats(engine).BlockCacheSize);
+        Assert.Equal(generationBefore, ReadCodeCacheStats(engine).CodeCacheGeneration);
+
+        engine.Run(maxInsts: 16);
+        Assert.Equal(EmuStatus.Fault, engine.Status);
+        Assert.True(ReadCodeCacheStats(engine).CodeCacheGeneration > generationBefore);
+    }
+
+    [Fact]
+    public void MemoryFaultCallback_CannotReenterRunAndDefersExplicitReset()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var sibling = engine.Clone(true);
+        const uint dataAddr = 0x00490000;
+        InstallAbsoluteAlByteReader(engine, CodeAddr, dataAddr);
+        var rejectedSame = false;
+        var rejectedSibling = false;
+        var rejectedStep = false;
+        var rejectedResetMemory = false;
+        var rejectedRebind = false;
+        var rejectedDestroy = false;
+        using var replacement = MmuHandle.CreateEmpty();
+        engine.FaultHandler = (cpu, addr, _) =>
+        {
+            if (addr != dataAddr) return false;
+            try { cpu.Run(); }
+            catch (InvalidOperationException) { rejectedSame = true; }
+            try { sibling.Run(); }
+            catch (InvalidOperationException) { rejectedSibling = true; }
+            try { cpu.Step(); }
+            catch (InvalidOperationException) { rejectedStep = true; }
+            try { sibling.ResetMemory(); }
+            catch (InvalidOperationException) { rejectedResetMemory = true; }
+            try { cpu.ReplaceMmu(replacement); }
+            catch (InvalidOperationException) { rejectedRebind = true; }
+            try { cpu.Dispose(); }
+            catch (InvalidOperationException) { rejectedDestroy = true; }
+            sibling.ResetAllCodeCache();
+            var page = cpu.AllocatePage(dataAddr, (byte)(Protection.Read | Protection.Write));
+            Marshal.WriteByte(page, 0x5A);
+            return true;
+        };
+
+        engine.Eip = CodeAddr;
+        var generationBefore = ReadCodeCacheStats(engine).CodeCacheGeneration;
+        engine.Run(CodeAddr + 5, 16);
+        Assert.True(rejectedSame);
+        Assert.True(rejectedSibling);
+        Assert.True(rejectedStep);
+        Assert.True(rejectedResetMemory);
+        Assert.True(rejectedRebind);
+        Assert.True(rejectedDestroy);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal((uint)0x5A, engine.RegRead(Reg.EAX) & 0xFF);
+        Assert.Equal(generationBefore, ReadCodeCacheStats(engine).CodeCacheGeneration);
+
+        engine.Eip = CodeAddr;
+        engine.Run(CodeAddr + 5, 16);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.True(ReadCodeCacheStats(engine).CodeCacheGeneration > generationBefore);
     }
 
     [Fact]
@@ -1000,7 +1206,11 @@ public class EngineMmuTransferTests
     private static void WarmSimpleCode(Engine engine, uint addr)
     {
         engine.Eip = addr;
-        engine.Run(addr + (uint)SimpleCode.Length, 16);
+        for (var attempt = 0; attempt < 16; ++attempt)
+        {
+            engine.Run(addr + (uint)SimpleCode.Length, 16);
+            if (engine.Status != EmuStatus.CachePressure) break;
+        }
         Assert.Equal(EmuStatus.Stopped, engine.Status);
         Assert.Equal(addr + (uint)SimpleCode.Length, engine.Eip);
     }

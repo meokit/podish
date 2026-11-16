@@ -762,7 +762,8 @@ public class Engine : IDisposable
     public virtual void Run(uint endEip = 0, ulong maxInsts = 0)
     {
         AssertNotDisposed();
-        X86Native.Run(State, endEip, maxInsts);
+        if (X86Native.Run(State, endEip, maxInsts) == 0)
+            throw new InvalidOperationException("Native guest execution cannot be re-entered from a callback.");
     }
 
     public virtual void Stop()
@@ -786,7 +787,10 @@ public class Engine : IDisposable
     public virtual int Step()
     {
         AssertNotDisposed();
-        return X86Native.Step(State);
+        var status = X86Native.Step(State);
+        if (status < 0)
+            throw new InvalidOperationException("Native guest execution cannot be re-entered from a callback.");
+        return status;
     }
 
     public virtual bool IsDirty(uint addr)
@@ -853,7 +857,8 @@ public class Engine : IDisposable
     public void ResetMemory()
     {
         AssertNotDisposed();
-        X86Native.ResetMemory(State);
+        if (X86Native.ResetMemory(State) == 0)
+            throw new InvalidOperationException("Cannot replace an MMU while its native code is executing.");
     }
 
     internal void SetCodeCacheBudgetBytesForTesting(ulong bytes)
@@ -1061,6 +1066,8 @@ public class Engine : IDisposable
     {
         if (!_disposed)
         {
+            if (State != IntPtr.Zero && X86Native.IsExecuting(State) != 0)
+                throw new InvalidOperationException("Cannot destroy an engine while it is executing guest code.");
             if (_currentMmu != null && !_currentMmu.IsClosed)
             {
                 try
@@ -1077,7 +1084,8 @@ public class Engine : IDisposable
 
             if (State != IntPtr.Zero)
             {
-                X86Native.Destroy(State);
+                if (X86Native.Destroy(State) == 0)
+                    throw new InvalidOperationException("Cannot destroy an engine while it is executing guest code.");
                 State = IntPtr.Zero;
             }
 

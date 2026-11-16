@@ -40,7 +40,7 @@ EmuState* X86_Create();
 EmuState* X86_CreateWithOptions(uint32_t options);
 // share_mem=1: Threads (CLONE_VM), share_mem=0: Fork (copy owned pages, preserve external mappings)
 EmuState* X86_Clone(EmuState* parent, int share_mem);
-void X86_Destroy(EmuState* state);
+int X86_Destroy(EmuState* state);
 
 // Register Access
 uint32_t X86_RegRead(EmuState* state, int reg_index);
@@ -101,7 +101,8 @@ X86_MmuHandle* X86_EngineDetachMmu(EmuState* state);
 int X86_EngineAttachMmu(EmuState* state, X86_MmuHandle* mmu);
 
 // Execution
-void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts);
+// Returns zero if a host callback attempts to re-enter native execution.
+int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts);
 void X86_EmuStop(EmuState* state);
 void X86_EmuFault(EmuState* state);
 void X86_EmuYield(EmuState* state);
@@ -119,7 +120,9 @@ void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook
 
 // Cache Control
 void X86_ResetAllCodeCache(EmuState* state);
-void X86_ResetMemory(EmuState* state);
+// Returns zero if the core is currently executing guest code.
+int X86_ResetMemory(EmuState* state);
+int X86_IsExecuting(EmuState* state);
 void X86_ResetCodeCacheByRange(EmuState* state, uint32_t addr, uint32_t size);
 void X86_InvalidateCodeCacheHostPages(EmuState* state, const void* const* host_pages, size_t count);
 void X86_SetCodeCacheBudgetBytes(EmuState* state, uint64_t bytes);

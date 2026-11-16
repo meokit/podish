@@ -1751,6 +1751,7 @@ public partial class FiberTask
                     break;
 
                 case EmuStatus.Yield:
+                case EmuStatus.CachePressure:
                 case EmuStatus.Running: // instruction quota exhausted
                     // Normal yield (quota or explicit sched_yield if implemented)
                     // Re-queue so other tasks get a turn

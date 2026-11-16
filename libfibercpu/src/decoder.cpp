@@ -529,7 +529,13 @@ static bool BasicBlockMatchesDecodedCandidate(const BasicBlock* candidate, uint3
 }
 
 BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts,
-                        BasicBlock* invalidated_candidate) {
+                         BasicBlock* invalidated_candidate, bool* use_single_step) {
+    if (use_single_step) *use_single_step = false;
+    const uint64_t reset_request_epoch = state->mmu.code_cache().reset_request_epoch;
+    if (state->mmu.code_cache_flush_pending()) {
+        if (use_single_step) *use_single_step = true;
+        return nullptr;
+    }
     // 1. Decode into temporary storage
     // Use a small buffer on stack to avoid heap allocation for common small blocks?
     // Or just std::vector. std::vector is safer for now.
@@ -787,6 +793,15 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 finalize:
     if (!success || temp_ops.empty()) return nullptr;
 
+    // An executable-fetch callback may have invalidated the candidate (or the
+    // source block held by a concatenation builder). The pool is still alive,
+    // but neither the candidate nor the decoded bytes may now be published.
+    if (state->mmu.code_cache_flush_pending() ||
+        state->mmu.code_cache().reset_request_epoch != reset_request_epoch) {
+        if (use_single_step) *use_single_step = true;
+        return nullptr;
+    }
+
     state->block_stats.Record(inst_count, stop_reason);
 
     const uint32_t slot_count = static_cast<uint32_t>(temp_ops.size());
@@ -818,7 +833,11 @@ finalize:
     }
 
     size_t alloc_size = BasicBlock::CalculateSize(slot_count);
-    void* mem = state->mmu.allocate_block_bytes(alloc_size, start_eip);
+    void* mem = state->mmu.try_allocate_block_bytes(alloc_size, start_eip);
+    if (!mem) {
+        if (use_single_step) *use_single_step = true;
+        return nullptr;
+    }
     BasicBlock* block = new (mem) BasicBlock;
     state->mmu.remember_allocated_block(block);
 

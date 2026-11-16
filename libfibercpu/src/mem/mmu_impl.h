@@ -20,6 +20,8 @@ inline EmuState* Mmu::get_state() {
     return reinterpret_cast<EmuState*>(reinterpret_cast<char*>(this) - offset);
 }
 
+inline bool Mmu::owning_engine_is_executing() { return get_state()->native_execution_active; }
+
 inline void Mmu::on_code_cache_hard_reset() {
     clear_block_lookup_cache();
     seen_code_cache_generation_ = core_ ? core_->code_cache.generation : 0;
@@ -28,11 +30,17 @@ inline void Mmu::on_code_cache_hard_reset() {
     }
 }
 
-inline void* Mmu::allocate_block_bytes(size_t size, uint32_t guest_eip) {
+inline void* Mmu::try_allocate_block_bytes(size_t size, uint32_t guest_eip) {
     sync_code_cache_generation();
 
     auto& cache = code_cache();
+    if (cache.pending_flush) return nullptr;
     if (cache.ShouldFlushForAllocation(size)) {
+        // A block allocation must never reclaim storage borrowed by a decoder,
+        // concatenation builder, or a running native operation chain.
+        if (cache.requested_block_bytes == 0) return nullptr;
+        cache.pending_flush = true;
+        cache.pending_budget_flush = true;
         const size_t bytes_before_flush = cache.requested_block_bytes;
         const size_t valid_blocks_before_flush = cache.CountValidBlocks();
         const size_t total_blocks_before_flush = cache.all_blocks.size();
@@ -41,13 +49,12 @@ inline void* Mmu::allocate_block_bytes(size_t size, uint32_t guest_eip) {
 
         LogMsgState(get_state(), LogWarning,
                     "[CodeCacheBudgetFlush] mmu=0x%zx budget=%zu bytes_before=%zu alloc=%zu valid_blocks=%zu "
-                    "all_blocks=%zu flush_count=%llu guest_eip=0x%08x",
+                    "all_blocks=%zu flush_count=%llu guest_eip=0x%08x pending=1",
                     static_cast<size_t>(mmu_identity), cache.block_budget_bytes, bytes_before_flush, size,
                     valid_blocks_before_flush, total_blocks_before_flush,
                     static_cast<unsigned long long>(next_flush_count), guest_eip);
 
-        cache.HardResetReleaseAll(1, 1);
-        on_code_cache_hard_reset();
+        return nullptr;
     }
 
     void* block_mem = cache.block_pool.allocate(size);

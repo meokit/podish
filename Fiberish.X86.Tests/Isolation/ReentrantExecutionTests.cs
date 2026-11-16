@@ -10,7 +10,7 @@ public sealed class ReentrantExecutionTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public unsafe void FaultCallbackExecutingPeerRestoresOuterFloatingEnvironment(bool run)
+    public unsafe void FaultCallbackRejectsPeerExecutionWithoutChangingOuterFloatingEnvironment(bool run)
     {
         using var outer = FloatingStateIsolationTests.CreateRounder(1, 1.5);
         using var inner = FloatingStateIsolationTests.CreateRounder(2, 1.5);
@@ -23,7 +23,10 @@ public sealed class ReentrantExecutionTests
             FloatingStateIsolationTests.ExecuteRounder(outer, run);
             Assert.Null(context.Error);
             Assert.Equal(1, context.Invocations);
+            Assert.True(context.PeerRunRejected);
+            Assert.Equal(CpuSandbox.CodeAddress, inner.Eip);
             Assert.Equal(1.0, FloatingStateIsolationTests.ReadResult(outer));
+            FloatingStateIsolationTests.ExecuteRounder(inner, run: true);
             Assert.Equal(2.0, FloatingStateIsolationTests.ReadResult(inner));
             Assert.Equal(-1, outer.FaultVector);
         }
@@ -43,7 +46,8 @@ public sealed class ReentrantExecutionTests
             if (context.Invocations++ != 0 || state != context.Outer.State ||
                 address != CpuSandbox.DataAddress || isWrite != 0)
                 throw new InvalidOperationException($"Unexpected nested fault at {address:X8} (write={isWrite}).");
-            FloatingStateIsolationTests.ExecuteRounder(context.Inner, run: true);
+            try { context.Inner.Run(CpuSandbox.CodeAddress + 14); }
+            catch (InvalidOperationException) { context.PeerRunRejected = true; }
             context.Outer.MapMemory(CpuSandbox.DataAddress, CpuSandbox.PageSize);
             context.Outer.WriteMemory(CpuSandbox.DataAddress, BitConverter.GetBytes(1.5));
             return 1;
@@ -62,6 +66,7 @@ public sealed class ReentrantExecutionTests
         public CpuSandbox Outer { get; } = outer;
         public CpuSandbox Inner { get; } = inner;
         public int Invocations { get; set; }
+        public bool PeerRunRejected { get; set; }
         public Exception? Error { get; set; }
     }
 }

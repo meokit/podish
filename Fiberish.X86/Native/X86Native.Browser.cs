@@ -8,7 +8,8 @@ public enum EmuStatus
     Running = 0,
     Stopped = 1,
     Fault = 2,
-    Yield = 3
+    Yield = 3,
+    CachePressure = 4
 }
 
 public enum Reg
@@ -52,7 +53,7 @@ public unsafe partial class X86Native
     public static partial IntPtr Clone(IntPtr parent, int shareMem);
 
     [LibraryImport(LibName, EntryPoint = "X86_Destroy")]
-    public static partial void Destroy(IntPtr state);
+    public static partial int Destroy(IntPtr state);
 
     [LibraryImport(LibName, EntryPoint = "X86_RegRead")]
     [SuppressGCTransition]
@@ -109,7 +110,7 @@ public unsafe partial class X86Native
     public static partial void MemRead(IntPtr state, uint addr, byte* val, uint size);
 
     [LibraryImport(LibName, EntryPoint = "X86_Run")]
-    public static partial void Run(IntPtr state, uint endEip, ulong maxInsts);
+    public static partial int Run(IntPtr state, uint endEip, ulong maxInsts);
 
     [LibraryImport(LibName, EntryPoint = "X86_EmuStop")]
     [SuppressGCTransition]
@@ -211,7 +212,10 @@ public unsafe partial class X86Native
     public static partial void ResetAllCodeCache(IntPtr state);
 
     [LibraryImport(LibName, EntryPoint = "X86_ResetMemory")]
-    public static partial void ResetMemory(IntPtr state);
+    public static partial int ResetMemory(IntPtr state);
+
+    [LibraryImport(LibName, EntryPoint = "X86_IsExecuting")]
+    public static partial int IsExecuting(IntPtr state);
 
     [LibraryImport(LibName, EntryPoint = "X86_ResetCodeCacheByRange")]
     public static partial void ResetCodeCacheByRange(IntPtr state, uint addr, uint size);

@@ -357,6 +357,6 @@ void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_
 
 // Start EIP, Limit EIP, Max Instructions -> Returns Pointer to allocated block or nullptr
 BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts,
-                        BasicBlock* invalidated_candidate = nullptr);
+                        BasicBlock* invalidated_candidate = nullptr, bool* use_single_step = nullptr);
 
 }  // namespace fiberish

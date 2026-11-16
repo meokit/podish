@@ -296,6 +296,9 @@ struct CodeCacheState {
     size_t block_budget_bytes = kDefaultBlockBudgetBytes;
     uint64_t flush_count = 0;
     uint64_t generation = 0;
+    uint64_t reset_request_epoch = 0;
+    bool pending_flush = false;
+    bool pending_budget_flush = false;
 
     CodeCacheState() { InitializeInvalidBasicBlock(dummy_invalid_block); }
 
@@ -316,18 +319,20 @@ struct CodeCacheState {
         const size_t preserved_budget_bytes = block_budget_bytes;
         const uint64_t next_flush_count = flush_count + flush_count_increment;
         const uint64_t next_generation = generation + generation_increment;
+        const uint64_t next_reset_request_epoch = reset_request_epoch;
 
         this->~CodeCacheState();
         new (this) CodeCacheState();
         block_budget_bytes = preserved_budget_bytes;
         flush_count = next_flush_count;
         generation = next_generation;
+        reset_request_epoch = next_reset_request_epoch;
     }
 
     void SetBlockBudgetBytes(size_t bytes) { block_budget_bytes = bytes == 0 ? kDefaultBlockBudgetBytes : bytes; }
 
     [[nodiscard]] bool ShouldFlushForAllocation(size_t alloc_size) const {
-        if (block_budget_bytes == 0 || requested_block_bytes == 0) return false;
+        if (block_budget_bytes == 0) return false;
         return alloc_size > std::numeric_limits<size_t>::max() - requested_block_bytes ||
                requested_block_bytes + alloc_size > block_budget_bytes;
     }
@@ -635,6 +640,9 @@ struct MmuCore {
     uintptr_t identity = 0;
     uint32_t state_flags = 0;
     CodeCacheState code_cache;
+    // Execution is serialized by the host scheduler. Callback-time cache resets
+    // may invalidate reachability, but must not release this core's block pool.
+    bool execution_active = false;
     struct ExternalAliasState {
         uint32_t exec_count = 0;
         uint32_t write_count = 0;
@@ -816,6 +824,7 @@ public:
 
 private:
     EmuState* get_state();
+    [[nodiscard]] bool owning_engine_is_executing();
 
     // Updated signal_fault to take context
     [[nodiscard]] EmuStatus signal_fault(uint32_t addr, int is_write);
@@ -1312,7 +1321,20 @@ public:
 
     [[nodiscard]] const BasicBlock* invalid_code_block() const { return &code_cache().dummy_invalid_block; }
 
-    [[nodiscard]] void* allocate_block_bytes(size_t size, uint32_t guest_eip);
+    [[nodiscard]] void* try_allocate_block_bytes(size_t size, uint32_t guest_eip);
+
+    [[nodiscard]] bool code_cache_flush_pending() const { return code_cache().pending_flush; }
+
+    void begin_execution() { core_->execution_active = true; }
+    void end_execution() { core_->execution_active = false; }
+
+    void flush_pending_code_cache_before_run() {
+        auto& cache = code_cache();
+        if (!cache.pending_flush || core_->execution_active) return;
+        const uint64_t budget_flush = cache.pending_budget_flush ? 1 : 0;
+        cache.HardResetReleaseAll(1, budget_flush);
+        on_code_cache_hard_reset();
+    }
 
     void remember_allocated_block(BasicBlock* block) { code_cache().RememberAllocatedBlock(block); }
 
@@ -1363,6 +1385,13 @@ public:
     void reset_code_cache() {
         [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         clear_block_lookup_cache();
+        if (core_->execution_active) {
+            auto& cache = code_cache();
+            cache.InvalidateAll();
+            ++cache.reset_request_epoch;
+            cache.pending_flush = true;
+            return;
+        }
         code_cache().HardResetReleaseAll(1, 0);
         on_code_cache_hard_reset();
     }
@@ -1621,11 +1650,12 @@ public:
     // API: reset_memory - Replace page directory contents with a fresh empty one.
     // Used during execve to clear all native pages before loading the new binary.
     // Keep core identity stable so C# MMU handles remain valid.
-    void reset_memory() {
+    [[nodiscard]] bool reset_memory() {
+        if (core_ && core_->execution_active) return false;
         [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         if (!core_) {
             bind_core(CreateEmptyCore(), false);
-            return;
+            return true;
         }
         core_->page_directory = std::make_unique<PageDirectory>();
         page_dir = core_->page_directory.get();
@@ -1634,6 +1664,7 @@ public:
         core_->external_aliases.clear();
         tlb.flush();
         publish_runtime_tlb_flush_all();
+        return true;
     }
 
     void set_code_cache_budget_bytes(size_t bytes) { code_cache().SetBlockBudgetBytes(bytes); }
@@ -1643,6 +1674,7 @@ public:
     void flush_tlb_only() { tlb.flush(); }
 
     [[nodiscard]] MmuCore* detach_core() {
+        if (owning_engine_is_executing()) return nullptr;
         if (!core_) {
             bind_core(CreateEmptyCore(), false);
         }
@@ -1652,12 +1684,14 @@ public:
         return detached;
     }
 
-    void attach_core(MmuCore* core, bool add_ref = true) {
+    [[nodiscard]] bool attach_core(MmuCore* core, bool add_ref = true) {
+        if (owning_engine_is_executing()) return false;
         if (!core) {
             bind_core(CreateEmptyCore(), false);
-            return;
+            return true;
         }
         bind_core(core, add_ref);
+        return true;
     }
 
     // Internal helper for resolution (TLB or Slow) without hooks
