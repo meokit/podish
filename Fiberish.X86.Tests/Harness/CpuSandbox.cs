@@ -1,5 +1,6 @@
 using Fiberish.X86.Native;
 using Microsoft.Win32.SafeHandles;
+using System.Runtime.InteropServices;
 
 namespace Fiberish.X86.Tests.Harness;
 
@@ -16,6 +17,7 @@ public sealed unsafe class CpuSandbox : IDisposable
 
     private readonly CpuHandle _handle;
     private readonly Dictionary<uint, byte> _pages = [];
+    private readonly List<IntPtr> _externalPages = [];
 
     public CpuSandbox(bool mapDefaults = true)
     {
@@ -90,6 +92,31 @@ public sealed unsafe class CpuSandbox : IDisposable
             new Span<byte>(pointer, (int)PageSize).Clear();
             _pages.Add(guestPage, permissions);
         }
+    }
+
+    /// <summary>
+    /// Maps a page whose backing memory is owned by the caller (the emulator
+    /// marks it External). External executable pages are the only ones that arm
+    /// SMC write interception, so instruction tests that exercise
+    /// ForceWriteSlow use this instead of AllocatePage.
+    /// </summary>
+    public void MapExternalMemory(uint address, byte permissions = 3)
+    {
+        CheckedEnd(address, PageSize);
+        if ((address & (PageSize - 1)) != 0)
+            throw new ArgumentException("External pages must be page aligned.", nameof(address));
+        if (_pages.ContainsKey(address))
+            throw new InvalidOperationException($"Guest page {address:X8} is already mapped.");
+
+        IntPtr memory = Marshal.AllocHGlobal((int)PageSize);
+        new Span<byte>((void*)memory, (int)PageSize).Clear();
+        if (X86Native.MapManagedPage(State, address, (void*)memory, permissions) == 0)
+        {
+            Marshal.FreeHGlobal(memory);
+            throw new InvalidOperationException($"Could not map external guest page {address:X8}.");
+        }
+        _externalPages.Add(memory);
+        _pages.Add(address, permissions);
     }
 
     public void ProtectMemory(uint address, uint size, byte permissions)
@@ -207,7 +234,12 @@ public sealed unsafe class CpuSandbox : IDisposable
         Enumerable.Range(0, 8).Select(ReadXmm).ToArray(),
         Enumerable.Range(0, 8).Select(ReadFpu).ToArray());
 
-    public void Dispose() => _handle.Dispose();
+    public void Dispose()
+    {
+        _handle.Dispose();
+        foreach (IntPtr page in _externalPages) Marshal.FreeHGlobal(page);
+        _externalPages.Clear();
+    }
 
     private static ulong CheckedEnd(uint address, uint size)
     {

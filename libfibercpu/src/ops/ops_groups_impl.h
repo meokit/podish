@@ -218,7 +218,22 @@ FORCE_INLINE LogicFlow OpXadd_T_Internal(LogicFuncParams) {
     else
         src_val = (T)GetReg(state, reg);
 
-    T res = AluAdd(state, flags_cache, dest_val, src_val);
+    // Keep the flag update local until the store is known to have completed: a
+    // faulting instruction must not commit partial architectural state.
+    uint64_t xadd_flags = flags_cache;
+    T res = AluAdd(state, xadd_flags, dest_val, src_val);
+
+    // Write the result BEFORE overwriting the source register. WriteModRM
+    // recomputes the effective address from the register file, and the source
+    // register can participate in that address (e.g. xadd [eax], eax).
+    if constexpr (sizeof(T) == 1) {
+        if (!WriteModRM<uint8_t, OpOnTLBMiss::Blocking>(state, op, res, utlb)) return LogicFlow::ExitOnCurrentEIP;
+    } else if constexpr (sizeof(T) == 2) {
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, res, utlb)) return LogicFlow::ExitOnCurrentEIP;
+    } else {
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::Blocking>(state, op, res, utlb)) return LogicFlow::ExitOnCurrentEIP;
+    }
+    flags_cache = xadd_flags;
 
     // Swap: Original Dest -> Src Reg
     if constexpr (sizeof(T) == 1) {
@@ -236,14 +251,6 @@ FORCE_INLINE LogicFlow OpXadd_T_Internal(LogicFuncParams) {
         SetReg(state, reg, dest_val);
     }
 
-    // Result -> Dest Memory/Reg (Retry on fail)
-    if constexpr (sizeof(T) == 1) {
-        if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
-    } else if constexpr (sizeof(T) == 2) {
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
-    } else {
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
-    }
     return LogicFlow::Continue;
 }
 

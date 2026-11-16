@@ -503,7 +503,11 @@ FORCE_INLINE LogicFlow OpXchg_EbGb(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t reg_val = GetReg8(state, reg);
 
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, reg_val, utlb)) return LogicFlow::RetryMemoryOp;
+    // The store must not use the retry mechanism: the register write below has
+    // to happen exactly once, after the store succeeds. If it faults (page
+    // fault or SMC interception), exit on the instruction start so the whole
+    // instruction is re-executed instead of resuming after it.
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Blocking>(state, op, reg_val, utlb)) return LogicFlow::ExitOnCurrentEIP;
     SetReg8(state, reg, rm_val);
     return LogicFlow::Continue;
 }

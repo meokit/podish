@@ -61,6 +61,10 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
         if (!fault) {
             mem_op.done = true;
         } else {
+            // Flags produced by earlier instructions in this block are still
+            // only in the local cache. Commit them before leaving, otherwise the
+            // resumed execution sees stale flags (SMC interception exits here).
+            CommitFlagsCache(state, flags_cache);
             state->clear_pending_mem_op();
             return instr_limit;
         }
@@ -70,6 +74,7 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
         if (!fault) {
             mem_op.done = true;
         } else {
+            CommitFlagsCache(state, flags_cache);
             state->clear_pending_mem_op();
             return instr_limit;
         }
