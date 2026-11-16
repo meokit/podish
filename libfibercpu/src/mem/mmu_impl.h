@@ -251,9 +251,11 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
 
         utlb->tag_r = target_tag;
         utlb->addend = entry.addend;
-        // Read-path refill must stay cheap: whether writes may fast-path is
-        // encoded entirely in ForceWriteSlow, with no alias lookup here.
-        utlb->tag_w = (has_property(entry.perm, Property::Write) && !has_property(entry.perm, Property::ForceWriteSlow))
+        // Write fast-path eligibility must match TLB::fill: a clean (not Dirty)
+        // page must take the slow path so the write can mark it dirty, otherwise
+        // the store is invisible to file writeback/eviction.
+        utlb->tag_w = (has_property(entry.perm, Property::Write) && has_property(entry.perm, Property::Dirty) &&
+                       !has_property(entry.perm, Property::ForceWriteSlow))
                           ? target_tag
                           : std::numeric_limits<decltype(utlb->tag_w)>::max();
         return val;
