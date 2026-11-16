@@ -80,6 +80,133 @@ public class PipeTests
         Assert.Equal(-(int)Errno.EPERM, pipe.TrySetCapacity(int.MaxValue));
     }
 
+    [Fact]
+    public async Task Pipe_IoctlFionread_ReturnsBytesAvailable()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x10000); // pipe fds
+        env.MapUserPage(0x11000); // FIONREAD result
+        env.MapUserPage(0x12000); // payload
+        env.WriteBytes(0x12000, Enumerable.Repeat((byte)'a', 7).ToArray());
+
+        Assert.Equal(0, await CallSysPipe(env, 0x10000));
+        var (_, wfd) = env.ReadPipeFds(0x10000);
+        Assert.Equal(7, await CallSysWrite(env, (uint)wfd, 0x12000, 7));
+
+        Assert.Equal(0, await CallSysIoctl(env, (uint)wfd, LinuxConstants.FIONREAD, 0x11000));
+        var available = new byte[4];
+        Assert.True(env.Engine.CopyFromUser(0x11000, available));
+        Assert.Equal(7, BinaryPrimitives.ReadInt32LittleEndian(available));
+
+        Assert.Equal(-(int)Errno.EFAULT,
+            await CallSysIoctl(env, (uint)wfd, LinuxConstants.FIONREAD, 0xDEAD0000));
+    }
+
+    [Fact]
+    public async Task Pipe_LargeWriteToClosedReader_ReturnsEpipe()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x10000);
+        env.MapUserPage(0x20000);
+        env.MapUserPage(0x21000);
+
+        Assert.Equal(0, await CallSysPipe(env, 0x10000));
+        var (rfd, wfd) = env.ReadPipeFds(0x10000);
+        Assert.Equal(0, await CallSysClose(env, (uint)rfd));
+        Assert.Equal(-(int)Errno.EPIPE, await CallSysWrite(env, (uint)wfd, 0x20000, 8192));
+    }
+
+    [Fact]
+    public async Task PipeUserPagesSoftLimit_ShrinksNewPipesAndReleasesOnClose()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x10000);
+        env.MapUserPage(0x11000);
+        env.MapUserPage(0x12000);
+        env.Scheduler!.CurrentTask = env.Task;
+        env.Process!.EUID = 1000;
+        env.Process.SetCapability(Process.CapabilitySysResource, false, false, false);
+        env.Scheduler.PipeUserPagesSoft = 16;
+
+        Assert.Equal(0, await CallSysPipe(env, 0x10000));
+        var (r1, w1) = env.ReadPipeFds(0x10000);
+        var first = Assert.IsType<PipeInode>(env.SyscallManager.GetFD(r1)!.OpenedInode);
+        Assert.Equal(65536, first.Capacity);
+
+        Assert.Equal(0, await CallSysPipe(env, 0x11000));
+        var (r2, w2) = env.ReadPipeFds(0x11000);
+        var second = Assert.IsType<PipeInode>(env.SyscallManager.GetFD(r2)!.OpenedInode);
+        Assert.Equal(4096, second.Capacity);
+
+        Assert.Equal(0, await CallSysClose(env, (uint)r1));
+        Assert.Equal(0, await CallSysClose(env, (uint)w1));
+        Assert.Equal(0, await CallSysClose(env, (uint)r2));
+        Assert.Equal(0, await CallSysClose(env, (uint)w2));
+
+        Assert.Equal(0, await CallSysPipe(env, 0x12000));
+        var (r3, _) = env.ReadPipeFds(0x12000);
+        var third = Assert.IsType<PipeInode>(env.SyscallManager.GetFD(r3)!.OpenedInode);
+        Assert.Equal(65536, third.Capacity);
+    }
+
+    [Fact]
+    public async Task PipeUserPagesHardLimit_RejectsNewPipes()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x10000);
+        env.MapUserPage(0x11000);
+        env.Scheduler!.CurrentTask = env.Task;
+        env.Process!.EUID = 1000;
+        env.Process.SetCapability(Process.CapabilitySysResource, false, false, false);
+        env.Scheduler.PipeUserPagesSoft = 0;
+        env.Scheduler.PipeUserPagesHard = 16;
+
+        Assert.Equal(0, await CallSysPipe(env, 0x10000));
+        Assert.Equal(-(int)Errno.ENFILE, await CallSysPipe(env, 0x11000));
+    }
+
+    [Fact(Timeout = 1000)]
+    public async Task PipeUserPagesHardLimit_RejectedCreationDoesNotLeakWaitQueues()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x10000);
+        env.MapUserPage(0x11000);
+        env.MapUserPage(0x12000);
+        env.MapUserPage(0x13000);
+        env.Scheduler!.CurrentTask = env.Task;
+        env.Process!.EUID = 1000;
+        env.Process.SetCapability(Process.CapabilitySysResource, false, false, false);
+        env.Scheduler.PipeUserPagesSoft = 0;
+
+        // Seed the scheduler's wait-queue pool twice so a leaked rental is observable.
+        for (var i = 0; i < 2; i++)
+        {
+            var fdsAddr = 0x10000u + (uint)(i * 0x1000);
+            Assert.Equal(0, await CallSysPipe(env, fdsAddr));
+            var (seedRead, seedWrite) = env.ReadPipeFds(fdsAddr);
+            Assert.Equal(0, await CallSysClose(env, (uint)seedRead));
+            Assert.Equal(0, await CallSysClose(env, (uint)seedWrite));
+        }
+
+        env.Scheduler.PipeUserPagesHard = 16;
+        Assert.Equal(0, await CallSysPipe(env, 0x12000));
+        var (rfd, wfd) = env.ReadPipeFds(0x12000);
+
+        var pool = Assert.IsType<Stack<AsyncWaitQueue>>(AsyncWaitQueuePoolField.GetValue(env.Scheduler));
+        var before = pool.Count;
+        Assert.Equal(-(int)Errno.ENFILE, await CallSysPipe(env, 0x13000));
+        Assert.Equal(before, pool.Count);
+
+        Assert.Equal(0, await CallSysClose(env, (uint)rfd));
+        Assert.Equal(0, await CallSysClose(env, (uint)wfd));
+    }
+
+    private static ValueTask<int> CallSysIoctl(TestEnv env, uint fd, uint request, uint arg)
+    {
+        var method = typeof(SyscallManager).GetMethod("SysIoctl", BindingFlags.NonPublic | BindingFlags.Instance);
+        return (ValueTask<int>)method!.Invoke(env.SyscallManager, [env.Engine, fd, request, arg, 0u, 0u, 0u])!;
+    }
+
     private static readonly FieldInfo AsyncWaitQueuePoolField =
         typeof(KernelScheduler).GetField("_asyncWaitQueuePool", BindingFlags.Instance | BindingFlags.NonPublic)!;
 

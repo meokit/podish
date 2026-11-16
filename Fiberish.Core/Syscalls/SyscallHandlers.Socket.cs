@@ -551,6 +551,10 @@ public partial class SyscallManager
         if (msgRes.Error < 0) return msgRes.Error;
         var msg = msgRes.Value;
 
+        if (msg.msg_controllen < 0) return -(int)Errno.EINVAL;
+        if (msg.msg_controllen > 0 && msg.msg_controllen < 16) return -(int)Errno.EINVAL;
+        if (msg.msg_control == 0 && msg.msg_controllen != 0) return -(int)Errno.EINVAL;
+
         object? endpoint = null;
         if (msg.msg_name != 0 && msg.msg_namelen > 0)
         {
@@ -567,9 +571,16 @@ public partial class SyscallManager
         if (msg.msg_control != 0 && msg.msg_controllen >= 16)
         {
             var res = ReadCmsgFds(engine, msg.msg_control, msg.msg_controllen);
-            if (!res.Success) return -(int)Errno.EINVAL;
+            if (res.Error < 0) return res.Error;
             fds = res.Fds;
         }
+
+        // Match Linux: copy msghdr and control data before the protocol rejects
+        // MSG_OOB for a socket family that does not support urgent data.
+        if ((flags & LinuxConstants.MSG_OOB) != 0 &&
+            (file.OpenedInode is UnixSocketInode ||
+             file.OpenedInode is ISocketStreamInfo { IsStreamSocket: false }))
+            return -(int)Errno.EOPNOTSUPP;
 
         if (file.TryGetSocketDataOps(out var ops))
             return await ops.SendMsgAsync(file, task, buf, fds, flags | msg.msg_flags, endpoint);
@@ -941,11 +952,11 @@ public partial class SyscallManager
         return 0;
     }
 
-    private (bool Success, List<LinuxFile>? Fds) ReadCmsgFds(Engine engine, uint controlPtr, int controlLen)
+    private (int Error, List<LinuxFile>? Fds) ReadCmsgFds(Engine engine, uint controlPtr, int controlLen)
     {
-        if (controlLen < 16 || controlPtr == 0) return (true, null);
+        if (controlLen < 16 || controlPtr == 0) return (0, null);
         var cmRaw = new byte[controlLen];
-        if (!engine.CopyFromUser(controlPtr, cmRaw)) return (false, null);
+        if (!engine.CopyFromUser(controlPtr, cmRaw)) return (-(int)Errno.EFAULT, null);
 
         List<LinuxFile> sendFds = new();
         var cmsgOffset = 0;
@@ -960,21 +971,23 @@ public partial class SyscallManager
             if (cmsgLevel == LinuxConstants.SOL_SOCKET && cmsgType == LinuxConstants.SCM_RIGHTS)
             {
                 var fdCount = (cmsgLen - 12) / 4;
-                if (totalFds + fdCount > LinuxConstants.SCM_MAX_FD) return (false, null);
+                if (totalFds + fdCount > LinuxConstants.SCM_MAX_FD)
+                    return (-(int)Errno.EINVAL, null);
                 totalFds += fdCount;
 
                 for (var j = 0; j < fdCount; j++)
                 {
                     var cmsgFd = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset + 12 + j * 4, 4));
                     var file = GetFD(cmsgFd);
-                    if (file != null) sendFds.Add(file);
+                    if (file == null) return (-(int)Errno.EBADF, null);
+                    sendFds.Add(file);
                 }
             }
 
             cmsgOffset += (cmsgLen + 3) & ~3;
         }
 
-        return (true, sendFds.Count > 0 ? sendFds : null);
+        return (0, sendFds.Count > 0 ? sendFds : null);
     }
 
     private int WriteCmsg(Engine engine, uint controlPtr, int controlLen, List<LinuxFile>? fds,

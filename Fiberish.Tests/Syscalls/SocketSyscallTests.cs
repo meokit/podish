@@ -2113,6 +2113,142 @@ public class SocketSyscallTests
         Assert.True(sawEagain);
     }
 
+    [Fact]
+    public async Task SendMsg_UnixDatagram_MsgOob_ReturnsEopnotsupp()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x4D000);
+        env.MapUserPage(0x4E000);
+        env.MapUserPage(0x4F000);
+        env.WriteBytes(0x4F000, [0x41]);
+
+        Assert.Equal(0, await CallSysSocketPair(env, LinuxConstants.AF_UNIX,
+            LinuxConstants.SOCK_DGRAM, 0, 0x4D000));
+        var senderFd = env.ReadInt32(0x4D000);
+
+        WriteIovec(env, 0x4E000, 0x4F000, 1);
+        WriteMsgHdr(env, 0x4D800, 0x4E000, 1, 0, 0, 0, 0);
+        Assert.Equal(-(int)Errno.EOPNOTSUPP,
+            await CallSysSendMsg(env, (uint)senderFd, 0x4D800, LinuxConstants.MSG_OOB));
+    }
+
+    [Fact]
+    public async Task SendMsg_InvalidCmsgPointer_ReturnsEfault()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x50000);
+        env.MapUserPage(0x51000);
+        env.MapUserPage(0x52000);
+        env.WriteBytes(0x52000, [0x41]);
+
+        Assert.Equal(0, await CallSysSocketPair(env, LinuxConstants.AF_UNIX,
+            LinuxConstants.SOCK_DGRAM, 0, 0x50000));
+        var senderFd = env.ReadInt32(0x50000);
+
+        WriteIovec(env, 0x51000, 0x52000, 1);
+        WriteMsgHdr(env, 0x50000 + 0x800, 0x51000, 1, 0xDEAD0000, 16, 0, 0);
+        Assert.Equal(-(int)Errno.EFAULT,
+            await CallSysSendMsg(env, (uint)senderFd, 0x50800, 0));
+    }
+
+    [Fact]
+    public async Task SendMsg_InvalidMsgPointerWithMsgOob_ReturnsEfault()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x54000);
+        Assert.Equal(0, await CallSysSocketPair(env, LinuxConstants.AF_UNIX,
+            LinuxConstants.SOCK_DGRAM, 0, 0x54000));
+        var senderFd = env.ReadInt32(0x54000);
+
+        Assert.Equal(-(int)Errno.EFAULT,
+            await CallSysSendMsg(env, (uint)senderFd, 0xDEAD0000, LinuxConstants.MSG_OOB));
+    }
+
+    [Fact]
+    public async Task SendMsg_NullControlWithLength_ReturnsEinval()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x55000);
+        env.MapUserPage(0x56000);
+        env.MapUserPage(0x57000);
+        env.WriteBytes(0x57000, [0x41]);
+
+        Assert.Equal(0, await CallSysSocketPair(env, LinuxConstants.AF_UNIX,
+            LinuxConstants.SOCK_DGRAM, 0, 0x55000));
+        var senderFd = env.ReadInt32(0x55000);
+
+        WriteIovec(env, 0x56000, 0x57000, 1);
+        WriteMsgHdr(env, 0x55800, 0x56000, 1, 0, 16, 0, 0);
+        Assert.Equal(-(int)Errno.EINVAL,
+            await CallSysSendMsg(env, (uint)senderFd, 0x55800, 0));
+    }
+
+    [Fact]
+    public async Task SendMsg_InvalidCmsgPointerWithMsgOob_ReturnsEfault()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x58000);
+        env.MapUserPage(0x59000);
+        env.MapUserPage(0x5A000);
+        env.WriteBytes(0x5A000, [0x41]);
+
+        Assert.Equal(0, await CallSysSocketPair(env, LinuxConstants.AF_UNIX,
+            LinuxConstants.SOCK_DGRAM, 0, 0x58000));
+        var senderFd = env.ReadInt32(0x58000);
+
+        WriteIovec(env, 0x59000, 0x5A000, 1);
+        WriteMsgHdr(env, 0x58800, 0x59000, 1, 0xDEAD0000, 16, 0, 0);
+        Assert.Equal(-(int)Errno.EFAULT,
+            await CallSysSendMsg(env, (uint)senderFd, 0x58800, LinuxConstants.MSG_OOB));
+    }
+
+    [Fact]
+    public async Task SendMsg_InvalidScmRightFd_ReturnsEbadf()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x5B000);
+        env.MapUserPage(0x5C000);
+        env.MapUserPage(0x5D000);
+        env.MapUserPage(0x5E000);
+        env.WriteBytes(0x5D000, [0x41]);
+
+        Assert.Equal(0, await CallSysSocketPair(env, LinuxConstants.AF_UNIX,
+            LinuxConstants.SOCK_DGRAM, 0, 0x5B000));
+        var senderFd = env.ReadInt32(0x5B000);
+
+        Span<byte> cmsg = stackalloc byte[16];
+        BinaryPrimitives.WriteUInt32LittleEndian(cmsg[..4], 16);
+        BinaryPrimitives.WriteInt32LittleEndian(cmsg[4..8], LinuxConstants.SOL_SOCKET);
+        BinaryPrimitives.WriteInt32LittleEndian(cmsg[8..12], LinuxConstants.SCM_RIGHTS);
+        BinaryPrimitives.WriteInt32LittleEndian(cmsg[12..16], 9999);
+        env.WriteBytes(0x5E000, cmsg.ToArray());
+
+        WriteIovec(env, 0x5C000, 0x5D000, 1);
+        WriteMsgHdr(env, 0x5B800, 0x5C000, 1, 0x5E000, 16, 0, 0);
+        Assert.Equal(-(int)Errno.EBADF,
+            await CallSysSendMsg(env, (uint)senderFd, 0x5B800, 0));
+    }
+
+    [Fact]
+    public async Task SendMsg_ShortControlLength_ReturnsEinval()
+    {
+        using var env = new TestEnv();
+        env.MapUserPage(0x5E000);
+        env.MapUserPage(0x5F000);
+        env.MapUserPage(0x60000);
+        env.MapUserPage(0x61000);
+        env.WriteBytes(0x61000, [0x41]);
+
+        Assert.Equal(0, await CallSysSocketPair(env, LinuxConstants.AF_UNIX,
+            LinuxConstants.SOCK_DGRAM, 0, 0x5F000));
+        var senderFd = env.ReadInt32(0x5F000);
+
+        WriteIovec(env, 0x60000, 0x61000, 1);
+        WriteMsgHdr(env, 0x5F800, 0x60000, 1, 0x5E000, 8, 0, 0);
+        Assert.Equal(-(int)Errno.EINVAL,
+            await CallSysSendMsg(env, (uint)senderFd, 0x5F800, 0));
+    }
+
     private static void WriteSockaddrIn(TestEnv env, uint addr, uint ipv4Be, ushort port)
     {
         Span<byte> buf = stackalloc byte[16];

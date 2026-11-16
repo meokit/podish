@@ -222,6 +222,12 @@ public partial class SyscallManager
             if (wFd.HasValue) FreeFD(wFd.Value);
             return -(int)Errno.ENOMEM;
         }
+        catch (PipeQuotaExceededException)
+        {
+            if (rFd.HasValue) FreeFD(rFd.Value);
+            if (wFd.HasValue) FreeFD(wFd.Value);
+            return -(int)Errno.ENFILE;
+        }
         catch (Exception ex)
         {
             if (rFd.HasValue) FreeFD(rFd.Value);
@@ -292,6 +298,12 @@ public partial class SyscallManager
             if (rFd.HasValue) FreeFD(rFd.Value);
             if (wFd.HasValue) FreeFD(wFd.Value);
             return -(int)Errno.ENOMEM;
+        }
+        catch (PipeQuotaExceededException)
+        {
+            if (rFd.HasValue) FreeFD(rFd.Value);
+            if (wFd.HasValue) FreeFD(wFd.Value);
+            return -(int)Errno.ENFILE;
         }
         catch (Exception ex)
         {

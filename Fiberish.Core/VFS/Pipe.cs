@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
@@ -9,6 +10,13 @@ using WaitHandle = Fiberish.Core.AsyncWaitQueue;
 
 
 namespace Fiberish.VFS;
+
+public class PipeQuotaExceededException : Exception
+{
+    public PipeQuotaExceededException() : base("Pipe user page hard limit exceeded")
+    {
+    }
+}
 
 public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatcherEdgeWaitSource,
     IPollNotificationSource
@@ -33,22 +41,64 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     private int _tail; // Read position
     private int _writerCount;
     private bool _writersClosed;
+    private int _pipeAccountUid = -1;
+    private int _pipeAccountPages;
+    private bool _pipeAccountReleased;
 
     public PipeInode(KernelScheduler scheduler, bool packetMode = false)
     {
         _packetMode = packetMode;
-        _waitQueues = new PooledReadWriteWaitQueues(scheduler);
-        _readHandle = _waitQueues.ReadQueue;
-        _writeHandle = _waitQueues.WriteQueue;
-        var isUnpriv = scheduler.CurrentTask?.Process != null && scheduler.CurrentTask.Process.EUID != 0;
+        var process = scheduler.CurrentTask?.Process;
+        var isUnpriv = process != null && process.EUID != 0 &&
+                       !process.HasEffectiveCapability(Process.CapabilitySysResource);
         var initialCap = DefaultCapacity;
         if (isUnpriv && scheduler.PipeMaxSize < initialCap)
             initialCap = Math.Max(4096, NormalizePipeCapacity(scheduler.PipeMaxSize));
+
+        // Reserve the user page budget before renting pooled wait queues or a buffer:
+        // the hard limit is a normal rejection path, and partially constructed pipes
+        // must not leak scheduler resources.
+        var accountUid = -1;
+        var accountPages = 0;
+        if (isUnpriv)
+        {
+            accountUid = process!.UID;
+            var requestedPages = Math.Max(1, initialCap / PipeBuf);
+            accountPages = scheduler.ReservePipePages(accountUid, requestedPages);
+            initialCap = accountPages * PipeBuf;
+        }
+
+        PooledReadWriteWaitQueues waitQueues;
+        try
+        {
+            waitQueues = new PooledReadWriteWaitQueues(scheduler);
+        }
+        catch
+        {
+            if (accountUid >= 0 && accountPages > 0)
+                scheduler.ReleasePipePages(accountUid, accountPages);
+            throw;
+        }
+
+        _waitQueues = waitQueues;
+        _readHandle = waitQueues.ReadQueue;
+        _writeHandle = waitQueues.WriteQueue;
+        _pipeAccountUid = accountUid;
+        _pipeAccountPages = accountPages;
         _capacity = initialCap;
         Type = InodeType.Fifo;
         Mode = 0x1000 | 0x1FF; // FIFO + 777
         AnonymousInodeLifecycle.Initialize(this, "PipeInode.ctor");
-        _buffer = ArrayPool<byte>.Shared.Rent(_capacity);
+        try
+        {
+            _buffer = ArrayPool<byte>.Shared.Rent(_capacity);
+        }
+        catch
+        {
+            ReleasePipeAccount();
+            _waitQueues.ReturnToPool();
+            throw;
+        }
         // Initially writable (empty)
         _writeHandle.Set();
     }
@@ -94,9 +144,20 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             if (target == _capacity)
                 return _capacity;
 
+            var targetPages = target / PipeBuf;
+            var pageDelta = targetPages - _pipeAccountPages;
+            if (pageDelta > 0 && _pipeAccountUid >= 0 &&
+                !_waitQueues.Scheduler.TryReservePipePages(_pipeAccountUid, pageDelta))
+                return -(int)Errno.EPERM;
+
             byte[] newBuffer;
             try { newBuffer = ArrayPool<byte>.Shared.Rent(target); }
-            catch (OutOfMemoryException) { return -(int)Errno.ENOMEM; }
+            catch (OutOfMemoryException)
+            {
+                if (pageDelta > 0 && _pipeAccountUid >= 0)
+                    _waitQueues.Scheduler.ReleasePipePages(_pipeAccountUid, pageDelta);
+                return -(int)Errno.ENOMEM;
+            }
             if (_count > 0)
             {
                 var firstChunk = Math.Min(_count, _capacity - _tail);
@@ -112,6 +173,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 ArrayPool<byte>.Shared.Return(_buffer, clearArray: false);
             _buffer = newBuffer;
             _capacity = target;
+            if (pageDelta < 0 && _pipeAccountUid >= 0)
+                _waitQueues.Scheduler.ReleasePipePages(_pipeAccountUid, -pageDelta);
+            _pipeAccountPages = targetPages;
             _tail = 0;
             _head = _count % target;
             if (HasWritableBuffer())
@@ -309,6 +373,24 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             if (_readerCount <= 0 && _writerCount <= 0)
                 CloseLifecycleOnce();
         }
+    }
+
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
+    {
+        if (request == LinuxConstants.FIONREAD)
+        {
+            int available;
+            using (EnterStateScope())
+            {
+                available = _lifecycleClosed ? 0 : _count;
+            }
+
+            Span<byte> buf = stackalloc byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(buf, available);
+            return task.CPU.CopyToUser(arg, buf) ? 0 : -(int)Errno.EFAULT;
+        }
+
+        return base.Ioctl(linuxFile, task, request, arg);
     }
 
     public override void Open(LinuxFile linuxFile)
@@ -660,6 +742,19 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
     public int Capacity => GetPipeSize();
 
+    public bool IsPacketMode => _packetMode;
+
+    public int GetWritableBytes()
+    {
+        using (EnterStateScope())
+        {
+            // A closed lifecycle or reader must reach WriteFromHost so it can
+            // report EPIPE/SIGPIPE instead of being mistaken for a full pipe.
+            if (_lifecycleClosed || _readersClosed) return _capacity;
+            return Math.Max(0, _capacity - _count);
+        }
+    }
+
     /// <summary>
     ///     Linux tracks pipe fill in page-sized buffers: a pipe with a partially consumed
     ///     buffer is still full for poll(2)/epoll purposes until that buffer is released.
@@ -796,6 +891,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         _writersClosed = true;
         _readHandle.Reset();
         _writeHandle.Reset();
+        ReleasePipeAccount();
         ReturnHandlesToPool();
         AnonymousInodeLifecycle.CloseAliasesAndFinalize(this, "PipeInode.CloseLifecycleOnce");
 
@@ -809,6 +905,15 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
         ArrayPool<byte>.Shared.Return(_buffer, clearArray: false);
         _buffer = Array.Empty<byte>();
+    }
+
+    private void ReleasePipeAccount()
+    {
+        if (_pipeAccountReleased) return;
+        _pipeAccountReleased = true;
+        if (_pipeAccountUid >= 0 && _pipeAccountPages > 0)
+            _waitQueues.Scheduler.ReleasePipePages(_pipeAccountUid, _pipeAccountPages);
+        _pipeAccountPages = 0;
     }
 
     private void ReturnHandlesToPool()

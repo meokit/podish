@@ -1809,6 +1809,8 @@ LocResolvedUtimens64:
         if (file == null) return -(int)Errno.EBADF;
         var inode = file.OpenedInode;
         if (inode == null) return -(int)Errno.EBADF;
+        if (inode.Type is InodeType.Fifo or InodeType.Socket)
+            return -(int)Errno.EINVAL;
         var task = engine.Owner as FiberTask;
 
         BlockingHostOperationDebug.Trace(

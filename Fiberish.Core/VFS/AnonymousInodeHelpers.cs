@@ -10,7 +10,15 @@ internal sealed class PooledReadWriteWaitQueues
     {
         Scheduler = scheduler;
         ReadQueue = scheduler.RentAsyncWaitQueue();
-        WriteQueue = scheduler.RentAsyncWaitQueue();
+        try
+        {
+            WriteQueue = scheduler.RentAsyncWaitQueue();
+        }
+        catch
+        {
+            Scheduler.ReturnAsyncWaitQueue(ReadQueue);
+            throw;
+        }
     }
 
     public KernelScheduler Scheduler { get; }

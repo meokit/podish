@@ -8,6 +8,7 @@ using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.Native;
+using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -94,6 +95,67 @@ public class KernelScheduler : IDisposable
     internal long WakeSetCount => Interlocked.Read(ref _wakeSetCount);
     internal TimeWheel TimerSystem => _timerSystem;
     public int PipeMaxSize { get; set; } = 1048576;
+    public int PipeUserPagesSoft { get; set; } = 16384;
+    public int PipeUserPagesHard { get; set; }
+    private readonly object _pipeUserPageGate = new();
+    private readonly Dictionary<int, long> _pipeUserPages = [];
+
+    public int ReservePipePages(int uid, int requestedPages)
+    {
+        if (uid < 0 || requestedPages <= 0) return requestedPages;
+
+        lock (_pipeUserPageGate)
+        {
+            _pipeUserPages.TryGetValue(uid, out var current);
+            var hard = PipeUserPagesHard;
+            var soft = PipeUserPagesSoft;
+            var granted = requestedPages;
+
+            // A hard limit rejects the new pipe even if the soft limit would
+            // otherwise shrink it to a single page.
+            if (hard > 0 && current + 1 > hard)
+                throw new PipeQuotaExceededException();
+
+            if (soft > 0 && current + granted > soft)
+                granted = 1;
+            if (hard > 0 && current + granted > hard)
+                throw new PipeQuotaExceededException();
+
+            _pipeUserPages[uid] = current + granted;
+            return granted;
+        }
+    }
+
+    public bool TryReservePipePages(int uid, int pages)
+    {
+        if (uid < 0 || pages <= 0) return true;
+
+        lock (_pipeUserPageGate)
+        {
+            _pipeUserPages.TryGetValue(uid, out var current);
+            var hard = PipeUserPagesHard;
+            if (hard > 0 && current + pages > hard)
+                return false;
+
+            _pipeUserPages[uid] = current + pages;
+            return true;
+        }
+    }
+
+    public void ReleasePipePages(int uid, int pages)
+    {
+        if (uid < 0 || pages <= 0) return;
+
+        lock (_pipeUserPageGate)
+        {
+            if (!_pipeUserPages.TryGetValue(uid, out var current)) return;
+            var remaining = current - pages;
+            if (remaining <= 0)
+                _pipeUserPages.Remove(uid);
+            else
+                _pipeUserPages[uid] = remaining;
+        }
+    }
     public bool Running { get; set; } = true;
 
     public ILoggerFactory LoggerFactory { get; set; } = new NullLoggerFactory();

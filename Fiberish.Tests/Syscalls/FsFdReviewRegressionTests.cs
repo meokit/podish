@@ -66,6 +66,20 @@ public class FsFdReviewRegressionTests
         Assert.Equal((int)FileFlags.O_PATH, await env.Call("SysFcntl64", (uint)fd, 3));
     }
 
+    [Fact]
+    public async Task Fsync_PipeAndSocket_ReturnsEinval()
+    {
+        using var env = new TestEnv();
+        var (_, _, writer) = env.AddPipe();
+        Assert.Equal(-(int)Errno.EINVAL, await env.Call("SysFsync", (uint)writer));
+        Assert.Equal(-(int)Errno.EINVAL, await env.Call("SysFdatasync", (uint)writer));
+
+        var socket = await env.Call("SysSocket", LinuxConstants.AF_UNIX, LinuxConstants.SOCK_STREAM, 0u);
+        Assert.True(socket >= 0);
+        Assert.Equal(-(int)Errno.EINVAL, await env.Call("SysFsync", (uint)socket));
+        Assert.Equal(-(int)Errno.EINVAL, await env.Call("SysFdatasync", (uint)socket));
+    }
+
     // Review #2: ArrayPool<T>.Rent(n) is not an n-element input vector.
     [Theory]
     [InlineData(1)]

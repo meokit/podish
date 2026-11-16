@@ -1529,6 +1529,7 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
             var iov = iovs[i];
             if (iov.Len == 0) continue;
 
+            var allowPipePartial = this is PipeInode { IsPacketMode: false } && iov.Len > PipeInode.PipeBuf;
             var iovProcessed = 0u;
             while (iovProcessed < iov.Len)
             {
@@ -1543,6 +1544,21 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
 
                 var pageOffset = currAddr & 0xFFF;
                 var chunkLen = Math.Min(iov.Len - iovProcessed, 4096 - pageOffset);
+                if (allowPipePartial && this is PipeInode pipe)
+                {
+                    var writable = pipe.GetWritableBytes();
+                    if (writable <= 0)
+                    {
+                        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 ||
+                            (flags & 0x00000008) != 0 /* RWF_NOWAIT */ || task == null)
+                            return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN);
+                        if (await WaitForWrite(file, task, 1) == AwaitResult.Interrupted)
+                            return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.ERESTARTSYS);
+                        continue;
+                    }
+
+                    if ((uint)writable < chunkLen) chunkLen = (uint)writable;
+                }
 
                 while (true)
                 {

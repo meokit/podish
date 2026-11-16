@@ -1275,6 +1275,38 @@ file sealed class ProcSysRootInode : Inode
                     var text = FsEncoding.DecodeUtf8Lossy(data).Trim();
                     return int.TryParse(text, out _) ? (int)data.Length : -(int)Errno.EINVAL;
                 });
+        else if (_kind == ProcSysKind.Fs && name.SequenceEqual("pipe-user-pages-soft"u8))
+            created = CreateFile(dir, childName, ctx => $"{ctx.Scheduler?.PipeUserPagesSoft ?? 16384}\n", 0x1A4,
+                (ctx, data, _) =>
+                {
+                    if (ctx.Process != null && ctx.Process.EUID != 0)
+                        return -(int)Errno.EACCES;
+                    var text = FsEncoding.DecodeUtf8Lossy(data).Trim();
+                    if (int.TryParse(text, out var val) && val >= 0)
+                    {
+                        if (ctx.Scheduler != null)
+                            ctx.Scheduler.PipeUserPagesSoft = val;
+                        return (int)data.Length;
+                    }
+
+                    return -(int)Errno.EINVAL;
+                });
+        else if (_kind == ProcSysKind.Fs && name.SequenceEqual("pipe-user-pages-hard"u8))
+            created = CreateFile(dir, childName, ctx => $"{ctx.Scheduler?.PipeUserPagesHard ?? 0}\n", 0x1A4,
+                (ctx, data, _) =>
+                {
+                    if (ctx.Process != null && ctx.Process.EUID != 0)
+                        return -(int)Errno.EACCES;
+                    var text = FsEncoding.DecodeUtf8Lossy(data).Trim();
+                    if (int.TryParse(text, out var val) && val >= 0)
+                    {
+                        if (ctx.Scheduler != null)
+                            ctx.Scheduler.PipeUserPagesHard = val;
+                        return (int)data.Length;
+                    }
+
+                    return -(int)Errno.EINVAL;
+                });
         else if (_kind == ProcSysKind.Fs && name.SequenceEqual("pipe-max-size"u8))
             created = CreateFile(dir, childName, ctx => $"{ctx.Scheduler?.PipeMaxSize ?? 1048576}\n", 0x1A4,
                 (ctx, data, _) =>
@@ -1315,6 +1347,8 @@ file sealed class ProcSysRootInode : Inode
                 break;
             case ProcSysKind.Fs:
                 entries.Add(new DirectoryEntry { Name = "pipe-max-size", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "pipe-user-pages-soft", Ino = 0, Type = InodeType.File });
+                entries.Add(new DirectoryEntry { Name = "pipe-user-pages-hard", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "lease-break-time", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "nr_open", Ino = 0, Type = InodeType.File });
                 entries.Add(new DirectoryEntry { Name = "inotify", Ino = 0, Type = InodeType.Directory });
