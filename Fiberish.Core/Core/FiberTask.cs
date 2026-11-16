@@ -1380,6 +1380,12 @@ public partial class FiberTask
         // esp+4: sig
         // esp+8: sigcontext
         // sizeof(sigframe) = 732
+        // The sigcontext carries a pointer to the FP/SIMD state, which lives
+        // below the frame.
+
+        esp = (esp - FpStateSize) & ~0xFu;
+        var fpstateAddr = esp;
+        WriteFpState(fpstateAddr);
 
         esp = (esp - 736u) & ~0xFu;
         var sigcontextAddr = esp + 8;
@@ -1387,10 +1393,71 @@ public partial class FiberTask
         // Zero out the frame
         CPU.CopyToUser(esp, new byte[736]);
 
-        WriteSigContext(sigcontextAddr, oldMask);
+        WriteSigContext(sigcontextAddr, oldMask, fpstateAddr);
 
         if (!CPU.CopyToUser(esp + 4, BitConverter.GetBytes(sig))) return;
         if (!CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr))) return;
+    }
+
+    private const int FpStateSize = 640;
+    private const int FpStateLegacyStOffset = 28;   // _st[8], 10 bytes each
+    private const int FpStateMagicOffset = 110;     // 0xffff marks a populated area
+    private const int FpStateMxcsrOffset = 136;
+    private const int FpStateFxsrStOffset = 144;    // _fxsr_st[8], 16 bytes each
+    private const int FpStateXmmOffset = 272;       // _xmm[8], 16 bytes each
+
+    private unsafe void WriteFpState(uint addr)
+    {
+        var buf = new byte[FpStateSize];
+        var s = buf.AsSpan();
+        BinaryPrimitives.WriteUInt32LittleEndian(s, X86Native.GetFCW(CPU.State));
+        BinaryPrimitives.WriteUInt32LittleEndian(s[4..], X86Native.GetFSW(CPU.State));
+        BinaryPrimitives.WriteUInt32LittleEndian(s[8..], X86Native.GetFTW(CPU.State));
+        BinaryPrimitives.WriteUInt32LittleEndian(s[FpStateMxcsrOffset..], X86Native.GetMXCSR(CPU.State));
+        BinaryPrimitives.WriteUInt16LittleEndian(s[FpStateMagicOffset..], 0xFFFF);
+
+        for (var i = 0; i < 8; i++)
+        {
+            fixed (byte* legacy = s.Slice(FpStateLegacyStOffset + i * 10, 10))
+            {
+                X86Native.ReadFPUReg(CPU.State, i, legacy);
+            }
+            fixed (byte* fxsr = s.Slice(FpStateFxsrStOffset + i * 16, 10))
+            {
+                X86Native.ReadFPUReg(CPU.State, i, fxsr);
+            }
+            fixed (byte* xmm = s.Slice(FpStateXmmOffset + i * 16, 16))
+            {
+                X86Native.ReadXMM(CPU.State, i, xmm);
+            }
+        }
+
+        CPU.CopyToUser(addr, buf);
+    }
+
+    private unsafe void ReadFpState(uint addr)
+    {
+        var buf = new byte[FpStateSize];
+        if (!CPU.CopyFromUser(addr, buf)) return;
+        var s = buf.AsSpan();
+        if (BinaryPrimitives.ReadUInt16LittleEndian(s[FpStateMagicOffset..]) != 0xFFFF) return;
+
+        X86Native.SetFCW(CPU.State, (ushort)BinaryPrimitives.ReadUInt32LittleEndian(s));
+        X86Native.SetFSW(CPU.State, (ushort)BinaryPrimitives.ReadUInt32LittleEndian(s[4..]));
+        X86Native.SetFTW(CPU.State, (ushort)BinaryPrimitives.ReadUInt32LittleEndian(s[8..]));
+        X86Native.SetMXCSR(CPU.State, BinaryPrimitives.ReadUInt32LittleEndian(s[FpStateMxcsrOffset..]));
+
+        for (var i = 0; i < 8; i++)
+        {
+            fixed (byte* fxsr = s.Slice(FpStateFxsrStOffset + i * 16, 10))
+            {
+                X86Native.WriteFPUReg(CPU.State, i, fxsr);
+            }
+            fixed (byte* xmm = s.Slice(FpStateXmmOffset + i * 16, 16))
+            {
+                X86Native.WriteXMM(CPU.State, i, xmm);
+            }
+        }
     }
 
     /// <summary>
@@ -1428,6 +1495,12 @@ public partial class FiberTask
     private void SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask,
         SigInfo info)
     {
+        // Reserve the floating-point state area first; sigcontext.fpstate points
+        // at it and the guest signal handler is free to modify it.
+        esp = (esp - FpStateSize) & ~0xFu;
+        var fpstateAddr = esp;
+        WriteFpState(fpstateAddr);
+
         // ... (existing stack alignment)
         esp = (esp - 512u) & ~0xFu;
 
@@ -1440,7 +1513,7 @@ public partial class FiberTask
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(16), AltStackSize);
         if (!CPU.CopyToUser(ucontextAddr, header)) return;
 
-        WriteSigContext(esp + mcontextOffset, oldMask);
+        WriteSigContext(esp + mcontextOffset, oldMask, fpstateAddr);
 
         esp = (esp - 128u) & ~0xFu;
         var siginfoAddr = esp;
@@ -1528,9 +1601,16 @@ public partial class FiberTask
             Logger.LogDebug("[RestoreSigContext] Restored SignalMask {SignalMask}, before {OldSignalMask}", SignalMask,
                 oldSignalMask);
         }
+
+        // Restore x87/SIMD state saved by SetupSigContext.
+        var fpstate = BinaryPrimitives.ReadUInt32LittleEndian(s[76..]);
+        if (fpstate != 0)
+        {
+            ReadFpState(fpstate);
+        }
     }
 
-    private void WriteSigContext(uint addr, ulong oldMask)
+    private void WriteSigContext(uint addr, ulong oldMask, uint fpstateAddr)
     {
         /*
          * Reference: struct sigcontext_32 from Linux UAPI (arch/x86/include/uapi/asm/sigcontext.h)
@@ -1564,6 +1644,7 @@ public partial class FiberTask
             BinaryPrimitives.WriteUInt32LittleEndian(s[64..], CPU.Eflags);
             BinaryPrimitives.WriteUInt32LittleEndian(s[68..], CPU.RegRead(Reg.ESP)); // sp_at_signal (UESP)
             BinaryPrimitives.WriteUInt32LittleEndian(s[72..], 0x2B); // SS
+            BinaryPrimitives.WriteUInt32LittleEndian(s[76..], fpstateAddr); // fpstate
 
             // Cheat: Store full 64-bit mask in oldmask + cr2 area (8 bytes starting at 80)
             BinaryPrimitives.WriteUInt64LittleEndian(s[80..], oldMask);

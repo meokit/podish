@@ -275,6 +275,47 @@ public partial class SignalSyscallTests
         return InvokeSys(manager, engine, name, a[0], a[1], a[2], a[3], a[4], a[5]);
     }
 
+    [Fact]
+    public void SignalFrame_SavesAndRestoresFpuAndXmmState()
+    {
+        using var env = new SignalEnv();
+        const uint buffer = 0x00013000;
+        env.MapUserPage(buffer);
+
+        var pattern = new byte[16];
+        for (var i = 0; i < pattern.Length; i++) pattern[i] = (byte)(0xA0 + i);
+
+        unsafe
+        {
+            fixed (byte* p = pattern) X86Native.WriteXMM(env.TargetEngine.State, 0, p);
+        }
+        X86Native.SetFCW(env.TargetEngine.State, 0x027F);
+        X86Native.SetMXCSR(env.TargetEngine.State, 0x1F80);
+
+        InvokeTaskMethod(env.TargetTask, "WriteFpState", buffer);
+
+        // The handler is allowed to clobber every caller-saved FP/SIMD register.
+        var clobber = new byte[16];
+        Array.Fill(clobber, (byte)0x5C);
+        unsafe
+        {
+            fixed (byte* p = clobber) X86Native.WriteXMM(env.TargetEngine.State, 0, p);
+        }
+        X86Native.SetFCW(env.TargetEngine.State, 0x037F);
+        X86Native.SetMXCSR(env.TargetEngine.State, 0x1F00);
+
+        InvokeTaskMethod(env.TargetTask, "ReadFpState", buffer);
+
+        var restored = new byte[16];
+        unsafe
+        {
+            fixed (byte* p = restored) X86Native.ReadXMM(env.TargetEngine.State, 0, p);
+        }
+        Assert.Equal(pattern, restored);
+        Assert.Equal(0x027F, X86Native.GetFCW(env.TargetEngine.State));
+        Assert.Equal(0x1F80u, X86Native.GetMXCSR(env.TargetEngine.State));
+    }
+
     private static void WriteQueueInfo(SignalEnv env, int code)
     {
         env.MapUserPage(SignalBuffer);
