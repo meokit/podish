@@ -604,7 +604,9 @@ public partial class FiberTask
             PostSignalInfo(new SigInfo
             {
                 Signo = (int)fatalSignal,
-                Code = faultResult == FaultResult.BusError ? 2 : 1
+                Code = faultResult == FaultResult.BusError ? 2 : 1,
+                Addr = addr,
+                HasAddr = true
             });
             _pendingMemoryFaultSignal = fatalSignal;
             _pendingFaultFromInterrupt = true;
@@ -1391,6 +1393,38 @@ public partial class FiberTask
         if (!CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr))) return;
     }
 
+    /// <summary>
+    /// Serializes the guest-visible siginfo_t (128 bytes). Kept separate so the
+    /// union layout is testable without delivering a signal.
+    /// </summary>
+    internal static void WriteSigInfo(byte[] siBuf, SigInfo info)
+    {
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(0, 4), info.Signo);
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(4, 4), info.Errno);
+        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(8, 4), info.Code);
+
+        if (info.HasAddr)
+        {
+            // Fault signals: si_addr shares the union at offset 12. Offset 16 is
+            // si_addr_lsb on newer kernels; the emulator reports no low bits.
+            BinaryPrimitives.WriteUInt32LittleEndian(siBuf.AsSpan(12, 4), info.Addr);
+            BinaryPrimitives.WriteUInt32LittleEndian(siBuf.AsSpan(16, 4), 0);
+        }
+        else if (info.HasFdPayload)
+        {
+            // SIGPOLL/SIGIO: si_band (long, 4 bytes) then si_fd.
+            BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(12, 4), (int)info.Band);
+            BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(16, 4), info.Fd);
+        }
+        else
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(12, 4), info.Pid);
+            BinaryPrimitives.WriteUInt32LittleEndian(siBuf.AsSpan(16, 4), info.Uid);
+        }
+
+        BinaryPrimitives.WriteUInt64LittleEndian(siBuf.AsSpan(20, 8), info.Value);
+    }
+
     private void SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask,
         SigInfo info)
     {
@@ -1413,26 +1447,7 @@ public partial class FiberTask
 
         // Populate SigInfo (128 bytes)
         var siBuf = new byte[128];
-        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(0, 4), info.Signo);
-        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(4, 4), info.Errno);
-        BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(8, 4), info.Code);
-
-        // Payload (e.g. Pid/Uid for SI_USER, or TimerId for POSIX Timer)
-        if (info.HasFdPayload)
-        {
-            // SIGPOLL/SIGIO: si_band (long, 4 bytes) then si_fd.
-            BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(12, 4), (int)info.Band);
-            BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(16, 4), info.Fd);
-        }
-        else
-        {
-            BinaryPrimitives.WriteInt32LittleEndian(siBuf.AsSpan(12, 4), info.Pid);
-            BinaryPrimitives.WriteUInt32LittleEndian(siBuf.AsSpan(16, 4), info.Uid);
-        }
-
-        // Write the unionized payload value (e.g. SIGRT)
-        BinaryPrimitives.WriteUInt64LittleEndian(siBuf.AsSpan(20, 8), info.Value);
-
+        WriteSigInfo(siBuf, info);
         if (!CPU.CopyToUser(siginfoAddr, siBuf)) return;
 
         // Populate UContext uc_sigmask (offset 108)

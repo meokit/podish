@@ -23,6 +23,13 @@ public struct SigInfo
     // sigval payload (often a ptr or an int)
     public ulong Value;
 
+    // Fault signals (SIGSEGV/SIGBUS): siginfo_t.si_addr at offset 12.
+    public uint Addr;
+
+    // True when Addr is meaningful, including a fault at address 0. Internal
+    // bookkeeping, never serialized as a separate field.
+    internal bool HasAddr;
+
     // POSIX timers
     public int TimerId;
     public int Overrun;

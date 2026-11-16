@@ -202,6 +202,25 @@ public class MmapSupportTests
     }
 
     [Fact]
+    public async Task WriteFault_OnPopulatedReadOnlyPrivatePage_ReturnsSegv()
+    {
+        using var env = new TestEnv();
+        const uint addr = 0x53000000;
+
+        Assert.Equal(addr, (uint)await env.Call("SysMmap2", addr, LinuxConstants.PageSize,
+            (uint)(Protection.Read | Protection.Write),
+            (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
+        Assert.Equal(FaultResult.Handled, env.Vma.HandleFaultDetailed(addr, true, env.Engine));
+
+        Assert.Equal(0, await env.Call("SysMprotect", addr, LinuxConstants.PageSize, (uint)Protection.Read));
+
+        // The page is populated and the VMA no longer permits writes. A write
+        // fault must terminate with SIGSEGV instead of being "handled" by
+        // reinstalling the same read-only mapping in a loop.
+        Assert.Equal(FaultResult.Segv, env.Vma.HandleFaultDetailed(addr, true, env.Engine));
+    }
+
+    [Fact]
     public async Task Mprotect_RangeCrossingHole_ReturnsEnomem()
     {
         using var env = new TestEnv();

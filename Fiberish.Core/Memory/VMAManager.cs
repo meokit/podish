@@ -3112,6 +3112,15 @@ public class VMAManager
 
     private FaultResult ResolvePrivateFault(VmArea vma, uint pageStart, uint pageIndex, bool isWrite, Engine engine)
     {
+        if (isWrite && (vma.Perms & Protection.Write) == 0)
+        {
+            // A write fault on a populated private page must terminate, not be
+            // "handled" by reinstalling the same read-only permissions (which
+            // makes the instruction fault again forever).
+            Logger.LogTrace("Write fault on read-only private VMA: {VmaName} at 0x{Addr:x}", vma.Name, pageStart);
+            return FaultResult.Segv;
+        }
+
         var privateObject = vma.VmAnonVma;
         var vmaRelativeOffset = vma.GetRelativeOffsetForPageIndex(pageIndex);
         var absoluteFileOffset = vma.GetAbsoluteFileOffsetForPageIndex(pageIndex);
