@@ -35,7 +35,7 @@
     </ItemGroup>
 
     <Target Name="BuildNativeLib" BeforeTargets="BeforeBuild" 
-            Condition="'$(DesignTimeBuild)' != 'true' And '$(LibFibercpuSourceExists)' == 'true'"
+            Condition="'$(DesignTimeBuild)' != 'true' And '$(FiberishSkipNativeBuild)' != 'true' And '$(LibFibercpuSourceExists)' == 'true'"
             Inputs="@(NativeBuildInput)"
             Outputs="$(NativeBuildDir)/Release/fibercpu.dll;$(NativeBuildDir)/Release/fibercpu.lib;$(NativeBuildDir)/libfibercpu.so;$(NativeBuildDir)/libfibercpu.a;$(NativeBuildDir)/libfibercpu.dylib">
         

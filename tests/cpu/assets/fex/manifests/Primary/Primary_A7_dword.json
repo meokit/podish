@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Primary_A7_dword",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "5c22366a8bad173165e98a82dc72135618fa5f9d2ce60ef5c3598b126e063b03",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Primary_A7_dword.bin",
+  "binarySha256": "ebe9b5f9bd003d66fecd7fd6cf0573e982c63faf17df091397a46e7a234704c9",
+  "haltAddresses": [
+    65578
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x1600",
+      "RDI": "0xE000000C",
+      "RSI": "0xE0000004"
+    },
+    "Mode": "32BIT"
+  }
+}

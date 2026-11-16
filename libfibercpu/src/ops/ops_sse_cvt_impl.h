@@ -4,8 +4,7 @@
 
 #include <simde/x86/sse.h>
 
-#include <cmath>
-#include <limits>
+#include <cstring>
 
 #include "../dispatch.h"
 #include "../exec_utils.h"
@@ -16,16 +15,97 @@
 namespace fiberish {
 namespace op {
 
-template <typename FloatT>
-FORCE_INLINE int32_t CvttToInt32(FloatT value) {
-    if (!std::isfinite(value)) return std::numeric_limits<int32_t>::min();
+// Conversions must use the guest's RC/DAZ and explicitly accumulate guest flags.
+// Host casts/SIMDe conversions otherwise inherit host rounding, can invoke C++
+// out-of-range conversion UB, and never update Context::mxcsr. Work from IEEE bits
+// so even an SNaN is classified without performing a host floating-point operation.
+template <int FractionBits, int ExponentBits>
+FORCE_INLINE uint32_t SseFloatBitsToInt32(uint64_t bits, uint32_t mxcsr, bool truncate, uint32_t& exceptions) {
+    constexpr uint64_t fraction_mask = (uint64_t{1} << FractionBits) - 1;
+    constexpr uint32_t exponent_mask = (uint32_t{1} << ExponentBits) - 1;
+    constexpr int bias = (1 << (ExponentBits - 1)) - 1;
+    const bool negative = ((bits >> (FractionBits + ExponentBits)) & 1) != 0;
+    const uint32_t exponent = static_cast<uint32_t>(bits >> FractionBits) & exponent_mask;
+    uint64_t significand = bits & fraction_mask;
+    if (exponent == exponent_mask) {
+        exceptions |= 1;  // IE: any NaN or infinity is invalid for integer conversion.
+        return 0x80000000u;
+    }
+    if (exponent == 0 && (significand == 0 || (mxcsr & 0x40))) return 0;  // Zero or DAZ.
+    const int power = (exponent == 0 ? 1 : static_cast<int>(exponent)) - bias;
+    if (power > 31) {
+        exceptions |= 1;
+        return 0x80000000u;
+    }
+    if (exponent != 0) significand |= uint64_t{1} << FractionBits;
+    uint64_t magnitude;
+    bool inexact = false, above_half = false, exactly_half = false;
+    if (power >= FractionBits) {
+        magnitude = significand << (power - FractionBits);
+    } else {
+        const int shift = FractionBits - power;
+        if (shift >= 64) {
+            magnitude = 0;
+            inexact = significand != 0;
+        } else {
+            magnitude = significand >> shift;
+            const uint64_t remainder = significand & ((uint64_t{1} << shift) - 1);
+            const uint64_t halfway = uint64_t{1} << (shift - 1);
+            inexact = remainder != 0;
+            above_half = remainder > halfway;
+            exactly_half = remainder == halfway;
+        }
+    }
+    const uint32_t rounding = truncate ? 3 : ((mxcsr >> 13) & 3);
+    const bool increment = rounding == 0 ? (above_half || (exactly_half && (magnitude & 1)))
+        : rounding == 1 ? (inexact && negative) : rounding == 2 ? (inexact && !negative) : false;
+    magnitude += increment;
+    if (magnitude > (negative ? 0x80000000ull : 0x7FFFFFFFull)) {
+        // An invalid conversion does not additionally report precision for this lane.
+        exceptions |= 1;
+        return 0x80000000u;
+    }
+    if (inexact) exceptions |= 0x20;  // PE, including nonzero subnormals when DAZ is clear.
+    const uint32_t result = static_cast<uint32_t>(magnitude);
+    return negative ? 0u - result : result;
+}
 
-    double truncated = std::trunc(static_cast<double>(value));
-    if (truncated < static_cast<double>(std::numeric_limits<int32_t>::min()) ||
-        truncated > static_cast<double>(std::numeric_limits<int32_t>::max()))
-        return std::numeric_limits<int32_t>::min();
+FORCE_INLINE uint32_t SseInt32ToSingleBits(uint32_t bits, uint32_t mxcsr, uint32_t& exceptions) {
+    const bool negative = (bits >> 31) != 0;
+    const uint32_t magnitude = negative ? 0u - bits : bits;
+    if (magnitude == 0) return 0;
+    int power = 0;
+    for (uint32_t scan = magnitude; scan > 1; scan >>= 1) ++power;
+    uint32_t significand;
+    if (power <= 23) {
+        significand = magnitude << (23 - power);
+    } else {
+        const int shift = power - 23;
+        significand = magnitude >> shift;
+        const uint32_t remainder = magnitude & ((1u << shift) - 1);
+        const uint32_t halfway = 1u << (shift - 1);
+        const uint32_t rounding = (mxcsr >> 13) & 3;
+        const bool increment = rounding == 0 ? (remainder > halfway || (remainder == halfway && (significand & 1)))
+            : rounding == 1 ? (remainder != 0 && negative) : rounding == 2 ? (remainder != 0 && !negative) : false;
+        if (remainder != 0) exceptions |= 0x20;
+        significand += increment;
+        if (significand == (1u << 24)) {
+            significand >>= 1;
+            ++power;
+        }
+    }
+    return (negative ? 0x80000000u : 0) | (static_cast<uint32_t>(power + 127) << 23) | (significand & 0x7FFFFF);
+}
 
-    return static_cast<int32_t>(truncated);
+FORCE_INLINE bool SseCommitConversionExceptions(EmuState* state, uint32_t exceptions) {
+    const uint32_t masks = (state->ctx.mxcsr >> 7) & 0x3F;
+    // Unmasked invalid has priority over precision from other packed lanes.
+    if ((exceptions & 1) && !(masks & 1)) exceptions &= ~0x20u;
+    state->ctx.mxcsr |= exceptions;
+    if ((exceptions & ~masks) == 0) return true;
+    state->fault_vector = 19;  // #XM: do not commit any destination lane/register.
+    if (!state->hooks.on_interrupt(state, 19)) state->status = EmuStatus::Fault;
+    return false;
 }
 
 FORCE_INLINE LogicFlow OpCvt_2A(LogicFuncParams) {
@@ -44,7 +124,10 @@ FORCE_INLINE LogicFlow OpCvt_2A(LogicFuncParams) {
         *dest_ptr = simde_mm_castpd_ps(res);
     } else if (op->prefixes.flags.rep) {
         // F3: CVTSI2SS
-        *dest_ptr = simde_mm_cvtsi32_ss(*dest_ptr, val);
+        uint32_t exceptions = 0;
+        const uint32_t result = SseInt32ToSingleBits(*val_res, state->ctx.mxcsr, exceptions);
+        if (!SseCommitConversionExceptions(state, exceptions)) return LogicFlow::ExitOnCurrentEIP;
+        std::memcpy(dest_ptr, &result, sizeof(result));
     } else {
         state->fault_vector = 6;
         if (!state->hooks.on_invalid_opcode(state)) {
@@ -52,81 +135,52 @@ FORCE_INLINE LogicFlow OpCvt_2A(LogicFuncParams) {
         }
         return LogicFlow::ExitOnCurrentEIP;
     }
+    return LogicFlow::Continue;
+}
+
+template <bool Truncate>
+FORCE_INLINE LogicFlow OpCvtScalarToInt32(LogicFuncParams) {
+    uint32_t addr = 0;
+    if (op->modrm < 0xC0) addr = ComputeLinearAddress(state, op);
+    uint32_t result = 0, exceptions = 0;
+    if (op->prefixes.flags.repne) {  // F2: CVT[T]SD2SI
+        uint64_t bits;
+        if (op->modrm >= 0xC0) {
+            std::memcpy(&bits, &state->ctx.xmm[op->modrm & 7], sizeof(bits));
+        } else {
+            auto value = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            if (!value) return LogicFlow::RestartMemoryOp;
+            bits = *value;
+        }
+        result = SseFloatBitsToInt32<52, 11>(bits, state->ctx.mxcsr, Truncate, exceptions);
+    } else if (op->prefixes.flags.rep) {  // F3: CVT[T]SS2SI
+        uint32_t bits;
+        if (op->modrm >= 0xC0) {
+            std::memcpy(&bits, &state->ctx.xmm[op->modrm & 7], sizeof(bits));
+        } else {
+            auto value = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            if (!value) return LogicFlow::RestartMemoryOp;
+            bits = *value;
+        }
+        result = SseFloatBitsToInt32<23, 8>(bits, state->ctx.mxcsr, Truncate, exceptions);
+    } else {
+        state->fault_vector = 6;
+        if (!state->hooks.on_invalid_opcode(state)) {
+            state->status = EmuStatus::Fault;
+        }
+        return LogicFlow::ExitOnCurrentEIP;
+    }
+    if (!SseCommitConversionExceptions(state, exceptions)) return LogicFlow::ExitOnCurrentEIP;
+    SetReg(state, (op->modrm >> 3) & 7, result);
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpCvt_2C(LogicFuncParams) {
-    // 2C: CVTTSD2SI (F2), CVTTSS2SI (F3)
-    uint32_t addr = 0;
-    if (op->modrm < 0xC0) addr = ComputeLinearAddress(state, op);
-    int32_t res = 0;
-
-    if (op->prefixes.flags.repne) {  // F2: CVTTSD2SI (Double -> Int32)
-        double b;
-        if (op->modrm >= 0xC0) {
-            b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
-        } else {
-            auto b_res = ReadMem<double, OpOnTLBMiss::Restart>(state, addr, utlb, op);
-            if (!b_res) return LogicFlow::RestartMemoryOp;
-            b = *b_res;
-        }
-        res = CvttToInt32(b);
-    } else if (op->prefixes.flags.rep) {  // F3: CVTTSS2SI (Single -> Int32)
-        float b;
-        if (op->modrm >= 0xC0) {
-            b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
-        } else {
-            auto b_res = ReadMem<float, OpOnTLBMiss::Restart>(state, addr, utlb, op);
-            if (!b_res) return LogicFlow::RestartMemoryOp;
-            b = *b_res;
-        }
-        res = CvttToInt32(b);
-    } else {
-        state->fault_vector = 6;
-        if (!state->hooks.on_invalid_opcode(state)) {
-            state->status = EmuStatus::Fault;
-        }
-        return LogicFlow::ExitOnCurrentEIP;
-    }
-    SetReg(state, (op->modrm >> 3) & 7, (uint32_t)res);
-    return LogicFlow::Continue;
+    return OpCvtScalarToInt32<true>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpCvt_2D(LogicFuncParams) {
-    // 0F 2D: CVTSD2SI (F2) / CVTSS2SI (F3)
-    uint32_t addr = 0;
-    if (op->modrm < 0xC0) addr = ComputeLinearAddress(state, op);
-    int32_t res = 0;
-
-    if (op->prefixes.flags.repne) {  // F2: CVTSD2SI
-        double b;
-        if (op->modrm >= 0xC0) {
-            b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
-        } else {
-            auto b_res = ReadMem<double, OpOnTLBMiss::Restart>(state, addr, utlb, op);
-            if (!b_res) return LogicFlow::RestartMemoryOp;
-            b = *b_res;
-        }
-        res = simde_mm_cvtsd_si32(simde_mm_set_sd(b));
-    } else if (op->prefixes.flags.rep) {  // F3: CVTSS2SI
-        float b;
-        if (op->modrm >= 0xC0) {
-            b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
-        } else {
-            auto b_res = ReadMem<float, OpOnTLBMiss::Restart>(state, addr, utlb, op);
-            if (!b_res) return LogicFlow::RestartMemoryOp;
-            b = *b_res;
-        }
-        res = simde_mm_cvtss_si32(simde_mm_set_ss(b));
-    } else {
-        state->fault_vector = 6;
-        if (!state->hooks.on_invalid_opcode(state)) {
-            state->status = EmuStatus::Fault;
-        }
-        return LogicFlow::ExitOnCurrentEIP;
-    }
-    SetReg(state, (op->modrm >> 3) & 7, (uint32_t)res);
-    return LogicFlow::Continue;
+    return OpCvtScalarToInt32<false>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpCvt_5A(LogicFuncParams) {
@@ -198,19 +252,20 @@ FORCE_INLINE LogicFlow OpCvt_5B(LogicFuncParams) {
     if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128 src = *src_res;
 
-    if (op->prefixes.flags.opsize) {
-        // 66: CVTPS2DQ
-        simde__m128i res = simde_mm_cvtps_epi32(src);
-        *dest_ptr = simde_mm_castsi128_ps(res);
-    } else if (op->prefixes.flags.rep) {
-        // F3: CVTTPS2DQ (Truncate)
-        simde__m128i res = simde_mm_cvttps_epi32(src);
-        *dest_ptr = simde_mm_castsi128_ps(res);
+    uint32_t input[4], result[4], exceptions = 0;
+    std::memcpy(input, &src, sizeof(input));
+    if (op->prefixes.flags.opsize || op->prefixes.flags.rep) {
+        // 66: CVTPS2DQ; F3: CVTTPS2DQ. Accumulate before committing any lane.
+        for (int lane = 0; lane < 4; ++lane)
+            result[lane] = SseFloatBitsToInt32<23, 8>(input[lane], state->ctx.mxcsr,
+                !op->prefixes.flags.opsize, exceptions);
     } else {
         // 0F: CVTDQ2PS
-        simde__m128i isrc = simde_mm_castps_si128(src);
-        *dest_ptr = simde_mm_cvtepi32_ps(isrc);
+        for (int lane = 0; lane < 4; ++lane)
+            result[lane] = SseInt32ToSingleBits(input[lane], state->ctx.mxcsr, exceptions);
     }
+    if (!SseCommitConversionExceptions(state, exceptions)) return LogicFlow::ExitOnCurrentEIP;
+    std::memcpy(dest_ptr, result, sizeof(result));
     return LogicFlow::Continue;
 }
 
@@ -223,10 +278,13 @@ FORCE_INLINE LogicFlow OpCvt_E6(LogicFuncParams) {
         // 66: CVTTPD2DQ (Truncate xmm/m128 -> xmm)
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
-        simde__m128d src_pd = simde_mm_castps_pd(*src_res);
-
-        simde__m128i res = simde_mm_cvttpd_epi32(src_pd);
-        *dest_ptr = simde_mm_castsi128_ps(res);
+        uint64_t input[2];
+        uint32_t result[4] = {}, exceptions = 0;
+        std::memcpy(input, &*src_res, sizeof(input));
+        for (int lane = 0; lane < 2; ++lane)
+            result[lane] = SseFloatBitsToInt32<52, 11>(input[lane], state->ctx.mxcsr, true, exceptions);
+        if (!SseCommitConversionExceptions(state, exceptions)) return LogicFlow::ExitOnCurrentEIP;
+        std::memcpy(dest_ptr, result, sizeof(result));
 
     } else if (op->prefixes.flags.rep) {
         // F3: CVTDQ2PD (xmm/m64 -> xmm)
@@ -252,10 +310,13 @@ FORCE_INLINE LogicFlow OpCvt_E6(LogicFuncParams) {
         // F2: CVTPD2DQ (xmm/m128 -> xmm)
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
-        simde__m128d src_pd = simde_mm_castps_pd(*src_res);
-
-        simde__m128i res = simde_mm_cvtpd_epi32(src_pd);
-        *dest_ptr = simde_mm_castsi128_ps(res);
+        uint64_t input[2];
+        uint32_t result[4] = {}, exceptions = 0;
+        std::memcpy(input, &*src_res, sizeof(input));
+        for (int lane = 0; lane < 2; ++lane)
+            result[lane] = SseFloatBitsToInt32<52, 11>(input[lane], state->ctx.mxcsr, false, exceptions);
+        if (!SseCommitConversionExceptions(state, exceptions)) return LogicFlow::ExitOnCurrentEIP;
+        std::memcpy(dest_ptr, result, sizeof(result));
     } else {
         state->fault_vector = 6;
         if (!state->hooks.on_invalid_opcode(state)) {

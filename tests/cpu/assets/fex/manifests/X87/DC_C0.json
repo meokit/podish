@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/DC_C0",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "9c0ea1c65a4468730872d7445322626272d646e5288683ee763ee8678bcc108a",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/DC_C0.bin",
+  "binarySha256": "aeed7116a9072ed2e40f6d20ea8214a3e881f01a4f1ddd058de040e9f836ba78",
+  "haltAddresses": [
+    65561
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "MM5": [
+        "0x8000000000000000",
+        "0x4001"
+      ],
+      "MM6": [
+        "0x8000000000000000",
+        "0x4000"
+      ],
+      "MM7": [
+        "0xA000000000000000",
+        "0x4001"
+      ]
+    },
+    "Mode": "32BIT"
+  }
+}

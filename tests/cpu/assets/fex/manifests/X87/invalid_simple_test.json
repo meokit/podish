@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/invalid_simple_test",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "6b51d437dce9432e70ac691414dcea22d2f3b09c35217378dde532b05d8403d9",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/invalid_simple_test.bin",
+  "binarySha256": "ddafa0cbac7b218b7c95c069ba003f4020f2faebf4774911a745cbeb9caa6b61",
+  "haltAddresses": [
+    65557
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

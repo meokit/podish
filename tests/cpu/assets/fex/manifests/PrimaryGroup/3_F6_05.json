@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "PrimaryGroup/3_F6_05",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "ac262c540847242814ef32e2b95ad13c7a5b1ce1e163088b84db229c2c329064",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/PrimaryGroup/3_F6_05.bin",
+  "binarySha256": "485b38469d69ad14fdf55d465be4ae89a1af0634dc22c78cda701dc029799601",
+  "haltAddresses": [
+    65680
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RDI": "0x00000000000003fc"
+    },
+    "Mode": "32BIT"
+  }
+}

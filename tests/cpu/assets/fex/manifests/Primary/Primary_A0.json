@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Primary_A0",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "7594abbc5750df4a7697f19d6edd80663307e2aefe7f531d8f43a2ff5bdf7faa",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Primary_A0.bin",
+  "binarySha256": "e05991e9bd63ef47aaf9c3fa661cd39df9da05989a634cd6e758ce23e3a107c2",
+  "haltAddresses": [
+    65582
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RCX": "0xFFFF0042",
+      "RDX": "0x42"
+    },
+    "Mode": "32BIT"
+  }
+}

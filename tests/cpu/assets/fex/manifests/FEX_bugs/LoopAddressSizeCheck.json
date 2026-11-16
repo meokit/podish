@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/LoopAddressSizeCheck",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "da8113037bd6e58207f96b3cb06d091e06f76eb7cc8d8b5c6f0a6e01e4e4b533",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/LoopAddressSizeCheck.bin",
+  "binarySha256": "821f8c463661dfa340dd659d58512163548fcd4545514ed458e01763de7cfdd8",
+  "haltAddresses": [
+    65572
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x0000000000000001",
+      "RBX": "0x0000000000010001"
+    },
+    "Mode": "32BIT"
+  }
+}

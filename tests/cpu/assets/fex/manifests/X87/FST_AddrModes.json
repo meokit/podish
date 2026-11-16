@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/FST_AddrModes",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "f7c389036577c6a5b7f7683f8e34174b6e099144aa435eb153ee03b99d7587ec",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/FST_AddrModes.bin",
+  "binarySha256": "f9de109e5c1e8680646a838923199e1cec4b3149d1ce70467ab15994c467d5ce",
+  "haltAddresses": [
+    65596
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x3f800000",
+      "RBX": "0x3f800000",
+      "RCX": "0x3f800000",
+      "RBP": "0x3f800000",
+      "RDI": "0x3f800000",
+      "RSP": "0x3f800000"
+    },
+    "MemoryRegions": {
+      "0xf0000000": "4096"
+    },
+    "Mode": "32BIT"
+  }
+}

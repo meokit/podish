@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/SubAddrBug",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "ad2ea37ac0cb4ce13cb25721cacf9ca37e2da3104e68ef49c8aa83d9599387bf",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/SubAddrBug.bin",
+  "binarySha256": "d7c018e23a9b3afe52645f5319194bbe95dac9439d111613013560f940bb4801",
+  "haltAddresses": [
+    65554
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0xdeadbeef"
+    },
+    "MemoryRegions": {
+      "0x10000000": "4096"
+    },
+    "MemoryData": {
+      "0x10000000": "0xdeadbeef"
+    },
+    "Mode": "32BIT"
+  }
+}

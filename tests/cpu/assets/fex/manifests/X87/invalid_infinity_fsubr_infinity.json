@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/invalid_infinity_fsubr_infinity",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "b4337b12d5a7db22a9f161e9c68761bcd0f066db0eb1a8397c826e749bf1b758",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/invalid_infinity_fsubr_infinity.bin",
+  "binarySha256": "85bd8f7cb0a520b7d797e1625c161355c2601d3f0c77bf21fffee1cab2deb6ce",
+  "haltAddresses": [
+    65561
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

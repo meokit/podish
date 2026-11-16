@@ -176,6 +176,8 @@ void RegisterAluOps() {
     g_Handlers[0x3F] = DispatchWrapper<op::OpAas>;
     g_Handlers[0xD4] = DispatchWrapper<op::OpAam>;
     g_Handlers[0xD5] = DispatchWrapper<op::OpAad>;
+    g_Handlers[0xD6] = DispatchWrapper<op::OpSalc>;
+    g_Handlers[0x63] = DispatchWrapper<op::OpArpl>;
 
 #undef REGISTER_EVGV_NF_32_MODREG
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <limits>
+
 #include "common.h"
 #include "decoder.h"
 #include "exec_utils.h"
@@ -296,7 +298,7 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
             if constexpr (sizeof(T) == 1) {  // AX / r/m8
                 int16_t ax = (int16_t)(GetReg(state, EAX) & 0xFFFF);
                 int8_t v = (int8_t)val;
-                if (v == 0) {
+                if (v == 0 || (ax == std::numeric_limits<int16_t>::min() && v == -1)) {
                     state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
                         state->status = EmuStatus::Fault;
@@ -304,8 +306,10 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
                     return LogicFlow::ExitOnCurrentEIP;
                 }
 
-                int16_t q = ax / v;
-                int16_t r = ax % v;
+                // Keep the promoted quotient wide until after the byte range
+                // check; narrowing first could hide quotient overflow.
+                int32_t q = static_cast<int32_t>(ax) / v;
+                int32_t r = static_cast<int32_t>(ax) % v;
 
                 if (q > 127 || q < -128) {
                     state->fault_vector = 0;  // #DE
@@ -321,7 +325,9 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
                 int32_t dx_ax =
                     (int32_t)(((uint32_t)(GetReg(state, EDX) & 0xFFFF) << 16) | (GetReg(state, EAX) & 0xFFFF));
                 int16_t v = (int16_t)val;
-                if (v == 0) {
+                // The host divide must not execute INT32_MIN / -1: guest
+                // quotient overflow is #DE, not a host arithmetic exception.
+                if (v == 0 || (dx_ax == std::numeric_limits<int32_t>::min() && v == -1)) {
                     state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
                         state->status = EmuStatus::Fault;
@@ -344,9 +350,14 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
                 *rax = (*rax & 0xFFFF0000) | (q & 0xFFFF);
                 *rdx = (*rdx & 0xFFFF0000) | (r & 0xFFFF);
             } else {  // EDX:EAX / r/m32
-                int64_t edx_eax = ((int64_t)GetReg(state, EDX) << 32) | GetReg(state, EAX);
+                // Assemble as an unsigned bitvector before interpreting the
+                // signed dividend, avoiding overflow in a signed left shift.
+                uint64_t bits = ((uint64_t)GetReg(state, EDX) << 32) | GetReg(state, EAX);
+                int64_t edx_eax = static_cast<int64_t>(bits);
                 int32_t v = (int32_t)val;
-                if (v == 0) {
+                // Guard both / and % before either host instruction can trap.
+                // Return without committing EAX/EDX or advancing the guest EIP.
+                if (v == 0 || (edx_eax == std::numeric_limits<int64_t>::min() && v == -1)) {
                     state->fault_vector = 0;  // #DE
                     if (!state->hooks.on_interrupt(state, 0)) {
                         state->status = EmuStatus::Fault;

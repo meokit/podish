@@ -1311,8 +1311,11 @@ FORCE_INLINE LogicFlow OpAaa(LogicFuncParams) {
     bool new_cf = false;
 
     if ((al & 0x0F) > 9 || af) {
-        al += 6;
-        ah += 1;
+        // The adjustment is 16-bit AX arithmetic: an AL carry must also
+        // propagate into AH in addition to the explicit AH increment.
+        const uint16_t adjusted = static_cast<uint16_t>(GetReg(state, EAX) + 0x106);
+        al = static_cast<uint8_t>(adjusted);
+        ah = static_cast<uint8_t>(adjusted >> 8);
         new_af = true;
         new_cf = true;
     }
@@ -1347,8 +1350,10 @@ FORCE_INLINE LogicFlow OpAas(LogicFuncParams) {
     bool new_cf = false;
 
     if ((al & 0x0F) > 9 || af) {
-        al -= 6;
-        ah -= 1;
+        // Preserve the borrow from AX-6 before subtracting the extra 0x100.
+        const uint16_t adjusted = static_cast<uint16_t>(GetReg(state, EAX) - 0x106);
+        al = static_cast<uint8_t>(adjusted);
+        ah = static_cast<uint8_t>(adjusted >> 8);
         new_af = true;
         new_cf = true;
     }
@@ -1365,6 +1370,29 @@ FORCE_INLINE LogicFlow OpAas(LogicFuncParams) {
     SetReg(state, EAX, eax);
 
     SetFlags32AndSyncParityState(flags_cache, flags);
+    return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpSalc(LogicFuncParams) {
+    // Legacy SALC is accepted by the 32-bit compatibility model. It preserves
+    // every flag and every register bit except AL.
+    SetReg8(state, EAX, ReadCF(flags_cache) ? 0xFF : 0);
+    return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpArpl(LogicFuncParams) {
+    // ARPL operates only on selector RPL bits; no descriptor lookup is needed.
+    // Delay ZF and destination changes until the memory operation can complete.
+    auto destination = ReadModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, utlb);
+    if (!destination) return LogicFlow::ExitOnCurrentEIP;
+    const uint16_t source = static_cast<uint16_t>(GetReg(state, (op->modrm >> 3) & 7));
+    const bool adjusted = (*destination & 3) < (source & 3);
+    if (adjusted) {
+        const uint16_t result = static_cast<uint16_t>((*destination & ~3u) | (source & 3));
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, result, utlb))
+            return LogicFlow::ExitOnCurrentEIP;
+    }
+    AssignZF(flags_cache, adjusted);
     return LogicFlow::Continue;
 }
 

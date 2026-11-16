@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/invalid_fcos_infinity",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "897436b50402a3a6a48f54cae8c93c7ad775c737bf81ffafe6b54024c39832dd",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/invalid_fcos_infinity.bin",
+  "binarySha256": "e16b8c748e6ef23c69b452ef47554b1225a141fe8011d68d208e04704d8daa51",
+  "haltAddresses": [
+    65562
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

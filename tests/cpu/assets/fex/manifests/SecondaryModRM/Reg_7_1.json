@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "SecondaryModRM/Reg_7_1",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "e37e250604f2c0ccb6d1ea23763a87b499a5789cf62a71d6f6808d68173ec444",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/SecondaryModRM/Reg_7_1.bin",
+  "binarySha256": "6eb7d73147c606b549cdb519307116189c4a1428988fd368c86b1d35595ce42d",
+  "haltAddresses": [
+    65548
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "Mode": "32BIT",
+    "HostFeatures": [
+      "Linux"
+    ]
+  }
+}

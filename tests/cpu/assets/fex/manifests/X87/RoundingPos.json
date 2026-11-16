@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/RoundingPos",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "ac7ec65c8a32e20b946f3d29d0f3c90cfb87ee68859ef8620a7758c9b7a206fd",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/RoundingPos.bin",
+  "binarySha256": "0ca8bbbf704584a94f2ad92a0bc933813a05f733c9f3384ab7ebdab372d0b84b",
+  "haltAddresses": [
+    66070
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RBX": "0x21212121",
+      "RCX": "0x1121"
+    },
+    "MemoryRegions": {
+      "0xf0000000": "4096"
+    },
+    "Mode": "32BIT"
+  }
+}

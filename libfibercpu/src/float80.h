@@ -45,6 +45,7 @@ typedef struct {
 // Conversion
 float80 f80_from_int(int64_t i);
 int64_t f80_to_int(float80 f);
+int64_t f80_trunc_to_int(float80 f);  // Non-signaling finite exponent conversion for FSCALE.
 float80 f80_from_double(double d);
 double f80_to_double(float80 f);
 int16_t f80_to_int16_checked(float80 f, bool truncate, bool* invalid);
@@ -80,6 +81,7 @@ bool f80_uncomparable(float80 a, float80 b);
 // Trigonometry and Transcendental
 float80 f80_sin(float80 f);
 float80 f80_cos(float80 f);
+float80 f80_tan(float80 f);
 float80 f80_log2(float80 x);
 float80 f80_scale(float80 x, int scale);
 float80 f80_round(float80 f);
@@ -95,12 +97,16 @@ enum f80_rounding_mode {
 };
 
 /**
- * Updates the global FPU rounding mode.
- * Implementation in float80.cpp handles synchronization with SoftFloat state.
+ * Updates the calling thread's temporary FPU rounding mode.
  */
 void f80_set_rounding_mode(enum f80_rounding_mode mode);
 void f80_sync_to_soft(uint16_t cw, uint16_t sw);
 void f80_sync_from_soft(uint16_t* cw, uint16_t* sw);
+// Preserve all library TLS around guest execution (also supports nested calls).
+// Bytes: rounding mode, exception flags, tininess detection, ext80 precision.
+// The fallback backend uses only the rounding-mode byte.
+uint32_t f80_save_environment(void);
+void f80_restore_environment(uint32_t environment);
 
 #define F80_NAN ((float80){.signif = 0xc000000000000000, .signExp = 0x7fff})
 #define F80_INF ((float80){.signif = 0x8000000000000000, .signExp = 0x7fff})
@@ -108,7 +114,7 @@ void f80_sync_from_soft(uint16_t* cw, uint16_t* sw);
 #define F80_ONE ((float80){.signif = 0x8000000000000000, .signExp = 0x3fff})
 #define F80_PI ((float80){.signif = 0xC90FDAA22168C235, .signExp = 0x4000})
 #define F80_L2T ((float80){.signif = 0xD49A784BCD1B8AFE, .signExp = 0x4000})
-#define F80_L2E ((float80){.signif = 0xB8AA3B295C17D06D, .signExp = 0x3FFF})
+#define F80_L2E ((float80){.signif = 0xB8AA3B295C17F0BC, .signExp = 0x3FFF})
 #define F80_LG2 ((float80){.signif = 0x9A209A84FBCFF799, .signExp = 0x3FFD})
 #define F80_LN2 ((float80){.signif = 0xB17217F7D1CF79AC, .signExp = 0x3FFE})
 
@@ -120,7 +126,7 @@ constexpr float80 ConstF80_Zero() { return float80{.signif = 0, .signExp = 0}; }
 constexpr float80 ConstF80_One() { return float80{.signif = 0x8000000000000000, .signExp = 0x3fff}; }
 constexpr float80 ConstF80_Pi() { return float80{.signif = 0xC90FDAA22168C235, .signExp = 0x4000}; }
 constexpr float80 ConstF80_L2T() { return float80{.signif = 0xD49A784BCD1B8AFE, .signExp = 0x4000}; }
-constexpr float80 ConstF80_L2E() { return float80{.signif = 0xB8AA3B295C17D06D, .signExp = 0x3FFF}; }
+constexpr float80 ConstF80_L2E() { return float80{.signif = 0xB8AA3B295C17F0BC, .signExp = 0x3FFF}; }
 constexpr float80 ConstF80_LG2() { return float80{.signif = 0x9A209A84FBCFF799, .signExp = 0x3FFD}; }
 constexpr float80 ConstF80_LN2() { return float80{.signif = 0xB17217F7D1CF79AC, .signExp = 0x3FFE}; }
 

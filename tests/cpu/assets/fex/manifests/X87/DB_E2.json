@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/DB_E2",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "41bcee6f486f892ddfc26de774014c160942b5ff444120f1c088f13a370bf15d",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/DB_E2.bin",
+  "binarySha256": "3b2dd4cdd83b78d16e1f689fe0aad0d47a90b2289072a5682d31c5ffb61af727",
+  "haltAddresses": [
+    65568
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0",
+      "RBX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

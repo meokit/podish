@@ -24,7 +24,9 @@ FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, DecodedOp* op, ui
     }
     uint32_t res = dest;
 
-    // Mask count
+    // IA-32 masks every Group 2 count before any modulo-width reduction,
+    // including the width+1 carry ring used by RCL/RCR.
+    count &= 0x1F;
     if (count == 0) return LogicFlow::Continue;  // Nothing
 
     // Perform Op

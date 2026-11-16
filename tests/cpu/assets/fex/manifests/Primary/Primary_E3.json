@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Primary_E3",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "077b8ea53aa601ea93a919360882282d5c0ccaa34d51b05b02fb2fdf9591a980",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Primary_E3.bin",
+  "binarySha256": "a5715c3374c1bee83af790c38bf5b864bb3ae4f49a0146c5849cc8c359e7876a",
+  "haltAddresses": [
+    65567
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RCX": "0x10000"
+    },
+    "Mode": "32BIT"
+  }
+}

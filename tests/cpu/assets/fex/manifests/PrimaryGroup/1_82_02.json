@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "PrimaryGroup/1_82_02",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "2bf0b82b2658e7a5facf5908945d757d8dfe95213fbeec5921e53662e378a29d",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/PrimaryGroup/1_82_02.bin",
+  "binarySha256": "3c34d2dc2a4ae14a5a0cc1f7aa6a86437005da9cec0a393847bd0efe772c7b46",
+  "haltAddresses": [
+    65572
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0xdeadbe02",
+      "RBX": "0xdeadbe02"
+    },
+    "Mode": "32BIT"
+  }
+}

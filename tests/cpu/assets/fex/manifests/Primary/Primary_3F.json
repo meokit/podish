@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Primary_3F",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "1ec0c6b79901d0adb5c72b2901f8a073b0bede09de71f4b9077edae674596419",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Primary_3F.bin",
+  "binarySha256": "3c9d8779aa3e7c5dc438104abe253c65b80410704525b5e932c24a5d6fa8d2f8",
+  "haltAddresses": [
+    65554
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x12345107"
+    },
+    "Mode": "32BIT"
+  }
+}

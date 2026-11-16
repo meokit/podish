@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Primary_AF_REP_dword",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "b1acf57e658d9b51406279ce6a31b903be940d285eafb3daf0cba5f3ce1eed59",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Primary_AF_REP_dword.bin",
+  "binarySha256": "7619d2729b7e69bcd92c2eaae10a02a3491b049c70f22f0dbf109f2a5de61785",
+  "haltAddresses": [
+    65609
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RCX": "6",
+      "RDI": "0xE0000008"
+    },
+    "Mode": "32BIT"
+  }
+}

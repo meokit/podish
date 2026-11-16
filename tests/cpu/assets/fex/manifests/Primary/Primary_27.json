@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Primary_27",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "b62ba97c19b27803e2d55362ce1816255dfbba4cfc820804e8b0b0aa2a2df67c",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Primary_27.bin",
+  "binarySha256": "33329d93951ae9c31e0711138aace25c33707b23604f37513b87521dc5d4cb15",
+  "haltAddresses": [
+    65554
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x12345637"
+    },
+    "Mode": "32BIT"
+  }
+}

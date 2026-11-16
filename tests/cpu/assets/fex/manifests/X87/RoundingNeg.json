@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/RoundingNeg",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "ac30afc2e70b087a73003834038ac1abd25ee0febb85d0a7811b13322fce8ed0",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/RoundingNeg.bin",
+  "binarySha256": "23219263c17646d4cfeaeabff00a31e58b7027bbd8d30b97988ed0a29d9edd3c",
+  "haltAddresses": [
+    66119
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0xfffefffe",
+      "RBX": "0xffffffff",
+      "RCX": "0xfffffffe",
+      "RDX": "0xffffffff",
+      "RSI": "0xfffefffe",
+      "RDI": "0xffffffff"
+    },
+    "MemoryRegions": {
+      "0xf0000000": "4096"
+    },
+    "Mode": "32BIT"
+  }
+}

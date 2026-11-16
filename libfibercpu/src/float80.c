@@ -19,6 +19,7 @@
 
 #include "3rdparty/softfloat/platform.h"
 #include "3rdparty/softfloat/softfloat.h"
+#include "3rdparty/softfloat/internals.h"
 
 #undef float16_t
 #undef bfloat16_t
@@ -28,6 +29,26 @@
 #else
 static THREAD_LOCAL int g_RoundingMode = 0;  // round_to_nearest
 #endif
+
+uint32_t f80_save_environment(void) {
+#ifdef X86EMU_USE_SOFTFLOAT
+    return (uint32_t)softfloat_roundingMode | ((uint32_t)softfloat_exceptionFlags << 8) |
+           ((uint32_t)softfloat_detectTininess << 16) | ((uint32_t)extF80_roundingPrecision << 24);
+#else
+    return (uint32_t)g_RoundingMode;
+#endif
+}
+
+void f80_restore_environment(uint32_t environment) {
+#ifdef X86EMU_USE_SOFTFLOAT
+    softfloat_roundingMode = (uint8_t)environment;
+    softfloat_exceptionFlags = (uint8_t)(environment >> 8);
+    softfloat_detectTininess = (uint8_t)(environment >> 16);
+    extF80_roundingPrecision = (uint8_t)(environment >> 24);
+#else
+    g_RoundingMode = (int)(environment & 0xFF);
+#endif
+}
 
 #ifdef X86EMU_USE_SOFTFLOAT
 // Helper to cast between our float80 and SoftFloat's type.
@@ -103,6 +124,7 @@ static double round_double_for_int_store(double d, bool truncate) {
 float80 f80_from_int(int64_t i) { return from_soft(i64_to_extF80(i)); }
 
 int64_t f80_to_int(float80 f) { return extF80_to_i64(to_soft(f), softfloat_roundingMode, true); }
+int64_t f80_trunc_to_int(float80 f) { return extF80_to_i64_r_minMag(to_soft(f), false); }
 
 float80 f80_from_double(double d) {
     union {
@@ -125,6 +147,7 @@ double f80_to_double(float80 f) {
 }
 #else
 float80 f80_from_int(int64_t i) { return f80_from_double((double)i); }
+int64_t f80_trunc_to_int(float80 f) { return (int64_t)trunc(f80_to_double(f)); }
 
 int64_t f80_to_int(float80 f) {
     double d = f80_to_double(f);
@@ -289,9 +312,19 @@ float80 f80_div(float80 a, float80 b) { return from_soft(extF80_div(to_soft(a), 
 float80 f80_rem(float80 a, float80 b) { return from_soft(extF80_rem(to_soft(a), to_soft(b))); }
 
 float80 f80_mod(float80 a, float80 b) {
-    // x87 FPREM uses truncation, SoftFloat rem uses IEEE 754 (rounding).
-    // For now we use IEEE rem, but a more accurate x87 FPREM might be needed.
-    return from_soft(extF80_rem(to_soft(a), to_soft(b)));
+    // IEEE remainder uses the nearest-even quotient. A truncating remainder
+    // differs by exactly one signed divisor when IEEE remainder changes the
+    // dividend's sign. Correct in ext80, never through double or a rounded
+    // quotient. This addition is exact and FPREM ignores precision control.
+    float80 r = f80_rem(a, b);
+    if (!f80_isnan(r) && !f80_iszero(r) && ((r.signExp ^ a.signExp) & 0x8000)) {
+        uint_fast8_t precision = extF80_roundingPrecision;
+        extF80_roundingPrecision = 80;
+        b.signExp = (b.signExp & 0x7FFF) | (a.signExp & 0x8000);
+        r = f80_add(r, b);
+        extF80_roundingPrecision = precision;
+    }
+    return r;
 }
 #else
 float80 f80_sqrt(float80 f) { return f80_from_double(sqrt(f80_to_double(f))); }
@@ -299,7 +332,7 @@ float80 f80_add(float80 a, float80 b) { return f80_from_double(f80_to_double(a) 
 float80 f80_sub(float80 a, float80 b) { return f80_from_double(f80_to_double(a) - f80_to_double(b)); }
 float80 f80_mul(float80 a, float80 b) { return f80_from_double(f80_to_double(a) * f80_to_double(b)); }
 float80 f80_div(float80 a, float80 b) { return f80_from_double(f80_to_double(a) / f80_to_double(b)); }
-float80 f80_rem(float80 a, float80 b) { return f80_from_double(fmod(f80_to_double(a), f80_to_double(b))); }
+float80 f80_rem(float80 a, float80 b) { return f80_from_double(remainder(f80_to_double(a), f80_to_double(b))); }
 float80 f80_mod(float80 a, float80 b) { return f80_from_double(fmod(f80_to_double(a), f80_to_double(b))); }
 #endif
 
@@ -342,19 +375,25 @@ float80 f80_round(float80 f) {
 }
 
 float80 f80_scale(float80 x, int scale) {
-    // x * 2^scale.
-    // Naive implementation for now.
-    if (scale > 16383) {
-        return (x.signExp & 0x8000) ? f80_neg(F80_INF) : F80_INF;
+    if (!f80_is_supported(x)) return f80_mul(F80_INF, F80_ZERO);
+    if (f80_isnan(x) || f80_isinf(x) || f80_iszero(x)) return f80_mul(x, F80_ONE);
+#ifdef X86EMU_USE_SOFTFLOAT
+    // Scaling changes the exponent, not the precision of the significand. Use
+    // SoftFloat's normal ext80 overflow/subnormal rounding instead of creating
+    // an unrepresentable power-of-two intermediate or saturating too early.
+    int32_t exp = x.signExp & 0x7FFF;
+    uint64_t sig = x.signif;
+    if (!exp) exp = 1;
+    while (!(sig & UINT64_C(0x8000000000000000))) {
+        sig <<= 1;
+        --exp;
     }
-    if (scale < -16382) {
-        return (x.signExp & 0x8000) ? f80_neg(F80_ZERO) : F80_ZERO;
-    }
-
-    float80 s;
-    s.signif = 0x8000000000000000ULL;
-    s.signExp = (uint16_t)(16383 + scale);
-    return f80_mul(x, s);
+    if (scale > 65536) scale = 65536;
+    if (scale < -65536) scale = -65536;
+    return from_soft(softfloat_roundPackToExtF80((x.signExp & 0x8000) != 0, exp + scale, sig, 0, 80));
+#else
+    return f80_from_double(ldexp(f80_to_double(x), scale));
+#endif
 }
 
 void f80_xtract(float80 f, int* exp, float80* signif) {
@@ -364,10 +403,34 @@ void f80_xtract(float80 f, int* exp, float80* signif) {
     signif->signExp = (f.signExp & 0x8000) | 16383;
 }
 
-// transcendental/special via double
-float80 f80_sin(float80 x) { return f80_from_double(sin(f80_to_double(x))); }
+// Finite transcendental evaluation still uses double, but exceptional operands
+// must have x87/SoftFloat invalid-operation and NaN propagation semantics.
+static bool trig_special(float80 x, float80* result) {
+    if (!f80_is_supported(x) || f80_isinf(x)) {
+        *result = f80_mul(F80_INF, F80_ZERO);
+        return true;
+    }
+    if (f80_isnan(x)) {
+        *result = f80_add(x, F80_ZERO);
+        return true;
+    }
+    return false;
+}
 
-float80 f80_cos(float80 x) { return f80_from_double(cos(f80_to_double(x))); }
+float80 f80_sin(float80 x) {
+    float80 result;
+    return trig_special(x, &result) ? result : f80_from_double(sin(f80_to_double(x)));
+}
+
+float80 f80_cos(float80 x) {
+    float80 result;
+    return trig_special(x, &result) ? result : f80_from_double(cos(f80_to_double(x)));
+}
+
+float80 f80_tan(float80 x) {
+    float80 result;
+    return trig_special(x, &result) ? result : f80_from_double(tan(f80_to_double(x)));
+}
 
 float80 f80_log2(float80 x) { return f80_from_double(log2(f80_to_double(x))); }
 
@@ -375,6 +438,8 @@ void f80_sync_to_soft(uint16_t cw, uint16_t sw) {
     uint16_t rc = (cw >> 10) & 3;
     f80_set_rounding_mode((enum f80_rounding_mode)rc);
 #ifdef X86EMU_USE_SOFTFLOAT
+    // This setting is not architectural state; never inherit it from a caller.
+    softfloat_detectTininess = softfloat_tininess_afterRounding;
     uint16_t pc = (cw >> 8) & 3;
     switch (pc) {
         case 0:

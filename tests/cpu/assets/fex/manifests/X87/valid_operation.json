@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/valid_operation",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "ddcf31af2ae1b67899e45469eac188a69baa1dddb0d4b3b925ccd01030277384",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/valid_operation.bin",
+  "binarySha256": "ef4cf52471216e4e1b6ce141cea6c9aca2f071eb5ab578cbc6ca8bc75bd2dbc7",
+  "haltAddresses": [
+    65557
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0"
+    },
+    "Mode": "32BIT"
+  }
+}

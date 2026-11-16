@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/invalid_reduced_precision",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "cce4f43883660cd6ae2b53c613165d5b812981e9193daea3ae1a089526c99019",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/invalid_reduced_precision.bin",
+  "binarySha256": "612dfabc12f90af9dcf0b1b5d1332ecb4d027a6e399611bc272273725b7096b8",
+  "haltAddresses": [
+    65595
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

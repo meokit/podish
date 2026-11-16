@@ -1,0 +1,1334 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/FEX-Emu/FEX",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "license": "MIT",
+  "assemblyCount": 260,
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "f34a779f56b36d22b20e1b990d23e583a6a7ca071331925fa46156441c77a1ee",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/LICENSE"
+    },
+    {
+      "path": "Scripts/json_config_parse.py",
+      "sha256": "1a4811c05131f2f3d947c429c34c7c6b8bebf4f883e9ead7a747e425033838cd",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/Scripts/json_config_parse.py"
+    },
+    {
+      "path": "Source/Tools/CommonTools/HarnessHelpers.h",
+      "sha256": "da33fa3fc5fb5d8dcf59b9e6328a0316105ebea81a4377ae63041ac14235497b",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/Source/Tools/CommonTools/HarnessHelpers.h"
+    },
+    {
+      "path": "unittests/32Bit_ASM/CMakeLists.txt",
+      "sha256": "8f888386f79afdca3fbf756baa45c242b8dd593404059f3abe257dd25a726a80",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/CMakeLists.txt"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/GOT_calculation.asm",
+      "sha256": "8bd539010dbdf32b528aec8f27250791dcdedc0a36c3a9124ea63505b2070d13",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/GOT_calculation.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/IMUL_garbagedata.asm",
+      "sha256": "e8ad0616692363611bee133b88bbdbf525d08daacdc4718a3825d33d8caff919",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/IMUL_garbagedata.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/InlineSyscall.asm",
+      "sha256": "f099e2e836ad6757718a312e946f42a50bd06072906e65c30290b4993c41d7fb",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/InlineSyscall.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/InvertedCarrySet.asm",
+      "sha256": "4996a60a70db87f2ad8dc18e9dec832156f86c93a771500256f162e34b8f3e3f",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/InvertedCarrySet.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/LoopAddressSizeCheck.asm",
+      "sha256": "da8113037bd6e58207f96b3cb06d091e06f76eb7cc8d8b5c6f0a6e01e4e4b533",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/LoopAddressSizeCheck.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/SignExtendBug.asm",
+      "sha256": "070112cf800abcd1f0ac0b1d9099a23b44a209923e5b32b8f5974548bbae6b8c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/SignExtendBug.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/SubAddrBug.asm",
+      "sha256": "ad2ea37ac0cb4ce13cb25721cacf9ca37e2da3104e68ef49c8aa83d9599387bf",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/SubAddrBug.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/TelemetryFlags.asm",
+      "sha256": "5038285dad6ca7db5b075f66c8f17ae881601c80997fd34d3cc194bd4aa0e147",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/TelemetryFlags.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/VEXW_Bug.asm",
+      "sha256": "e33810721801a6752ab4511f8d4b8a7362effefefb44ff4408a649f82fdca428",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/VEXW_Bug.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/adc.asm",
+      "sha256": "f44e145f275272b128f416ec5a4c243393aaa09358a8285e51a784e747b7d51c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/adc.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/fsave_finit_ip.asm",
+      "sha256": "538d45f137ca26d50043ca5e9f63c41365a1cd979a1b919c7fb0fe1342ddcd6b",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/fsave_finit_ip.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/fsave_rstore_ip.asm",
+      "sha256": "c07cd32b2e4a6aa323e4f61f5ca677f0065e6d67933f1f6c743df605972ef0c7",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/fsave_rstore_ip.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/fxsave_rstore_ip.asm",
+      "sha256": "3535ee4dcc92822e19bc3b5a252f5a0049b0e89b61b74af10af59a07ef0b3a51",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/fxsave_rstore_ip.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/rep_lods_bug.asm",
+      "sha256": "b1fff04bce5dc54ede148a70ed472635743b4b12c5a7df5867ea7fb2f7c1ba38",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/rep_lods_bug.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/repne_bsr_bsf.asm",
+      "sha256": "ed4ea3d64831f95df372d1cbb7bd2c67b89df27a45dd6b83d1e5e9ef43493af8",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/repne_bsr_bsf.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/x87_FIP.asm",
+      "sha256": "6c95236e36149007120f8e520455f15d01588a8c1451c6f4eaa17187747649c8",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/x87_FIP.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/x87_FIP.mac",
+      "sha256": "7e52673a12cc05e05807f54bd6079eb5cbc4cff4bfeed6c929464c4e25c583a9",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/x87_FIP.mac"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/x87_FIP_reduced.asm",
+      "sha256": "4df3ffcbc11019f3fa1bf9d1e935a28c0b134a7ccad3cb1e23331af92f629f12",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/x87_FIP_reduced.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/FEX_bugs/x87_unordered_cmp_fix_32.asm",
+      "sha256": "26e7bf826c9440bea204ab98688c9a3016ee4577e09b49fbf79df3f57197819e",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/FEX_bugs/x87_unordered_cmp_fix_32.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Loops.asm",
+      "sha256": "7800cfb4708631ad39fac43698ea64632a90a6c7e545745dd78076db7505f9d4",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Loops.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Pop_Segments.asm",
+      "sha256": "65a527fbce8db6c69a2a71cec6b4dccd3607fe0c83dfb813b90e7773cb6b94f8",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Pop_Segments.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_00.asm",
+      "sha256": "8b6109b42d313c4f4250662af1f10bdc98b6b536f6601a7a83a76860cbfcf0fd",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_00.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_00_2.asm",
+      "sha256": "5f07502745dd09a189c94f8178e857c1a3fe9ec69dfd4ae306e74cbe62b0a5f8",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_00_2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_00_3.asm",
+      "sha256": "213fd8ec1b43c106e16f400b61ecf318fb7b10905518af3361c178251425c6f8",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_00_3.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_27.asm",
+      "sha256": "b62ba97c19b27803e2d55362ce1816255dfbba4cfc820804e8b0b0aa2a2df67c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_27.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_2F.asm",
+      "sha256": "22647f824ea3d35a604c423e401f36053e9cbe02c6e1a2237c6d2bab3b60fc7b",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_2F.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_37.asm",
+      "sha256": "0abc866c66ed73bcdd9ff3853ed7291e2c936d1d8ec2bae9837695778972e937",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_37.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_3F.asm",
+      "sha256": "1ec0c6b79901d0adb5c72b2901f8a073b0bede09de71f4b9077edae674596419",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_3F.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_60.asm",
+      "sha256": "c8485e8be4430584919569759c821073af423a7b69bd207dbb81a74dfb40b3c4",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_60.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_60_2.asm",
+      "sha256": "1d6ec53fede948f9279d6682f32ef285fb85f3c205cf95b235e814ac11de8ee0",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_60_2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_61.asm",
+      "sha256": "130a569ccc2938c080a99db9457e9713a4e39fa523c8fd10e1d654ad93c47422",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_61.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_61_2.asm",
+      "sha256": "67f095d7aef0096f46ccb046ffc902f4b7b5a394f625860c6b8c19f23f2113f7",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_61_2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_8C.asm",
+      "sha256": "3a7729dc0ac39000a4dfcd9baeb5a9c791fd8847f6947f9b72afd8c1692ae365",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_8C.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_8C_2.asm",
+      "sha256": "75b60d460721fb4dd3f640437326de20adbc393683e642d2e933d26df49680f6",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_8C_2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_8D.asm",
+      "sha256": "3197aa9b7ac9d8d58d0cc425dbb7fd616e373a602c7b3d66811a6652c45ccbaf",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_8D.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A0.asm",
+      "sha256": "7594abbc5750df4a7697f19d6edd80663307e2aefe7f531d8f43a2ff5bdf7faa",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A2.asm",
+      "sha256": "dbfa716022cc4ca4cc066fd9769356eaccd39b3e9e25955f628ec6f1541e5357",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A6.asm",
+      "sha256": "1eb7c3cdb388fa4ade704331ba301a007d074e546dc2277f43623c8325e17a34",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A6.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A6_REP.asm",
+      "sha256": "aea11aa612c33ad109280338d712481cfb3691fbfeb01336a2e797d3887ef478",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A6_REP.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A6_REPNE.asm",
+      "sha256": "04681b36efe80ce37c822cc11c8fbbed2bd6c613b41ab491ba92a2bb410bb756",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A6_REPNE.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A6_REPNE_Equal.asm",
+      "sha256": "33805ae628ac20d2c9eb225807979aa2fa56169d2f4f79e5340c5382a9c6cd2d",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A6_REPNE_Equal.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A6_REP_Equal.asm",
+      "sha256": "5358f8729d911951181dd016a34f6d1a7ac190ede2b203d81c4792820a3eaa53",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A6_REP_Equal.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A6_REP_Smaller.asm",
+      "sha256": "50555bfaf4181a9c097dbca809d6f307a4db0dd298e3d16b0f3d0fd3993370f5",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A6_REP_Smaller.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A6_REP_down.asm",
+      "sha256": "edec10d9b14f87dba902f27c0508aacc540765d2257f9b32887c040af3892d3e",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A6_REP_down.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A6_REP_down_Equal.asm",
+      "sha256": "fc10dd4edf506c17bf6afd9e9efbf330ae67b26dc5d17f65357dcb902ce3e974",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A6_REP_down_Equal.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A6_down.asm",
+      "sha256": "127ea4f8b67f6f114ad6fd38c2c598bd1a971b496bc000124f71d706553595b6",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A6_down.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A7_dword.asm",
+      "sha256": "5c22366a8bad173165e98a82dc72135618fa5f9d2ce60ef5c3598b126e063b03",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A7_dword.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A7_dword_down.asm",
+      "sha256": "d6776bf55d1e4aefcc3fcf91e2cb776fc5eaf1bcd69f15fa69a5f62dbda6204a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A7_dword_down.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A7_word.asm",
+      "sha256": "68862fea3202f9de339dc9c55c50981a0d5d1fe9ac8866c781ccacb85affdfc5",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A7_word.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_A7_word_down.asm",
+      "sha256": "f5be7cfd1a29a0f294467e26a806860977386785f0c9487225877ba337318958",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_A7_word_down.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_AE.asm",
+      "sha256": "2eb22c355d5807f5862a356fec7eaa6c12229cd32b5f6147f934fa2d3e4deaa0",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_AE.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_AE_REP.asm",
+      "sha256": "b03d4ba2d5c2467867750e860455e7600bff4ee353b17dd3d8484a4d8c2b003c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_AE_REP.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_AE_REPNE.asm",
+      "sha256": "ea71c9590f42a25670ac05769844f889cf82bcc307286a33115c8eaec63efcc8",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_AE_REPNE.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_AE_REPNE_down.asm",
+      "sha256": "e6c2747030037ad9ea16009e1215301c6b63b382abc7e61a1d4f5b25c38cf706",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_AE_REPNE_down.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_AE_REP_down.asm",
+      "sha256": "94a2751fcbf34e4104c7a3855e2c3ad69e6eb47ad8c3464d592cfbe900a0a33f",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_AE_REP_down.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_AF_REP_dword.asm",
+      "sha256": "b1acf57e658d9b51406279ce6a31b903be940d285eafb3daf0cba5f3ce1eed59",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_AF_REP_dword.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_AF_REP_word.asm",
+      "sha256": "9764fc4f170936e9e6806ba8c4fa25710c0ee70d36c4fab825bfe08b951cbe3c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_AF_REP_word.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_C9.asm",
+      "sha256": "c89bc05cc4983477ba8dcad4d108f9ec6626c6e166d2e8f89947ca06b12a3f1c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_C9.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_CE.asm",
+      "sha256": "ab26153c547f52df721634607c2554c4e94e41c8915cd623ead2e1e6f29681b2",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_CE.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_CF.asm",
+      "sha256": "a760a2772ab2f93d78080cb72da4a222e0fb89111cec4e3dc29a36bd43ab77a1",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_CF.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_D4.asm",
+      "sha256": "cca61a2eadd9f25ddb9c3d63e9147ed142ebb7ea33d33b91843c0b7f0649f7dc",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_D4.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_D5.asm",
+      "sha256": "c9c68484a7c800c5ba89352a150a084b5897ebcd98252be01f795d3d057f365b",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_D5.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_D6.asm",
+      "sha256": "a52ed04475b391d529ea4513e1f9a1f0751bb6fd1a9b1bb073362f8b32b5ebee",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_D6.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_E3.asm",
+      "sha256": "077b8ea53aa601ea93a919360882282d5c0ccaa34d51b05b02fb2fdf9591a980",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_E3.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_E8.asm",
+      "sha256": "653d5ff62e8498da5fdd76d7db2638b87efadf2c2b6bf584ff33859f6df029be",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_E8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_E8_2.asm",
+      "sha256": "75a5b00a945466e1431db9d972769ecc8dc27aba1409cfd562db0179f1f04f5c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_E8_2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_E9.asm",
+      "sha256": "ec03b665df0a1c102618ef384a2b8042a662b0d2f1d852072c8b31d2ace53d23",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_E9.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Primary_E9_2.asm",
+      "sha256": "33ed317ab01eb474f46065c401d19930066b3de11a08cf15b23da84088daf056",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Primary_E9_2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Primary/Push_Segments.asm",
+      "sha256": "aafea04c52c8fe86617dda36a9a4197478ff97b1e096fecdb49ef354dd5f622c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Primary/Push_Segments.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/PrimaryGroup/1_82_00.asm",
+      "sha256": "1b52d0f117749865bd80fded65f8be592986d55c7eb5870326cbb18e35fd2f2a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/PrimaryGroup/1_82_00.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/PrimaryGroup/1_82_01.asm",
+      "sha256": "7a6b28f5c5c7c1cdd2af88fde26847de52dda60eb28f7c78e23e13295dd9ce7c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/PrimaryGroup/1_82_01.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/PrimaryGroup/1_82_02.asm",
+      "sha256": "2bf0b82b2658e7a5facf5908945d757d8dfe95213fbeec5921e53662e378a29d",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/PrimaryGroup/1_82_02.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/PrimaryGroup/1_82_03.asm",
+      "sha256": "a5ecd69894340bed0d6845e3ddb845132d9bd9e9d9663f9db9ac790f24d77493",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/PrimaryGroup/1_82_03.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/PrimaryGroup/1_82_04.asm",
+      "sha256": "880f36e163f689f6da2e49982e67cdf411c5588aea13fd0fc4a6c038c7f65d9f",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/PrimaryGroup/1_82_04.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/PrimaryGroup/1_82_05.asm",
+      "sha256": "ff58756ee4e026f3255a20b5fcdf6f2daa0381b0d8b88726bc1432e7301408a5",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/PrimaryGroup/1_82_05.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/PrimaryGroup/1_82_06.asm",
+      "sha256": "17d7ddacfdb1c5a1b03b4afbf4dcf3f26687a67eece29ada1f978786437f1749",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/PrimaryGroup/1_82_06.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/PrimaryGroup/1_82_07.asm",
+      "sha256": "fe55614ec856556d4a5826561ec331bb36adc4ab49349784e513e573f2f85683",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/PrimaryGroup/1_82_07.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/PrimaryGroup/3_F6_05.asm",
+      "sha256": "ac262c540847242814ef32e2b95ad13c7a5b1ce1e163088b84db229c2c329064",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/PrimaryGroup/3_F6_05.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/PrimaryGroup/5_FF_02.asm",
+      "sha256": "14ec3ea16024a4f2418b64ddc7821387171a293eec9ab025a695145458d61489",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/PrimaryGroup/5_FF_02.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/PrimaryGroup/5_FF_02_2.asm",
+      "sha256": "f64adf8bb96b56b8720576b5d3b43bfb644f3c03eb05ad828ea85de439809c81",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/PrimaryGroup/5_FF_02_2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/PrimaryGroup/5_FF_02_3.asm",
+      "sha256": "97a5626fde1c8e0c2c6117682e3899df1c31fcfef1a52faadf8e7ac0f7310a52",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/PrimaryGroup/5_FF_02_3.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Secondary/06_XX_00.asm",
+      "sha256": "f2fa5f68a71f64ac0d7139f354b9441174b816532628e367960370518bdd22e1",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Secondary/06_XX_00.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Secondary/07_XX_00.asm",
+      "sha256": "c25260af40ece33f3df8d08d2b0e9ceeb4309f82a219f86b2df4427933db7f35",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Secondary/07_XX_00.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Secondary/07_XX_04.asm",
+      "sha256": "cc0bcc506616e5b63f0e17765d0b5b59b16369b640bbc09967f608a98738f4e7",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Secondary/07_XX_04.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/Secondary/15_XX_0.asm",
+      "sha256": "cf223e08e6115132875c5efdae6827b2e120d5b7cef2c4658fb59058d02ecebe",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/Secondary/15_XX_0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/SecondaryModRM/Reg_7_1.asm",
+      "sha256": "e37e250604f2c0ccb6d1ea23763a87b499a5789cf62a71d6f6808d68173ec444",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/SecondaryModRM/Reg_7_1.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/SecondaryModRM/Reg_7_4_2.asm",
+      "sha256": "1e8d83058bddc8584d507a47cb358ef5d39f81391ccaed0bc2f3d35b9037f1b6",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/SecondaryModRM/Reg_7_4_2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/TwoByte/0F_82.asm",
+      "sha256": "e130d360e339bae9f50f299c78c7f69efb762d8cab5f67f9d747b9fb78a962b3",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/TwoByte/0F_82.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/TwoByte/0F_82_2.asm",
+      "sha256": "e719becb9609187f757a861ba5773138f4337199fe3fee08143cbd797af8e27b",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/TwoByte/0F_82_2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qpd_128bit_1xdisp_overflow.asm",
+      "sha256": "c600689b8aec4bbc5bbceaf9c9c6a62e830f302156b707e5188c12368e00de02",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qpd_128bit_1xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qpd_128bit_2xdisp_overflow.asm",
+      "sha256": "61ee9bcc6b53bde06149912a5f2f6bbaf5e5e67a61eb098b8b5b0b14b2f3fa0c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qpd_128bit_2xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qpd_128bit_4xdisp_overflow.asm",
+      "sha256": "95157a2aa3febadb29c8ef9d50aa3733ea93827a7a80ec8ab58629cbf078cab0",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qpd_128bit_4xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qpd_128bit_8xdisp_overflow.asm",
+      "sha256": "67fb573bdafdf9d17484a4505d2123fa7e4fcb2dcc63d92876c49869bcdcd0c7",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qpd_128bit_8xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qpd_256bit_1xdisp_overflow.asm",
+      "sha256": "47d88736dba9f651f38ff6a465ce277d91bbe21398ffa924d0200522b56ecbb5",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qpd_256bit_1xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qpd_256bit_2xdisp_overflow.asm",
+      "sha256": "d774803c9eb241b93fc31cbfafa40b212118718f88799ebb04a8a2e7dadac2d7",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qpd_256bit_2xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qpd_256bit_4xdisp_overflow.asm",
+      "sha256": "7ef6788ef7c722eb1206d29cb6f93f0e00ab9c8febfee2a4347b773bc4943d43",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qpd_256bit_4xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qpd_256bit_8xdisp_overflow.asm",
+      "sha256": "6a7eeb98c1ae7fdb60b311eba1437cb967e57e8279ad8f49bfdb3ff456e1c66d",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qpd_256bit_8xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qps_128bit_1xdisp_overflow.asm",
+      "sha256": "2312e42e09b6fb3dd27e7a37e71e71d586a1cd2f05a744e7097153adefe02585",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qps_128bit_1xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qps_128bit_2xdisp_overflow.asm",
+      "sha256": "6351c4cd48ded0262aab6a9f8eeb944030abdc51941515f8b221787f832643f5",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qps_128bit_2xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qps_128bit_4xdisp_overflow.asm",
+      "sha256": "a91d7bf1345b027ee6dc37a173947455920d73d43bf2a9a57671b6d54436d7b1",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qps_128bit_4xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qps_128bit_8xdisp_overflow.asm",
+      "sha256": "10e7106aec88c170c9eed5056aa375cbbb1de5e324db36088e4982a1e66cd3ab",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qps_128bit_8xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qps_256bit_1xdisp_overflow.asm",
+      "sha256": "bc79a5b0a78eefc78c8d9a700b4f0736e53843d166142234cd5e878b5d01a408",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qps_256bit_1xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qps_256bit_2xdisp_overflow.asm",
+      "sha256": "670a3e5acd7bfbad7f3c76ca2aa1f8947ff4957b11f79c0e246797f9ae2472dd",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qps_256bit_2xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qps_256bit_4xdisp_overflow.asm",
+      "sha256": "d54250322705fca4d989c8f3afdd61213670c602dd8e123a034a10a50d90e38e",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qps_256bit_4xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vgather_qps_256bit_8xdisp_overflow.asm",
+      "sha256": "c186ab185e3a74c987f384c13ee08232684d5481c32ec4ba7efbb7b15cd77804",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vgather_qps_256bit_8xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qd_128bit_1xdisp_overflow.asm",
+      "sha256": "f65d856bb37d33729f9afa89397854a8e59afcb2b417198c305eb3e4acc952c8",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qd_128bit_1xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qd_128bit_2xdisp_overflow.asm",
+      "sha256": "7edc6a17619764e0f431a9167d4a7d3e8a58792365a4ab5122793ae16c4ebc9a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qd_128bit_2xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qd_128bit_4xdisp_overflow.asm",
+      "sha256": "ccbcf3041b74294607e4d8f512a0d3cd645d51596dba44c6e3b6fe3420db9ce9",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qd_128bit_4xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qd_128bit_8xdisp_overflow.asm",
+      "sha256": "1ff202ba0a251e51432cd175c9b52bf0d404b0e85423bb97a3336b28478fa7ce",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qd_128bit_8xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qd_256bit_1xdisp_overflow.asm",
+      "sha256": "320f456dd5b315721579f47ee6f1a728f6f18387952a33f7b2affafeb3a8c698",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qd_256bit_1xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qd_256bit_2xdisp_overflow.asm",
+      "sha256": "3a7d546de6057fcaedcd6fb575afd3aeaf4a0d4158f560c3bc2ecc6abf057a2b",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qd_256bit_2xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qd_256bit_4xdisp_overflow.asm",
+      "sha256": "0a4bcb2800d89eec4e4f6809ba8a8f6efd5a57b9503fed568ff0159f2cf7fc3f",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qd_256bit_4xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qd_256bit_8xdisp_overflow.asm",
+      "sha256": "dbc60e80ad8f4569c7d2f63d1bbc371bd66217eef70959c79a918eb65c44cb23",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qd_256bit_8xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qq_128bit_1xdisp_overflow.asm",
+      "sha256": "f43b6ee1cae314b02b3964a13eaabbad9d780079203f431d16c76f6006d9c06a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qq_128bit_1xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qq_128bit_2xdisp_overflow.asm",
+      "sha256": "c6fd0728cca59f477261cac1e569b6f0d807ccf2042cc3ef44fd7b04cbec53d2",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qq_128bit_2xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qq_128bit_4xdisp_overflow.asm",
+      "sha256": "3b13787f40cf593e612886c94b01fd8d319fae183818b8bab2fa41a87af2a0c4",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qq_128bit_4xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qq_128bit_8xdisp_overflow.asm",
+      "sha256": "e24149ed60fbad15467433ebf4ac125251110541a12eae69ba3010c1529148b4",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qq_128bit_8xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qq_256bit_1xdisp_overflow.asm",
+      "sha256": "060e5df8fc18935ec356da94a544a02d66e0c631425f35c4daff8f9b39cdddb6",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qq_256bit_1xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qq_256bit_2xdisp_overflow.asm",
+      "sha256": "f35f0b8e2f9623fc18f1215abd4b3fa4daa1735e0f8706f36d0fb534e7c3560e",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qq_256bit_2xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qq_256bit_4xdisp_overflow.asm",
+      "sha256": "c1f562576379c008609b7a28606bfaa909d3d052f2e39706904407cfbe828354",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qq_256bit_4xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/VEX/vpgather_qq_256bit_8xdisp_overflow.asm",
+      "sha256": "6783cc61eec01b7c4d7f724aa3fbff886ad48bb6dbbf37e2b8eb719c7f54d405",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/VEX/vpgather_qq_256bit_8xdisp_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D8_00.asm",
+      "sha256": "79314330dda47b39429df970440767c18a10e945adbb3dd87267dcc7c91f1f1c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D8_00.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D8_01.asm",
+      "sha256": "13450d8b5d77b397aa2c32b7a9fea4a2cdffc408a5d07106e4256e77a3dbfad8",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D8_01.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D8_04.asm",
+      "sha256": "4b8a3d75114a62536b8316742aabc9011e53fb554734d39365929a54181c6e42",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D8_04.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D8_05.asm",
+      "sha256": "630c0b5feedb86c0849e7b80a3d153e4946062b681be03a25d958cbe89f26d9d",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D8_05.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D8_06.asm",
+      "sha256": "3d392d912a91a563b0abe9c5e7a10d992c1f975d1c1d3a62355d3ae1af5c60f7",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D8_06.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D8_07.asm",
+      "sha256": "a1e8dbd4109be9b07d9cc15b8d18ac6c4656d0d686ebc569d96de7ba7bd29d1f",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D8_07.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D8_C0.asm",
+      "sha256": "c0d74fd3852cd9727966b508e8a0a35fad55b1c6a341b583ef246b62b738261a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D8_C0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D8_C8.asm",
+      "sha256": "35a2a63dc1ade3c6ca417ea0b52577fc922d6c6ab34f4737a5110b034b00c52f",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D8_C8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D8_E0.asm",
+      "sha256": "ad8155c96d73afed0c44c561bc8a058ba9aa74eaf1f99d2b29a327abc0ec11ab",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D8_E0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D8_E8.asm",
+      "sha256": "290a5f24b2de89f59be06ed4c8c037a9143b5922cf38a73d67dac39a972999a0",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D8_E8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D8_F0.asm",
+      "sha256": "c73e209328b872d9b0b00feaca4a33fae42246521988ffa01f91e1f7b0bb767d",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D8_F0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D8_F0_2.asm",
+      "sha256": "247c77376966838621610a03702d26c21ec8bb00108a4c8b39013e287d81a279",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D8_F0_2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D8_F8.asm",
+      "sha256": "87dca86431e3cd1740f944cb8620fd18e1fcd148b60d050b8a1bb57c5f7f4848",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D8_F8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_00.asm",
+      "sha256": "4c16ccbdfcdc4b81263b7e74b7b601af7e427f69f94f55031996ccf16f4a80f3",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_00.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_02.asm",
+      "sha256": "354e237ddef8a233aa59717ab998e3ead6706f4162b23bb27fa1cc7a7406c02f",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_02.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_03.asm",
+      "sha256": "a9312ad99b8bef33e61e4bf242ca1647fcb6d1070e64ceb5084eff18ebce175a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_03.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_05.asm",
+      "sha256": "c7f29dbca72279114350ea22e409b2026197215b902a98f4c04a65b33f32108a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_05.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_06.asm",
+      "sha256": "343cd577de7bf88b41563f4b20a5eba8198bb684fc132dfe0dda80ac7b3cb597",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_06.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_06_2.asm",
+      "sha256": "3df521ab4fd637d89859bbb5a21f7ce0f91f1164c70aeee4deb3cc2fc416d25b",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_06_2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_07.asm",
+      "sha256": "519e9cb326ef03128a6a2e2cc0681e84b20d8087750c1ee6587c0dc63c87fdf9",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_07.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_C0.asm",
+      "sha256": "d52abb6946b5a77e24b0a97fb14958f430f92fc8295b6fe40c7c634a00331175",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_C0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_C8.asm",
+      "sha256": "aa0ee0fbe26158a717b24b5e4cfd0d38d598f8618c6fc3cc09e5cfa2849af140",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_C8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_D0.asm",
+      "sha256": "c904d0ba69b8ec7af232c7593fc9a4f6aa29a87088e2905249843f11652801e2",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_D0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_E0.asm",
+      "sha256": "173bc816ac9c119191cca5065c6133cc060aa54681bf070ca8ec749eda3b59bf",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_E0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_E1.asm",
+      "sha256": "ec4bb0c2608e97702a1092f36c2727e17567a5bd1e786e83db5af51a63204696",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_E1.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_E8.asm",
+      "sha256": "e354990b0cc615f2efed6a16606e752891569dbfe120891ddabd744a5088ed14",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_E8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_E9.asm",
+      "sha256": "276a84802dedabfb99e4203f543a9b35e73d1f479e07e3498dc55cd5f12ea914",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_E9.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_EA.asm",
+      "sha256": "63eca0e945992974ea5c0040801c8812b88e3da4b4aa8f924ab3e8e7b8e7e377",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_EA.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_EB.asm",
+      "sha256": "eaadfd4a9a7f25288549d03ec40d9253d6221afab2ab9e209326818d1c083247",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_EB.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_EC.asm",
+      "sha256": "06e6ca248dbc1895960d4823d6ac596a8c863d02cfc0aede22decea8916eb547",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_EC.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_ED.asm",
+      "sha256": "14db3b1b84fc4557b20423b73080f7545087a4a8486b823745ae78a78b7c602a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_ED.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_EE.asm",
+      "sha256": "523b0924923fe1de57f27e46e7e43db185c19bf4bd31ba5bb0d397a30ad21e1a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_EE.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_F0.asm",
+      "sha256": "e3461305222cbb781f059d0c24ce5cfa4e5984ac13245b53eab1a93560f9c353",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_F0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_F1.asm",
+      "sha256": "8dddb7a4b39a8ce81786d8e3f29feae4a60462e0e1103b7791c00c1510fbac35",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_F1.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_F2.asm",
+      "sha256": "7c11707adc426743b31d1bad4ff1cc0a38c01ba75ad1e73e418c5691bdffaacc",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_F2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_F3.asm",
+      "sha256": "eaa26dee1816cb86c9af0af4b691d7d1d7e4bff2c4ed46a13a5c5e8bcce88087",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_F3.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_F4.asm",
+      "sha256": "540134d18f13b8196c5cd80d848d9ba8120680c8ae8e1c9ea596162e899b02b0",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_F4.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_F5.asm",
+      "sha256": "5f63fb5ac9f250a5ff281f8742e706cdb421f70ad3af671dec7c98a1b8225978",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_F5.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_F6.asm",
+      "sha256": "1483c820ee0d5363893e466577b983b80b1a0f7aa41b74281849987b000392b0",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_F6.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_F7.asm",
+      "sha256": "d30f1800c32b489578548c5db313f8e74fbc645c43d680b2c7dd8b7dcd09888a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_F7.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_F8.asm",
+      "sha256": "a98f4d29169b4de43b4dc89337ce58c0f928931c7acafbab227e6c6ec5235dec",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_F8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_F9.asm",
+      "sha256": "7ff288a00ce2d06b7298cc4d308524d5b48c90cc3a7fbbfe246bdf06a5994008",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_F9.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_FA.asm",
+      "sha256": "dead47ec80229b3eaa64293ae428c75c5b9864a5151df84a7bf3ee9882e2d90d",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_FA.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_FB.asm",
+      "sha256": "a81578583d775d1e6b39b06762843868243c0bdf32dad148956c5230b1a44879",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_FB.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_FC.asm",
+      "sha256": "a883e9650c5abb6dfe6babd0015baaf1951f7c9a728f431b6c31c1669c862302",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_FC.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_FD.asm",
+      "sha256": "e6020405bb94ca2df2d3b82c8758927af9b7d365ba87ea4273322f80367348aa",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_FD.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_FE.asm",
+      "sha256": "663747103e014dabf7f45dd95a3ac637151baaea323e285a7f7bd597f1ec52ab",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_FE.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/D9_FF.asm",
+      "sha256": "4cd35bf183295b0571ca0d13e8e4b579d86ab1234111de9b856b87d626bc8284",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/D9_FF.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DA_00.asm",
+      "sha256": "d1523c93023f7932340e1a519cf85799e0ecc9ef8f343830d30417865b91c44d",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DA_00.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DA_01.asm",
+      "sha256": "544cd39688696168df78419a3404d4b4c3b67a9bf6bad9c25c9a2f0148fe576f",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DA_01.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DA_04.asm",
+      "sha256": "581bd5406fbf8b6656994f874f5368d6a47d54d3c41c0be17644d5094442feb7",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DA_04.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DA_05.asm",
+      "sha256": "f1e791f217b058dd678339c8fdf8a049b1268e0695ef04c0ad8ead4b9efe941d",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DA_05.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DA_06.asm",
+      "sha256": "483fba31f2755dbd527611a354d6f9766abca770a311b7b16ba0e97d0e1d173c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DA_06.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DA_07.asm",
+      "sha256": "d27965612314f857a454f213ea4d8c6b977e0302a916dd81f10a25f837a9313e",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DA_07.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DA_C0.asm",
+      "sha256": "cfb239ae96ebaa70e233ad51c63abdb5ce2e888077015b4dff954ee1071397bd",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DA_C0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DA_C8.asm",
+      "sha256": "dbd11c1ab4c2119507bfb043bb0c4f1dbe92d7997382008b6337f22140725e33",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DA_C8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DA_D0.asm",
+      "sha256": "d12fed1cab5b6573bd2ac9ef0923504bf3b990763491dc92ec289256efe0f039",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DA_D0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DA_D8.asm",
+      "sha256": "ad1782ecb5de288c1f12410bcfa1ab7bd7edd4abdcb478d4dfdbdb34511cddf1",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DA_D8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DB_00.asm",
+      "sha256": "c890a3c065785510d6e66eef91b9814289851557eb33ed8be0be96bf48fffb25",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DB_00.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DB_01.asm",
+      "sha256": "e0acc289509f5fcdcea63d8f713cac023bd1ab694ac28f4d68af2c1d2a9b57f7",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DB_01.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DB_02.asm",
+      "sha256": "8dc22df654450fbfabad57c06bb2d1598144930ab5ed9133521ebee5844af94c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DB_02.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DB_03.asm",
+      "sha256": "2aeb014e9083f25f78c52e2db40d69622801bbb1aba467213d8cead849b097f2",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DB_03.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DB_05.asm",
+      "sha256": "303192a1cc4e35dbc14ab8530176c32c47fda1db6607c4018264eaae88edeb2e",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DB_05.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DB_07.asm",
+      "sha256": "68ebbfd4959e2652473dd22fbbdb7d4159b4f7b6e145c8e07d76c7a87fad1c14",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DB_07.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DB_C0.asm",
+      "sha256": "f2e06796c057612d95fdc4ee8694fd621d398e0d7b37111763f492dc33a5d100",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DB_C0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DB_C8.asm",
+      "sha256": "aeb5f272223251b84bbec82d8baecbcd5102f0848d282d3e9ae82d86a1a39c7e",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DB_C8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DB_D0.asm",
+      "sha256": "e41b3315e53c42ab3249fa8e989ca425dfe9ccad2f86586dd75a75f7a545e71c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DB_D0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DB_D8.asm",
+      "sha256": "5983cde35d4937f833fc96367da77c340fc05e3c4c6c9c342e2d2626bac94387",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DB_D8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DB_E2.asm",
+      "sha256": "41bcee6f486f892ddfc26de774014c160942b5ff444120f1c088f13a370bf15d",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DB_E2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DB_E3.asm",
+      "sha256": "1baeb530775596fd7bef951ea990e6e2d082987ba35e5b53454c5ef32cf4532d",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DB_E3.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DB_E3_2.asm",
+      "sha256": "272fa86e2c47983828dd38be6178a0cdda67eb104b74ee626ea52bbe9980fec9",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DB_E3_2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DC_00.asm",
+      "sha256": "9f8ab3e75dccb5af6878a1d7e0988e1c129d4e18f125731763f3948d48b0b942",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DC_00.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DC_01.asm",
+      "sha256": "70d059279779ba61d2ef34f65b684ef02d08dbaf9cd8ef5fc4c10c50e9963383",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DC_01.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DC_04.asm",
+      "sha256": "82e160c59755236b436b0591a928464b6d435f3199789e810871132cd3bbddce",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DC_04.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DC_05.asm",
+      "sha256": "0ad2c1476e988275cb9f52bbef374d8ab2c59ced88c6a049fe0a5147151e48de",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DC_05.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DC_06.asm",
+      "sha256": "1e50ba6134e0a53d65070151c20f493040abbc52296fe571c92982ba5627920a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DC_06.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DC_07.asm",
+      "sha256": "cb903827a3b8957b64b122adc44917d5b5e15b5f8279c65f353ca0a44c7e3881",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DC_07.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DC_C0.asm",
+      "sha256": "9c0ea1c65a4468730872d7445322626272d646e5288683ee763ee8678bcc108a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DC_C0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DC_C8.asm",
+      "sha256": "39c880f223c063b717579106e7ad350bf0af595b22472d804247f316213155ec",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DC_C8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DC_E0.asm",
+      "sha256": "707fc8e92c319e85e0da7850bf7a1124d70ab8b6b88d4849ed8c385aa60c5506",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DC_E0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DC_E8.asm",
+      "sha256": "5a495cdaccee63d64d549d0b964cfc664f63209979e17a30471980d7f4749a13",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DC_E8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DC_F0.asm",
+      "sha256": "3393da8bf568000b7143b3cd6a58ba2ed093de94d482ace86b8342a73f2ed0b9",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DC_F0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DC_F8.asm",
+      "sha256": "7da6f7d7b142b59a4c1ce0bd93e60b130071329c992f61452f63efffaa36e41e",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DC_F8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DD_00.asm",
+      "sha256": "c19745eef74d0dc4bdba48907228260d8059165dc535bb6b88bd1ed917d41d39",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DD_00.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DD_01.asm",
+      "sha256": "f97e874509f217899c8428cbdc36b4a93b000b481f20bbb442cb6da678e7fa90",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DD_01.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DD_02.asm",
+      "sha256": "7efb85a2e91bfecd82e377086de5905a784db7e1e89316927c70137449b3d922",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DD_02.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DD_03.asm",
+      "sha256": "678cfee444f56ae6e813264cc75ed2e3802b18089fe8e0dd7d641c3255b7a315",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DD_03.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DD_04.asm",
+      "sha256": "c08b6c3d260a9e83c281b89ce309fd452553673a979e21d33e063ef63eaec564",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DD_04.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DD_04_2.asm",
+      "sha256": "e7aed4ef37ca9c2ee0a9a7c69d87040568ae28741a5c6a113f27e9f27e9351d6",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DD_04_2.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DD_07.asm",
+      "sha256": "93254c081ac12f6f77272a09cdddb9a45e115ac5c689d88354d233e778243c8a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DD_07.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DD_C0.asm",
+      "sha256": "5946139d19282192fc6366134c7be20c377b37f89c663d375504efcd068a5dcf",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DD_C0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DD_D0.asm",
+      "sha256": "2e9f8e980d3c1dfe9c222a3a9235deb655b74fef300aab24f9003c80eece4c7e",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DD_D0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DD_D8.asm",
+      "sha256": "2fb48dd9e02db184340d297c0ade21fff0eb97a2283c32ffd04e77dad38bd04b",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DD_D8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DE_00.asm",
+      "sha256": "b686870a4d63c66644e5e7e913e8983b7478a8ce2b6f726200010d277e1baa73",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DE_00.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DE_01.asm",
+      "sha256": "f9cd7236652a48b8c6b6c3dce75cc9f7849eafb76f457ac1744169f5e1c310a4",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DE_01.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DE_04.asm",
+      "sha256": "bb2580f295c6b0f07d6540da9637f497cdd1af00aec7b0a82a29f66ab88c2dab",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DE_04.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DE_05.asm",
+      "sha256": "185fe99ed445f8810a5cdcd9c83ef4bdfa081ad74d2561d5123ef1e0374660c3",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DE_05.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DE_06.asm",
+      "sha256": "b1798d3e30f1f11aebd74483de77aa980ebac8f6929588249e00fbe032b18a3e",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DE_06.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DE_07.asm",
+      "sha256": "45b0fa814c1e8d72da47bc9eca41144fda0da9957435a0898caad17b0a2048eb",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DE_07.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DE_C0.asm",
+      "sha256": "35a86905ec7c85bbff0afe3aa1e6878c00398c883890fc9b29450c7903577cc8",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DE_C0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DE_C8.asm",
+      "sha256": "89533b83bb6239cd15d70087b4abea40f97e50f8055612ac21da76aea5f4b30f",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DE_C8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DE_E0.asm",
+      "sha256": "405e86a8c2b0ea140b94b4455ec32cb2b62a6fc4901717acdae7559da2869795",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DE_E0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DE_E8.asm",
+      "sha256": "6096324a6f78aa9c8c2d691a7d8b2fe0d820f4fc8d837dbe3aca8b47d4fe5a82",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DE_E8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DE_F0.asm",
+      "sha256": "7c14daa7e06963167de3a12bc359ac1b7ceadb1d50d653d5f4cf0ffde5f658bc",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DE_F0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DE_F8.asm",
+      "sha256": "041cbe0f6282dd4aaba5239842bc8a4c9753b63cc5878ff9a78f5f99ee532041",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DE_F8.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DF_00.asm",
+      "sha256": "9f2524638e5179bcabb033f36556bf1a7a9a00592e4f0c9dabc1c6d793432cdd",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DF_00.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DF_01.asm",
+      "sha256": "8644b244a73964ac2184ec882bbe8314be50d84697a27e7ef5efb1c1f98d9344",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DF_01.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DF_02.asm",
+      "sha256": "b22330cdd8c7b9569a32cb26b0785a547ebd82aa764013cfd721e5541f038514",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DF_02.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DF_03.asm",
+      "sha256": "a01f1ceb917c82372b644c4b05f7049d6f4a07ffeda5017540c5d00ac0bfc0ae",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DF_03.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DF_05.asm",
+      "sha256": "c05c9bdb7b8eba32c232854651dce01cfc611d19fbac2674e8776383b57742f2",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DF_05.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DF_07.asm",
+      "sha256": "4f81cfc7237f6961003f1f5d4723290896e5efd7abcd0e5f1778afa24a945f71",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DF_07.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DF_C0.asm",
+      "sha256": "af412c8d59295e852963e58aae52b1cc468af48a0b34f47ffdfa3494a16cc447",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DF_C0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/DF_E0.asm",
+      "sha256": "6ce831123518ea6b1d7d319041e0ee1e66fabe3ded88774158fddcb9bd80f17a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/DF_E0.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/FST_AddrModes.asm",
+      "sha256": "f7c389036577c6a5b7f7683f8e34174b6e099144aa435eb153ee03b99d7587ec",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/FST_AddrModes.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/RoundingNeg.asm",
+      "sha256": "ac30afc2e70b087a73003834038ac1abd25ee0febb85d0a7811b13322fce8ed0",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/RoundingNeg.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/RoundingPos.asm",
+      "sha256": "ac7ec65c8a32e20b946f3d29d0f3c90cfb87ee68859ef8620a7758c9b7a206fd",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/RoundingPos.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_div_zero.asm",
+      "sha256": "65af2f4f48a48f6480c1660fc54f99d9b3126ef48d5c54e3def7aaeeb60c9368",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_div_zero.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_fcos_infinity.asm",
+      "sha256": "897436b50402a3a6a48f54cae8c93c7ad775c737bf81ffafe6b54024c39832dd",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_fcos_infinity.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_fist_nan.asm",
+      "sha256": "84ecafaafdf471afc219b9b87569eccd0e59459dc989db367f0c7aa20010392d",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_fist_nan.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_fist_overflow.asm",
+      "sha256": "d416bc8cde325aee4e73c506a60178187224d2882f33fa3f0985d18feefa0c9c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_fist_overflow.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_fist_overflow_16bit.asm",
+      "sha256": "8d48f6acdd5d61ba116c59e366df2d32f987673a9a6bb5ff19ca1cfb160ffd42",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_fist_overflow_16bit.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_fist_overflow_32bit.asm",
+      "sha256": "f9ef95d2d7b4bbc29b0075f934cab0c2d261aac29a49f0e22fe9940b9c04af80",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_fist_overflow_32bit.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_fist_overflow_64bit.asm",
+      "sha256": "57061d46f3733cfbcf2f1b4047ff9cc2423541dbfdc733696a7cb87a9a7fdc8a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_fist_overflow_64bit.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_fprem_infinity.asm",
+      "sha256": "072e5ff9bcef7956eb7ac96c1d1b9817461f0911130f0dd46c55808198c95273",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_fprem_infinity.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_fptan_infinity.asm",
+      "sha256": "3e5dc102f5a551343ba743cece1a632d51375440ee78ba93cd9cb2027438558a",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_fptan_infinity.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_fsin_infinity.asm",
+      "sha256": "9b98a932c2fa60eba225c7f3baf08fc3d582946ae816ce8dc978075bd48108a2",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_fsin_infinity.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_fsincos_infinity.asm",
+      "sha256": "88b1bcb740219f409ca49c34bd8f47bf8b42736f5a8334d8b31f7c7c83d469aa",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_fsincos_infinity.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_infinity_fsub_memory.asm",
+      "sha256": "c20a07e9a4c102528145a1b30a6929f07ba5ffa1484ec8d05f691265b2676047",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_infinity_fsub_memory.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_infinity_fsubr_infinity.asm",
+      "sha256": "b4337b12d5a7db22a9f161e9c68761bcd0f066db0eb1a8397c826e749bf1b758",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_infinity_fsubr_infinity.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_infinity_mul_zero.asm",
+      "sha256": "4eb012f81206ebffac13a3ee40cc512f93c30758515ea9799f63ba5387d0044e",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_infinity_mul_zero.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_infinity_ops.asm",
+      "sha256": "7cc3d5a1a15795f8de04492353a8888950e6671ae566ce8e176121a9a6752b2c",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_infinity_ops.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_infinity_sub_infinity.asm",
+      "sha256": "c4e3e36a65130ae6a745cd1c8676cc75a0d168f9aacb16b262d1e403d49dce6b",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_infinity_sub_infinity.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_neg_infinity_sub_neg_infinity.asm",
+      "sha256": "19fe43072d8a6fd82196acf98d6d227fea5a3954534eed952150cc63c97d71de",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_neg_infinity_sub_neg_infinity.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_reduced_precision.asm",
+      "sha256": "cce4f43883660cd6ae2b53c613165d5b812981e9193daea3ae1a089526c99019",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_reduced_precision.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_simple_test.asm",
+      "sha256": "6b51d437dce9432e70ac691414dcea22d2f3b09c35217378dde532b05d8403d9",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_simple_test.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/invalid_sqrt_negative.asm",
+      "sha256": "c372eb878578da04c9c2676840f7100863bc149a0e3cb7ebabacadf3cc26242d",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/invalid_sqrt_negative.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/valid_fist_16bit.asm",
+      "sha256": "405f8131602e11e28aa05d8a203011c5c2e82dbe4400a5f37c852ac9227d35c1",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/valid_fist_16bit.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/X87/valid_operation.asm",
+      "sha256": "ddcf31af2ae1b67899e45469eac188a69baa1dddb0d4b3b925ccd01030277384",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/X87/valid_operation.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/arpl.asm",
+      "sha256": "f90cd811acf4c9b914e2ac68da8ac4bd3fb8f8ce87a4a46b100b23b9b8b8d8cd",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/arpl.asm"
+    },
+    {
+      "path": "unittests/32Bit_ASM/arpl_2.asm",
+      "sha256": "15503cd1a9c25fb3afb785003298d46f4798669d8775a7ef9b594a730ff4e1c8",
+      "url": "https://raw.githubusercontent.com/FEX-Emu/FEX/8e95a994a014b0e68fa38b7bf17d84987102e374/unittests/32Bit_ASM/arpl_2.asm"
+    }
+  ]
+}

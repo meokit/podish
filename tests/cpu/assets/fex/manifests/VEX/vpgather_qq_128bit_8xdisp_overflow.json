@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "VEX/vpgather_qq_128bit_8xdisp_overflow",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "e24149ed60fbad15467433ebf4ac125251110541a12eae69ba3010c1529148b4",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/VEX/vpgather_qq_128bit_8xdisp_overflow.bin",
+  "binarySha256": "51e98b2b44f56d052daa6ad8038e86dd5c13e0df0102de8479547ce9b9e4f380",
+  "haltAddresses": [
+    65664
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "XMM1": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "XMM7": [
+        "0x2db6b85f6135a9d7",
+        "0xe273f1177f80d2ec",
+        "0",
+        "0"
+      ]
+    },
+    "Mode": "32BIT",
+    "Env": {
+      "FEX_HOSTFEATURES": "enableavx"
+    },
+    "HostFeatures": [
+      "AVX"
+    ]
+  }
+}

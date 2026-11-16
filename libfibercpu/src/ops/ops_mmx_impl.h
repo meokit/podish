@@ -29,18 +29,20 @@ FORCE_INLINE simde__m64 GetMmxReg(EmuState* state, int idx) {
     return simde_x_mm_set_pi64(static_cast<int64_t>(val));
 }
 
+// All successfully executed MMX instructions except EMMS enter the same x87
+// alias state, including instructions which only store an MMX source.
+FORCE_INLINE void EnterMmxState(EmuState* state) {
+    state->ctx.fpu_top = 0;
+    state->ctx.fpu_sw &= ~0x3800u;
+    state->ctx.fpu_tw = 0;
+}
+
 // Set MMX register from simde__m64
 FORCE_INLINE void SetMmxReg(EmuState* state, int idx, simde__m64 val) {
     simde__m64_private p = simde__m64_to_private(val);
     state->ctx.fpu_regs[idx].signif = static_cast<uint64_t>(p.i64[0]);
-
-    // MMX execution sets TOS to 0
-    state->ctx.fpu_top = 0;
-
-    // Set Tag for this register to Valid (00)
-    // fpu_tw is 16-bit, 2 bits per register.
-    // Need to clear the 2 bits at position idx * 2.
-    state->ctx.fpu_tw &= ~(3 << (idx * 2));
+    state->ctx.fpu_regs[idx].signExp = 0xFFFF;
+    EnterMmxState(state);
 }
 
 // =========================================================================================
@@ -178,7 +180,6 @@ namespace op {
 FORCE_INLINE LogicFlow OpEmms(LogicFuncParams) {
     // Reset FPU tag word to all empty (0xFFFF)
     state->ctx.fpu_tw = 0xFFFF;
-    state->ctx.fpu_top = 0;
     return LogicFlow::Continue;
 }
 
@@ -211,7 +212,7 @@ FORCE_INLINE LogicFlow OpMovd_FromMmx(LogicFuncParams) {
 
     auto res = WriteDwordModRM<OpOnTLBMiss::Restart>(state, op, low_dword, utlb);
     if (!res) return LogicFlow::RestartMemoryOp;
-
+    EnterMmxState(state);
     return LogicFlow::Continue;
 }
 
@@ -234,7 +235,7 @@ FORCE_INLINE LogicFlow OpMovq_FromMmx(LogicFuncParams) {
 
     auto res = WriteMmxModRM<OpOnTLBMiss::Restart>(state, op, val, utlb);
     if (!res) return LogicFlow::RestartMemoryOp;
-
+    EnterMmxState(state);
     return LogicFlow::Continue;
 }
 
@@ -842,7 +843,7 @@ FORCE_INLINE LogicFlow OpPextrw_Mmx(LogicFuncParams) {
 
     simde__m64_private src = simde__m64_to_private(*src_res);
     SetReg(state, gpr, static_cast<uint32_t>(src.u16[lane]));
-
+    EnterMmxState(state);
     return LogicFlow::Continue;
 }
 
@@ -858,6 +859,7 @@ FORCE_INLINE LogicFlow OpPmovmskb_Mmx(LogicFuncParams) {
         mask |= ((src.u8[i] >> 7) & 1u) << i;
     }
     SetReg(state, gpr, mask);
+    EnterMmxState(state);
     return LogicFlow::Continue;
 }
 
@@ -867,6 +869,7 @@ FORCE_INLINE LogicFlow OpMovntq_Mmx(LogicFuncParams) {
     simde__m64 val = GetMmxReg(state, reg);
     auto res = WriteMmxModRM<OpOnTLBMiss::Retry>(state, op, val, utlb);
     if (!res) return LogicFlow::RetryMemoryOp;
+    EnterMmxState(state);
     return LogicFlow::Continue;
 }
 
@@ -886,6 +889,7 @@ FORCE_INLINE LogicFlow OpMaskmovq_Mmx(LogicFuncParams) {
             }
         }
     }
+    EnterMmxState(state);
     return LogicFlow::Continue;
 }
 

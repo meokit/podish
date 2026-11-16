@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/invalid_fist_overflow_64bit",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "57061d46f3733cfbcf2f1b4047ff9cc2423541dbfdc733696a7cb87a9a7fdc8a",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/invalid_fist_overflow_64bit.bin",
+  "binarySha256": "fc5c6b6c21c3c3f846229b521208695ac0bbd01f05d142179130eb696fa39c12",
+  "haltAddresses": [
+    65570
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

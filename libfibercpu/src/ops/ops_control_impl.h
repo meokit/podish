@@ -3,7 +3,9 @@
 // Auto-generated from ops.cpp refactoring
 
 #include <simde/x86/sse.h>
+#include <array>
 #include <chrono>
+#include <cstring>
 #include "../dispatch.h"
 #include "../exec_utils.h"
 #include "../ops.h"
@@ -399,6 +401,116 @@ FORCE_INLINE LogicFlow OpWait(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+struct FxStateImage {
+    std::array<uint8_t, 512> bytes{};
+
+    template <typename T>
+    T Read(size_t offset) const {
+        T value;
+        std::memcpy(&value, bytes.data() + offset, sizeof(value));
+        return value;
+    }
+
+    template <typename T>
+    void Write(size_t offset, T value) {
+        std::memcpy(bytes.data() + offset, &value, sizeof(value));
+    }
+};
+
+constexpr uint32_t kFxMxcsrMask = 0x0000FFFFu;
+
+FORCE_INLINE uint16_t FxFullTag(const float80& value) {
+    const uint16_t exponent = value.signExp & 0x7FFF;
+    if (exponent == 0 && value.signif == 0) return 1;  // Zero (either sign)
+    if (exponent != 0 && exponent != 0x7FFF && (value.signif >> 63)) return 0;  // Valid
+    return 2;  // Denormal, infinity, NaN or unsupported encoding
+}
+
+FORCE_INLINE LogicFlow OpFxState(LogicFuncParams, bool restore) {
+    if ((op->modrm & 0xC0) == 0xC0) {
+        state->status = EmuStatus::Fault;
+        state->fault_vector = 6;
+        return LogicFlow::ExitOnCurrentEIP;
+    }
+    const uint32_t address = ComputeLinearAddress(state, op);
+    if (address & 15) {
+        state->status = EmuStatus::Fault;
+        state->fault_vector = 13;
+        return LogicFlow::ExitOnCurrentEIP;
+    }
+
+    FxStateImage image;
+    if (restore) {
+        // Blocking, bounded reads avoid partial architectural updates and the
+        // single pending-memory slot used by restartable scalar operations.
+        for (uint32_t offset = 0; offset < image.bytes.size(); offset += 16) {
+            auto value = ReadMem<std::array<uint8_t, 16>, OpOnTLBMiss::Blocking>(state, address + offset, utlb, op);
+            if (!value) return LogicFlow::ExitOnCurrentEIP;
+            std::memcpy(image.bytes.data() + offset, value->data(), 16);
+        }
+        const uint32_t mxcsr = image.Read<uint32_t>(24);
+        if (mxcsr & ~kFxMxcsrMask) {
+            state->status = EmuStatus::Fault;
+            state->fault_vector = 13;
+            return LogicFlow::ExitOnCurrentEIP;
+        }
+
+        const uint16_t sw = image.Read<uint16_t>(2);
+        const uint8_t top = (sw >> 11) & 7;
+        const uint8_t abridged_tags = image.bytes[4];
+        uint16_t tags = 0xFFFF;
+        std::array<float80, 8> registers{};
+        for (uint32_t logical = 0; logical < 8; ++logical) {
+            const uint32_t physical = (top + logical) & 7;
+            std::memcpy(&registers[physical], image.bytes.data() + 32 + logical * 16, 10);
+            // Abridged FTW bits describe physical registers; the saved payloads
+            // are logical ST(0)..ST(7). Restore all 80 bits, including empty slots.
+            if (abridged_tags & (1u << physical)) {
+                tags = (tags & ~(3u << (physical * 2))) | (FxFullTag(registers[physical]) << (physical * 2));
+            }
+        }
+
+        state->ctx.fpu_cw = image.Read<uint16_t>(0);
+        state->ctx.fpu_sw = sw;
+        state->ctx.fpu_top = top;
+        state->ctx.fpu_tw = tags;
+        state->ctx.fpu_opcode = image.Read<uint16_t>(6) & 0x7FF;
+        state->ctx.fpu_ip = image.Read<uint32_t>(8);
+        state->ctx.fpu_dp = image.Read<uint32_t>(16);
+        state->ctx.mxcsr = mxcsr;
+        std::memcpy(state->ctx.fpu_regs, registers.data(), sizeof(state->ctx.fpu_regs));
+        std::memcpy(state->ctx.xmm, image.bytes.data() + 160, sizeof(state->ctx.xmm));
+        // A following x87 instruction may execute in the same Run/block.
+        f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
+    } else {
+        f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
+        const uint8_t top = state->ctx.fpu_top & 7;
+        image.Write<uint16_t>(0, state->ctx.fpu_cw);
+        image.Write<uint16_t>(2, (state->ctx.fpu_sw & ~0x3800u) | (top << 11));
+        image.Write<uint16_t>(6, state->ctx.fpu_opcode & 0x7FF);
+        image.Write<uint32_t>(8, state->ctx.fpu_ip);
+        image.Write<uint32_t>(16, state->ctx.fpu_dp);
+        image.Write<uint32_t>(24, state->ctx.mxcsr);
+        image.Write<uint32_t>(28, kFxMxcsrMask);
+        for (uint32_t logical = 0; logical < 8; ++logical) {
+            const uint32_t physical = (top + logical) & 7;
+            if (((state->ctx.fpu_tw >> (physical * 2)) & 3) != 3) image.bytes[4] |= 1u << physical;
+            std::memcpy(image.bytes.data() + 32 + logical * 16, &state->ctx.fpu_regs[physical], 10);
+        }
+        std::memcpy(image.bytes.data() + 160, state->ctx.xmm, sizeof(state->ctx.xmm));
+        // Reserved fields are not architectural outputs. Emit zeros there, but
+        // leave the software-owned final 48 bytes (464..511) untouched.
+        for (uint32_t offset = 0; offset < 464; offset += 16) {
+            std::array<uint8_t, 16> value;
+            std::memcpy(value.data(), image.bytes.data() + offset, 16);
+            if (!WriteMem<std::array<uint8_t, 16>, OpOnTLBMiss::Blocking>(state, address + offset, value, utlb, op)) {
+                return LogicFlow::ExitOnCurrentEIP;
+            }
+        }
+    }
+    return LogicFlow::Continue;
+}
+
 FORCE_INLINE LogicFlow OpGroup_0FAE(LogicFuncParams) {
     // 0F AE /r
     uint8_t sub = (op->modrm >> 3) & 7;
@@ -406,12 +518,25 @@ FORCE_INLINE LogicFlow OpGroup_0FAE(LogicFuncParams) {
     uint8_t rm = op->modrm & 7;
 
     switch (sub) {
+        case 0:  // FXSAVE m512byte (legacy 32-bit layout)
+            return OpFxState(LogicPassParams, false);
+        case 1:  // FXRSTOR m512byte
+            return OpFxState(LogicPassParams, true);
         case 2:  // LDMXCSR m32
             if (mod != 3) {
                 uint32_t addr = ComputeLinearAddress(state, op);
                 auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
                 if (!val_res) return LogicFlow::RestartMemoryOp;
+                if (*val_res & ~kFxMxcsrMask) {
+                    state->status = EmuStatus::Fault;
+                    state->fault_vector = 13;
+                    return LogicFlow::ExitOnCurrentEIP;
+                }
                 state->ctx.mxcsr = *val_res;
+            } else {
+                state->status = EmuStatus::Fault;
+                state->fault_vector = 6;
+                return LogicFlow::ExitOnCurrentEIP;
             }
             break;
         case 3:  // STMXCSR m32

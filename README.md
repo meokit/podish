@@ -181,6 +181,16 @@ dotnet test Fiberish.Tests/Fiberish.Tests.csproj --no-build
 dotnet test Fiberish.SilkFS.Tests/Fiberish.SilkFS.Tests.csproj --no-build
 ```
 
+The isolated CPU instruction suite runs directly against `libfibercpu`, including
+generated integer boundaries, SIMD/addressing cases and pinned FEX regressions:
+
+```bash
+dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release --filter "Category!=Exhaustive"
+```
+
+See [Fiberish.X86.Tests/README.md](Fiberish.X86.Tests/README.md) for exhaustive
+cases, parallelism, state isolation and superopcode build variants.
+
 Linux syscall integration tests use a pinned [LTP](https://github.com/linux-test-project/ltp)
 submodule and a curated selection of unmodified static i386 test binaries:
 

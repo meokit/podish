@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Push_Segments",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "aafea04c52c8fe86617dda36a9a4197478ff97b1e096fecdb49ef354dd5f622c",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Push_Segments.bin",
+  "binarySha256": "4009afb77011d4550ddf468f77a9a3556cc4910e254e7693bacfa04ceb8362c3",
+  "haltAddresses": [
+    65572
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RSP": "0xE000001C"
+    },
+    "Mode": "32BIT"
+  }
+}

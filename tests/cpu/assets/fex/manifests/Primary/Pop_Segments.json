@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Pop_Segments",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "65a527fbce8db6c69a2a71cec6b4dccd3607fe0c83dfb813b90e7773cb6b94f8",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Pop_Segments.bin",
+  "binarySha256": "c2712332b71263e02913c09af5f0883dea5344a71b27e7824ea14b67c79f575a",
+  "haltAddresses": [
+    65589
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RSP": "0xE0000040"
+    },
+    "Mode": "32BIT"
+  }
+}

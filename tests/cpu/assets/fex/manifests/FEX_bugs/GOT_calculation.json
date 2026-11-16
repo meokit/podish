@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/GOT_calculation",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "8bd539010dbdf32b528aec8f27250791dcdedc0a36c3a9124ea63505b2070d13",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/GOT_calculation.bin",
+  "binarySha256": "5527778d8cd719636fec466de2aed1c342cb4560de49ad81af7625f23df8886d",
+  "haltAddresses": [
+    65556
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x10013"
+    },
+    "Mode": "32BIT"
+  }
+}

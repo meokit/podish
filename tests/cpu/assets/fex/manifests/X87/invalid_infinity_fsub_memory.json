@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/invalid_infinity_fsub_memory",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "c20a07e9a4c102528145a1b30a6929f07ba5ffa1484ec8d05f691265b2676047",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/invalid_infinity_fsub_memory.bin",
+  "binarySha256": "9c597538eede896c0aae87cc905b1962d8b3ba4c08795bf92c07837cea855c10",
+  "haltAddresses": [
+    65583
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

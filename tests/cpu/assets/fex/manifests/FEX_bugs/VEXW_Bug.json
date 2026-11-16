@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/VEXW_Bug",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "e33810721801a6752ab4511f8d4b8a7362effefefb44ff4408a649f82fdca428",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/VEXW_Bug.bin",
+  "binarySha256": "e619674cb8ed43c5397282557cf82c153c6928e00208906bf513ccf7b7d94d36",
+  "haltAddresses": [
+    65749
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x0000000000000004",
+      "RBX": "0x0000000000000004",
+      "RCX": "0x0000000000000006",
+      "RDX": "0x0000000000000006",
+      "XMM0": [
+        "0x402f800000000000",
+        "0x400c000000000000"
+      ],
+      "XMM1": [
+        "0x402f800000000000",
+        "0x4035400000000000"
+      ],
+      "XMM2": [
+        "0x0000000045464748",
+        "0"
+      ],
+      "XMM3": [
+        "0x4142434445464748",
+        "0"
+      ],
+      "XMM4": [
+        "0x0000000041424344",
+        "0"
+      ],
+      "XMM5": [
+        "0x0000000045464748",
+        "0x5152535455565758"
+      ]
+    },
+    "Mode": "32BIT"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "VEX/vgather_qpd_128bit_2xdisp_overflow",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "61ee9bcc6b53bde06149912a5f2f6bbaf5e5e67a61eb098b8b5b0b14b2f3fa0c",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/VEX/vgather_qpd_128bit_2xdisp_overflow.bin",
+  "binarySha256": "0e91b91b91d5a042eef2b56d2ccf16cc6bf8f102b1ff0b06ff6a68380279a321",
+  "haltAddresses": [
+    65660
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "XMM1": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "XMM7": [
+        "0x2db6b85f6135a9d7",
+        "0xe273f1177f80d2ec",
+        "0",
+        "0"
+      ]
+    },
+    "Mode": "32BIT",
+    "Env": {
+      "FEX_HOSTFEATURES": "enableavx"
+    },
+    "HostFeatures": [
+      "AVX"
+    ]
+  }
+}

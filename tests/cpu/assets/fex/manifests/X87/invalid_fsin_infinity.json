@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/invalid_fsin_infinity",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "9b98a932c2fa60eba225c7f3baf08fc3d582946ae816ce8dc978075bd48108a2",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/invalid_fsin_infinity.bin",
+  "binarySha256": "5500d78bb1ca491b9108eec2c9a5763799cb989684d49524d208dae8f5c27e93",
+  "haltAddresses": [
+    65589
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

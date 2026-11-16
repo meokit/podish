@@ -66,8 +66,19 @@ FORCE_INLINE uint32_t ComputeLinearAddressSpecialized(EmuState* state, const Dec
         addr += index << memdesc::Scale(ea_desc);
     }
 
+    if (op->prefixes.flags.addrsize) addr &= 0xFFFFu;
+
     if constexpr (SegmentSpec == AddrSegmentSpec::General) {
         addr += GetMemSegmentBase(state, op);
+    } else if constexpr (SegmentSpec == AddrSegmentSpec::None) {
+        // "NoSegment" means no override, not an architectural zero base.
+        // Keep specialized handlers correct if a caller supplies non-flat DS/SS.
+        if constexpr (BaseRegSpec == AddrBaseRegSpec::Dynamic) {
+            addr += GetMemSegmentBase(state, op);
+        } else {
+            constexpr int segment = (BaseRegSpec == AddrBaseRegSpec::Esp || BaseRegSpec == AddrBaseRegSpec::Ebp) ? 3 : 4;
+            addr += state->ctx.seg_base[segment];
+        }
     } else if constexpr (SegmentSpec != AddrSegmentSpec::None) {
         addr += state->ctx.seg_base[static_cast<int>(SegmentSpec)];
     }
@@ -826,12 +837,7 @@ MOVSX_WORD_32_REG_WRAPPER(Edi, Specialized::RegEdi)
 
 template <Specialized SizeSpec, Specialized RegSpec = Specialized::None>
 FORCE_INLINE LogicFlow OpLea_Impl(LogicFuncParams) {
-    const auto* ext = GetExt(op);
-    uint32_t ea_desc = ext->data.ea_desc;
-    const uintptr_t regs_base = reinterpret_cast<uintptr_t>(state->ctx.regs);
-    uint32_t offset = ext->data.disp;
-    offset += *reinterpret_cast<const uint32_t*>(regs_base + memdesc::BaseOffset(ea_desc));
-    offset += *reinterpret_cast<const uint32_t*>(regs_base + memdesc::IndexOffset(ea_desc)) << memdesc::Scale(ea_desc);
+    uint32_t offset = ComputeEA(state, op);
 
     if constexpr (SizeSpec == Specialized::Opsize16) {
         if constexpr (RegSpec >= Specialized::Reg0 && RegSpec <= Specialized::Reg7) {
@@ -943,15 +949,23 @@ FORCE_INLINE LogicFlow OpPush_Reg(LogicFuncParams) {
 }
 
 FORCE_INLINE LogicFlow OpPush_Imm32(LogicFuncParams) {
-    // 68: PUSH imm32
-    if (!Push<uint32_t, true>(state, imm, utlb, op)) return LogicFlow::RestartMemoryOp;
+    // 68: PUSH imm16/32. Operand size controls both immediate and stack width.
+    if (op->prefixes.flags.opsize) {
+        if (!Push<uint16_t, true>(state, static_cast<uint16_t>(imm), utlb, op)) return LogicFlow::RestartMemoryOp;
+    } else if (!Push<uint32_t, true>(state, imm, utlb, op)) {
+        return LogicFlow::RestartMemoryOp;
+    }
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpPush_Imm8(LogicFuncParams) {
     // 6A: PUSH imm8
     int32_t val = (int32_t)(int8_t)imm;
-    if (!Push<uint32_t, true>(state, val, utlb, op)) return LogicFlow::RestartMemoryOp;
+    if (op->prefixes.flags.opsize) {
+        if (!Push<uint16_t, true>(state, static_cast<uint16_t>(val), utlb, op)) return LogicFlow::RestartMemoryOp;
+    } else if (!Push<uint32_t, true>(state, val, utlb, op)) {
+        return LogicFlow::RestartMemoryOp;
+    }
     return LogicFlow::Continue;
 }
 

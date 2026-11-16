@@ -1,0 +1,3 @@
+# These are source-controlled offline test assets, not .NET build output.
+!assets/fex/bin/
+!assets/fex/bin/**

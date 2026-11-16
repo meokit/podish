@@ -234,15 +234,13 @@ struct HandlerInit {
     }
 };
 
-// Static instance to trigger initialization
-static HandlerInit _init;
-
 // Specialization Registry
 // Array of vectors for O(1) opcode lookup
 static std::vector<SpecializedEntry> g_OpSpecializations[1024];
-// Lookup Cache to accelerate finding specialized handlers
-// Thread-local for lock-free access
-static thread_local ankerl::unordered_dense::map<uint64_t, HandlerFunc> g_SpecCache;
+
+// Construct the registry before registration populates it. Both dispatch and
+// specialization tables are immutable after library initialization.
+static HandlerInit _init;
 
 void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler) {
     if (opcode >= 1024) return;
@@ -256,50 +254,13 @@ void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerF
         int b_score = b.criteria.GetScore();
         return a_score > b_score;
     });
-
-    // Clear cache on registration?
-    // Since cache is thread_local and registration happens at startup (main thread),
-    // clearing main thread's cache is fine but others start empty anyway.
-    // We can skip explicit clear here as it's unlikely to have stale entries during static init.
 }
 
 HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
     if (handler_index >= 1024) return nullptr;
 
-    // Construct Cache Key
-    // Layout:
-    // [0-9]   Opcode (10 bits)
-    // [10-17] ModRM (8 bits)
-    // [18-25] Prefixes (8 bits)
-    // [26]    HasModRM (1 bit)
-    // [27]    NoFlags (1 bit)
-    // [28]    HasMem (1 bit)
-    // [29-34] EA Base Offset (6 bits)
-    // [35-40] EA Index Offset (6 bits)
-    // [41-42] EA Scale (2 bits)
-    // [43-45] EA Segment (3 bits)
-    uint64_t key = handler_index;
-
-    if (op->meta.flags.has_modrm) {
-        key |= ((uint64_t)op->modrm << 10);
-        key |= (1ULL << 26);
-    }
-    key |= ((uint64_t)op->prefixes.all << 18);
-    if (op->meta.flags.no_flags) key |= (1ULL << 27);
-    if (op->meta.flags.has_mem) {
-        const uint32_t ea_desc = GetExt(op)->data.ea_desc;
-        key |= (1ULL << 28);
-        key |= ((uint64_t)memdesc::BaseOffset(ea_desc) << 29);
-        key |= ((uint64_t)memdesc::IndexOffset(ea_desc) << 35);
-        key |= ((uint64_t)memdesc::Scale(ea_desc) << 41);
-        key |= ((uint64_t)memdesc::Segment(ea_desc) << 43);
-    }
-
-    // Check Cache
-    auto it = g_SpecCache.find(key);
-    if (it != g_SpecCache.end()) return it->second;
-
-    // Lookup
+    // Deliberately uncached: decoded blocks already retain the selected handler,
+    // and a process/thread cache would retain guest-derived data across engines.
     const auto& list = g_OpSpecializations[handler_index];
     HandlerFunc found = nullptr;
 
@@ -311,8 +272,6 @@ HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
         break;  // Found the most specific match due to sorting
     }
 
-    // Update Cache
-    g_SpecCache[key] = found;
     return found;
 }
 

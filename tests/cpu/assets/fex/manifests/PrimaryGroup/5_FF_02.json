@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "PrimaryGroup/5_FF_02",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "14ec3ea16024a4f2418b64ddc7821387171a293eec9ab025a695145458d61489",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/PrimaryGroup/5_FF_02.bin",
+  "binarySha256": "bc97671ebf3cd65ecae5fc043ef3322c22720f80897b25f843e1c1610b145236",
+  "haltAddresses": [
+    65602
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x41424344"
+    },
+    "Mode": "32BIT"
+  }
+}

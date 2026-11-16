@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Primary_AE_REP_down",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "94a2751fcbf34e4104c7a3855e2c3ad69e6eb47ad8c3464d592cfbe900a0a33f",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Primary_AE_REP_down.bin",
+  "binarySha256": "f9ae7e1d6c8133414861a0227b6461508561d5106382c54cf2863c89a9a6d975",
+  "haltAddresses": [
+    65608
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RCX": "7",
+      "RDI": "0xE000000F"
+    },
+    "Mode": "32BIT"
+  }
+}

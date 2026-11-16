@@ -68,6 +68,22 @@ The following Rust crates are transitive dependencies of smoltcp:
 
 ## C# Third-Party Libraries (NuGet Packages)
 
+### Iced (CPU tests and asset validation only)
+
+| Property | Value |
+|----------|-------|
+| Repository | https://github.com/icedland/iced |
+| Version | 1.21.0 |
+| License | MIT |
+
+### FEX instruction tests (test assets only)
+
+| Property | Value |
+|----------|-------|
+| Repository | https://github.com/FEX-Emu/FEX |
+| Revision | 8e95a994a014b0e68fa38b7bf17d84987102e374 |
+| License | MIT; upstream notices retained with assets in tests/cpu |
+
 ### Microsoft.Extensions.Logging
 
 | Property | Value |

@@ -72,19 +72,64 @@ static bool UsesControlFlowCacheStorage(uint16_t handler_index) {
     return (handler_index >= 0x70 && handler_index <= 0x7F) || (handler_index >= 0x180 && handler_index <= 0x18F);
 }
 
+static bool IsLockableOpcode(uint16_t opcode) {
+    // Arithmetic forms with r/m as destination, not source.
+    if (opcode <= 0x31 && (opcode & 7) <= 1) return true;
+    switch (opcode) {
+        case 0x80: case 0x81: case 0x82: case 0x83:  // Group 1, except CMP
+        case 0x86: case 0x87:                       // XCHG
+        case 0xF6: case 0xF7:                       // NOT / NEG
+        case 0xFE: case 0xFF:                       // INC / DEC
+        case 0x1AB: case 0x1B3: case 0x1BB:          // BTS / BTR / BTC
+        case 0x1BA:                                // Immediate BTS / BTR / BTC
+        case 0x1B0: case 0x1B1:                     // CMPXCHG
+        case 0x1C0: case 0x1C1:                     // XADD
+        case 0x1C7:                                // CMPXCHG8B
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool IsValidLockModRM(uint16_t opcode, uint8_t modrm) {
+    if ((modrm & 0xC0) == 0xC0) return false;
+    const uint8_t subop = (modrm >> 3) & 7;
+    switch (opcode) {
+        case 0x80: case 0x81: case 0x82: case 0x83:
+            return subop != 7;
+        case 0xF6: case 0xF7:
+            return subop == 2 || subop == 3;
+        case 0xFE: case 0xFF:
+            return subop <= 1;
+        case 0x1BA:
+            return subop >= 5;
+        case 0x1C7:
+            return subop == 1;
+        default:
+            return true;
+    }
+}
+
 // Decoder Logic
-// Returns true on success, false on failure/invalid instruction
-bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index) {
+// Distinguishes an invalid encoding from a valid but incomplete byte sequence.
+InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t available, DecodedInstTmp* inst,
+                                                  uint16_t* handler_index) {
     *inst = {};
 
     DecodedOp* op = &inst->head;
 
     const uint8_t* start = code;
     const uint8_t* ptr = code;
+    auto require = [&](size_t count) {
+        const size_t end = static_cast<size_t>(ptr - start) + count;
+        if (end > 15) return InstructionDecodeResult::Invalid;
+        return end <= available ? InstructionDecodeResult::Success : InstructionDecodeResult::NeedMoreBytes;
+    };
 
     // 1. Legacy Prefixes
     bool prefix_done = false;
     while (!prefix_done) {
+        if (auto result = require(1); result != InstructionDecodeResult::Success) return result;
         uint8_t b = *ptr;
         switch (b) {
             // Group 1: Lock / REP
@@ -133,7 +178,7 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
                 continue;  // Do not increment ptr for non-prefix
         }
         ptr++;
-        if (ptr - start > 14) return false;
+        if (ptr - start > 14) return InstructionDecodeResult::Invalid;
     }
 
     // 2. Opcode Dispatch
@@ -143,12 +188,14 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
     if (opcode == 0x0F) {
         map = 1;
         ptr++;
+        if (auto result = require(1); result != InstructionDecodeResult::Success) return result;
         opcode = *ptr;  // Next byte is opcode
     }
     ptr++;
 
     // Set Handler Index (Map 0 or 1) - Local, not stored in op
     *handler_index = (map << 8) | opcode;
+    if (op->prefixes.flags.lock && !IsLockableOpcode(*handler_index)) return InstructionDecodeResult::Invalid;
     if (UsesControlFlowCacheStorage(*handler_index)) {
         SetExtKind(op, ExtKind::ControlFlow);
     }
@@ -157,8 +204,12 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
     uint8_t has_modrm = kHasModRM[map][opcode];
     if (has_modrm) {
         op->meta.flags.has_modrm = 1;
+        if (auto result = require(1); result != InstructionDecodeResult::Success) return result;
         uint8_t modrm = *ptr++;
         op->modrm = modrm;
+        if (op->prefixes.flags.lock && !IsValidLockModRM(*handler_index, modrm)) {
+            return InstructionDecodeResult::Invalid;
+        }
 
         uint8_t mod = (modrm >> 6) & 3;
         uint8_t rm = modrm & 7;
@@ -169,7 +220,8 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
 
         // SIB? (If Mod != 3 and RM == 4)
         uint8_t sib_byte = 0;
-        if (is_mem_operand && rm == 4) {
+        if (is_mem_operand && !op->prefixes.flags.addrsize && rm == 4) {
+            if (auto result = require(1); result != InstructionDecodeResult::Success) return result;
             sib_byte = *ptr++;
         }
 
@@ -178,35 +230,46 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
         if (is_mem_operand) {
             op->meta.flags.has_mem = 1;
 
-            if (mod == 0) {
-                if (rm == 5) disp_size = 4;  // Disp32 (EBP replaced by Disp32)
-            } else if (mod == 1) {
-                disp_size = 1;  // Disp8
-            } else if (mod == 2) {
-                disp_size = 4;  // Disp32
-            }
-
-            // SIB Base Special Case?
-            if (rm == 4) {
-                uint8_t base = sib_byte & 7;
-                if (mod == 0 && base == 5) {
-                    disp_size = 4;  // Disp32 (Mod=0, Base=5 -> Disp32, no Base)
+            if (op->prefixes.flags.addrsize) {
+                if (mod == 0 && rm == 6) disp_size = 2;  // Direct disp16, no BP
+                if (mod == 1) disp_size = 1;
+                if (mod == 2) disp_size = 2;
+            } else {
+                if (mod == 0 && rm == 5) disp_size = 4;
+                if (mod == 1) disp_size = 1;
+                if (mod == 2) disp_size = 4;
+                if (rm == 4 && mod == 0 && (sib_byte & 7) == 5) {
+                    disp_size = 4;  // SIB with no base
                 }
             }
 
             if (disp_size > 0) {
+                if (auto result = require(disp_size); result != InstructionDecodeResult::Success) return result;
                 if (disp_size == 1) {
                     int8_t d8 = (int8_t)*ptr;
                     inst->head.ext.data.disp = (uint32_t)(int32_t)d8;  // Sign extend!
                     ptr += 1;
+                } else if (disp_size == 2) {
+                    uint16_t d16;
+                    std::memcpy(&d16, ptr, 2);
+                    inst->head.ext.data.disp = mod == 0
+                        ? d16 : static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(d16)));
+                    ptr += 2;
                 } else {
-                    inst->head.ext.data.disp = *reinterpret_cast<const uint32_t*>(ptr);
+                    std::memcpy(&inst->head.ext.data.disp, ptr, 4);
                     ptr += 4;
                 }
             }
 
             // Pre-calculate EA components for faster execution
-            if (rm == 4) {
+            if (op->prefixes.flags.addrsize) {
+                // No SIB in 16-bit addressing. Keep BP in the base component
+                // so implicit SS selection is distinguishable from DS.
+                constexpr uint8_t bases[8] = {EBX, EBX, EBP, EBP, ESI, EDI, EBP, EBX};
+                constexpr uint8_t indices[8] = {ESI, EDI, ESI, EDI, 8, 8, 8, 8};
+                if (!(mod == 0 && rm == 6)) base_offset = bases[rm] * 4;
+                index_offset = indices[rm] * 4;
+            } else if (rm == 4) {
                 scale = (sib_byte >> 6) & 3;
                 uint8_t index = (sib_byte >> 3) & 7;
                 uint8_t base_reg = sib_byte & 7;
@@ -248,20 +311,10 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
     }
 
     if (imm_len > 0) {
+        if (auto result = require(imm_len); result != InstructionDecodeResult::Success) return result;
         op->meta.flags.has_imm = 1;
         uint32_t decoded_imm = 0;
-        if (imm_len == 1)
-            decoded_imm = *reinterpret_cast<const uint8_t*>(ptr);
-        else if (imm_len == 2)
-            decoded_imm = *reinterpret_cast<const uint16_t*>(ptr);
-        else if (imm_len == 4)
-            decoded_imm = *reinterpret_cast<const uint32_t*>(ptr);
-        else if (imm_len == 3) {
-            // Special Case for ENTER (Iw Ib)
-            uint16_t iw = *reinterpret_cast<const uint16_t*>(ptr);
-            uint8_t ib = *(ptr + 2);
-            decoded_imm = iw | (ib << 16);
-        }
+        std::memcpy(&decoded_imm, ptr, imm_len);
         inst->head.ext.data.imm = decoded_imm;
         ptr += imm_len;
     }
@@ -315,7 +368,44 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
         op->handler = ud2;
     }
 
-    return true;
+    return InstructionDecodeResult::Success;
+}
+
+bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index) {
+    return DecodeInstructionBounded(code, 15, inst, handler_index) == InstructionDecodeResult::Success;
+}
+
+InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip, uint8_t* buffer,
+                                                   DecodedInstTmp* inst, uint16_t* handler_index) {
+    // A mapping is page-granular: copying bytes within the first page is safe,
+    // but even probing the next mapping must wait until we know it is needed.
+    size_t available = std::min<size_t>(15, 0x1000u - (eip & 0xFFFu));
+    const std::byte* code = state->mmu.translate_exec(state, eip);
+    if (!code || state->status != EmuStatus::Running) {
+        if (state->status == EmuStatus::Running) {
+            state->status = EmuStatus::Fault;
+            state->fault_vector = 14;
+            state->fault_addr = eip;
+        }
+        return InstructionDecodeResult::FetchFault;
+    }
+    std::memcpy(buffer, code, available);
+    for (;;) {
+        auto result = DecodeInstructionBounded(buffer, available, inst, handler_index);
+        if (result != InstructionDecodeResult::NeedMoreBytes) return result;
+        // Bounded decoding returns Invalid rather than requesting a 16th byte.
+        const uint32_t address = eip + static_cast<uint32_t>(available);
+        code = state->mmu.translate_exec(state, address);
+        if (!code || state->status != EmuStatus::Running) {
+            if (state->status == EmuStatus::Running) {
+                state->status = EmuStatus::Fault;
+                state->fault_vector = 14;
+                state->fault_addr = address;
+            }
+            return InstructionDecodeResult::FetchFault;
+        }
+        buffer[available++] = static_cast<uint8_t>(*code);
+    }
 }
 
 // Helper to check if opcode is Control Flow
@@ -342,12 +432,18 @@ static uint32_t GetDirectRelativeJmpTarget(uint16_t handler_index, const Decoded
     if (handler_index == 0xEB) {
         return op.next_eip + static_cast<int8_t>(GetImm(&op));
     }
+    if (op.prefixes.flags.opsize) {
+        return (op.next_eip + static_cast<int16_t>(GetImm(&op))) & 0xFFFFu;
+    }
     return op.next_eip + static_cast<int32_t>(GetImm(&op));
 }
 
 static uint32_t GetDirectRelativeJccTarget(uint16_t handler_index, const DecodedOp& op) {
     if ((handler_index >= 0xE0 && handler_index <= 0xE3) || (handler_index >= 0x70 && handler_index <= 0x7F)) {
         return op.next_eip + static_cast<int8_t>(GetImm(&op));
+    }
+    if (op.prefixes.flags.opsize) {
+        return (op.next_eip + static_cast<int16_t>(GetImm(&op))) & 0xFFFFu;
     }
     return op.next_eip + static_cast<int32_t>(GetImm(&op));
 }
@@ -362,7 +458,7 @@ static bool TryGetDirectRelativeTargetEip(uint16_t handler_index, const DecodedO
         return true;
     }
     if (IsDirectRelativeCallHandlerIndex(handler_index)) {
-        *target_eip = op.next_eip + static_cast<int32_t>(GetImm(&op));
+        *target_eip = GetDirectRelativeJmpTarget(handler_index, op);
         return true;
     }
     return false;
@@ -372,6 +468,20 @@ static void ApplySpecializedHandler(uint16_t handler_index, DecodedOp& op) {
     HandlerFunc specialized_h = FindSpecializedHandler(handler_index, &op);
     if (specialized_h) {
         op.handler = specialized_h;
+    }
+}
+
+void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedOp* op) {
+    op->next_eip = eip + op->GetLength();
+    ApplySpecializedHandler(handler_index, *op);
+    if (GetExtKind(op) == ExtKind::ControlFlow) {
+        SetCachedTarget(op, state->mmu.invalid_code_block());
+    }
+    uint32_t target_eip;
+    // Read the immediate before storing a target. These fields share storage
+    // with the memory descriptor, so only relative control-flow ops use it.
+    if (TryGetDirectRelativeTargetEip(handler_index, *op, &target_eip)) {
+        SetControlTargetEip(op, target_eip);
     }
 }
 
@@ -439,11 +549,6 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
     std::vector<uint16_t> op_indices;
     op_indices.reserve(effective_limit);
 
-    // Page boundary check helper
-    auto is_page_cross = [](uint32_t start, uint32_t len) {
-        return (start & 0xFFFFF000) != ((start + len - 1) & 0xFFFFF000);
-    };
-
     uint32_t end_eip = start_eip;
     bool success = true;
     BlockStopReason stop_reason = BlockStopReason::Unknown;
@@ -454,65 +559,29 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             stop_reason = BlockStopReason::LimitEip;
             break;
         }
-        // 1. Fetch with Probe
-        uint8_t buf[16];
-        std::memset(buf, 0, 16);
-        bool fetch_fault = false;
-
-        uint32_t page_offset = current_eip & 0xFFF;
-        uint32_t bytes_to_page_end = 0x1000 - page_offset;
-
-        if (bytes_to_page_end >= 16) {
-            // Fast Path
-            for (int i = 0; i < 16; ++i) {
-                buf[i] = state->mmu.read_for_exec<uint8_t>(state, current_eip + i);
-                if (state->status != EmuStatus::Running) {
-                    fetch_fault = true;
-                    break;
-                }
-            }
-        } else {
-            // Slow Path: Check boundary
-            // Fetch first part
-            for (uint32_t i = 0; i < bytes_to_page_end; ++i) {
-                buf[i] = state->mmu.read_for_exec<uint8_t>(state, current_eip + i);
-                if (state->status != EmuStatus::Running) {
-                    fetch_fault = true;
-                    break;
-                }
-            }
-
-            // Check next page if no fault so far
-            if (!fetch_fault) {
-                const uint32_t next_page_addr = current_eip + bytes_to_page_end;
-                const bool next_exec_ok = state->mmu.probe_exec(next_page_addr);
-                if (next_exec_ok) {
-                    // Safe to fetch remaining
-                    for (uint32_t i = bytes_to_page_end; i < 16; ++i) {
-                        buf[i] = state->mmu.read_for_exec<uint8_t>(state, current_eip + i);
-                        if (state->status != EmuStatus::Running) {
-                            fetch_fault = true;
-                            break;
-                        }
-                    }
-                }
-                // Else: Ignore, buffer already zero-padded
+        // A block may span already executable pages (its cache tracks every
+        // backing page), but decoding must not raise a later fetch fault before
+        // earlier instructions have committed. Defer potentially missing pages
+        // to a fresh block without invoking a guest fault resolver speculatively.
+        if (!temp_ops.empty()) {
+            const uint32_t remaining = 0x1000u - (current_eip & 0xFFFu);
+            if (!state->mmu.probe_exec(current_eip) ||
+                (remaining < 15 && !state->mmu.probe_exec(current_eip + remaining))) {
+                stop_reason = BlockStopReason::PageCross;
+                break;
             }
         }
-
-        if (fetch_fault) {
-            if (temp_ops.empty()) {
-                // If first instruction fails, we return nullptr effectively (or special block?)
-                // Original code returned false.
-                success = false;
-            }
+        uint8_t buf[15] = {};
+        DecodedInstTmp inst{};
+        uint16_t handler_index = 0;
+        const auto decode_result = FetchAndDecodeInstruction(state, current_eip, buf, &inst, &handler_index);
+        if (decode_result == InstructionDecodeResult::FetchFault) {
+            success = false;
             stop_reason = BlockStopReason::FetchFault;
             break;
         }
 
-        DecodedInstTmp inst;
-        uint16_t handler_index;
-        if (!DecodeInstruction(buf, &inst, &handler_index)) {
+        if (decode_result != InstructionDecodeResult::Success) {
             // Decode error: Insert Fault Op
             fprintf(stderr,
                     "[DecodeBlock] DecodeInstruction Failed at %08X. Bytes: %02X %02X "
@@ -526,6 +595,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
             inst.head.next_eip = current_eip;
             temp_ops.push_back(inst);
+            inst_count++;  // The synthetic #UD op must be executable, not an empty block.
 
             // Append Sentinel for dispatch safety
             DecodedInstTmp sentinel{};
@@ -544,37 +614,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             goto finalize;
         }
 
-        // Verify length does not exceed valid fetch (Post-Decode Check)
-        if (bytes_to_page_end < 16 && inst.head.GetLength() > bytes_to_page_end) {
-            // Instruction spans into the probed-invalid page!
-            // Trigger fault explicitly by reading the first byte of the invalid region.
-            const uint32_t next_page_addr = current_eip + bytes_to_page_end;
-            if (!state->mmu.probe_exec(next_page_addr)) {
-                (void)state->mmu.read_for_exec<uint8_t>(state, next_page_addr);
-                if (state->status != EmuStatus::Running) {
-                    if (temp_ops.empty()) success = false;
-                    break;
-                }
-
-                // Fault handler reported success. Ensure the target page really became executable.
-                // If yes, retry decoding the same instruction with fresh bytes from the new mapping.
-                if (state->mmu.probe_exec(next_page_addr)) {
-                    continue;
-                }
-
-                if (temp_ops.empty()) success = false;
-                state->status = EmuStatus::Fault;
-                stop_reason = BlockStopReason::CrossPageFault;
-                break;
-            }
-        }
-
-        // Check if a specialized handler exists for this opcode + modrm/etc.
-        ApplySpecializedHandler(handler_index, inst.head);
-
-        if (GetExtKind(&inst.head) == ExtKind::ControlFlow) {
-            SetCachedTarget(&inst.head, state->mmu.invalid_code_block());
-        }
+        FinalizeDecodedInstruction(state, current_eip, handler_index, &inst.head);
 
         // Recover index logic (to keep op_indices in sync)
         uint8_t map = 0;
@@ -596,12 +636,6 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             opcode = *ptr;
         }
         op_indices.push_back((map << 8) | opcode);
-        inst.head.next_eip = current_eip + inst.head.GetLength();
-
-        uint32_t target_eip;
-        if (TryGetDirectRelativeTargetEip(handler_index, inst.head, &target_eip)) {
-            SetControlTargetEip(&inst.head, target_eip);
-        }
 
         // Optimization: Skip NOPs by absorbing them into the previous instruction
         // unless it's the first instruction of the block
@@ -640,16 +674,15 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             break;
         }
 
-        // Stop if Page Cross
-        if (is_page_cross(current_eip, 1)) {
-            stop_reason = BlockStopReason::PageCross;
-            break;
-        }
+        // Continue across mapped executable pages. The next iteration probes
+        // before decoding so a missing mapping cannot fault this block early.
     }
 
     if (stop_reason == BlockStopReason::Unknown && temp_ops.size() >= effective_limit) {
         stop_reason = BlockStopReason::MaxInsts;
     }
+
+    if (!success || temp_ops.empty()) return nullptr;
 
     // Append Sentinel Op
     {

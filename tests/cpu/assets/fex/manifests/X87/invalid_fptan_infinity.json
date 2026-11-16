@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/invalid_fptan_infinity",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "3e5dc102f5a551343ba743cece1a632d51375440ee78ba93cd9cb2027438558a",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/invalid_fptan_infinity.bin",
+  "binarySha256": "2ab653ba5dffce52a68b73bcb08c41640491dd197793d70920fe594b02433038",
+  "haltAddresses": [
+    65589
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

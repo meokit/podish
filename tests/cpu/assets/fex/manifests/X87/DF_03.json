@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/DF_03",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "a01f1ceb917c82372b644c4b05f7049d6f4a07ffeda5017540c5d00ac0bfc0ae",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/DF_03.bin",
+  "binarySha256": "58b45a195c98993238c0570fb75863390cb400678c3c132fc3f525ede57ec503",
+  "haltAddresses": [
+    65567
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x400",
+      "MM7": [
+        "0x8000000000000000",
+        "0x3FFF"
+      ]
+    },
+    "Mode": "32BIT"
+  }
+}

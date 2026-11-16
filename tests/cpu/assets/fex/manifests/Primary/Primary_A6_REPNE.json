@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Primary_A6_REPNE",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "04681b36efe80ce37c822cc11c8fbbed2bd6c613b41ab491ba92a2bb410bb756",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Primary_A6_REPNE.bin",
+  "binarySha256": "3e88da6b9b87c3f27a1d2bc909d2935bafb85d54432fb8180165f20978ed2f7e",
+  "haltAddresses": [
+    65636
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x4600",
+      "RCX": "0x3",
+      "RDX": "0x1",
+      "RDI": "0xE0000007",
+      "RSI": "0xE0000017"
+    },
+    "Mode": "32BIT"
+  }
+}

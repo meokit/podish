@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Primary_A6_REP_down",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "edec10d9b14f87dba902f27c0508aacc540765d2257f9b32887c040af3892d3e",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Primary_A6_REP_down.bin",
+  "binarySha256": "3e2d89b575776011f5035628a89077e96cd0f26e0029dbe29c7d94d315881467",
+  "haltAddresses": [
+    65637
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x8300",
+      "RCX": "0x9",
+      "RDX": "0x0",
+      "RDI": "0xE000000C",
+      "RSI": "0xE000001C"
+    },
+    "Mode": "32BIT"
+  }
+}

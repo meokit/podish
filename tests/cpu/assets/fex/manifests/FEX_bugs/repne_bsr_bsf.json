@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/repne_bsr_bsf",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "ed4ea3d64831f95df372d1cbb7bd2c67b89df27a45dd6b83d1e5e9ef43493af8",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/repne_bsr_bsf.bin",
+  "binarySha256": "202dd14873a901750cd9a4c7db9a832a796485a29c04b7e0fd1d70ea4157aa49",
+  "haltAddresses": [
+    65596
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0",
+      "RBX": "0x81828384",
+      "RCX": "0x71727374",
+      "RDX": "0x51525354",
+      "RSP": "0x61626364",
+      "RSI": "0x21222324",
+      "RDI": "2",
+      "RBP": "0x1e"
+    },
+    "Mode": "32BIT"
+  }
+}

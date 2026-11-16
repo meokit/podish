@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/valid_fist_16bit",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "405f8131602e11e28aa05d8a203011c5c2e82dbe4400a5f37c852ac9227d35c1",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/valid_fist_16bit.bin",
+  "binarySha256": "702040593132fce77749708c3735f8dc4d57e1a74c19d74448fc9be447eaf31d",
+  "haltAddresses": [
+    65573
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0",
+      "RBX": "12346"
+    },
+    "Mode": "32BIT"
+  }
+}

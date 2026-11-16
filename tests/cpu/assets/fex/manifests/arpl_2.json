@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "arpl_2",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "15503cd1a9c25fb3afb785003298d46f4798669d8775a7ef9b594a730ff4e1c8",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/arpl_2.bin",
+  "binarySha256": "8c1718dcb1292edd3bb4cdb1e0f2882a5a22dd4f0d52b8335d23409dbdfcf394",
+  "haltAddresses": [
+    65581
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0xFFFF_01FD",
+      "RBX": "0xFFFF_0201",
+      "RCX": "0xFFFF_03FE",
+      "RDX": "0xFFFF_04FF",
+      "RSI": "0xFFFF_0501",
+      "RDI": "0xFFFF_06FC"
+    },
+    "Mode": "32BIT"
+  }
+}

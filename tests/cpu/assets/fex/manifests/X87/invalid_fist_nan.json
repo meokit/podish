@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/invalid_fist_nan",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "84ecafaafdf471afc219b9b87569eccd0e59459dc989db367f0c7aa20010392d",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/invalid_fist_nan.bin",
+  "binarySha256": "86bb285f29753d6bdf7336f2c83fc2418bed0993e3440a4e4cc93668afcaa3f2",
+  "haltAddresses": [
+    65565
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

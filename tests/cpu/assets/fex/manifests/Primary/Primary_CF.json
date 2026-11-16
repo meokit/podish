@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Primary_CF",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "a760a2772ab2f93d78080cb72da4a222e0fb89111cec4e3dc29a36bd43ab77a1",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Primary_CF.bin",
+  "binarySha256": "254f9e7efc1116c5f17014124a344c5c4898c1ba740f1dff49c24abce613aee1",
+  "haltAddresses": [
+    65580,
+    65586,
+    65592
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x1",
+      "RSP": "0xe0000010"
+    },
+    "Mode": "32BIT"
+  }
+}

@@ -344,7 +344,16 @@ static_assert(offsetof(BasicBlock, slots) == 48, "BasicBlock: slots must start a
 #endif
 
 // Decoder Logic
+enum class InstructionDecodeResult : uint8_t { Success, NeedMoreBytes, Invalid, FetchFault };
+// Never reads beyond available bytes or the architectural 15-byte limit.
+InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t available, DecodedInstTmp* inst,
+                                                  uint16_t* handler_index);
 bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index);
+// buffer must have room for 15 bytes. Fetches another page only when decoding requires it.
+InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip, uint8_t* buffer,
+                                                   DecodedInstTmp* inst, uint16_t* handler_index);
+// Shared Step/block preparation, without dead-flags analysis.
+void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedOp* op);
 
 // Start EIP, Limit EIP, Max Instructions -> Returns Pointer to allocated block or nullptr
 BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts,

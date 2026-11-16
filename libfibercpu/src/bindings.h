@@ -34,7 +34,10 @@ typedef struct {
 enum { X86_PAGE_FLAG_DIRTY = 1 << 0, X86_PAGE_FLAG_EXTERNAL = 1 << 1 };
 
 // Creation / Destruction
+enum { X86_CREATE_NO_FATAL_SIGNAL_HANDLERS = 1u };
 EmuState* X86_Create();
+// Options affect this creation only; no environment variables are modified.
+EmuState* X86_CreateWithOptions(uint32_t options);
 // share_mem=1: Threads (CLONE_VM), share_mem=0: Fork (copy owned pages, preserve external mappings)
 EmuState* X86_Clone(EmuState* parent, int share_mem);
 void X86_Destroy(EmuState* state);
@@ -52,6 +55,8 @@ void X86_SetEFLAGS(EmuState* state, uint32_t val);
 // XMM Access (128-bit)
 void X86_ReadXMM(EmuState* state, int idx, uint8_t* val);
 void X86_WriteXMM(EmuState* state, int idx, const uint8_t* val);
+uint32_t X86_GetMXCSR(EmuState* state);
+void X86_SetMXCSR(EmuState* state, uint32_t val);
 
 // FPU Access
 uint16_t X86_GetFCW(EmuState* state);
@@ -121,6 +126,12 @@ void X86_SetCodeCacheBudgetBytes(EmuState* state, uint64_t bytes);
 
 // Diagnostics
 int32_t X86_GetFaultVector(EmuState* state);
+uint32_t X86_GetFaultAddress(EmuState* state);
+// Test-only calling-thread environment access, independent of any engine.
+// Low 32 bits: SoftFloat/fallback TLS (bytes: rounding, flags, tininess, precision).
+// High 32 bits: host MXCSR on SSE hosts, otherwise zero. Setter requires a valid host MXCSR.
+uint64_t X86_DebugGetFloatEnvironment(void);
+void X86_DebugSetFloatEnvironment(uint64_t environment);
 
 // TSC Control
 void X86_SetTscFrequency(EmuState* state, uint64_t freq);

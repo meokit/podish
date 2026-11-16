@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/adc",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "f44e145f275272b128f416ec5a4c243393aaa09358a8285e51a784e747b7d51c",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/adc.bin",
+  "binarySha256": "2036ceddbd933c26005dee7e2a8d682d258c471a321386614322317a645ab0fc",
+  "haltAddresses": [
+    65574
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x00000000fffffffe",
+      "RBX": "0x0000000000000001"
+    },
+    "Mode": "32BIT"
+  }
+}

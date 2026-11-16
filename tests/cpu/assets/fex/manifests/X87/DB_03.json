@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/DB_03",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "2aeb014e9083f25f78c52e2db40d69622801bbb1aba467213d8cead849b097f2",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/DB_03.bin",
+  "binarySha256": "72f6292ad7652d6b816e095a9ba305c0446145d680a3c910f07454d2212a34de",
+  "haltAddresses": [
+    65561
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x400",
+      "MM7": [
+        "0x8000000000000000",
+        "0x3FFF"
+      ]
+    },
+    "Mode": "32BIT"
+  }
+}

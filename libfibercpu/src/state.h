@@ -103,7 +103,7 @@ struct EmuState {
     LogCallback log_callback = nullptr;
     void* log_userdata = nullptr;
 
-    bool eip_dirty = false;  // External API Set EIP? Warning: only cleared by x86_Run
+    bool eip_dirty = false;  // External API Set EIP; cleared at execution entry.
     // Set when a write targets an executable guest page while exec writes are
     // disallowed. X86_Run consumes this and re-executes the current instruction
     // in a safe single-instruction mode.

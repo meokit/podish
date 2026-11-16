@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/invalid_sqrt_negative",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "c372eb878578da04c9c2676840f7100863bc149a0e3cb7ebabacadf3cc26242d",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/invalid_sqrt_negative.bin",
+  "binarySha256": "063a040cdfb79a27d7caf3e15cb84ca2d93121e85abd7814e81277184de153b7",
+  "haltAddresses": [
+    65557
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

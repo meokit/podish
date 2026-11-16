@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/rep_lods_bug",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "b1fff04bce5dc54ede148a70ed472635743b4b12c5a7df5867ea7fb2f7c1ba38",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/rep_lods_bug.bin",
+  "binarySha256": "22c9411a655fe0208092ae9c432c3d12ec3e50e8d226f31e36d949e5a9171f3e",
+  "haltAddresses": [
+    65587
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x52",
+      "RBX": "0x202",
+      "RCX": "0"
+    },
+    "Mode": "32BIT"
+  }
+}

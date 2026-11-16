@@ -5,11 +5,13 @@
 #endif
 #include <algorithm>
 #include <array>
+#include <cfenv>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include "decoder.h"
 #include "dispatch.h"
 #include "hooks.h"
@@ -18,6 +20,11 @@
 #include "ops.h"
 #include "state.h"
 #include "superopcodes.h"
+
+#if defined(__SSE__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1)
+#include <xmmintrin.h>
+#define FIBERCPU_HOST_SSE 1
+#endif
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -37,6 +44,48 @@ struct X86_MmuHandle {
     mem::MmuCore* core = nullptr;
 };
 
+// SoftFloat's state is already TLS, but it must not retain a previous engine's
+// rounding/precision/flags on a reused worker thread. Stack-scoped restoration
+// also preserves an outer engine when a callback executes another engine.
+class ScopedFloatEnvironment {
+public:
+    explicit ScopedFloatEnvironment(EmuState* state) : state_(state), soft_environment_(f80_save_environment()) {
+#if defined(FIBERCPU_HOST_SSE)
+        host_mxcsr_ = _mm_getcsr();
+#endif
+        host_environment_saved_ = std::fegetenv(&host_environment_) == 0;
+        if (host_environment_saved_) std::fesetenv(FE_DFL_ENV);
+#if defined(FIBERCPU_HOST_SSE)
+        // Native SSE/SIMDe helpers must neither inherit host rounding/DAZ/FTZ
+        // nor deliver the host's unmasked floating-point exceptions.
+        _mm_setcsr(0x1F80);
+#endif
+        f80_sync_to_soft(state_->ctx.fpu_cw, state_->ctx.fpu_sw);
+    }
+
+    ~ScopedFloatEnvironment() {
+        f80_sync_from_soft(&state_->ctx.fpu_cw, &state_->ctx.fpu_sw);
+        f80_restore_environment(soft_environment_);
+        if (host_environment_saved_) std::fesetenv(&host_environment_);
+#if defined(FIBERCPU_HOST_SSE)
+        // Some CRT fenv implementations do not preserve every MXCSR bit.
+        _mm_setcsr(host_mxcsr_);
+#endif
+    }
+
+    ScopedFloatEnvironment(const ScopedFloatEnvironment&) = delete;
+    ScopedFloatEnvironment& operator=(const ScopedFloatEnvironment&) = delete;
+
+private:
+    EmuState* state_;
+    uint32_t soft_environment_;
+    std::fenv_t host_environment_{};
+    bool host_environment_saved_ = false;
+#if defined(FIBERCPU_HOST_SSE)
+    uint32_t host_mxcsr_ = 0;
+#endif
+};
+
 extern "C" {
 
 // ----------------------------------------------------------------------------
@@ -44,7 +93,7 @@ extern "C" {
 // ----------------------------------------------------------------------------
 
 static bool FaultTraceEnabled() {
-    static bool enabled = []() {
+    static const bool enabled = []() {
         const char* v = std::getenv("FIBERISH_TRACE_DECODE_FAULT");
         return v && v[0] != '\0' && std::strcmp(v, "0") != 0;
     }();
@@ -52,7 +101,7 @@ static bool FaultTraceEnabled() {
 }
 
 static bool FatalSignalHandlerEnabled() {
-    static bool enabled = []() {
+    static const bool enabled = []() {
         const char* disable_vars[] = {
             "FIBERCPU_DISABLE_FATAL_SIGNAL_HANDLER",
             "FIBERISH_DISABLE_FATAL_SIGNAL_HANDLER",
@@ -70,6 +119,8 @@ static bool FatalSignalHandlerEnabled() {
 
 static int InternalFaultBridge(void* opaque, uint32_t addr, int is_write) {
     auto* state = static_cast<EmuState*>(opaque);
+    const uint8_t previous_vector = state->fault_vector;
+    const uint32_t previous_address = state->fault_addr;
     state->fault_vector = 14;  // #PF
     state->fault_addr = addr;
     if (FaultTraceEnabled()) {
@@ -77,6 +128,10 @@ static int InternalFaultBridge(void* opaque, uint32_t addr, int is_write) {
     }
     if (state->fault_handler) {
         int res = state->fault_handler(state, addr, is_write, state->fault_userdata);
+        if (res && state->status != EmuStatus::Fault) {
+            state->fault_vector = previous_vector;
+            state->fault_addr = previous_address;
+        }
         if (FaultTraceEnabled()) {
             fprintf(stderr, "[Bridge] Handler returned %d\n", res);
         }
@@ -344,20 +399,22 @@ static void RegisterFatalSignalHandler(int sig) {
 }
 #endif
 
-static bool g_SignalRegistered = false;
-
 // ----------------------------------------------------------------------------
 // Creation / Destruction
 // ----------------------------------------------------------------------------
 
-EmuState* X86_Create() {
-    if (!g_SignalRegistered && FatalSignalHandlerEnabled()) {
+EmuState* X86_Create() { return X86_CreateWithOptions(0); }
+
+EmuState* X86_CreateWithOptions(uint32_t options) {
+    if (!(options & X86_CREATE_NO_FATAL_SIGNAL_HANDLERS) && FatalSignalHandlerEnabled()) {
 #if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
-        RegisterFatalSignalHandler(SIGSEGV);
-        RegisterFatalSignalHandler(SIGILL);
-        RegisterFatalSignalHandler(SIGBUS);
+        static std::once_flag signal_registration;
+        std::call_once(signal_registration, []() {
+            RegisterFatalSignalHandler(SIGSEGV);
+            RegisterFatalSignalHandler(SIGILL);
+            RegisterFatalSignalHandler(SIGBUS);
+        });
 #endif
-        g_SignalRegistered = true;
     }
 
     EmuState* state = new EmuState();
@@ -375,6 +432,7 @@ EmuState* X86_Create() {
     state->ctx.fpu_sw = 0x0000;
     state->ctx.fpu_tw = 0xFFFF;
     state->ctx.fpu_top = 0;
+    state->ctx.mxcsr = 0x1F80;
 
     state->mmu.set_fault_callback(InternalFaultBridge, state);
     state->mmu.set_smc_callback(InternalSmcBridge, state);
@@ -494,6 +552,9 @@ void X86_WriteXMM(EmuState* state, int idx, const uint8_t* val) {
     }
 }
 
+uint32_t X86_GetMXCSR(EmuState* state) { return state->ctx.mxcsr; }
+void X86_SetMXCSR(EmuState* state, uint32_t val) { state->ctx.mxcsr = val; }
+
 // ----------------------------------------------------------------------------
 // FPU Access
 // ----------------------------------------------------------------------------
@@ -501,13 +562,11 @@ void X86_WriteXMM(EmuState* state, int idx, const uint8_t* val) {
 uint16_t X86_GetFCW(EmuState* state) { return state->ctx.fpu_cw; }
 void X86_SetFCW(EmuState* state, uint16_t val) {
     state->ctx.fpu_cw = val;
-    f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
 }
 uint16_t X86_GetFSW(EmuState* state) { return state->ctx.fpu_sw; }
 void X86_SetFSW(EmuState* state, uint16_t val) {
     state->ctx.fpu_sw = val;
     state->ctx.fpu_top = (val >> 11) & 7;
-    f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
 }
 uint16_t X86_GetFTW(EmuState* state) { return state->ctx.fpu_tw; }
 void X86_SetFTW(EmuState* state, uint16_t val) { state->ctx.fpu_tw = val; }
@@ -703,7 +762,12 @@ size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86
 // ----------------------------------------------------------------------------
 
 void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
+    ScopedFloatEnvironment float_environment(state);
     state->status = EmuStatus::Running;
+    state->fault_vector = 0xFF;
+    state->fault_addr = 0;
+    state->eip_dirty = false;
+    state->clear_pending_mem_op();
     state->block_stats = {};
 #if defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
     state->handler_exec_counts.clear();
@@ -717,8 +781,6 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     state->allow_write_exec_page = false;
     state->intercept_exec_write_for_smc = false;
 
-    // Sync FPU state before starting
-    f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
     state->mmu.sync_runtime_tlb_shootdowns();
     [[maybe_unused]] auto runtime_tlb_batch = state->mmu.scoped_runtime_tlb_publish_batch();
 
@@ -822,7 +884,6 @@ void X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     state->current_block_head = nullptr;
 #endif
-    f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
 }
 
 void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats) {
@@ -930,40 +991,40 @@ void X86_EmuYield(EmuState* state) {
 }
 
 int X86_Step(EmuState* state) {
+    ScopedFloatEnvironment float_environment(state);
     state->status = EmuStatus::Running;
+    state->fault_vector = 0xFF;
+    state->fault_addr = 0;
+    state->eip_dirty = false;
+    state->clear_pending_mem_op();
+    state->smc_write_to_exec = false;
     state->last_block = state->mmu.invalid_code_block();
     const bool prev_allow_write_exec_page = state->allow_write_exec_page;
     const bool prev_intercept_exec_write_for_smc = state->intercept_exec_write_for_smc;
     state->allow_write_exec_page = true;
     state->intercept_exec_write_for_smc = true;
 
-    // Sync FPU state before starting
-    f80_sync_to_soft(state->ctx.fpu_cw, state->ctx.fpu_sw);
     state->mmu.sync_runtime_tlb_shootdowns();
     [[maybe_unused]] auto runtime_tlb_batch = state->mmu.scoped_runtime_tlb_publish_batch();
 
-    uint8_t buf[16];
-    for (int i = 0; i < 16; ++i) {
-        auto res = state->mmu.read_no_utlb<uint8_t>(state->ctx.eip + i);
-        buf[i] = res.value_or(0);
-        if (state->status != EmuStatus::Running) {
-            state->allow_write_exec_page = prev_allow_write_exec_page;
-            state->intercept_exec_write_for_smc = prev_intercept_exec_write_for_smc;
-            f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
-            return (int)state->status;
-        }
-    }
-
+    uint8_t buf[15] = {};
     DecodedInstTmp inst{};
     uint16_t handler_index = 0;
-
-    if (!DecodeInstruction(buf, &inst, &handler_index)) {
-        inst.head.SetLength(1);
+    const auto decode_result = FetchAndDecodeInstruction(state, state->ctx.eip, buf, &inst, &handler_index);
+    if (decode_result == InstructionDecodeResult::FetchFault) {
+        state->allow_write_exec_page = prev_allow_write_exec_page;
+        state->intercept_exec_write_for_smc = prev_intercept_exec_write_for_smc;
+        return (int)state->status;
+    }
+    if (decode_result != InstructionDecodeResult::Success) {
+        inst = {};
+        inst.head.SetLength(0);
         HandlerFunc ud2 = g_Handlers[0x10B];
         inst.head.handler = ud2;
+        inst.head.next_eip = state->ctx.eip;
+    } else {
+        FinalizeDecodedInstruction(state, state->ctx.eip, handler_index, &inst.head);
     }
-
-    inst.head.next_eip = state->ctx.eip + inst.head.GetLength();
 
     alignas(16) std::byte op_storage[sizeof(DecodedOp) * 2];
     std::byte* op_storage_bytes = op_storage;
@@ -972,7 +1033,11 @@ int X86_Step(EmuState* state) {
     std::memcpy(head, &inst.head, sizeof(inst.head));
 
     DecodedOp sentinel{};
-    HandlerFunc exit_h = g_ExitHandlersFallthrough[0];
+    // FF /2 and /4 return their target through the dispatch branch argument.
+    // They need the same branch-carrying sentinel used by decoded blocks.
+    const uint8_t subop = (head->modrm >> 3) & 7;
+    const bool indirect_branch = handler_index == 0xFF && (subop == 2 || subop == 4);
+    HandlerFunc exit_h = indirect_branch ? g_ExitHandlersBranch[0] : g_ExitHandlersFallthrough[0];
     sentinel.handler = exit_h;
     sentinel.next_eip = head->next_eip;
     SetNextBlock(&sentinel, state->mmu.invalid_code_block());
@@ -1003,7 +1068,6 @@ int X86_Step(EmuState* state) {
 #endif
     state->allow_write_exec_page = prev_allow_write_exec_page;
     state->intercept_exec_write_for_smc = prev_intercept_exec_write_for_smc;
-    f80_sync_from_soft(&state->ctx.fpu_cw, &state->ctx.fpu_sw);
 
     return (int)state->status;
 }
@@ -1046,6 +1110,23 @@ void X86_SetInterruptHook(EmuState* state, uint8_t vector, fiberish::InterruptHa
 int32_t X86_GetFaultVector(EmuState* state) {
     if (!state) return -1;
     return (state->fault_vector == 0xFF) ? -1 : (int32_t)state->fault_vector;
+}
+
+uint32_t X86_GetFaultAddress(EmuState* state) { return state ? state->fault_addr : 0; }
+
+uint64_t X86_DebugGetFloatEnvironment(void) {
+    uint64_t environment = f80_save_environment();
+#if defined(FIBERCPU_HOST_SSE)
+    environment |= static_cast<uint64_t>(_mm_getcsr()) << 32;
+#endif
+    return environment;
+}
+
+void X86_DebugSetFloatEnvironment(uint64_t environment) {
+    f80_restore_environment(static_cast<uint32_t>(environment));
+#if defined(FIBERCPU_HOST_SSE)
+    _mm_setcsr(static_cast<uint32_t>(environment >> 32));
+#endif
 }
 
 void X86_ResetAllCodeCache(EmuState* state) {

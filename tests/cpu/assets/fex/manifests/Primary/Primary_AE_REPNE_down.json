@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Primary_AE_REPNE_down",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "e6c2747030037ad9ea16009e1215301c6b63b382abc7e61a1d4f5b25c38cf706",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Primary_AE_REPNE_down.bin",
+  "binarySha256": "0234b998cb0df1227a3bf75b89d196fb0b6f57faabe53a45d6827b9bc2fe7d0a",
+  "haltAddresses": [
+    65608
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RCX": "5",
+      "RDI": "0xE000000D"
+    },
+    "Mode": "32BIT"
+  }
+}

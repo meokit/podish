@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "TwoByte/0F_82",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "e130d360e339bae9f50f299c78c7f69efb762d8cab5f67f9d747b9fb78a962b3",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/TwoByte/0F_82.bin",
+  "binarySha256": "726b70b7073868d5a0fa5fcb83293ef3bbe8bab22bfd1eedfa183ea3a5671868",
+  "haltAddresses": [
+    65592
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x41424344"
+    },
+    "Mode": "32BIT"
+  }
+}

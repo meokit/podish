@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Primary_CE",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "ab26153c547f52df721634607c2554c4e94e41c8915cd623ead2e1e6f29681b2",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Primary_CE.bin",
+  "binarySha256": "a732f09d6f0853700f25155247888678a925bc3b4a06662804ce32ef75bce7a6",
+  "haltAddresses": [
+    65548
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {},
+    "Mode": "32BIT"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/DA_06",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "483fba31f2755dbd527611a354d6f9766abca770a311b7b16ba0e97d0e1d173c",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/DA_06.bin",
+  "binarySha256": "293b83c418859a3c4507dd06354415b751c9d7be0aa135eb609d5f1b151fdad9",
+  "haltAddresses": [
+    65593
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "XMM0": [
+        "0x8000000000000000",
+        "0x3FFE"
+      ],
+      "XMM1": [
+        "0x8000000000000000",
+        "0xBFFE"
+      ]
+    },
+    "Mode": "32BIT"
+  }
+}

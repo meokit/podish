@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/invalid_infinity_ops",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "7cc3d5a1a15795f8de04492353a8888950e6671ae566ce8e176121a9a6752b2c",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/invalid_infinity_ops.bin",
+  "binarySha256": "3937a786da73d433d92060eab4587fe19e1a1ace18746913a5636a3cfd2f3be4",
+  "haltAddresses": [
+    65561
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

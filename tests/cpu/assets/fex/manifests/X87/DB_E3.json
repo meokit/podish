@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/DB_E3",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "1baeb530775596fd7bef951ea990e6e2d082987ba35e5b53454c5ef32cf4532d",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/DB_E3.bin",
+  "binarySha256": "9fb5f0ac3ecb5fbcb2eb05a25538549e15d2bd3386e64068ebe828bfad2ec2bb",
+  "haltAddresses": [
+    65559
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x037F"
+    },
+    "Mode": "32BIT"
+  }
+}

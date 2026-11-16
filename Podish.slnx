@@ -4,6 +4,7 @@
   <Project Path="Fiberish.SilkFS.Tests/Fiberish.SilkFS.Tests.csproj" />
   <Project Path="Fiberish.Tests/Fiberish.Tests.csproj" />
   <Project Path="Fiberish.X86/Fiberish.X86.csproj" />
+  <Project Path="Fiberish.X86.Tests/Fiberish.X86.Tests.csproj" />
   <Project Path="Podish.Benchmarks/Podish.Benchmarks.csproj" />
   <Project Path="Podish.Browser/Podish.Browser.csproj" />
   <Project Path="Podish.Cli/Podish.Cli.csproj" />

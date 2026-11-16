@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "Primary/Loops",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "7800cfb4708631ad39fac43698ea64632a90a6c7e545745dd78076db7505f9d4",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/Primary/Loops.bin",
+  "binarySha256": "e5379585b64a3dbd8466b9fe28c43b3ba9fe004e726f5ae67f6896c15dddfe7e",
+  "haltAddresses": [
+    65567
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "Mode": "32BIT"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/InvertedCarrySet",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "4996a60a70db87f2ad8dc18e9dec832156f86c93a771500256f162e34b8f3e3f",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/InvertedCarrySet.bin",
+  "binarySha256": "0d34365c4b87ff1004f1abe3eeebbe9d9ea72e1dda1ddf34b042802d2a322f04",
+  "haltAddresses": [
+    65575,
+    65581
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

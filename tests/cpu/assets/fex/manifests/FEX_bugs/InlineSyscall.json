@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/InlineSyscall",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "f099e2e836ad6757718a312e946f42a50bd06072906e65c30290b4993c41d7fb",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/InlineSyscall.bin",
+  "binarySha256": "04d90f25d67cd44e0a8ecb30e75b534c45d59318298564094b0d4abb966c5002",
+  "haltAddresses": [
+    65567
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {},
+    "Mode": "32BIT"
+  }
+}

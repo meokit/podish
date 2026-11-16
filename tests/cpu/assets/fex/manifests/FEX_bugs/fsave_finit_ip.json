@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/fsave_finit_ip",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "538d45f137ca26d50043ca5e9f63c41365a1cd979a1b919c7fb0fe1342ddcd6b",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/fsave_finit_ip.bin",
+  "binarySha256": "cd567636df32ac8423418dbf34e7a2b0561ee11d55399867c62ad7942c86e96c",
+  "haltAddresses": [
+    65583
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0"
+    },
+    "Mode": "32BIT"
+  }
+}

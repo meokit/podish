@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/invalid_div_zero",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "65af2f4f48a48f6480c1660fc54f99d9b3126ef48d5c54e3def7aaeeb60c9368",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/invalid_div_zero.bin",
+  "binarySha256": "ddafa0cbac7b218b7c95c069ba003f4020f2faebf4774911a745cbeb9caa6b61",
+  "haltAddresses": [
+    65557
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

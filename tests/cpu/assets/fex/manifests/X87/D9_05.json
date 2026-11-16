@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/D9_05",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "c7f29dbca72279114350ea22e409b2026197215b902a98f4c04a65b33f32108a",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/D9_05.bin",
+  "binarySha256": "abf0365499275209fdbd4eecfb248b708a5e0817ac0fbbe12d600211eb0770d6",
+  "haltAddresses": [
+    65552
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "Mode": "32BIT"
+  }
+}

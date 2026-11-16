@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/IMUL_garbagedata",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "e8ad0616692363611bee133b88bbdbf525d08daacdc4718a3825d33d8caff919",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/IMUL_garbagedata.bin",
+  "binarySha256": "e2f2ad00666e5100c0cc103c2295ad0054f036295f0b2a55e7fbc56717e6b7aa",
+  "haltAddresses": [
+    65598
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x000000007dbf2800",
+      "RDX": "0x0000000000000000",
+      "RBX": "0x000000000000004f",
+      "RCX": "0x000000000000004f",
+      "RBP": "0x0000000000009e4f",
+      "RSI": "0x0000000000009e4f",
+      "RSP": "0x000000000000004f"
+    },
+    "Mode": "32BIT"
+  }
+}

@@ -1,0 +1,2350 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/FEX-Emu/FEX",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "license": "MIT",
+  "adaptation": "BITS 32; org 10000h; mov eax,0x17; four NOP bytes replacing FEX Linux ds/es selector loads; unchanged upstream body; ret. Preserve original instruction addresses and flat zero-base segments.",
+  "nasmVersion": "3.01",
+  "tests": [
+    {
+      "id": "FEX_bugs/GOT_calculation",
+      "source": "unittests/32Bit_ASM/FEX_bugs/GOT_calculation.asm",
+      "sourceSha256": "8bd539010dbdf32b528aec8f27250791dcdedc0a36c3a9124ea63505b2070d13",
+      "manifest": "manifests/FEX_bugs/GOT_calculation.json",
+      "manifestSha256": "6a79798cf944f07120e8ae1a2e5d3f146cfd1eb76696aafa841715e04c4e3ca2",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "FEX_bugs/IMUL_garbagedata",
+      "source": "unittests/32Bit_ASM/FEX_bugs/IMUL_garbagedata.asm",
+      "sourceSha256": "e8ad0616692363611bee133b88bbdbf525d08daacdc4718a3825d33d8caff919",
+      "manifest": "manifests/FEX_bugs/IMUL_garbagedata.json",
+      "manifestSha256": "5d74fc3042baa5f66a5367895e653128743de42d56f97afbcb5ba0ec991802e1",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "FEX_bugs/InlineSyscall",
+      "source": "unittests/32Bit_ASM/FEX_bugs/InlineSyscall.asm",
+      "sourceSha256": "f099e2e836ad6757718a312e946f42a50bd06072906e65c30290b4993c41d7fb",
+      "manifest": "manifests/FEX_bugs/InlineSyscall.json",
+      "manifestSha256": "db285d305fd3b664f5a1c0bd3e8da1bcde9ae2b411209d50365ce276e06f386e",
+      "status": "blocked",
+      "reason": "Requires the Linux int 0x80 syscall ABI; the CPU-only sandbox has no OS syscall handler."
+    },
+    {
+      "id": "FEX_bugs/InvertedCarrySet",
+      "source": "unittests/32Bit_ASM/FEX_bugs/InvertedCarrySet.asm",
+      "sourceSha256": "4996a60a70db87f2ad8dc18e9dec832156f86c93a771500256f162e34b8f3e3f",
+      "manifest": "manifests/FEX_bugs/InvertedCarrySet.json",
+      "manifestSha256": "df1e167a609fb03696eae9e0131f65ba59658b360b989a31c4d5e7f499910655",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "FEX_bugs/LoopAddressSizeCheck",
+      "source": "unittests/32Bit_ASM/FEX_bugs/LoopAddressSizeCheck.asm",
+      "sourceSha256": "da8113037bd6e58207f96b3cb06d091e06f76eb7cc8d8b5c6f0a6e01e4e4b533",
+      "manifest": "manifests/FEX_bugs/LoopAddressSizeCheck.json",
+      "manifestSha256": "da6a7ffcbceab8bd8cf63f8d6431f360216beca96ad89f83aa915b7db6409322",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "FEX_bugs/SignExtendBug",
+      "source": "unittests/32Bit_ASM/FEX_bugs/SignExtendBug.asm",
+      "sourceSha256": "070112cf800abcd1f0ac0b1d9099a23b44a209923e5b32b8f5974548bbae6b8c",
+      "manifest": "manifests/FEX_bugs/SignExtendBug.json",
+      "manifestSha256": "5000eb4b80a9c4152276429eb17b8386398034f76869ddbeb5d115bab0db8389",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "FEX_bugs/SubAddrBug",
+      "source": "unittests/32Bit_ASM/FEX_bugs/SubAddrBug.asm",
+      "sourceSha256": "ad2ea37ac0cb4ce13cb25721cacf9ca37e2da3104e68ef49c8aa83d9599387bf",
+      "manifest": "manifests/FEX_bugs/SubAddrBug.json",
+      "manifestSha256": "4d05134a12e6e632ebabccabfa90541ae93574674404bd1ec75d7b648049e51c",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "FEX_bugs/TelemetryFlags",
+      "source": "unittests/32Bit_ASM/FEX_bugs/TelemetryFlags.asm",
+      "sourceSha256": "5038285dad6ca7db5b075f66c8f17ae881601c80997fd34d3cc194bd4aa0e147",
+      "manifest": "manifests/FEX_bugs/TelemetryFlags.json",
+      "manifestSha256": "e081406f96d0ee4be39a9293916fb2e3eb7f0f459a8085964780b8d388057038",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "FEX_bugs/VEXW_Bug",
+      "source": "unittests/32Bit_ASM/FEX_bugs/VEXW_Bug.asm",
+      "sourceSha256": "e33810721801a6752ab4511f8d4b8a7362effefefb44ff4408a649f82fdca428",
+      "manifest": "manifests/FEX_bugs/VEXW_Bug.json",
+      "manifestSha256": "e9cb64b0ce181f949950570228da3993b22b63c9566cb681640d11d8f720d5e3",
+      "status": "blocked",
+      "reason": "Uses AVX/FMA VEX instructions (not declared in upstream HostFeatures); the sandbox has no AVX/FMA register/execution contract."
+    },
+    {
+      "id": "FEX_bugs/adc",
+      "source": "unittests/32Bit_ASM/FEX_bugs/adc.asm",
+      "sourceSha256": "f44e145f275272b128f416ec5a4c243393aaa09358a8285e51a784e747b7d51c",
+      "manifest": "manifests/FEX_bugs/adc.json",
+      "manifestSha256": "74f8c716baa3e5511ad7c87630a15f60668d37b1ba2934fdae9a3023bc184e45",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "FEX_bugs/fsave_finit_ip",
+      "source": "unittests/32Bit_ASM/FEX_bugs/fsave_finit_ip.asm",
+      "sourceSha256": "538d45f137ca26d50043ca5e9f63c41365a1cd979a1b919c7fb0fe1342ddcd6b",
+      "manifest": "manifests/FEX_bugs/fsave_finit_ip.json",
+      "manifestSha256": "344fea5e4b2418bc5bef6c4e8b596d369193d36339ec2b2ed9ee69d89572afd9",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "FEX_bugs/fsave_rstore_ip",
+      "source": "unittests/32Bit_ASM/FEX_bugs/fsave_rstore_ip.asm",
+      "sourceSha256": "c07cd32b2e4a6aa323e4f61f5ca677f0065e6d67933f1f6c743df605972ef0c7",
+      "manifest": "manifests/FEX_bugs/fsave_rstore_ip.json",
+      "manifestSha256": "63b11e71dc068afe08420466aaaa10d395b2b491fe7211ec07b6a81e86db14c1",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "FEX_bugs/fxsave_rstore_ip",
+      "source": "unittests/32Bit_ASM/FEX_bugs/fxsave_rstore_ip.asm",
+      "sourceSha256": "3535ee4dcc92822e19bc3b5a252f5a0049b0e89b61b74af10af59a07ef0b3a51",
+      "manifest": "manifests/FEX_bugs/fxsave_rstore_ip.json",
+      "manifestSha256": "700ac0e9a1413ea98761e6ad4948b5d2301843bf7713b44d6de1be0b464022f9",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "FEX_bugs/rep_lods_bug",
+      "source": "unittests/32Bit_ASM/FEX_bugs/rep_lods_bug.asm",
+      "sourceSha256": "b1fff04bce5dc54ede148a70ed472635743b4b12c5a7df5867ea7fb2f7c1ba38",
+      "manifest": "manifests/FEX_bugs/rep_lods_bug.json",
+      "manifestSha256": "0f52fbd38213a29a9bcead7ad3d1f9738e783d3f58b0304e2435e262520461d4",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "FEX_bugs/repne_bsr_bsf",
+      "source": "unittests/32Bit_ASM/FEX_bugs/repne_bsr_bsf.asm",
+      "sourceSha256": "ed4ea3d64831f95df372d1cbb7bd2c67b89df27a45dd6b83d1e5e9ef43493af8",
+      "manifest": "manifests/FEX_bugs/repne_bsr_bsf.json",
+      "manifestSha256": "fe2e967603dcabfe66c929279f61cc0f5fd86ede10ce33b2fcf8215d01ea6e35",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "FEX_bugs/x87_FIP",
+      "source": "unittests/32Bit_ASM/FEX_bugs/x87_FIP.asm",
+      "sourceSha256": "6c95236e36149007120f8e520455f15d01588a8c1451c6f4eaa17187747649c8",
+      "manifest": "manifests/FEX_bugs/x87_FIP.json",
+      "manifestSha256": "dae60844977606cf2d8c30cd52cc6600cf0ec0200c55916c83ff548bac7fc05a",
+      "status": "blocked",
+      "reason": "Unsupported FEX-specific Env settings: FEX_JITFEATURES, FEX_X87REDUCEDPRECISION"
+    },
+    {
+      "id": "FEX_bugs/x87_FIP_reduced",
+      "source": "unittests/32Bit_ASM/FEX_bugs/x87_FIP_reduced.asm",
+      "sourceSha256": "4df3ffcbc11019f3fa1bf9d1e935a28c0b134a7ccad3cb1e23331af92f629f12",
+      "manifest": "manifests/FEX_bugs/x87_FIP_reduced.json",
+      "manifestSha256": "12648e9d9e4001dd00b026bc7fe6189ee13baaa4fac346e469903bde3d114948",
+      "status": "blocked",
+      "reason": "Unsupported FEX-specific Env settings: FEX_JITFEATURES, FEX_X87REDUCEDPRECISION"
+    },
+    {
+      "id": "FEX_bugs/x87_unordered_cmp_fix_32",
+      "source": "unittests/32Bit_ASM/FEX_bugs/x87_unordered_cmp_fix_32.asm",
+      "sourceSha256": "26e7bf826c9440bea204ab98688c9a3016ee4577e09b49fbf79df3f57197819e",
+      "manifest": "manifests/FEX_bugs/x87_unordered_cmp_fix_32.json",
+      "manifestSha256": "a7e999622f9f0e41f11391a1b9767d4e7953a47bd9292582f27a1f503323dd05",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Loops",
+      "source": "unittests/32Bit_ASM/Primary/Loops.asm",
+      "sourceSha256": "7800cfb4708631ad39fac43698ea64632a90a6c7e545745dd78076db7505f9d4",
+      "manifest": "manifests/Primary/Loops.json",
+      "manifestSha256": "5b121795d2b1577b46acabefde1a1a34f3f66c2d16ab2240217de97004747c46",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Pop_Segments",
+      "source": "unittests/32Bit_ASM/Primary/Pop_Segments.asm",
+      "sourceSha256": "65a527fbce8db6c69a2a71cec6b4dccd3607fe0c83dfb813b90e7773cb6b94f8",
+      "manifest": "manifests/Primary/Pop_Segments.json",
+      "manifestSha256": "5fc70cfd40f80c0a8c15e16d9461cb4475dd38d3e9dcee81f4b0ac00ff80bf4f",
+      "status": "blocked",
+      "reason": "Explicit segment-selector operations require a descriptor/selector model; only flat zero-base segments are adapted."
+    },
+    {
+      "id": "Primary/Primary_00",
+      "source": "unittests/32Bit_ASM/Primary/Primary_00.asm",
+      "sourceSha256": "8b6109b42d313c4f4250662af1f10bdc98b6b536f6601a7a83a76860cbfcf0fd",
+      "manifest": "manifests/Primary/Primary_00.json",
+      "manifestSha256": "bfc0e12d8f3b973d2f4b8be52eb533bf1b711a11dcdf67fac283622134dc1765",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_00_2",
+      "source": "unittests/32Bit_ASM/Primary/Primary_00_2.asm",
+      "sourceSha256": "5f07502745dd09a189c94f8178e857c1a3fe9ec69dfd4ae306e74cbe62b0a5f8",
+      "manifest": "manifests/Primary/Primary_00_2.json",
+      "manifestSha256": "2f08c4ec3e8340c6cf0ea9436d184bfe9711466344b210172dc691a6b3d04fed",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_00_3",
+      "source": "unittests/32Bit_ASM/Primary/Primary_00_3.asm",
+      "sourceSha256": "213fd8ec1b43c106e16f400b61ecf318fb7b10905518af3361c178251425c6f8",
+      "manifest": "manifests/Primary/Primary_00_3.json",
+      "manifestSha256": "d5a84ca0d33330f17ed3a21d0c636fcd2781b11c14cfc01152ce74fb03cca268",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_27",
+      "source": "unittests/32Bit_ASM/Primary/Primary_27.asm",
+      "sourceSha256": "b62ba97c19b27803e2d55362ce1816255dfbba4cfc820804e8b0b0aa2a2df67c",
+      "manifest": "manifests/Primary/Primary_27.json",
+      "manifestSha256": "28bd3101610c4b53d26e8c653eb957f28efc97886c7e70a4b1e7c5989572b268",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_2F",
+      "source": "unittests/32Bit_ASM/Primary/Primary_2F.asm",
+      "sourceSha256": "22647f824ea3d35a604c423e401f36053e9cbe02c6e1a2237c6d2bab3b60fc7b",
+      "manifest": "manifests/Primary/Primary_2F.json",
+      "manifestSha256": "9750057dfbffc879a61ea6d3a2ee940388de4af807d7310ed8c268525481dfd8",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_37",
+      "source": "unittests/32Bit_ASM/Primary/Primary_37.asm",
+      "sourceSha256": "0abc866c66ed73bcdd9ff3853ed7291e2c936d1d8ec2bae9837695778972e937",
+      "manifest": "manifests/Primary/Primary_37.json",
+      "manifestSha256": "7560206dab1c101e9e3dce493a6e5526da63024f262fcb59e22b83fa94acfd4b",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_3F",
+      "source": "unittests/32Bit_ASM/Primary/Primary_3F.asm",
+      "sourceSha256": "1ec0c6b79901d0adb5c72b2901f8a073b0bede09de71f4b9077edae674596419",
+      "manifest": "manifests/Primary/Primary_3F.json",
+      "manifestSha256": "0a32d557beaaa84833620e9a8c52cda5b516396237dc3958d4aa616dbbad5103",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_60",
+      "source": "unittests/32Bit_ASM/Primary/Primary_60.asm",
+      "sourceSha256": "c8485e8be4430584919569759c821073af423a7b69bd207dbb81a74dfb40b3c4",
+      "manifest": "manifests/Primary/Primary_60.json",
+      "manifestSha256": "42e01b813552a5a6d88b0cd172062a91819bb7df93da6fd0fd893301c9b25964",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_60_2",
+      "source": "unittests/32Bit_ASM/Primary/Primary_60_2.asm",
+      "sourceSha256": "1d6ec53fede948f9279d6682f32ef285fb85f3c205cf95b235e814ac11de8ee0",
+      "manifest": "manifests/Primary/Primary_60_2.json",
+      "manifestSha256": "3f75afc4579793fc7a95b3fb32aa8e14091d69e8a9e7043355c6a4337ff852f6",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_61",
+      "source": "unittests/32Bit_ASM/Primary/Primary_61.asm",
+      "sourceSha256": "130a569ccc2938c080a99db9457e9713a4e39fa523c8fd10e1d654ad93c47422",
+      "manifest": "manifests/Primary/Primary_61.json",
+      "manifestSha256": "292fa731887e4a89db209a498eb2322f0ea0915ea23298b1eca2e243ffe12ae6",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_61_2",
+      "source": "unittests/32Bit_ASM/Primary/Primary_61_2.asm",
+      "sourceSha256": "67f095d7aef0096f46ccb046ffc902f4b7b5a394f625860c6b8c19f23f2113f7",
+      "manifest": "manifests/Primary/Primary_61_2.json",
+      "manifestSha256": "d464e7082642cb913364c04ac9faaa634d361b356950c907ecb1f112ee1cb293",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_8C",
+      "source": "unittests/32Bit_ASM/Primary/Primary_8C.asm",
+      "sourceSha256": "3a7729dc0ac39000a4dfcd9baeb5a9c791fd8847f6947f9b72afd8c1692ae365",
+      "manifest": "manifests/Primary/Primary_8C.json",
+      "manifestSha256": "2192bb196008bb6d7640d15272b46b6df2453fe9607fff773effbb821800e76f",
+      "status": "blocked",
+      "reason": "Explicit segment-selector operations require a descriptor/selector model; only flat zero-base segments are adapted."
+    },
+    {
+      "id": "Primary/Primary_8C_2",
+      "source": "unittests/32Bit_ASM/Primary/Primary_8C_2.asm",
+      "sourceSha256": "75b60d460721fb4dd3f640437326de20adbc393683e642d2e933d26df49680f6",
+      "manifest": "manifests/Primary/Primary_8C_2.json",
+      "manifestSha256": "dd21f1518bbc382378a4e71aef2c728e71b1359e91e7d3e7cc6a0396ca638a1b",
+      "status": "blocked",
+      "reason": "Explicit segment-selector operations require a descriptor/selector model; only flat zero-base segments are adapted."
+    },
+    {
+      "id": "Primary/Primary_8D",
+      "source": "unittests/32Bit_ASM/Primary/Primary_8D.asm",
+      "sourceSha256": "3197aa9b7ac9d8d58d0cc425dbb7fd616e373a602c7b3d66811a6652c45ccbaf",
+      "manifest": "manifests/Primary/Primary_8D.json",
+      "manifestSha256": "ba2a698072a27c444f5865cbfcc41a1f1c2382812c5e0a19e9440bc7a417fec9",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_A0",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A0.asm",
+      "sourceSha256": "7594abbc5750df4a7697f19d6edd80663307e2aefe7f531d8f43a2ff5bdf7faa",
+      "manifest": "manifests/Primary/Primary_A0.json",
+      "manifestSha256": "144a87a119ca2a674b811ff71530a06b902af76ef1160d5eb93d18356f6f8a0b",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_A2",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A2.asm",
+      "sourceSha256": "dbfa716022cc4ca4cc066fd9769356eaccd39b3e9e25955f628ec6f1541e5357",
+      "manifest": "manifests/Primary/Primary_A2.json",
+      "manifestSha256": "185250e120e8d44f43eeb3030603e2d2823fd0e75bd29ef616cb4521f96c52d3",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_A6",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A6.asm",
+      "sourceSha256": "1eb7c3cdb388fa4ade704331ba301a007d074e546dc2277f43623c8325e17a34",
+      "manifest": "manifests/Primary/Primary_A6.json",
+      "manifestSha256": "5da9a91c0a2040691b2ae2ce2448b60196cfa7c74b4eca8660fada5cd9cd0493",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_A6_REP",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A6_REP.asm",
+      "sourceSha256": "aea11aa612c33ad109280338d712481cfb3691fbfeb01336a2e797d3887ef478",
+      "manifest": "manifests/Primary/Primary_A6_REP.json",
+      "manifestSha256": "c0849f828cc84efef1038ae94e77fb1a41026003dc7ee54ee6183b2907365387",
+      "status": "blocked",
+      "reason": "Explicit segment-selector operations require a descriptor/selector model; only flat zero-base segments are adapted."
+    },
+    {
+      "id": "Primary/Primary_A6_REPNE",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A6_REPNE.asm",
+      "sourceSha256": "04681b36efe80ce37c822cc11c8fbbed2bd6c613b41ab491ba92a2bb410bb756",
+      "manifest": "manifests/Primary/Primary_A6_REPNE.json",
+      "manifestSha256": "912fb876a5c979740e487c52f05756ec6b99d905f268ace3381826c5be45228c",
+      "status": "blocked",
+      "reason": "Explicit segment-selector operations require a descriptor/selector model; only flat zero-base segments are adapted."
+    },
+    {
+      "id": "Primary/Primary_A6_REPNE_Equal",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A6_REPNE_Equal.asm",
+      "sourceSha256": "33805ae628ac20d2c9eb225807979aa2fa56169d2f4f79e5340c5382a9c6cd2d",
+      "manifest": "manifests/Primary/Primary_A6_REPNE_Equal.json",
+      "manifestSha256": "c108aff9ce14d8d48e267a8fb7cf66035058fe24543a61e8462b6ba1e91a2096",
+      "status": "blocked",
+      "reason": "Explicit segment-selector operations require a descriptor/selector model; only flat zero-base segments are adapted."
+    },
+    {
+      "id": "Primary/Primary_A6_REP_Equal",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A6_REP_Equal.asm",
+      "sourceSha256": "5358f8729d911951181dd016a34f6d1a7ac190ede2b203d81c4792820a3eaa53",
+      "manifest": "manifests/Primary/Primary_A6_REP_Equal.json",
+      "manifestSha256": "b83b2ec111815bb2c9dc9ca2b6b3327f6f1373d08c0276e9606b8b5de329353a",
+      "status": "blocked",
+      "reason": "Explicit segment-selector operations require a descriptor/selector model; only flat zero-base segments are adapted."
+    },
+    {
+      "id": "Primary/Primary_A6_REP_Smaller",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A6_REP_Smaller.asm",
+      "sourceSha256": "50555bfaf4181a9c097dbca809d6f307a4db0dd298e3d16b0f3d0fd3993370f5",
+      "manifest": "manifests/Primary/Primary_A6_REP_Smaller.json",
+      "manifestSha256": "c455da6d3e177465c93744aeeb175049b27e8dba1ac8ba571b2de5ef00daca72",
+      "status": "blocked",
+      "reason": "Explicit segment-selector operations require a descriptor/selector model; only flat zero-base segments are adapted."
+    },
+    {
+      "id": "Primary/Primary_A6_REP_down",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A6_REP_down.asm",
+      "sourceSha256": "edec10d9b14f87dba902f27c0508aacc540765d2257f9b32887c040af3892d3e",
+      "manifest": "manifests/Primary/Primary_A6_REP_down.json",
+      "manifestSha256": "0ac85519985298166dea215bcaab4637c208e2a369a26a639dd43cc5f4d1558c",
+      "status": "blocked",
+      "reason": "Explicit segment-selector operations require a descriptor/selector model; only flat zero-base segments are adapted."
+    },
+    {
+      "id": "Primary/Primary_A6_REP_down_Equal",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A6_REP_down_Equal.asm",
+      "sourceSha256": "fc10dd4edf506c17bf6afd9e9efbf330ae67b26dc5d17f65357dcb902ce3e974",
+      "manifest": "manifests/Primary/Primary_A6_REP_down_Equal.json",
+      "manifestSha256": "8fef6a2ea2c803222a684f7b14ec27cdb39dd935ea2983e0f522235c919eb359",
+      "status": "blocked",
+      "reason": "Explicit segment-selector operations require a descriptor/selector model; only flat zero-base segments are adapted."
+    },
+    {
+      "id": "Primary/Primary_A6_down",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A6_down.asm",
+      "sourceSha256": "127ea4f8b67f6f114ad6fd38c2c598bd1a971b496bc000124f71d706553595b6",
+      "manifest": "manifests/Primary/Primary_A6_down.json",
+      "manifestSha256": "635a34b2de4a98d783316bc1c26522b10c8978d90888786741a252f9477c0128",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_A7_dword",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A7_dword.asm",
+      "sourceSha256": "5c22366a8bad173165e98a82dc72135618fa5f9d2ce60ef5c3598b126e063b03",
+      "manifest": "manifests/Primary/Primary_A7_dword.json",
+      "manifestSha256": "d0ae6620f8da5bf7b232b68c564a34ae829d2b776eeb58e0615c38bdada4f378",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_A7_dword_down",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A7_dword_down.asm",
+      "sourceSha256": "d6776bf55d1e4aefcc3fcf91e2cb776fc5eaf1bcd69f15fa69a5f62dbda6204a",
+      "manifest": "manifests/Primary/Primary_A7_dword_down.json",
+      "manifestSha256": "9a467da9ae0bf56550d37428db91ad2942d573a2b176ea3f31d9998faf56269e",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_A7_word",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A7_word.asm",
+      "sourceSha256": "68862fea3202f9de339dc9c55c50981a0d5d1fe9ac8866c781ccacb85affdfc5",
+      "manifest": "manifests/Primary/Primary_A7_word.json",
+      "manifestSha256": "c159e63c774a7ad13df5c344b650b1aaad18b6b606f2baaa12a54e31835dae7b",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_A7_word_down",
+      "source": "unittests/32Bit_ASM/Primary/Primary_A7_word_down.asm",
+      "sourceSha256": "f5be7cfd1a29a0f294467e26a806860977386785f0c9487225877ba337318958",
+      "manifest": "manifests/Primary/Primary_A7_word_down.json",
+      "manifestSha256": "8ef160a13d80265548019db13d17e66a057bc1dde9ee72cc2d5de66bca09430e",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_AE",
+      "source": "unittests/32Bit_ASM/Primary/Primary_AE.asm",
+      "sourceSha256": "2eb22c355d5807f5862a356fec7eaa6c12229cd32b5f6147f934fa2d3e4deaa0",
+      "manifest": "manifests/Primary/Primary_AE.json",
+      "manifestSha256": "1a942d1543383ec1cc3fbdd62bc9e0af49aff60b86e0154b1e7ef3605e37de0e",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_AE_REP",
+      "source": "unittests/32Bit_ASM/Primary/Primary_AE_REP.asm",
+      "sourceSha256": "b03d4ba2d5c2467867750e860455e7600bff4ee353b17dd3d8484a4d8c2b003c",
+      "manifest": "manifests/Primary/Primary_AE_REP.json",
+      "manifestSha256": "4450d344589c5ab21130654545f9db8132765a3a3fa4edef5ec9a7178a4b8777",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_AE_REPNE",
+      "source": "unittests/32Bit_ASM/Primary/Primary_AE_REPNE.asm",
+      "sourceSha256": "ea71c9590f42a25670ac05769844f889cf82bcc307286a33115c8eaec63efcc8",
+      "manifest": "manifests/Primary/Primary_AE_REPNE.json",
+      "manifestSha256": "74b603cd02f17c36871dae5df6ba36bee5e58a1adb458e2bdc27ea1439d3ba54",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_AE_REPNE_down",
+      "source": "unittests/32Bit_ASM/Primary/Primary_AE_REPNE_down.asm",
+      "sourceSha256": "e6c2747030037ad9ea16009e1215301c6b63b382abc7e61a1d4f5b25c38cf706",
+      "manifest": "manifests/Primary/Primary_AE_REPNE_down.json",
+      "manifestSha256": "ab98210166602986a0cf6a78bca1427615f0bff936d18944655db370c42ac113",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_AE_REP_down",
+      "source": "unittests/32Bit_ASM/Primary/Primary_AE_REP_down.asm",
+      "sourceSha256": "94a2751fcbf34e4104c7a3855e2c3ad69e6eb47ad8c3464d592cfbe900a0a33f",
+      "manifest": "manifests/Primary/Primary_AE_REP_down.json",
+      "manifestSha256": "d7a6724316b106f68b7d3b19e22d24a8cfcfb7d671bd19c931a2ba85bee37212",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_AF_REP_dword",
+      "source": "unittests/32Bit_ASM/Primary/Primary_AF_REP_dword.asm",
+      "sourceSha256": "b1acf57e658d9b51406279ce6a31b903be940d285eafb3daf0cba5f3ce1eed59",
+      "manifest": "manifests/Primary/Primary_AF_REP_dword.json",
+      "manifestSha256": "8ea56998b8e155035d95d2f524232dcf62868a955e8f2af95347a3f77e712c63",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_AF_REP_word",
+      "source": "unittests/32Bit_ASM/Primary/Primary_AF_REP_word.asm",
+      "sourceSha256": "9764fc4f170936e9e6806ba8c4fa25710c0ee70d36c4fab825bfe08b951cbe3c",
+      "manifest": "manifests/Primary/Primary_AF_REP_word.json",
+      "manifestSha256": "8644dab46e847504cd569ec8ea90995f5581da39d5be8724cf6bd713518351f6",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_C9",
+      "source": "unittests/32Bit_ASM/Primary/Primary_C9.asm",
+      "sourceSha256": "c89bc05cc4983477ba8dcad4d108f9ec6626c6e166d2e8f89947ca06b12a3f1c",
+      "manifest": "manifests/Primary/Primary_C9.json",
+      "manifestSha256": "5a439ae9bb4e40c85ef65310db8f04eef139c2e3697e58504ba6458450f6f52d",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_CE",
+      "source": "unittests/32Bit_ASM/Primary/Primary_CE.asm",
+      "sourceSha256": "ab26153c547f52df721634607c2554c4e94e41c8915cd623ead2e1e6f29681b2",
+      "manifest": "manifests/Primary/Primary_CE.json",
+      "manifestSha256": "dcfba912f83005154004a2c41d8e9438a3591e25d1a877d2e9ca25f627c20e6f",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_CF",
+      "source": "unittests/32Bit_ASM/Primary/Primary_CF.asm",
+      "sourceSha256": "a760a2772ab2f93d78080cb72da4a222e0fb89111cec4e3dc29a36bd43ab77a1",
+      "manifest": "manifests/Primary/Primary_CF.json",
+      "manifestSha256": "e75e54129a30251e32d9a86996932b03c1b904740646c606f44047e1337cf372",
+      "status": "blocked",
+      "reason": "IRET requires validating/loading the hard-coded Linux CS selector and protection state; the sandbox models segment bases, not descriptors."
+    },
+    {
+      "id": "Primary/Primary_D4",
+      "source": "unittests/32Bit_ASM/Primary/Primary_D4.asm",
+      "sourceSha256": "cca61a2eadd9f25ddb9c3d63e9147ed142ebb7ea33d33b91843c0b7f0649f7dc",
+      "manifest": "manifests/Primary/Primary_D4.json",
+      "manifestSha256": "379fd02376e9a2f65d347c829eafd4da99ee9b23491c67cc65051393340a6c5b",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_D5",
+      "source": "unittests/32Bit_ASM/Primary/Primary_D5.asm",
+      "sourceSha256": "c9c68484a7c800c5ba89352a150a084b5897ebcd98252be01f795d3d057f365b",
+      "manifest": "manifests/Primary/Primary_D5.json",
+      "manifestSha256": "dfe59dfd1180843783cda1d35c32c4520b71b48e54a820bd1a7224ca59f0787e",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_D6",
+      "source": "unittests/32Bit_ASM/Primary/Primary_D6.asm",
+      "sourceSha256": "a52ed04475b391d529ea4513e1f9a1f0751bb6fd1a9b1bb073362f8b32b5ebee",
+      "manifest": "manifests/Primary/Primary_D6.json",
+      "manifestSha256": "21ca6fd5d880fba6989e40c4d77a4bfefc9b5795348e8402aaef63500366934e",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_E3",
+      "source": "unittests/32Bit_ASM/Primary/Primary_E3.asm",
+      "sourceSha256": "077b8ea53aa601ea93a919360882282d5c0ccaa34d51b05b02fb2fdf9591a980",
+      "manifest": "manifests/Primary/Primary_E3.json",
+      "manifestSha256": "12f6929dc287fccb9e113a3930d9d9074de57e750a61e2fdd2a1e0046450484b",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_E8",
+      "source": "unittests/32Bit_ASM/Primary/Primary_E8.asm",
+      "sourceSha256": "653d5ff62e8498da5fdd76d7db2638b87efadf2c2b6bf584ff33859f6df029be",
+      "manifest": "manifests/Primary/Primary_E8.json",
+      "manifestSha256": "70aaa3396efad1bfa917c5f227980c2590d07821a271ce4015ae61da0601e4d1",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_E8_2",
+      "source": "unittests/32Bit_ASM/Primary/Primary_E8_2.asm",
+      "sourceSha256": "75a5b00a945466e1431db9d972769ecc8dc27aba1409cfd562db0179f1f04f5c",
+      "manifest": "manifests/Primary/Primary_E8_2.json",
+      "manifestSha256": "3309cea405bf70b3ccb2a980588bbdb65c2c41e5ba8ea164e8e0b2968771389f",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_E9",
+      "source": "unittests/32Bit_ASM/Primary/Primary_E9.asm",
+      "sourceSha256": "ec03b665df0a1c102618ef384a2b8042a662b0d2f1d852072c8b31d2ace53d23",
+      "manifest": "manifests/Primary/Primary_E9.json",
+      "manifestSha256": "3e11602c183265154cab6508c784848ff0f7e7912a006016f552e93585d69749",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Primary_E9_2",
+      "source": "unittests/32Bit_ASM/Primary/Primary_E9_2.asm",
+      "sourceSha256": "33ed317ab01eb474f46065c401d19930066b3de11a08cf15b23da84088daf056",
+      "manifest": "manifests/Primary/Primary_E9_2.json",
+      "manifestSha256": "8a5effa4a3c632e17ab5b7cc7d2459ad43b98ad2040e6a40d174db0919fcb3fd",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Primary/Push_Segments",
+      "source": "unittests/32Bit_ASM/Primary/Push_Segments.asm",
+      "sourceSha256": "aafea04c52c8fe86617dda36a9a4197478ff97b1e096fecdb49ef354dd5f622c",
+      "manifest": "manifests/Primary/Push_Segments.json",
+      "manifestSha256": "52caee4f5d23ffe5002d7ee1426a5f3c684eb65028b8b50d3f01767156c3d51f",
+      "status": "blocked",
+      "reason": "Explicit segment-selector operations require a descriptor/selector model; only flat zero-base segments are adapted."
+    },
+    {
+      "id": "PrimaryGroup/1_82_00",
+      "source": "unittests/32Bit_ASM/PrimaryGroup/1_82_00.asm",
+      "sourceSha256": "1b52d0f117749865bd80fded65f8be592986d55c7eb5870326cbb18e35fd2f2a",
+      "manifest": "manifests/PrimaryGroup/1_82_00.json",
+      "manifestSha256": "a9c2788cadbcf2afb4acb0e96102db40413dfb4803f14c5fd238dca9f43536de",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "PrimaryGroup/1_82_01",
+      "source": "unittests/32Bit_ASM/PrimaryGroup/1_82_01.asm",
+      "sourceSha256": "7a6b28f5c5c7c1cdd2af88fde26847de52dda60eb28f7c78e23e13295dd9ce7c",
+      "manifest": "manifests/PrimaryGroup/1_82_01.json",
+      "manifestSha256": "ea96d5ab3a65e4d2d7f85d6658269978e4174cdeb098351625831c05e55df0fc",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "PrimaryGroup/1_82_02",
+      "source": "unittests/32Bit_ASM/PrimaryGroup/1_82_02.asm",
+      "sourceSha256": "2bf0b82b2658e7a5facf5908945d757d8dfe95213fbeec5921e53662e378a29d",
+      "manifest": "manifests/PrimaryGroup/1_82_02.json",
+      "manifestSha256": "b9821e908dfc0d0abf3476e27c066ef3d79cb2a9c175570133cf957f5d369987",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "PrimaryGroup/1_82_03",
+      "source": "unittests/32Bit_ASM/PrimaryGroup/1_82_03.asm",
+      "sourceSha256": "a5ecd69894340bed0d6845e3ddb845132d9bd9e9d9663f9db9ac790f24d77493",
+      "manifest": "manifests/PrimaryGroup/1_82_03.json",
+      "manifestSha256": "eacc9b3cb4de099db4b30d51f70eb725749ad2e89b6f2bd02d8adb3a92f953b6",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "PrimaryGroup/1_82_04",
+      "source": "unittests/32Bit_ASM/PrimaryGroup/1_82_04.asm",
+      "sourceSha256": "880f36e163f689f6da2e49982e67cdf411c5588aea13fd0fc4a6c038c7f65d9f",
+      "manifest": "manifests/PrimaryGroup/1_82_04.json",
+      "manifestSha256": "7bc163394cb21d92155aa41e8b8ebd64554cec7a17691ce91c50b7924490e225",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "PrimaryGroup/1_82_05",
+      "source": "unittests/32Bit_ASM/PrimaryGroup/1_82_05.asm",
+      "sourceSha256": "ff58756ee4e026f3255a20b5fcdf6f2daa0381b0d8b88726bc1432e7301408a5",
+      "manifest": "manifests/PrimaryGroup/1_82_05.json",
+      "manifestSha256": "b6b52bd6f416ede7a79aff9ac2b06d1d81fa6bd60734b5fc69b3c569d5f74a49",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "PrimaryGroup/1_82_06",
+      "source": "unittests/32Bit_ASM/PrimaryGroup/1_82_06.asm",
+      "sourceSha256": "17d7ddacfdb1c5a1b03b4afbf4dcf3f26687a67eece29ada1f978786437f1749",
+      "manifest": "manifests/PrimaryGroup/1_82_06.json",
+      "manifestSha256": "c7eccf422fe7d2d31c64beb15ead33525e43a3417f5e645c494ae9dceb32ee8e",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "PrimaryGroup/1_82_07",
+      "source": "unittests/32Bit_ASM/PrimaryGroup/1_82_07.asm",
+      "sourceSha256": "fe55614ec856556d4a5826561ec331bb36adc4ab49349784e513e573f2f85683",
+      "manifest": "manifests/PrimaryGroup/1_82_07.json",
+      "manifestSha256": "9f398efc4fef9326cd624dd980994765ceabc2d02b2d6f88d3742131c7c4d41e",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "PrimaryGroup/3_F6_05",
+      "source": "unittests/32Bit_ASM/PrimaryGroup/3_F6_05.asm",
+      "sourceSha256": "ac262c540847242814ef32e2b95ad13c7a5b1ce1e163088b84db229c2c329064",
+      "manifest": "manifests/PrimaryGroup/3_F6_05.json",
+      "manifestSha256": "4f61105a5d34ee9d6c3dfd188f31499337980ac54d31cef826b025abf066f4ee",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "PrimaryGroup/5_FF_02",
+      "source": "unittests/32Bit_ASM/PrimaryGroup/5_FF_02.asm",
+      "sourceSha256": "14ec3ea16024a4f2418b64ddc7821387171a293eec9ab025a695145458d61489",
+      "manifest": "manifests/PrimaryGroup/5_FF_02.json",
+      "manifestSha256": "e513d4d6347dd420ed5e67772c3740fe6fbf183ad28382a7c1aebc749f7b6529",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "PrimaryGroup/5_FF_02_2",
+      "source": "unittests/32Bit_ASM/PrimaryGroup/5_FF_02_2.asm",
+      "sourceSha256": "f64adf8bb96b56b8720576b5d3b43bfb644f3c03eb05ad828ea85de439809c81",
+      "manifest": "manifests/PrimaryGroup/5_FF_02_2.json",
+      "manifestSha256": "3849f2061083f7cc1bd0ad89d3ad2b08b96e9bea17a1b7b0d80091c3ab2d2583",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "PrimaryGroup/5_FF_02_3",
+      "source": "unittests/32Bit_ASM/PrimaryGroup/5_FF_02_3.asm",
+      "sourceSha256": "97a5626fde1c8e0c2c6117682e3899df1c31fcfef1a52faadf8e7ac0f7310a52",
+      "manifest": "manifests/PrimaryGroup/5_FF_02_3.json",
+      "manifestSha256": "cc42a37aaa255d798a14f91f27fd1541d0775d41f98fed5ec9728bce1d1b243f",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "Secondary/06_XX_00",
+      "source": "unittests/32Bit_ASM/Secondary/06_XX_00.asm",
+      "sourceSha256": "f2fa5f68a71f64ac0d7139f354b9441174b816532628e367960370518bdd22e1",
+      "manifest": "manifests/Secondary/06_XX_00.json",
+      "manifestSha256": "ca52b01c783959e1eee84d8217b403d48b584b5ff1702a82593a1ac774e43d53",
+      "status": "blocked",
+      "reason": "Expected values depend on FEX/Linux\u0027s synthetic GDTR, LDTR or CR0 state, which the flat CPU-only sandbox does not reproduce."
+    },
+    {
+      "id": "Secondary/07_XX_00",
+      "source": "unittests/32Bit_ASM/Secondary/07_XX_00.asm",
+      "sourceSha256": "c25260af40ece33f3df8d08d2b0e9ceeb4309f82a219f86b2df4427933db7f35",
+      "manifest": "manifests/Secondary/07_XX_00.json",
+      "manifestSha256": "1cc90a4b80a10b1e80d283079e585f732ad19b7c62f402c98eed342ebc1f8f16",
+      "status": "blocked",
+      "reason": "Expected values depend on FEX/Linux\u0027s synthetic GDTR, LDTR or CR0 state, which the flat CPU-only sandbox does not reproduce."
+    },
+    {
+      "id": "Secondary/07_XX_04",
+      "source": "unittests/32Bit_ASM/Secondary/07_XX_04.asm",
+      "sourceSha256": "cc0bcc506616e5b63f0e17765d0b5b59b16369b640bbc09967f608a98738f4e7",
+      "manifest": "manifests/Secondary/07_XX_04.json",
+      "manifestSha256": "1e590c1ef9511f6702e29533d0fd32542356507d35e7f86d688f799f600bc92d",
+      "status": "blocked",
+      "reason": "Expected values depend on FEX/Linux\u0027s synthetic GDTR, LDTR or CR0 state, which the flat CPU-only sandbox does not reproduce."
+    },
+    {
+      "id": "Secondary/15_XX_0",
+      "source": "unittests/32Bit_ASM/Secondary/15_XX_0.asm",
+      "sourceSha256": "cf223e08e6115132875c5efdae6827b2e120d5b7cef2c4658fb59058d02ecebe",
+      "manifest": "manifests/Secondary/15_XX_0.json",
+      "manifestSha256": "f5e8f7c32f5f7f13445a2376e36f51d7a12ad81852fd65017290cf60e42ce0a9",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "SecondaryModRM/Reg_7_1",
+      "source": "unittests/32Bit_ASM/SecondaryModRM/Reg_7_1.asm",
+      "sourceSha256": "e37e250604f2c0ccb6d1ea23763a87b499a5789cf62a71d6f6808d68173ec444",
+      "manifest": "manifests/SecondaryModRM/Reg_7_1.json",
+      "manifestSha256": "1d43455ceaa01bc22b37dd268717b055a5a8dbdbe155fc9158c284bf65fe295e",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: Linux"
+    },
+    {
+      "id": "SecondaryModRM/Reg_7_4_2",
+      "source": "unittests/32Bit_ASM/SecondaryModRM/Reg_7_4_2.asm",
+      "sourceSha256": "1e8d83058bddc8584d507a47cb358ef5d39f81391ccaed0bc2f3d35b9037f1b6",
+      "manifest": "manifests/SecondaryModRM/Reg_7_4_2.json",
+      "manifestSha256": "b884a8fe7b58102701223ee5a4d317729d3f4250806aff4afe3179e2346d06eb",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: CLZERO"
+    },
+    {
+      "id": "TwoByte/0F_82",
+      "source": "unittests/32Bit_ASM/TwoByte/0F_82.asm",
+      "sourceSha256": "e130d360e339bae9f50f299c78c7f69efb762d8cab5f67f9d747b9fb78a962b3",
+      "manifest": "manifests/TwoByte/0F_82.json",
+      "manifestSha256": "84f7f3a1e7e7791d8952c73b58bec603ff297a3d140381837ba060817447b279",
+      "status": "blocked",
+      "reason": "Generates executable code and HLT outside the source binary; requires a separately validated dynamic-code termination contract."
+    },
+    {
+      "id": "TwoByte/0F_82_2",
+      "source": "unittests/32Bit_ASM/TwoByte/0F_82_2.asm",
+      "sourceSha256": "e719becb9609187f757a861ba5773138f4337199fe3fee08143cbd797af8e27b",
+      "manifest": "manifests/TwoByte/0F_82_2.json",
+      "manifestSha256": "41ae36ad8ccf10934e9b19049a7ba8e2e0974f631b9a5488d40cfe1ba3371042",
+      "status": "blocked",
+      "reason": "Generates executable code and HLT outside the source binary; requires a separately validated dynamic-code termination contract."
+    },
+    {
+      "id": "VEX/vgather_qpd_128bit_1xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qpd_128bit_1xdisp_overflow.asm",
+      "sourceSha256": "c600689b8aec4bbc5bbceaf9c9c6a62e830f302156b707e5188c12368e00de02",
+      "manifest": "manifests/VEX/vgather_qpd_128bit_1xdisp_overflow.json",
+      "manifestSha256": "c08cd6741a206daa026e97afafe9c2385cd0a730aa088d4c8d4b86a3ef5b0189",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qpd_128bit_2xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qpd_128bit_2xdisp_overflow.asm",
+      "sourceSha256": "61ee9bcc6b53bde06149912a5f2f6bbaf5e5e67a61eb098b8b5b0b14b2f3fa0c",
+      "manifest": "manifests/VEX/vgather_qpd_128bit_2xdisp_overflow.json",
+      "manifestSha256": "a50546668247a786c5cc5199868c96e85d1d84ab159e93142d901d074984cff5",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qpd_128bit_4xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qpd_128bit_4xdisp_overflow.asm",
+      "sourceSha256": "95157a2aa3febadb29c8ef9d50aa3733ea93827a7a80ec8ab58629cbf078cab0",
+      "manifest": "manifests/VEX/vgather_qpd_128bit_4xdisp_overflow.json",
+      "manifestSha256": "1869298a31da9e8aa51fd95902bfb6439e6f4edfdf24fb5805645bf9e8af65cb",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qpd_128bit_8xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qpd_128bit_8xdisp_overflow.asm",
+      "sourceSha256": "67fb573bdafdf9d17484a4505d2123fa7e4fcb2dcc63d92876c49869bcdcd0c7",
+      "manifest": "manifests/VEX/vgather_qpd_128bit_8xdisp_overflow.json",
+      "manifestSha256": "9200520541408ef45e44d828bb40309d8fe09cd20adfb75e0c66b75f9d6ee4bc",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qpd_256bit_1xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qpd_256bit_1xdisp_overflow.asm",
+      "sourceSha256": "47d88736dba9f651f38ff6a465ce277d91bbe21398ffa924d0200522b56ecbb5",
+      "manifest": "manifests/VEX/vgather_qpd_256bit_1xdisp_overflow.json",
+      "manifestSha256": "2b5efbff1a2a59b3beac2c04897fdd8638ad6d4500be706de09c6179c4d4e4e1",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qpd_256bit_2xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qpd_256bit_2xdisp_overflow.asm",
+      "sourceSha256": "d774803c9eb241b93fc31cbfafa40b212118718f88799ebb04a8a2e7dadac2d7",
+      "manifest": "manifests/VEX/vgather_qpd_256bit_2xdisp_overflow.json",
+      "manifestSha256": "933545085afd8dbb0b9ac6fe58b8ae6def11169602cb9ccaa44279773156da70",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qpd_256bit_4xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qpd_256bit_4xdisp_overflow.asm",
+      "sourceSha256": "7ef6788ef7c722eb1206d29cb6f93f0e00ab9c8febfee2a4347b773bc4943d43",
+      "manifest": "manifests/VEX/vgather_qpd_256bit_4xdisp_overflow.json",
+      "manifestSha256": "2b3023879baf62d9c8d8df01c64a2592d3caf42838c1069127d98278b8872bb5",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qpd_256bit_8xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qpd_256bit_8xdisp_overflow.asm",
+      "sourceSha256": "6a7eeb98c1ae7fdb60b311eba1437cb967e57e8279ad8f49bfdb3ff456e1c66d",
+      "manifest": "manifests/VEX/vgather_qpd_256bit_8xdisp_overflow.json",
+      "manifestSha256": "bc25fbc0b7daaf7dae5d8be432f266229522585d1258dbcab932799b84db25d4",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qps_128bit_1xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qps_128bit_1xdisp_overflow.asm",
+      "sourceSha256": "2312e42e09b6fb3dd27e7a37e71e71d586a1cd2f05a744e7097153adefe02585",
+      "manifest": "manifests/VEX/vgather_qps_128bit_1xdisp_overflow.json",
+      "manifestSha256": "5d4e78cc4807140d6be520b03c025a7bdac170e4a1e998a1459584f87e5ca523",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qps_128bit_2xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qps_128bit_2xdisp_overflow.asm",
+      "sourceSha256": "6351c4cd48ded0262aab6a9f8eeb944030abdc51941515f8b221787f832643f5",
+      "manifest": "manifests/VEX/vgather_qps_128bit_2xdisp_overflow.json",
+      "manifestSha256": "8b7a2195a2b826b27561154e84893a09c8359fb4ea19ee8bc1a13619371bd8cb",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qps_128bit_4xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qps_128bit_4xdisp_overflow.asm",
+      "sourceSha256": "a91d7bf1345b027ee6dc37a173947455920d73d43bf2a9a57671b6d54436d7b1",
+      "manifest": "manifests/VEX/vgather_qps_128bit_4xdisp_overflow.json",
+      "manifestSha256": "9658dd573e259a9e3fc358de5f20be34e4a7c4a7e677ffdd17983139bcc1b26d",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qps_128bit_8xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qps_128bit_8xdisp_overflow.asm",
+      "sourceSha256": "10e7106aec88c170c9eed5056aa375cbbb1de5e324db36088e4982a1e66cd3ab",
+      "manifest": "manifests/VEX/vgather_qps_128bit_8xdisp_overflow.json",
+      "manifestSha256": "84f207b0ce440f4cb4d307acb35a8c21f71290478a1fae6ebe0d4bb1357c408d",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qps_256bit_1xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qps_256bit_1xdisp_overflow.asm",
+      "sourceSha256": "bc79a5b0a78eefc78c8d9a700b4f0736e53843d166142234cd5e878b5d01a408",
+      "manifest": "manifests/VEX/vgather_qps_256bit_1xdisp_overflow.json",
+      "manifestSha256": "bb86d3e79b48af757464407bb019c442ef9e08dfcf08baa7fc4118935b30b9d4",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qps_256bit_2xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qps_256bit_2xdisp_overflow.asm",
+      "sourceSha256": "670a3e5acd7bfbad7f3c76ca2aa1f8947ff4957b11f79c0e246797f9ae2472dd",
+      "manifest": "manifests/VEX/vgather_qps_256bit_2xdisp_overflow.json",
+      "manifestSha256": "31df0e69a67e81fd84f28c52f90f6a865f3b12e0f13d28d89786ef411d5f1e5d",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qps_256bit_4xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qps_256bit_4xdisp_overflow.asm",
+      "sourceSha256": "d54250322705fca4d989c8f3afdd61213670c602dd8e123a034a10a50d90e38e",
+      "manifest": "manifests/VEX/vgather_qps_256bit_4xdisp_overflow.json",
+      "manifestSha256": "03dcbc5568627311bfa65061f1d99bf316f2fccdff8fcac7d1915d0a51df61a2",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vgather_qps_256bit_8xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vgather_qps_256bit_8xdisp_overflow.asm",
+      "sourceSha256": "c186ab185e3a74c987f384c13ee08232684d5481c32ec4ba7efbb7b15cd77804",
+      "manifest": "manifests/VEX/vgather_qps_256bit_8xdisp_overflow.json",
+      "manifestSha256": "ccd0d7d1409f2fdab139b0da38582f2a404ff66644aaa96885eef0aa6c0035c0",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qd_128bit_1xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qd_128bit_1xdisp_overflow.asm",
+      "sourceSha256": "f65d856bb37d33729f9afa89397854a8e59afcb2b417198c305eb3e4acc952c8",
+      "manifest": "manifests/VEX/vpgather_qd_128bit_1xdisp_overflow.json",
+      "manifestSha256": "22108495b11ba1b257db4d6ebf4d83a04f69c718022897bb80c7d5c05ee9178f",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qd_128bit_2xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qd_128bit_2xdisp_overflow.asm",
+      "sourceSha256": "7edc6a17619764e0f431a9167d4a7d3e8a58792365a4ab5122793ae16c4ebc9a",
+      "manifest": "manifests/VEX/vpgather_qd_128bit_2xdisp_overflow.json",
+      "manifestSha256": "9a1923ec9823175b1b667a1d8fbc8b73c3c5b50e9369fb5553702c3df8f02448",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qd_128bit_4xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qd_128bit_4xdisp_overflow.asm",
+      "sourceSha256": "ccbcf3041b74294607e4d8f512a0d3cd645d51596dba44c6e3b6fe3420db9ce9",
+      "manifest": "manifests/VEX/vpgather_qd_128bit_4xdisp_overflow.json",
+      "manifestSha256": "a70a9524424c5ecdc767e436514dc1f212bc5c2e525d6509bb7ca7a465169c4b",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qd_128bit_8xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qd_128bit_8xdisp_overflow.asm",
+      "sourceSha256": "1ff202ba0a251e51432cd175c9b52bf0d404b0e85423bb97a3336b28478fa7ce",
+      "manifest": "manifests/VEX/vpgather_qd_128bit_8xdisp_overflow.json",
+      "manifestSha256": "7b481a54b4954710355b14c93af1e75b64f2453386012c67fecdc31c285a992a",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qd_256bit_1xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qd_256bit_1xdisp_overflow.asm",
+      "sourceSha256": "320f456dd5b315721579f47ee6f1a728f6f18387952a33f7b2affafeb3a8c698",
+      "manifest": "manifests/VEX/vpgather_qd_256bit_1xdisp_overflow.json",
+      "manifestSha256": "3d7500155668e6c48c2ff944ee824abf3662b9a30caea2ade023fe2006ac9401",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qd_256bit_2xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qd_256bit_2xdisp_overflow.asm",
+      "sourceSha256": "3a7d546de6057fcaedcd6fb575afd3aeaf4a0d4158f560c3bc2ecc6abf057a2b",
+      "manifest": "manifests/VEX/vpgather_qd_256bit_2xdisp_overflow.json",
+      "manifestSha256": "a25ac1bae9f5af827d950d5be16d30f00149112c6426309d113d92e1ea71824e",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qd_256bit_4xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qd_256bit_4xdisp_overflow.asm",
+      "sourceSha256": "0a4bcb2800d89eec4e4f6809ba8a8f6efd5a57b9503fed568ff0159f2cf7fc3f",
+      "manifest": "manifests/VEX/vpgather_qd_256bit_4xdisp_overflow.json",
+      "manifestSha256": "a1b74a65a25933609233279808e7a62c693c900cf24ba115b01e6eb24572723b",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qd_256bit_8xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qd_256bit_8xdisp_overflow.asm",
+      "sourceSha256": "dbc60e80ad8f4569c7d2f63d1bbc371bd66217eef70959c79a918eb65c44cb23",
+      "manifest": "manifests/VEX/vpgather_qd_256bit_8xdisp_overflow.json",
+      "manifestSha256": "6468bbba592227c43f605b844a08dc23b673384081b0f867857870a23a99d47f",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qq_128bit_1xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qq_128bit_1xdisp_overflow.asm",
+      "sourceSha256": "f43b6ee1cae314b02b3964a13eaabbad9d780079203f431d16c76f6006d9c06a",
+      "manifest": "manifests/VEX/vpgather_qq_128bit_1xdisp_overflow.json",
+      "manifestSha256": "c2f2552d78e63bbf55fd2a89e9394fdae8c0b8a5cfbef95dd027307fa5d981a4",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qq_128bit_2xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qq_128bit_2xdisp_overflow.asm",
+      "sourceSha256": "c6fd0728cca59f477261cac1e569b6f0d807ccf2042cc3ef44fd7b04cbec53d2",
+      "manifest": "manifests/VEX/vpgather_qq_128bit_2xdisp_overflow.json",
+      "manifestSha256": "a2926fdcee8e0f4fb3e544db41449b595f02597fd14e5e5adeecf77595597648",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qq_128bit_4xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qq_128bit_4xdisp_overflow.asm",
+      "sourceSha256": "3b13787f40cf593e612886c94b01fd8d319fae183818b8bab2fa41a87af2a0c4",
+      "manifest": "manifests/VEX/vpgather_qq_128bit_4xdisp_overflow.json",
+      "manifestSha256": "e9897f4833ee7317de5ecf2e17d086b7dcd63d70909483ba8936d168a4de7370",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qq_128bit_8xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qq_128bit_8xdisp_overflow.asm",
+      "sourceSha256": "e24149ed60fbad15467433ebf4ac125251110541a12eae69ba3010c1529148b4",
+      "manifest": "manifests/VEX/vpgather_qq_128bit_8xdisp_overflow.json",
+      "manifestSha256": "3e290d9224b68b130c4c4f13156e0cf1def519ea49a078554a9625b9e8019636",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qq_256bit_1xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qq_256bit_1xdisp_overflow.asm",
+      "sourceSha256": "060e5df8fc18935ec356da94a544a02d66e0c631425f35c4daff8f9b39cdddb6",
+      "manifest": "manifests/VEX/vpgather_qq_256bit_1xdisp_overflow.json",
+      "manifestSha256": "aed60a9b8236496afb747d648cb23997f6d18fdae7f06dbf86a3af7d44624762",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qq_256bit_2xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qq_256bit_2xdisp_overflow.asm",
+      "sourceSha256": "f35f0b8e2f9623fc18f1215abd4b3fa4daa1735e0f8706f36d0fb534e7c3560e",
+      "manifest": "manifests/VEX/vpgather_qq_256bit_2xdisp_overflow.json",
+      "manifestSha256": "4aaad9d75c56d89209d396c101f25b4e7a8abd7d418e2c1d3ac8749bec2b7064",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qq_256bit_4xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qq_256bit_4xdisp_overflow.asm",
+      "sourceSha256": "c1f562576379c008609b7a28606bfaa909d3d052f2e39706904407cfbe828354",
+      "manifest": "manifests/VEX/vpgather_qq_256bit_4xdisp_overflow.json",
+      "manifestSha256": "6aa416ed220d579cd45f52a88fbff2da56ea2161a0f392918d6c0778315ad634",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "VEX/vpgather_qq_256bit_8xdisp_overflow",
+      "source": "unittests/32Bit_ASM/VEX/vpgather_qq_256bit_8xdisp_overflow.asm",
+      "sourceSha256": "6783cc61eec01b7c4d7f724aa3fbff886ad48bb6dbbf37e2b8eb719c7f54d405",
+      "manifest": "manifests/VEX/vpgather_qq_256bit_8xdisp_overflow.json",
+      "manifestSha256": "d5d5ad50188909e75d3df341ff770e95a91ed283ffea8940a24c0a6b53299363",
+      "status": "blocked",
+      "reason": "Unsupported declared HostFeatures: AVX"
+    },
+    {
+      "id": "X87/D8_00",
+      "source": "unittests/32Bit_ASM/X87/D8_00.asm",
+      "sourceSha256": "79314330dda47b39429df970440767c18a10e945adbb3dd87267dcc7c91f1f1c",
+      "manifest": "manifests/X87/D8_00.json",
+      "manifestSha256": "ef481469bdf07a33f5c6aa0484e56a7d00cecdfee3e0b1ac40ccc11dd81c4f49",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D8_01",
+      "source": "unittests/32Bit_ASM/X87/D8_01.asm",
+      "sourceSha256": "13450d8b5d77b397aa2c32b7a9fea4a2cdffc408a5d07106e4256e77a3dbfad8",
+      "manifest": "manifests/X87/D8_01.json",
+      "manifestSha256": "949837c07488784b38f3fbd5d09c22130f39f5a064f45dd39188fe23732bc6a3",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D8_04",
+      "source": "unittests/32Bit_ASM/X87/D8_04.asm",
+      "sourceSha256": "4b8a3d75114a62536b8316742aabc9011e53fb554734d39365929a54181c6e42",
+      "manifest": "manifests/X87/D8_04.json",
+      "manifestSha256": "b24edbccb008edb525d695298e410656867b0c0e8e02019ed6196f236e0ff747",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D8_05",
+      "source": "unittests/32Bit_ASM/X87/D8_05.asm",
+      "sourceSha256": "630c0b5feedb86c0849e7b80a3d153e4946062b681be03a25d958cbe89f26d9d",
+      "manifest": "manifests/X87/D8_05.json",
+      "manifestSha256": "49072f8a4e8e8317ba41b3f193c38544d9812567929b024ba8009f4ec80f145f",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D8_06",
+      "source": "unittests/32Bit_ASM/X87/D8_06.asm",
+      "sourceSha256": "3d392d912a91a563b0abe9c5e7a10d992c1f975d1c1d3a62355d3ae1af5c60f7",
+      "manifest": "manifests/X87/D8_06.json",
+      "manifestSha256": "d102291c3cf2a79e3c41b046ac00fb3cc7b59280b7879bbf4cda7d1762a1732b",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D8_07",
+      "source": "unittests/32Bit_ASM/X87/D8_07.asm",
+      "sourceSha256": "a1e8dbd4109be9b07d9cc15b8d18ac6c4656d0d686ebc569d96de7ba7bd29d1f",
+      "manifest": "manifests/X87/D8_07.json",
+      "manifestSha256": "aa718686d45342f1596b7fa2d546f7f8e574de34727f6fbdcf274d4593acf2f4",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D8_C0",
+      "source": "unittests/32Bit_ASM/X87/D8_C0.asm",
+      "sourceSha256": "c0d74fd3852cd9727966b508e8a0a35fad55b1c6a341b583ef246b62b738261a",
+      "manifest": "manifests/X87/D8_C0.json",
+      "manifestSha256": "6ad90354e07000be3950374ef6ad3a99c72887a7c62ebf0ab33803119a7dd722",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D8_C8",
+      "source": "unittests/32Bit_ASM/X87/D8_C8.asm",
+      "sourceSha256": "35a2a63dc1ade3c6ca417ea0b52577fc922d6c6ab34f4737a5110b034b00c52f",
+      "manifest": "manifests/X87/D8_C8.json",
+      "manifestSha256": "a6e6c6656115c541c57df371c6d2c8cb8c914eb6d73f7acb957a2fcf3ea24be1",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D8_E0",
+      "source": "unittests/32Bit_ASM/X87/D8_E0.asm",
+      "sourceSha256": "ad8155c96d73afed0c44c561bc8a058ba9aa74eaf1f99d2b29a327abc0ec11ab",
+      "manifest": "manifests/X87/D8_E0.json",
+      "manifestSha256": "fed9dde92827107b39556a4e36c5f78f3de1a7dc95e625311ef83f02dfe6c6cc",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D8_E8",
+      "source": "unittests/32Bit_ASM/X87/D8_E8.asm",
+      "sourceSha256": "290a5f24b2de89f59be06ed4c8c037a9143b5922cf38a73d67dac39a972999a0",
+      "manifest": "manifests/X87/D8_E8.json",
+      "manifestSha256": "aa53dc006cce67caac2804bf577f600e6b1d62423b2187df94182ddb5a3179e1",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D8_F0",
+      "source": "unittests/32Bit_ASM/X87/D8_F0.asm",
+      "sourceSha256": "c73e209328b872d9b0b00feaca4a33fae42246521988ffa01f91e1f7b0bb767d",
+      "manifest": "manifests/X87/D8_F0.json",
+      "manifestSha256": "55d7eb68dd5375ac1a0c52f48f17e9913f8ee773f7251d5381779fa3feb21a1d",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D8_F0_2",
+      "source": "unittests/32Bit_ASM/X87/D8_F0_2.asm",
+      "sourceSha256": "247c77376966838621610a03702d26c21ec8bb00108a4c8b39013e287d81a279",
+      "manifest": "manifests/X87/D8_F0_2.json",
+      "manifestSha256": "49f9593e7740d4e756abd5af0c25e265b3e0fbe8329e1cd78567b601a91506da",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D8_F8",
+      "source": "unittests/32Bit_ASM/X87/D8_F8.asm",
+      "sourceSha256": "87dca86431e3cd1740f944cb8620fd18e1fcd148b60d050b8a1bb57c5f7f4848",
+      "manifest": "manifests/X87/D8_F8.json",
+      "manifestSha256": "10f0f074a01ad0209edb4cb1ef77e77e42b50acb95f3cd08842b87df495cb4cf",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_00",
+      "source": "unittests/32Bit_ASM/X87/D9_00.asm",
+      "sourceSha256": "4c16ccbdfcdc4b81263b7e74b7b601af7e427f69f94f55031996ccf16f4a80f3",
+      "manifest": "manifests/X87/D9_00.json",
+      "manifestSha256": "7e98a7b2449a3c0fb0a49c230a2af5858c649e126f023a2cb4184b909bc182ce",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_02",
+      "source": "unittests/32Bit_ASM/X87/D9_02.asm",
+      "sourceSha256": "354e237ddef8a233aa59717ab998e3ead6706f4162b23bb27fa1cc7a7406c02f",
+      "manifest": "manifests/X87/D9_02.json",
+      "manifestSha256": "ca69600cb07f579ec3b48ff2105eafd50d761c6f7b9d1a5bd6060a80316b6126",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_03",
+      "source": "unittests/32Bit_ASM/X87/D9_03.asm",
+      "sourceSha256": "a9312ad99b8bef33e61e4bf242ca1647fcb6d1070e64ceb5084eff18ebce175a",
+      "manifest": "manifests/X87/D9_03.json",
+      "manifestSha256": "aa8e06948fdecb4bea690e7df7bf7c425027b33531cbcf371638537361c2088b",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_05",
+      "source": "unittests/32Bit_ASM/X87/D9_05.asm",
+      "sourceSha256": "c7f29dbca72279114350ea22e409b2026197215b902a98f4c04a65b33f32108a",
+      "manifest": "manifests/X87/D9_05.json",
+      "manifestSha256": "ac7b2f33a4c31b0fef10d9c9db6f26a3b0f00e5ec8b42516e290d9cb06f5e669",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_06",
+      "source": "unittests/32Bit_ASM/X87/D9_06.asm",
+      "sourceSha256": "343cd577de7bf88b41563f4b20a5eba8198bb684fc132dfe0dda80ac7b3cb597",
+      "manifest": "manifests/X87/D9_06.json",
+      "manifestSha256": "c579fd3cdc5176da5d33881d03cfac245837132e0f8212beda663336cdb64db6",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_06_2",
+      "source": "unittests/32Bit_ASM/X87/D9_06_2.asm",
+      "sourceSha256": "3df521ab4fd637d89859bbb5a21f7ce0f91f1164c70aeee4deb3cc2fc416d25b",
+      "manifest": "manifests/X87/D9_06_2.json",
+      "manifestSha256": "b18ce3cc603f821990d852d7445bff76eba80b89bcfbc13910a4d77efe7cce85",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_07",
+      "source": "unittests/32Bit_ASM/X87/D9_07.asm",
+      "sourceSha256": "519e9cb326ef03128a6a2e2cc0681e84b20d8087750c1ee6587c0dc63c87fdf9",
+      "manifest": "manifests/X87/D9_07.json",
+      "manifestSha256": "ad916f48228c1673dfe78fb56b6319b004d66204b21db34a4da1e20dc718a73c",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_C0",
+      "source": "unittests/32Bit_ASM/X87/D9_C0.asm",
+      "sourceSha256": "d52abb6946b5a77e24b0a97fb14958f430f92fc8295b6fe40c7c634a00331175",
+      "manifest": "manifests/X87/D9_C0.json",
+      "manifestSha256": "6e9d90efc4c2a110bc6064ada0f020385ac43824334fc310e230aac4b2155cd7",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_C8",
+      "source": "unittests/32Bit_ASM/X87/D9_C8.asm",
+      "sourceSha256": "aa0ee0fbe26158a717b24b5e4cfd0d38d598f8618c6fc3cc09e5cfa2849af140",
+      "manifest": "manifests/X87/D9_C8.json",
+      "manifestSha256": "b5e85ded6314fdb8935d8dc6364938a9636df55c84e1e0fff7b132f815ebb29c",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_D0",
+      "source": "unittests/32Bit_ASM/X87/D9_D0.asm",
+      "sourceSha256": "c904d0ba69b8ec7af232c7593fc9a4f6aa29a87088e2905249843f11652801e2",
+      "manifest": "manifests/X87/D9_D0.json",
+      "manifestSha256": "6fca36bd78c4d104513dd0d1b4da7f6e58df0c93f801acf39529dba68f0a21ca",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_E0",
+      "source": "unittests/32Bit_ASM/X87/D9_E0.asm",
+      "sourceSha256": "173bc816ac9c119191cca5065c6133cc060aa54681bf070ca8ec749eda3b59bf",
+      "manifest": "manifests/X87/D9_E0.json",
+      "manifestSha256": "1ef50b9b194c95190e45cdb45f9a16b9021cf83a8f5e1aad23dca2d5ead2683c",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_E1",
+      "source": "unittests/32Bit_ASM/X87/D9_E1.asm",
+      "sourceSha256": "ec4bb0c2608e97702a1092f36c2727e17567a5bd1e786e83db5af51a63204696",
+      "manifest": "manifests/X87/D9_E1.json",
+      "manifestSha256": "355bf03bdf9fe006b72c3ff0d9a395dc0152a822cc90ed7475776bd2f81af98e",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_E8",
+      "source": "unittests/32Bit_ASM/X87/D9_E8.asm",
+      "sourceSha256": "e354990b0cc615f2efed6a16606e752891569dbfe120891ddabd744a5088ed14",
+      "manifest": "manifests/X87/D9_E8.json",
+      "manifestSha256": "96752e2c71f6189f6bf33563f0eb718a08dae1d75222a33f4ea1eff8488ee5f1",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_E9",
+      "source": "unittests/32Bit_ASM/X87/D9_E9.asm",
+      "sourceSha256": "276a84802dedabfb99e4203f543a9b35e73d1f479e07e3498dc55cd5f12ea914",
+      "manifest": "manifests/X87/D9_E9.json",
+      "manifestSha256": "e1de1f5a3165c784a1f528431d75d793d13b5e45eed2e6672626c19146b61f90",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_EA",
+      "source": "unittests/32Bit_ASM/X87/D9_EA.asm",
+      "sourceSha256": "63eca0e945992974ea5c0040801c8812b88e3da4b4aa8f924ab3e8e7b8e7e377",
+      "manifest": "manifests/X87/D9_EA.json",
+      "manifestSha256": "7e9ecc399788a4de4cd72a53f1213ae9bd83a67cf4d82d215e849c65c46c8e4c",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_EB",
+      "source": "unittests/32Bit_ASM/X87/D9_EB.asm",
+      "sourceSha256": "eaadfd4a9a7f25288549d03ec40d9253d6221afab2ab9e209326818d1c083247",
+      "manifest": "manifests/X87/D9_EB.json",
+      "manifestSha256": "8ca30fbcdf9c7ec7c60561ec05b40480a2a7cf4953ff91a3249be92990c9dab6",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_EC",
+      "source": "unittests/32Bit_ASM/X87/D9_EC.asm",
+      "sourceSha256": "06e6ca248dbc1895960d4823d6ac596a8c863d02cfc0aede22decea8916eb547",
+      "manifest": "manifests/X87/D9_EC.json",
+      "manifestSha256": "d475e02b144d5e5a773557a786ac2c6511920a283b5056d8a192bd228ae58251",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_ED",
+      "source": "unittests/32Bit_ASM/X87/D9_ED.asm",
+      "sourceSha256": "14db3b1b84fc4557b20423b73080f7545087a4a8486b823745ae78a78b7c602a",
+      "manifest": "manifests/X87/D9_ED.json",
+      "manifestSha256": "68e48d8d1df5907fbe623d41ce422f3810bb55cf0196423c6194d2978c3541a9",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_EE",
+      "source": "unittests/32Bit_ASM/X87/D9_EE.asm",
+      "sourceSha256": "523b0924923fe1de57f27e46e7e43db185c19bf4bd31ba5bb0d397a30ad21e1a",
+      "manifest": "manifests/X87/D9_EE.json",
+      "manifestSha256": "bb6c86e59e522ea1c566bb7f7d5a14ea50d61a9495d16756f28ada3c9818ebed",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_F0",
+      "source": "unittests/32Bit_ASM/X87/D9_F0.asm",
+      "sourceSha256": "e3461305222cbb781f059d0c24ce5cfa4e5984ac13245b53eab1a93560f9c353",
+      "manifest": "manifests/X87/D9_F0.json",
+      "manifestSha256": "28001e2a47d29e44c2b534e144458cd75c5db10a51480b7a54f940e89e7afcff",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_F1",
+      "source": "unittests/32Bit_ASM/X87/D9_F1.asm",
+      "sourceSha256": "8dddb7a4b39a8ce81786d8e3f29feae4a60462e0e1103b7791c00c1510fbac35",
+      "manifest": "manifests/X87/D9_F1.json",
+      "manifestSha256": "bd9c6fd72b6f3c12c713e1b349b7c6b52b10eea809baf09118a8eac37819d36a",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_F2",
+      "source": "unittests/32Bit_ASM/X87/D9_F2.asm",
+      "sourceSha256": "7c11707adc426743b31d1bad4ff1cc0a38c01ba75ad1e73e418c5691bdffaacc",
+      "manifest": "manifests/X87/D9_F2.json",
+      "manifestSha256": "3473f38f2642263e38e008fcd5987d6d306088a6adbc7132f58a40a3487aacaa",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_F3",
+      "source": "unittests/32Bit_ASM/X87/D9_F3.asm",
+      "sourceSha256": "eaa26dee1816cb86c9af0af4b691d7d1d7e4bff2c4ed46a13a5c5e8bcce88087",
+      "manifest": "manifests/X87/D9_F3.json",
+      "manifestSha256": "13ba251c21464dc9cb8afbe7a7c357bdd4549604388bd8d181262706126436db",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_F4",
+      "source": "unittests/32Bit_ASM/X87/D9_F4.asm",
+      "sourceSha256": "540134d18f13b8196c5cd80d848d9ba8120680c8ae8e1c9ea596162e899b02b0",
+      "manifest": "manifests/X87/D9_F4.json",
+      "manifestSha256": "d6d15dce8a2be832de2b2873b2502ee92b4e8c38cf47e0226b94ecee5344e201",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_F5",
+      "source": "unittests/32Bit_ASM/X87/D9_F5.asm",
+      "sourceSha256": "5f63fb5ac9f250a5ff281f8742e706cdb421f70ad3af671dec7c98a1b8225978",
+      "manifest": "manifests/X87/D9_F5.json",
+      "manifestSha256": "6e62809527f862b958c00969b0385a37c06cca2a173533871d91ccae93e59240",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_F6",
+      "source": "unittests/32Bit_ASM/X87/D9_F6.asm",
+      "sourceSha256": "1483c820ee0d5363893e466577b983b80b1a0f7aa41b74281849987b000392b0",
+      "manifest": "manifests/X87/D9_F6.json",
+      "manifestSha256": "13f927901cd433fa47e45d93d78676e2d99b697710c86e01f671a3adf7a89a1b",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_F7",
+      "source": "unittests/32Bit_ASM/X87/D9_F7.asm",
+      "sourceSha256": "d30f1800c32b489578548c5db313f8e74fbc645c43d680b2c7dd8b7dcd09888a",
+      "manifest": "manifests/X87/D9_F7.json",
+      "manifestSha256": "cb78013baa7304ff54e072c9b7a71e1b7aba72ebe8e52be477a94d21cf1c1eef",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_F8",
+      "source": "unittests/32Bit_ASM/X87/D9_F8.asm",
+      "sourceSha256": "a98f4d29169b4de43b4dc89337ce58c0f928931c7acafbab227e6c6ec5235dec",
+      "manifest": "manifests/X87/D9_F8.json",
+      "manifestSha256": "b8d03b0d23bbe6e78760af0d6e41a141aafb49dab69288a62d770c1c67e7267d",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_F9",
+      "source": "unittests/32Bit_ASM/X87/D9_F9.asm",
+      "sourceSha256": "7ff288a00ce2d06b7298cc4d308524d5b48c90cc3a7fbbfe246bdf06a5994008",
+      "manifest": "manifests/X87/D9_F9.json",
+      "manifestSha256": "0a36f3fc07f6fe2f8bf26447099837fed82cbc72ddd1592a57a75d44a55783d9",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_FA",
+      "source": "unittests/32Bit_ASM/X87/D9_FA.asm",
+      "sourceSha256": "dead47ec80229b3eaa64293ae428c75c5b9864a5151df84a7bf3ee9882e2d90d",
+      "manifest": "manifests/X87/D9_FA.json",
+      "manifestSha256": "af21e1038bd08f89e7641d31b6541ece65f399fd1a5c94b3d172ae2f00128f00",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_FB",
+      "source": "unittests/32Bit_ASM/X87/D9_FB.asm",
+      "sourceSha256": "a81578583d775d1e6b39b06762843868243c0bdf32dad148956c5230b1a44879",
+      "manifest": "manifests/X87/D9_FB.json",
+      "manifestSha256": "b249ba91e1dce870dcf7ceb81897732e9350a8f5150493ea003549eefe0c6737",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_FC",
+      "source": "unittests/32Bit_ASM/X87/D9_FC.asm",
+      "sourceSha256": "a883e9650c5abb6dfe6babd0015baaf1951f7c9a728f431b6c31c1669c862302",
+      "manifest": "manifests/X87/D9_FC.json",
+      "manifestSha256": "f51f0cc0b9f75659c36898fe48827cebf5c30dd89f18856619d2b7d457147b69",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_FD",
+      "source": "unittests/32Bit_ASM/X87/D9_FD.asm",
+      "sourceSha256": "e6020405bb94ca2df2d3b82c8758927af9b7d365ba87ea4273322f80367348aa",
+      "manifest": "manifests/X87/D9_FD.json",
+      "manifestSha256": "b86b3fc5f042e0b3f3550a40b234cccb6c6525ada9c3bf1882ce41a91f2b388a",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_FE",
+      "source": "unittests/32Bit_ASM/X87/D9_FE.asm",
+      "sourceSha256": "663747103e014dabf7f45dd95a3ac637151baaea323e285a7f7bd597f1ec52ab",
+      "manifest": "manifests/X87/D9_FE.json",
+      "manifestSha256": "70503e37a941b934e9cafeb8cb201b4eeb74ec4e325b9e0bee7a363eda04113d",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/D9_FF",
+      "source": "unittests/32Bit_ASM/X87/D9_FF.asm",
+      "sourceSha256": "4cd35bf183295b0571ca0d13e8e4b579d86ab1234111de9b856b87d626bc8284",
+      "manifest": "manifests/X87/D9_FF.json",
+      "manifestSha256": "26975726855ef13ebc915b167dc8c546f368f95d49890d2862dae1f4f9c4140b",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DA_00",
+      "source": "unittests/32Bit_ASM/X87/DA_00.asm",
+      "sourceSha256": "d1523c93023f7932340e1a519cf85799e0ecc9ef8f343830d30417865b91c44d",
+      "manifest": "manifests/X87/DA_00.json",
+      "manifestSha256": "4f7bc2f90a78e6f6fa36fd05787c0a7f34f78bb19ad0152926247850dcb48ae1",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DA_01",
+      "source": "unittests/32Bit_ASM/X87/DA_01.asm",
+      "sourceSha256": "544cd39688696168df78419a3404d4b4c3b67a9bf6bad9c25c9a2f0148fe576f",
+      "manifest": "manifests/X87/DA_01.json",
+      "manifestSha256": "22168be218436fb619ff40836de084b8decd7ac73e9628d9bc08af040a647f42",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DA_04",
+      "source": "unittests/32Bit_ASM/X87/DA_04.asm",
+      "sourceSha256": "581bd5406fbf8b6656994f874f5368d6a47d54d3c41c0be17644d5094442feb7",
+      "manifest": "manifests/X87/DA_04.json",
+      "manifestSha256": "1c8d9220aa9d15b07596496aa36ce16f2a9df08d84424d5cf47a8e4814b5a8d4",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DA_05",
+      "source": "unittests/32Bit_ASM/X87/DA_05.asm",
+      "sourceSha256": "f1e791f217b058dd678339c8fdf8a049b1268e0695ef04c0ad8ead4b9efe941d",
+      "manifest": "manifests/X87/DA_05.json",
+      "manifestSha256": "012bf697bbfcb43aceab3247456fcdffddf97fe6186e55428d6c5ed676f6c13e",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DA_06",
+      "source": "unittests/32Bit_ASM/X87/DA_06.asm",
+      "sourceSha256": "483fba31f2755dbd527611a354d6f9766abca770a311b7b16ba0e97d0e1d173c",
+      "manifest": "manifests/X87/DA_06.json",
+      "manifestSha256": "d1f30cf21c4d1afa7cb552722d61ca45e635e7e0c6f4903530ca76c36bbc5169",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DA_07",
+      "source": "unittests/32Bit_ASM/X87/DA_07.asm",
+      "sourceSha256": "d27965612314f857a454f213ea4d8c6b977e0302a916dd81f10a25f837a9313e",
+      "manifest": "manifests/X87/DA_07.json",
+      "manifestSha256": "c776ba6d0471dd3b6d4235e531e428f8cae894ab9e1f44bbfb590cb99a6559bd",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DA_C0",
+      "source": "unittests/32Bit_ASM/X87/DA_C0.asm",
+      "sourceSha256": "cfb239ae96ebaa70e233ad51c63abdb5ce2e888077015b4dff954ee1071397bd",
+      "manifest": "manifests/X87/DA_C0.json",
+      "manifestSha256": "9642f1c3cce2e68ce1f7f5c44e7cf7bffc6d970f9a79efe9e9a616237b92624c",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DA_C8",
+      "source": "unittests/32Bit_ASM/X87/DA_C8.asm",
+      "sourceSha256": "dbd11c1ab4c2119507bfb043bb0c4f1dbe92d7997382008b6337f22140725e33",
+      "manifest": "manifests/X87/DA_C8.json",
+      "manifestSha256": "a311a5c1af34a161415269571c0dd2753438f26d646f5ab5e83002ac7240b0b2",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DA_D0",
+      "source": "unittests/32Bit_ASM/X87/DA_D0.asm",
+      "sourceSha256": "d12fed1cab5b6573bd2ac9ef0923504bf3b990763491dc92ec289256efe0f039",
+      "manifest": "manifests/X87/DA_D0.json",
+      "manifestSha256": "79545ae28aa542b09f5cce4a8460c4dc9f41c95927094b22f8598ffdb08bb134",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DA_D8",
+      "source": "unittests/32Bit_ASM/X87/DA_D8.asm",
+      "sourceSha256": "ad1782ecb5de288c1f12410bcfa1ab7bd7edd4abdcb478d4dfdbdb34511cddf1",
+      "manifest": "manifests/X87/DA_D8.json",
+      "manifestSha256": "7414fdffc3c1054d56c0504e9c268ae92ffc12f71b2e988c420919cd4ffebc25",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DB_00",
+      "source": "unittests/32Bit_ASM/X87/DB_00.asm",
+      "sourceSha256": "c890a3c065785510d6e66eef91b9814289851557eb33ed8be0be96bf48fffb25",
+      "manifest": "manifests/X87/DB_00.json",
+      "manifestSha256": "a0afa36021bc3953cc3b5642d010f7a60accec2f4da55547b5fbc669829e36fa",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DB_01",
+      "source": "unittests/32Bit_ASM/X87/DB_01.asm",
+      "sourceSha256": "e0acc289509f5fcdcea63d8f713cac023bd1ab694ac28f4d68af2c1d2a9b57f7",
+      "manifest": "manifests/X87/DB_01.json",
+      "manifestSha256": "7875382e84de419cb863bcffdea78f6ce0b48d5ef48fcae0831380a56c91277a",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DB_02",
+      "source": "unittests/32Bit_ASM/X87/DB_02.asm",
+      "sourceSha256": "8dc22df654450fbfabad57c06bb2d1598144930ab5ed9133521ebee5844af94c",
+      "manifest": "manifests/X87/DB_02.json",
+      "manifestSha256": "07001fc7ec68da45e7571222c771aa7f505e05b1c719efb612e067fb225722da",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DB_03",
+      "source": "unittests/32Bit_ASM/X87/DB_03.asm",
+      "sourceSha256": "2aeb014e9083f25f78c52e2db40d69622801bbb1aba467213d8cead849b097f2",
+      "manifest": "manifests/X87/DB_03.json",
+      "manifestSha256": "b163c949e6befabcbb1c590294b979b44a5fcfa0f51e02ef17aafb6065b44d8b",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DB_05",
+      "source": "unittests/32Bit_ASM/X87/DB_05.asm",
+      "sourceSha256": "303192a1cc4e35dbc14ab8530176c32c47fda1db6607c4018264eaae88edeb2e",
+      "manifest": "manifests/X87/DB_05.json",
+      "manifestSha256": "e813064c4307f475d1be693c4c031bf6c0fdb3156ac4e1280b37306bc7cffb80",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DB_07",
+      "source": "unittests/32Bit_ASM/X87/DB_07.asm",
+      "sourceSha256": "68ebbfd4959e2652473dd22fbbdb7d4159b4f7b6e145c8e07d76c7a87fad1c14",
+      "manifest": "manifests/X87/DB_07.json",
+      "manifestSha256": "7cccf1b37762c5865315531b09e61f83fbc5e33d690f88ac121101067618004e",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DB_C0",
+      "source": "unittests/32Bit_ASM/X87/DB_C0.asm",
+      "sourceSha256": "f2e06796c057612d95fdc4ee8694fd621d398e0d7b37111763f492dc33a5d100",
+      "manifest": "manifests/X87/DB_C0.json",
+      "manifestSha256": "d55ed0e1af14b4a6214b9a5c636a1d51ceb2394b3359b10180d98a6a6bcd8e23",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DB_C8",
+      "source": "unittests/32Bit_ASM/X87/DB_C8.asm",
+      "sourceSha256": "aeb5f272223251b84bbec82d8baecbcd5102f0848d282d3e9ae82d86a1a39c7e",
+      "manifest": "manifests/X87/DB_C8.json",
+      "manifestSha256": "b83c6438c3802b4d375d0f78c58edc930a224b2d0ad358063a6359288a6ca003",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DB_D0",
+      "source": "unittests/32Bit_ASM/X87/DB_D0.asm",
+      "sourceSha256": "e41b3315e53c42ab3249fa8e989ca425dfe9ccad2f86586dd75a75f7a545e71c",
+      "manifest": "manifests/X87/DB_D0.json",
+      "manifestSha256": "df957ee8f373f9fc8e115d0c63ff5af9783b8a0afb5bc164517cc5469b660768",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DB_D8",
+      "source": "unittests/32Bit_ASM/X87/DB_D8.asm",
+      "sourceSha256": "5983cde35d4937f833fc96367da77c340fc05e3c4c6c9c342e2d2626bac94387",
+      "manifest": "manifests/X87/DB_D8.json",
+      "manifestSha256": "1b3dea276a4fd2f4bc697e17a38961a16b31f2bc37dedc7f7199265a50021832",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DB_E2",
+      "source": "unittests/32Bit_ASM/X87/DB_E2.asm",
+      "sourceSha256": "41bcee6f486f892ddfc26de774014c160942b5ff444120f1c088f13a370bf15d",
+      "manifest": "manifests/X87/DB_E2.json",
+      "manifestSha256": "e85d0f161bf5f92de5765675432a24831fb571e668b5576dc9cd6494b2bdf204",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DB_E3",
+      "source": "unittests/32Bit_ASM/X87/DB_E3.asm",
+      "sourceSha256": "1baeb530775596fd7bef951ea990e6e2d082987ba35e5b53454c5ef32cf4532d",
+      "manifest": "manifests/X87/DB_E3.json",
+      "manifestSha256": "1d85c48af79fd9a0cb7ddf52be55beb0fb467783493eccea62acde9305652085",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DB_E3_2",
+      "source": "unittests/32Bit_ASM/X87/DB_E3_2.asm",
+      "sourceSha256": "272fa86e2c47983828dd38be6178a0cdda67eb104b74ee626ea52bbe9980fec9",
+      "manifest": "manifests/X87/DB_E3_2.json",
+      "manifestSha256": "bf7abed0331231eb25443300df88dad301a5b2d703af7010097da58860d2dd92",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DC_00",
+      "source": "unittests/32Bit_ASM/X87/DC_00.asm",
+      "sourceSha256": "9f8ab3e75dccb5af6878a1d7e0988e1c129d4e18f125731763f3948d48b0b942",
+      "manifest": "manifests/X87/DC_00.json",
+      "manifestSha256": "eb1c9735b583a24589652ec5e287cc1b5a42539c69931413430667af8e6e0d77",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DC_01",
+      "source": "unittests/32Bit_ASM/X87/DC_01.asm",
+      "sourceSha256": "70d059279779ba61d2ef34f65b684ef02d08dbaf9cd8ef5fc4c10c50e9963383",
+      "manifest": "manifests/X87/DC_01.json",
+      "manifestSha256": "1fccebc61d798f72b0772cc95b8c2170fc91796081977036dbef2d92ff1af40e",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DC_04",
+      "source": "unittests/32Bit_ASM/X87/DC_04.asm",
+      "sourceSha256": "82e160c59755236b436b0591a928464b6d435f3199789e810871132cd3bbddce",
+      "manifest": "manifests/X87/DC_04.json",
+      "manifestSha256": "f58acc23e8336cce8ff0ea426f74010101ab134afd7e80ccd547b8722290baa5",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DC_05",
+      "source": "unittests/32Bit_ASM/X87/DC_05.asm",
+      "sourceSha256": "0ad2c1476e988275cb9f52bbef374d8ab2c59ced88c6a049fe0a5147151e48de",
+      "manifest": "manifests/X87/DC_05.json",
+      "manifestSha256": "9e4cffa8a5100ca7fa7fecd10bed2400426d5a87dd2b0856e649a7ac46ca3cba",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DC_06",
+      "source": "unittests/32Bit_ASM/X87/DC_06.asm",
+      "sourceSha256": "1e50ba6134e0a53d65070151c20f493040abbc52296fe571c92982ba5627920a",
+      "manifest": "manifests/X87/DC_06.json",
+      "manifestSha256": "42df73daaea1d6db9065f5882618ba7a9b4dbe5d2ed151a1447b5fdd01fa0f66",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DC_07",
+      "source": "unittests/32Bit_ASM/X87/DC_07.asm",
+      "sourceSha256": "cb903827a3b8957b64b122adc44917d5b5e15b5f8279c65f353ca0a44c7e3881",
+      "manifest": "manifests/X87/DC_07.json",
+      "manifestSha256": "552b66bf4fe47dbb59a6d29ca7581de44c111b39319b963dbc069ebbfcb8bc9f",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DC_C0",
+      "source": "unittests/32Bit_ASM/X87/DC_C0.asm",
+      "sourceSha256": "9c0ea1c65a4468730872d7445322626272d646e5288683ee763ee8678bcc108a",
+      "manifest": "manifests/X87/DC_C0.json",
+      "manifestSha256": "5a7d74b741473f71bbf7646035fbff732a8b26c6e47fbab59afbe45fda471028",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DC_C8",
+      "source": "unittests/32Bit_ASM/X87/DC_C8.asm",
+      "sourceSha256": "39c880f223c063b717579106e7ad350bf0af595b22472d804247f316213155ec",
+      "manifest": "manifests/X87/DC_C8.json",
+      "manifestSha256": "87549d0b150a4eca13f86ed620153453501cafa1a39e16331b741eb6af9177ca",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DC_E0",
+      "source": "unittests/32Bit_ASM/X87/DC_E0.asm",
+      "sourceSha256": "707fc8e92c319e85e0da7850bf7a1124d70ab8b6b88d4849ed8c385aa60c5506",
+      "manifest": "manifests/X87/DC_E0.json",
+      "manifestSha256": "835d57657582504d93f4857d01d09069ee9539e14483ce11a795330ba19dfdb7",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DC_E8",
+      "source": "unittests/32Bit_ASM/X87/DC_E8.asm",
+      "sourceSha256": "5a495cdaccee63d64d549d0b964cfc664f63209979e17a30471980d7f4749a13",
+      "manifest": "manifests/X87/DC_E8.json",
+      "manifestSha256": "1b035f8ba3f5f99add73a1a907e16028ea3067ce026d50abbd0c2496f3f1cc28",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DC_F0",
+      "source": "unittests/32Bit_ASM/X87/DC_F0.asm",
+      "sourceSha256": "3393da8bf568000b7143b3cd6a58ba2ed093de94d482ace86b8342a73f2ed0b9",
+      "manifest": "manifests/X87/DC_F0.json",
+      "manifestSha256": "4ba371cec00393d83515dc2df557f10e81a60417a9e1b7f37479cc2928be3b9a",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DC_F8",
+      "source": "unittests/32Bit_ASM/X87/DC_F8.asm",
+      "sourceSha256": "7da6f7d7b142b59a4c1ce0bd93e60b130071329c992f61452f63efffaa36e41e",
+      "manifest": "manifests/X87/DC_F8.json",
+      "manifestSha256": "d5e303036799f7f645e17bdcac5ba71cc36c31db85d95f970ff4d3d5445f0570",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DD_00",
+      "source": "unittests/32Bit_ASM/X87/DD_00.asm",
+      "sourceSha256": "c19745eef74d0dc4bdba48907228260d8059165dc535bb6b88bd1ed917d41d39",
+      "manifest": "manifests/X87/DD_00.json",
+      "manifestSha256": "74fac543c79a3afaa24c4db0746c290726ef586ca67a58af5887672de3ef0d1a",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DD_01",
+      "source": "unittests/32Bit_ASM/X87/DD_01.asm",
+      "sourceSha256": "f97e874509f217899c8428cbdc36b4a93b000b481f20bbb442cb6da678e7fa90",
+      "manifest": "manifests/X87/DD_01.json",
+      "manifestSha256": "0eb099c6d744c542250fe8f8eb2f1820e904d8dac2282b64742155e7c5ac5495",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DD_02",
+      "source": "unittests/32Bit_ASM/X87/DD_02.asm",
+      "sourceSha256": "7efb85a2e91bfecd82e377086de5905a784db7e1e89316927c70137449b3d922",
+      "manifest": "manifests/X87/DD_02.json",
+      "manifestSha256": "efb23d0da36e3f7157d715e5a33a3720fa3d7898e613ac3de8a3bc0b0aa852ed",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DD_03",
+      "source": "unittests/32Bit_ASM/X87/DD_03.asm",
+      "sourceSha256": "678cfee444f56ae6e813264cc75ed2e3802b18089fe8e0dd7d641c3255b7a315",
+      "manifest": "manifests/X87/DD_03.json",
+      "manifestSha256": "17df52bf9929d8d3f6fec2328947f971a7fae3a3ddf4d4099ca4c387d7fcb674",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DD_04",
+      "source": "unittests/32Bit_ASM/X87/DD_04.asm",
+      "sourceSha256": "c08b6c3d260a9e83c281b89ce309fd452553673a979e21d33e063ef63eaec564",
+      "manifest": "manifests/X87/DD_04.json",
+      "manifestSha256": "a92ecd388bb4d466d1534b3cb017878f8a4f77793ada45e6be6b22b3b23e2f44",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DD_04_2",
+      "source": "unittests/32Bit_ASM/X87/DD_04_2.asm",
+      "sourceSha256": "e7aed4ef37ca9c2ee0a9a7c69d87040568ae28741a5c6a113f27e9f27e9351d6",
+      "manifest": "manifests/X87/DD_04_2.json",
+      "manifestSha256": "f4ed910d6964888386ed51f61b015428078e6b003428a9143d207b494f8e59f0",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DD_07",
+      "source": "unittests/32Bit_ASM/X87/DD_07.asm",
+      "sourceSha256": "93254c081ac12f6f77272a09cdddb9a45e115ac5c689d88354d233e778243c8a",
+      "manifest": "manifests/X87/DD_07.json",
+      "manifestSha256": "e356d707e0ce158f2305e8fd203c0a534e0bfdd13a6cfa31d89dbb7f20433bbb",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DD_C0",
+      "source": "unittests/32Bit_ASM/X87/DD_C0.asm",
+      "sourceSha256": "5946139d19282192fc6366134c7be20c377b37f89c663d375504efcd068a5dcf",
+      "manifest": "manifests/X87/DD_C0.json",
+      "manifestSha256": "29e75772aae9f06d279e3b68a4cd9f6f5364937dd12e332cff90e8be98818722",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DD_D0",
+      "source": "unittests/32Bit_ASM/X87/DD_D0.asm",
+      "sourceSha256": "2e9f8e980d3c1dfe9c222a3a9235deb655b74fef300aab24f9003c80eece4c7e",
+      "manifest": "manifests/X87/DD_D0.json",
+      "manifestSha256": "9d54649ff566931ad5c6e87ae6a23031d071bb07947bec39f7315ae2b813fa7d",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DD_D8",
+      "source": "unittests/32Bit_ASM/X87/DD_D8.asm",
+      "sourceSha256": "2fb48dd9e02db184340d297c0ade21fff0eb97a2283c32ffd04e77dad38bd04b",
+      "manifest": "manifests/X87/DD_D8.json",
+      "manifestSha256": "29d6d7370eed290b7772ae235e197a352cca6002448c482844894336ba7b01fe",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DE_00",
+      "source": "unittests/32Bit_ASM/X87/DE_00.asm",
+      "sourceSha256": "b686870a4d63c66644e5e7e913e8983b7478a8ce2b6f726200010d277e1baa73",
+      "manifest": "manifests/X87/DE_00.json",
+      "manifestSha256": "c3c21a392039e20d85060acfca69a31623c0424886ffa77d0b5a28d35e5d8809",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DE_01",
+      "source": "unittests/32Bit_ASM/X87/DE_01.asm",
+      "sourceSha256": "f9cd7236652a48b8c6b6c3dce75cc9f7849eafb76f457ac1744169f5e1c310a4",
+      "manifest": "manifests/X87/DE_01.json",
+      "manifestSha256": "29dbad4d8332814e2bc1112c5b09c6180f3294442946b52423095f41973f90b2",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DE_04",
+      "source": "unittests/32Bit_ASM/X87/DE_04.asm",
+      "sourceSha256": "bb2580f295c6b0f07d6540da9637f497cdd1af00aec7b0a82a29f66ab88c2dab",
+      "manifest": "manifests/X87/DE_04.json",
+      "manifestSha256": "7df3bca65154855a7780f16497001f7eaadef86fe81825c94d1bb610ce77fc61",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DE_05",
+      "source": "unittests/32Bit_ASM/X87/DE_05.asm",
+      "sourceSha256": "185fe99ed445f8810a5cdcd9c83ef4bdfa081ad74d2561d5123ef1e0374660c3",
+      "manifest": "manifests/X87/DE_05.json",
+      "manifestSha256": "426b66c409273d6558ce7211250e9d6b39249aadfbaa652d8c1a779fabd5ac9d",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DE_06",
+      "source": "unittests/32Bit_ASM/X87/DE_06.asm",
+      "sourceSha256": "b1798d3e30f1f11aebd74483de77aa980ebac8f6929588249e00fbe032b18a3e",
+      "manifest": "manifests/X87/DE_06.json",
+      "manifestSha256": "c97835361d6615567f21c493a8988c77678781e0119ad5696ed60d1ec6f522bd",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DE_07",
+      "source": "unittests/32Bit_ASM/X87/DE_07.asm",
+      "sourceSha256": "45b0fa814c1e8d72da47bc9eca41144fda0da9957435a0898caad17b0a2048eb",
+      "manifest": "manifests/X87/DE_07.json",
+      "manifestSha256": "0f6a9e2cfa7a51f7bda523b16551bc9f4097060881f11fb8c2edffaaa0302216",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DE_C0",
+      "source": "unittests/32Bit_ASM/X87/DE_C0.asm",
+      "sourceSha256": "35a86905ec7c85bbff0afe3aa1e6878c00398c883890fc9b29450c7903577cc8",
+      "manifest": "manifests/X87/DE_C0.json",
+      "manifestSha256": "1d2f884893b67d4b580318ee38598e7d301cfe54d78deb63f760ae8af92dd7ea",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DE_C8",
+      "source": "unittests/32Bit_ASM/X87/DE_C8.asm",
+      "sourceSha256": "89533b83bb6239cd15d70087b4abea40f97e50f8055612ac21da76aea5f4b30f",
+      "manifest": "manifests/X87/DE_C8.json",
+      "manifestSha256": "339ce78f0b08ef9c40a7cad4aa1d651c67997996aa017d4cf42df7df8b88e2f8",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DE_E0",
+      "source": "unittests/32Bit_ASM/X87/DE_E0.asm",
+      "sourceSha256": "405e86a8c2b0ea140b94b4455ec32cb2b62a6fc4901717acdae7559da2869795",
+      "manifest": "manifests/X87/DE_E0.json",
+      "manifestSha256": "4ca7f84c494915438eee3458c1400a3a43d0829ec9d24002c4856787310bc344",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DE_E8",
+      "source": "unittests/32Bit_ASM/X87/DE_E8.asm",
+      "sourceSha256": "6096324a6f78aa9c8c2d691a7d8b2fe0d820f4fc8d837dbe3aca8b47d4fe5a82",
+      "manifest": "manifests/X87/DE_E8.json",
+      "manifestSha256": "dcd354243a913a5505ee811b51aa2619e070cde04e3c3d178cf354225f6da96a",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DE_F0",
+      "source": "unittests/32Bit_ASM/X87/DE_F0.asm",
+      "sourceSha256": "7c14daa7e06963167de3a12bc359ac1b7ceadb1d50d653d5f4cf0ffde5f658bc",
+      "manifest": "manifests/X87/DE_F0.json",
+      "manifestSha256": "fefe0ee6403f1e5d44e0cac6c6927a8b10eb06f5a2bfbd6b6daf7f0d035f3507",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DE_F8",
+      "source": "unittests/32Bit_ASM/X87/DE_F8.asm",
+      "sourceSha256": "041cbe0f6282dd4aaba5239842bc8a4c9753b63cc5878ff9a78f5f99ee532041",
+      "manifest": "manifests/X87/DE_F8.json",
+      "manifestSha256": "6ceac4a2a62e044e5703434e199f670bb96979115f088109588617681c466c49",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DF_00",
+      "source": "unittests/32Bit_ASM/X87/DF_00.asm",
+      "sourceSha256": "9f2524638e5179bcabb033f36556bf1a7a9a00592e4f0c9dabc1c6d793432cdd",
+      "manifest": "manifests/X87/DF_00.json",
+      "manifestSha256": "f09b2bd89341c63aa1df78241ee17b84b968c70a348825b19af052ab23ef0342",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DF_01",
+      "source": "unittests/32Bit_ASM/X87/DF_01.asm",
+      "sourceSha256": "8644b244a73964ac2184ec882bbe8314be50d84697a27e7ef5efb1c1f98d9344",
+      "manifest": "manifests/X87/DF_01.json",
+      "manifestSha256": "6c190da65b21d3ebe2cc4330cfc2f88a17754df473eb371a3107b1dbaf0e5ad5",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DF_02",
+      "source": "unittests/32Bit_ASM/X87/DF_02.asm",
+      "sourceSha256": "b22330cdd8c7b9569a32cb26b0785a547ebd82aa764013cfd721e5541f038514",
+      "manifest": "manifests/X87/DF_02.json",
+      "manifestSha256": "a76b69d7a81559165bd2d16f200eaece6cb2be5016d1e4899579d505f3cdcb02",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DF_03",
+      "source": "unittests/32Bit_ASM/X87/DF_03.asm",
+      "sourceSha256": "a01f1ceb917c82372b644c4b05f7049d6f4a07ffeda5017540c5d00ac0bfc0ae",
+      "manifest": "manifests/X87/DF_03.json",
+      "manifestSha256": "ba850437336d1b23b7a1ade1d1f6d6ac90e33ee53a4adf0edaf3cdec2d230068",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DF_05",
+      "source": "unittests/32Bit_ASM/X87/DF_05.asm",
+      "sourceSha256": "c05c9bdb7b8eba32c232854651dce01cfc611d19fbac2674e8776383b57742f2",
+      "manifest": "manifests/X87/DF_05.json",
+      "manifestSha256": "6e591d1a8b3fb11228b63cbda69eda033e8e9343bdc8d19af6474e03063c9a4f",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DF_07",
+      "source": "unittests/32Bit_ASM/X87/DF_07.asm",
+      "sourceSha256": "4f81cfc7237f6961003f1f5d4723290896e5efd7abcd0e5f1778afa24a945f71",
+      "manifest": "manifests/X87/DF_07.json",
+      "manifestSha256": "3d0cbc0f01c072f8c846e8302594ae3b45e49c528f62c69f06b6b4378edd55bf",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DF_C0",
+      "source": "unittests/32Bit_ASM/X87/DF_C0.asm",
+      "sourceSha256": "af412c8d59295e852963e58aae52b1cc468af48a0b34f47ffdfa3494a16cc447",
+      "manifest": "manifests/X87/DF_C0.json",
+      "manifestSha256": "e1e8945d6083a7ca3e5cbe720294b31f60b56e5baab3216b0adfcd4fd91fff6b",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/DF_E0",
+      "source": "unittests/32Bit_ASM/X87/DF_E0.asm",
+      "sourceSha256": "6ce831123518ea6b1d7d319041e0ee1e66fabe3ded88774158fddcb9bd80f17a",
+      "manifest": "manifests/X87/DF_E0.json",
+      "manifestSha256": "ed5c6d5bf3059040421842ccb68caa76a173bb37d582b6ea720b9eb22b8550a3",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/FST_AddrModes",
+      "source": "unittests/32Bit_ASM/X87/FST_AddrModes.asm",
+      "sourceSha256": "f7c389036577c6a5b7f7683f8e34174b6e099144aa435eb153ee03b99d7587ec",
+      "manifest": "manifests/X87/FST_AddrModes.json",
+      "manifestSha256": "4e068dcbe20de415897bf867b47b914642a3d33f4f3b659b65320e6eae2269bb",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/RoundingNeg",
+      "source": "unittests/32Bit_ASM/X87/RoundingNeg.asm",
+      "sourceSha256": "ac30afc2e70b087a73003834038ac1abd25ee0febb85d0a7811b13322fce8ed0",
+      "manifest": "manifests/X87/RoundingNeg.json",
+      "manifestSha256": "11439582bc7d8620f332d8fcc9ab0ea09da1cf4ad08e90e9f38b66608c62f557",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/RoundingPos",
+      "source": "unittests/32Bit_ASM/X87/RoundingPos.asm",
+      "sourceSha256": "ac7ec65c8a32e20b946f3d29d0f3c90cfb87ee68859ef8620a7758c9b7a206fd",
+      "manifest": "manifests/X87/RoundingPos.json",
+      "manifestSha256": "3d25614a552413fd5ce17312a96823e64e78b68029d822226a7aa15b12ec4b55",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_div_zero",
+      "source": "unittests/32Bit_ASM/X87/invalid_div_zero.asm",
+      "sourceSha256": "65af2f4f48a48f6480c1660fc54f99d9b3126ef48d5c54e3def7aaeeb60c9368",
+      "manifest": "manifests/X87/invalid_div_zero.json",
+      "manifestSha256": "46c9f47b098736e4acd2c46b7d0c2d4436f0e1b03d4a48a91cf192e3d9fa9efe",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_fcos_infinity",
+      "source": "unittests/32Bit_ASM/X87/invalid_fcos_infinity.asm",
+      "sourceSha256": "897436b50402a3a6a48f54cae8c93c7ad775c737bf81ffafe6b54024c39832dd",
+      "manifest": "manifests/X87/invalid_fcos_infinity.json",
+      "manifestSha256": "f49323d7536a912f53591f4902d1c6939f84c13b1de7d191e1e1c7b6ef2c2d09",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_fist_nan",
+      "source": "unittests/32Bit_ASM/X87/invalid_fist_nan.asm",
+      "sourceSha256": "84ecafaafdf471afc219b9b87569eccd0e59459dc989db367f0c7aa20010392d",
+      "manifest": "manifests/X87/invalid_fist_nan.json",
+      "manifestSha256": "51e96dfdbada7cd01b2efc2c24c4a1963678d1bd98425d762fd38ca4ce421784",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_fist_overflow",
+      "source": "unittests/32Bit_ASM/X87/invalid_fist_overflow.asm",
+      "sourceSha256": "d416bc8cde325aee4e73c506a60178187224d2882f33fa3f0985d18feefa0c9c",
+      "manifest": "manifests/X87/invalid_fist_overflow.json",
+      "manifestSha256": "e2196d5df03db27b60154588ac18e799e716e0d9b969087d55a5a745793d77f8",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_fist_overflow_16bit",
+      "source": "unittests/32Bit_ASM/X87/invalid_fist_overflow_16bit.asm",
+      "sourceSha256": "8d48f6acdd5d61ba116c59e366df2d32f987673a9a6bb5ff19ca1cfb160ffd42",
+      "manifest": "manifests/X87/invalid_fist_overflow_16bit.json",
+      "manifestSha256": "c5e710a18b49fa51f9e4632935492a340baa7b0a8cc215a463329be9deae1ed7",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_fist_overflow_32bit",
+      "source": "unittests/32Bit_ASM/X87/invalid_fist_overflow_32bit.asm",
+      "sourceSha256": "f9ef95d2d7b4bbc29b0075f934cab0c2d261aac29a49f0e22fe9940b9c04af80",
+      "manifest": "manifests/X87/invalid_fist_overflow_32bit.json",
+      "manifestSha256": "822582c7cad2706a29e38393b616e68230e03a57d2b70d1310c9ee2c5a448ba2",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_fist_overflow_64bit",
+      "source": "unittests/32Bit_ASM/X87/invalid_fist_overflow_64bit.asm",
+      "sourceSha256": "57061d46f3733cfbcf2f1b4047ff9cc2423541dbfdc733696a7cb87a9a7fdc8a",
+      "manifest": "manifests/X87/invalid_fist_overflow_64bit.json",
+      "manifestSha256": "56c44a1306e9cb9ae5211cb2c0f5876b1d090863b21ceaee317c332bab6ea103",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_fprem_infinity",
+      "source": "unittests/32Bit_ASM/X87/invalid_fprem_infinity.asm",
+      "sourceSha256": "072e5ff9bcef7956eb7ac96c1d1b9817461f0911130f0dd46c55808198c95273",
+      "manifest": "manifests/X87/invalid_fprem_infinity.json",
+      "manifestSha256": "a9395ded1eb0bcc44f1d729a7137caed203691fddf7a87b792742f2d99481538",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_fptan_infinity",
+      "source": "unittests/32Bit_ASM/X87/invalid_fptan_infinity.asm",
+      "sourceSha256": "3e5dc102f5a551343ba743cece1a632d51375440ee78ba93cd9cb2027438558a",
+      "manifest": "manifests/X87/invalid_fptan_infinity.json",
+      "manifestSha256": "90b1ef05bcecfda19f59cd8c600bbbf26073ab38f6a71e8f2bcedaefde6406ba",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_fsin_infinity",
+      "source": "unittests/32Bit_ASM/X87/invalid_fsin_infinity.asm",
+      "sourceSha256": "9b98a932c2fa60eba225c7f3baf08fc3d582946ae816ce8dc978075bd48108a2",
+      "manifest": "manifests/X87/invalid_fsin_infinity.json",
+      "manifestSha256": "5f55735e225e9b7d459863f4c9c5c351ed9404ab22a772aec68f655489f5cd82",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_fsincos_infinity",
+      "source": "unittests/32Bit_ASM/X87/invalid_fsincos_infinity.asm",
+      "sourceSha256": "88b1bcb740219f409ca49c34bd8f47bf8b42736f5a8334d8b31f7c7c83d469aa",
+      "manifest": "manifests/X87/invalid_fsincos_infinity.json",
+      "manifestSha256": "ae1787871a24486c236ad48fdfa480e6279fa1ec57ef553393ab239f29d3389d",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_infinity_fsub_memory",
+      "source": "unittests/32Bit_ASM/X87/invalid_infinity_fsub_memory.asm",
+      "sourceSha256": "c20a07e9a4c102528145a1b30a6929f07ba5ffa1484ec8d05f691265b2676047",
+      "manifest": "manifests/X87/invalid_infinity_fsub_memory.json",
+      "manifestSha256": "837fb0659b768603bfe4361144b5a734c718f446add973b944a6d754235b7455",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_infinity_fsubr_infinity",
+      "source": "unittests/32Bit_ASM/X87/invalid_infinity_fsubr_infinity.asm",
+      "sourceSha256": "b4337b12d5a7db22a9f161e9c68761bcd0f066db0eb1a8397c826e749bf1b758",
+      "manifest": "manifests/X87/invalid_infinity_fsubr_infinity.json",
+      "manifestSha256": "5ca3e1b74a1167cb56f7baa8e9646161b1deb55bcc5d98957baed15137a081f8",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_infinity_mul_zero",
+      "source": "unittests/32Bit_ASM/X87/invalid_infinity_mul_zero.asm",
+      "sourceSha256": "4eb012f81206ebffac13a3ee40cc512f93c30758515ea9799f63ba5387d0044e",
+      "manifest": "manifests/X87/invalid_infinity_mul_zero.json",
+      "manifestSha256": "46d9eda1e8b5a4cfb829db5cec7d22208b8b6c10e66e9a0f42c327b50276fc29",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_infinity_ops",
+      "source": "unittests/32Bit_ASM/X87/invalid_infinity_ops.asm",
+      "sourceSha256": "7cc3d5a1a15795f8de04492353a8888950e6671ae566ce8e176121a9a6752b2c",
+      "manifest": "manifests/X87/invalid_infinity_ops.json",
+      "manifestSha256": "80758eda6e550918c934b4e456344adfa2ef9ab413853582bfb6851563a200cd",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_infinity_sub_infinity",
+      "source": "unittests/32Bit_ASM/X87/invalid_infinity_sub_infinity.asm",
+      "sourceSha256": "c4e3e36a65130ae6a745cd1c8676cc75a0d168f9aacb16b262d1e403d49dce6b",
+      "manifest": "manifests/X87/invalid_infinity_sub_infinity.json",
+      "manifestSha256": "3705ef0aaeff121d1b6df0b50531074a358e7a3d9c469ea6225096b79239d92a",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_neg_infinity_sub_neg_infinity",
+      "source": "unittests/32Bit_ASM/X87/invalid_neg_infinity_sub_neg_infinity.asm",
+      "sourceSha256": "19fe43072d8a6fd82196acf98d6d227fea5a3954534eed952150cc63c97d71de",
+      "manifest": "manifests/X87/invalid_neg_infinity_sub_neg_infinity.json",
+      "manifestSha256": "33a63ee67a9fef19cb290f4040bd416c313d15958c174aeba64e91c4fb01f3dd",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_reduced_precision",
+      "source": "unittests/32Bit_ASM/X87/invalid_reduced_precision.asm",
+      "sourceSha256": "cce4f43883660cd6ae2b53c613165d5b812981e9193daea3ae1a089526c99019",
+      "manifest": "manifests/X87/invalid_reduced_precision.json",
+      "manifestSha256": "3524d476e7b430b51f672f573d4f31a2a9d65f3e7a2f9c5ce80cafad29411bd6",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_simple_test",
+      "source": "unittests/32Bit_ASM/X87/invalid_simple_test.asm",
+      "sourceSha256": "6b51d437dce9432e70ac691414dcea22d2f3b09c35217378dde532b05d8403d9",
+      "manifest": "manifests/X87/invalid_simple_test.json",
+      "manifestSha256": "ee13187425b81e16f1f630649f05c51a9b19db74f49b70ce6d1b15d3cb47cd6d",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/invalid_sqrt_negative",
+      "source": "unittests/32Bit_ASM/X87/invalid_sqrt_negative.asm",
+      "sourceSha256": "c372eb878578da04c9c2676840f7100863bc149a0e3cb7ebabacadf3cc26242d",
+      "manifest": "manifests/X87/invalid_sqrt_negative.json",
+      "manifestSha256": "e097e3f1c6b07c5af6b7da0b05b76a359ecafd0ab673909e2d87c3bc33c0b93d",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/valid_fist_16bit",
+      "source": "unittests/32Bit_ASM/X87/valid_fist_16bit.asm",
+      "sourceSha256": "405f8131602e11e28aa05d8a203011c5c2e82dbe4400a5f37c852ac9227d35c1",
+      "manifest": "manifests/X87/valid_fist_16bit.json",
+      "manifestSha256": "74dc2223b10c248796004345d0b2b27ac32d18946dd6713929616dc8af7f603b",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "X87/valid_operation",
+      "source": "unittests/32Bit_ASM/X87/valid_operation.asm",
+      "sourceSha256": "ddcf31af2ae1b67899e45469eac188a69baa1dddb0d4b3b925ccd01030277384",
+      "manifest": "manifests/X87/valid_operation.json",
+      "manifestSha256": "81188d62bd019572974bff7347f505b3b83f12379be11756210b10c17151341a",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "arpl",
+      "source": "unittests/32Bit_ASM/arpl.asm",
+      "sourceSha256": "f90cd811acf4c9b914e2ac68da8ac4bd3fb8f8ce87a4a46b100b23b9b8b8d8cd",
+      "manifest": "manifests/arpl.json",
+      "manifestSha256": "d6c968d888b3ab2ca63f1b7271c432e4fceca7a7b2cf0bd0c939f8d452adf761",
+      "status": "ready",
+      "reason": null
+    },
+    {
+      "id": "arpl_2",
+      "source": "unittests/32Bit_ASM/arpl_2.asm",
+      "sourceSha256": "15503cd1a9c25fb3afb785003298d46f4798669d8775a7ef9b594a730ff4e1c8",
+      "manifest": "manifests/arpl_2.json",
+      "manifestSha256": "541c96fc4296f58055cb10b95db5f4310fb37075328600036ffbf3c16616c398",
+      "status": "ready",
+      "reason": null
+    }
+  ]
+}

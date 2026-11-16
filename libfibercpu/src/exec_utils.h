@@ -229,10 +229,9 @@ inline bool CheckCondition(uint64_t& flags_cache, uint8_t cond) {
 FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
     uint8_t seg = op->prefixes.flags.segment;
     // 1=ES, 2=CS, 3=SS, 4=DS, 5=FS, 6=GS
-    if (seg >= 5) {
-        return state->ctx.seg_base[seg];
-    }
-    return 0;
+    // Moffs, XLAT and string source operands default to DS. An explicit
+    // override may select any of the six caller-provided segment bases.
+    return state->ctx.seg_base[seg == 0 ? 4 : seg];
 }
 
 FORCE_INLINE uint32_t ComputeEA(EmuState* state, const DecodedOp* op) {
@@ -246,15 +245,21 @@ FORCE_INLINE uint32_t ComputeEA(EmuState* state, const DecodedOp* op) {
 
     // index is usually 0 if no index (pointing to zero reg)
     // base is usually 0 if no base (pointing to zero reg)
-    return base + (index << memdesc::Scale(ea_desc)) + ext->data.disp;
+    uint32_t offset = base + (index << memdesc::Scale(ea_desc)) + ext->data.disp;
+    // Address size controls offset arithmetic, independently of operand width.
+    // Truncate before adding the segment base, including for LEA destinations.
+    return op->prefixes.flags.addrsize ? offset & 0xFFFFu : offset;
 }
 
 FORCE_INLINE uint32_t GetMemSegmentBase(EmuState* state, const DecodedOp* op) {
     uint8_t seg = memdesc::Segment(GetExt(op)->data.ea_desc);
-    if (seg >= 5) {
-        return state->ctx.seg_base[seg];
+    if (seg == 0) {
+        // Only the base register selects the default segment. EBP used as a
+        // SIB index with no base still defaults to DS, not SS.
+        const uint8_t base = memdesc::BaseOffset(GetExt(op)->data.ea_desc);
+        seg = (base == EBP * 4 || base == ESP * 4) ? 3 : 4;
     }
-    return 0;
+    return state->ctx.seg_base[seg];
 }
 
 FORCE_INLINE uint32_t ComputeLinearAddress(EmuState* state, const DecodedOp* op) {
@@ -692,11 +697,14 @@ FORCE_INLINE T AluShl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t co
     count &= 0x1F;
     if (count == 0) return dest;
 
-    // CF: Last bit shifted out is bit (sizeof(T)*8 - count) of original
+    // Widen before shifting: narrow unsigned operands otherwise promote to
+    // signed int, and counts above the operand width must not underflow the
+    // carry-bit index. CF is undefined for SHL counts >= the operand width.
     uint32_t width = sizeof(T) * 8;
-    bool cf = (dest >> (width - count)) & 1;
+    uint64_t bits = static_cast<std::make_unsigned_t<T>>(dest);
+    bool cf = count <= width && ((bits >> (width - count)) & 1);
 
-    T res = dest << count;
+    T res = static_cast<T>(bits << count);
 
     if constexpr (UpdateFlags) {
         ClearArithmeticFlags(flags_cache);
@@ -746,8 +754,10 @@ FORCE_INLINE T AluSar(EmuState* state, uint64_t& flags_cache, T dest, uint8_t co
     ST sres = sdest >> count;
     T res = (T)sres;
 
-    // CF: Last bit shifted out
-    bool cf = (dest >> (count - 1)) & 1;
+    // Once all original bits have left the operand, SAR keeps shifting out
+    // the replicated sign bit. Unlike SHL/SHR, CF is defined in this case.
+    uint32_t width = sizeof(T) * 8;
+    bool cf = count >= width ? sdest < 0 : ((dest >> (count - 1)) & 1) != 0;
 
     if constexpr (UpdateFlags) {
         ClearArithmeticFlags(flags_cache);
@@ -761,58 +771,51 @@ FORCE_INLINE T AluSar(EmuState* state, uint64_t& flags_cache, T dest, uint8_t co
 
 template <typename T, bool UpdateFlags = true>
 FORCE_INLINE T AluRol(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
-    if (count == 0) return dest;
     uint32_t width = sizeof(T) * 8;
-    count &= 0x1F;
-    count %= width;
-    if (count == 0) return dest;
+    uint8_t masked_count = count & 0x1F;
+    if (masked_count == 0) return dest;
+    count = masked_count % width;
 
-    T res = (dest << count) | (dest >> (width - count));
+    // A full byte/word turn preserves the value but still updates CF. Avoid
+    // shifting by the width, and avoid signed integer promotions for r/m16.
+    uint64_t bits = static_cast<std::make_unsigned_t<T>>(dest);
+    T res = count == 0 ? dest : static_cast<T>((bits << count) | (bits >> (width - count)));
 
     if constexpr (UpdateFlags) {
-        uint32_t flags = GetFlags32NoPF(flags_cache) & ~(CF_MASK | OF_MASK);
-        // SF/ZF/PF/AF unaffected
+        // SF/ZF/PF/AF are untouched, including any deferred parity state.
+        bool cf = (res & 1) != 0;
+        AssignCF(flags_cache, cf);
 
-        // CF: LSB of result
-        bool cf = (res & 1);
-        if (cf) flags |= CF_MASK;
-
-        // OF: For 1-bit, OF = MSB(Res) ^ CF
-        if (count == 1) {
+        // OF is defined only when the masked (not modulo-width) count is 1.
+        if (masked_count == 1) {
             bool msb = (res >> (width - 1)) & 1;
-            if (msb != cf) flags |= OF_MASK;
+            AssignOF(flags_cache, msb != cf);
         }
-
-        SetFlags32(flags_cache, (GetFlags32NoPF(flags_cache) & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags);
     }
     return res;
 }
 
 template <typename T, bool UpdateFlags = true>
 FORCE_INLINE T AluRor(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
-    if (count == 0) return dest;
     uint32_t width = sizeof(T) * 8;
-    count &= 0x1F;
-    count %= width;
-    if (count == 0) return dest;
+    uint8_t masked_count = count & 0x1F;
+    if (masked_count == 0) return dest;
+    count = masked_count % width;
 
-    T res = (dest >> count) | (dest << (width - count));
+    uint64_t bits = static_cast<std::make_unsigned_t<T>>(dest);
+    T res = count == 0 ? dest : static_cast<T>((bits >> count) | (bits << (width - count)));
 
     if constexpr (UpdateFlags) {
-        uint32_t flags = GetFlags32NoPF(flags_cache) & ~(CF_MASK | OF_MASK);
-
         // CF: MSB of result
         bool cf = (res >> (width - 1)) & 1;
-        if (cf) flags |= CF_MASK;
+        AssignCF(flags_cache, cf);
 
-        // OF: For 1-bit, OF = MSB(Res) ^ MSB-1(Res)
-        if (count == 1) {
+        // SF/ZF/PF/AF are preserved; OF is undefined for masked counts > 1.
+        if (masked_count == 1) {
             bool msb = (res >> (width - 1)) & 1;
             bool smsb = (res >> (width - 2)) & 1;
-            if (msb != smsb) flags |= OF_MASK;
+            AssignOF(flags_cache, msb != smsb);
         }
-
-        SetFlags32(flags_cache, (GetFlags32NoPF(flags_cache) & (PF_MASK | AF_MASK | ZF_MASK | SF_MASK)) | flags);
     }
     return res;
 }
@@ -820,7 +823,8 @@ FORCE_INLINE T AluRor(EmuState* state, uint64_t& flags_cache, T dest, uint8_t co
 template <typename T, bool UpdateFlags = true>
 FORCE_INLINE T AluRcl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     uint32_t width = sizeof(T) * 8;
-    count %= (width + 1);
+    uint8_t masked_count = count & 0x1F;
+    count = masked_count % (width + 1);
     if (count == 0) return dest;
 
     uint64_t val = (uint64_t)(std::make_unsigned_t<T>)dest;
@@ -835,7 +839,7 @@ FORCE_INLINE T AluRcl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t co
     if constexpr (UpdateFlags) {
         AssignCF(flags_cache, new_cf);
 
-        if (count == 1) {
+        if (masked_count == 1) {
             bool msb = (res >> (width - 1)) & 1;
             AssignOF(flags_cache, msb != new_cf);
         }
@@ -846,7 +850,8 @@ FORCE_INLINE T AluRcl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t co
 template <typename T, bool UpdateFlags = true>
 FORCE_INLINE T AluRcr(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
     uint32_t width = sizeof(T) * 8;
-    count %= (width + 1);
+    uint8_t masked_count = count & 0x1F;
+    count = masked_count % (width + 1);
     if (count == 0) return dest;
 
     uint64_t val = (uint64_t)(std::make_unsigned_t<T>)dest;
@@ -861,7 +866,7 @@ FORCE_INLINE T AluRcr(EmuState* state, uint64_t& flags_cache, T dest, uint8_t co
     if constexpr (UpdateFlags) {
         AssignCF(flags_cache, new_cf);
 
-        if (count == 1) {
+        if (masked_count == 1) {
             bool msb = (res >> (width - 1)) & 1;
             bool smsb = (res >> (width - 2)) & 1;
             AssignOF(flags_cache, msb != smsb);

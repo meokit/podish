@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/x87_FIP_reduced",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "4df3ffcbc11019f3fa1bf9d1e935a28c0b134a7ccad3cb1e23331af92f629f12",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/x87_FIP_reduced.bin",
+  "binarySha256": "52bc34a0ff37ab5d01c09ec2ade45fcbaea040be3431c2783daf76f4116a524b",
+  "haltAddresses": [
+    73394
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RDX": "0"
+    },
+    "Env": {
+      "FEX_JITFEATURES": "enablex87fip",
+      "FEX_X87REDUCEDPRECISION": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

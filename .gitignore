@@ -48,3 +48,4 @@ tests/pjdfstest/upstream/
 *.xcuserstate
 xcuserdata/
 Fiberish.Tests/TestResults/
+Fiberish.X86.Tests/TestResults/

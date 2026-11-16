@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/x87_unordered_cmp_fix_32",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "26e7bf826c9440bea204ab98688c9a3016ee4577e09b49fbf79df3f57197819e",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/x87_unordered_cmp_fix_32.bin",
+  "binarySha256": "42945f9bbf0afb39ca4d4355076167154858b4ea4c41f72e5c3a7045690d04cf",
+  "haltAddresses": [
+    65649,
+    65655
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0xcafecafe"
+    },
+    "Mode": "32BIT"
+  }
+}

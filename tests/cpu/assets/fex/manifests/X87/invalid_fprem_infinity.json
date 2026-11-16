@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "X87/invalid_fprem_infinity",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "072e5ff9bcef7956eb7ac96c1d1b9817461f0911130f0dd46c55808198c95273",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/X87/invalid_fprem_infinity.bin",
+  "binarySha256": "9f063bdcbd44177e0ec15018a244c502b0df2a200da6a2a4aff741ad6c13a0df",
+  "haltAddresses": [
+    65560
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "1"
+    },
+    "Mode": "32BIT"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "SecondaryModRM/Reg_7_4_2",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "1e8d83058bddc8584d507a47cb358ef5d39f81391ccaed0bc2f3d35b9037f1b6",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/SecondaryModRM/Reg_7_4_2.bin",
+  "binarySha256": "1c7966c7a38f05f22233a918c69334c13c99bde085a50839f2e022cd3707324b",
+  "haltAddresses": [
+    65781
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RBX": "0x0",
+      "RCX": "0x000000000a121a20",
+      "RDX": "0x000000000b131b20"
+    },
+    "Mode": "32BIT",
+    "HostFeatures": [
+      "CLZERO"
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/SignExtendBug",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "070112cf800abcd1f0ac0b1d9099a23b44a209923e5b32b8f5974548bbae6b8c",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/SignExtendBug.bin",
+  "binarySha256": "9ff91244b34c34c18b63c8449e051b39f3cbf7f13e26b845be77bb3472659ec5",
+  "haltAddresses": [
+    65583
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x41424344",
+      "RBX": "0x41424344",
+      "RCX": "0x51525354"
+    },
+    "MemoryRegions": {
+      "0x00fd0000": "4096",
+      "0xf0000000": "4096"
+    },
+    "MemoryData": {
+      "0xf0000000": "0x41424344",
+      "0x00fd0000": "0x51525354"
+    },
+    "Mode": "32BIT"
+  }
+}

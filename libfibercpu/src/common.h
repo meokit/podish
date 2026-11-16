@@ -90,6 +90,13 @@ struct alignas(64) Context {
     uint16_t fpu_sw = 0;
     uint16_t fpu_cw = 0;       // Default to 0 to match Unicorn (was 0x037F)
     uint16_t fpu_tw = 0xFFFF;  // Empty
+    // Architectural last x87 data-instruction/data-operand metadata. Control
+    // instructions (save/restore/init/status/control-word) do not overwrite FIP.
+    uint32_t fpu_ip = 0;
+    uint32_t fpu_dp = 0;
+    uint16_t fpu_opcode = 0;
+    uint16_t fpu_cs = 0;
+    uint16_t fpu_ds = 0;
 };
 
 struct EmuState;

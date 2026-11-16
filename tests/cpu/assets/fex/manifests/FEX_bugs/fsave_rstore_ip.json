@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "FEX_bugs/fsave_rstore_ip",
+  "revision": "8e95a994a014b0e68fa38b7bf17d84987102e374",
+  "sourceSha256": "c07cd32b2e4a6aa323e4f61f5ca677f0065e6d67933f1f6c743df605972ef0c7",
+  "loadAddress": 65536,
+  "entryPoint": 65536,
+  "binary": "bin/FEX_bugs/fsave_rstore_ip.bin",
+  "binarySha256": "10abc2979011edd2bf58079b4d628da9f165f72ea379cdea8b07629625ca8ae8",
+  "haltAddresses": [
+    65585
+  ],
+  "instructionLimit": 1000000,
+  "dynamicCode": [],
+  "config": {
+    "RegData": {
+      "RAX": "0x61626364"
+    },
+    "Mode": "32BIT"
+  }
+}
