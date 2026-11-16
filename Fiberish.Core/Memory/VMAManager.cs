@@ -918,9 +918,49 @@ public class VMAManager
         bool resetCodeCacheRange)
     {
         if (len == 0) return;
-        engine.ReprotectMappedRange(addr, len, (byte)perms);
+
+        if ((perms & Protection.Write) == 0)
+        {
+            engine.ReprotectMappedRange(addr, len, (byte)perms);
+        }
+        else
+        {
+            // Grant Write per page, but never to a backing page that is still
+            // shared: a MAP_PRIVATE page that has not been copied yet must stay
+            // read-only so the store faults into the CoW path instead of
+            // modifying the file cache (or another address space's backing).
+            var end = ComputeRangeEnd(addr, len);
+            const uint pageSize = LinuxConstants.PageSize;
+            for (var page = addr & ~(pageSize - 1); page < end; page += pageSize)
+            {
+                var pagePerms = perms;
+                if (IsCowSharedBackingPage(page))
+                    pagePerms &= ~Protection.Write;
+                engine.ReprotectMappedRange(page, pageSize, (byte)pagePerms);
+            }
+        }
+
         if (resetCodeCacheRange)
             engine.ResetCodeCacheByRange(addr, len);
+    }
+
+    /// <summary>
+    /// True when the page is a populated private mapping whose native backing is
+    /// still shared (file cache or the shared zero page), i.e. a write must go
+    /// through copy-on-write before Write may be granted natively.
+    /// </summary>
+    private bool IsCowSharedBackingPage(uint pageAddr)
+    {
+        var vma = FindVmArea(pageAddr);
+        if (vma == null) return false;
+        if ((vma.Flags & MapFlags.Private) == 0) return false;
+        if (vma.File == null) return false;
+
+        var privateObject = vma.VmAnonVma;
+        if (privateObject == null) return true;
+
+        var pageIndex = vma.GetPageIndex(pageAddr);
+        return privateObject.GetPage(pageIndex) == IntPtr.Zero;
     }
 
     public void RebuildExternalMappingsFromNative(Engine engine, IEnumerable<VmArea> vmas)

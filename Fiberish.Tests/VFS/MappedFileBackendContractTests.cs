@@ -127,6 +127,30 @@ public sealed class MappedFileBackendContractTests
     }
 
     [Fact]
+    public void MprotectWrite_OnPopulatedPrivateFileMapping_DoesNotModifySharedFilePage()
+    {
+        using var env = new MappedFileBackendTestEnvironment("hostfs", LinuxConstants.PageSize);
+        const uint address = MappedFileBackendTestEnvironment.Address;
+        env.Map(0, address, shared: false);
+
+        Assert.Equal(FaultResult.Handled, env.Memory.HandleFaultDetailed(address, false, env.Engine));
+        var original = env.Read(address);
+        Assert.Equal(MappedFileBackendTestEnvironment.Pattern(0), original);
+
+        // A redundant mprotect(RW) must not drop the CoW protection of the
+        // still-shared backing page.
+        Assert.Equal(0, env.Memory.Mprotect(address, LinuxConstants.PageSize,
+            Protection.Read | Protection.Write, env.Engine, out _));
+
+        Assert.True(env.Engine.CopyToUser(address, new byte[] { 0x99 }));
+        Assert.Equal((byte)0x99, env.Read(address));
+
+        using var file = new FileStream(env.BackingPath, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        Assert.Equal(original, (byte)file.ReadByte());
+    }
+
+    [Fact]
     public void LeaseDiagnostics_RejectForeignPointersAndTrackRetirementUntilRelease()
     {
         using var env = new MappedFileBackendTestEnvironment("hostfs", 4096);
