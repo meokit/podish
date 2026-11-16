@@ -357,13 +357,12 @@ public class ElfLoader
                             mm.FindVmArea(pageStart)?.SetSyntheticZeroRange(bssStart, fileMapEnd);
                     }
 
-                    if (bssStart < fileMapEnd)
-                    {
-                        var zeroLen = (int)(fileMapEnd - bssStart);
-                        if (!engine.CopyToUser(bssStart, bssZeroPage[..zeroLen]))
-                            Logger.LogWarning("ElfLoader: Failed to zero-fill BSS tail at 0x{Addr:x} (len {Len})",
-                                bssStart, zeroLen);
-                    }
+                    // The tail bytes of the last file-backed page are provided by
+                    // the synthetic zero range above: the host page here is the
+                    // shared file-cache page and the segment mapping is often
+                    // read-only, so writing zeros through it would either fault
+                    // (read-only writes are rejected) or corrupt the file cache.
+                    // Guest reads and CoW copies apply the zero fill instead.
 
                     if (bssEnd > fileMapEnd)
                     {
