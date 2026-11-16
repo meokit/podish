@@ -21,7 +21,12 @@ batch (66 cases; first baseline: 22 PASS). See
 (18 cases; Podish 18 PASS). The follow-up exec hardening round adds staged
 `execve` failure atomicity, auxv/credentials, `AT_EXECFN`, FS/GS/EFLAGS reset,
 thread-group teardown and ETXTBSY/noexec checks (see
-[EXEC_HARDENING.md](EXEC_HARDENING.md)). SysV IPC remains
+[EXEC_HARDENING.md](EXEC_HARDENING.md)). The follow-up
+[`cases-exec.json`](cases-exec.json) batch adds five local standalone LTP
+binaries for the remaining exec boundaries; see
+[EXEC_BASELINE.md](EXEC_BASELINE.md) for Linux contracts and commands and
+[EXEC_FIX_REPORT.md](EXEC_FIX_REPORT.md) for the runtime repairs and allocation
+work. SysV IPC remains
 available as a lower-usage compatibility reference in
 [IPC_BASELINE.md](IPC_BASELINE.md) (39 cases; first Podish baseline 4 PASS,
 6 FAIL, 26 BROKEN, 3 SKIP). [BUSYBOX_IMAGE.md](BUSYBOX_IMAGE.md) records the
@@ -79,6 +84,12 @@ batches use `cases-net-io.json` (`artifacts/ltp-net-io`, see
 deferred `cases-ipc.json` (`artifacts/ltp-ipc`, see
 [IPC_BASELINE.md](IPC_BASELINE.md)). A manifest case may also set
 `"timeoutSeconds"` to override the host timeout for long-running race tests.
+
+`cases-exec.json` is the separate local exec boundary batch (five binaries).
+Build it with the same script into `artifacts/ltp-exec`; it requires a root
+native baseline and defaults to tmpfs. Its `localSuite: exec` adds only our
+own sources to the disposable build tree, never changes upstream tests, and
+records local source hashes in `build.json`.
 
 The `tmpfs` backend imports one generated image containing all selected
 binaries under `/opt/ltp/testcases/bin`, a static i386 BusyBox under `/bin`,

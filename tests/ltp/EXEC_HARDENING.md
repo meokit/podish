@@ -86,18 +86,11 @@ nonzero length, unreadable control data and invalid `SCM_RIGHTS` fds.
   exercise descriptor checks. See `PIPE_BASELINE.md`.
 - i386 segment selectors (DS/ES/SS) are not modeled; only FS/GS bases are reset.
 - `AT_SYSINFO`/`AT_SYSINFO_EHDR` are not provided by the current minimal vDSO.
-- argv and envp vector budgets are enforced independently; a combined vector
-  slightly above `RLIMIT_STACK/4` can still pass.
 - `CLONE_FILES` is unshared on successful exec; `CLONE_FS` isolation is not.
-- `PT_INTERP` is opened without the noexec/DAC/ETXTBSY checks applied to the
-  main executable and shebang interpreter; only the ELF loader path is covered.
-- Writable `MAP_SHARED` mappings do not count towards `ETXTBSY`; only writable
-  open file descriptions do.
-- `MS_NOSUID` and the `S_ISGID | S_IXGRP` rule are not applied when computing
-  exec credentials, and file capabilities are not modeled.
-- The commit phase (thread teardown / SysV detach) runs after a successful
-  staged load. A scheduler invariant failure there would leave the old image in
-  place but with updated process-image metadata; normal scheduler paths do not
-  hit it.
+- File capabilities are not modeled. The previously listed PT_INTERP access,
+  mapping-held writers, nosuid/SGID, combined vector budget and commit-error
+  handling gaps are addressed in [EXEC_FIX_REPORT.md](EXEC_FIX_REPORT.md), with
+  standalone Linux oracles and host-side failure injection. Post-commit
+  failures are fatal, not rolled back, matching Linux's point-of-no-return rule.
 - `ElfLoader` still logs `Failed to zero-fill BSS tail` for some read-only BSS
   tails; this predates the exec round and does not affect the selected tests.
