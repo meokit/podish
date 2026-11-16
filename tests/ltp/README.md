@@ -18,7 +18,10 @@ batch (66 cases; first baseline: 22 PASS). See
 [MEMORY_FIX_REPORT.md](MEMORY_FIX_REPORT.md) for bounded repairs
 (36 PASS, 11 FAIL, 14 BROKEN, 0 TIMEOUT, 5 SKIP) and deferred memory-model work.
 [PIPE_BASELINE.md](PIPE_BASELINE.md) selects the next batch: pipes and FIFOs
-(18 cases; Podish 14 PASS, 1 FAIL, 3 BROKEN). SysV IPC remains
+(18 cases; Podish 18 PASS). The follow-up exec hardening round adds staged
+`execve` failure atomicity, auxv/credentials, `AT_EXECFN`, FS/GS/EFLAGS reset,
+thread-group teardown and ETXTBSY/noexec checks (see
+[EXEC_HARDENING.md](EXEC_HARDENING.md)). SysV IPC remains
 available as a lower-usage compatibility reference in
 [IPC_BASELINE.md](IPC_BASELINE.md) (39 cases; first Podish baseline 4 PASS,
 6 FAIL, 26 BROKEN, 3 SKIP). [BUSYBOX_IMAGE.md](BUSYBOX_IMAGE.md) records the

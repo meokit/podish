@@ -1244,7 +1244,7 @@ file sealed class ProcSysRootInode : Inode
         else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("version"u8))
             created = CreateFile(dir, childName, ctx => ProcFsManager.GenerateSysKernelVersion(ctx.Process));
         else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("pid_max"u8))
-            created = CreateFile(dir, childName, _ => $"{int.MaxValue}\n");
+            created = CreateFile(dir, childName, _ => "4194304\n");
         else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("tainted"u8))
             created = CreateFile(dir, childName, _ => "0\n");
         else if (_kind == ProcSysKind.Kernel && name.SequenceEqual("sem"u8))

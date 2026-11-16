@@ -180,7 +180,26 @@ public sealed partial class LtpRegressionTests
         var fd = (uint)await env.Call("SysOpen", 0x10000);
         var count = await env.Call("SysRead", fd, 0x12000, 32);
         Assert.True(count > 0);
-        Assert.Equal(int.MaxValue.ToString() + "\n", Encoding.ASCII.GetString(env.Read(0x12000, count)));
+        Assert.Equal("4194304\n", Encoding.ASCII.GetString(env.Read(0x12000, count)));
+    }
+
+    [Fact]
+    public async Task Wait4_PidAbovePidMax_ReturnsEchild()
+    {
+        using var env = new TestEnv();
+        Assert.Equal(-(int)Errno.ECHILD,
+            await env.Call("SysWait4", 4194305u, 0x12000u, 0u, 0u, 0u, 0u));
+    }
+
+    [Fact]
+    public async Task ProcPipeUserPagesSoft_ReportsDefaultLimit()
+    {
+        using var env = new TestEnv();
+        env.Syscalls.MountStandardProc();
+        env.WriteString(0x10000, "/proc/sys/fs/pipe-user-pages-soft");
+        var fd = (uint)await env.Call("SysOpen", 0x10000);
+        var count = await env.Call("SysRead", fd, 0x12000, 32);
+        Assert.Equal("16384\n", Encoding.ASCII.GetString(env.Read(0x12000, count)));
     }
 
     [Fact]

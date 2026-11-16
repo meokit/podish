@@ -1,10 +1,10 @@
 # LTP network sockets and I/O multiplexing batch — baseline and fixes
 
-> BusyBox image update (2026-11-15): `sendmsg01` now runs (BusyBox
-> `ip`/`ifconfig`) and is **FAIL**: invalid `MSG_*` flags return success instead
-> of `EOPNOTSUPP`, and an invalid control-message pointer returns `EINVAL`
-> instead of `EFAULT`. The batch is now 63 PASS / 5 PARTIAL / 1 FAIL / 3 BROKEN
-> / 1 SKIP. See [BUSYBOX_IMAGE.md](BUSYBOX_IMAGE.md).
+> BusyBox image update (2026-11-15): `sendmsg01` now runs and passes after
+> rejecting `MSG_OOB` on datagram/Unix sockets with `EOPNOTSUPP` and mapping an
+> unreadable control-message pointer to `EFAULT`. The batch is now **64 PASS /
+> 5 PARTIAL / 0 FAIL / 3 BROKEN / 1 SKIP**. See
+> [BUSYBOX_IMAGE.md](BUSYBOX_IMAGE.md).
 
 > Final review/integration checkpoint: see [NET_IO_MERGE_VERIFICATION.md](NET_IO_MERGE_VERIFICATION.md)
 > for the four reproduced semantic fixes, reconciliation with main's fs-fd work, and fresh guest regression
@@ -38,7 +38,9 @@ Branch: `fix/ltp-net-io` (baseline, first repair round, timer and readiness roun
 
 The new 73-case run used the current-worktree CLI, unchanged upstream executables
 and a 40-second per-case timeout. `epoll_wait10` moved from BROKEN to PASS;
-`epoll_wait16`, `setsockopt05`, `setsockopt08`, and `sendmsg01` remain BROKEN.
+`epoll_wait16`, `setsockopt05`, `setsockopt08`, and `sendmsg01` remained BROKEN
+in that historical run. The BusyBox follow-up fixed `sendmsg01`; the current
+batch is 64 PASS / 5 PARTIAL / 0 FAIL / 3 BROKEN / 1 SKIP.
 Report: `artifacts/ltp-net-io/results/podish-tmpfs.json`, source revision
 `5bff69f9a2433b8c0fa387ccdca69edaaee0a1d8` + dirty changes digest
 `46507a6f8a86a35ab30df84f5e544a94e5265a0089fd344771c77255dfbc86d7`.
@@ -215,7 +217,6 @@ the 1 s case ≈ 1000.7 ms. `epoll_wait02`, `epoll_pwait03`, `poll02`,
 | `epoll_wait16` | BROKEN | `EPOLLEXCLUSIVE` is still rejected with `EINVAL`: one-event-wakes-one-waiter needs a per-target exclusive wakeup arbiter shared by all epoll instances. Needs its own change with the epoll wakeup contract. |
 | `epoll_wait10` | BROKEN | Needs `/proc/mounts` to emit `POLLPRI` on mount-namespace changes; procfs has no poll notifications yet. |
 | `setsockopt05`, `setsockopt08` | BROKEN | The tests call `unshare(CLONE_NEWUSER\|CLONE_NEWNET)` in `tst_setup_netns`; `unshare` returns `ENOSYS`. Namespace support, not a socket defect. |
-| `sendmsg01` | BROKEN | The legacy test shells out to `ip`/`ifconfig` to bring up `lo`; the guest image has no such tools. |
 | `bind04`, `bind05`, `sendto02` | PARTIAL/SKIP | `SCTP`/`UDP-Lite` protocols are not implemented; native Linux runs them. |
 | `accept03`, `epoll_ctl06`, `epoll_pwait06` | PARTIAL | Remaining variants need `pidfd`, `fanotify`, `userfaultfd`, `io_uring`, `bpf`, `fsopen`/`fspick` fd types. |
 

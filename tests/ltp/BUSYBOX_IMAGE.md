@@ -61,15 +61,15 @@ All selected manifests were run on Windows Podish with the BusyBox image,
 
 | Batch | Native | Podish before | Podish with BusyBox | Notes |
 | --- | ---: | --- | --- | --- |
-| basic (`tmpfs`) | 50 PASS | 50 PASS (`hostfs`) | 48 PASS / 1 PARTIAL / 1 FAIL | `read02` skips its two `O_DIRECT` variants on tmpfs; `wait402` now reaches its assertion and fails with `ESRCH` instead of `ECHILD`. Hostfs current run: 49 PASS / 1 FAIL (`wait402`). |
+| basic (`tmpfs`) | 50 PASS | 50 PASS (`hostfs`) | 49 PASS / 1 PARTIAL | `read02` skips its two `O_DIRECT` variants on tmpfs; hostfs is 50/50 after the `wait402` fix. |
 | permissions | 71 PASS | 70 PASS / 1 FAIL | **71 PASS** | `access02` now passes with `/bin/sh`. |
 | sync | 32 PASS | 31 PASS / 1 SKIP | 31 PASS / 1 SKIP | `futex_wake04` skips on the `hugetlbfs` requirement. |
 | signals | 46 PASS | 46 PASS | 46 PASS | No command dependency. |
 | memory | 66 PASS | 59 PASS / 1 FAIL / 1 BROKEN / 5 SKIP | 59 PASS / 1 FAIL / 2 BROKEN / 4 SKIP | `msync03` remains the known `RLIMIT_DATA` difference; one `madvise` skip/broken classification moved. |
-| net-io | 73 PASS | 63 PASS / 5 PARTIAL / 4 BROKEN / 1 SKIP | 63 PASS / 5 PARTIAL / 1 FAIL / 3 BROKEN / 1 SKIP | `sendmsg01` now runs; see below. |
+| net-io | 73 PASS | 63 PASS / 5 PARTIAL / 4 BROKEN / 1 SKIP | **64 PASS** / 5 PARTIAL / 3 BROKEN / 1 SKIP | `sendmsg01` now passes. |
 | fs-fd | 115 PASS | 106 PASS / 1 PARTIAL / 8 SKIP | 106 PASS / 1 PARTIAL / 8 SKIP | No change. |
 | proc-time | 98 PASS | 89 PASS / 2 PARTIAL / 1 FAIL / 4 BROKEN / 2 SKIP | **90 PASS** / 2 PARTIAL / 1 FAIL / 3 BROKEN / 2 SKIP | `setrlimit04` now passes with `/bin/true`. |
-| pipe | 18 PASS | 17 cases: 14 PASS / 1 FAIL / 2 BROKEN | 14 PASS / 1 FAIL / 3 BROKEN | `pipe2_02` added; resource copy works, but its child faults after fork/exec. |
+| pipe | 18 PASS | 17 cases: 14 PASS / 1 FAIL / 2 BROKEN | **18 PASS** | `pipe2_02` passes after the staged exec/register-state reset. |
 | ipc (deferred) | 39 PASS | 4 PASS / 6 FAIL / 26 BROKEN / 3 SKIP | 4 PASS / 6 FAIL / 26 BROKEN / 3 SKIP | SysV message queues remain unimplemented. |
 
 ## Newly reached assertions
@@ -79,18 +79,25 @@ All selected manifests were run on Windows Podish with the BusyBox image,
 - `access02`: previously failed because `/bin/sh` was missing; now 16 assertions
   pass.
 - `setrlimit04`: previously `TBROK` because `/bin/true` was missing; now passes.
-- `pipe2_02`: the resource copy now succeeds through BusyBox `cp` and `sh`.
-  The remaining failure is a separate fork/exec crash in `pipe2_02_child`
-  (direct execution of the same static binary succeeds).
+- `pipe2_02`: the resource copy now succeeds through BusyBox `cp` and `sh`;
+  the later exec/exit crash is fixed by the register-state change below.
 
-### Exposed after the command dependency disappeared
+### Exposed and then fixed in the review round
 
-- `sendmsg01`: now reaches the syscall assertions and reports two errors:
-  - invalid `MSG_*` flags return success; Linux returns `EOPNOTSUPP`;
-  - an invalid control-message pointer returns `EINVAL`; Linux returns
-    `EFAULT`.
-- `wait402`: `/proc/sys/kernel/pid_max` is now available, so the test reaches
-  `wait4(pid_max + 1)`; Podish returns `ESRCH`, Linux returns `ECHILD`.
+- `sendmsg01`: now passes after validating `MSG_OOB` for datagram/Unix sockets
+  (`EOPNOTSUPP`) and mapping an unreadable control-message pointer to `EFAULT`.
+- `wait402`: now passes after reporting a realistic `pid_max` (4194304) and
+  keeping `wait4(INT_MIN)` as the separate `ESRCH` case.
+- `pipe12`: `FIONREAD` is implemented and nonblocking large writes fill the
+  remaining pipe capacity.
+- `pipe15`: `pipe-user-pages-soft` and `pipe-user-pages-hard` are exposed.
+- `fsync03`: `fsync`/`fdatasync` on pipes, Unix sockets and FIFOs return
+  `EINVAL`.
+- `pipe2_02` and static glibc programs launched through BusyBox `sh`: `execve`
+  now builds the replacement image in a private address space, clears inherited
+  GPR/EFLAGS/FS/GS state, terminates sibling threads and commits only after the
+  new image is fully loaded. Failed exec leaves the old image, CLOEXEC
+  descriptors, signal dispositions and altstack untouched.
 
 ## Remaining non-command limitations
 
@@ -98,7 +105,8 @@ The image intentionally does not solve block-device, mount-namespace or
 netlink requirements:
 
 - BusyBox `ip` needs `AF_NETLINK`, which Podish does not implement. `sendmsg01`
-  falls back to BusyBox `ifconfig` and proceeds.
+  reaches its assertions through the BusyBox `ifconfig` fallback and now passes;
+  other netlink-dependent tools remain limited.
 - Tests that need a real block device, `chattr` on a non-tmpfs filesystem, or
   mount operations still report `TCONF`/`SKIP` as before.
 - `getfattr` is not present in this BusyBox build; `setfattr`, `chattr` and
