@@ -67,12 +67,19 @@ public partial class SyscallManager
         return result;
     }
 
-    private static async ValueTask<(int, long?)> DoSendfile(SyscallManager sm, Engine engine, int outFd, int inFd,
+    private static ValueTask<(int, long?)> DoSendfile(SyscallManager sm, Engine engine, int outFd, int inFd,
         long? offset, int count)
     {
         if (!sm.FDs.TryGetValue(inFd, out var inFile) || !sm.FDs.TryGetValue(outFd, out var outFile))
-            return (-(int)Errno.EBADF, null);
-        if (inFile == null || outFile == null) return (-(int)Errno.EBADF, null);
+            return ValueTask.FromResult<(int, long?)>((-(int)Errno.EBADF, null));
+        var lease = new FileIoLease(inFile, outFile);
+        try { return lease.Complete(DoSendfileCore(engine, inFile, outFile, offset, count), engine.Owner as FiberTask); }
+        finally { lease.Dispose(); }
+    }
+
+    private static async ValueTask<(int, long?)> DoSendfileCore(Engine engine, LinuxFile inFile, LinuxFile outFile,
+        long? offset, int count)
+    {
         if (inFile.IsPathOnly || outFile.IsPathOnly) return (-(int)Errno.EBADF, null);
         var task = engine.Owner as FiberTask;
 
@@ -80,10 +87,18 @@ public partial class SyscallManager
         const int O_ACCMODE = 3;
         if (((int)inFile.Flags & O_ACCMODE) == (int)FileFlags.O_WRONLY) return (-(int)Errno.EBADF, null);
         if (((int)outFile.Flags & O_ACCMODE) == (int)FileFlags.O_RDONLY) return (-(int)Errno.EBADF, null);
+        if (inFile.IoInode is PipeInode)
+        {
+            if (offset.HasValue) return (-(int)Errno.ESPIPE, null);
+            if (outFile.IoInode is not PipeInode || ReferenceEquals(inFile.IoInode, outFile.IoInode))
+                return (-(int)Errno.EINVAL, null);
+        }
+        if (count == 0) return (0, offset);
 
         // Use a buffer
         var bufLen = Math.Min(count, 32768);
         var buffer = ArrayPool<byte>.Shared.Rent(bufLen);
+        var rented = new TaskIoBuffer<byte>(buffer);
         var totalWritten = 0;
 
         try
@@ -94,7 +109,9 @@ public partial class SyscallManager
             while (remaining > 0)
             {
                 var toRead = Math.Min(remaining, bufLen);
-                var bytesRead = inFile.OpenedInode!.ReadToHost(task, inFile, buffer.AsSpan(0, toRead), readOffset);
+                var bytesRead = inFile.IoInode is PipeInode inputPipe
+                    ? inputPipe.Peek(buffer.AsSpan(0, toRead))
+                    : inFile.IoInode!.ReadToHost(task, inFile, buffer.AsSpan(0, toRead), readOffset);
 
                 if (bytesRead <= 0)
                 {
@@ -105,6 +122,7 @@ public partial class SyscallManager
                         if (totalWritten > 0) break;
                         if ((inFile.Flags & FileFlags.O_NONBLOCK) != 0) return (-(int)Errno.EAGAIN, null);
                         if (task == null) return (-(int)Errno.EAGAIN, null);
+                        rented.TrackPending(task);
                         if (await new IOAwaitable(inFile, true, task) == AwaitResult.Interrupted)
                             return (-(int)Errno.ERESTARTSYS, null);
                         continue;
@@ -115,11 +133,11 @@ public partial class SyscallManager
                     return (bytesRead, null); // Return error code
                 }
 
-                if (!offset.HasValue) inFile.Position += bytesRead;
-
                 // Write to out_fd
+                var toWrite = outFile.IoInode is PipeInode outputPipe
+                    ? Math.Min(bytesRead, Math.Max(1, outputPipe.GetWritableBytes())) : bytesRead;
                 var bytesWritten =
-                    outFile.OpenedInode!.WriteFromHost(task, outFile, buffer.AsSpan(0, bytesRead), outFile.Position);
+                    outFile.IoInode!.WriteFromHost(task, outFile, buffer.AsSpan(0, toWrite), outFile.Position);
 
                 if (bytesWritten < 0)
                 {
@@ -129,26 +147,30 @@ public partial class SyscallManager
                         if ((outFile.Flags & FileFlags.O_NONBLOCK) != 0) return (-(int)Errno.EAGAIN, null);
                         if (task != null)
                         {
+                            rented.TrackPending(task);
                             if (await new IOAwaitable(outFile, false, task) == AwaitResult.Interrupted)
-                                // We read data but were interrupted before writing.
-                                // If we don't handle this perfectly, bytes are technically lost. For now, return ERESTARTSYS.
                                 return (-(int)Errno.ERESTARTSYS, null);
 
-                            // Unwind the read loop since we need to retry write, but we already advanced the read position!
-                            // This gets complex. But wait, if we got EAGAIN on write, we've already consumed read.
-                            // In real Linux, sendfile might block on write, so we should just continue writing what we read.
-                            // For simplicity, we just rewind the input position and break/retry.
-                            if (!offset.HasValue) inFile.Position -= bytesRead;
+                            // Re-read/peek after suspension: input was not consumed,
+                            // and another task may have changed a shared source.
                             continue;
                         }
                     }
 
+                    if (bytesWritten == -(int)Errno.EPIPE) task?.PostSignal((int)Signal.SIGPIPE);
                     if (totalWritten > 0) break;
 
                     return (bytesWritten, null);
                 }
 
-                if (bytesWritten > 0) outFile.Position += bytesWritten;
+                if (bytesWritten > 0)
+                {
+                    if (inFile.IoInode is PipeInode source)
+                        source.ConsumeSpliced(bytesWritten);
+                    else if (!offset.HasValue)
+                        inFile.Position += bytesWritten;
+                    if (outFile.IoInode is not PipeInode) outFile.Position += bytesWritten;
+                }
 
                 totalWritten += bytesWritten;
                 readOffset += bytesWritten;
@@ -169,7 +191,7 @@ public partial class SyscallManager
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
+            rented.Dispose();
         }
     }
 
@@ -384,21 +406,29 @@ public partial class SyscallManager
         }
     }
 
-    private static int ImplOpen(SyscallManager sm, RentedUserBytes path, uint flags, uint mode,
+    private static ValueTask<int> ImplOpen(SyscallManager sm, RentedUserBytes path, uint flags, uint mode,
         PathLocation startLoc = default)
     {
         return ImplOpen(sm, path.UnsafeBuffer, path.Length, flags, mode, startLoc);
     }
 
-    private static int ImplOpen(SyscallManager sm, string path, uint flags, uint mode, PathLocation startLoc = default)
+    private static ValueTask<int> ImplOpen(SyscallManager sm, string path, uint flags, uint mode, PathLocation startLoc = default)
     {
         var pathBytes = FsEncoding.EncodeUtf8(path);
         return ImplOpen(sm, pathBytes, pathBytes.Length, flags, mode, startLoc);
     }
 
-    private static int ImplOpen(SyscallManager sm, byte[] pathBytes, int pathLength, uint flags, uint mode,
+    private static ValueTask<int> ImplOpen(SyscallManager sm, byte[] pathBytes, int pathLength, uint flags, uint mode,
         PathLocation startLoc = default)
     {
+        var rc = ImplOpenCore(sm, pathBytes, pathLength, flags, mode, startLoc, out var pending);
+        return pending ?? ValueTask.FromResult(rc);
+    }
+
+    private static int ImplOpenCore(SyscallManager sm, byte[] pathBytes, int pathLength, uint flags, uint mode,
+        PathLocation startLoc, out ValueTask<int>? pending)
+    {
+        pending = null;
         if (Logger.IsEnabled(LogLevel.Trace))
             Logger.LogTrace("[Open] Path='{Path}' Flags={Flags} Mode={Mode}",
                 FsEncoding.DecodeUtf8Lossy(pathBytes.AsSpan(0, pathLength)), flags, mode);
@@ -509,7 +539,10 @@ public partial class SyscallManager
                         }
 
                         if (!pathBytes.AsSpan(0, pathLength).SequenceEqual(createPath))
-                            return ImplOpen(sm, createPath, createPath.Length, flags, mode, startLoc);
+                        {
+                            pending = ImplOpen(sm, createPath, createPath.Length, flags, mode, startLoc);
+                            return 0;
+                        }
                     }
                 }
 
@@ -558,10 +591,6 @@ public partial class SyscallManager
                     return -(int)Errno.EISDIR;
                 if (dentry.Inode?.Type == InodeType.Socket)
                     return -(int)Errno.ENXIO;
-                if (dentry.Inode?.Type == InodeType.Fifo &&
-                    accessMode == (int)FileFlags.O_WRONLY &&
-                    ((FileFlags)flags & FileFlags.O_NONBLOCK) != 0)
-                    return -(int)Errno.ENXIO;
 
                 // open(2): O_NOATIME requires ownership or CAP_FOWNER.
                 var noAtime = ((FileFlags)flags & FileFlags.O_NOATIME) != 0;
@@ -591,7 +620,7 @@ public partial class SyscallManager
 
                 // Check mount read-only for write operations on existing file
                 if (accessMode != 0 || wantTrunc) // O_WRONLY or O_RDWR or O_TRUNC
-                    if (mount != null && mount.IsReadOnly)
+                    if (mount != null && mount.IsReadOnly && dentry.Inode?.Type != InodeType.Fifo)
                         return -(int)Errno.EROFS;
             }
         }
@@ -613,6 +642,11 @@ public partial class SyscallManager
                 ? flags & ~(uint)(FileFlags.O_CREAT | FileFlags.O_EXCL | FileFlags.O_TRUNC)
                 : flags;
             if (dentry == null) return -(int)Errno.ENOENT;
+            if (!isPathOnly && dentry.Inode is MappingBackedInode { Type: InodeType.Fifo } && task != null)
+            {
+                pending = sm.OpenNamedFifo(dentry, (FileFlags)openFlags, mount ?? sm.RootMount!, task);
+                return 0;
+            }
             var f = new LinuxFile(dentry, (FileFlags)openFlags, mount ?? sm.RootMount!);
             if (task != null && f.OpenedInode is ITaskContextBoundInode taskBoundInode)
                 taskBoundInode.BindTaskContext(f, task);
@@ -635,7 +669,7 @@ public partial class SyscallManager
         if (pathErr != 0) return ValueTask.FromResult(pathErr);
         using var _ = path;
 
-        return ValueTask.FromResult(ImplOpen(this, path, a2, a3));
+        return ImplOpen(this, path, a2, a3);
     }
 
     private ValueTask<int> SysOpenAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -659,7 +693,7 @@ public partial class SyscallManager
             startLoc = f.LivePath;
         }
 
-        return ValueTask.FromResult(ImplOpen(this, path, a3, a4, startLoc));
+        return ImplOpen(this, path, a3, a4, startLoc);
     }
 
     private ValueTask<int> SysOpenAt2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -674,11 +708,11 @@ public partial class SyscallManager
 
         if (howSize < 24) return ValueTask.FromResult(-(int)Errno.EINVAL);
 
-        var howBuf = new byte[24];
+        Span<byte> howBuf = stackalloc byte[24];
         if (!engine.CopyFromUser(howPtr, howBuf)) return ValueTask.FromResult(-(int)Errno.EFAULT);
 
-        var flags = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.AsSpan(0, 8));
-        var mode = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.AsSpan(8, 8));
+        var flags = BinaryPrimitives.ReadUInt64LittleEndian(howBuf[..8]);
+        var mode = BinaryPrimitives.ReadUInt64LittleEndian(howBuf.Slice(8, 8));
 
         PathLocation startAt = default;
         if (dirfd != -100 && !path.IsAbsolute)
@@ -690,7 +724,7 @@ public partial class SyscallManager
             startAt = fdir.LivePath;
         }
 
-        return ValueTask.FromResult(ImplOpen(this, path, (uint)flags, (uint)mode, startAt));
+        return ImplOpen(this, path, (uint)flags, (uint)mode, startAt);
     }
 
     private async ValueTask<int> SysDup(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -721,6 +755,7 @@ public partial class SyscallManager
         var f = GetFD(oldfd);
         if (f == null) return -(int)Errno.EBADF;
 
+        if (CurrentFdTable.IsReserved(newfd)) return -(int)Errno.EBUSY;
         FreeFD(newfd);
         FDs[newfd] = f;
         f.Get();
@@ -744,11 +779,20 @@ public partial class SyscallManager
         return rc;
     }
 
-    private static async ValueTask<int> DoReadV(SyscallManager sm, Engine engine, int fd, Iovec[] iovs, int iovCnt,
+    private static ValueTask<int> DoReadV(SyscallManager sm, Engine engine, int fd, Iovec[] iovs, int iovCnt,
         long offset, int flags)
     {
-        var f = sm.GetFD(fd);
-        if (f == null || f.IsPathOnly) return -(int)Errno.EBADF;
+        var file = sm.GetFD(fd);
+        if (file == null) return ValueTask.FromResult(-(int)Errno.EBADF);
+        var lease = new FileIoLease(file);
+        try { return lease.Complete(DoReadVCore(engine, file, iovs, iovCnt, offset, flags), engine.Owner as FiberTask); }
+        finally { lease.Dispose(); }
+    }
+
+    private static async ValueTask<int> DoReadVCore(Engine engine, LinuxFile f, Iovec[] iovs, int iovCnt,
+        long offset, int flags)
+    {
+        if (f.IsPathOnly) return -(int)Errno.EBADF;
         var task = engine.Owner as FiberTask;
         const int O_ACCMODE = 3;
         if (((int)f.Flags & O_ACCMODE) == (int)FileFlags.O_WRONLY)
@@ -759,18 +803,26 @@ public partial class SyscallManager
         if (f.OpenedInode.Type == InodeType.Directory)
             return -(int)Errno.EISDIR;
 
-        var readRc = await f.OpenedInode.ReadV(engine, f, task, new ArraySegment<Iovec>(iovs, 0, iovCnt), offset,
+        var readRc = await f.IoInode!.ReadV(engine, f, task, new ArraySegment<Iovec>(iovs, 0, iovCnt), offset,
             flags);
         if (readRc > 0)
             InotifyEvents.RaiseChild(f.Dentry, f.OpenedInode, LinuxConstants.IN_ACCESS);
         return readRc;
     }
 
-    private static async ValueTask<int> DoWriteV(SyscallManager sm, Engine engine, int fd, Iovec[] iovs, int iovCnt,
+    private static ValueTask<int> DoWriteV(SyscallManager sm, Engine engine, int fd, Iovec[] iovs, int iovCnt,
         long offset, int flags)
     {
-        var f = sm.GetFD(fd);
-        if (f == null) return -(int)Errno.EBADF;
+        var file = sm.GetFD(fd);
+        if (file == null) return ValueTask.FromResult(-(int)Errno.EBADF);
+        var lease = new FileIoLease(file);
+        try { return lease.Complete(DoWriteVCore(sm, engine, file, iovs, iovCnt, offset, flags), engine.Owner as FiberTask); }
+        finally { lease.Dispose(); }
+    }
+
+    private static async ValueTask<int> DoWriteVCore(SyscallManager sm, Engine engine, LinuxFile f, Iovec[] iovs, int iovCnt,
+        long offset, int flags)
+    {
         var task = engine.Owner as FiberTask;
 
         // Check mount read-only status (like Linux mnt_want_write)
@@ -816,15 +868,17 @@ public partial class SyscallManager
         }
 
         var sizeBeforeWrite = (long)f.OpenedInode.Size;
+        var rentedLimited = limitedIovs == null ? default : new TaskIoBuffer<Iovec>(limitedIovs);
         int rc;
         try
         {
-            rc = await f.OpenedInode.WriteV(engine, f, task, writeIovs, offset, flags);
+            var operation = f.IoInode!.WriteV(engine, f, task, writeIovs, offset, flags);
+            if (limitedIovs != null && !operation.IsCompleted) rentedLimited.TrackPending(task);
+            rc = await operation;
         }
         finally
         {
-            if (limitedIovs != null)
-                ArrayPool<Iovec>.Shared.Return(limitedIovs);
+            rentedLimited.Dispose();
         }
 
         if (rc > 0 && f.OpenedInode is Inode inode)
@@ -899,28 +953,30 @@ public partial class SyscallManager
     internal async ValueTask<int> SysRead(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var iovs = ArrayPool<Iovec>.Shared.Rent(1);
+        var rented = new TaskIoBuffer<Iovec>(iovs);
         iovs[0] = new Iovec { BaseAddr = a2, Len = a3 };
         try
         {
-            return await DoReadV(this, engine, (int)a1, iovs, 1, -1, 0);
+            return await rented.Track(DoReadV(this, engine, (int)a1, iovs, 1, -1, 0), engine.Owner as FiberTask);
         }
         finally
         {
-            ArrayPool<Iovec>.Shared.Return(iovs);
+            rented.Dispose();
         }
     }
 
     internal async ValueTask<int> SysWrite(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var iovs = ArrayPool<Iovec>.Shared.Rent(1);
+        var rented = new TaskIoBuffer<Iovec>(iovs);
         iovs[0] = new Iovec { BaseAddr = a2, Len = a3 };
         try
         {
-            return await DoWriteV(this, engine, (int)a1, iovs, 1, -1, 0);
+            return await rented.Track(DoWriteV(this, engine, (int)a1, iovs, 1, -1, 0), engine.Owner as FiberTask);
         }
         finally
         {
-            ArrayPool<Iovec>.Shared.Return(iovs);
+            rented.Dispose();
         }
     }
 
@@ -930,14 +986,15 @@ public partial class SyscallManager
         var error = ValidatePositionedIo((int)a1, offset);
         if (error != 0) return error;
         var iovs = ArrayPool<Iovec>.Shared.Rent(1);
+        var rented = new TaskIoBuffer<Iovec>(iovs);
         iovs[0] = new Iovec { BaseAddr = a2, Len = a3 };
         try
         {
-            return await DoReadV(this, engine, (int)a1, iovs, 1, offset, 0);
+            return await rented.Track(DoReadV(this, engine, (int)a1, iovs, 1, offset, 0), engine.Owner as FiberTask);
         }
         finally
         {
-            ArrayPool<Iovec>.Shared.Return(iovs);
+            rented.Dispose();
         }
     }
 
@@ -947,14 +1004,15 @@ public partial class SyscallManager
         var error = ValidatePositionedIo((int)a1, offset);
         if (error != 0) return error;
         var iovs = ArrayPool<Iovec>.Shared.Rent(1);
+        var rented = new TaskIoBuffer<Iovec>(iovs);
         iovs[0] = new Iovec { BaseAddr = a2, Len = a3 };
         try
         {
-            return await DoWriteV(this, engine, (int)a1, iovs, 1, offset, 0);
+            return await rented.Track(DoWriteV(this, engine, (int)a1, iovs, 1, offset, 0), engine.Owner as FiberTask);
         }
         finally
         {
-            ArrayPool<Iovec>.Shared.Return(iovs);
+            rented.Dispose();
         }
     }
 
@@ -962,13 +1020,14 @@ public partial class SyscallManager
     {
         var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);
         if (iovs == null) return error;
+        var rented = new TaskIoBuffer<Iovec>(iovs);
         try
         {
-            return await DoReadV(this, engine, (int)a1, iovs, (int)a3, -1, 0);
+            return await rented.Track(DoReadV(this, engine, (int)a1, iovs, (int)a3, -1, 0), engine.Owner as FiberTask);
         }
         finally
         {
-            ArrayPool<Iovec>.Shared.Return(iovs);
+            rented.Dispose();
         }
     }
 
@@ -976,13 +1035,14 @@ public partial class SyscallManager
     {
         var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);
         if (iovs == null) return error;
+        var rented = new TaskIoBuffer<Iovec>(iovs);
         try
         {
-            return await DoWriteV(this, engine, (int)a1, iovs, (int)a3, -1, 0);
+            return await rented.Track(DoWriteV(this, engine, (int)a1, iovs, (int)a3, -1, 0), engine.Owner as FiberTask);
         }
         finally
         {
-            ArrayPool<Iovec>.Shared.Return(iovs);
+            rented.Dispose();
         }
     }
 
@@ -993,13 +1053,14 @@ public partial class SyscallManager
         if (positionError != 0) return positionError;
         var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);
         if (iovs == null) return error;
+        var rented = new TaskIoBuffer<Iovec>(iovs);
         try
         {
-            return await DoReadV(this, engine, (int)a1, iovs, (int)a3, offset, 0);
+            return await rented.Track(DoReadV(this, engine, (int)a1, iovs, (int)a3, offset, 0), engine.Owner as FiberTask);
         }
         finally
         {
-            ArrayPool<Iovec>.Shared.Return(iovs);
+            rented.Dispose();
         }
     }
 
@@ -1010,13 +1071,14 @@ public partial class SyscallManager
         if (positionError != 0) return positionError;
         var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);
         if (iovs == null) return error;
+        var rented = new TaskIoBuffer<Iovec>(iovs);
         try
         {
-            return await DoWriteV(this, engine, (int)a1, iovs, (int)a3, offset, 0);
+            return await rented.Track(DoWriteV(this, engine, (int)a1, iovs, (int)a3, offset, 0), engine.Owner as FiberTask);
         }
         finally
         {
-            ArrayPool<Iovec>.Shared.Return(iovs);
+            rented.Dispose();
         }
     }
 
@@ -1030,13 +1092,14 @@ public partial class SyscallManager
         if (positionError != 0) return positionError;
         var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);
         if (iovs == null) return error;
+        var rented = new TaskIoBuffer<Iovec>(iovs);
         try
         {
-            return await DoReadV(this, engine, (int)a1, iovs, (int)a3, offset, flags);
+            return await rented.Track(DoReadV(this, engine, (int)a1, iovs, (int)a3, offset, flags), engine.Owner as FiberTask);
         }
         finally
         {
-            ArrayPool<Iovec>.Shared.Return(iovs);
+            rented.Dispose();
         }
     }
 
@@ -1050,13 +1113,14 @@ public partial class SyscallManager
         if (positionError != 0) return positionError;
         var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);
         if (iovs == null) return error;
+        var rented = new TaskIoBuffer<Iovec>(iovs);
         try
         {
-            return await DoWriteV(this, engine, (int)a1, iovs, (int)a3, offset, flags);
+            return await rented.Track(DoWriteV(this, engine, (int)a1, iovs, (int)a3, offset, flags), engine.Owner as FiberTask);
         }
         finally
         {
-            ArrayPool<Iovec>.Shared.Return(iovs);
+            rented.Dispose();
         }
     }
 
@@ -1174,7 +1238,7 @@ public partial class SyscallManager
                 return;
 
             var wakeHandler = new IoWaitOperation(task, token, continuation, operation, forRead);
-            var inode = file.OpenedInode!;
+            var inode = file.IoInode!;
             var registration = inode is ITaskWaitSource taskWaitSource
                 ? taskWaitSource.RegisterWaitHandle(file, task, wakeHandler.OnIoReady,
                     (short)(forRead ? 0x0001 : 0x0004))

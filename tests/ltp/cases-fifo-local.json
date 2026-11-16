@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "description": "Independent LTP-harness FIFO oracles for open rendezvous, stream I/O, readiness generations, inode lifetime, interrupted operations and ancillary APIs.",
+  "localSuite": "fifo",
+  "requiresRoot": true,
+  "podishFsBackend": "tmpfs",
+  "cases": [
+    {"name": "fifo_open01", "directory": "podish_fifo", "group": "fifo"},
+    {"name": "fifo_io01", "directory": "podish_fifo", "group": "fifo"},
+    {"name": "fifo_poll01", "directory": "podish_fifo", "group": "fifo"},
+    {"name": "fifo_lifetime01", "directory": "podish_fifo", "group": "fifo"},
+    {"name": "fifo_signal01", "directory": "podish_fifo", "group": "fifo"},
+    {"name": "fifo_api01", "directory": "podish_fifo", "group": "fifo"},
+    {"name": "fifo_review01", "directory": "podish_fifo", "group": "fifo-review"}
+  ]
+}

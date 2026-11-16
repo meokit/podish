@@ -8,6 +8,37 @@ namespace Fiberish.Tests.VFS;
 public class PollNotificationTests
 {
     [Fact]
+    public void WarmedOwnerThreadSignals_WithPersistentSubscription_DoNotAllocate()
+    {
+        var queue = new PollNotificationQueue();
+        var calls = 0;
+        using var subscription = queue.Subscribe(new SchedulerReadyDispatcher(null),
+            _ => { calls++; return true; }, PollEvents.POLLIN, false);
+        for (var i = 0; i < 32; i++) queue.Signal(PollEvents.POLLIN);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 256; i++) queue.Signal(PollEvents.POLLIN);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(288, calls);
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void DeferredPublication_KeepsItsOriginalSnapshot_WhenSubscriptionsChange()
+    {
+        var queue = new PollNotificationQueue();
+        var stopped = new ManualDispatcher();
+        var calls = new List<int>();
+        using var first = queue.Subscribe(stopped, _ => { calls.Add(1); return false; }, PollEvents.POLLIN, false);
+        using var old = queue.Subscribe(new SchedulerReadyDispatcher(null), _ => { calls.Add(2); return false; }, PollEvents.POLLIN, false);
+        queue.Signal(PollEvents.POLLIN);
+        old.Dispose();
+        using var added = queue.Subscribe(new SchedulerReadyDispatcher(null), _ => { calls.Add(3); return false; }, PollEvents.POLLIN, false);
+        queue.Signal(PollEvents.POLLIN);
+        stopped.Drain();
+        Assert.Equal(new[] { 1, 1, 3 }, calls);
+    }
+
+    [Fact]
     public void Signal_SkipsInactiveExclusiveAndNotifiesAllOrdinaryListeners()
     {
         var queue = new PollNotificationQueue();
@@ -152,6 +183,28 @@ public class PollNotificationTests
         Assert.Equal(1, calls);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Signal_InlineForeignPost_RecyclesOnlyAfterAcknowledgement(bool throwAfterPost)
+    {
+        var queue = new PollNotificationQueue();
+        var dispatcher = new ManualDispatcher(inline: true, throwAfterPost: throwAfterPost);
+        var foreignCalls = 0;
+        var localCalls = 0;
+        using var foreign = queue.Subscribe(dispatcher, _ => { foreignCalls++; return false; }, PollEvents.POLLIN, true);
+        using var local = queue.Subscribe(new SchedulerReadyDispatcher(null),
+            _ => { localCalls++; return true; }, PollEvents.POLLIN, true);
+        for (var i = 0; i < 32; i++)
+        {
+            var error = Record.Exception(() => queue.Signal(PollEvents.POLLIN));
+            if (throwAfterPost) Assert.IsType<InvalidOperationException>(error);
+            else Assert.Null(error);
+            Assert.Equal(i + 1, foreignCalls);
+            Assert.Equal(i + 1, localCalls);
+        }
+    }
+
     [Fact]
     public async Task Dispose_RacingPostedDelivery_ConsumesAtMostOneWakeAndCannotStrandThePublication()
     {
@@ -177,8 +230,12 @@ public class PollNotificationTests
 
     private sealed class ManualDispatcher : IReadyDispatcher
     {
-        public ManualDispatcher()
+        private readonly bool _inline;
+        private readonly bool _throwAfterPost;
+        public ManualDispatcher(bool inline = false, bool throwAfterPost = false)
         {
+            _inline = inline;
+            _throwAfterPost = throwAfterPost;
             typeof(KernelScheduler).GetField("_isInsideRunLoop",
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
                 .SetValue(Scheduler, false);
@@ -187,7 +244,12 @@ public class PollNotificationTests
         public bool CanDispatch => true;
         public FiberTask? CurrentTask => null;
         public KernelScheduler? Scheduler { get; } = new KernelScheduler();
-        public void Post(Action callback) => Pending.Enqueue(callback);
+        public void Post(Action callback)
+        {
+            if (_inline) callback();
+            else Pending.Enqueue(callback);
+            if (_throwAfterPost) throw new InvalidOperationException("Post failed after delivery");
+        }
         public void Drain()
         {
             while (Pending.TryDequeue(out var callback)) callback();

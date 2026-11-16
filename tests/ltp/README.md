@@ -26,7 +26,11 @@ thread-group teardown and ETXTBSY/noexec checks (see
 binaries for the remaining exec boundaries; see
 [EXEC_BASELINE.md](EXEC_BASELINE.md) for Linux contracts and commands and
 [EXEC_FIX_REPORT.md](EXEC_FIX_REPORT.md) for the runtime repairs and allocation
-work. SysV IPC remains
+work. The [named FIFO plan](FIFO_TEST_PLAN.md), [baseline](FIFO_BASELINE.md)
+and [repair report](FIFO_FIX_REPORT.md) cover the separate 15-binary unmodified
+upstream selection and seven independent stream/open/readiness gap programs
+(101 local assertions, including review regressions).
+SysV IPC remains
 available as a lower-usage compatibility reference in
 [IPC_BASELINE.md](IPC_BASELINE.md) (39 cases; first Podish baseline 4 PASS,
 6 FAIL, 26 BROKEN, 3 SKIP). [BUSYBOX_IMAGE.md](BUSYBOX_IMAGE.md) records the
@@ -90,6 +94,11 @@ Build it with the same script into `artifacts/ltp-exec`; it requires a root
 native baseline and defaults to tmpfs. Its `localSuite: exec` adds only our
 own sources to the disposable build tree, never changes upstream tests, and
 records local source hashes in `build.json`.
+
+`cases-fifo.json` is the 15-binary unmodified upstream FIFO batch;
+`cases-fifo-local.json` selects seven standalone gap programs (`localSuite: fifo`).
+Build/run them into separate artifact directories, with a matching root Linux
+baseline before Podish. See [FIFO_BASELINE.md](FIFO_BASELINE.md) for commands.
 
 The `tmpfs` backend imports one generated image containing all selected
 binaries under `/opt/ltp/testcases/bin`, a static i386 BusyBox under `/bin`,

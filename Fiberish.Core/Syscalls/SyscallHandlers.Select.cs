@@ -354,11 +354,11 @@ public partial class SyscallManager
             if (checkWrite) pollEvents |= PollEvents.POLLOUT;
             if (checkEx) pollEvents |= PollEvents.POLLPRI;
 
-            var revents = file.OpenedInode switch
+            var revents = file.IoInode switch
             {
                 SignalFdInode signalfd when task != null => signalfd.Poll(task, pollEvents),
                 ITaskPollSource taskPollSource when task != null => taskPollSource.Poll(file, task, pollEvents),
-                _ => file.OpenedInode!.Poll(file, pollEvents)
+                _ => file.IoInode!.Poll(file, pollEvents)
             };
 
             if ((revents & (PollEvents.POLLIN | PollEvents.POLLHUP | PollEvents.POLLERR)) != 0 && checkRead)
@@ -413,11 +413,11 @@ public partial class SyscallManager
             {
                 if (fds.TryGetValue(pfd.Fd, out var file))
                 {
-                    var revents = file.OpenedInode switch
+                    var revents = file.IoInode switch
                     {
                         SignalFdInode signalfd when task != null => signalfd.Poll(task, pfd.Events),
                         ITaskPollSource taskPollSource when task != null => taskPollSource.Poll(file, task, pfd.Events),
-                        _ => file.OpenedInode!.Poll(file, pfd.Events)
+                        _ => file.IoInode!.Poll(file, pfd.Events)
                     };
                     revents &= (short)(pfd.Events | PollEvents.POLLERR | PollEvents.POLLHUP | PollEvents.POLLNVAL);
                     Logger.LogTrace("[ScanPoll] FD={Fd} Events={Events} Revents={Revents} Type={Type}", pfd.Fd,
@@ -698,13 +698,13 @@ public partial class SyscallManager
                         IDisposable? registration;
                         if (file.OpenedInode is SignalFdInode signalfd)
                             registration = signalfd.RegisterWaitHandle(_task, ScheduleRePoll, events);
-                        else if (file.OpenedInode is ITaskWaitSource taskWaitSource)
+                        else if (file.IoInode is ITaskWaitSource taskWaitSource)
                             registration = taskWaitSource.RegisterWaitHandle(file, _task, ScheduleRePoll, events);
-                        else if (file.OpenedInode is IDispatcherWaitSource dispatcherWaitSource)
+                        else if (file.IoInode is IDispatcherWaitSource dispatcherWaitSource)
                             registration =
                                 dispatcherWaitSource.RegisterWaitHandle(file, dispatcher, ScheduleRePoll, events);
                         else
-                            registration = file.OpenedInode!.RegisterWaitHandle(file, ScheduleRePoll, events);
+                            registration = file.IoInode!.RegisterWaitHandle(file, ScheduleRePoll, events);
                         if (registration != null)
                         {
                             _waitRegistrations.Add(registration);
@@ -887,13 +887,13 @@ public partial class SyscallManager
                     IDisposable? registration;
                     if (file.OpenedInode is SignalFdInode signalfd)
                         registration = signalfd.RegisterWaitHandle(_task, ScheduleRePoll, pfd.Events);
-                    else if (file.OpenedInode is ITaskWaitSource taskWaitSource)
+                    else if (file.IoInode is ITaskWaitSource taskWaitSource)
                         registration = taskWaitSource.RegisterWaitHandle(file, _task, ScheduleRePoll, pfd.Events);
-                    else if (file.OpenedInode is IDispatcherWaitSource dispatcherWaitSource)
+                    else if (file.IoInode is IDispatcherWaitSource dispatcherWaitSource)
                         registration = dispatcherWaitSource.RegisterWaitHandle(file, dispatcher, ScheduleRePoll,
                             pfd.Events);
                     else
-                        registration = file.OpenedInode!.RegisterWaitHandle(file, ScheduleRePoll, pfd.Events);
+                        registration = file.IoInode!.RegisterWaitHandle(file, ScheduleRePoll, pfd.Events);
                     if (registration != null)
                     {
                         _waitRegistrations.Add(registration);

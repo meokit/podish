@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "description": "Unmodified upstream LTP named-FIFO transport gates, descriptor controls and creation/identity checks. No host sysctl changes, device formatting or namespace prerequisites.",
+  "requiresRoot": true,
+  "podishFsBackend": "tmpfs",
+  "cases": [
+    {"name": "open06", "directory": "open", "group": "fifo-open"},
+    {"name": "read03", "directory": "read", "group": "fifo-io"},
+    {"name": "write04", "directory": "write", "group": "fifo-io"},
+    {"name": "select01", "directory": "select", "group": "fifo-poll"},
+    {"name": "lseek02", "directory": "lseek", "group": "fifo-fd"},
+    {"name": "dup05", "directory": "dup", "group": "fifo-fd"},
+    {"name": "fsync03", "directory": "fsync", "group": "fifo-fd"},
+    {"name": "fcntl07", "directory": "fcntl", "group": "fifo-fd"},
+    {"name": "mknod02", "directory": "mknod", "group": "fifo-create"},
+    {"name": "mknod03", "directory": "mknod", "group": "fifo-create"},
+    {"name": "mknod04", "directory": "mknod", "group": "fifo-create"},
+    {"name": "mknod05", "directory": "mknod", "group": "fifo-create"},
+    {"name": "mknod06", "directory": "mknod", "group": "fifo-create"},
+    {"name": "mknod08", "directory": "mknod", "group": "fifo-create"},
+    {"name": "unlink05", "directory": "unlink", "group": "fifo-create"}
+  ]
+}

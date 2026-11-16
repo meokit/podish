@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build selected upstream programs or the explicitly selected local exec suite.
+# Build selected upstream programs or an explicitly selected local suite.
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd -- "$here/../.." && pwd)
@@ -28,17 +28,17 @@ git -C "$upstream" archive HEAD | tar -x -C "$work"
 local_suite=$(python3 - "$manifest" <<'PY'
 import json, sys
 suite = json.load(open(sys.argv[1])).get('localSuite', '')
-if suite not in ('', 'exec'):
+if suite not in ('', 'exec', 'fifo'):
     raise SystemExit('Unsupported local suite: ' + repr(suite))
 print(suite)
 PY
 )
-if [[ "$local_suite" == exec ]]; then
+if [[ -n "$local_suite" ]]; then
     # Add our own directory only in the disposable build tree. No upstream
     # source, test assertion or checked-out submodule is modified.
-    mkdir -p "$work/testcases/kernel/syscalls/podish_exec"
-    cp "$here/exec/Makefile" "$here"/exec/*.c "$here"/exec/*.h \
-        "$work/testcases/kernel/syscalls/podish_exec/"
+    mkdir -p "$work/testcases/kernel/syscalls/podish_$local_suite"
+    cp "$here/$local_suite/Makefile" "$here/$local_suite"/*.c "$here/$local_suite"/*.h \
+        "$work/testcases/kernel/syscalls/podish_$local_suite/"
 fi
 printf 'int main(void) { return 0; }\n' > "$work/probe.c"
 gcc -m32 -static -o "$work/probe" "$work/probe.c"
@@ -105,8 +105,9 @@ metadata = {
     'binaries': {c['name']: hashlib.sha256((out / 'bin' / c['name']).read_bytes()).hexdigest() for c in cases},
     'resources': {r: hashlib.sha256((out / 'bin' / r).read_bytes()).hexdigest() for r in resources},
 }
-if json.load(open(sys.argv[3])).get('localSuite') == 'exec':
-    sources = pathlib.Path(sys.argv[4]) / 'testcases/kernel/syscalls/podish_exec'
+suite = json.load(open(sys.argv[3])).get('localSuite')
+if suite in ('exec', 'fifo'):
+    sources = pathlib.Path(sys.argv[4]) / ('testcases/kernel/syscalls/podish_' + suite)
     metadata['localSources'] = {
         p.name: hashlib.sha256(p.read_bytes()).hexdigest()
         for p in sorted(sources.iterdir())

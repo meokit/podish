@@ -406,7 +406,7 @@ public partial class SyscallManager
 
         var fd = minFd;
         var table = task == null ? CurrentFdTable : GetTaskFdTable(task);
-        while (table.Fds.ContainsKey(fd)) fd++;
+        while (table.Fds.ContainsKey(fd) || table.IsReserved(fd)) fd++;
         if ((ulong)fd >= nofileLimit)
         {
             linuxFile.Close();

@@ -103,7 +103,7 @@ public partial class SyscallManager
         if (epFile == targetFile) return -(int)Errno.EINVAL; // Cannot watch itself
         if (targetFile is MountFile) return -(int)Errno.EBADF;
         if ((targetFile.Flags & FileFlags.O_PATH) != 0) return -(int)Errno.EBADF;
-        if (!IsEpollSupportedInode(targetFile.OpenedInode)) return -(int)Errno.EPERM;
+        if (!IsEpollSupportedInode(targetFile.IoInode)) return -(int)Errno.EPERM;
 
         uint events = 0;
         ulong data = 0;

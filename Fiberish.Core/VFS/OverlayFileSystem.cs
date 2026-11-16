@@ -75,6 +75,7 @@ public class OverlaySuperBlock : SuperBlock
     private readonly Dictionary<OverlayNodeStateKey, OverlayNodeState> _nodeStates = new();
     private readonly Dictionary<InodeKey, FileLockState> _fileLocks = new();
     private readonly Lock _fileLocksGate = new();
+    private Dictionary<InodeKey, OverlayFifoState>? _fifoStates;
     private readonly HashSet<InodeKey> _opaqueDirs = new();
     private readonly List<SuperBlock> _ownedBackings = [];
     private readonly Dictionary<InodeKey, FsNameSet> _whiteouts = new();
@@ -99,6 +100,51 @@ public class OverlaySuperBlock : SuperBlock
     public SuperBlock LowerSB { get; }
     public SuperBlock UpperSB { get; }
     public IOverlayWhiteoutCodec WhiteoutCodec { get; }
+
+    internal OverlayFifoState? GetFifoState(OverlayNodeState state, bool create)
+    {
+        lock (Lock)
+        {
+            var lower = state.LowerDentries.FirstOrDefault()?.Inode;
+            var upper = state.UpperDentry?.Inode;
+            // Prefer an active identity to a cached, closed state on an old alias.
+            OverlayFifoState? fifo = null;
+            if (lower != null) _fifoStates?.TryGetValue(new InodeKey(lower.Dev, lower.Ino), out fifo);
+            if (fifo == null && upper != null) _fifoStates?.TryGetValue(new InodeKey(upper.Dev, upper.Ino), out fifo);
+            fifo ??= state.FifoState;
+            if (fifo == null && !create) return null;
+            fifo ??= new OverlayFifoState();
+            state.FifoState = fifo;
+            // Remember copy-up identities for later reopen, but keep only live
+            // transports in the superblock registry. No lookup on ready I/O.
+            if (lower != null) fifo.AddIdentity(new InodeKey(lower.Dev, lower.Ino));
+            if (upper != null) fifo.AddIdentity(new InodeKey(upper.Dev, upper.Ino));
+            if (fifo.Pipe != null) RegisterFifoState(fifo);
+            return fifo;
+        }
+    }
+
+    internal void SetFifoPipe(OverlayNodeState state, PipeInode? pipe)
+    {
+        lock (Lock)
+        {
+            var fifo = GetFifoState(state, pipe != null);
+            if (fifo == null) return;
+            fifo.Pipe = pipe;
+            if (pipe != null)
+                RegisterFifoState(fifo);
+            else if (_fifoStates != null)
+                foreach (var key in fifo.Identities)
+                    if (_fifoStates.TryGetValue(key, out var current) && ReferenceEquals(current, fifo))
+                        _fifoStates.Remove(key);
+        }
+    }
+
+    private void RegisterFifoState(OverlayFifoState fifo)
+    {
+        var states = _fifoStates ??= [];
+        foreach (var key in fifo.Identities) states[key] = fifo;
+    }
 
     internal FileLockState? GetFileLockState(OverlayNodeState state, bool create)
     {
@@ -326,9 +372,20 @@ public readonly record struct OverlayNodeStateKey(int Identity)
     }
 }
 
+internal sealed class OverlayFifoState
+{
+    internal PipeInode? Pipe;
+    internal readonly List<InodeKey> Identities = new(2);
+    internal void AddIdentity(InodeKey key)
+    {
+        if (!Identities.Contains(key)) Identities.Add(key);
+    }
+}
+
 public sealed class OverlayNodeState
 {
     internal FileLockState? FileLocks { get; set; }
+    internal OverlayFifoState? FifoState { get; set; }
     private readonly HashSet<OverlayInode> _aliases = [];
     private readonly FsNameMap<OverlayNodeState> _children = new();
     private List<DirectoryEntry>? _cachedEntries;
@@ -486,6 +543,12 @@ public class OverlayInode : MappingBackedInode
 {
     private readonly Dictionary<LinuxFile, Inode> _openBackingByFile = [];
     private readonly OverlayNodeState _state;
+
+    internal override PipeInode? NamedPipe
+    {
+        get => ((OverlaySuperBlock)SuperBlock).GetFifoState(_state, false)?.Pipe;
+        set => ((OverlaySuperBlock)SuperBlock).SetFifoPipe(_state, value);
+    }
 
     public OverlayInode(SuperBlock sb, Dentry? lower, Dentry? upper)
         : this(sb, lower != null ? [lower] : null, upper, null)
@@ -958,6 +1021,7 @@ public class OverlayInode : MappingBackedInode
     private void PromoteStateBackings(Inode? newBacking, LinuxFile? triggeringFile = null)
     {
         if (newBacking == null) return;
+        if (Type == InodeType.Fifo) _ = ((OverlaySuperBlock)SuperBlock).GetFifoState(_state, false);
         foreach (var alias in _state.SnapshotAliases())
         {
             alias.RebindAllFileBackings(newBacking, FileBackingTraceOperation.CopyUp);

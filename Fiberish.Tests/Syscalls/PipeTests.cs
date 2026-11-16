@@ -11,6 +11,27 @@ namespace Fiberish.Tests.Syscalls;
 
 public class PipeTests
 {
+    [Fact]
+    public void PacketSplice_PartialConsumptionAndReadDiscard_KeepFollowingPacketIntact()
+    {
+        using var env = new TestEnv();
+        var pipe = new PipeInode(env.Scheduler!, true) { SuperBlock = env.SyscallManager.MemfdSuperBlock };
+        using var file = new LinuxFile(new Dentry("packet", pipe, null, pipe.SuperBlock),
+            FileFlags.O_RDWR | FileFlags.O_NONBLOCK, null);
+        Assert.Equal(5, pipe.WriteFromHost(env.Task, file, "ABCDE"u8, 0));
+        Assert.Equal(3, pipe.WriteFromHost(env.Task, file, "xyz"u8, 0));
+        pipe.ConsumeSpliced(1);
+        var bytes = new byte[8];
+        Assert.Equal(4, pipe.Peek(bytes));
+        Assert.Equal("BCDE"u8.ToArray(), bytes[..4]);
+        pipe.ConsumeSpliced(1);
+        Assert.Equal(1, pipe.ReadToHost(env.Task, file, bytes.AsSpan(0, 1), 0));
+        Assert.Equal((byte)'C', bytes[0]); // read discards DE, but not the next packet.
+        Assert.Equal(3, pipe.ReadToHost(env.Task, file, bytes, 0));
+        Assert.Equal("xyz"u8.ToArray(), bytes[..3]);
+        Assert.Equal(-(int)Errno.EAGAIN, pipe.ReadToHost(env.Task, file, bytes, 0));
+    }
+
     [Theory]
     [InlineData(false, -(int)Errno.EPERM)]
     [InlineData(true, -(int)Errno.ENOMEM)]

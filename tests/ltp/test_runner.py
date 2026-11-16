@@ -19,6 +19,32 @@ def summary(passed=1, failed=0, broken=0, skipped=0, warnings=0):
             f"skipped  {skipped}\nwarnings {warnings}\n")
 
 
+class FifoSuiteTests(unittest.TestCase):
+    def test_local_manifest_has_independent_sources_and_no_resources(self):
+        manifest = json.loads((run.HERE / "cases-fifo-local.json").read_text())
+        self.assertEqual(manifest["localSuite"], "fifo")
+        self.assertTrue(manifest["requiresRoot"])
+        self.assertEqual(manifest["podishFsBackend"], "tmpfs")
+        names = [case["name"] for case in manifest["cases"]]
+        self.assertEqual(len(names), 7)
+        self.assertEqual(len(set(names)), 7)
+        for case in manifest["cases"]:
+            self.assertEqual(case["directory"], "podish_fifo")
+            self.assertFalse(case.get("resources"))
+            self.assertTrue((run.HERE / "fifo" / (case["name"] + ".c")).is_file())
+
+    def test_upstream_selection_is_bounded_and_has_transport_gates(self):
+        manifest = json.loads((run.HERE / "cases-fifo.json").read_text())
+        self.assertTrue(manifest["requiresRoot"])
+        self.assertEqual(manifest["podishFsBackend"], "tmpfs")
+        self.assertNotIn("localSuite", manifest)
+        names = [case["name"] for case in manifest["cases"]]
+        self.assertEqual(len(names), 15)
+        self.assertEqual(len(set(names)), 15)
+        self.assertTrue({"open06", "read03", "write04", "select01"} <= set(names))
+        self.assertFalse({"open16", "mknod07", "mknodat02"} & set(names))
+
+
 class LocalExecSuiteTests(unittest.TestCase):
     def test_manifest_has_independent_sources_and_no_helper_resources(self):
         manifest = json.loads((run.HERE / "cases-exec.json").read_text())

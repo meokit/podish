@@ -22,6 +22,8 @@ internal sealed class PollNotificationQueue
 {
     private readonly Lock _gate = new();
     private readonly List<Subscription> _subscriptions = [];
+    private Subscription[] _snapshot = [];
+    private readonly Stack<Publication> _publicationPool = new(4);
     private readonly Queue<Publication> _pending = new();
     private readonly Queue<Publication> _runs = new();
     private bool _pumping;
@@ -30,7 +32,11 @@ internal sealed class PollNotificationQueue
         bool exclusive)
     {
         var subscription = new Subscription(this, dispatcher, notify, interests, exclusive);
-        lock (_gate) _subscriptions.Add(subscription);
+        lock (_gate)
+        {
+            _subscriptions.Add(subscription);
+            _snapshot = _subscriptions.ToArray();
+        }
         return subscription;
     }
 
@@ -39,8 +45,9 @@ internal sealed class PollNotificationQueue
         Publication publication;
         lock (_gate)
         {
-            if (_subscriptions.Count == 0) return;
-            publication = new Publication(this, _subscriptions.ToArray(), events);
+            if (_snapshot.Length == 0) return;
+            publication = _publicationPool.TryPop(out var pooled) ? pooled : new Publication(this);
+            publication.Initialize(_snapshot, events);
             _pending.Enqueue(publication);
             if (_pending.Count != 1) return;
         }
@@ -86,6 +93,10 @@ internal sealed class PollNotificationQueue
                 throw new InvalidOperationException("Poll notifications completed out of order.");
             _pending.Dequeue();
             next = _pending.TryPeek(out var pending) ? pending : null;
+            publication.ReleaseSnapshot();
+            // Bound retained backlog/reentrant state. Ordinary owner-thread signals
+            // reuse one publication; immutable snapshots allocate only on topology changes.
+            if (_publicationPool.Count < 16) _publicationPool.Push(publication);
         }
         if (next != null) ScheduleRun(next);
     }
@@ -109,6 +120,7 @@ internal sealed class PollNotificationQueue
             lock (owner._gate)
             {
                 owner._subscriptions.Remove(this);
+                owner._snapshot = owner._subscriptions.ToArray();
                 delivery = PendingDelivery;
                 PendingDelivery = null;
             }
@@ -150,17 +162,30 @@ internal sealed class PollNotificationQueue
         }
     }
 
-    private sealed class Publication(PollNotificationQueue owner, Subscription[] subscriptions, short events)
+    private sealed class Publication(PollNotificationQueue owner)
     {
+        private Subscription[] _subscriptions = [];
+        private short _events;
         private int _index;
         private bool _exclusivePhase;
         private int _exclusiveBudget = 1;
+
+        internal void Initialize(Subscription[] subscriptions, short events)
+        {
+            _subscriptions = subscriptions;
+            _events = events;
+            _index = 0;
+            _exclusivePhase = false;
+            _exclusiveBudget = 1;
+        }
+
+        internal void ReleaseSnapshot() => _subscriptions = [];
 
         internal void Run()
         {
             while (true)
             {
-                if (_index == subscriptions.Length)
+                if (_index == _subscriptions.Length)
                 {
                     if (_exclusivePhase)
                     {
@@ -170,14 +195,14 @@ internal sealed class PollNotificationQueue
                     _exclusivePhase = true;
                     _index = 0;
                 }
-                var subscription = subscriptions[_index++];
-                if (subscription.Exclusive != _exclusivePhase || !subscription.Matches(events) ||
+                var subscription = _subscriptions[_index++];
+                if (subscription.Exclusive != _exclusivePhase || !subscription.Matches(_events) ||
                     (_exclusivePhase && _exclusiveBudget == 0)) continue;
 
                 var scheduler = subscription.Dispatcher.Scheduler;
                 if (scheduler == null || scheduler.IsSchedulerThread)
                 {
-                    try { Acknowledge(subscription.Invoke(events)); }
+                    try { Acknowledge(subscription.Invoke(_events)); }
                     catch
                     {
                         // Continue the remaining listeners too, then surface the callback error.
@@ -187,7 +212,7 @@ internal sealed class PollNotificationQueue
                     continue;
                 }
 
-                var delivery = new Delivery(owner, this, subscription, events);
+                var delivery = new Delivery(owner, this, subscription, _events);
                 lock (owner._gate)
                 {
                     if (subscription.IsDisposed) continue;
@@ -206,7 +231,7 @@ internal sealed class PollNotificationQueue
         internal void Acknowledge(bool wokeWaiter)
         {
             // Match ep_poll_callback: simultaneous IN and OUT is not a wake-one acknowledgement.
-            var direction = events & (PollEvents.POLLIN | PollEvents.POLLOUT);
+            var direction = _events & (PollEvents.POLLIN | PollEvents.POLLOUT);
             if (_exclusivePhase && wokeWaiter && direction != (PollEvents.POLLIN | PollEvents.POLLOUT))
                 _exclusiveBudget--;
         }

@@ -202,13 +202,13 @@ public partial class SyscallManager
     //
     // Moves data between file descriptors without copying to user space.
     // At least one of fd_in/fd_out must be a pipe.
-    // Our implementation performs a buffered copy via kernel buffer,
-    // which is semantically correct even if not zero-copy.
+    // Buffered emulation; pipe-to-pipe transfers must not consume input until
+    // output has accepted it (including nonblocking/backpressure failure).
 
-    private async ValueTask<int> SysSplice(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysSplice(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
-        if (task == null) return -(int)Errno.EPERM;
+        if (task == null) return ValueTask.FromResult(-(int)Errno.EPERM);
 
         var fdIn = (int)a1;
         var offIn = a2; // loff_t* — pointer to guest offset, or 0 for current position
@@ -217,15 +217,22 @@ public partial class SyscallManager
         var len = (int)a5;
         var flags = (int)a6; // SPLICE_F_NONBLOCK=0x2, SPLICE_F_MORE=0x4, etc.
 
-        if (len <= 0) return 0;
+        if (len <= 0) return ValueTask.FromResult(0);
 
         var fileIn = GetFD(fdIn);
         var fileOut = GetFD(fdOut);
-        if (fileIn == null || fileOut == null) return -(int)Errno.EBADF;
+        if (fileIn == null || fileOut == null) return ValueTask.FromResult(-(int)Errno.EBADF);
+        var lease = new FileIoLease(fileIn, fileOut);
+        try { return lease.Complete(DoSplice(engine, task, fileIn, fileOut, offIn, offOut, len, flags), task); }
+        finally { lease.Dispose(); }
+    }
 
+    private static async ValueTask<int> DoSplice(Engine engine, FiberTask task, LinuxFile fileIn,
+        LinuxFile fileOut, uint offIn, uint offOut, int len, int flags)
+    {
         // At least one FD must be a pipe (enforced by Linux; we relax here for compatibility)
-        var inIsPipe = fileIn.OpenedInode is PipeInode;
-        var outIsPipe = fileOut.OpenedInode is PipeInode;
+        var inIsPipe = fileIn.IoInode is PipeInode;
+        var outIsPipe = fileOut.IoInode is PipeInode;
         if (!inIsPipe && !outIsPipe) return -(int)Errno.EINVAL;
         if (inIsPipe && offIn != 0) return -(int)Errno.ESPIPE;
         if (outIsPipe && offOut != 0) return -(int)Errno.ESPIPE;
@@ -254,6 +261,12 @@ public partial class SyscallManager
         if ((fileOut.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EBADF;
         if ((fileOut.Flags & FileFlags.O_APPEND) != 0) return -(int)Errno.EINVAL;
 
+        if (fileIn.IoInode is PipeInode sourcePipe && fileOut.IoInode is PipeInode targetPipe)
+        {
+            if (ReferenceEquals(sourcePipe, targetPipe)) return -(int)Errno.EINVAL;
+            return await SplicePipes(task, fileIn, sourcePipe, fileOut, targetPipe, len, flags);
+        }
+
         // Resolve read offset
         var readOffset = fileIn.Position;
         if (offIn != 0)
@@ -274,6 +287,7 @@ public partial class SyscallManager
 
         var bufSize = Math.Min(len, 65536);
         var buf = ArrayPool<byte>.Shared.Rent(bufSize);
+        var rented = new TaskIoBuffer<byte>(buf);
         var totalTransferred = 0;
 
         try
@@ -282,7 +296,7 @@ public partial class SyscallManager
             while (remaining > 0)
             {
                 var toRead = Math.Min(remaining, bufSize);
-                var bytesRead = fileIn.OpenedInode!.ReadToHost(task, fileIn, buf.AsSpan(0, toRead), readOffset);
+                var bytesRead = fileIn.IoInode!.ReadToHost(task, fileIn, buf.AsSpan(0, toRead), readOffset);
 
                 if (bytesRead == 0) break; // EOF
                 if (bytesRead == -(int)Errno.EAGAIN)
@@ -292,7 +306,7 @@ public partial class SyscallManager
                     if ((flags & 2) != 0 || (fileIn.Flags & FileFlags.O_NONBLOCK) != 0)
                         return -(int)Errno.EAGAIN;
                     // Otherwise wait for data (pipe read-ready)
-                    var waitResult = await fileIn.OpenedInode.WaitForRead(fileIn, task);
+                    var waitResult = await rented.Track(fileIn.IoInode.WaitForRead(fileIn, task), task);
                     if (waitResult == AwaitResult.Interrupted)
                         return totalTransferred > 0 ? totalTransferred : -(int)Errno.ERESTARTSYS;
                     continue;
@@ -303,7 +317,7 @@ public partial class SyscallManager
                 var writeConsumed = 0;
                 while (writeConsumed < bytesRead)
                 {
-                    var bytesWritten = fileOut.OpenedInode!.WriteFromHost(task, fileOut,
+                    var bytesWritten = fileOut.IoInode!.WriteFromHost(task, fileOut,
                         buf.AsSpan(writeConsumed, bytesRead - writeConsumed), writeOffset);
 
                     if (bytesWritten == -(int)Errno.EPIPE)
@@ -318,7 +332,7 @@ public partial class SyscallManager
                         if (totalTransferred > 0) break;
                         if ((flags & 2) != 0 || (fileOut.Flags & FileFlags.O_NONBLOCK) != 0)
                             return -(int)Errno.EAGAIN;
-                        var waitResult = await fileOut.OpenedInode.WaitForWrite(fileOut, task);
+                        var waitResult = await rented.Track(fileOut.IoInode.WaitForWrite(fileOut, task), task);
                         if (waitResult == AwaitResult.Interrupted)
                             return totalTransferred > 0 ? totalTransferred : -(int)Errno.ERESTARTSYS;
                         continue;
@@ -354,7 +368,52 @@ public partial class SyscallManager
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buf);
+            rented.Dispose();
+        }
+    }
+
+    private static async ValueTask<int> SplicePipes(FiberTask task, LinuxFile input, PipeInode source,
+        LinuxFile output, PipeInode target, int length, int flags)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(Math.Min(length, 65536));
+        var rented = new TaskIoBuffer<byte>(buffer);
+        try
+        {
+            while (true)
+            {
+                var available = source.Peek(buffer.AsSpan(0, Math.Min(length, 65536)));
+                if (available == -(int)Errno.EAGAIN)
+                {
+                    if ((flags & SpliceFNonBlock) != 0 || (input.Flags & FileFlags.O_NONBLOCK) != 0)
+                        return available;
+                    if (await rented.Track(source.WaitForRead(input, task), task) == AwaitResult.Interrupted)
+                        return -(int)Errno.ERESTARTSYS;
+                    continue;
+                }
+                if (available <= 0) return available;
+
+                // Splice may make partial progress below PIPE_BUF; it is not an
+                // atomic user write. Peek, write and consume never suspend.
+                var amount = Math.Min(available, Math.Max(1, target.GetWritableBytes()));
+                var written = target.WriteFromHost(task, output, buffer.AsSpan(0, amount), 0);
+                if (written == -(int)Errno.EAGAIN)
+                {
+                    if ((flags & SpliceFNonBlock) != 0 || (output.Flags & FileFlags.O_NONBLOCK) != 0)
+                        return written;
+                    if (await rented.Track(target.WaitForWrite(output, task), task) == AwaitResult.Interrupted)
+                        return -(int)Errno.ERESTARTSYS;
+                    // Another reader may have consumed the source during wait.
+                    continue;
+                }
+                if (written == -(int)Errno.EPIPE) task.PostSignal((int)Signal.SIGPIPE);
+                if (written <= 0) return written;
+                source.ConsumeSpliced(written);
+                return written;
+            }
+        }
+        finally
+        {
+            rented.Dispose();
         }
     }
 
@@ -365,28 +424,35 @@ public partial class SyscallManager
     // Duplicates data between two pipe file descriptors *without* consuming
     // the data from fd_in (peek semantics).
 
-    private async ValueTask<int> SysTee(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysTee(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
-        if (task == null) return -(int)Errno.EPERM;
+        if (task == null) return ValueTask.FromResult(-(int)Errno.EPERM);
 
         var fdIn = (int)a1;
         var fdOut = (int)a2;
         var len = (int)a3;
         var flags = (int)a4;
 
-        if (len <= 0) return 0;
+        if (len <= 0) return ValueTask.FromResult(0);
 
         var fileIn = GetFD(fdIn);
         var fileOut = GetFD(fdOut);
-        if (fileIn == null || fileOut == null) return -(int)Errno.EBADF;
+        if (fileIn == null || fileOut == null) return ValueTask.FromResult(-(int)Errno.EBADF);
+        var lease = new FileIoLease(fileIn, fileOut);
+        try { return lease.Complete(DoTee(task, fileIn, fileOut, len, flags), task); }
+        finally { lease.Dispose(); }
+    }
 
-        if (fileIn.OpenedInode is not PipeInode pipeIn) return -(int)Errno.EINVAL;
-        if (fileOut.OpenedInode is not PipeInode pipeOut) return -(int)Errno.EINVAL;
+    private static async ValueTask<int> DoTee(FiberTask task, LinuxFile fileIn, LinuxFile fileOut, int len, int flags)
+    {
+        if (fileIn.IoInode is not PipeInode pipeIn) return -(int)Errno.EINVAL;
+        if (fileOut.IoInode is not PipeInode pipeOut) return -(int)Errno.EINVAL;
         if (ReferenceEquals(pipeIn, pipeOut)) return -(int)Errno.EINVAL;
 
         var bufSize = Math.Min(len, 65536);
         var buf = ArrayPool<byte>.Shared.Rent(bufSize);
+        var rented = new TaskIoBuffer<byte>(buf);
 
         try
         {
@@ -400,7 +466,7 @@ public partial class SyscallManager
                 {
                     if ((flags & 2) != 0 || (fileIn.Flags & FileFlags.O_NONBLOCK) != 0)
                         return -(int)Errno.EAGAIN;
-                    var waitResult = await fileIn.OpenedInode.WaitForRead(fileIn, task);
+                    var waitResult = await rented.Track(fileIn.IoInode.WaitForRead(fileIn, task), task);
                     if (waitResult == AwaitResult.Interrupted)
                         return -(int)Errno.ERESTARTSYS;
                     continue; // retry after data arrives
@@ -409,12 +475,12 @@ public partial class SyscallManager
                 if (bytesRead < 0) return bytesRead;
 
                 var bytesWritten =
-                    fileOut.OpenedInode!.WriteFromHost(task, fileOut, buf.AsSpan(0, bytesRead), fileOut.Position);
+                    fileOut.IoInode!.WriteFromHost(task, fileOut, buf.AsSpan(0, bytesRead), fileOut.Position);
                 if (bytesWritten == -(int)Errno.EAGAIN)
                 {
                     if ((flags & 2) != 0 || (fileOut.Flags & FileFlags.O_NONBLOCK) != 0)
                         return -(int)Errno.EAGAIN;
-                    var waitResult = await fileOut.OpenedInode.WaitForWrite(fileOut, task);
+                    var waitResult = await rented.Track(fileOut.IoInode.WaitForWrite(fileOut, task), task);
                     if (waitResult == AwaitResult.Interrupted)
                         return -(int)Errno.ERESTARTSYS;
                     continue;
@@ -427,7 +493,7 @@ public partial class SyscallManager
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buf);
+            rented.Dispose();
         }
     }
 

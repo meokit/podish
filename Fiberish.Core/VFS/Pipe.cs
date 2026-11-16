@@ -27,7 +27,8 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     private byte[] _buffer;
     private readonly bool _packetMode;
     private readonly Queue<int> _packetLengths = new();
-    private readonly HashSet<LinuxFile> _openFiles = new(ReferenceEqualityComparer.Instance);
+    private int _packetReadOffset;
+    private HashSet<LinuxFile>? _asyncReaders;
 
     // Notification handles
     private readonly WaitHandle _readHandle;
@@ -44,9 +45,19 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     private int _pipeAccountUid = -1;
     private int _pipeAccountPages;
     private bool _pipeAccountReleased;
+    private readonly Inode? _namedOwner;
+    private AsyncWaitQueue? _openQueue;
+    private ulong _readerGeneration;
+    private ulong _writerGeneration;
 
     public PipeInode(KernelScheduler scheduler, bool packetMode = false)
+        : this(scheduler, packetMode, null)
     {
+    }
+
+    internal PipeInode(KernelScheduler scheduler, bool packetMode, Inode? namedOwner)
+    {
+        _namedOwner = namedOwner;
         _packetMode = packetMode;
         var process = scheduler.CurrentTask?.Process;
         var isUnpriv = process != null && process.EUID != 0 &&
@@ -88,7 +99,13 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         _capacity = initialCap;
         Type = InodeType.Fifo;
         Mode = 0x1000 | 0x1FF; // FIFO + 777
-        AnonymousInodeLifecycle.Initialize(this, "PipeInode.ctor");
+        if (namedOwner == null)
+            AnonymousInodeLifecycle.Initialize(this, "PipeInode.ctor");
+        else
+        {
+            SuperBlock = namedOwner.SuperBlock;
+            _readersClosed = _writersClosed = true;
+        }
         try
         {
             _buffer = ArrayPool<byte>.Shared.Rent(_capacity);
@@ -189,6 +206,8 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     bool IDispatcherWaitSource.RegisterWait(LinuxFile linuxFile, IReadyDispatcher dispatcher, Action callback,
         short events)
     {
+        if (_namedOwner != null)
+            return RegisterNamedWait(linuxFile, null, callback, events, false) != null;
         var scheduler = dispatcher.Scheduler
                         ?? throw new InvalidOperationException("Pipe readiness wait requires an explicit scheduler.");
         const short POLLIN = 0x0001;
@@ -200,7 +219,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             if (_lifecycleClosed)
                 return false;
 
-            var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => HasReadEvent(linuxFile), _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
                 ? new QueueReadinessWatch(POLLOUT, HasWritableBuffer, _writeHandle, _writeHandle.Reset)
@@ -219,10 +238,15 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     IDisposable IPollNotificationSource.SubscribePoll(LinuxFile file, IReadyDispatcher dispatcher,
         Func<short, bool> notify, short interests, bool exclusive)
     {
-        // End direction matters even when ERR/HUP are implicit in the interest mask.
-        var read = ((int)file.Flags & 3) != (int)FileFlags.O_WRONLY
+        // A one-way end needs terminal notifications even with an empty mask.
+        // RDWR supplies its own reader/writer, so its unused direction cannot
+        // acquire HUP/ERR and need not publish irrelevant epoll notifications.
+        var mode = file.Flags & FileFlags.O_ACCMODE;
+        var read = mode != FileFlags.O_WRONLY &&
+                   (mode != FileFlags.O_RDWR || (interests & LinuxConstants.POLLIN) != 0)
             ? _readHandle.SubscribePoll(dispatcher, notify, interests, exclusive) : null;
-        var write = ((int)file.Flags & 3) != (int)FileFlags.O_RDONLY
+        var write = mode != FileFlags.O_RDONLY &&
+                    (mode != FileFlags.O_RDWR || (interests & LinuxConstants.POLLOUT) != 0)
             ? _writeHandle.SubscribePoll(dispatcher, notify, interests, exclusive) : null;
         return new PollSubscriptions(read, write);
     }
@@ -230,6 +254,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     IDisposable? IDispatcherWaitSource.RegisterWaitHandle(LinuxFile linuxFile, IReadyDispatcher dispatcher,
         Action callback, short events)
     {
+        if (_namedOwner != null) return RegisterNamedWait(linuxFile, null, callback, events, false);
         var scheduler = dispatcher.Scheduler
                         ?? throw new InvalidOperationException("Pipe readiness wait requires an explicit scheduler.");
         const short POLLIN = 0x0001;
@@ -239,7 +264,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             if (_lifecycleClosed)
                 return null;
 
-            var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => HasReadEvent(linuxFile), _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
                 ? new QueueReadinessWatch(POLLOUT, HasWritableBuffer, _writeHandle, _writeHandle.Reset)
@@ -252,6 +277,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     IDisposable? IDispatcherEdgeWaitSource.RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile,
         IReadyDispatcher dispatcher, Action callback, short events)
     {
+        if (_namedOwner != null) return RegisterNamedWait(linuxFile, null, callback, events, true);
         var scheduler = dispatcher.Scheduler;
         if (scheduler == null)
             return null;
@@ -262,7 +288,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             if (_lifecycleClosed)
                 return null;
 
-            var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => HasReadEvent(linuxFile), _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
                 ? new QueueReadinessWatch(POLLOUT, HasWritableBuffer, _writeHandle, _writeHandle.Reset)
@@ -275,6 +301,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
     public bool RegisterWait(LinuxFile linuxFile, FiberTask task, Action callback, short events)
     {
+        if (_namedOwner != null) return RegisterNamedWait(linuxFile, task, callback, events, false) != null;
         const short POLLIN = 0x0001;
         const short POLLOUT = 0x0004;
         var registered = false;
@@ -284,7 +311,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             if (_lifecycleClosed)
                 return false;
 
-            var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => HasReadEvent(linuxFile), _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
                 ? new QueueReadinessWatch(POLLOUT, HasWritableBuffer, _writeHandle, _writeHandle.Reset)
@@ -302,6 +329,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
     public IDisposable? RegisterWaitHandle(LinuxFile linuxFile, FiberTask task, Action callback, short events)
     {
+        if (_namedOwner != null) return RegisterNamedWait(linuxFile, task, callback, events, false);
         const short POLLIN = 0x0001;
         const short POLLOUT = 0x0004;
         using (EnterStateScope())
@@ -309,7 +337,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             if (_lifecycleClosed)
                 return null;
 
-            var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => HasReadEvent(linuxFile), _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
                 ? new QueueReadinessWatch(POLLOUT, HasWritableBuffer, _writeHandle, _writeHandle.Reset)
@@ -329,7 +357,13 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         using (EnterStateScope())
         {
             _readerCount++;
+            _readerGeneration++;
             _readersClosed = false;
+            if (_namedOwner != null)
+            {
+                _openQueue?.Signal();
+                _writeHandle.Signal();
+            }
         }
     }
 
@@ -338,8 +372,13 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         using (EnterStateScope())
         {
             _writerCount++;
+            _writerGeneration++;
             _writersClosed = false;
-            // If writers were closed, reopening might affect read handle? No.
+            if (_namedOwner != null)
+            {
+                if (_count == 0) _readHandle.Reset();
+                _openQueue?.Signal();
+            }
         }
     }
 
@@ -395,14 +434,22 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
     public override void Open(LinuxFile linuxFile)
     {
-        base.Open(linuxFile);
+        if (_namedOwner == null) base.Open(linuxFile);
         using (EnterStateScope())
         {
-            _openFiles.Add(linuxFile);
+            RefreshAsyncReader(linuxFile);
         }
 
         const int O_ACCMODE = 3;
         var mode = (int)linuxFile.Flags & O_ACCMODE;
+        if (_namedOwner != null)
+        {
+            // One snapshot serves open rendezvous and the reader's initial-HUP
+            // suppression. A reader opened with a live writer already has history.
+            linuxFile.FifoPeerGeneration = mode == (int)FileFlags.O_RDONLY
+                ? _writerCount == 0 ? _writerGeneration : ulong.MaxValue
+                : mode == (int)FileFlags.O_WRONLY ? _readerGeneration : ulong.MaxValue;
+        }
         if (mode == (int)FileFlags.O_RDONLY)
         {
             AddReader();
@@ -418,6 +465,60 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         }
     }
 
+    internal bool HasReaders => _readerCount != 0;
+
+    internal void ReleaseIfUnopened()
+    {
+        if (_namedOwner != null && _readerCount == 0 && _writerCount == 0) CloseLifecycleOnce();
+    }
+
+    internal bool NeedsOpenPeer(LinuxFile file)
+    {
+        if ((file.Flags & FileFlags.O_NONBLOCK) != 0) return false;
+        return (file.Flags & FileFlags.O_ACCMODE) switch
+        {
+            FileFlags.O_RDONLY => _writerCount == 0 && _writerGeneration == file.FifoPeerGeneration,
+            FileFlags.O_WRONLY => _readerCount == 0 && _readerGeneration == file.FifoPeerGeneration,
+            _ => false
+        };
+    }
+
+    internal async ValueTask<int> WaitForOpenPeer(LinuxFile file, FiberTask task)
+    {
+        while (NeedsOpenPeer(file))
+        {
+            if (task.Exited || task.IsRetiring || task.HasInterruptingPendingSignal())
+                return -(int)Errno.ERESTARTSYS;
+            var queue = _openQueue ??= _waitQueues.Scheduler.RentAsyncWaitQueue();
+            queue.Reset();
+            if (await queue.WaitInterruptiblyAsync(task) == AwaitResult.Interrupted)
+                return -(int)Errno.ERESTARTSYS;
+        }
+        return 0;
+    }
+
+    private bool HasReadEvent(LinuxFile file) => _count != 0 ||
+        (_writersClosed && (_namedOwner == null || file.FifoPeerGeneration != _writerGeneration));
+
+    private IDisposable? RegisterNamedWait(LinuxFile file, FiberTask? task, Action callback, short events, bool edge)
+    {
+        const short input = 1, output = 4, error = 8, hup = 16;
+        var mode = file.Flags & FileFlags.O_ACCMODE;
+        var read = mode != FileFlags.O_WRONLY ? new QueueReadinessWatch((short)(input | hup),
+            () => ((events & input) != 0 && _count > 0) ||
+                  (_writersClosed && file.FifoPeerGeneration != _writerGeneration),
+            _readHandle, _readHandle.Reset) : default;
+        var write = mode != FileFlags.O_RDONLY ? new QueueReadinessWatch((short)(output | error),
+            () => _readersClosed || ((events & output) != 0 && HasWritableBuffer()),
+            _writeHandle, _writeHandle.Reset) : default;
+        var observe = (short)(events | error | hup);
+        if (task != null)
+            return edge ? QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, task, observe, read, write)
+                : QueueReadinessRegistration.RegisterHandle(callback, task, observe, read, write);
+        return edge ? QueueReadinessRegistration.RegisterHandleOnNextSignal(callback, _waitQueues.Scheduler, observe, read, write)
+            : QueueReadinessRegistration.RegisterHandle(callback, _waitQueues.Scheduler, observe, read, write);
+    }
+
     public override int ReadToHost(FiberTask? task, LinuxFile linuxFile, Span<byte> buffer,
         long offset)
     {
@@ -431,7 +532,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             if (_count > 0)
             {
                 // Read data
-                var consumed = _packetMode ? _packetLengths.Peek() : Math.Min(buffer.Length, _count);
+                var consumed = _packetMode ? _packetLengths.Peek() - _packetReadOffset : Math.Min(buffer.Length, _count);
                 var available = Math.Min(buffer.Length, consumed);
                 var firstChunk = Math.Min(available, _capacity - _tail);
 
@@ -447,7 +548,11 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 // A short packet read discards the unread tail of that packet.
                 _tail = (_tail + consumed) % _capacity;
                 _count -= consumed;
-                if (_packetMode) _packetLengths.Dequeue();
+                if (_packetMode)
+                {
+                    _packetLengths.Dequeue();
+                    _packetReadOffset = 0;
+                }
 
                 // Update handles
                 if (_count == 0) _readHandle.Reset();
@@ -471,7 +576,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
             if (_count > 0)
             {
-                var available = Math.Min(buffer.Length, _packetMode ? _packetLengths.Peek() : _count);
+                var available = Math.Min(buffer.Length, _packetMode ? _packetLengths.Peek() - _packetReadOffset : _count);
                 var firstChunk = Math.Min(available, _capacity - _tail);
 
                 if (firstChunk > 0)
@@ -490,6 +595,33 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
             return -(int)Errno.EAGAIN;
         }
+    }
+
+    // splice/sendfile advance by accepted bytes, not read(2)'s packet-tail discard.
+    internal void ConsumeSpliced(int length)
+    {
+        using var scope = EnterStateScope();
+        if (length < 0 || length > _count) throw new ArgumentOutOfRangeException(nameof(length));
+        if (_packetMode)
+        {
+            var remaining = length;
+            while (remaining > 0)
+            {
+                var packetBytes = _packetLengths.Peek() - _packetReadOffset;
+                if (remaining < packetBytes)
+                {
+                    _packetReadOffset += remaining;
+                    break;
+                }
+                remaining -= packetBytes;
+                _packetLengths.Dequeue();
+                _packetReadOffset = 0;
+            }
+        }
+        _tail = (_tail + length) % _capacity;
+        _count -= length;
+        if (_count == 0) _readHandle.Reset();
+        _writeHandle.Set();
     }
 
     public override int WriteFromHost(FiberTask? task, LinuxFile linuxFile,
@@ -552,11 +684,11 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
     {
         const int O_ASYNC = 0x2000;
         const int O_ACCMODE = 3;
-        if (_openFiles.Count == 0)
+        if (_asyncReaders == null || _asyncReaders.Count == 0)
             return;
 
         var scheduler = _waitQueues.Scheduler;
-        foreach (var file in _openFiles)
+        foreach (var file in _asyncReaders)
         {
             if (((int)file.Flags & O_ASYNC) == 0)
                 continue;
@@ -591,6 +723,14 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         }
     }
 
+    internal void RefreshAsyncReader(LinuxFile file)
+    {
+        if (((int)file.Flags & 0x2000) != 0 && (file.Flags & FileFlags.O_ACCMODE) != FileFlags.O_WRONLY)
+            (_asyncReaders ??= new HashSet<LinuxFile>(ReferenceEqualityComparer.Instance)).Add(file);
+        else
+            _asyncReaders?.Remove(file);
+    }
+
     public override ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task,
         ArraySegment<Iovec> iovs, long offset, int flags)
     {
@@ -602,7 +742,72 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         ArraySegment<Iovec> iovs, long offset, int flags)
     {
         if (_packetMode) return WritePacketV(engine, file, task, iovs);
+        // PIPE_BUF applies to the whole writev, including guest page boundaries.
+        // Keep the common single-page/scalar path direct; gather only when an
+        // atomic record would otherwise be split by the generic I/O loop.
+        long total = 0;
+        foreach (var iov in iovs)
+        {
+            total += iov.Len;
+            if (total > PipeBuf) break;
+        }
+        if (total is > 0 and <= PipeBuf && (iovs.Count > 1 ||
+            (iovs[0].BaseAddr & LinuxConstants.PageOffsetMask) + iovs[0].Len > PipeBuf))
+            return WriteAtomicV(engine, file, task, iovs, (int)total, flags);
         return WriteVViaHostBuffer(engine, file, task, iovs, offset, flags);
+    }
+
+    private ValueTask<int> WriteAtomicV(Engine engine, LinuxFile file, FiberTask? task,
+        ArraySegment<Iovec> iovs, int length, int flags)
+    {
+        if (_readersClosed)
+        {
+            task?.PostSignal((int)Signal.SIGPIPE);
+            return ValueTask.FromResult(-(int)Errno.EPIPE);
+        }
+        if (GetWritableBytes() >= length)
+            return ValueTask.FromResult(WriteAtomicVReady(engine, file, task, iovs, length));
+        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 8) != 0 || task == null)
+            return ValueTask.FromResult(-(int)Errno.EAGAIN);
+        return WriteAtomicVSlow(engine, file, task, iovs, length, flags);
+    }
+
+    private async ValueTask<int> WriteAtomicVSlow(Engine engine, LinuxFile file, FiberTask task,
+        ArraySegment<Iovec> iovs, int length, int flags)
+    {
+        while (!_readersClosed && GetWritableBytes() < length)
+            if (await WaitForWrite(file, task, length) == AwaitResult.Interrupted)
+                return -(int)Errno.ERESTARTSYS;
+        return await WriteAtomicV(engine, file, task, iovs, length, flags);
+    }
+
+    private int WriteAtomicVReady(Engine engine, LinuxFile file, FiberTask? task,
+        ArraySegment<Iovec> iovs, int length)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(length);
+        try
+        {
+            var copied = 0;
+            foreach (var iov in iovs)
+            {
+                uint done = 0;
+                while (done < iov.Len)
+                {
+                    var address = iov.BaseAddr + done;
+                    var chunk = (int)Math.Min(iov.Len - done,
+                        LinuxConstants.PageSize - (address & LinuxConstants.PageOffsetMask));
+                    if (!engine.CopyFromUser(address, buffer.AsSpan(copied, chunk)))
+                        return -(int)Errno.EFAULT;
+                    done += (uint)chunk;
+                    copied += chunk;
+                }
+            }
+            return WriteFromHost(task, file, buffer.AsSpan(0, copied), 0);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private async ValueTask<int> ReadPacketV(Engine engine, LinuxFile file, FiberTask? task,
@@ -790,19 +995,14 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
                 return revents;
             }
 
-            var readWatch = canRead
-                ? new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle, _readHandle.Reset)
-                : default;
-            var writeWatch = canWrite && !_readersClosed
-                ? new QueueReadinessWatch(POLLOUT, HasWritableBuffer, _writeHandle, _writeHandle.Reset)
-                : default;
-
-            revents |= QueueReadinessRegistration.ComputeRevents(events, readWatch, writeWatch);
-            if (_writersClosed && _count == 0)
-                revents &= unchecked((short)~POLLIN);
+            // Sampling readiness is a hot path, not a wait registration: do not
+            // allocate predicate/reset delegates or a closure on every poll.
+            if (canRead && _count > 0 && (events & POLLIN) != 0) revents |= POLLIN;
+            if (canWrite && !_readersClosed && HasWritableBuffer() && (events & POLLOUT) != 0)
+                revents |= POLLOUT;
 
             if (canRead)
-                if (_writersClosed)
+                if (_writersClosed && (_namedOwner == null || linuxFile.FifoPeerGeneration != _writerGeneration))
                     revents |= POLLHUP;
 
             if (canWrite)
@@ -815,16 +1015,19 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
     public override bool RegisterWait(LinuxFile linuxFile, Action callback, short events)
     {
+        if (_namedOwner != null) return RegisterNamedWait(linuxFile, null, callback, events, false) != null;
         return false;
     }
 
     public override IDisposable? RegisterWaitHandle(LinuxFile linuxFile, Action callback, short events)
     {
+        if (_namedOwner != null) return RegisterNamedWait(linuxFile, null, callback, events, false);
         return null;
     }
 
     public override IDisposable? RegisterEdgeTriggeredWaitHandle(LinuxFile linuxFile, Action callback, short events)
     {
+        if (_namedOwner != null) return RegisterNamedWait(linuxFile, null, callback, events, true);
         const short POLLIN = 0x0001;
         const short POLLOUT = 0x0004;
         using (EnterStateScope())
@@ -832,7 +1035,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
             if (_lifecycleClosed)
                 return null;
 
-            var readWatch = new QueueReadinessWatch(POLLIN, () => _count > 0 || _writersClosed, _readHandle,
+            var readWatch = new QueueReadinessWatch(POLLIN, () => HasReadEvent(linuxFile), _readHandle,
                 _readHandle.Reset);
             var writeWatch = !_readersClosed
                 ? new QueueReadinessWatch(POLLOUT, HasWritableBuffer, _writeHandle, _writeHandle.Reset)
@@ -845,10 +1048,10 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
     public override void Release(LinuxFile linuxFile)
     {
-        base.Release(linuxFile);
+        if (_namedOwner == null) base.Release(linuxFile);
         using (EnterStateScope())
         {
-            _openFiles.Remove(linuxFile);
+            _asyncReaders?.Remove(linuxFile);
         }
 
         const int O_ACCMODE = 3;
@@ -883,6 +1086,9 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         _lifecycleClosed = true;
 
         _count = 0;
+        _asyncReaders?.Clear();
+        _packetLengths.Clear();
+        _packetReadOffset = 0;
         _head = 0;
         _tail = 0;
         _readerCount = 0;
@@ -893,7 +1099,17 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         _writeHandle.Reset();
         ReleasePipeAccount();
         ReturnHandlesToPool();
-        AnonymousInodeLifecycle.CloseAliasesAndFinalize(this, "PipeInode.CloseLifecycleOnce");
+        if (_namedOwner == null)
+            AnonymousInodeLifecycle.CloseAliasesAndFinalize(this, "PipeInode.CloseLifecycleOnce");
+        else
+        {
+            if (ReferenceEquals(_namedOwner.NamedPipe, this)) _namedOwner.NamedPipe = null;
+            if (_openQueue != null)
+            {
+                _waitQueues.Scheduler.ReturnAsyncWaitQueue(_openQueue);
+                _openQueue = null;
+            }
+        }
 
         ReturnBufferToPool();
     }

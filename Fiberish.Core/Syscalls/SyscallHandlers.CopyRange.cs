@@ -19,11 +19,11 @@ public partial class SyscallManager
     ///     vmsplice(2): copy user pages into a pipe (or pipe data into user memory
     ///     for a pipe read end).
     /// </summary>
-    private async ValueTask<int> SysVmsplice(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private ValueTask<int> SysVmsplice(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         var task = engine.Owner as FiberTask;
-        if (task == null) return -(int)Errno.EPERM;
+        if (task == null) return ValueTask.FromResult(-(int)Errno.EPERM);
 
         var fd = (int)a1;
         var iovPtr = a2;
@@ -31,17 +31,25 @@ public partial class SyscallManager
         var flags = (int)a4;
 
         if (nrSegs < 0 || nrSegs > MaxVmspliceSegs)
-            return -(int)Errno.EINVAL;
+            return ValueTask.FromResult(-(int)Errno.EINVAL);
         if ((flags & ~(SpliceFMove | SpliceFNonBlock | SpliceFMore | SpliceFGift)) != 0)
-            return -(int)Errno.EINVAL;
+            return ValueTask.FromResult(-(int)Errno.EINVAL);
 
         var file = GetFD(fd);
-        if (file == null || file.OpenedInode == null) return -(int)Errno.EBADF;
-        if (file.OpenedInode is not PipeInode pipe) return -(int)Errno.EBADF;
-        if (nrSegs == 0) return 0;
+        if (file == null || file.OpenedInode == null) return ValueTask.FromResult(-(int)Errno.EBADF);
+        if (file.IoInode is not PipeInode pipe) return ValueTask.FromResult(-(int)Errno.EBADF);
+        if (nrSegs == 0) return ValueTask.FromResult(0);
+        var lease = new FileIoLease(file);
+        try { return lease.Complete(DoVmsplice(engine, task, file, pipe, iovPtr, nrSegs, flags), task); }
+        finally { lease.Dispose(); }
+    }
 
+    private async ValueTask<int> DoVmsplice(Engine engine, FiberTask task, LinuxFile file, PipeInode pipe,
+        uint iovPtr, long nrSegs, int flags)
+    {
         var iovs = ReadIovecs(this, engine, iovPtr, (int)nrSegs, out var iovErr);
         if (iovs == null) return iovErr;
+        var rentedIovs = new TaskIoBuffer<Iovec>(iovs);
 
         try
         {
@@ -50,6 +58,7 @@ public partial class SyscallManager
             var nonBlock = (flags & SpliceFNonBlock) != 0 || (file.Flags & FileFlags.O_NONBLOCK) != 0;
 
             var buffer = ArrayPool<byte>.Shared.Rent(32 * 1024);
+            var rented = new TaskIoBuffer<byte>(buffer);
             try
             {
                 var total = 0;
@@ -73,7 +82,9 @@ public partial class SyscallManager
                                 if (total > 0) return total;
                                 if (nonBlock) return -(int)Errno.EAGAIN;
                                 var minWritableBytes = chunk <= PipeInode.PipeBuf ? chunk : 1;
-                                var wait = await pipe.WaitForWrite(file, task, minWritableBytes);
+                                var operation = pipe.WaitForWrite(file, task, minWritableBytes);
+                                if (!operation.IsCompleted) rentedIovs.TrackPending(task);
+                                var wait = await rented.Track(operation, task);
                                 if (wait == AwaitResult.Interrupted)
                                     return total > 0 ? total : -(int)Errno.ERESTARTSYS;
                                 continue;
@@ -99,7 +110,9 @@ public partial class SyscallManager
                             {
                                 if (total > 0) return total;
                                 if (nonBlock) return -(int)Errno.EAGAIN;
-                                var wait = await pipe.WaitForRead(file, task);
+                                var operation = pipe.WaitForRead(file, task);
+                                if (!operation.IsCompleted) rentedIovs.TrackPending(task);
+                                var wait = await rented.Track(operation, task);
                                 if (wait == AwaitResult.Interrupted)
                                     return total > 0 ? total : -(int)Errno.ERESTARTSYS;
                                 continue;
@@ -121,12 +134,12 @@ public partial class SyscallManager
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(buffer);
+                rented.Dispose();
             }
         }
         finally
         {
-            ArrayPool<Iovec>.Shared.Return(iovs);
+            rentedIovs.Dispose();
         }
     }
 

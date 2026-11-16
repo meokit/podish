@@ -1619,6 +1619,11 @@ public partial class SyscallManager
     private sealed class SharedFdTable
     {
         private int _refCount = 1;
+        private HashSet<int>? _reserved;
+
+        public bool IsReserved(int fd) => _reserved?.Contains(fd) == true;
+        public void Reserve(int fd) => (_reserved ??= []).Add(fd);
+        public void Unreserve(int fd) => _reserved?.Remove(fd);
 
         public bool IsShared => Volatile.Read(ref _refCount) > 1;
 

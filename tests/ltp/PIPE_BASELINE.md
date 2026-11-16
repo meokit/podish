@@ -75,10 +75,14 @@ needs more support first.
 
 ## Remaining work
 
-1. Named FIFOs on tmpfs are still descriptor-compatible placeholders backed by
-   the page cache, not real pipe objects. `dup05` and `fsync03` only exercise
-   descriptor checks; a future FIFO data-path batch should either back them
-   with `PipeInode` or keep the documented scope to anonymous pipes.
+1. At the time of this pipe baseline, named FIFOs on tmpfs were descriptor-compatible
+   placeholders backed by the page cache, not real pipe objects. `dup05` and
+   `fsync03` only exercise descriptor checks, not the FIFO data path.
+   [FIFO_BASELINE.md](FIFO_BASELINE.md) and [FIFO_FIX_REPORT.md](FIFO_FIX_REPORT.md)
+   record the subsequent transport repair; [FIFO_TEST_PLAN.md](FIFO_TEST_PLAN.md)
+   defines the separate LTP-first
+   selection, missing differential probes and lifecycle-safe repair sequence;
+   it does not change the recorded results above.
 2. Decide whether to add a POSIX shared-memory batch by extending the runner for
    the `open_posix_testsuite` format. The pipe/FIFO descriptor batch is green.
 

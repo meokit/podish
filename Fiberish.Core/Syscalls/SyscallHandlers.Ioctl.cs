@@ -19,7 +19,7 @@ public partial class SyscallManager
         if (file.IsPathOnly) return -(int)Errno.EBADF;
 
         // Delegate to the inode's Ioctl method (polymorphic dispatch)
-        var inode = file.OpenedInode;
+        var inode = file.IoInode;
         if (inode != null)
         {
             IoctlLogger.LogTrace("[IoctlDispatch] fd={Fd} req=0x{Request:X} arg=0x{Arg:X} inode={InodeType}",
@@ -147,12 +147,12 @@ public partial class SyscallManager
                 return 0;
             }
             case F_GETPIPE_SZ:
-                return file.OpenedInode is PipeInode getPipe
+                return file.IoInode is PipeInode getPipe
                     ? getPipe.GetPipeSize()
                     : -(int)Errno.EBADF;
             case F_SETPIPE_SZ:
             {
-                if (file.OpenedInode is not PipeInode setPipe)
+                if (file.IoInode is not PipeInode setPipe)
                     return -(int)Errno.EBADF;
                 var task = engine.Owner as FiberTask;
                 var isPrivileged = task?.Process == null || task.Process.HasEffectiveCapability(Process.CapabilitySysResource);
@@ -178,6 +178,7 @@ public partial class SyscallManager
             var settableMask = FileFlags.O_APPEND | FileFlags.O_NONBLOCK | (FileFlags)O_ASYNC;
             var newStatusBits = (FileFlags)(int)arg & settableMask;
             file.Flags = (file.Flags & ~settableMask) | newStatusBits;
+            if (file.IoInode is PipeInode pipe) pipe.RefreshAsyncReader(file);
             return 0;
         }
 

@@ -677,6 +677,10 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     private Process? _leaseOwner;
     private List<LinuxFile>? _dnotifyWatchers;
 
+    // Metadata survives final FIFO close; the lazily allocated stream does not.
+    // Inode identity (not pathname) makes hard links and renames share a stream.
+    internal virtual PipeInode? NamedPipe { get; set; }
+
     /// <summary>
     ///     Optional per-inode page cache / address_space.
     ///     Mapping-backed inode families manage its lifecycle via <see cref="MappingBackedInode" />.
@@ -1420,7 +1424,7 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     protected async ValueTask<int> ReadVViaHostBuffer(Engine engine, LinuxFile file, FiberTask? task,
         ArraySegment<Iovec> iovs, long offset, int flags)
     {
-        var updatePosition = offset == -1;
+        var updatePosition = offset == -1 && this is not PipeInode;
         var currentOffset = updatePosition ? file.Position : offset;
         var totalRead = 0;
 
@@ -1454,6 +1458,7 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
 
                     if (n == -(int)Errno.EAGAIN)
                     {
+                        if (totalRead > 0 && this is PipeInode) return totalRead;
                         if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0 /* RWF_NOWAIT */)
                         {
                             if (updatePosition) file.Position = currentOffset;
@@ -1509,7 +1514,7 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     protected async ValueTask<int> WriteVViaHostBuffer(Engine engine, LinuxFile file, FiberTask? task,
         ArraySegment<Iovec> iovs, long offset, int flags)
     {
-        var updatePosition = offset == -1;
+        var updatePosition = offset == -1 && this is not PipeInode;
         var append = (file.Flags & FileFlags.O_APPEND) != 0;
         var currentOffset = updatePosition
             ? append ? (long)Size : file.Position
@@ -4759,6 +4764,10 @@ public class LinuxFile : IDisposable
     public PathLocation LivePath => new(Dentry, Mount);
     public Dentry Dentry { get; }
     public Inode? OpenedInode { get; }
+    public Inode? IoInode => (Inode?)NamedPipe ?? OpenedInode;
+    internal PipeInode? NamedPipe { get; set; }
+    internal ulong FifoPeerGeneration { get; set; }
+    internal bool SuppressCloseNotification { get; set; }
     public int DebugId { get; }
     public string DebugOrigin { get; }
     public long Position { get; set; }
@@ -4856,7 +4865,7 @@ public class LinuxFile : IDisposable
             return -(int)Errno.EBADF;
 
         // Check mount read-only
-        if (Mount != null && Mount.IsReadOnly)
+        if (Mount != null && Mount.IsReadOnly && OpenedInode?.Type != InodeType.Fifo)
             return -(int)Errno.EROFS;
 
         return 0;
@@ -4878,7 +4887,7 @@ public class LinuxFile : IDisposable
         // report it once, on the final close, including CLOEXEC/dup2/exit paths.
         // An mmap hold is not a close(2); a shared barrier defers the event until the
         // last mapping is gone as well.
-        if (Kind != ReferenceKind.MmapHold)
+        if (Kind != ReferenceKind.MmapHold && !SuppressCloseNotification)
         {
             if (CloseBarrier != null)
                 CloseBarrier.OnFileClosed();
@@ -4902,6 +4911,9 @@ public class LinuxFile : IDisposable
             }
 
         var dentry = Dentry;
+        var namedPipe = NamedPipe;
+        NamedPipe = null;
+        namedPipe?.Release(this);
         OpenedInode?.ReleaseFileDescriptorLocks(this);
         if (!IsPathOnly && (((int)Flags & 3) != 0))
             OpenedInode?.RemoveWritableOpenFile();

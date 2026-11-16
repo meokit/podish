@@ -218,7 +218,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
             OnTargetClosing(item);
             return;
         }
-        var openedInode = item.File.OpenedInode
+        var openedInode = item.File.IoInode
             ?? throw new InvalidOperationException("Epoll watch target inode is unavailable.");
         if (openedInode is IPollNotificationSource source)
         {
@@ -341,7 +341,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
         if (watchEvents == 0)
             return;
 
-        var openedInode = item.File.OpenedInode
+        var openedInode = item.File.IoInode
                           ?? throw new InvalidOperationException("Epoll watch target inode is unavailable.");
 
         if (openedInode is IDispatcherEdgeWaitSource edgeWaitSource)
@@ -506,7 +506,7 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
     private short PollWatch(EpollItem item, short events)
     {
         lock (item.LifetimeGate)
-            return IsWatchActive(item) ? item.File.OpenedInode!.Poll(item.File, events) : (short)0;
+            return IsWatchActive(item) ? item.File.IoInode!.Poll(item.File, events) : (short)0;
     }
 
     private void RefreshPendingWatches()
