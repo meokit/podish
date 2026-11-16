@@ -1,5 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using Fiberish.Auth.Cred;
+using ExecIdentity = Fiberish.Auth.Cred.CredentialService.ExecIdentity;
 using Fiberish.Core;
 using Fiberish.Diagnostics;
 using Fiberish.Memory;
@@ -15,7 +17,11 @@ public class LoaderResult
 {
     public uint Entry { get; set; }
     public uint SP { get; set; }
-    public byte[] InitialStack { get; set; } = [];
+    /// <summary>
+    ///     Initial stack bytes, as a slice of the loader-owned backing array. Callers must copy or
+    ///     consume it before the result goes out of scope.
+    /// </summary>
+    public ArraySegment<byte> InitialStack { get; set; }
     public uint BrkAddr { get; set; }
     public GuestAddressSpaceLayout Layout { get; set; } = null!;
 }
@@ -25,15 +31,16 @@ public class ElfLoader
     private static readonly ILogger Logger = Logging.CreateLogger<ElfLoader>();
 
     public static LoaderResult Load(Dentry dentry, string guestPath, SyscallManager sys, string[] args,
-        string[] envs, Mount mount, GuestAddressSpaceLayout layout)
+        string[] envs, Mount mount, GuestAddressSpaceLayout layout, ExecIdentity identity)
     {
-        return Load(dentry, FsEncoding.EncodeUtf8(guestPath), sys,
+        var guestPathRaw = FsEncoding.EncodeUtf8(guestPath);
+        return Load(dentry, guestPathRaw, guestPathRaw, sys,
             args.Select(FsEncoding.EncodeUtf8).ToArray(),
-            envs.Select(FsEncoding.EncodeUtf8).ToArray(), mount, layout);
+            envs.Select(FsEncoding.EncodeUtf8).ToArray(), mount, layout, identity);
     }
 
-    public static LoaderResult Load(Dentry dentry, byte[] guestPathRaw, SyscallManager sys, byte[][] argsRaw,
-        byte[][] envsRaw, Mount mount, GuestAddressSpaceLayout layout)
+    public static LoaderResult Load(Dentry dentry, byte[] guestPathRaw, byte[] execFnPathRaw, SyscallManager sys,
+        byte[][] argsRaw, byte[][] envsRaw, Mount mount, GuestAddressSpaceLayout layout, ExecIdentity identity)
     {
         var mm = sys.Mem;
         var engine = sys.CurrentSyscallEngine;
@@ -45,8 +52,9 @@ public class ElfLoader
             var elf = Elf32Reader.Read(mainStream);
 
             var loadBase = elf.FileType == ElfFileType.Executable ? 0u : layout.PieBase;
-            Logger.LogDebug("ElfLoader: {Filename} FileType={Type}, selected loadBase=0x{LoadBase:x}",
-                FsEncoding.DecodeUtf8Lossy(guestPathRaw), elf.FileType, loadBase);
+            if (Logger.IsEnabled(LogLevel.Debug))
+                Logger.LogDebug("ElfLoader: {Filename} FileType={Type}, selected loadBase=0x{LoadBase:x}",
+                    FsEncoding.DecodeUtf8Lossy(guestPathRaw), elf.FileType, loadBase);
 
             mainInfo = LoadSegments(elf, loadBase, mm, engine, dentry, guestPathRaw, mainStream, mainFile, mount);
         }
@@ -89,7 +97,9 @@ public class ElfLoader
         foreach (var arg in argsRaw) variableDataSize += checked((uint)arg.Length + 1u);
         foreach (var env in envsRaw) variableDataSize += checked((uint)env.Length + 1u);
         variableDataSize += 5;
-        variableDataSize += checked((uint)guestPathRaw.Length + 1u);
+        // AT_EXECFN is the path passed to execve: for a script that is the script path,
+        // not the resolved interpreter path used for EXECUTABLE_PATH/AT_PHDR.
+        variableDataSize += checked((uint)execFnPathRaw.Length + 1u);
 
         var initialTargetSp = layout.InitialStackTop - variableDataSize - (uint)totalSize;
         var finalSp = initialTargetSp & ~0xFu;
@@ -126,21 +136,22 @@ public class ElfLoader
         for (var i = envsRaw.Length - 1; i >= 0; i--) envPtrs[i] = PushCStringBytes(envsRaw[i]);
 
         var platPtr = PushCStringBytes("i686"u8);
-        var execFnPtr = PushCStringBytes(guestPathRaw);
+        var execFnPtr = PushCStringBytes(execFnPathRaw);
 
         var randPtr = PushBytes(randBytes);
-        Logger.LogInformation("Pushing AT_RANDOM to guest stack at 0x{Ptr:X}: {Bytes}", randPtr,
-            BitConverter.ToString(randBytes));
+        if (Logger.IsEnabled(LogLevel.Information))
+            Logger.LogInformation("Pushing AT_RANDOM to guest stack at 0x{Ptr:X}: {Bytes}", randPtr,
+                BitConverter.ToString(randBytes));
 
         Span<uint> auxv = stackalloc uint[]
         {
             LinuxConstants.AT_PLATFORM, platPtr,
             LinuxConstants.AT_EXECFN, execFnPtr,
             LinuxConstants.AT_RANDOM, randPtr,
-            LinuxConstants.AT_UID, 0,
-            LinuxConstants.AT_EUID, 0,
-            LinuxConstants.AT_GID, 0,
-            LinuxConstants.AT_EGID, 0,
+            LinuxConstants.AT_UID, unchecked((uint)identity.Uid),
+            LinuxConstants.AT_EUID, unchecked((uint)identity.Euid),
+            LinuxConstants.AT_GID, unchecked((uint)identity.Gid),
+            LinuxConstants.AT_EGID, unchecked((uint)identity.Egid),
             LinuxConstants.AT_PHNUM, mainInfo.PhNum,
             LinuxConstants.AT_PHENT, mainInfo.PhEnt,
             LinuxConstants.AT_PHDR, mainInfo.PhdrAddr,
@@ -148,7 +159,7 @@ public class ElfLoader
             LinuxConstants.AT_ENTRY, mainInfo.EntryPoint,
             LinuxConstants.AT_BASE, interpBase,
             LinuxConstants.AT_FLAGS, 0,
-            LinuxConstants.AT_SECURE, 0,
+            LinuxConstants.AT_SECURE, identity.Secure ? 1u : 0u,
             LinuxConstants.AT_HWCAP, 0x0fcbfbfd,
             LinuxConstants.AT_HWCAP2, 0,
             LinuxConstants.AT_CLKTCK, 100,
@@ -192,13 +203,14 @@ public class ElfLoader
         {
             Entry = mainInfo.InterpPathRaw != null ? interpEntry : mainInfo.EntryPoint,
             SP = sp,
-            InitialStack = stackData.AsSpan((int)(sp - finalSp)).ToArray(),
+            InitialStack = new ArraySegment<byte>(stackData, (int)(sp - finalSp),
+                stackData.Length - (int)(sp - finalSp)),
             BrkAddr = mainInfo.BrkAddr,
             Layout = layout
         };
         Logger.LogInformation(
             "ElfLoader Entry=0x{Entry:x} SP=0x{SP:x} Brk=0x{Brk:x} InitialStackLen={StackLen} InterpBase=0x{InterpBase:x}",
-            res.Entry, res.SP, res.BrkAddr, res.InitialStack.Length, interpBase);
+            res.Entry, res.SP, res.BrkAddr, res.InitialStack.Count, interpBase);
         return res;
     }
 
@@ -333,9 +345,10 @@ public class ElfLoader
 
         info.FirstLoadVaddr = firstLoadVaddr + loadBase;
 
-        Logger.LogDebug(
-            "ElfLoader: [{FileDesc}] loadBase=0x{LoadBase:x} phdrAddr=0x{PhdrAddr:x} phnum={PhNum} entry=0x{Entry:x} brk=0x{Brk:x}",
-            FsEncoding.DecodeUtf8Lossy(fileDescRaw), loadBase, info.PhdrAddr, info.PhNum, info.EntryPoint,
+        if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug(
+                "ElfLoader: [{FileDesc}] loadBase=0x{LoadBase:x} phdrAddr=0x{PhdrAddr:x} phnum={PhNum} entry=0x{Entry:x} brk=0x{Brk:x}",
+                FsEncoding.DecodeUtf8Lossy(fileDescRaw), loadBase, info.PhdrAddr, info.PhNum, info.EntryPoint,
             info.BrkAddr);
 
         return info;

@@ -259,6 +259,12 @@ public partial class SyscallManager
     public uint SigReturnAddr { get; private set; }
     public uint RtSigReturnAddr { get; private set; }
 
+    internal void RestoreVdsoAddresses(uint sigReturnAddr, uint rtSigReturnAddr)
+    {
+        SigReturnAddr = sigReturnAddr;
+        RtSigReturnAddr = rtSigReturnAddr;
+    }
+
     private HashSet<int> FdCloseOnExecSet => CurrentFdTable.CloseOnExec;
 
     public LoopbackNetNamespace GetOrCreatePrivateNetNamespace()

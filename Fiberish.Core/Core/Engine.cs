@@ -146,8 +146,14 @@ public class Engine : IDisposable
     {
         AssertNotDisposed();
         AssertSchedulerThread();
-        if (Owner is not FiberTask task) return;
-        ProcessAddressSpaceSync.SyncEngineBeforeRun(task.Process.Mem, this, task.Process);
+        // The engine's active address space can differ from its owner process during
+        // staged exec loading. Prefer the syscall manager's current memory, which is
+        // what user copies and fault resolution use, and only fall back to the owner.
+        var mem = CurrentSyscallManager?.Mem;
+        if (mem == null && Owner is FiberTask task)
+            mem = task.Process.Mem;
+        if (mem == null) return;
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(mem, this, (Owner as FiberTask)?.Process);
     }
 
     private void InitializeCurrentMmuFromState()

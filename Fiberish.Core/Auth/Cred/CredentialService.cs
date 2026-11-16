@@ -6,6 +6,29 @@ namespace Fiberish.Auth.Cred;
 
 public static class CredentialService
 {
+    public readonly record struct ExecIdentity(int Uid, int Euid, int Gid, int Egid, bool Secure);
+
+    public static ExecIdentity ComputeExecIdentity(Process process, Inode executable,
+        bool allowPrivilegeGain = true)
+    {
+        var newEuid = process.EUID;
+        var newEgid = process.EGID;
+        var secure = false;
+
+        // PR_SET_NO_NEW_PRIVS: execve must not grant privileges, so setuid/setgid bits
+        // (and, in Linux, file capabilities) are ignored for the transition.
+        if (allowPrivilegeGain && !process.NoNewPrivs && executable.Type == InodeType.File)
+        {
+            if ((executable.Mode & 0x800) != 0)
+                newEuid = executable.Uid; // S_ISUID
+            if ((executable.Mode & 0x400) != 0)
+                newEgid = executable.Gid; // S_ISGID
+
+            secure = newEuid != process.EUID || newEgid != process.EGID;
+        }
+
+        return new ExecIdentity(process.UID, newEuid, process.GID, newEgid, secure);
+    }
     public static void InitializeCredentials(Process process, int uid, int gid, IReadOnlyList<int>? supplementaryGroups = null)
     {
         var cred = new Cred
@@ -347,39 +370,20 @@ public static class CredentialService
 
     public static void ApplyExecSetIdOnExec(Process process, Inode executable, bool allowPrivilegeGain = true)
     {
-        var newEuid = process.EUID;
-        var newEgid = process.EGID;
-        var gainedSetId = false;
+        var identity = ComputeExecIdentity(process, executable, allowPrivilegeGain);
 
-        // PR_SET_NO_NEW_PRIVS: execve must not grant privileges, so setuid/setgid bits
-        // (and, in Linux, file capabilities) are ignored for the transition.
-        if (allowPrivilegeGain && !process.NoNewPrivs && executable.Type == InodeType.File)
-        {
-            if ((executable.Mode & 0x800) != 0)
-            {
-                newEuid = executable.Uid; // S_ISUID
-                gainedSetId = true;
-            }
-
-            if ((executable.Mode & 0x400) != 0)
-            {
-                newEgid = executable.Gid; // S_ISGID
-                gainedSetId = true;
-            }
-        }
-
-        process.EUID = newEuid;
-        process.EGID = newEgid;
+        process.EUID = identity.Euid;
+        process.EGID = identity.Egid;
 
         // Linux exec semantics: saved IDs become effective IDs after exec transitions.
-        process.SUID = newEuid;
-        process.SGID = newEgid;
-        process.FSUID = newEuid;
-        process.FSGID = newEgid;
+        process.SUID = identity.Euid;
+        process.SGID = identity.Egid;
+        process.FSUID = identity.Euid;
+        process.FSGID = identity.Egid;
 
         // A plain exec must preserve the capability sets. Only a setid transition
         // recomputes them from the new credentials; NoNewPrivs never gains anything.
-        if (gainedSetId)
+        if (identity.Secure)
             NormalizeCapabilityState(process);
     }
 }

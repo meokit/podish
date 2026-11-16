@@ -189,38 +189,91 @@ public partial class SyscallManager
         return 0;
     }
 
-    public byte[][] ReadUserCStringVectorBytes(uint vectorPtr)
+    public (byte[][] Values, int Error) ReadUserCStringVectorBytes(uint vectorPtr,
+        int maxStringLength = LinuxConstants.MaxArgStrlen)
     {
         if (vectorPtr == 0)
-            return [];
+            return ([], 0);
+        if (maxStringLength <= 0)
+            return ([], -(int)Errno.EINVAL);
 
+        var maxTotalBytes = GetExecArgMaxBytes();
         var result = new List<byte[]>();
         var ptrBuf = new byte[4];
         var curr = vectorPtr;
+        var totalBytes = 0;
 
         while (true)
         {
             if (!CurrentSyscallEngine.CopyFromUser(curr, ptrBuf))
-                break;
+                return ([], -(int)Errno.EFAULT);
+
             var strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
             if (strPtr == 0)
                 break;
 
-            if (ReadUserBytes(strPtr, out var rented) != 0)
-                break;
-            try
-            {
-                result.Add(rented.ToArray());
-            }
-            finally
-            {
-                rented.Dispose();
-            }
+            var rc = ReadUserCStringBytes(strPtr, maxStringLength, out var value);
+            if (rc != 0)
+                return ([], rc);
+
+            totalBytes += value.Length + 1 + 4;
+            if (totalBytes > maxTotalBytes)
+                return ([], -(int)Errno.E2BIG);
+            result.Add(value);
 
             curr += 4;
         }
 
-        return [.. result];
+        return ([.. result], 0);
+    }
+
+    /// <summary>
+    ///     Reads a NUL-terminated exec argument. Starts small because the 128 KiB
+    ///     MAX_ARG_STRLEN is the exception, not the common case; grows only when the
+    ///     string does not fit.
+    /// </summary>
+    private int ReadUserCStringBytes(uint addr, int maxLength, out byte[] value)
+    {
+        value = [];
+        var probeLength = Math.Min(256, maxLength);
+        while (true)
+        {
+            var rc = ReadUserBytes(addr, out var rented, probeLength);
+            if (rc == 0)
+            {
+                try
+                {
+                    value = rented.ToArray();
+                }
+                finally
+                {
+                    rented.Dispose();
+                }
+
+                return 0;
+            }
+
+            if (rc != -(int)Errno.ENAMETOOLONG)
+                return rc;
+            if (probeLength >= maxLength)
+                return -(int)Errno.E2BIG;
+
+            probeLength = (int)Math.Min((long)probeLength * 2, maxLength);
+        }
+    }
+
+    private int GetExecArgMaxBytes()
+    {
+        const int FallbackStackBytes = 8 * 1024 * 1024;
+        const int MaxArgBytes = 6 * 1024 * 1024;
+        var stackBytes = (ulong)FallbackStackBytes;
+        if (CurrentTask?.Process is { } process &&
+            process.TryGetResourceLimit(LinuxConstants.RLIMIT_STACK, out var limit) &&
+            limit.Soft != LinuxConstants.RLIM64_INFINITY)
+            stackBytes = limit.Soft;
+
+        var quarter = stackBytes / 4;
+        return (int)Math.Min(quarter, MaxArgBytes);
     }
 
     /// <summary>

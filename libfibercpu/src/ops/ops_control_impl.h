@@ -472,6 +472,11 @@ FORCE_INLINE LogicFlow OpInt(LogicFuncParams) {
 
     RaiseInterrupt(state, vector, op);
 
+    // A handler may replace the image (execve) and reset EFLAGS. The local
+    // flags_cache still describes the caller; reload it before this block can
+    // commit the stale value on its next flag-modifying instruction.
+    flags_cache = GetStateFlagsCache(state);
+
     // If EIP changed (e.g. signal handler, sigreturn), exit block
     if (state->ctx.eip != op->next_eip || state->eip_dirty || state->status != EmuStatus::Running) {
         return LogicFlow::ExitOnNextEIP;

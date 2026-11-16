@@ -715,6 +715,8 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     public int FileMmapRefCount { get; private set; }
     public int PathPinRefCount { get; private set; }
     public int KernelInternalRefCount { get; private set; }
+    private int _writableOpenFileCount;
+    public bool HasWritableOpenFile => Volatile.Read(ref _writableOpenFileCount) > 0;
     public bool HasActiveRuntimeRefs => FileOpenRefCount > 0 || FileMmapRefCount > 0 || PathPinRefCount > 0;
     public int LinkCount { get; private set; }
     public bool HasExplicitLinkCount { get; private set; }
@@ -2011,6 +2013,16 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     public virtual void Open(LinuxFile linuxFile)
     {
         RegisterOpenFile(linuxFile);
+    }
+
+    internal void AddWritableOpenFile()
+    {
+        Interlocked.Increment(ref _writableOpenFileCount);
+    }
+
+    internal void RemoveWritableOpenFile()
+    {
+        Interlocked.Decrement(ref _writableOpenFileCount);
     }
 
     public virtual void Release(LinuxFile linuxFile)
@@ -4712,6 +4724,8 @@ public class LinuxFile : IDisposable
             throw;
         }
         // Note: Mount reference is managed by caller if provided
+        if (Kind == ReferenceKind.Normal && !IsPathOnly && (((int)Flags & 3) != 0))
+            OpenedInode?.AddWritableOpenFile();
     }
 
     public LinuxFile(Dentry dentry, FileFlags flags, Mount? mount, ReferenceKind referenceKind = ReferenceKind.Normal,
@@ -4870,6 +4884,8 @@ public class LinuxFile : IDisposable
 
         var dentry = Dentry;
         OpenedInode?.ReleaseFileDescriptorLocks(this);
+        if (Kind == ReferenceKind.Normal && !IsPathOnly && (((int)Flags & 3) != 0))
+            OpenedInode?.RemoveWritableOpenFile();
         if (!IsPathOnly)
             OpenedInode?.Release(this);
         var refKind = Kind == ReferenceKind.MmapHold ? InodeRefKind.FileMmap : InodeRefKind.FileOpen;

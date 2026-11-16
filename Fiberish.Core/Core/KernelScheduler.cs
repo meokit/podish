@@ -234,6 +234,36 @@ public class KernelScheduler : IDisposable
         foreach (var task in tasksToRemove) ReleaseDetachedTask(task);
     }
 
+    /// <summary>
+    ///     Linux de_thread(): successful execve keeps the caller and removes every other
+    ///     task in the thread group before the new image starts.
+    /// </summary>
+    public int DetachSiblingThreads(FiberTask current)
+    {
+        AssertSchedulerThread();
+        var threads = current.Process.Threads;
+        if (threads.Count <= 1) return threads.Count;
+
+        var siblings = new List<FiberTask>(threads.Count - 1);
+        foreach (var thread in threads)
+            if (!ReferenceEquals(thread, current))
+                siblings.Add(thread);
+
+        foreach (var sibling in siblings)
+        {
+            // Linux delivers these through do_exit() for every thread zapped by de_thread().
+            sibling.ExitRobustList();
+            sibling.RobustListHead = 0;
+            sibling.RobustListSize = 0;
+            sibling.ClearChildTidAndWake();
+            sibling.Exited = true;
+            sibling.ExitStatus = 0;
+            DetachTask(sibling);
+        }
+
+        return current.Process.Threads.Count;
+    }
+
     public int DetachTask(FiberTask task)
     {
         AssertSchedulerThread();

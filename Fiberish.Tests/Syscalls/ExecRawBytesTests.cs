@@ -6,6 +6,7 @@ using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
+using Fiberish.X86.Native;
 using Xunit;
 
 namespace Fiberish.Tests.Syscalls;
@@ -61,6 +62,55 @@ public class ExecRawBytesTests
             var rc = await Call(sm, "SysExecve", pathAddr);
             Assert.Equal(0, rc);
             Assert.Equal(0, process.ParentDeathSignal);
+        }
+        finally
+        {
+            sm.Close();
+        }
+    }
+
+    [Fact]
+    public async Task SysExecve_ClearsGeneralPurposeRegistersForNewImage()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
+        var sm = new SyscallManager(engine, mm, 0);
+        sm.MountRootHostfs(ResolveGuestRootForHelloStatic());
+        sm.MountStandardProc();
+
+        var scheduler = new KernelScheduler();
+        var process = new Process(9304, mm, sm);
+        scheduler.RegisterProcess(process);
+        var task = new FiberTask(process.TGID, process, engine, scheduler);
+        engine.Owner = task;
+
+        try
+        {
+            const uint pathAddr = 0x61000000;
+            MapUserPage(mm, engine, pathAddr);
+            WriteCString(engine, pathAddr, "/hello_static");
+
+            // glibc's i386 _start passes EDX to __libc_start_main as rtld_fini.
+            // Linux resets it on exec; a stale parent value registers a bogus
+            // exit handler and crashes in __run_exit_handlers.
+            engine.RegWrite(Reg.EAX, 0x11111111);
+            engine.RegWrite(Reg.EBX, 0x22222222);
+            engine.RegWrite(Reg.ECX, 0x33333333);
+            engine.RegWrite(Reg.EDX, 0x44444444);
+            engine.RegWrite(Reg.ESI, 0x55555555);
+            engine.RegWrite(Reg.EDI, 0x66666666);
+            engine.RegWrite(Reg.EBP, 0x77777777);
+
+            Assert.Equal(0, await Call(sm, "SysExecve", pathAddr));
+            Assert.Equal(0u, engine.RegRead(Reg.EAX));
+            Assert.Equal(0u, engine.RegRead(Reg.EBX));
+            Assert.Equal(0u, engine.RegRead(Reg.ECX));
+            Assert.Equal(0u, engine.RegRead(Reg.EDX));
+            Assert.Equal(0u, engine.RegRead(Reg.ESI));
+            Assert.Equal(0u, engine.RegRead(Reg.EDI));
+            Assert.Equal(0u, engine.RegRead(Reg.EBP));
+            Assert.NotEqual(0u, engine.RegRead(Reg.ESP));
         }
         finally
         {

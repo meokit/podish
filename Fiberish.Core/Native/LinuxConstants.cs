@@ -137,6 +137,7 @@ public static class LinuxConstants
     public const uint PageMask = 0xFFFFF000;
     public const uint PageOffsetMask = 0xFFF;
     public const int PathMax = 4096;
+    public const int MaxArgStrlen = 32 * 4096;
     public const int NameMax = 255;
     public const int MaxSymlinkDepth = 40;
 

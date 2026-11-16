@@ -1,4 +1,6 @@
+using Fiberish.Auth.Cred;
 using Fiberish.Auth.Permission;
+using ExecIdentity = Fiberish.Auth.Cred.CredentialService.ExecIdentity;
 using Fiberish.Core.Utils;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Loader;
@@ -34,6 +36,8 @@ public enum ProcessKind
 }
 
 public readonly record struct ResourceLimit(ulong Soft, ulong Hard);
+
+public sealed class TextFileBusyException(string message) : IOException(message);
 
 public readonly record struct CpuTimeSnapshot(long UserNs, long SystemNs)
 {
@@ -451,15 +455,19 @@ public class Process
 
     public void LoadExecutable(Dentry dentry, string guestPath, string[] args, string[] envs, Mount mount)
     {
+        var guestPathRaw = FsEncoding.EncodeUtf8(guestPath);
         var argsRaw = args.Select(FsEncoding.EncodeUtf8).ToArray();
-        LoadExecutable(dentry, FsEncoding.EncodeUtf8(guestPath), argsRaw, envs.Select(FsEncoding.EncodeUtf8).ToArray(),
-            mount);
+        LoadExecutable(dentry, guestPathRaw, argsRaw, envs.Select(FsEncoding.EncodeUtf8).ToArray(),
+            mount, guestPathRaw, takeArgvOwnership: true);
     }
 
-    public void LoadExecutable(Dentry dentry, byte[] guestPathRaw, byte[][] argsRaw, byte[][] envsRaw, Mount mount)
+    public void LoadExecutable(Dentry dentry, byte[] guestPathRaw, byte[][] argsRaw, byte[][] envsRaw, Mount mount,
+        byte[]? execFnPathRaw = null, ExecIdentity? execIdentity = null, bool takeArgvOwnership = false)
     {
         var resolved = ResolveExecutableImage(dentry, guestPathRaw, argsRaw, mount);
-        UpdateProcessImage(resolved.ExecutablePathRaw, resolved.ArgvRaw);
+        var identity = execIdentity ?? CredentialService.ComputeExecIdentity(this, resolved.Dentry.Inode!);
+        UpdateProcessImage(resolved.ExecutablePathRaw, execFnPathRaw ?? guestPathRaw, resolved.ArgvRaw,
+            takeArgvOwnership);
 
         var stackLimit = ResourceLimits[LinuxConstants.RLIMIT_STACK];
         var randBytes = Mem.MemoryContext.CreateExecRandomBytes(32, resolved.ExecutablePathRaw.AsSpan());
@@ -467,24 +475,40 @@ public class Process
         Syscalls.Mem.Layout = layout;
         Syscalls.SetupVDSO();
 
-        var res = ElfLoader.Load(resolved.Dentry, resolved.ExecutablePathRaw, Syscalls, resolved.ArgvRaw, envsRaw,
-            resolved.Mount, layout);
+        var res = ElfLoader.Load(resolved.Dentry, resolved.ExecutablePathRaw,
+            execFnPathRaw ?? guestPathRaw, Syscalls, resolved.ArgvRaw, envsRaw,
+            resolved.Mount, layout, identity);
         Syscalls.BrkAddr = res.BrkAddr;
 
         var engine = Syscalls.CurrentSyscallEngine;
         engine.Eip = res.Entry;
         engine.RegWrite(Reg.ESP, res.SP);
+        // execve resets the general register file. This matters on i386:
+        // glibc's _start forwards the inherited %edx to __libc_start_main as
+        // rtld_fini. A stale value is registered as an exit handler and later
+        // demangles into a bogus pointer in __run_exit_handlers.
+        engine.RegWrite(Reg.EAX, 0);
+        engine.RegWrite(Reg.EBX, 0);
+        engine.RegWrite(Reg.ECX, 0);
+        engine.RegWrite(Reg.EDX, 0);
+        engine.RegWrite(Reg.ESI, 0);
+        engine.RegWrite(Reg.EDI, 0);
+        engine.RegWrite(Reg.EBP, 0);
+        // i386 start_thread() clears the FS/GS selectors; both bases therefore
+        // read as zero in the new image. Programs install their own TLS later.
+        engine.SetSegBase(Seg.FS, 0);
+        engine.SetSegBase(Seg.GS, 0);
         engine.Eflags = 0x202;
 
         var spBase = res.SP;
         var stackData = res.InitialStack;
         var stackStart = spBase & LinuxConstants.PageMask;
-        var stackLength = ((spBase + (uint)stackData.Length + LinuxConstants.PageSize - 1) & LinuxConstants.PageMask) -
-                          stackStart;
+        var stackLength = ((spBase + (uint)stackData.Count + LinuxConstants.PageSize - 1) &
+                           LinuxConstants.PageMask) - stackStart;
         if (!Syscalls.Mem.PrefaultRange(stackStart, stackLength, engine, true))
             throw new OutOfMemoryException($"Failed to allocate initial stack pages at 0x{stackStart:x}");
 
-        if (!engine.CopyToUser(spBase, stackData))
+        if (!engine.CopyToUser(spBase, stackData.AsSpan()))
             throw new InvalidOperationException("Failed to write initial stack content to guest memory");
     }
 
@@ -499,7 +523,7 @@ public class Process
         for (var depth = 0; depth < maxShebangDepth; depth++)
         {
             var displayPath = FsEncoding.DecodeUtf8Lossy(guestPathRaw);
-            EnsureExecutableAccess(dentry, displayPath);
+            EnsureExecutableAccess(dentry, displayPath, mount);
 
             var headerBuf = new byte[256];
             var headerLen = 0;
@@ -534,53 +558,162 @@ public class Process
         throw new InvalidDataException($"Shebang recursion too deep for '{FsEncoding.DecodeUtf8Lossy(guestPathRaw)}'.");
     }
 
-    private void EnsureExecutableAccess(Dentry dentry, string guestPath)
+    private void EnsureExecutableAccess(Dentry dentry, string guestPath, Mount mount)
     {
         if (dentry.Inode == null)
             throw new FileNotFoundException($"Executable not found in VFS: {guestPath}");
         if (dentry.Inode is HostInode hostInode)
             hostInode.RefreshProjectedMetadata(EUID, EGID);
+        if (dentry.Inode.Type != InodeType.File)
+            throw new UnauthorizedAccessException($"Executable is not a regular file: '{guestPath}'.");
+        if ((mount.Flags & LinuxConstants.MS_NOEXEC) != 0)
+            throw new UnauthorizedAccessException($"Mount is noexec for '{guestPath}'.");
+        if (dentry.Inode is TmpfsInode { IsMemfdNoExecSealed: true })
+            throw new UnauthorizedAccessException($"Executable is sealed noexec: '{guestPath}'.");
 
         var accessRc = DacPolicy.CheckPathAccess(this, dentry.Inode, AccessMode.MayExec, true);
         if (accessRc < 0)
             throw new UnauthorizedAccessException($"Execute access denied for '{guestPath}'.");
+        if (dentry.Inode is not TmpfsInode { IsMemfd: true } && dentry.Inode.HasWritableOpenFile)
+            throw new TextFileBusyException($"Text file busy: '{guestPath}'.");
     }
 
     internal void Exec(Dentry dentry, string guestPath, string[] args, string[] envs, Mount mount)
     {
-        Exec(dentry, FsEncoding.EncodeUtf8(guestPath), args.Select(FsEncoding.EncodeUtf8).ToArray(),
-            envs.Select(FsEncoding.EncodeUtf8).ToArray(), mount);
+        var guestPathRaw = FsEncoding.EncodeUtf8(guestPath);
+        Exec(dentry, guestPathRaw, args.Select(FsEncoding.EncodeUtf8).ToArray(),
+            envs.Select(FsEncoding.EncodeUtf8).ToArray(), mount, guestPathRaw);
     }
 
-    internal void Exec(Dentry dentry, byte[] guestPathRaw, byte[][] argsRaw, byte[][] envsRaw, Mount mount)
+    internal void Exec(Dentry dentry, byte[] guestPathRaw, byte[][] argsRaw, byte[][] envsRaw, Mount mount,
+        byte[]? execFnPathRaw = null)
     {
         var oldMem = Mem;
         var oldEngine = Syscalls.CurrentSyscallEngine;
-        var hadSharedAddressSpace = oldMem.GetSharedRefCount() > 1;
-        var shouldDetachSysVShm = oldMem.GetSharedRefCount() == 1;
+        var oldBrkAddr = Syscalls.BrkAddr;
+        var oldLayout = oldMem.Layout;
+        var oldSigReturnAddr = Syscalls.SigReturnAddr;
+        var oldRtSigReturnAddr = Syscalls.RtSigReturnAddr;
+        var oldExecutablePathRaw = ExecutablePathRaw;
+        var oldCommandLineArgumentBytes = CommandLineArgumentBytes;
+        var oldCommandLineRaw = CommandLineRaw;
+        var oldComm = Comm;
 
-        if (shouldDetachSysVShm)
+        // Build the replacement image in a private address space. The old image stays
+        // fully live until every mapping, stack page and auxv entry has been written;
+        // any load failure then leaves the caller's process untouched.
+        var stagedMem = new VMAManager(oldMem.MemoryContext);
+        var stagedEngine = new Engine(oldMem.MemoryContext)
+        {
+            Owner = oldEngine.Owner,
+            CurrentSyscallManager = Syscalls,
+            LogHandler = oldEngine.LogHandler
+        };
+        stagedMem.BindAddressSpaceHandle(ProcessAddressSpaceHandle.CaptureAttachedEngine(stagedEngine));
+
+        Syscalls.Mem = stagedMem;
+        Syscalls.CurrentSyscallEngine = stagedEngine;
+        try
+        {
+            LoadExecutable(dentry, guestPathRaw, argsRaw, envsRaw, mount,
+                execFnPathRaw ?? guestPathRaw, takeArgvOwnership: true);
+        }
+        catch
+        {
+            Syscalls.Mem = oldMem;
+            Syscalls.CurrentSyscallEngine = oldEngine;
+            Syscalls.BrkAddr = oldBrkAddr;
+            oldMem.Layout = oldLayout;
+            Syscalls.RestoreVdsoAddresses(oldSigReturnAddr, oldRtSigReturnAddr);
+            ExecutablePathRaw = oldExecutablePathRaw;
+            CommandLineArgumentBytes = oldCommandLineArgumentBytes;
+            CommandLineRaw = oldCommandLineRaw;
+            Comm = oldComm;
+            ProcessAddressSpaceSync.UnregisterEngineAddressSpace(stagedMem, stagedEngine);
+            stagedMem.ReleaseSharedRef(stagedEngine);
+            stagedEngine.Dispose();
+            throw;
+        }
+
+        Syscalls.Mem = oldMem;
+        Syscalls.CurrentSyscallEngine = oldEngine;
+
+        var currentTask = oldEngine.Owner as FiberTask;
+
+        // Linux unshares the descriptor table before installing the new image. Keep
+        // it at the commit boundary so an allocation failure still leaves the old
+        // image and all threads intact.
+        if (currentTask != null)
+        {
+            try
+            {
+                Syscalls.UnshareFdTable(currentTask);
+            }
+            catch
+            {
+                ProcessAddressSpaceSync.UnregisterEngineAddressSpace(stagedMem, stagedEngine);
+                stagedMem.ReleaseSharedRef(stagedEngine);
+                stagedEngine.Dispose();
+                throw;
+            }
+        }
+
+        // Commit. First stop sibling threads while their engines still point at the
+        // old address space, then detach SysV shared-memory attachments and release it.
+        if (currentTask != null)
+        {
+            currentTask.CommonKernel.DetachSiblingThreads(currentTask);
+
+            // Linux processes the execing task's robust futex list while the old mm is
+            // still live (futex_exec_release -> exit_robust_list). The pointer must not
+            // survive into the new image.
+            currentTask.ExitRobustList();
+            if (oldMem.GetSharedRefCount() > 1)
+                currentTask.ClearChildTidAndWake();
+            else
+                currentTask.ChildClearTidPtr = 0;
+        }
+
+        if (oldMem.GetSharedRefCount() == 1)
             Syscalls.SysVShm.OnProcessExit(TGID, oldMem, oldEngine, this);
 
-        var freshMem = new VMAManager(oldMem.MemoryContext);
-        if (hadSharedAddressSpace)
-            freshMem.BindAddressSpaceHandle(ProcessAddressSpaceHandle.DetachFromSharedEngine(oldEngine));
-        else
-            freshMem.BindAddressSpaceHandle(ProcessAddressSpaceHandle.CaptureAttachedEngine(oldEngine));
-        Mem = freshMem;
-        Syscalls.Mem = freshMem;
-        ProcessAddressSpaceSync.RebindEngineAddressSpace(oldMem, freshMem, oldEngine);
-        MemoryReleased = false;
+        var stagedEip = stagedEngine.Eip;
+        var stagedEsp = stagedEngine.RegRead(Reg.ESP);
+        var stagedFlags = stagedEngine.Eflags;
+        var stagedEax = stagedEngine.RegRead(Reg.EAX);
+        var stagedEbx = stagedEngine.RegRead(Reg.EBX);
+        var stagedEcx = stagedEngine.RegRead(Reg.ECX);
+        var stagedEdx = stagedEngine.RegRead(Reg.EDX);
+        var stagedEsi = stagedEngine.RegRead(Reg.ESI);
+        var stagedEdi = stagedEngine.RegRead(Reg.EDI);
+        var stagedEbp = stagedEngine.RegRead(Reg.EBP);
+
+        ProcessAddressSpaceSync.RebindEngineAddressSpace(oldMem, stagedMem, oldEngine);
         oldMem.ReleaseSharedRef(oldEngine);
+        stagedMem.AddressSpaceHandle!.AttachEngine(oldEngine);
 
-        Syscalls.CurrentSyscallEngine.ResetMemory();
+        Mem = stagedMem;
+        Syscalls.Mem = stagedMem;
+        MemoryReleased = false;
 
-        ResetSignalDispositionsForExec();
+        oldEngine.Eip = stagedEip;
+        oldEngine.RegWrite(Reg.ESP, stagedEsp);
+        oldEngine.RegWrite(Reg.EAX, stagedEax);
+        oldEngine.RegWrite(Reg.EBX, stagedEbx);
+        oldEngine.RegWrite(Reg.ECX, stagedEcx);
+        oldEngine.RegWrite(Reg.EDX, stagedEdx);
+        oldEngine.RegWrite(Reg.ESI, stagedEsi);
+        oldEngine.RegWrite(Reg.EDI, stagedEdi);
+        oldEngine.RegWrite(Reg.EBP, stagedEbp);
+        oldEngine.SetSegBase(Seg.FS, 0);
+        oldEngine.SetSegBase(Seg.GS, 0);
+        oldEngine.Eflags = stagedFlags;
 
-        LoadExecutable(dentry, guestPathRaw, argsRaw, envsRaw, mount);
+        ProcessAddressSpaceSync.UnregisterEngineAddressSpace(stagedMem, stagedEngine);
+        stagedEngine.Dispose();
     }
 
-    private void ResetSignalDispositionsForExec()
+    internal void ResetSignalDispositionsForExec()
     {
         // Linux clears the parent-death signal in execve; it must be re-armed explicitly.
         ParentDeathSignal = 0;
@@ -630,13 +763,22 @@ public class Process
         Array.Copy(src.ResourceLimits, ResourceLimits, ResourceLimits.Length);
     }
 
-    private void UpdateProcessImage(byte[] exeRaw, byte[][] argsRaw)
+    // When takeArgvOwnership is true, argsRaw is retained directly; callers must not mutate it.
+    private void UpdateProcessImage(byte[] exeRaw, byte[] commPathRaw, byte[][] argsRaw, bool takeArgvOwnership)
     {
         ExecutablePathRaw = [.. exeRaw];
-        CommandLineArgumentBytes = argsRaw.Select(a => a.ToArray()).ToArray();
+        CommandLineArgumentBytes = takeArgvOwnership
+            ? argsRaw
+            : argsRaw.Select(a => a.ToArray()).ToArray();
 
-        var commBase = CommandLineArgumentBytes.Length > 0 ? CommandLineArgumentBytes[0] : ExecutablePathRaw;
-        Comm = GetByteBasename(commBase);
+        // Linux sets comm from the executable filename (bprm->filename), not argv[0],
+        // and truncates it to TASK_COMM_LEN-1 (15) bytes. For a script that is the
+        // script path passed to execve, not the interpreter resolved for the image.
+        var commBytes = commPathRaw.AsSpan();
+        var lastSlash = commBytes.LastIndexOf((byte)'/');
+        if (lastSlash >= 0) commBytes = commBytes[(lastSlash + 1)..];
+        if (commBytes.Length > 15) commBytes = commBytes[..15];
+        Comm = FsEncoding.DecodeUtf8Lossy(commBytes);
         if (string.IsNullOrEmpty(Comm)) Comm = "process";
 
         if (CommandLineArgumentBytes.Length == 0)
@@ -655,14 +797,6 @@ public class Process
         }
 
         CommandLineRaw = raw;
-    }
-
-    private static string GetByteBasename(byte[] path)
-    {
-        if (path.Length == 0) return "";
-        var lastSlash = path.AsSpan().LastIndexOf((byte)'/');
-        var name = lastSlash >= 0 ? path.AsSpan(lastSlash + 1) : path.AsSpan();
-        return FsEncoding.DecodeUtf8Lossy(name);
     }
 
     private static ResourceLimit[] CreateDefaultResourceLimits()

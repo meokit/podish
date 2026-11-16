@@ -605,6 +605,13 @@ public partial class SyscallManager
         if (pathErr != 0) return pathErr;
         using var _ = filename;
 
+        // Linux copies argv/envp before it opens the executable, so EFAULT/E2BIG take
+        // precedence over ENOENT/EACCES/ETXTBSY. Keep the same ordering here.
+        var (args, argsError) = ReadUserCStringVectorBytes(a2);
+        if (argsError < 0) return argsError;
+        var (envs, envsError) = ReadUserCStringVectorBytes(a3);
+        if (envsError < 0) return envsError;
+
         var lookup = PathWalker.PathWalkWithData(filename.UnsafeBuffer, filename.Length, null, LookupFlags.FollowSymlink);
         if (lookup.HasError)
         {
@@ -624,12 +631,10 @@ public partial class SyscallManager
         var mount = loc.Mount!;
         if (dentry.Inode == null)
             return -(int)Errno.ENOENT;
-        if (dentry.Inode.Type == InodeType.Directory)
-            return -(int)Errno.EACCES;
         if (dentry.Inode is HostInode hostInode)
             hostInode.RefreshProjectedMetadata(task.Process.EUID, task.Process.EGID);
 
-        var execAccessRc = DacPolicy.CheckPathAccess(task.Process, dentry.Inode, AccessMode.MayExec, true);
+        var execAccessRc = CheckExecutableFile(task.Process, dentry, mount);
         if (execAccessRc < 0)
             return execAccessRc;
 
@@ -644,11 +649,12 @@ public partial class SyscallManager
 
         if (ShebangParser.TryParse(headerBuf.AsSpan(0, headerLen), out var interpPathRaw, out var interpArgRaw))
         {
-            Logger.LogInformation(
-                "[SysExecve] Shebang detected: interpreter='{Interp}', arg='{Arg}', script='{Script}'",
-                FsEncoding.DecodeUtf8Lossy(interpPathRaw),
-                interpArgRaw != null ? FsEncoding.DecodeUtf8Lossy(interpArgRaw) : "(none)",
-                displayPath);
+            if (Logger.IsEnabled(LogLevel.Information))
+                Logger.LogInformation(
+                    "[SysExecve] Shebang detected: interpreter='{Interp}', arg='{Arg}', script='{Script}'",
+                    FsEncoding.DecodeUtf8Lossy(interpPathRaw),
+                    interpArgRaw != null ? FsEncoding.DecodeUtf8Lossy(interpArgRaw) : "(none)",
+                    displayPath);
 
             var (interpLoc, _, _) = ResolvePathBytes(interpPathRaw);
             if (!interpLoc.IsValid)
@@ -665,42 +671,28 @@ public partial class SyscallManager
             if (interpDentry.Inode is HostInode interpHostInode)
                 interpHostInode.RefreshProjectedMetadata(task.Process.EUID, task.Process.EGID);
 
-            var interpAccessRc = DacPolicy.CheckPathAccess(task.Process, interpDentry.Inode, AccessMode.MayExec, true);
+            var interpAccessRc = CheckExecutableFile(task.Process, interpDentry, interpMount);
             if (interpAccessRc < 0)
                 return interpAccessRc;
-
-            var origArgs = ReadUserCStringVectorBytes(a2);
-            var origEnvs = ReadUserCStringVectorBytes(a3);
 
             var newArgs = new List<byte[]> { interpPathRaw };
             if (interpArgRaw != null)
                 newArgs.Add(interpArgRaw);
             newArgs.Add(guestPathRaw);
-            if (origArgs.Length > 1)
-                newArgs.AddRange(origArgs.Skip(1));
+            if (args.Length > 1)
+                newArgs.AddRange(args.Skip(1));
 
-            var toCloseShebang = GetCloseOnExecFds();
-            foreach (var fd in toCloseShebang) FreeFD(fd);
-
-            var ignoredShebang = task.Process.SignalActions
-                .Where(kv => kv.Value.Handler == 1)
-                .ToDictionary(kv => kv.Key, kv => kv.Value);
-            task.Process.SignalActions.Clear();
-            foreach (var kv in ignoredShebang) task.Process.SignalActions[kv.Key] = kv.Value;
-            task.ResetAltStack();
-
-            task.ExitRobustList();
-            task.RobustListHead = 0;
-            task.RobustListSize = 0;
-
-            Logger.LogInformation("[SysExecve] Re-executing as: {Args}",
-                string.Join(" ", newArgs.Select(a => FsEncoding.DecodeUtf8Lossy(a))));
+            if (Logger.IsEnabled(LogLevel.Information))
+                Logger.LogInformation("[SysExecve] Re-executing as: {Args}",
+                    string.Join(" ", newArgs.Select(a => FsEncoding.DecodeUtf8Lossy(a))));
             Logger.LogDebug("[SysExecve] Shebang re-exec argc={ArgCount} envc={EnvCount}",
-                newArgs.Count, origEnvs.Length);
+                newArgs.Count, envs.Length);
 
             try
             {
-                task.Process.Exec(interpLoc.Dentry!, interpPathRaw, [.. newArgs], origEnvs, interpLoc.Mount!);
+                task.Process.Exec(interpLoc.Dentry!, interpPathRaw, [.. newArgs], envs, interpLoc.Mount!,
+                    guestPathRaw);
+                ApplyExecSuccessState(task);
                 task.Process.HasExeced = true;
                 CredentialService.ApplyExecSetIdOnExec(task.Process, interpLoc.Dentry!.Inode!);
                 ProcFsManager.OnProcessExec(this, task.Process);
@@ -725,33 +717,16 @@ public partial class SyscallManager
             return -(int)Errno.ENOEXEC;
         }
 
-        var args = ReadUserCStringVectorBytes(a2);
-        var envs = ReadUserCStringVectorBytes(a3);
-
-        var toClose = GetCloseOnExecFds();
-        foreach (var fd in toClose) FreeFD(fd);
-
-        var ignored = task.Process.SignalActions
-            .Where(kv => kv.Value.Handler == 1)
-            .ToDictionary(kv => kv.Key, kv => kv.Value);
-
-        task.Process.SignalActions.Clear();
-        foreach (var kv in ignored) task.Process.SignalActions[kv.Key] = kv.Value;
-
-        task.ResetAltStack();
-
-        task.ExitRobustList();
-        task.RobustListHead = 0;
-        task.RobustListSize = 0;
-
         Logger.LogInformation("[SysExecve] Loading {GuestPath} with {ArgCount} args, {EnvCount} envs via Process.Exec",
             displayPath, args.Length, envs.Length);
-        foreach (var arg in args)
-            Logger.LogDebug("  arg: {Arg}", FsEncoding.DecodeUtf8Lossy(arg));
+        if (Logger.IsEnabled(LogLevel.Debug))
+            foreach (var arg in args)
+                Logger.LogDebug("  arg: {Arg}", FsEncoding.DecodeUtf8Lossy(arg));
 
         try
         {
-            task.Process.Exec(dentry, guestPathRaw, args, envs, mount);
+            task.Process.Exec(dentry, guestPathRaw, args, envs, mount, guestPathRaw);
+            ApplyExecSuccessState(task);
             task.Process.HasExeced = true;
             CredentialService.ApplyExecSetIdOnExec(task.Process, dentry.Inode!);
             ProcFsManager.OnProcessExec(this, task.Process);
@@ -766,15 +741,54 @@ public partial class SyscallManager
         }
     }
 
+    private static int CheckExecutableFile(Process process, Dentry dentry, Mount mount)
+    {
+        var inode = dentry.Inode;
+        if (inode == null) return -(int)Errno.ENOENT;
+        if (inode.Type != InodeType.File) return -(int)Errno.EACCES;
+        if ((mount.Flags & LinuxConstants.MS_NOEXEC) != 0) return -(int)Errno.EACCES;
+        if (inode is TmpfsInode { IsMemfdNoExecSealed: true }) return -(int)Errno.EACCES;
+
+        var accessRc = DacPolicy.CheckPathAccess(process, inode, AccessMode.MayExec, true);
+        if (accessRc < 0) return accessRc;
+
+        // Linux does not apply deny_write_access() to anonymous memfd inodes;
+        // /proc/self/fd/N remains executable while the memfd is open O_RDWR.
+        if (inode is not TmpfsInode { IsMemfd: true } && inode.HasWritableOpenFile)
+            return -(int)Errno.ETXTBSY;
+        return 0;
+    }
+
+    private static void ApplyExecSuccessState(FiberTask task)
+    {
+        // The descriptor table was unshared and the robust list processed in the exec
+        // commit phase. Remaining side effects are applied after the new image is live.
+        // Linux applies these only after the new image has been installed. On a
+        // failed execve the descriptor table, signal dispositions and altstack must
+        // remain exactly as they were.
+        foreach (var fd in task.Process.Syscalls.GetCloseOnExecFds())
+            task.Process.Syscalls.FreeFD(fd);
+
+        task.Process.ResetSignalDispositionsForExec();
+        task.ResetAltStack();
+        task.ChildClearTidPtr = 0;
+        task.RobustListHead = 0;
+        task.RobustListSize = 0;
+    }
+
     private static int MapExecveExceptionToErrno(Exception ex)
     {
         return ex switch
         {
             OutOfMemoryException => -(int)Errno.ENOMEM,
+            TextFileBusyException => -(int)Errno.ETXTBSY,
+            EndOfStreamException or InvalidDataException or NotSupportedException or InvalidOperationException =>
+                -(int)Errno.ENOEXEC,
+            OverflowException => -(int)Errno.E2BIG,
             FileNotFoundException => -(int)Errno.ENOENT,
             DirectoryNotFoundException => -(int)Errno.ENOENT,
             UnauthorizedAccessException => -(int)Errno.EACCES,
-            _ => -(int)Errno.ENOENT
+            _ => -(int)Errno.ENOEXEC
         };
     }
 
