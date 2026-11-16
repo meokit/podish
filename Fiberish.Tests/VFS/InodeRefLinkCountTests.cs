@@ -1,4 +1,5 @@
 using Fiberish.VFS;
+using Fiberish.Memory;
 using Xunit;
 
 namespace Fiberish.Tests.VFS;
@@ -82,6 +83,30 @@ public class InodeRefLinkCountTests
         Assert.Equal(0, inode.FileMmapRefCount);
         Assert.False(inode.HasActiveRuntimeRefs);
         Assert.False(rig.SuperBlock.HasActiveInodes());
+    }
+
+    [Theory]
+    [InlineData(FileFlags.O_RDONLY, false)]
+    [InlineData(FileFlags.O_RDWR, true)]
+    public void Tmpfs_MappingWriter_RemainsUntilLastForkOrSplitReference(FileFlags flags, bool writable)
+    {
+        using var rig = FileSystemTestRigFactory.Create("tmpfs");
+        var dentry = new Dentry(FsName.FromString("image"), null, rig.Root, rig.SuperBlock);
+        rig.RootInode.Create(dentry, 0x1ed, 0, 0);
+        var inode = dentry.Inode!;
+        var mount = new Mount(rig.SuperBlock, rig.Root);
+        var fd = new LinuxFile(dentry, flags, mount);
+        var mapping = new VmaFileMapping(new LinuxFile(dentry, flags, mount, LinuxFile.ReferenceKind.MmapHold));
+        var inherited = mapping.AddRef(); // VmArea.Clone/fork/split share this lifetime
+        fd.Close();
+        Assert.Equal(writable, inode.HasWritableOpenFile);
+        Assert.Equal(0, inode.FileOpenRefCount);
+        mapping.Release();
+        Assert.Equal(writable, inode.HasWritableOpenFile);
+        Assert.Equal(1, inode.FileMmapRefCount);
+        inherited.Release();
+        Assert.False(inode.HasWritableOpenFile);
+        Assert.Equal(0, inode.FileMmapRefCount);
     }
 
     [Fact]

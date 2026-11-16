@@ -4740,7 +4740,10 @@ public class LinuxFile : IDisposable
             throw;
         }
         // Note: Mount reference is managed by caller if provided
-        if (Kind == ReferenceKind.Normal && !IsPathOnly && (((int)Flags & 3) != 0))
+        // An mmap hold retains the original open description's write access even
+        // after close(fd), regardless of VMA protection or MAP_SHARED/PRIVATE.
+        // Reuse this hold's lifetime rather than allocating/scanning a writer table.
+        if (!IsPathOnly && (((int)Flags & 3) != 0))
             OpenedInode?.AddWritableOpenFile();
     }
 
@@ -4900,7 +4903,7 @@ public class LinuxFile : IDisposable
 
         var dentry = Dentry;
         OpenedInode?.ReleaseFileDescriptorLocks(this);
-        if (Kind == ReferenceKind.Normal && !IsPathOnly && (((int)Flags & 3) != 0))
+        if (!IsPathOnly && (((int)Flags & 3) != 0))
             OpenedInode?.RemoveWritableOpenFile();
         if (!IsPathOnly)
             OpenedInode?.Release(this);
