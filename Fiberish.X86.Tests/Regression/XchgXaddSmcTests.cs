@@ -145,6 +145,26 @@ public sealed class XchgXaddSmcTests
         Assert.Equal((byte)0x01, cpu.ReadMemory(CpuSandbox.DataAddress, 1)[0]);
     }
 
+    [Fact]
+    public void ReplacingExternalExecutablePage_InvalidatesTranslatedBlocks()
+    {
+        using var cpu = CreateExternalSandbox();
+        cpu.WriteMemory(CpuSandbox.DataAddress, [0x00]);
+
+        // v1: mov byte [0x00200000], 1
+        cpu.WriteCode([0xC6, 0x05, 0x00, 0x00, 0x20, 0x00, 0x01]);
+        cpu.Run(CpuSandbox.CodeAddress + 7);
+        Assert.Equal((byte)0x01, cpu.ReadMemory(CpuSandbox.DataAddress, 1)[0]);
+
+        // Replace the executable backing without touching the code cache: the
+        // block decoded from v1 must be invalidated by the page replacement.
+        cpu.ReplaceExternalMemory(CpuSandbox.CodeAddress, [0xC6, 0x05, 0x00, 0x00, 0x20, 0x00, 0x02], 7);
+        cpu.Eip = CpuSandbox.CodeAddress;
+        cpu.Run(CpuSandbox.CodeAddress + 7);
+
+        Assert.Equal((byte)0x02, cpu.ReadMemory(CpuSandbox.DataAddress, 1)[0]);
+    }
+
     private static CpuSandbox CreateExternalSandbox()
     {
         var cpu = new CpuSandbox(mapDefaults: false);

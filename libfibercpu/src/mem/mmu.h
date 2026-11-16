@@ -984,6 +984,11 @@ private:
     void publish_runtime_tlb_flush_deduped(uint32_t guest_page) {
         if (!core_) return;
 
+        // Apply sibling engines' pending translations before publishing this
+        // one. Otherwise the read cursor below skips them and this engine can
+        // keep using a stale translation for the rest of the current Run.
+        sync_runtime_tlb_shootdowns();
+
         auto& ring = core_->runtime_tlb_shootdown_ring;
         const uint64_t write_seq = ring.write_seq;
         const uint64_t capacity = MmuCore::RuntimeTlbShootdownRing::kCapacity;
@@ -1004,6 +1009,9 @@ private:
 
     void publish_runtime_tlb_flush_all() {
         if (!core_) return;
+
+        // See publish_runtime_tlb_flush_deduped: do not skip sibling events.
+        sync_runtime_tlb_shootdowns();
 
         auto& ring = core_->runtime_tlb_shootdown_ring;
         ring.write_seq += MmuCore::RuntimeTlbShootdownRing::kCapacity + 1;
@@ -1605,6 +1613,15 @@ public:
         // Free existing page if owned
         if (chunk->pages[l2_idx] && !has_property(chunk->permissions[l2_idx], Property::External)) {
             delete[] chunk->pages[l2_idx];
+        }
+
+        // A translated block that was decoded from the old backing keeps
+        // executing the old instructions even though the guest now sees new
+        // contents. Invalidate those blocks before publishing the new backing.
+        if (old_page != nullptr && old_page != external_page && has_property(old_perms, Property::Exec)) {
+            HostPageSet affected_host_pages;
+            code_cache().InvalidateHostPage(reinterpret_cast<uintptr_t>(old_page), &affected_host_pages);
+            refresh_smc_armed_for_host_pages(affected_host_pages);
         }
 
         // Set external page (caller owns this memory)

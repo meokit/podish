@@ -792,6 +792,57 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
+    public void SharedClone_InterveningSiblingPublish_MustNotSkipUnconsumedShootdown()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
+        var mm = runtime.CreateAddressSpace();
+        mm.BindOrAssertAddressSpaceHandle(parent);
+        parent.FaultHandler =
+            (engine, addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+        parent.PageFaultResolver =
+            (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, parent) == FaultResult.Handled;
+
+        using var child = parent.Clone(true);
+        mm.BindOrAssertAddressSpaceHandle(child);
+        child.FaultHandler =
+            (engine, addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, engine) == FaultResult.Handled;
+        child.PageFaultResolver =
+            (addr, isWrite) => mm.HandleFaultDetailed(addr, isWrite, child) == FaultResult.Handled;
+
+        const uint dataAddr = 0x0041A000;
+        const uint otherAddr = 0x0041D000;
+        const uint readerAddr = 0x0041B000;
+        const uint writerAddr = 0x0041C000;
+        const uint otherWriterAddr = 0x0041E000;
+        Assert.Equal(dataAddr,
+            mm.Mmap(dataAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "shootdown-order-data",
+                parent));
+        Assert.Equal(otherAddr,
+            mm.Mmap(otherAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,
+                MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "shootdown-order-other",
+                parent));
+
+        InstallAbsoluteAlByteReader(parent, readerAddr, dataAddr);
+        InstallAbsoluteAlByteWriter(parent, writerAddr, dataAddr);
+        InstallAbsoluteAlByteWriter(parent, otherWriterAddr, otherAddr);
+
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(mm, parent);
+        ProcessAddressSpaceSync.SyncEngineBeforeRun(mm, child);
+
+        RunAbsoluteAlByteReader(parent, readerAddr, 0x00);
+
+        // The child remaps dataAddr, publishing a shootdown the parent has not
+        // consumed yet. Populating an unrelated page through the parent then
+        // must not advance the parent's read cursor past that event.
+        RunAbsoluteAlByteWriter(child, writerAddr, 0x5A);
+        RunAbsoluteAlByteWriter(parent, otherWriterAddr, 0x11);
+
+        RunAbsoluteAlByteReader(parent, readerAddr, 0x5A);
+    }
+
+    [Fact]
     public void SamePageSelfModifyingRun_SecondPatchMustNotExecuteStaleTailBytes()
     {
         var runtime = new TestRuntimeFactory();

@@ -119,6 +119,31 @@ public sealed unsafe class CpuSandbox : IDisposable
         _pages.Add(address, permissions);
     }
 
+    /// <summary>
+    /// Installs a new backing page at an address that is already mapped. Does
+    /// not invalidate the code cache on purpose: callers use this to verify
+    /// that native page replacement invalidates translated blocks itself.
+    /// </summary>
+    public void ReplaceExternalMemory(uint address, ReadOnlySpan<byte> bytes, byte permissions = 7)
+    {
+        CheckedEnd(address, PageSize);
+        if ((address & (PageSize - 1)) != 0)
+            throw new ArgumentException("External pages must be page aligned.", nameof(address));
+        if (bytes.Length > PageSize) throw new ArgumentOutOfRangeException(nameof(bytes));
+
+        IntPtr memory = Marshal.AllocHGlobal((int)PageSize);
+        var span = new Span<byte>((void*)memory, (int)PageSize);
+        span.Clear();
+        bytes.CopyTo(span);
+        if (X86Native.MapManagedPage(State, address, (void*)memory, permissions) == 0)
+        {
+            Marshal.FreeHGlobal(memory);
+            throw new InvalidOperationException($"Could not replace external guest page {address:X8}.");
+        }
+        _externalPages.Add(memory);
+        _pages[address] = permissions;
+    }
+
     public void ProtectMemory(uint address, uint size, byte permissions)
     {
         var end = CheckedEnd(address, size);
