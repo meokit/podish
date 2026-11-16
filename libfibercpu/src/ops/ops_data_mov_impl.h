@@ -668,11 +668,14 @@ FORCE_INLINE LogicFlow OpMov_Moffs_Store_Word(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpMov_Rm_Sreg(LogicFuncParams) {
     // 8C: MOV r/m16, Sreg
+    // The memory destination is always 16 bits; only a register destination is
+    // written as a full 32-bit GPR (zero-extended selector).
     uint16_t val = 0;
-    if (op->prefixes.flags.opsize) {
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, val, utlb)) return LogicFlow::RetryMemoryOp;
-    } else {
+    const bool register_destination = ((op->modrm >> 6) & 3) == 3;
+    if (register_destination) {
         if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, (uint32_t)val, utlb)) return LogicFlow::RetryMemoryOp;
+    } else {
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, val, utlb)) return LogicFlow::RetryMemoryOp;
     }
     return LogicFlow::Continue;
 }

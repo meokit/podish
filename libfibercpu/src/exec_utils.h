@@ -462,14 +462,15 @@ template <typename T, bool fail_on_tlb_miss = false>
 FORCE_INLINE MemResult<void> Push(EmuState* state, T val, mem::MicroTLB* utlb, DecodedOp* op) {
     constexpr uint32_t size = sizeof(T);
     uint32_t esp = GetReg(state, ESP);
+    const uint32_t ss_base = state->ctx.seg_base[3];  // SS
 
     // Write to memory (ESP - size)
-    auto res = state->mmu.write<T, fail_on_tlb_miss>(esp - size, val, utlb, op);
+    auto res = state->mmu.write<T, fail_on_tlb_miss>(ss_base + esp - size, val, utlb, op);
 
     // Request a write and return
     if (!res && fail_on_tlb_miss) [[unlikely]] {
         // Push can satisfy "Retry" semantics (update ESP only on success)
-        res = state->request_write_and_check_pending<T>(esp - size, val, op->next_eip);
+        res = state->request_write_and_check_pending<T>(ss_base + esp - size, val, op->next_eip);
     }
 
     if (res) {
@@ -483,11 +484,12 @@ template <typename T, bool fail_on_tlb_miss = false>
 FORCE_INLINE MemResult<T> Pop(EmuState* state, mem::MicroTLB* utlb, DecodedOp* op) {
     constexpr uint32_t size = sizeof(T);
     uint32_t esp = GetReg(state, ESP);
+    const uint32_t ss_base = state->ctx.seg_base[3];  // SS
 
     // Read from memory (ESP)
-    auto res = state->mmu.read<T, fail_on_tlb_miss>(esp, utlb, op);
+    auto res = state->mmu.read<T, fail_on_tlb_miss>(ss_base + esp, utlb, op);
     if (!res && fail_on_tlb_miss) [[unlikely]] {
-        res = state->request_read_and_check_pending<T>(esp, op->next_eip);
+        res = state->request_read_and_check_pending<T>(ss_base + esp, op->next_eip);
     }
 
     if (res) {

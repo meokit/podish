@@ -174,31 +174,43 @@ JCC_WRAPPERS(15, G)
 #undef JCC_WRAPPERS
 
 FORCE_INLINE LogicFlow OpCall_Rel(LogicFuncParams) {
-    // E8: CALL rel32
-    // Push Return Address
-    // If Push fails, we Restart. SP is guaranteed untouched by Push on failure.
-    // Use Push<T, true> to request Restart explicitly on TLB Miss.
-    if (!Push<uint32_t, true>(state, op->next_eip, utlb, op)) return LogicFlow::RestartMemoryOp;
-
-    // Jump relative to Next Insn
-    *branch = GetControlTargetEip(op);
+    // E8: CALL rel16/32
+    // The operand-size prefix controls the pushed return-address width.
+    if (op->prefixes.flags.opsize) {
+        if (!Push<uint16_t, true>(state, (uint16_t)op->next_eip, utlb, op)) return LogicFlow::RestartMemoryOp;
+        *branch = GetControlTargetEip(op) & 0xFFFFu;
+    } else {
+        if (!Push<uint32_t, true>(state, op->next_eip, utlb, op)) return LogicFlow::RestartMemoryOp;
+        *branch = GetControlTargetEip(op);
+    }
     return LogicFlow::ExitToBranch;
 }
 
 FORCE_INLINE LogicFlow OpRet(LogicFuncParams) {
     // C3: RET
-    // Use Pop<T, true> to request Restart explicitly on TLB Miss.
-    auto val_res = Pop<uint32_t, true>(state, utlb, op);
-    if (!val_res) return LogicFlow::RestartMemoryOp;
-    *branch = *val_res;
+    if (op->prefixes.flags.opsize) {
+        auto val_res = Pop<uint16_t, true>(state, utlb, op);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
+        *branch = *val_res;
+    } else {
+        auto val_res = Pop<uint32_t, true>(state, utlb, op);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
+        *branch = *val_res;
+    }
     return LogicFlow::ExitToBranch;
 }
 
 FORCE_INLINE LogicFlow OpRet_Imm16(LogicFuncParams) {
     // C2: RET imm16
-    auto val_res = Pop<uint32_t, true>(state, utlb, op);
-    if (!val_res) return LogicFlow::RestartMemoryOp;
-    *branch = *val_res;
+    if (op->prefixes.flags.opsize) {
+        auto val_res = Pop<uint16_t, true>(state, utlb, op);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
+        *branch = *val_res;
+    } else {
+        auto val_res = Pop<uint32_t, true>(state, utlb, op);
+        if (!val_res) return LogicFlow::RestartMemoryOp;
+        *branch = *val_res;
+    }
 
     // Pop imm16 bytes from stack
     uint32_t esp = GetReg(state, ESP);
