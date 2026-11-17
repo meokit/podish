@@ -1784,7 +1784,7 @@ public:
     template <typename T>
     [[nodiscard]] FORCE_INLINE MemResult<HostAddr> try_write_target_tlb(GuestAddr addr, MicroTLB* utlb);
 
-    template <typename T, bool Store>
+    template <typename T, bool Store, bool FlushOnMiss = true>
     [[nodiscard]] FORCE_INLINE MemResult<std::conditional_t<Store, void, HostAddr>> write_tlb_impl(
         GuestAddr addr, T val, MicroTLB* utlb);
 

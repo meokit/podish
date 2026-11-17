@@ -270,7 +270,7 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
     return std::unexpected(FaultCode::PageFault);
 }
 
-template <typename T, bool Store>
+template <typename T, bool Store, bool FlushOnMiss>
 MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAddr addr, T val, MicroTLB* utlb) {
     const GuestAddr end_addr = addr + sizeof(T) - 1;
     const uint32_t target_tag = addr & ~PAGE_MASK;
@@ -315,7 +315,10 @@ MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAd
     // Invalidate both read/write micro-TLB tags to avoid stale read hits
     // against the pre-remap addend in the same translated block.
     InvalidateMicroTLB(utlb);
-    tlb.flush_page(addr);
+    // Nonblocking instruction writes tail-dispatch to MemoryOpGeneric. Its
+    // blocking write repeats this miss check and flushes before any remap.
+    // Blocking writes, direct TLB users and carry-RMW keep immediate flushing.
+    if constexpr (FlushOnMiss) tlb.flush_page(addr);
 #ifdef ENABLE_TLB_STATS
     stats.write_misses++;
     stats.total_writes++;
@@ -346,7 +349,7 @@ template <typename T, bool fail_on_tlb_miss>
 // Write
 template <typename T, bool fail_on_tlb_miss>
 [[nodiscard]] FORCE_INLINE MemResult<void> Mmu::write(GuestAddr addr, T val, MicroTLB* utlb, const DecodedOp* cur_op) {
-    if (auto result = write_tlb_only<T>(addr, val, utlb)) return result;
+    if (auto result = write_tlb_impl<T, true, !fail_on_tlb_miss>(addr, val, utlb)) return result;
     get_state()->sync_eip_to_op_start(cur_op);
     if constexpr (fail_on_tlb_miss) return std::unexpected(FaultCode::PageFault);
     return write_slow<T>(addr, val);

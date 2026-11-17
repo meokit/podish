@@ -119,7 +119,7 @@ ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RE
     ATTR_MUSTTAIL return MemoryOpGeneric<false>(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
 }
 
-static FORCE_INLINE int64_t ChainToKnownBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                               mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
                                               uint32_t branch, uint64_t flags_cache) {
     (void)op;

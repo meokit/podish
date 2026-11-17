@@ -252,13 +252,7 @@ FORCE_INLINE uint32_t ComputeEA(EmuState* state, const DecodedOp* op) {
 }
 
 FORCE_INLINE uint32_t GetMemSegmentBase(EmuState* state, const DecodedOp* op) {
-    uint8_t seg = memdesc::Segment(GetExt(op)->data.ea_desc);
-    if (seg == 0) {
-        // Only the base register selects the default segment. EBP used as a
-        // SIB index with no base still defaults to DS, not SS.
-        const uint8_t base = memdesc::BaseOffset(GetExt(op)->data.ea_desc);
-        seg = (base == EBP * 4 || base == ESP * 4) ? 3 : 4;
-    }
+    const uint8_t seg = memdesc::ResolvedSegment(GetExt(op)->data.ea_desc);
     return state->ctx.seg_base[seg];
 }
 

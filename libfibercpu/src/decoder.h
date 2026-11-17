@@ -16,7 +16,18 @@
 #define ATTR_MUSTTAIL
 #endif
 
-#if __has_cpp_attribute(preserve_none)
+// Probe the GNU spelling used below. Clang also recognizes the namespaced
+// C++ attribute clang::preserve_none, but the unqualified C++ attribute probe
+// silently selected the platform ABI and its nonvolatile register saves.
+// Limit the new probe to the x64 target verified here; other targets retain
+// their existing attribute/fallback selection.
+#if defined(__clang__) && (defined(__x86_64__) || defined(_M_X64))
+#if __has_attribute(preserve_none)
+#define ATTR_PRESERVE_NONE __attribute__((preserve_none))
+#else
+#define ATTR_PRESERVE_NONE
+#endif
+#elif __has_cpp_attribute(preserve_none)
 #define ATTR_PRESERVE_NONE __attribute__((preserve_none))
 #else
 #define ATTR_PRESERVE_NONE
@@ -129,10 +140,17 @@ constexpr uint32_t kBaseShift = 0;
 constexpr uint32_t kIndexShift = 6;
 constexpr uint32_t kScaleShift = 12;
 constexpr uint32_t kSegmentShift = 14;
+constexpr uint32_t kResolvedSegmentShift = 17;
 
 FORCE_INLINE constexpr uint32_t PackEA(uint8_t base_offset, uint8_t index_offset, uint8_t scale, uint8_t segment) {
+    // The base register and override are fixed for the lifetime of this decoded
+    // operand. Resolve DS vs SS here, but still load the chosen base at runtime.
+    // Keep the original override bits for specialization matching.
+    const bool stack_base = base_offset == ESP * sizeof(uint32_t) || base_offset == EBP * sizeof(uint32_t);
+    const uint8_t resolved_segment = segment != 0 ? segment : (stack_base ? 3 : 4);
     return (static_cast<uint32_t>(base_offset) << kBaseShift) | (static_cast<uint32_t>(index_offset) << kIndexShift) |
-           (static_cast<uint32_t>(scale) << kScaleShift) | (static_cast<uint32_t>(segment) << kSegmentShift);
+           (static_cast<uint32_t>(scale) << kScaleShift) | (static_cast<uint32_t>(segment) << kSegmentShift) |
+           (static_cast<uint32_t>(resolved_segment) << kResolvedSegmentShift);
 }
 
 FORCE_INLINE constexpr uint8_t BaseOffset(uint32_t ea_desc) {
@@ -147,6 +165,10 @@ FORCE_INLINE constexpr uint8_t Scale(uint32_t ea_desc) { return static_cast<uint
 
 FORCE_INLINE constexpr uint8_t Segment(uint32_t ea_desc) {
     return static_cast<uint8_t>((ea_desc >> kSegmentShift) & 0x7);
+}
+
+FORCE_INLINE constexpr uint8_t ResolvedSegment(uint32_t ea_desc) {
+    return static_cast<uint8_t>((ea_desc >> kResolvedSegmentShift) & 0x7);
 }
 }  // namespace memdesc
 
