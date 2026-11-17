@@ -2,8 +2,6 @@
 // SSE2 Integer Operations
 // Auto-generated from ops.cpp refactoring
 
-#include "ops_sse_int.h"
-
 #include <simde/x86/sse2.h>
 
 #include <cstring>

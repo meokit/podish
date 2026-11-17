@@ -1,0 +1,40 @@
+{
+  "baseline_commit": "c86246815f8db436c9e5fb3ad57e1621b96d1eb7",
+  "checkpoint_commit": "413652d1",
+  "source_catalog_sha256": "01aa65b225be1b3c0bf07ea28f8e9d68c0be60af5276b1b6f798a46df88fd338",
+  "exact_registry_match": {
+    "unique_variants": 503,
+    "fallbacks": 411,
+    "duplicate_rows_removed": 32
+  },
+  "validation": {
+    "cpu_on": 3145,
+    "cpu_off": 3145,
+    "tooling": 29,
+    "reflection_python": 5,
+    "compile_time_contracts": true
+  },
+  "gcc_coremark": {
+    "iterations": 60000,
+    "rounds": 3,
+    "median_scores": {
+      "before": 3265.306122,
+      "after": 3284.971257
+    },
+    "throughput_change_percent": 0.602244759457804
+  },
+  "holdout_throughput_change_percent": {
+    "gzip": -0.28514274695250474,
+    "sha256": 1.1442922969671976,
+    "coremark_zig": 0.037809768171115365
+  },
+  "executable_text_bytes": {
+    "before": 688372,
+    "after": 651212
+  },
+  "library_sha256": {
+    "before": "fd58327fd2412b3f6bf010f12e983cf22b2e712b1725791724e5d7242bedf393",
+    "after": "b16b86f30c006ba87cf990470508861da221e718d6fd07de376a94dd54534643"
+  },
+  "after_final_binary_equals_measured": true
+}

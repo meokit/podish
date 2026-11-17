@@ -221,7 +221,7 @@ typedef struct {
     void* first;
     void* second;
     void* third;
-    void* fourth; // NULL for width 3
+    void* fourth;  // NULL for width 3
     uint64_t count;
 } X86_NGramProfileEntry;
 size_t X86_GetNGramProfile(EmuState* state, X86_NGramProfileEntry* buffer, size_t capacity);
@@ -236,6 +236,24 @@ size_t X86_GetBlockCount(EmuState* state);
 size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count);
 
 // Handler reflection APIs generated from fibercpu_core.
+// Immutable instruction catalog. Pointers remain valid for the lifetime of the library.
+typedef struct {
+    uint32_t schema_version;
+    uint32_t opcode;
+    uint64_t variant_key;
+    void* handler;
+    const char* logic_name;
+    const char* family_name;
+    const char* fusion_parent;
+    int32_t priority;
+    uint32_t bake_with_parent;
+    uint32_t is_fallback;
+    uint32_t constraints[19];
+} X86_InstructionVariant;
+const char* X86_GetInstructionCatalogHash(void);
+int32_t X86_GetInstructionVariantCount(void);
+int32_t X86_GetInstructionVariant(int32_t index, X86_InstructionVariant* result);
+
 int32_t X86_GetHandlerCount(void);
 int32_t X86_GetHandlerId(void* handler);
 void* X86_GetHandlerById(int32_t handler_id);

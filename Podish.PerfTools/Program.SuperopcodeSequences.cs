@@ -23,19 +23,7 @@ internal static partial class Program
         // Keep original handlers for memory forms and execute specialized logic in
         // the new variants; do not normalize back to generic logic at runtime.
         var selectedPatternCount = patterns.Count;
-        var specializationFamilies = new Dictionary<string, string[]>(StringComparer.Ordinal)
-        {
-            ["op::OpAdd_EvGv"] = ["op::OpAdd_EvGv_Eax"],
-            ["op::OpGroup2_EvIb_Shl"] = ["op::OpGroup2_EvIb_Shl_ModReg"],
-            ["op::OpGroup2_Ev1_Shl"] = ["op::OpGroup2_Ev1_Shl_ModReg"],
-            ["op::OpGroup2_EvCl_Shl"] = ["op::OpGroup2_EvCl_Shl_ModReg"],
-            ["op::OpGroup2_EvIb_Shr"] = ["op::OpGroup2_EvIb_Shr_ModReg"],
-            ["op::OpGroup2_Ev1_Shr"] = ["op::OpGroup2_Ev1_Shr_ModReg"],
-            ["op::OpGroup2_EvCl_Shr"] = ["op::OpGroup2_EvCl_Shr_ModReg"],
-            ["op::OpGroup2_EvIb_Sar"] = ["op::OpGroup2_EvIb_Sar_ModReg"],
-            ["op::OpGroup2_Ev1_Sar"] = ["op::OpGroup2_Ev1_Sar_ModReg"],
-            ["op::OpGroup2_EvCl_Sar"] = ["op::OpGroup2_EvCl_Sar_ModReg"]
-        };
+        var specializationFamilies = LoadInstructionFusionFamilies();
         foreach (var pattern in patterns.Take(selectedPatternCount).ToArray())
         {
             var variants = new List<string[]> { Array.Empty<string>() };

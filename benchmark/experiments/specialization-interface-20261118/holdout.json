@@ -1,0 +1,152 @@
+{
+  "method": "Two rotating paired rounds; GNU gzip/sha256 fixed deterministic input independent of CoreMark; separately compiled Zig CoreMark. Compares the original and unified declaration registries with the same 71 fusion handlers. All outputs validated.",
+  "samples": [
+    {
+      "case": "gzip",
+      "variant": "before",
+      "seconds": 4.145165041089058,
+      "wall_seconds": 4.412616166984662,
+      "iterations": 7,
+      "validated": true,
+      "log": "holdout-1-gzip-before.log",
+      "round": 1
+    },
+    {
+      "case": "gzip",
+      "variant": "after",
+      "seconds": 4.113013375084847,
+      "wall_seconds": 4.37111937510781,
+      "iterations": 7,
+      "validated": true,
+      "log": "holdout-1-gzip-after.log",
+      "round": 1
+    },
+    {
+      "case": "sha256",
+      "variant": "after",
+      "seconds": 3.485091916983947,
+      "wall_seconds": 3.743696999968961,
+      "iterations": 51,
+      "validated": true,
+      "log": "holdout-1-sha256-after.log",
+      "round": 1
+    },
+    {
+      "case": "sha256",
+      "variant": "before",
+      "seconds": 3.5242864170577377,
+      "wall_seconds": 3.7845782921649516,
+      "iterations": 51,
+      "validated": true,
+      "log": "holdout-1-sha256-before.log",
+      "round": 1
+    },
+    {
+      "case": "coremark_zig",
+      "variant": "before",
+      "seconds": 12.05,
+      "score": 2489.626556,
+      "wall_seconds": 16.805476000066847,
+      "iterations": 30000,
+      "validated": true,
+      "log": "holdout-1-coremark_zig-before.log",
+      "round": 1
+    },
+    {
+      "case": "coremark_zig",
+      "variant": "after",
+      "seconds": 16.153,
+      "score": 2476.320188,
+      "wall_seconds": 20.837874333839864,
+      "iterations": 40000,
+      "validated": true,
+      "log": "holdout-1-coremark_zig-after.log",
+      "round": 1
+    },
+    {
+      "case": "sha256",
+      "variant": "after",
+      "seconds": 3.5754692920017987,
+      "wall_seconds": 3.840718833031133,
+      "iterations": 51,
+      "validated": true,
+      "log": "holdout-2-sha256-after.log",
+      "round": 2
+    },
+    {
+      "case": "sha256",
+      "variant": "before",
+      "seconds": 3.6170682499650866,
+      "wall_seconds": 3.8796779580879956,
+      "iterations": 51,
+      "validated": true,
+      "log": "holdout-2-sha256-before.log",
+      "round": 2
+    },
+    {
+      "case": "coremark_zig",
+      "variant": "before",
+      "seconds": 12.044,
+      "score": 2490.866822,
+      "wall_seconds": 16.776632874971256,
+      "iterations": 30000,
+      "validated": true,
+      "log": "holdout-2-coremark_zig-before.log",
+      "round": 2
+    },
+    {
+      "case": "coremark_zig",
+      "variant": "after",
+      "seconds": 11.971,
+      "score": 2506.056303,
+      "wall_seconds": 16.66905799997039,
+      "iterations": 30000,
+      "validated": true,
+      "log": "holdout-2-coremark_zig-after.log",
+      "round": 2
+    },
+    {
+      "case": "gzip",
+      "variant": "after",
+      "seconds": 4.163937875069678,
+      "wall_seconds": 4.427996541839093,
+      "iterations": 7,
+      "validated": true,
+      "log": "holdout-2-gzip-after.log",
+      "round": 2
+    },
+    {
+      "case": "gzip",
+      "variant": "before",
+      "seconds": 4.108185082906857,
+      "wall_seconds": 4.369480416877195,
+      "iterations": 7,
+      "validated": true,
+      "log": "holdout-2-gzip-before.log",
+      "round": 2
+    }
+  ],
+  "summary": {
+    "gzip": {
+      "medians": {
+        "before": 4.1266750619979575,
+        "after": 4.1384756250772625
+      },
+      "speedup": 0.997148572530475
+    },
+    "sha256": {
+      "medians": {
+        "before": 3.570677333511412,
+        "after": 3.530280604492873
+      },
+      "speedup": 1.011442922969672
+    },
+    "coremark_zig": {
+      "medians": {
+        "before": 2490.246689,
+        "after": 2491.1882455
+      },
+      "speedup": 1.0003780976817112
+    }
+  }
+}

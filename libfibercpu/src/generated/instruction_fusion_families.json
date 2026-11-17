@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "source_sha256": "01aa65b225be1b3c0bf07ea28f8e9d68c0be60af5276b1b6f798a46df88fd338",
+  "families": {
+    "op::OpAdd_EvGv": [
+      "op::OpAdd_EvGv_Eax"
+    ],
+    "op::OpGroup2_Ev1_Sar": [
+      "op::OpGroup2_Ev1_Sar_ModReg"
+    ],
+    "op::OpGroup2_Ev1_Shl": [
+      "op::OpGroup2_Ev1_Shl_ModReg"
+    ],
+    "op::OpGroup2_Ev1_Shr": [
+      "op::OpGroup2_Ev1_Shr_ModReg"
+    ],
+    "op::OpGroup2_EvCl_Sar": [
+      "op::OpGroup2_EvCl_Sar_ModReg"
+    ],
+    "op::OpGroup2_EvCl_Shl": [
+      "op::OpGroup2_EvCl_Shl_ModReg"
+    ],
+    "op::OpGroup2_EvCl_Shr": [
+      "op::OpGroup2_EvCl_Shr_ModReg"
+    ],
+    "op::OpGroup2_EvIb_Sar": [
+      "op::OpGroup2_EvIb_Sar_ModReg"
+    ],
+    "op::OpGroup2_EvIb_Shl": [
+      "op::OpGroup2_EvIb_Shl_ModReg"
+    ],
+    "op::OpGroup2_EvIb_Shr": [
+      "op::OpGroup2_EvIb_Shr_ModReg"
+    ]
+  }
+}

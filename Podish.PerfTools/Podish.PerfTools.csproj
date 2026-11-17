@@ -24,6 +24,7 @@
         <Compile Include="Program.Semantics.cs"/>
         <Compile Include="Program.Superopcodes.cs"/>
         <Compile Include="Program.SuperopcodeSequences.cs"/>
+        <Compile Include="Program.InstructionCatalog.cs"/>
         <Compile Include="BenchmarkRunner.cs"/>
         <Compile Include="Program.Training.cs"/>
         <Compile Include="Program.TrainingFixtures.cs"/>

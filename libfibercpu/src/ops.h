@@ -6,21 +6,6 @@
 #include "specialization.h"
 #include "state.h"
 
-// Include all modular operation headers
-#include "ops/ops_alu.h"
-#include "ops/ops_compare.h"
-#include "ops/ops_control.h"
-#include "ops/ops_data_mov.h"
-#include "ops/ops_double_shift.h"
-#include "ops/ops_fpu.h"
-#include "ops/ops_groups.h"
-#include "ops/ops_muldiv.h"
-#include "ops/ops_shift_bit.h"
-#include "ops/ops_sse_cvt.h"
-#include "ops/ops_sse_fp.h"
-#include "ops/ops_sse_int.h"
-#include "ops/ops_sse_mov.h"
-
 #include <array>
 #include <limits>
 #include <utility>
@@ -50,21 +35,6 @@ enum SpecializedOp : uint16_t {
     OP_MOV_RR_LOAD = 0x202,   // MOV r32, r32 (from 0x8B)
     OP_MOV_MR_LOAD = 0x203,   // MOV r32, [mem] (from 0x8B)
 };
-
-// Initialization
-void RegisterAluOps();
-void RegisterCompareOps();
-void RegisterControlOps();
-void RegisterDataMovOps();
-void RegisterDoubleShiftOps();
-void RegisterFpuOps();
-void RegisterGroupOps();
-void RegisterMulDivOps();
-void RegisterShiftBitOps();
-void RegisterSseCvtOps();
-void RegisterSseFpOps();
-void RegisterSseIntOps();
-void RegisterSseMovOps();
 
 // Diagnostics / tooling helper: map a wrapper handler pointer back to its logical opcode id.
 int FindOpcodeIndexForHandler(HandlerFunc handler);

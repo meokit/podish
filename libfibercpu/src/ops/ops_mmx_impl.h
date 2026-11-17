@@ -2,8 +2,6 @@
 // MMX Instruction Operations Implementation
 // Uses SIMDe for cross-platform MMX/SSE emulation
 
-#include "ops_mmx.h"
-
 #include <simde/x86/mmx.h>
 
 #include <cstring>

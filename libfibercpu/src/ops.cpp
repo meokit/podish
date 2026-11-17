@@ -1,7 +1,7 @@
 #include "ops.h"
 #include <algorithm>
 #include "dispatch.h"
-#include "ops/ops_mmx.h"
+#include "instruction_variants.h"
 
 namespace fiberish {
 
@@ -119,9 +119,10 @@ ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RE
     ATTR_MUSTTAIL return MemoryOpGeneric<false>(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
 }
 
-static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                              mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-                                              uint32_t branch, uint64_t flags_cache) {
+static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                                 int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                                 mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                                 uint64_t flags_cache) {
     (void)op;
     (void)branch;
     BasicBlock* next_block = state->last_block;
@@ -182,8 +183,8 @@ ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowControlFlow(EmuState* RESTRICT
 ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
                                                uint32_t branch, uint64_t flags_cache) {
-    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb_tags,
-                                                                         utlb_addend, branch, flags_cache);
+    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb_tags, utlb_addend,
+                                                                         branch, flags_cache);
 }
 
 // Sentinel Handlers
@@ -228,21 +229,7 @@ struct HandlerInit {
             g_Handlers[i] = nullptr;
         }
 
-        // 2. Register all modular operations
-        RegisterAluOps();
-        RegisterCompareOps();
-        RegisterControlOps();
-        RegisterDataMovOps();
-        RegisterDoubleShiftOps();
-        RegisterFpuOps();
-        RegisterGroupOps();
-        RegisterMmxOps();
-        RegisterMulDivOps();
-        RegisterShiftBitOps();
-        RegisterSseCvtOps();
-        RegisterSseFpOps();
-        RegisterSseIntOps();
-        RegisterSseMovOps();
+        RegisterInstructionVariants();
     }
 };
 
@@ -254,17 +241,17 @@ static std::vector<SpecializedEntry> g_OpSpecializations[1024];
 // specialization tables are immutable after library initialization.
 static HandlerInit _init;
 
-void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler) {
+void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler, int priority) {
     if (opcode >= 1024) return;
     auto& list = g_OpSpecializations[opcode];
-    list.push_back({opcode, criteria, handler});
+    list.push_back({opcode, criteria, handler, priority});
 
     // Sort by specificity (Descending Score)
     // Most specific first
     std::sort(list.begin(), list.end(), [](const SpecializedEntry& a, const SpecializedEntry& b) {
         int a_score = a.criteria.GetScore();
         int b_score = b.criteria.GetScore();
-        return a_score > b_score;
+        return a_score != b_score ? a_score > b_score : a.priority < b.priority;
     });
 }
 

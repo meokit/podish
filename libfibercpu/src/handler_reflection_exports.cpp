@@ -1,5 +1,6 @@
 #include "bindings.h"
 #include "decoder.h"
+#include "instruction_variants.h"
 
 namespace fiberish::generated::handler_reflection {
 size_t HandlerCount();
@@ -9,6 +10,14 @@ const char* NameForId(uint32_t id);
 }  // namespace fiberish::generated::handler_reflection
 
 extern "C" {
+const char* X86_GetInstructionCatalogHash() { return fiberish::InstructionCatalogHash(); }
+int32_t X86_GetInstructionVariantCount() { return static_cast<int32_t>(fiberish::InstructionVariantCatalog().size()); }
+int32_t X86_GetInstructionVariant(int32_t index, X86_InstructionVariant* result) {
+    const auto& catalog = fiberish::InstructionVariantCatalog();
+    if (!result || index < 0 || static_cast<size_t>(index) >= catalog.size()) return 0;
+    *result = catalog[index];
+    return 1;
+}
 
 int32_t X86_GetHandlerCount() { return static_cast<int32_t>(fiberish::generated::handler_reflection::HandlerCount()); }
 

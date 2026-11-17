@@ -8,7 +8,6 @@
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
-#include "ops_data_mov.h"
 
 namespace fiberish {
 
@@ -76,7 +75,8 @@ FORCE_INLINE uint32_t ComputeLinearAddressSpecialized(EmuState* state, const Dec
         if constexpr (BaseRegSpec == AddrBaseRegSpec::Dynamic) {
             addr += GetMemSegmentBase(state, op);
         } else {
-            constexpr int segment = (BaseRegSpec == AddrBaseRegSpec::Esp || BaseRegSpec == AddrBaseRegSpec::Ebp) ? 3 : 4;
+            constexpr int segment =
+                (BaseRegSpec == AddrBaseRegSpec::Esp || BaseRegSpec == AddrBaseRegSpec::Ebp) ? 3 : 4;
             addr += state->ctx.seg_base[segment];
         }
     } else if constexpr (SegmentSpec != AddrSegmentSpec::None) {
@@ -1013,11 +1013,11 @@ template <typename T>
 FORCE_INLINE LogicFlow PushaWithWidth(LogicFuncParams) {
     const uint32_t sp = GetReg(state, ESP);
     const uint32_t ss = state->ctx.seg_base[3];
-    const uint32_t values[] = {GetReg(state, EAX), GetReg(state, ECX), GetReg(state, EDX), GetReg(state, EBX),
-                               sp, GetReg(state, EBP), GetReg(state, ESI), GetReg(state, EDI)};
+    const uint32_t values[] = {GetReg(state, EAX), GetReg(state, ECX), GetReg(state, EDX), GetReg(state, EBX), sp,
+                               GetReg(state, EBP), GetReg(state, ESI), GetReg(state, EDI)};
     for (uint32_t i = 0; i < 8; ++i) {
-        if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, ss + sp - (i + 1) * sizeof(T), static_cast<T>(values[i]),
-                                               utlb, op))
+        if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, ss + sp - (i + 1) * sizeof(T), static_cast<T>(values[i]), utlb,
+                                                op))
             return LogicFlow::ExitOnCurrentEIP;
     }
     SetReg(state, ESP, sp - 8 * sizeof(T));
@@ -1026,7 +1026,7 @@ FORCE_INLINE LogicFlow PushaWithWidth(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpPusha(LogicFuncParams) {
     return op->prefixes.flags.opsize ? PushaWithWidth<uint16_t>(LogicPassParams)
-                                    : PushaWithWidth<uint32_t>(LogicPassParams);
+                                     : PushaWithWidth<uint32_t>(LogicPassParams);
 }
 
 template <typename T>
@@ -1036,7 +1036,7 @@ FORCE_INLINE LogicFlow PopaWithWidth(LogicFuncParams) {
     constexpr uint8_t regs[] = {EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX};
     T values[8]{};
     for (uint32_t i = 0; i < 8; ++i) {
-        if (i == 3) continue; // The saved SP slot is not read or restored.
+        if (i == 3) continue;  // The saved SP slot is not read or restored.
         auto value = ReadMem<T, OpOnTLBMiss::Blocking>(state, ss + sp + i * sizeof(T), utlb, op);
         if (!value) return LogicFlow::ExitOnCurrentEIP;
         values[i] = *value;
@@ -1050,7 +1050,7 @@ FORCE_INLINE LogicFlow PopaWithWidth(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpPopa(LogicFuncParams) {
     return op->prefixes.flags.opsize ? PopaWithWidth<uint16_t>(LogicPassParams)
-                                    : PopaWithWidth<uint32_t>(LogicPassParams);
+                                     : PopaWithWidth<uint32_t>(LogicPassParams);
 }
 
 template <typename T>
@@ -1085,7 +1085,7 @@ FORCE_INLINE LogicFlow EnterWithWidth(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpEnter(LogicFuncParams) {
     return op->prefixes.flags.opsize ? EnterWithWidth<uint16_t>(LogicPassParams)
-                                    : EnterWithWidth<uint32_t>(LogicPassParams);
+                                     : EnterWithWidth<uint32_t>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpLeave(LogicFuncParams) {
@@ -1387,8 +1387,7 @@ bool Helper_Scas(LogicFuncParams) {
     auto perform = [&]() -> bool {
         uint32_t edi = GetStringOffset(state, EDI, addr16);
         // ES:[EDI]
-        auto mem_val_res =
-            ReadMem<T, OpOnTLBMiss::Blocking>(state, StringDestinationAddress(state, edi), utlb, op);
+        auto mem_val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, StringDestinationAddress(state, edi), utlb, op);
         if (!mem_val_res) return false;
         T mem_val = *mem_val_res;
 
