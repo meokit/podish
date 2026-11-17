@@ -2,6 +2,7 @@
 #include "state.h"
 #include <cstdio>
 #include <cstring>
+#include <span>
 
 using namespace fiberish;
 
@@ -51,6 +52,28 @@ int main() {
     page[1] = std::byte{0xc0};
     result = FetchAndDecodeInstruction(state, address, buffer, &decoded, &handler, &raw);
     ok = ok && result == InstructionDecodeResult::Success && raw == 0x8b && handler != raw;
+    // Check every immediate width and every truncated prefix of each encoding.
+    auto check_immediate = [&](std::span<const uint8_t> code, size_t imm_size) {
+        for (size_t length = 0; length < code.size(); ++length) {
+            DecodedInstTmp inst{};
+            uint16_t index = 0;
+            if (DecodeInstructionBounded(code.data(), length, &inst, &index) != InstructionDecodeResult::NeedMoreBytes)
+                return false;
+        }
+        DecodedInstTmp inst{};
+        uint16_t index = 0;
+        if (DecodeInstructionBounded(code.data(), code.size(), &inst, &index) != InstructionDecodeResult::Success)
+            return false;
+        uint32_t expected_imm = 0;
+        std::memcpy(&expected_imm, code.data() + code.size() - imm_size, imm_size);
+        return inst.head.GetLength() == code.size() && GetImm(&inst.head) == expected_imm;
+    };
+    const uint8_t imm8[] = {0xb0, 0xab};
+    const uint8_t imm16[] = {0x66, 0xb8, 0x34, 0x12};
+    const uint8_t imm24[] = {0xc8, 0x34, 0x12, 0x56};
+    const uint8_t imm32[] = {0xb8, 0x78, 0x56, 0x34, 0x12};
+    ok = check_immediate(imm8, 1) && check_immediate(imm16, 2) && check_immediate(imm24, 3) &&
+         check_immediate(imm32, 4) && ok;
     if (!ok)
         std::fprintf(stderr, "Decode storage or fetch boundary check failed\n");
     X86_Destroy(state);

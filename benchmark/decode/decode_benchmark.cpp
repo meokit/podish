@@ -31,6 +31,14 @@ int main(int argc, char** argv) {
         append({0x8d, 0x54, 0x80, 0x04});
         append({0x83, 0xfa, 0x20});
         append({0x75, 0x02});
+    } else if (std::strcmp(scenario, "fusion") == 0) {
+        append({0xc1, 0xe8, 0x03});
+        append({0x89, 0xf2});
+        append({0x0f, 0xb6, 0x1c, 0x77});
+        append({0x8b, 0x0c, 0x77});
+    } else if (std::strcmp(scenario, "handwritten") == 0) {
+        append({0x8b, 0x04, 0x24});
+        append({0xc3});
     } else if (std::strcmp(scenario, "register") == 0) {
         for (int i = 0; i < 32; ++i)
             append({0x01, 0xc8});

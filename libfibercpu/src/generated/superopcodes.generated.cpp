@@ -5,6 +5,7 @@
 // generated_pattern_count=71
 #include <ankerl/unordered_dense.h>
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <vector>
 #include "superopcodes.h"
@@ -32,22 +33,15 @@ struct GeneratedSequenceKey {
 };
 struct GeneratedSequenceHash {
     uint64_t operator()(const GeneratedSequenceKey& key) const {
-        auto mix = [](uint64_t value) -> uint64_t {
-            value ^= value >> 33;
-            value *= 0xff51afd7ed558ccdULL;
-            value ^= value >> 33;
-            value *= 0xc4ceb9fe1a85ec53ULL;
-            value ^= value >> 33;
-            return value;
-        };
-        uint64_t h0 = mix(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(key.first)));
-        uint64_t h1 = mix(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(key.second)));
-        return h0 ^ (h1 + 0x9e3779b97f4a7c15ULL + (h0 << 6) + (h0 >> 2));
+        uint64_t a = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(key.first));
+        uint64_t b = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(key.second));
+        return (a >> 2) ^ ((b >> 2) * 0x9e3779b97f4a7c15ULL);
     }
 };
 struct GeneratedSequenceMatch { HandlerFunc third, fourth, fused; uint8_t width; };
-using GeneratedSequenceTable = ankerl::unordered_dense::map<GeneratedSequenceKey,
+using GeneratedSequenceMap = ankerl::unordered_dense::map<GeneratedSequenceKey,
     std::vector<GeneratedSequenceMatch>, GeneratedSequenceHash>;
+struct GeneratedSequenceTable : GeneratedSequenceMap { std::array<uint64_t, 16> bits{}; };
 } // namespace
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_000_OpGroup1_EvIz_And_32_Flags__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
@@ -1469,6 +1463,10 @@ GeneratedSequenceTable* BuildGeneratedSequenceTable() {
         std::vector<GeneratedSequenceMatch>{
             GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovsx_Byte>, (HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, SuperOpcode_4_069_OpMovzx_Byte__OpAdd_EvGv_Eax__OpMovsx_Byte__OpInc_Reg_NF, 4},
         });
+    for (const auto& entry : *table) {
+        auto hash = GeneratedSequenceHash{}(entry.first);
+        table->bits[(hash >> 6) & 15] |= uint64_t{1} << (hash & 63);
+    }
     return table;
 }
 } // namespace
@@ -1485,7 +1483,10 @@ __attribute__((used)) HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops)
         } else table = created;
     }
     const auto* second = NextOp(ops);
-    auto entry = table->find(GeneratedSequenceKey{ops->handler, second->handler});
+    GeneratedSequenceKey key{ops->handler, second->handler};
+    auto hash = GeneratedSequenceHash{}(key);
+    if (!(table->bits[(hash >> 6) & 15] & (uint64_t{1} << (hash & 63)))) return nullptr;
+    auto entry = table->find(key);
     if (entry == table->end()) return nullptr;
     for (const auto& match : entry->second) {
         if (match.width == 2) return match.fused;
@@ -1497,4 +1498,46 @@ __attribute__((used)) HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops)
     }
     return nullptr;
 }
+#ifdef FIBERCPU_VALIDATE_SPECIALIZATION_INDEX
+bool ValidateGeneratedSequenceLookup() {
+    auto* table = BuildGeneratedSequenceTable();
+    auto verify = [&](DecodedOp* ops) {
+        HandlerFunc expected = nullptr;
+        auto it = table->find({ops[0].handler, ops[1].handler});
+        if (it != table->end()) {
+            for (const auto& match : it->second) {
+                if (match.width == 2 ||
+                    (ops[2].len && ops[2].handler == match.third &&
+                     (match.width == 3 || (ops[3].len && ops[3].handler == match.fourth)))) {
+                    expected = match.fused;
+                    break;
+                }
+            }
+        }
+        return GeneratedFindSuperOpcode(ops) == expected;
+    };
+    bool ok = true;
+    for (const auto& entry : *table) {
+        DecodedOp ops[4]{};
+        ops[0].handler = entry.first.first;
+        ops[1].handler = entry.first.second;
+        for (const auto& match : entry.second) {
+            ops[2].handler = match.third;
+            ops[3].handler = match.fourth;
+            for (int lengths = 0; lengths < 4; ++lengths) {
+                ops[2].len = lengths & 1;
+                ops[3].len = (lengths >> 1) & 1;
+                if (!verify(ops)) ok = false;
+            }
+        }
+        for (const auto& other : *table) {
+            ops[1].handler = other.first.second;
+            ops[2].len = ops[3].len = 0;
+            if (!verify(ops)) ok = false;
+        }
+    }
+    delete table;
+    return ok;
+}
+#endif
 } // namespace fiberish

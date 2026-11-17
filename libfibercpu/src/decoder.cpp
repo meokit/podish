@@ -332,7 +332,22 @@ InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t ava
         if (auto result = require(imm_len); result != InstructionDecodeResult::Success) return result;
         op->meta.flags.has_imm = 1;
         uint32_t decoded_imm = 0;
-        std::memcpy(&decoded_imm, ptr, imm_len);
+        switch (imm_len) {
+            case 1:
+                std::memcpy(&decoded_imm, ptr, 1);
+                break;
+            case 2:
+                std::memcpy(&decoded_imm, ptr, 2);
+                break;
+            case 3:
+                std::memcpy(&decoded_imm, ptr, 3);
+                break;
+            case 4:
+                std::memcpy(&decoded_imm, ptr, 4);
+                break;
+            default:
+                __builtin_unreachable();
+        }
         inst->head.ext.data.imm = decoded_imm;
         ptr += imm_len;
     }

@@ -256,7 +256,42 @@ static std::vector<SpecializedEntry> g_OpSpecializations[1024];
 
 // Construct the registry before registration populates it. Both dispatch and
 // specialization tables are immutable after library initialization.
-using SpecializationBuckets = std::array<std::vector<const SpecializedEntry*>, 514>;
+struct CompiledSpecialization {
+    HandlerFunc handler;
+    uint32_t ea_mask;
+    uint32_t ea_value;
+    uint16_t prefix_mask;
+    uint16_t prefix_value;
+    bool requires_mem;
+};
+// Pack the decoded-memory fields once; values outside the constrained field
+// bits cannot match the reference predicate and are discarded.
+static bool CompileSpecialization(const SpecCriteria& c, HandlerFunc handler, CompiledSpecialization& out) {
+    const uint32_t base = c.base_offset_mask & 0x3f;
+    const uint32_t index = c.index_offset_mask & 0x3f;
+    const uint32_t scale = c.scale_mask & 0x03;
+    const uint32_t segment = c.segment_mask & 0x07;
+    if ((c.base_offset_mask && (c.base_offset_val & ~base)) || (c.index_offset_mask && (c.index_offset_val & ~index)) ||
+        (c.scale_mask && (c.scale_val & ~scale)) || (c.segment_mask && (c.segment_val & ~segment)))
+        return false;
+    const uint32_t mask = (base << memdesc::kBaseShift) | (index << memdesc::kIndexShift) |
+                          (scale << memdesc::kScaleShift) | (segment << memdesc::kSegmentShift);
+    const uint32_t value = ((c.base_offset_mask ? c.base_offset_val : 0u) << memdesc::kBaseShift) |
+                           ((c.index_offset_mask ? c.index_offset_val : 0u) << memdesc::kIndexShift) |
+                           ((c.scale_mask ? c.scale_val : 0u) << memdesc::kScaleShift) |
+                           ((c.segment_mask ? c.segment_val : 0u) << memdesc::kSegmentShift);
+    out = {handler, mask, value, c.prefix_mask, c.prefix_val, c.RequiresMemShape()};
+    return true;
+}
+
+static bool MatchesCompiled(const CompiledSpecialization& entry, const DecodedOp* op) {
+    if (entry.prefix_mask && (op->prefixes.all & entry.prefix_mask) != entry.prefix_value) return false;
+    return !entry.requires_mem ||
+           (op->meta.flags.has_mem && (GetExt(op)->data.ea_desc & entry.ea_mask) == entry.ea_value);
+}
+
+static std::vector<CompiledSpecialization> g_CompiledSpecializations[1024];
+using SpecializationBuckets = std::array<std::vector<const CompiledSpecialization*>, 514>;
 static std::unique_ptr<SpecializationBuckets> g_SpecializationIndex[1024];
 static HandlerInit _init;
 
@@ -282,8 +317,14 @@ static void BuildSpecializationIndex() {
         const auto& list = g_OpSpecializations[opcode];
         if (list.empty()) continue;
         auto buckets = std::make_unique<SpecializationBuckets>();
+        auto& compiled = g_CompiledSpecializations[opcode];
+        compiled.reserve(list.size());
         for (const auto& entry : list) {
             const auto& c = entry.criteria;
+            CompiledSpecialization item{};
+            if (!CompileSpecialization(c, entry.handler, item)) continue;
+            compiled.push_back(item);
+            const auto* optimized = &compiled.back();
             for (unsigned encoded = 0; encoded <= 256; ++encoded) {
                 const bool has_modrm = encoded != 0;
                 const unsigned modrm = has_modrm ? encoded - 1 : 0;
@@ -292,7 +333,7 @@ static void BuildSpecializationIndex() {
                                   (c.reg_mask && (((modrm >> 3) & 7) & c.reg_mask) != c.reg_val) ||
                                   (c.rm_mask && ((modrm & 7) & c.rm_mask) != c.rm_val)))
                     continue;
-                (*buckets)[encoded * 2 + c.no_flags].push_back(&entry);
+                (*buckets)[encoded * 2 + c.no_flags].push_back(optimized);
             }
         }
         g_SpecializationIndex[opcode] = std::move(buckets);
@@ -304,12 +345,17 @@ HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
     const unsigned encoded = op->meta.flags.has_modrm ? unsigned(op->modrm) + 1 : 0;
     const auto& bucket = (*g_SpecializationIndex[handler_index])[encoded * 2 + op->meta.flags.no_flags];
     for (const auto* entry : bucket) {
-        if (entry->criteria.MatchesIndexedRemainder(op)) return entry->handler;
+        if (!MatchesCompiled(*entry, op)) continue;
+        return entry->handler;
     }
     return nullptr;
 }
 
 #ifdef FIBERCPU_VALIDATE_SPECIALIZATION_INDEX
+bool MatchesCompiledForTest(const SpecCriteria& criteria, const DecodedOp* op) {
+    CompiledSpecialization entry{};
+    return CompileSpecialization(criteria, nullptr, entry) && MatchesCompiled(entry, op);
+}
 HandlerFunc FindSpecializedHandlerReference(uint16_t opcode, DecodedOp* op) {
     if (opcode >= 1024) return nullptr;
     for (const auto& entry : g_OpSpecializations[opcode])

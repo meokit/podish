@@ -2,6 +2,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <vector>
 #include "common.h"
 #include "mem/tlb.h"
@@ -128,10 +129,10 @@ enum class ExtKind : uint8_t {
 };
 
 struct DecodedMemData {
-    uint32_t imm = 0;
-    uint32_t ea_desc = 0;
-    uint32_t disp = 0;
-    uint32_t reserved = 0;
+    uint32_t imm;
+    uint32_t ea_desc;
+    uint32_t disp;
+    uint32_t reserved;
 };
 
 namespace memdesc {
@@ -173,9 +174,9 @@ FORCE_INLINE constexpr uint8_t ResolvedSegment(uint32_t ea_desc) {
 }  // namespace memdesc
 
 struct DecodedControlFlowData {
-    uint32_t imm = 0;
-    uint32_t target_eip = 0;
-    BasicBlock* cached_target = nullptr;
+    uint32_t imm;
+    uint32_t target_eip;
+    BasicBlock* cached_target;
 #if INTPTR_MAX == INT32_MAX
     uint32_t cached_target_padding;
 #endif
@@ -207,9 +208,12 @@ struct alignas(16) DecodedOp {
     void SetLength(uint8_t l) { len = l; }
 };
 
+// Value-initialize individual decoded instructions with {}. Default
+// initialization is deliberately trivial so unused block slots stay untouched.
 struct alignas(16) DecodedInstTmp {
-    DecodedOp head{};
+    DecodedOp head;
 };
+static_assert(std::is_trivially_default_constructible_v<DecodedInstTmp>);
 
 static_assert(sizeof(DecodedOp) == 32, "DecodedOp must be exactly 32 bytes");
 static_assert(sizeof(DecodedMemData) == 16, "DecodedMemData must be exactly 16 bytes");

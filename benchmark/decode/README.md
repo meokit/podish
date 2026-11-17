@@ -18,10 +18,12 @@ cmake --build build/decode --target decode_benchmark -j
 
 The first optional argument is the number of measured batches (1,000 blocks each;
 default 100). The second selects `mixed` (default), `register`, `memory`, or
-`prefix`. The latter three decode 32 repeated instructions to exercise different
-paths; they remain synthetic hot blocks. Output reports time per block, decoded instructions/s and input
-bytes/s. These microbenchmarks are not representative workloads; compare results on the same machine and build configuration. CMake
-may need network access to fetch its normal dependencies on the first build.
+`prefix`, `fusion`, or `handwritten`. The register, memory, and prefix cases
+decode 32 repeated instructions; the two fusion cases exercise generated and
+handwritten patterns. All are synthetic hot blocks. Output reports time per
+block, decoded instructions/s and input bytes/s. Compare results on the same
+machine and build configuration. CMake may need network access to fetch its
+normal dependencies on the first build.
 
 To check the specialization index against the original ordered linear lookup:
 
@@ -34,7 +36,9 @@ cmake --build build/decode --target specialization_index_test -j
 The index is built once after handler registration. It uses an opcode-indexed
 array and a direct key for ModRM presence/value and no-flags state. Each bucket
 keeps candidates in the original score order; prefix and memory-shape masks
-are still checked on lookup. This uses additional startup work and memory to
+are still checked on lookup. Memory-shape masks are packed once at registration
+into a compact mask and value. This uses additional startup work and memory to
 avoid hashing and repeated scans in the decoder. The equivalence test covers
-every opcode and ModRM value, both flag states, and seeded prefix/memory shapes;
-it is not exhaustive over all memory descriptors.
+every opcode and ModRM value, both flag states, seeded prefix/memory shapes,
+and randomized criteria including out-of-range mask bits; it is not exhaustive
+over all memory descriptors.
