@@ -1437,18 +1437,18 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
             while (iovProcessed < iov.Len)
             {
                 var currAddr = iov.BaseAddr + iovProcessed;
-                var ptr = engine.GetPhysicalAddressSafe(currAddr, true); // true = We are writing TO guest memory
-                if (ptr == IntPtr.Zero)
-                    if (engine.PageFaultResolver != null && engine.PageFaultResolver(currAddr, true))
-                        ptr = engine.GetPhysicalAddressSafe(currAddr, true);
-
-                if (ptr == IntPtr.Zero) return totalRead > 0 ? totalRead : -(int)Errno.EFAULT;
-
                 var pageOffset = currAddr & 0xFFF;
                 var chunkLen = Math.Min(iov.Len - iovProcessed, 4096 - pageOffset);
 
                 while (true)
                 {
+                    // A blocked read may resume after munmap/mprotect/CoW or
+                    // replacement of this guest page. Never carry a host pointer
+                    // across WaitForRead; resolve it for each synchronous attempt.
+                    var ptr = engine.GetPhysicalAddressSafe(currAddr, true);
+                    if (ptr == IntPtr.Zero && engine.PageFaultResolver?.Invoke(currAddr, true) == true)
+                        ptr = engine.GetPhysicalAddressSafe(currAddr, true);
+                    if (ptr == IntPtr.Zero) return totalRead > 0 ? totalRead : -(int)Errno.EFAULT;
                     int n;
                     unsafe
                     {
