@@ -9,7 +9,6 @@
 #include "../ops.h"
 #include "../ops_helpers_template.h"
 #include "../state.h"
-#include "ops_groups.h"
 
 namespace fiberish {
 

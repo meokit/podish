@@ -1,0 +1,76 @@
+{
+  "tag": "confirm",
+  "commit": "413652d1bdad7d490caab3de309d46cccfde3cff",
+  "method": "Rotating variant order, same host/guest/rootfs/managed CLI, iteration count is guest_iterations_argument (0=auto); every timed sample >=10s, one process at a time, no concurrent build/profile; CRC checked. CoreMark GCC15.2 -O2 i386, 2K, one context.",
+  "guest_iterations_argument": "60000",
+  "samples": [
+    {
+      "round": 1,
+      "variant": "before",
+      "score": 3290.014805,
+      "timed_seconds": 18.237,
+      "iterations": 60000,
+      "wall_seconds": 18.49021187494509,
+      "validated": true,
+      "log": "confirm-1-before.log"
+    },
+    {
+      "round": 1,
+      "variant": "after",
+      "score": 3298.697015,
+      "timed_seconds": 18.189,
+      "iterations": 60000,
+      "wall_seconds": 18.460576416924596,
+      "validated": true,
+      "log": "confirm-1-after.log"
+    },
+    {
+      "round": 2,
+      "variant": "after",
+      "score": 3284.971257,
+      "timed_seconds": 18.265,
+      "iterations": 60000,
+      "wall_seconds": 18.516162416897714,
+      "validated": true,
+      "log": "confirm-2-after.log"
+    },
+    {
+      "round": 2,
+      "variant": "before",
+      "score": 3265.306122,
+      "timed_seconds": 18.375,
+      "iterations": 60000,
+      "wall_seconds": 18.630873790942132,
+      "validated": true,
+      "log": "confirm-2-before.log"
+    },
+    {
+      "round": 3,
+      "variant": "before",
+      "score": 3243.243243,
+      "timed_seconds": 18.5,
+      "iterations": 60000,
+      "wall_seconds": 18.756275916006416,
+      "validated": true,
+      "log": "confirm-3-before.log"
+    },
+    {
+      "round": 3,
+      "variant": "after",
+      "score": 3199.658703,
+      "timed_seconds": 18.752,
+      "iterations": 60000,
+      "wall_seconds": 19.009027499938384,
+      "validated": true,
+      "log": "confirm-3-after.log"
+    }
+  ],
+  "library_sha256": {
+    "before": "fd58327fd2412b3f6bf010f12e983cf22b2e712b1725791724e5d7242bedf393",
+    "after": "b16b86f30c006ba87cf990470508861da221e718d6fd07de376a94dd54534643"
+  },
+  "median_scores": {
+    "before": 3265.306122,
+    "after": 3284.971257
+  }
+}

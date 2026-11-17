@@ -10,7 +10,6 @@
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
-#include "ops_control.h"
 
 namespace fiberish {
 
@@ -46,8 +45,7 @@ FORCE_INLINE LogicFlow OpCmov_Internal(LogicFuncParams) {
         if (op->prefixes.flags.opsize) {
             auto value = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
             if (!value) return LogicFlow::RestartMemoryOp;
-            if (CheckConditionFixed<Cond>(flags_cache))
-                SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | *value);
+            if (CheckConditionFixed<Cond>(flags_cache)) SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | *value);
         } else {
             auto value = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
             if (!value) return LogicFlow::RestartMemoryOp;
@@ -449,7 +447,7 @@ constexpr uint32_t kFxMxcsrMask = 0x0000FFFFu;
 
 FORCE_INLINE uint16_t FxFullTag(const float80& value) {
     const uint16_t exponent = value.signExp & 0x7FFF;
-    if (exponent == 0 && value.signif == 0) return 1;  // Zero (either sign)
+    if (exponent == 0 && value.signif == 0) return 1;                           // Zero (either sign)
     if (exponent != 0 && exponent != 0x7FFF && (value.signif >> 63)) return 0;  // Valid
     return 2;  // Denormal, infinity, NaN or unsupported encoding
 }

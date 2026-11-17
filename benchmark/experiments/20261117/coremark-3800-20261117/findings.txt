@@ -1,0 +1,90 @@
+CoreMark >=3800 experiment, ARM64, 2026-11-17
+
+完成：前一批修改已提交并推送 GitHub main，c86246815f8db436c9e5fb3ad57e1621b96d1eb7。
+https://github.com/meokit/podish/commit/c86246815f8db436c9e5fb3ad57e1621b96d1eb7
+该提交主 CI、CPU CI 全部成功，见 pushed-commit-ci.json / pushed-commit-cpu-ci.json。
+以下候选为隔离实验，不替换已推送的默认表；工作区的受版本管理文件保持干净。
+
+结果
+GCC CoreMark 七轮交替 A/B：基线中位数 3298.697015，候选 3889.285020，提升 17.904%。
+候选范围 3828.239648..3905.995703，7/7 超过 3800；所有运行 CRC 正确，每次计时 >=10 秒。
+同一 GCC15.2 -O2 i386 ELF、相同 rootfs 和 argv 0x0 0x0 0x66 0 7 1 2000，2K，单 context。
+Apple M5 Max / ARM64 macOS；Apple Clang17 Release / ThinLTO / preserve_none ON。未修改 guest 或算法。
+对照和候选 managed CLI 字节相同；只更换 generated fusion source 编译出的 native library。
+一个 guest 进程串行测量，候选顺序轮换，计时期间不编译、不采样。CoreMark 自校准导致两版迭代数不同，均满足 >=10 秒。
+
+实验拆解（不同阶段的轮数不同，不能把单轮筛选当成七轮统计）
+base: 当前 64 个入选 GNU pattern + 7 个特化展开 = 71 项。
+union: 当前 GNU 64 项 + 去重后的旧 CoreMark pair，展开共 320 项，单轮 3706.678199 vs 3301.692117。
+pairs: 当前 GNU 基础 + 当前 profile 的 64 个新 pairs，展开共135项，两轮中位数 3737.049769。
+observed: pairs 再加32个当前高频四指令序列，展开共167项，两轮筛选中位数 3874.383367；七轮确认见上。
+
+选择和机制
+使用 superopcodes OFF + exact sequence profile ON 的独立训练库，GCC CoreMark 固定5000迭代，CRC正确。该训练运行约433分，有计数开销，不用于性能比较。
+保存 pairs 和实际连续3/4-op ngrams；按 count 降序、handler名字 ordinal tie-break，过滤普通合法逻辑及可选最后 Jcc。
+保留当前GNU基础表；选64个尚未入表的pair、32个4-op；生成器继续保留语义特化并追加安全家族组合。
+generator snapshot/manifest 是唯一的 native 差异；代码未识别 CoreMark、函数地址、guest常量或CRC值。
+generate_candidates.py 可逐字重现 saved manifest 的 candidates；reviewed-sequences.txt 包含全部新增序列及计数。
+主要热点包括 IMUL -> ADD NF -> CMP -> JNE、链表 load/store/mov、load -> movzx -> cmp16 -> JNE。
+融合减少中间 DispatchWrapper 的元数据加载/尾跳，编译器也能共同优化中间状态和标志处理；保留 memory fault / branch 共同控制流。
+在实际运行中，重叠序列不能同时融合，原始 ngram count 不是可相加的收益。
+
+采样与反汇编证据
+candidate.trace 为独立一次固定60000迭代采样，CRC通过；不把该次采样分数混入七轮确认。
+导出 candidate-samples.xml，排除前4秒启动，得到 candidate-hotspots.json/txt。
+新增四指令融合共约30.49% native样本，新增pairs约20.53%；这是采样时间占比，不是 retired instructions 覆盖率。
+实际热项含 SuperOpcode_4_146、140、130、147；IMUL/ADD/CMP/JNE 的 SuperOpcode_4_131 约2.09%。
+candidate.asm 保留整个精确测量 dylib 的反汇编；imul-add-cmp-jne.asm 是代表函数。
+后者正常32位寄存器路径含直接mul/add/subs、标志形成、条件分支及最终尾跳，额外保留16位/内存故障冷路径。
+
+正确性与独立输入
+候选原有3109项CPU tests通过。额外加入实际四指令入口断言、JNE taken/untaken、IMUL内存fault后恢复一次的3个探针，总3112项通过。
+探针只在 artifacts/probe-project，不修改生产源码。
+独立文本 seed987654，2MiB，八个GNU工具各两轮交替A/B；另有Zig编译CoreMark各两轮。36/36输出或CRC校验通过。
+两个样本不足以给小幅变化下稳定结论；以下列出所有变化，不能只看CoreMark。
+gzip             base=4.047961 candidate=4.043917 throughput_delta=+0.100%
+gunzip           base=4.342228 candidate=4.370132 throughput_delta=-0.639%
+sed              base=4.133765 candidate=3.988678 throughput_delta=+3.637%
+grep_fixed       base=4.290636 candidate=4.241921 throughput_delta=+1.148%
+grep_regex       base=4.287746 candidate=4.299999 throughput_delta=-0.285%
+sort             base=4.296432 candidate=4.242084 throughput_delta=+1.281%
+sha256           base=3.437950 candidate=3.490117 throughput_delta=-1.495%
+tar              base=4.592245 candidate=4.696295 throughput_delta=-2.216%
+coremark_zig     base=2528.374493 candidate=2544.345165 throughput_delta=+0.632%
+
+代码体积和收益评估
+以下是可执行 __text，不使用包含符号/字符串的整体 dylib 大小来代表指令缓存压力。
+base          688372 bytes = 672.238 KiB; vs base +0.000%
+pairs         725600 bytes = 708.594 KiB; vs base +5.408%
+observed      761708 bytes = 743.855 KiB; vs base +10.654%
+union         876044 bytes = 855.512 KiB; vs base +27.263%
+167项候选比71项基线代码段增加约10.65%，七轮CoreMark吞吐增加17.90%；320项候选代码更大却更慢，支持按收益选覆盖而非不断累加。
+总 __text 只是静态预算，实际 I-cache 压力由执行的 hot working set、布局、跳转目标等决定。冷代码不必全部进入L1I。
+扩张可能增加取指/iTLB/分支预测压力、解码查找和表初始化成本；融合也可能减少间接跳转和元数据加载，净效果非单调。
+本次仅有时间采样，没有硬件I-cache miss/stall计数；不能把tar的-2.22%或其他小幅变化确定归因于I-cache。
+评估流程：正确性先行；固定编译器/ABI/guest，分别A/B特化、融合和组合；再做family leave-one-out或budget sweep。
+同时记录实际融合入口/重叠后的覆盖、每个handler的.text、热点PC工作集、热循环和冷启动耗时、混合工作负载几何平均和最差回退。
+若硬件计数器可用，再采前端stall、I-cache/iTLB miss、branch miss、cycles和instructions。单凭Time Profiler符号百分比无法证明缓存瓶颈。
+以固定代码预算搜索32/64/128等规模，保留速度与体积的Pareto候选；只有实测增益超出波动且泛化代价可接受才推广。
+将稀有内存异常/宽度分支放到共享冷路径、仅克隆高频寄存器/宽度/NF组合，可降低膨胀；每项仍需实测，不能假定共享越多越快。
+当前167项是达到GCC CoreMark目标的可复现实验，不宣称是混合GNU工作负载的最优默认策略。
+
+复现
+1. 源码基线 c8624681；本目录已有精确训练profile、manifest、native lib和managed CLI。
+2. python3 artifacts/coremark-3800-20261117/generate_candidates.py
+3. dotnet Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll gen-superopcodes --input artifacts/coremark-3800-20261117/observed.json --output artifacts/coremark-3800-20261117/observed.generated.cpp --top 160
+4. 独立CMake Release/ThinLTO/ON，-DFIBERCPU_GENERATED_SUPEROPCODES_FILE=<absolute path>/observed.generated.cpp；见 observed-build/CMakeCache.txt。
+5. python3 artifacts/coremark-3800-20261117/bench.py confirm-rerun 7 base observed（不覆盖原确认数据）。
+6. 生产项目也可 opt-in：dotnet build Podish.Cli/Podish.Cli.csproj -c Release -p:SuperOpcodeManifest=<absolute path>/observed.json -p:SuperOpcodeTop=160；此命令会更新本机输出，未在本轮执行。
+7. holdout.py 创建独立rootfs，用seed987654，不覆盖前一轮的fixtures。重跑将覆盖holdout.json。
+
+Native dylib SHA256（七轮精确测量）
+base: fd58327fd2412b3f6bf010f12e983cf22b2e712b1725791724e5d7242bedf393
+observed: ef9c4f29745ee7aa5d5df911f24c454683d6d0973d779f02a59166bbbc90963c
+manifest SHA256: 586e5ff9b40a4ee407992fe0c9b07924126a6bc2a72835271308113f8d28f83b
+generated SHA256: ffb8d27665c5f8c762925d994a330d45973ed3da11c1e3f70a651a495384cf95
+
+原始数据：union-screen.json、observed-screen.json、confirm.json、holdout.json，及所有对应log。
+生成源码与选择：observed.json、observed.generated.cpp、pairs.json、union.json、generate_candidates.py、reviewed-sequences.txt。
+测试：podish-core3800-observed-tests.log、podish-core3800-fusion-probe-tests.log、probe-project/CoremarkFusionProbeTests.cs。
+代码段：native-section-sizes.txt、code-size.json。

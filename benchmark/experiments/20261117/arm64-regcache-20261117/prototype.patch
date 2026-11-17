@@ -1,0 +1,465 @@
+--- a/libfibercpu/src/bindings.cpp
++++ b/libfibercpu/src/bindings.cpp
+@@ -848,7 +848,7 @@
+         uint64_t utlb_tags = mem::InvalidMicroTlbAbiTags();
+         uint64_t utlb_addend = 0;
+         uint64_t flags_cache = GetStateFlagsCache(state);
+-        head->handler(state, head, 0, utlb_tags, utlb_addend, std::numeric_limits<uint32_t>::max(), flags_cache);
++        head->handler(state, head, 0, utlb_tags, utlb_addend, std::numeric_limits<uint32_t>::max(), flags_cache RC_INIT);
+     } else if (!state->hooks.on_invalid_opcode(state)) {
+         state->status = EmuStatus::Fault;
+         state->fault_vector = 6;
+@@ -943,7 +943,7 @@
+                 uint64_t utlb_addend = 0;
+                 uint64_t flags_cache = GetStateFlagsCache(state);
+                 int64_t remaining = block_ptr->entry(state, head, batch_limit, utlb_tags, utlb_addend,
+-                                                     std::numeric_limits<uint32_t>::max(), flags_cache);
++                                                     std::numeric_limits<uint32_t>::max(), flags_cache RC_INIT);
+                 state->intercept_exec_write_for_smc = false;
+                 total_run_insts += (initial_batch_limit - remaining);
+ #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+--- a/libfibercpu/src/decoder.cpp
++++ b/libfibercpu/src/decoder.cpp
+@@ -14,6 +14,7 @@
+ #include "superopcodes.h"
+ 
+ namespace fiberish {
++HandlerFunc RegCacheSpecialize(const DecodedOp* op);
+ 
+ alignas(64) static const uint8_t kControlFlowMaps[2][32] = {
+     // Map 0: Primary opcodes (Jcc short, CALL, JMP, RET, LOOP, INT, HLT, etc.)
+@@ -819,6 +820,10 @@
+     const uint32_t slot_count = static_cast<uint32_t>(temp_ops.size());
+     const uint32_t decoded_inst_count = slot_count == 0 ? 0 : slot_count - 1;
+     ApplySuperOpcodesToBlockOps(reinterpret_cast<DecodedOp*>(temp_ops.data()), decoded_inst_count);
++#if REGCACHE_CLONES
++    for (uint32_t i=0;i<decoded_inst_count;i++) if (temp_ops[i].head.len != 0)
++        if (auto h = RegCacheSpecialize(&temp_ops[i].head)) temp_ops[i].head.handler = h;
++#endif
+ 
+     BlockTerminalKind terminal_kind = BlockTerminalKind::None;
+     uint32_t branch_target_eip = 0;
+--- a/libfibercpu/src/decoder.h
++++ b/libfibercpu/src/decoder.h
+@@ -4,6 +4,7 @@
+ #include <cstdint>
+ #include <vector>
+ #include "common.h"
++#include "regcache_abi.h"
+ #include "mem/tlb.h"
+ 
+ #if __has_cpp_attribute(clang::musttail)
+@@ -56,7 +57,7 @@
+ // Handler Function (Preserve None ABI, functionality + dispatch)
+ using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                                  mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+-                                                 uint32_t branch, uint64_t flags_cache);
++                                                 uint32_t branch, uint64_t flags_cache RC_DECL);
+ 
+ enum class LogicFlow : uint8_t {
+     Continue = 0,
+--- a/libfibercpu/src/dispatch.h
++++ b/libfibercpu/src/dispatch.h
+@@ -35,28 +35,29 @@
+ 
+ extern ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                                   mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+-                                                  uint32_t branch, uint64_t flags_cache);
++                                                  uint32_t branch, uint64_t flags_cache RC_DECL);
+ extern ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                                 mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+-                                                uint32_t branch, uint64_t flags_cache);
++                                                uint32_t branch, uint64_t flags_cache RC_DECL);
+ extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowLink(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                               mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+-                                                              uint64_t flags_cache);
++                                                              uint64_t flags_cache RC_DECL);
+ extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowControlFlow(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                                      mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+-                                                                     uint64_t flags_cache);
++                                                                     uint64_t flags_cache RC_DECL);
+ extern ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                       int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                       mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+-                                                      uint64_t flags_cache);
++                                                      uint64_t flags_cache RC_DECL);
+ 
+ template <ExtKind Kind>
+ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                                   int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                                   mem::MicroTlbAbiWord utlb_addend, uint32_t target_eip,
+-                                                                  uint64_t flags_cache) {
++                                                                  uint64_t flags_cache RC_DECL) {
++    RC_ASSUME; 
+     (void)op;
+     (void)utlb_tags;
+     (void)utlb_addend;
+@@ -90,22 +91,23 @@
+ #endif
+         __builtin_assume(entry != nullptr);
+         ATTR_MUSTTAIL return entry(state, next_head, instr_limit, utlb_tags, utlb_addend,
+-                                   std::numeric_limits<uint32_t>::max(), flags_cache);
++                                   std::numeric_limits<uint32_t>::max(), flags_cache RC_PASS);
+     }
+ 
+     if constexpr (Kind == ExtKind::Link) {
+         ATTR_MUSTTAIL return ResolveBranchTargetSlowLink(state, op, instr_limit, utlb_tags, utlb_addend, target_eip,
+-                                                         flags_cache);
++                                                         flags_cache RC_PASS);
+     } else {
+         ATTR_MUSTTAIL return ResolveBranchTargetSlowControlFlow(state, op, instr_limit, utlb_tags, utlb_addend,
+-                                                                target_eip, flags_cache);
++                                                                target_eip, flags_cache RC_PASS);
+     }
+ }
+ 
+ template <LogicFunc Target>
+ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+-                                            uint32_t branch, uint64_t flags_cache) {
++                                            uint32_t branch, uint64_t flags_cache RC_DECL) {
++    RC_ASSUME; 
+ #ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+     const auto history_length = state->sequence_expected_op == op ? state->sequence_history_length : 0;
+     const auto history = state->sequence_history;
+@@ -137,13 +139,13 @@
+                 }
+ #endif
+                 ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
+-                                                      flags_cache);
++                                                      flags_cache RC_PASS);
+             }
+             __builtin_unreachable();
+         case LogicFlow::ContinueSkipOne:
+             if (auto* next_op = NextOp(NextOp(op))) {
+                 ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
+-                                                      flags_cache);
++                                                      flags_cache RC_PASS);
+             }
+             __builtin_unreachable();
+         case LogicFlow::ExitOnCurrentEIP:
+@@ -158,14 +160,14 @@
+             return instr_limit;
+         case LogicFlow::RestartMemoryOp:
+             RecordBlockHandlersThrough(state, op);
+-            ATTR_MUSTTAIL return MemoryOpRestart(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++            ATTR_MUSTTAIL return MemoryOpRestart(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache RC_PASS);
+         case LogicFlow::RetryMemoryOp:
+             RecordBlockHandlersThrough(state, op);
+-            ATTR_MUSTTAIL return MemoryOpRetry(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++            ATTR_MUSTTAIL return MemoryOpRetry(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache RC_PASS);
+         case LogicFlow::ExitToBranch:
+             RecordBlockHandlersThrough(state, op);
+             ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb_tags,
+-                                                                                 utlb_addend, branch, flags_cache);
++                                                                                 utlb_addend, branch, flags_cache RC_PASS);
+         default:
+             CommitFlagsCache(state, flags_cache);
+             return instr_limit;
+--- a/libfibercpu/src/ops.cpp
++++ b/libfibercpu/src/ops.cpp
+@@ -53,7 +53,8 @@
+ template <bool restart>
+ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+-                                           uint32_t branch, uint64_t flags_cache) {
++                                           uint32_t branch, uint64_t flags_cache RC_DECL) {
++    RC_ASSUME; 
+     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
+     // An architectural alignment fault has already completed fault setup and
+     // must not restart the same instruction or consume an older pending read.
+@@ -90,38 +91,41 @@
+     mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+     if constexpr (restart) {
+         // Don't clear mem_op, it's pending for restart
+-        ATTR_MUSTTAIL return op->handler(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++        ATTR_MUSTTAIL return op->handler(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache RC_PASS);
+     }
+ 
+     state->clear_pending_mem_op();
+     DecodedOp* next_op = NextOp(op);
+-    ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++    ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache RC_PASS);
+ }
+ 
+ template ATTR_PRESERVE_NONE int64_t MemoryOpGeneric<true>(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                           int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                           mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+-                                                          uint64_t flags_cache);
++                                                          uint64_t flags_cache RC_DECL);
+ template ATTR_PRESERVE_NONE int64_t MemoryOpGeneric<false>(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                            int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                            mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+-                                                           uint64_t flags_cache);
++                                                           uint64_t flags_cache RC_DECL);
+ 
+ ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+-                                           uint32_t branch, uint64_t flags_cache) {
+-    ATTR_MUSTTAIL return MemoryOpGeneric<true>(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++                                           uint32_t branch, uint64_t flags_cache RC_DECL) {
++    RC_ASSUME; 
++    ATTR_MUSTTAIL return MemoryOpGeneric<true>(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache RC_PASS);
+ }
+ 
+ ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                          mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+-                                         uint32_t branch, uint64_t flags_cache) {
+-    ATTR_MUSTTAIL return MemoryOpGeneric<false>(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++                                         uint32_t branch, uint64_t flags_cache RC_DECL) {
++    RC_ASSUME; 
++    ATTR_MUSTTAIL return MemoryOpGeneric<false>(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache RC_PASS);
+ }
+ 
+ static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                               mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+-                                              uint32_t branch, uint64_t flags_cache) {
++                                              uint32_t branch, uint64_t flags_cache RC_DECL) {
++    RC_ASSUME; 
+     (void)op;
+     (void)branch;
+     BasicBlock* next_block = state->last_block;
+@@ -135,14 +139,15 @@
+ #endif
+     __builtin_assume(next_block->entry != nullptr);
+     ATTR_MUSTTAIL return next_block->entry(state, next_head, instr_limit, utlb_tags, utlb_addend,
+-                                           std::numeric_limits<uint32_t>::max(), flags_cache);
++                                           std::numeric_limits<uint32_t>::max(), flags_cache RC_PASS);
+ }
+ 
+ template <ExtKind Kind>
+ static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                               mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+-                                                              uint64_t flags_cache) {
++                                                              uint64_t flags_cache RC_DECL) {
++    RC_ASSUME; 
+     const uint32_t target_eip = branch;
+     BasicBlock* next_block = state->mmu.lookup_cached_block(target_eip);
+     if (!next_block) next_block = state->mmu.invalid_code_block();
+@@ -160,45 +165,49 @@
+     }
+ 
+     state->last_block = next_block;
+-    ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++    ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache RC_PASS);
+ }
+ 
+ ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowLink(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                        int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                        mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+-                                                       uint64_t flags_cache) {
++                                                       uint64_t flags_cache RC_DECL) {
++    RC_ASSUME; 
+     ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
+-                                                                    branch, flags_cache);
++                                                                    branch, flags_cache RC_PASS);
+ }
+ 
+ ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowControlFlow(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                               mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+-                                                              uint64_t flags_cache) {
++                                                              uint64_t flags_cache RC_DECL) {
++    RC_ASSUME; 
+     ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<ExtKind::ControlFlow>(state, op, instr_limit, utlb_tags,
+-                                                                           utlb_addend, branch, flags_cache);
++                                                                           utlb_addend, branch, flags_cache RC_PASS);
+ }
+ 
+ ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                                mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+-                                               uint32_t branch, uint64_t flags_cache) {
++                                               uint32_t branch, uint64_t flags_cache RC_DECL) {
++    RC_ASSUME; 
+     ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb_tags,
+-                                                                         utlb_addend, branch, flags_cache);
++                                                                         utlb_addend, branch, flags_cache RC_PASS);
+ }
+ 
+ // Sentinel Handlers
+ template <int I, bool UseBranch>
+ ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
+                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
+-                                       uint32_t branch, uint64_t flags_cache) {
++                                       uint32_t branch, uint64_t flags_cache RC_DECL) {
++    RC_ASSUME; 
+     RecordBlockHandlersUntil(state, op);
+     if constexpr (UseBranch) {
+         if (branch == std::numeric_limits<uint32_t>::max()) __builtin_unreachable();
+         ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
+-                                                                      branch, flags_cache);
++                                                                      branch, flags_cache RC_PASS);
+     } else {
+         ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
+-                                                                      op->next_eip, flags_cache);
++                                                                      op->next_eip, flags_cache RC_PASS);
+     }
+ }
+ 
+--- /dev/null
++++ b/libfibercpu/src/regcache_abi.h
+@@ -0,0 +1,51 @@
++#pragma once
++#ifndef REGCACHE_SECOND
++#define REGCACHE_SECOND 2
++#endif
++#ifndef REGCACHE_COUNT
++#define REGCACHE_COUNT 0
++#endif
++#ifndef REGCACHE_ACTIVE
++#define REGCACHE_ACTIVE 0
++#endif
++#ifndef REGCACHE_CLONES
++#define REGCACHE_CLONES 0
++#endif
++#if REGCACHE_COUNT == 0
++#define RC_DECL 
++#define RC_NAMES 
++#define RC_READ 
++#define RC_ASSUME_ALL 
++#endif
++#if REGCACHE_COUNT == 1
++#define RC_DECL , uint32_t rc0
++#define RC_NAMES , rc0
++#define RC_READ , state->ctx.regs[0]
++#define RC_ASSUME_ALL __builtin_assume(state->ctx.regs[0] == rc0); 
++#endif
++#if REGCACHE_COUNT == 2
++#define RC_DECL , uint32_t rc0, uint32_t rc1
++#define RC_NAMES , rc0, rc1
++#define RC_READ , state->ctx.regs[0], state->ctx.regs[REGCACHE_SECOND]
++#define RC_ASSUME_ALL __builtin_assume(state->ctx.regs[0] == rc0); __builtin_assume(state->ctx.regs[REGCACHE_SECOND] == rc1); 
++#endif
++#if REGCACHE_COUNT == 3
++#define RC_DECL , uint32_t rc0, uint32_t rc1, uint32_t rc2
++#define RC_NAMES , rc0, rc1, rc2
++#define RC_READ , state->ctx.regs[0], state->ctx.regs[REGCACHE_SECOND], state->ctx.regs[1]
++#define RC_ASSUME_ALL __builtin_assume(state->ctx.regs[0] == rc0); __builtin_assume(state->ctx.regs[REGCACHE_SECOND] == rc1); __builtin_assume(state->ctx.regs[1] == rc2); 
++#endif
++#if REGCACHE_COUNT == 4
++#define RC_DECL , uint32_t rc0, uint32_t rc1, uint32_t rc2, uint32_t rc3
++#define RC_NAMES , rc0, rc1, rc2, rc3
++#define RC_READ , state->ctx.regs[0], state->ctx.regs[REGCACHE_SECOND], state->ctx.regs[1], state->ctx.regs[3]
++#define RC_ASSUME_ALL __builtin_assume(state->ctx.regs[0] == rc0); __builtin_assume(state->ctx.regs[REGCACHE_SECOND] == rc1); __builtin_assume(state->ctx.regs[1] == rc2); __builtin_assume(state->ctx.regs[3] == rc3); 
++#endif
++#if REGCACHE_ACTIVE
++#define RC_PASS RC_READ
++#define RC_ASSUME RC_ASSUME_ALL
++#else
++#define RC_PASS RC_NAMES
++#define RC_ASSUME
++#endif
++#define RC_INIT RC_READ
+--- a/libfibercpu/src/superopcodes.cpp
++++ b/libfibercpu/src/superopcodes.cpp
+@@ -31,7 +31,8 @@
+ #define DEFINE_HANDWRITTEN_SUPEROPCODE_2(Name, Op0, Op1)                                                   \
+     ATTR_PRESERVE_NONE int64_t Name(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, \
+                                     mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,      \
+-                                    uint32_t branch, uint64_t flags_cache) {                                \
++                                    uint32_t branch, uint64_t flags_cache RC_DECL) {                                \
++    RC_ASSUME; \
+         mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);                               \
+         RUN_SUPEROPCODE_OP(Op0, state, op, instr_limit, utlb, branch, flags_cache);                        \
+                                                                                                            \
+@@ -41,7 +42,7 @@
+         if (auto* next_op = NextOp(second_op)) {                                                           \
+             mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                          \
+             ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend,    \
+-                                                  branch, flags_cache);                                     \
++                                                  branch, flags_cache RC_PASS);                                     \
+         }                                                                                                  \
+         __builtin_unreachable();                                                                           \
+     }
+@@ -59,7 +60,8 @@
+ #define DEFINE_HANDWRITTEN_SUPEROPCODE_3(Name, Op0, Op1, Op2)                                              \
+     ATTR_PRESERVE_NONE int64_t Name(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, \
+                                     mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,      \
+-                                    uint32_t branch, uint64_t flags_cache) {                                \
++                                    uint32_t branch, uint64_t flags_cache RC_DECL) {                                \
++    RC_ASSUME; \
+         mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);                               \
+         LogicFlow exit_flow = LogicFlow::Continue;                                                         \
+         DecodedOp* exit_op = op;                                                                           \
+@@ -72,7 +74,7 @@
+         if (auto* next_op = NextOp(third_op)) {                                                            \
+             mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                          \
+             ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend,    \
+-                                                  branch, flags_cache);                                     \
++                                                  branch, flags_cache RC_PASS);                                     \
+         }                                                                                                  \
+         __builtin_unreachable();                                                                           \
+     superopcode_exit:                                                                                      \
+@@ -83,7 +85,8 @@
+ #define DEFINE_HANDWRITTEN_SUPEROPCODE_4(Name, Op0, Op1, Op2, Op3)                                         \
+     ATTR_PRESERVE_NONE int64_t Name(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, \
+                                     mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,      \
+-                                    uint32_t branch, uint64_t flags_cache) {                                \
++                                    uint32_t branch, uint64_t flags_cache RC_DECL) {                                \
++    RC_ASSUME; \
+         mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);                               \
+         LogicFlow exit_flow = LogicFlow::Continue;                                                         \
+         DecodedOp* exit_op = op;                                                                           \
+@@ -98,7 +101,7 @@
+         if (auto* next_op = NextOp(fourth_op)) {                                                           \
+             mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                          \
+             ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend,    \
+-                                                  branch, flags_cache);                                     \
++                                                  branch, flags_cache RC_PASS);                                     \
+         }                                                                                                  \
+         __builtin_unreachable();                                                                           \
+     superopcode_exit:                                                                                      \
+--- a/libfibercpu/src/superopcodes.h
++++ b/libfibercpu/src/superopcodes.h
+@@ -19,14 +19,14 @@
+                 if (auto* next_op = NextOp(flow_op)) {                                                             \
+                     mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                          \
+                     ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend,    \
+-                                                          branch, flags_cache);                                     \
++                                                          branch, flags_cache RC_PASS);                                     \
+                 }                                                                                                  \
+                 __builtin_unreachable();                                                                           \
+             case LogicFlow::ContinueSkipOne:                                                                       \
+                 if (auto* next_op = NextOp(NextOp(flow_op))) {                                                     \
+                     mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                          \
+                     ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend,    \
+-                                                          branch, flags_cache);                                     \
++                                                          branch, flags_cache RC_PASS);                                     \
+                 }                                                                                                  \
+                 __builtin_unreachable();                                                                           \
+             case LogicFlow::ExitOnCurrentEIP:                                                                      \
+@@ -43,17 +43,17 @@
+                 RecordBlockHandlersThrough(state, flow_op);                                                        \
+                 mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                              \
+                 ATTR_MUSTTAIL return MemoryOpRestart(state, flow_op, instr_limit, utlb_tags, utlb_addend, branch, \
+-                                                     flags_cache);                                                  \
++                                                     flags_cache RC_PASS);                                                  \
+             case LogicFlow::RetryMemoryOp:                                                                         \
+                 RecordBlockHandlersThrough(state, flow_op);                                                        \
+                 mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                              \
+                 ATTR_MUSTTAIL return MemoryOpRetry(state, flow_op, instr_limit, utlb_tags, utlb_addend, branch,   \
+-                                                   flags_cache);                                                    \
++                                                   flags_cache RC_PASS);                                                    \
+             case LogicFlow::ExitToBranch:                                                                          \
+                 RecordBlockHandlersThrough(state, flow_op);                                                        \
+                 mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                              \
+                 ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(                              \
+-                    state, flow_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);                    \
++                    state, flow_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache RC_PASS);                    \
+             default:                                                                                               \
+                 CommitFlagsCache(state, flags_cache);                                                              \
+                 return instr_limit;                                                                                \
+--- a/scripts/gen_handler_reflection.py
++++ b/scripts/gen_handler_reflection.py
+@@ -16,7 +16,7 @@
+     'fiberish::mem::MicroTlbAbiWord utlb_tags, '
+     'fiberish::mem::MicroTlbAbiWord utlb_addend, '
+     'uint32_t branch, '
+-    'uint64_t flags_cache'
++    'uint64_t flags_cache RC_DECL'
+ )
+ 
+ 

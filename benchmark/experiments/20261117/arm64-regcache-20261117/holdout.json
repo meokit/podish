@@ -1,0 +1,152 @@
+{
+  "method": "Two rotating paired rounds; GNU gzip/sha256 fixed deterministic input independent of CoreMark; separately compiled Zig CoreMark. Compares same operand-shape table with and without EAX/ESP tail cache. All outputs validated.",
+  "samples": [
+    {
+      "case": "gzip",
+      "variant": "plain256",
+      "seconds": 4.007148165954277,
+      "wall_seconds": 4.299341000150889,
+      "iterations": 7,
+      "validated": true,
+      "log": "holdout-1-gzip-plain256.log",
+      "round": 1
+    },
+    {
+      "case": "gzip",
+      "variant": "cache_asp",
+      "seconds": 4.0992210421245545,
+      "wall_seconds": 4.354367667110637,
+      "iterations": 7,
+      "validated": true,
+      "log": "holdout-1-gzip-cache_asp.log",
+      "round": 1
+    },
+    {
+      "case": "sha256",
+      "variant": "cache_asp",
+      "seconds": 4.184032165911049,
+      "wall_seconds": 4.441717917099595,
+      "iterations": 51,
+      "validated": true,
+      "log": "holdout-1-sha256-cache_asp.log",
+      "round": 1
+    },
+    {
+      "case": "sha256",
+      "variant": "plain256",
+      "seconds": 3.590754290809855,
+      "wall_seconds": 3.8551272498443723,
+      "iterations": 51,
+      "validated": true,
+      "log": "holdout-1-sha256-plain256.log",
+      "round": 1
+    },
+    {
+      "case": "coremark_zig",
+      "variant": "plain256",
+      "seconds": 16.046,
+      "score": 2492.833105,
+      "wall_seconds": 20.674077125033364,
+      "iterations": 40000,
+      "validated": true,
+      "log": "holdout-1-coremark_zig-plain256.log",
+      "round": 1
+    },
+    {
+      "case": "coremark_zig",
+      "variant": "cache_asp",
+      "seconds": 12.534,
+      "score": 2393.489708,
+      "wall_seconds": 17.25909349997528,
+      "iterations": 30000,
+      "validated": true,
+      "log": "holdout-1-coremark_zig-cache_asp.log",
+      "round": 1
+    },
+    {
+      "case": "sha256",
+      "variant": "cache_asp",
+      "seconds": 4.152505166828632,
+      "wall_seconds": 4.41065137507394,
+      "iterations": 51,
+      "validated": true,
+      "log": "holdout-2-sha256-cache_asp.log",
+      "round": 2
+    },
+    {
+      "case": "sha256",
+      "variant": "plain256",
+      "seconds": 3.5745232081972063,
+      "wall_seconds": 3.8376254581380635,
+      "iterations": 51,
+      "validated": true,
+      "log": "holdout-2-sha256-plain256.log",
+      "round": 2
+    },
+    {
+      "case": "coremark_zig",
+      "variant": "plain256",
+      "seconds": 15.536,
+      "score": 2574.665294,
+      "wall_seconds": 20.224179583135992,
+      "iterations": 40000,
+      "validated": true,
+      "log": "holdout-2-coremark_zig-plain256.log",
+      "round": 2
+    },
+    {
+      "case": "coremark_zig",
+      "variant": "cache_asp",
+      "seconds": 15.548,
+      "score": 2572.678158,
+      "wall_seconds": 20.10841629211791,
+      "iterations": 40000,
+      "validated": true,
+      "log": "holdout-2-coremark_zig-cache_asp.log",
+      "round": 2
+    },
+    {
+      "case": "gzip",
+      "variant": "cache_asp",
+      "seconds": 4.09644312504679,
+      "wall_seconds": 4.35628804191947,
+      "iterations": 7,
+      "validated": true,
+      "log": "holdout-2-gzip-cache_asp.log",
+      "round": 2
+    },
+    {
+      "case": "gzip",
+      "variant": "plain256",
+      "seconds": 4.011544041102752,
+      "wall_seconds": 4.268732208060101,
+      "iterations": 7,
+      "validated": true,
+      "log": "holdout-2-gzip-plain256.log",
+      "round": 2
+    }
+  ],
+  "summary": {
+    "gzip": {
+      "medians": {
+        "plain256": 4.0093461035285145,
+        "cache_asp": 4.097832083585672
+      },
+      "speedup": 0.9784066359352307
+    },
+    "sha256": {
+      "medians": {
+        "plain256": 3.5826387495035306,
+        "cache_asp": 4.1682686663698405
+      },
+      "speedup": 0.8595028382908108
+    },
+    "coremark_zig": {
+      "medians": {
+        "plain256": 2533.7491995,
+        "cache_asp": 2483.083933
+      },
+      "speedup": 0.9800038352217345
+    }
+  }
+}

@@ -1,0 +1,190 @@
+ARM64 guest 寄存器尾调用签名：设计与实测
+日期：2026-11-17
+工作树：/Users/jiangyiheng/.paseo/worktrees/379gbvgn/quiet-bird
+基线提交：c86246815f8db436c9e5fb3ad57e1621b96d1eb7
+平台：Apple M5 Max / macOS arm64，Apple Clang 17，Release + ThinLTO。
+
+结论
+当前验证最好的两个槽位组合是 EAX/ESP；尚未穷举所有组合。
+在相同 256 项操作数形状特化之上，GCC CoreMark 固定工作量三轮中位数由
+4953.764861 升至 5208.559399，增幅 5.143%。
+这证明签名携带 guest 值在充分特化的路径上有收益，但未覆盖路径有维护代价。
+独立 SHA256 吞吐回退 14.05%，所以原型不应全局默认开启。
+原型、脚本、二进制、测试和原始数据全部隔离在本目录，实际仓库源码没有修改。
+
+1. 真实 ABI 与寄存器预算
+实编译 abi-probe.cpp，检查 abi-probe.s；并核对最终 dylib 反汇编。
+现有 7 参数：state=x20、op=x21、limit=x22、utlb_tags=x23、addend=x24、
+branch=w25、flags=x26。新加两项 uint32_t guest 值实际位于 w27/w28；
+加四项时另占 w0/w1。前 24 项整数参数可经寄存器传递，第 25 项出现栈传参。
+
+按 x0..x17、x19..x28 计，有 28 个普通 GPR；排除 Apple 保留 x18、FP x29、LR x30。
+现有 7 项占用后理论剩 21，增加 2 项剩 19，增加 4 项剩 17。
+这是容量估算，实际还受 helper 调用、链接器暂存、编译器和临时变量活跃区间影响，
+不能据此保证所有 handler 无 spill。实际函数汇编检查见第 5 节。
+前两个新增寄存器 x27/x28 也属于普通调用约定的 callee-saved 集合；
+增加第 3/4 项进入 x0/x1 后，跨普通 helper 调用更可能需要搬运/保存。
+preserve_none 的 ABI 不稳定，升级编译器后应重新运行探针。
+官方说明：https://clang.llvm.org/docs/AttributeReference.html#preserve-none
+
+2. GCC CoreMark 的寄存器操作画像
+GCC 15.2 -O2 i386，EEMBC 源码固定 1f483d5b8316753a742cbf5590caf5bd0a4e4777。
+统计采用独立插桩库，固定 5000 次；只做频次，不用插桩速度作为性能成绩。
+所有直接 GPR 字段、GetReg/SetReg/GetRegPtr、动态 EA helper 均已插桩。
+GetRegPtr 保守计为读+写；这是源代码访问次数，不是退休 guest 指令数，也不是硬件内存操作数。
+首次读取比例指一个调度入口内，在写入前第一次读取某 GPR 的次数占所有 GPR 这类读取之比。
+生成融合共用一次 epoch；手写融合没有单独新增 epoch，因此该项是近似候选排名。
+动态 EA 有独立计数，已有固定 EA 特化中的读取归普通 GetReg，不能只看 EA 子计数。
+
+寄存器 读写合计占比  入口首次读取占比  首次读/入口写
+EAX     22.53%     21.33%        1.295
+EDX     20.96%     20.78%        1.276
+ECX     15.30%     14.83%        1.064
+EBX     12.14%     10.80%        0.938
+ESP     11.56%     13.24%        1.897
+ESI     10.80%      8.54%        0.923
+EDI      4.17%      5.61%        1.626
+EBP      2.55%      4.86%        4.273
+
+EAX/EDX 操作最多，但 ESP 的首次读/写比更高；大量栈基址读取处在 EA 依赖链上。
+所以不能只按总次数选寄存器，需综合：入口 live-in、写频率、已有特化覆盖、EA 关键路径，最后实测。
+数据：complete-register-counts.jsonl、register-ranking-final.json。
+固定 5000 次的统计运行 CRC 正确但不足 10 秒，CoreMark 会报计时不足；未将其计入成绩。
+
+3. 设计：先融合，再做静态寄存器归属特化
+完整建议在 design.txt。实现顺序：
+  decode + flags 分析 → 现有融合匹配 → 对最终 handler 做 operand/cache lowering。
+保留原融合表和原特化逻辑，融合 handler 的所有 constituent 一起 lowering。
+解码期决定 Cache0/Cache1/HeapOther/NoReg，运行时通过模板/if constexpr 选择访问器。
+HeapOther 可动态索引内存寄存器堆，但不再动态判断该索引是否属于两个 host 槽位。
+必须覆盖 reg、r/m、EA base/index、隐式 ESP、AL/AH/AX 部分寄存器和读写别名。
+
+先做 read cache + write-through：缓存读取直接用参数；写入同步内存和对应参数。
+引入明确的 cached-read/write mask；HeapOther 写入已知不影响两个槽位时直接透传。
+opaque 回调可能改寄存器时，回调返回后、继续执行前刷新缓存。
+所有 handler、融合、分支、sentinel、slow path、反射声明必须使用同一 musttail ABI。
+默认关闭；覆盖不足的代码使用 canonical 入口。混合模式需要明确冷→热入口桥接，
+由内存初始化缓存后才进入热 handler，不能因参数类型相同就假定值有效。
+
+本实验实现的是 LLVM 部分求值原型：在入口建立 state.regs == rc 的合法不变量，
+以 __builtin_assume 固定已验证的 operand shape，再内联原语义逻辑。
+并未实现正式的完整模板访问器体系、写集合生成、冷热桥接或 dirty write-back。
+GetReg 中没有新增 runtime cache-selection 分支。通用未知下标写入后可能重载缓存，
+这笔代价在测试中真实保留，未用 CoreMark 算法/数据/地址硬编码掩盖。
+形状只包含 ModRM、prefix、EA descriptor；immediate/displacement/guest 数据仍动态读取。
+解码时的原型选择器线性查表；正式版本应按 handler 分组或哈希，不在执行热路径查表。
+
+4. 性能实验与消融
+所有正式计时一进程串行运行，轮换变体顺序，同一 rootfs、guest、managed CLI；
+不并发编译/插桩/profile；每次检查 Correct operation validated、CRC、计时至少 10 秒。
+启用原有 167 项烘焙融合规则，所有变体使用相同规则。
+
+64 项形状覆盖 54.007% 已记录入口；单轮筛选：
+无 cache 4512.30，ABI 加两个未使用参数 4529.33，EAX/EDX cache 4368.40，四项 cache 4195.22。
+说明仅扩签名不够，未知寄存器写后重载可吞掉收益。
+扩至 256 项形状覆盖 83.919% 后，cache 转为正收益。
+这里覆盖率分母是 915,074,054 个已记录入口，含没有 GPR 收益的普通 Jcc；不是全引擎覆盖率。
+
+五轮 auto-calibration 消融中位数（confirm.json；不能和其他批次绝对值混算）：
+变体                    分数      对同批 plain
+plain256        4949.678271   +0.000%
+abi2x256        4937.052580   -0.255%
+cache2x256      5012.302925   +1.265%
+cache4x256      5052.592899   +2.079%
+abi2x256 只有扩签名、未使用缓存。cache2 为 EAX/EDX，cache4 为 EAX/EDX/ECX/EBX。
+两项和四项都五轮正收益，但四项没有一致胜过两项，尚不支持把更多寄存器全部加入。
+
+最终固定工作量比较：120000 iterations、2K、单 context，三轮轮换顺序，9/9 校验通过：
+变体                    中位分数       增幅
+plain256        4953.764861   +0.000%
+cache2x256      5105.513955   +3.063%
+cache_asp       5208.559399   +5.143%
+plain256 = 同样 256 项形状特化，无 guest cache。
+cache2x256 = EAX/EDX；cache_asp = EAX/ESP。
+EAX/ESP 每轮均比同轮 plain 高；bank-confirm.json 保存全部逐轮数值及原库 SHA256。
+EAX/ECX 只做单轮 bank-screen；没有穷举全部寄存器组合，也没有给出统计置信区间。
+
+注意：此前约 3889 → 现在约 5209 的总变化中，操作数形状特化贡献很大。
+不能把总增幅归到扩展尾调用签名；此处可归因的对照是同 256 形状的 5.143%。
+
+5. 栈访问、汇编和二进制尺寸
+对所有 profile 命中 handler 的最终 ARM64 汇编按入口频次加权：
+plain256、EAX/EDX、四寄存器、EAX/ESP 都有约 98.827% 入口落在完全不含 SP/FP 访问的函数中。
+常见 handler 没有新增栈访问；只有极冷的 x87 DF/DB wrapper 增加一些栈引用，
+其命中为 28+22 / 915,074,054。详见 weighted-pressure-256.json、pressure-summary.txt。
+这不是“实际 spill 时间占比”：一个函数的冷分支有栈引用就把整个函数标记为有栈路径；
+SP 引用也可能是 helper 调用帧，而非寄存器溢出。
+
+同一 OpMov_Load_Eax_EspBaseNoIndexNoSegment 特化：
+plain256：ldr w9, [x20,#0x10] 读取 guest ESP，随后 add 算 EA。
+EAX/ESP ：add w8,w8,w28 直接读取签名中的 ESP，省去堆加载及依赖链。
+参见 plain256-esp-load.asm、cache_asp-esp-load.asm。
+原 EDX TEST/JNE 也可直接 cmp w28,#0；没有 cache-vs-heap 选择分支。
+
+__text 大小（可执行代码，不用含字符串/元数据的整库大小代替）：
+167 融合基线 761708 B；64 形状 779732 B；256 形状 811240 B；
+EAX/EDX 818048 B；四项 817820 B；EAX/ESP 817776 B。
+EAX/ESP 相对同 256 形状增加 6536 B（6.38 KiB，0.806%）。
+参见 section-sizes.txt。当前规模下未见显著前端代价，不能据此保证无限扩展也如此。
+
+6. 硬件计数与收益来源
+使用此前 Instruments 自定义 9 事件 CPU Counters 模板，独立 profile 两个 fixed120000 版本。
+解析 dotnet 中周期最多的 guest worker，限定 P Core，稳态窗口 [4,14] 秒。
+                         plain256       EAX/ESP
+IPC                         6.1524         6.3761
+分支预测准确率                99.76677%      99.76696%
+load/store 指令占比           25.9914%       25.4951%
+L1D load miss / 1000 ins     0.09295        0.09484
+L1I demand miss / 1000 ins   0.01344        0.01718
+frontend no-issue cycles      3.6771%        3.8320%
+backend no-issue cycles       25.0895%       22.0449%
+
+整个 guest worker 录制区间 P Core 累计（含启动/退出，非精确 CoreMark timer 区间）：
+INST_LDST：156,844,664,538 → 152,938,901,151，-2.490%。
+Instructions：603,349,323,992 → 599,762,064,109，-0.595%。
+硬件采样与省去寄存器堆加载、缩短 EA 依赖的汇编证据一致；分支命中率没有实质变化。
+这是一次 profile 对照，不能把差异每一周期都精确归因于某条指令。
+frontend/backend 事件不是可加的 top-down 时间分解；L1D MPKI 不是每次 load 的 miss rate。
+原始 trace/XML、*-hardware-summary.json 和 *-hardware-whole-summary.json 均保留。
+
+7. 正确性及独立工作负载
+plain64、cache2、cache4、plain256、cache2x256、cache4x256、cache_ac、cache_asp
+各自原有 CPU 3109 项测试全通过；不是所有 ABI-only 筛选变体都另跑过 CPU 测试。
+EAX/ESP 另加 3 项专门探针，3112/3112：
+  实际进入 clone014，覆盖 ESP 基址、MOV SP/AX 部分写、PUSH/POP；
+  fault 保持 EIP/寄存器，API 修改 ESP 后 resume 读取新栈；
+  Run 边界通过 API 修改 EAX/ESP，重新初始化两个签名值。
+测试项目 probe-project，日志 test-logs。完整异常/回调组合空间仍需正式实现继续验证。
+
+独立 holdout 两轮、12/12 结果校验成功；比较同 256 形状 plain vs EAX/ESP，吞吐增幅：
+gzip             -2.159%
+sha256          -14.050%
+coremark_zig     -2.000%
+Zig CoreMark 有噪声，只有两轮；SHA256 回退很明显，不能用 GCC CoreMark 的收益掩盖。
+汇编显示 generic ROR 动态下标 store 后，cache 版本新增：
+  ldr w27,[x20]
+  ldr w28,[x20,#0x10]
+因为编译器不能证明未知下标没有写到两个缓存槽位，只能重载。
+参见 plain256-generic-ror.asm、cache_asp-generic-ror.asm。
+下一步是完整的 Cache/HeapOther operand classes + 写集合，以及冷路径 canonical 桥接。
+在这之前默认关闭，而非把本次 CoreMark 最佳参数直接全局推广。
+
+8. 复现与交付物
+本目录保留所有实验库及 CLI，无需重编译即可重跑固定工作量：
+  COREMARK_ITERATIONS=120000 python3 artifacts/arm64-regcache-20261117/bench.py rerun 3 plain256 cache2x256 cache_asp
+会输出独立 rerun*.log/json，不覆盖 bank-confirm 原记录。需要 dotnet、现有 rootfs。
+
+重建参考（先检查 build-configs.json；以下串行执行）：
+  REGCACHE_LIMIT=256 REGCACHE_SELECTION=selected-patterns-256.json REGCACHE_OUTPUT=regcache-256.generated.cpp python3 artifacts/arm64-regcache-20261117/prepare_prototype.py
+  REGCACHE_OUTPUT=regcache-256.generated.cpp python3 artifacts/arm64-regcache-20261117/build_variant.py plain256 0 0 1
+  REGCACHE_OUTPUT=regcache-256.generated.cpp python3 artifacts/arm64-regcache-20261117/build_variant.py cache2x256 2 1 1
+  REGCACHE_OUTPUT=regcache-256.generated.cpp REGCACHE_EXTRA_FLAGS=-DREGCACHE_SECOND=4 python3 artifacts/arm64-regcache-20261117/build_variant.py cache_asp 2 1 1
+不要在复测同时编译或运行插桩/profile。各库 SHA256 见 bank-confirm.json。
+脚本依赖本仓库现有 native deps、167 融合产物和已发布 managed CLI，非脱离仓库的独立包。
+
+prototype.patch：9 个源码/反射文件的原型修改；需配合 regcache-256.generated.cpp。
+regcache_abi.h 默认 COUNT=0、ACTIVE=0、CLONES=0，实验构建通过显式宏启用。
+已计时的二进制均显式 CLONES=1，后续默认宏整理没有改变这些二进制。
+build-configs.json 保存各变体编译宏；test-logs 保存测试结果；final-summary.json 汇总关键值。
+正式推进需把 ABI/bank/active/compiler 纳入 native build fingerprint 和共享译码缓存 key；
+shape/clone 保留 canonical OpId 以免反射/后续训练重复归类。当前仅为隔离实验，不发布、不提交。

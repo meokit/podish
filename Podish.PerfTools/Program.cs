@@ -66,6 +66,7 @@ internal static partial class Program
                 "analyze-sib-shapes" => RunAnalyzeSibShapes(rest),
                 "analyze-superopcode-candidates" => RunAnalyzeSuperopcodeCandidates(rest),
                 "gen-superopcodes" => RunGenerateSuperopcodes(rest),
+                "export-instruction-catalog" => RunExportInstructionCatalog(rest),
                 "pipeline" => RunPipeline(rest),
                 "superopcode" => RunTrainingCommand(rest),
                 "runner" => BenchmarkRunner.Run(rest),
@@ -91,6 +92,7 @@ internal static partial class Program
                             analyze-sib-shapes             Aggregate SIB addressing shapes and opcode mix from blocks_analysis.json
                             analyze-superopcode-candidates Aggregate candidate pairs from analysis files
                             gen-superopcodes               Generate libfibercpu/src/generated/superopcodes.generated.cpp
+                            export-instruction-catalog     Export fusion metadata from a built native library
                             pipeline                       Run the full benchmark + analysis pipeline
                             superopcode                    Standard GNU collect/distill/train/verify/benchmark/search workflow
                             runner                         Run the benchmark harness and optional block analysis

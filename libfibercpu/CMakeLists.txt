@@ -111,10 +111,28 @@ if(NOT MSVC AND NOT EMSCRIPTEN)
     )
 endif()
 
+# Fingerprint the semantic catalog independently of host addresses/compiler ABI.
+set(INSTRUCTION_CATALOG_INPUTS
+    instruction_spec.h instruction_families.h instruction_variants.inc
+    instruction_fallbacks.inc instruction_variants.cpp instruction_variants.h specialization.h)
+set(INSTRUCTION_CATALOG_FINGERPRINT "")
+foreach(input IN LISTS INSTRUCTION_CATALOG_INPUTS)
+    set(path "${CMAKE_CURRENT_SOURCE_DIR}/src/${input}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
+    file(READ "${path}" input_text)
+    string(REPLACE "\r\n" "\n" input_text "${input_text}")
+    string(SHA256 input_hash "${input_text}")
+    string(APPEND INSTRUCTION_CATALOG_FINGERPRINT "${input}:${input_hash}\n")
+endforeach()
+string(SHA256 INSTRUCTION_CATALOG_SHA256 "${INSTRUCTION_CATALOG_FINGERPRINT}")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_catalog_hash.h"
+    "#pragma once\n#define FIBERCPU_INSTRUCTION_CATALOG_SHA256 \"${INSTRUCTION_CATALOG_SHA256}\"\n")
+
 # Object library for core parts (contains the opcodes to scan)
 add_library(fibercpu_core OBJECT ${SOURCES})
 set_target_properties(fibercpu_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_include_directories(fibercpu_core PRIVATE .)
+target_include_directories(fibercpu_core PRIVATE . "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_include_directories(fibercpu_core SYSTEM PRIVATE ${simde_SOURCE_DIR})
 target_link_libraries(fibercpu_core PRIVATE unordered_dense::unordered_dense)
 

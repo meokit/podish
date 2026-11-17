@@ -8,7 +8,6 @@
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
-#include "ops_shift_bit.h"
 #include "ops_carry_rmw_impl.h"
 
 namespace fiberish {
@@ -52,20 +51,20 @@ FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, DecodedOp* op, ui
             break;
         case 2:  // RCL
             if (is_byte)
-                return ExecuteCarryRmw<CarryRmwKind::Rcl, uint8_t>(state, op, static_cast<uint8_t>(dest), count,
-                                                                  utlb, flags_cache);
+                return ExecuteCarryRmw<CarryRmwKind::Rcl, uint8_t>(state, op, static_cast<uint8_t>(dest), count, utlb,
+                                                                   flags_cache);
             else if (is_opsize)
-                return ExecuteCarryRmw<CarryRmwKind::Rcl, uint16_t>(state, op, static_cast<uint16_t>(dest), count,
-                                                                   utlb, flags_cache);
+                return ExecuteCarryRmw<CarryRmwKind::Rcl, uint16_t>(state, op, static_cast<uint16_t>(dest), count, utlb,
+                                                                    flags_cache);
             else
                 return ExecuteCarryRmw<CarryRmwKind::Rcl, uint32_t>(state, op, dest, count, utlb, flags_cache);
         case 3:  // RCR
             if (is_byte)
-                return ExecuteCarryRmw<CarryRmwKind::Rcr, uint8_t>(state, op, static_cast<uint8_t>(dest), count,
-                                                                  utlb, flags_cache);
+                return ExecuteCarryRmw<CarryRmwKind::Rcr, uint8_t>(state, op, static_cast<uint8_t>(dest), count, utlb,
+                                                                   flags_cache);
             else if (is_opsize)
-                return ExecuteCarryRmw<CarryRmwKind::Rcr, uint16_t>(state, op, static_cast<uint16_t>(dest), count,
-                                                                   utlb, flags_cache);
+                return ExecuteCarryRmw<CarryRmwKind::Rcr, uint16_t>(state, op, static_cast<uint16_t>(dest), count, utlb,
+                                                                    flags_cache);
             else
                 return ExecuteCarryRmw<CarryRmwKind::Rcr, uint32_t>(state, op, dest, count, utlb, flags_cache);
         case 4:  // SHL/SAL
@@ -279,6 +278,14 @@ FORCE_INLINE LogicFlow OpRotateRegImmediate(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+inline constexpr LogicFunc OpRol_RegImm16_Live = OpRotateRegImmediate<uint16_t, false, true>;
+inline constexpr LogicFunc OpRol_RegImm16_Dead = OpRotateRegImmediate<uint16_t, false, false>;
+inline constexpr LogicFunc OpRor_RegImm16_Live = OpRotateRegImmediate<uint16_t, true, true>;
+inline constexpr LogicFunc OpRor_RegImm16_Dead = OpRotateRegImmediate<uint16_t, true, false>;
+inline constexpr LogicFunc OpRol_RegImm32_Live = OpRotateRegImmediate<uint32_t, false, true>;
+inline constexpr LogicFunc OpRol_RegImm32_Dead = OpRotateRegImmediate<uint32_t, false, false>;
+inline constexpr LogicFunc OpRor_RegImm32_Live = OpRotateRegImmediate<uint32_t, true, true>;
+inline constexpr LogicFunc OpRor_RegImm32_Dead = OpRotateRegImmediate<uint32_t, true, false>;
 
 FORCE_INLINE LogicFlow OpGroup2_EbIb(LogicFuncParams) { return OpGroup2_EvIb_Internal<true>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpGroup2_EvIb(LogicFuncParams) { return OpGroup2_EvIb_Internal<false>(LogicPassParams); }

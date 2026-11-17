@@ -10,7 +10,6 @@
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
-#include "ops_sse_cvt.h"
 
 namespace fiberish {
 namespace op {
@@ -57,8 +56,10 @@ FORCE_INLINE uint32_t SseFloatBitsToInt32(uint64_t bits, uint32_t mxcsr, bool tr
         }
     }
     const uint32_t rounding = truncate ? 3 : ((mxcsr >> 13) & 3);
-    const bool increment = rounding == 0 ? (above_half || (exactly_half && (magnitude & 1)))
-        : rounding == 1 ? (inexact && negative) : rounding == 2 ? (inexact && !negative) : false;
+    const bool increment = rounding == 0   ? (above_half || (exactly_half && (magnitude & 1)))
+                           : rounding == 1 ? (inexact && negative)
+                           : rounding == 2 ? (inexact && !negative)
+                                           : false;
     magnitude += increment;
     if (magnitude > (negative ? 0x80000000ull : 0x7FFFFFFFull)) {
         // An invalid conversion does not additionally report precision for this lane.
@@ -85,8 +86,10 @@ FORCE_INLINE uint32_t SseInt32ToSingleBits(uint32_t bits, uint32_t mxcsr, uint32
         const uint32_t remainder = magnitude & ((1u << shift) - 1);
         const uint32_t halfway = 1u << (shift - 1);
         const uint32_t rounding = (mxcsr >> 13) & 3;
-        const bool increment = rounding == 0 ? (remainder > halfway || (remainder == halfway && (significand & 1)))
-            : rounding == 1 ? (remainder != 0 && negative) : rounding == 2 ? (remainder != 0 && !negative) : false;
+        const bool increment = rounding == 0   ? (remainder > halfway || (remainder == halfway && (significand & 1)))
+                               : rounding == 1 ? (remainder != 0 && negative)
+                               : rounding == 2 ? (remainder != 0 && !negative)
+                                               : false;
         if (remainder != 0) exceptions |= 0x20;
         significand += increment;
         if (significand == (1u << 24)) {
@@ -175,13 +178,9 @@ FORCE_INLINE LogicFlow OpCvtScalarToInt32(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCvt_2C(LogicFuncParams) {
-    return OpCvtScalarToInt32<true>(LogicPassParams);
-}
+FORCE_INLINE LogicFlow OpCvt_2C(LogicFuncParams) { return OpCvtScalarToInt32<true>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpCvt_2D(LogicFuncParams) {
-    return OpCvtScalarToInt32<false>(LogicPassParams);
-}
+FORCE_INLINE LogicFlow OpCvt_2D(LogicFuncParams) { return OpCvtScalarToInt32<false>(LogicPassParams); }
 
 FORCE_INLINE LogicFlow OpCvt_5A(LogicFuncParams) {
     // 0F 5A: CVTPS2PD / CVTPD2PS (66) / CVTSD2SS (F2) / CVTSS2SD (F3)
@@ -257,8 +256,8 @@ FORCE_INLINE LogicFlow OpCvt_5B(LogicFuncParams) {
     if (op->prefixes.flags.opsize || op->prefixes.flags.rep) {
         // 66: CVTPS2DQ; F3: CVTTPS2DQ. Accumulate before committing any lane.
         for (int lane = 0; lane < 4; ++lane)
-            result[lane] = SseFloatBitsToInt32<23, 8>(input[lane], state->ctx.mxcsr,
-                !op->prefixes.flags.opsize, exceptions);
+            result[lane] =
+                SseFloatBitsToInt32<23, 8>(input[lane], state->ctx.mxcsr, !op->prefixes.flags.opsize, exceptions);
     } else {
         // 0F: CVTDQ2PS
         for (int lane = 0; lane < 4; ++lane)

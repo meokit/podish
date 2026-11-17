@@ -1,0 +1,80 @@
+GCC CoreMark bottleneck analysis: Apple M5 Max ARM64, 2026-11-17
+
+结论：证据支持解释器热状态/元数据访问与标志处理/依赖链是主要优化方向；未见低分支预测命中率或频繁L1缓存未命中构成主因的证据。
+这里的“访存”需区分：L1命中的CPU状态/解码元数据访问，和慢缓存/DRAM等待。load/store采样多，不等于DRAM带宽受限。
+现有计数不提供完整计算端口/依赖链归因，不能给“纯计算vs L1命中延迟”一个精确拆分百分比。
+
+测试对象与方法
+基线：main c8624681 默认71项融合；候选：前轮167项融合，七轮GCC CoreMark中位数3889.29，基线3298.70。
+同一GCC15.2 -O2 i386 CoreMark、完整rootfs、单context、2K性能种子；本轮固定60000迭代，两版CRC均验证正确。
+候选未替换生产默认表；这轮没有修改受版本管理源码。
+前轮Time Profiler数据来自精确候选dylib的candidate-samples.xml和candidate.asm；排除前4秒，native样本12258ms。
+本轮在Instruments中配置9个硬件事件，保存CoremarkHardware.tracetemplate，再通过xctrace CLI逐个启动基线/候选。
+事件顺序：BRANCH_MISPRED_NONSPEC, Cycles, Instructions, INST_BRANCH, INST_LDST, L1D_CACHE_MISS_LD_NONSPEC, L1I_CACHE_MISS_DEMAND, ARM_STALL_FRONTEND, ARM_STALL_BACKEND。
+counters-profile导出的是每采样间隔的增量；按主guest worker选择，取[4,14]秒共同稳态区间，仅选P Core，求和后计算比值。
+不能把比率先逐样本平均；不能把采样PC类型占比视为stall原因。
+
+硬件计数（单次采样，两个版本同样方法）
+metric                                      default71       candidate167
+IPC                                             5.721332        6.389097
+branch prediction accuracy %                   99.630573       99.779864
+branch misprediction %                          0.369427        0.220136
+branch misses / 1000 instructions               0.441868        0.249983
+branch instructions %                          11.960901       11.355859
+load/store instructions %                      26.209229       25.493853
+retired L1D load misses / 1000 instructions     0.081598        0.083875
+L1I demand misses / 1000 instructions           0.011201        0.015465
+frontend no-issue / cycles %                    5.958647        4.360351
+backend no-issue / cycles %                    22.772570       21.765690
+
+L1D MPKI 的分母是所有retired instructions，不是所有loads，因此不能写成“L1D cache miss rate=0.084%”。
+branch accuracy按1-(architecturally executed mispredicted branches / retired branches incl calls+returns)计算，是全部host分支的总体比率，不是单独dispatch间接跳转的命中率。
+frontend/backend no-issue是两个原始事件相对Cycles的比值，不是可相加的top-down“时间占比”，backend也不能直接等同于memory-bound。
+IPC升高与分支MPKI下降是有利变化；只凭这两次计数不能把前轮17.90%吞吐收益精确拆成各类原因。
+候选L1I MPKI高于基线，但绝对值很低，frontend no-issue也下降；这轮没有出现代码变大后明显取指恶化的证据。
+
+汇编时间采样：候选native指令落点分布（单独Time Profiler运行）
+load/store                              6416 ms   52.341%
+compute/flags/address/other             5379 ms   43.882%
+conditional branch                       371 ms    3.027%
+indirect branch                           63 ms    0.514%
+direct branch/call/return                 29 ms    0.237%
+直接x21为基址的load/store：28.545% native样本，读取DecodedOp/后继handler/操作数字段。
+直接x20为基址的load/store：16.030% native样本，访问EmuState里的guest寄存器、MMU/块缓存等。
+明确的后继handler加载 ldr x0,[x21,#stride]!：15.639% native样本。该项包含在x21中，不可重复相加。
+上述两种直接基址占全部load/store样本约85%；其余动态基址仍可能属于元数据或guest数据，未强行自动归类。
+ORR+CSEL合计：31.865% native样本。检查热点上下文可见大量EFLAGS合成/条件选择，但并非所有ORR/CSEL都只处理flags。
+代表例：TEST/JNE融合中先用AND/CMP/CSEL/ORR/位移更新模拟ZF/SF/PF等状态，再检查ZF；CMP16/JNE、shift的OF/CF路径也有较长整数依赖链。
+代表访存热点：ldr x0,[x21,#0x40]! 是读取下一个宿主handler；str w8,[x20,x9,lsl#2] 是写模拟寄存器。它们不是CoreMark数组的DRAM传输。
+分支指令本身只占约3.8%时间采样，但这不代表只有3.8%时间与分支有关；分支预测结论以PMU事件为准。
+
+优化优先级（本轮只分析，未改代码）
+1. 更细的flag liveness/惰性标志，减少CMP/TEST/shift的标志打包与条件选择。需要保留跨块、故障与可观察flags语义，不能因当前JNE只读ZF便省略其余flags。
+2. 融合内寄存器值转发、烘焙/预解码更多字段，减少x20寄存器状态和x21元数据的往返与地址依赖。
+3. 继续按真实热序列选择融合，关注后继handler加载和间接分派，但不要只因分支指令存在就归因为预测失败。
+4. 当前证据下，DRAM预取或单纯追求降低L1 miss优先级较低。若要进一步区分计算端口与L1命中依赖，应增加端口/依赖、load/store等待事件或有针对性的A/B。
+
+CUA权限检查
+实测已成功：读取Instruments AX树、截图、点击Choose进入配置、选本机设备、添加事件、保存模板。
+先前timeout和“user changed”没有证明权限不足；后者在刷新AX控件编号后恢复。
+GUI初始选择离线iPhone，切到Mac并Retry后事件列表可用；默认CPU Counters CLI模板未配置事件，因此初次trace没有PMU表，这是另一个配置问题。
+运行中的电脑控制组件：~/.codex/computer-use/Codex Computer Use.app。终端文件系统沙箱权限与macOS辅助功能/录屏授权是不同机制。
+手动核查：系统设置 -> 隐私与安全性 -> 辅助功能，以及Screen & System Audio Recording（录屏与系统录音/屏幕与系统音频录制，随系统语言版本变化）。
+本轮未修改任何macOS隐私授权。
+
+原始材料
+CoremarkHardware.tracetemplate：9事件配置，GUI保存，可直接传给xctrace --template <absolute path>。
+hardware.trace / hardware-counters.xml / hardware-summary.json：候选；base-hardware.*：基线。
+hardware-toc.xml明确列出9个pmc-events；hardware-summary.json含所选worker、P Core cycles、事件总和。
+analyze_hardware.py：过滤窗口、线程和CPU，求和并计算指标；installed-as5-event-definitions.json：系统事件定义摘录。
+sampled-instructions.json / annotated-hotspots.txt：逐PC归类和汇编上下文，来自前轮精确候选Time Profiler/反汇编。
+所有4份本轮CoreMark transcript均包含Correct operation validated。
+
+主文档来源
+https://developer.apple.com/documentation/xcode/addressing-cpu-bottlenecks
+https://developer.apple.com/videos/play/wwdc2025/308/
+https://support.apple.com/guide/mac-help/control-access-screen-system-audio-recording-mchld6aa7d23/mac
+
+精确native library SHA256
+base: fd58327fd2412b3f6bf010f12e983cf22b2e712b1725791724e5d7242bedf393
+observed: ef9c4f29745ee7aa5d5df911f24c454683d6d0973d779f02a59166bbbc90963c

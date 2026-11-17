@@ -44,7 +44,8 @@ extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowLink(EmuState* RESTRICT
                                                               mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                               uint64_t flags_cache);
 extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowControlFlow(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                                     int64_t instr_limit,
+                                                                     mem::MicroTlbAbiWord utlb_tags,
                                                                      mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                                      uint64_t flags_cache);
 extern ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
@@ -105,7 +106,7 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
 template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-                                            uint32_t branch, uint64_t flags_cache) {
+                                           uint32_t branch, uint64_t flags_cache) {
 #ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
     const auto history_length = state->sequence_expected_op == op ? state->sequence_history_length : 0;
     const auto history = state->sequence_history;
@@ -171,27 +172,5 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             return instr_limit;
     }
 }
-
-// Registration Helper
-// We use a struct to infer the function pointer type for registration
-template <LogicFunc Target>
-struct DispatchRegistrar {
-    static void Register(int idx) { g_Handlers[idx] = DispatchWrapper<Target>; }
-
-    static void RegisterNF(int idx) {
-        SpecCriteria criteria;
-        criteria.no_flags = true;
-        RegisterSpecializedHandler(idx, criteria, (HandlerFunc)DispatchWrapper<Target>);
-    }
-
-    // Specialization Registration
-    static void RegisterSpecialized(int opcode, SpecCriteria criteria) {
-        RegisterSpecializedHandler(opcode, criteria, (HandlerFunc)DispatchWrapper<Target>);
-    }
-};
-
-// Simplified Macro for ops registration
-// Replaces the old g_Handlers[idx] = DispatchWrapper<Func>;
-// Usage: DispatchRegistrar<Func>::Register(idx);
 
 }  // namespace fiberish

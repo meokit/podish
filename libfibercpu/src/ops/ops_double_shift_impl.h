@@ -6,7 +6,6 @@
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
-#include "ops_double_shift.h"
 
 namespace fiberish {
 namespace op {

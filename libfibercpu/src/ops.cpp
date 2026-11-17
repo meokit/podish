@@ -1,7 +1,7 @@
 #include "ops.h"
 #include <algorithm>
 #include "dispatch.h"
-#include "ops/ops_mmx.h"
+#include "instruction_variants.h"
 
 namespace fiberish {
 
@@ -231,21 +231,7 @@ struct HandlerInit {
             g_Handlers[i] = nullptr;
         }
 
-        // 2. Register all modular operations
-        RegisterAluOps();
-        RegisterCompareOps();
-        RegisterControlOps();
-        RegisterDataMovOps();
-        RegisterDoubleShiftOps();
-        RegisterFpuOps();
-        RegisterGroupOps();
-        RegisterMmxOps();
-        RegisterMulDivOps();
-        RegisterShiftBitOps();
-        RegisterSseCvtOps();
-        RegisterSseFpOps();
-        RegisterSseIntOps();
-        RegisterSseMovOps();
+        RegisterInstructionVariants();
         BuildSpecializationIndex();
     }
 };
@@ -280,7 +266,7 @@ static bool CompileSpecialization(const SpecCriteria& c, HandlerFunc handler, Co
                            ((c.index_offset_mask ? c.index_offset_val : 0u) << memdesc::kIndexShift) |
                            ((c.scale_mask ? c.scale_val : 0u) << memdesc::kScaleShift) |
                            ((c.segment_mask ? c.segment_val : 0u) << memdesc::kSegmentShift);
-    out = {handler, mask, value, c.prefix_mask, c.prefix_val, c.RequiresMemShape()};
+    out = {handler, mask, value, c.prefix_mask, c.prefix_val, c.RequiresMemShape() || c.memory_only};
     return true;
 }
 
@@ -295,18 +281,37 @@ using SpecializationBuckets = std::array<std::vector<const CompiledSpecializatio
 static std::unique_ptr<SpecializationBuckets> g_SpecializationIndex[1024];
 static HandlerInit _init;
 
-void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler) {
+void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler, int priority) {
     if (opcode >= 1024) return;
     auto& list = g_OpSpecializations[opcode];
-    list.push_back({opcode, criteria, handler});
+    list.push_back({opcode, criteria, handler, priority});
 
     // Sort by specificity (Descending Score)
     // Most specific first
     std::sort(list.begin(), list.end(), [](const SpecializedEntry& a, const SpecializedEntry& b) {
         int a_score = a.criteria.GetScore();
         int b_score = b.criteria.GetScore();
-        return a_score > b_score;
+        return a_score != b_score ? a_score > b_score : a.priority < b.priority;
     });
+}
+
+static void IndexSpecialization(const SpecCriteria& c, const CompiledSpecialization* optimized,
+                                SpecializationBuckets& buckets) {
+    for (unsigned encoded = 0; encoded <= 256; ++encoded) {
+        const bool has_modrm = encoded != 0;
+        const unsigned modrm = has_modrm ? encoded - 1 : 0;
+        if (!has_modrm && (c.mod_mask || c.reg_mask || c.rm_mask)) continue;
+        if (has_modrm && ((c.mod_mask && (((modrm >> 6) & 3) & c.mod_mask) != c.mod_val) ||
+                          (c.reg_mask && (((modrm >> 3) & 7) & c.reg_mask) != c.reg_val) ||
+                          (c.rm_mask && ((modrm & 7) & c.rm_mask) != c.rm_val)))
+            continue;
+        if (c.any_flags) {
+            buckets[encoded * 2].push_back(optimized);
+            buckets[encoded * 2 + 1].push_back(optimized);
+        } else {
+            buckets[encoded * 2 + c.no_flags].push_back(optimized);
+        }
+    }
 }
 
 // Registration is complete before this is called. Buckets retain the exact
@@ -325,16 +330,7 @@ static void BuildSpecializationIndex() {
             if (!CompileSpecialization(c, entry.handler, item)) continue;
             compiled.push_back(item);
             const auto* optimized = &compiled.back();
-            for (unsigned encoded = 0; encoded <= 256; ++encoded) {
-                const bool has_modrm = encoded != 0;
-                const unsigned modrm = has_modrm ? encoded - 1 : 0;
-                if (!has_modrm && (c.mod_mask || c.reg_mask || c.rm_mask)) continue;
-                if (has_modrm && ((c.mod_mask && (((modrm >> 6) & 3) & c.mod_mask) != c.mod_val) ||
-                                  (c.reg_mask && (((modrm >> 3) & 7) & c.reg_mask) != c.reg_val) ||
-                                  (c.rm_mask && ((modrm & 7) & c.rm_mask) != c.rm_val)))
-                    continue;
-                (*buckets)[encoded * 2 + c.no_flags].push_back(optimized);
-            }
+            IndexSpecialization(c, optimized, *buckets);
         }
         g_SpecializationIndex[opcode] = std::move(buckets);
     }
@@ -352,6 +348,45 @@ HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
 }
 
 #ifdef FIBERCPU_VALIDATE_SPECIALIZATION_INDEX
+bool ValidateSpecializationWildcardIndex() {
+    const HandlerFunc handlers[] = {g_Handlers[0x90], g_Handlers[0xF4], g_Handlers[0xCD]};
+    SpecCriteria rules[3]{};
+    rules[0].any_flags = true;
+    rules[0].memory_only = true;
+    rules[1].no_flags = true;
+    rules[2].any_flags = true;
+    CompiledSpecialization compiled[3]{};
+    SpecializationBuckets buckets;
+    for (unsigned i = 0; i < 3; ++i) {
+        if (!CompileSpecialization(rules[i], handlers[i], compiled[i])) return false;
+        IndexSpecialization(rules[i], &compiled[i], buckets);
+    }
+    for (unsigned encoded = 0; encoded <= 256; ++encoded) {
+        for (unsigned flags = 0; flags < 2; ++flags) {
+            for (unsigned memory = 0; memory < 2; ++memory) {
+                DecodedOp op{};
+                op.meta.flags.has_modrm = encoded != 0;
+                op.modrm = encoded ? encoded - 1 : 0;
+                op.meta.flags.no_flags = flags;
+                op.meta.flags.has_mem = memory;
+                HandlerFunc expected = nullptr;
+                for (unsigned i = 0; i < 3; ++i)
+                    if (rules[i].Matches(&op)) {
+                        expected = handlers[i];
+                        break;
+                    }
+                HandlerFunc actual = nullptr;
+                for (const auto* entry : buckets[encoded * 2 + flags])
+                    if (MatchesCompiled(*entry, &op)) {
+                        actual = entry->handler;
+                        break;
+                    }
+                if (actual != expected) return false;
+            }
+        }
+    }
+    return true;
+}
 bool MatchesCompiledForTest(const SpecCriteria& criteria, const DecodedOp* op) {
     CompiledSpecialization entry{};
     return CompileSpecialization(criteria, nullptr, entry) && MatchesCompiled(entry, op);

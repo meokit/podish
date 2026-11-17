@@ -8,7 +8,6 @@
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
-#include "ops_alu.h"
 #include "ops_carry_rmw_impl.h"
 
 namespace fiberish {
@@ -1035,15 +1034,15 @@ FORCE_INLINE LogicFlow OpCarryRmw_ModReg_Internal(LogicFuncParams) {
     const uint8_t rm = op->modrm & 7;
     const uint8_t reg = (op->modrm >> 3) & 7;
     if constexpr (IsByte) {
-        return ExecuteCarryRmw<Kind, uint8_t, UpdateFlags, true>(
-            state, op, GetReg8(state, rm), GetReg8(state, reg), utlb, flags_cache);
+        return ExecuteCarryRmw<Kind, uint8_t, UpdateFlags, true>(state, op, GetReg8(state, rm), GetReg8(state, reg),
+                                                                 utlb, flags_cache);
     } else if (op->prefixes.flags.opsize) {
-        return ExecuteCarryRmw<Kind, uint16_t, UpdateFlags, true>(
-            state, op, static_cast<uint16_t>(GetReg(state, rm)), static_cast<uint16_t>(GetReg(state, reg)), utlb,
-            flags_cache);
+        return ExecuteCarryRmw<Kind, uint16_t, UpdateFlags, true>(state, op, static_cast<uint16_t>(GetReg(state, rm)),
+                                                                  static_cast<uint16_t>(GetReg(state, reg)), utlb,
+                                                                  flags_cache);
     } else {
         return ExecuteCarryRmw<Kind, uint32_t, UpdateFlags, true>(state, op, GetReg(state, rm), GetReg(state, reg),
-                                                                utlb, flags_cache);
+                                                                  utlb, flags_cache);
     }
 }
 
@@ -1418,8 +1417,7 @@ FORCE_INLINE LogicFlow OpArpl(LogicFuncParams) {
     const bool adjusted = (*destination & 3) < (source & 3);
     if (adjusted) {
         const uint16_t result = static_cast<uint16_t>((*destination & ~3u) | (source & 3));
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, result, utlb))
-            return LogicFlow::ExitOnCurrentEIP;
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, result, utlb)) return LogicFlow::ExitOnCurrentEIP;
     }
     AssignZF(flags_cache, adjusted);
     return LogicFlow::Continue;

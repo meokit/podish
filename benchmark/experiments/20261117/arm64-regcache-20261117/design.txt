@@ -1,0 +1,97 @@
+ARM64 tail-signature guest-register cache: proposal and implemented prototype
+
+Target: existing preserve_none ABI plus two 32-bit guest registers, initially as a read cache with architectural write-through.
+Keep existing 7 arguments: state, op, instruction limit, MicroTLB tags/addend, branch, flags cache. Append guest values.
+Apple Clang17 actually maps them to w27/w28; four cached guests additionally use w0/w1. Re-probe any compiler change because preserve_none ABI is unstable.
+
+Recommended lowering pipeline:
+1. Decode and dead-flag analysis select canonical logic and operand/EA metadata.
+2. Existing exact fusion matching chooses the original sequence, without losing specializations.
+3. Lower selected final entries to operand-specialized cached versions, including all constituents of a fused entry.
+4. Keep the same complete HandlerFunc signature in ordinary handlers, fused entries, sentinels, branch links, slow paths, and reflection declarations.
+5. Initialize cache at native Step/Run entry; keep memory state canonical in phase 1. Read current state after opaque callbacks or fallback writes before forwarding values.
+
+Production accessor policy:
+- OperandClass = CacheSlot0 / CacheSlot1 / HeapOther / Immediate. Address base/index use the same idea plus NoReg.
+- Decoding selects the class. A cached accessor is a compile-time template and directly reads the corresponding tail argument.
+- HeapOther always accesses the register file and does not run an index-to-cache branch.
+- Classify byte aliases and 16-bit writes explicitly: AL/AH share EAX; preserve the other bits; count SP/ESP and implicit stack/string operands.
+- Record read/write masks for each specialized family. Do not reload a cached guest when the handler provably did not write it and no opaque observer could modify it.
+- Bound the generated variants by observed operand classes and code budget, rather than instantiate every opcode x full ModRM x addressing x width combination.
+
+The implemented experiment is a conservative equivalent of the phase-1 read cache:
+- Memory register file stays canonical; no dirty architectural register state.
+- All cache-enabled entries receive values equal to memory. Compiler assumptions express that invariant and decoded operand shapes to the inliner.
+- Shape-specialized entries use constant ModRM/prefix/EA descriptors. Assembly proves cached register reads use w27/w28 and have no dynamic index-to-cache branch.
+- The tail call forwards updated values from the canonical state; where LLVM knows the exact write, this becomes direct SSA register forwarding.
+- Generic dynamic writes may force redundant cache reloads. This is intentionally measured as a cost, not hidden by a special CoreMark path.
+- No guest immediate data, addresses, algorithm or validation result is hard-coded. Shaped handlers remain valid for any guest with that operand encoding.
+
+Phase 2, not implemented in this experiment:
+- A write-back bank could remove stores as well as loads, but needs explicit observer barriers.
+- Before syscalls/interrupts/hooks, API returns, blocking memory helpers, faults/retries and decoding callbacks that can see/change registers, materialize the precise architectural state.
+- On return from a register-mutating callback, invalidate/reload the bank. On a fault, preserve the pre-fault destination and already-retired prefixes.
+- MicroTLB-hit memory accesses should not force a flush merely because they are memory instructions; slow/observable boundaries need explicit handling.
+- Test partial registers, ESP updates, cross-block branches, callback mutation, pending memory retry, SMC and single-step with the cache enabled.
+
+Coverage policy:
+The 64-shape experiment slowed down when caching was enabled; increasing coverage to 256 shapes made caching useful.
+A production version should enable cached lowering where its static access classes are covered, with canonical fallback/bridge entries for cold code.
+Use separate cached/canonical entry contracts or reconciliation only at cold-to-hot boundaries, so uncovered code does not pay register-cache maintenance at every instruction.
+No extra mode test belongs inside each GetReg operation. Keep cold and hot entry contracts explicit in decode/linking.
+
+Experiment-only source is under source/libfibercpu and regcache-*.generated.cpp. No production source has been changed.
+
+实测后的具体建议（2026-11-17）
+
+选两个 uint32_t 槽位，固定 EAX/ESP。当前编译器映射 w27/w28。
+这只是本轮已测试组合中的最佳结果，不是所有程序或所有寄存器组合的最优解。
+七个原参数保持顺序，在末尾附加：
+  Handler(state, op, limit, tags, addend, branch, flags, eax, esp)
+
+正式实现使用静态 operand access policy，不把动态 cache 选择塞进 GetReg：
+  enum AccessKind { CacheEax, CacheEsp, HeapOther, NoReg };
+  template<AccessKind K> ReadGpr(view, decoded_index)
+    CacheEax -> view.eax
+    CacheEsp -> view.esp
+    HeapOther -> state.regs[decoded_index]   // 由 decode 保证不是 EAX/ESP
+    NoReg -> 0
+  WriteGpr<CacheEax>(v) -> 同时赋值 view.eax 与 state.regs[EAX]
+  WriteGpr<CacheEsp>(v) -> 同时赋值 view.esp 与 state.regs[ESP]
+  WriteGpr<HeapOther>(v) -> 只写 state.regs[index]，两个签名值原样传递
+
+上面每个分支由 if constexpr 或模板特化消除。HeapOther 可以继续动态索引内存，
+但它的语义契约明确不含 EAX/ESP，不能在最后又无条件刷新两个槽位。
+对两个显式 GPR 操作数，先按三个归属类至多 3×3 个角色组合，再按 width/lane/别名剪枝；
+不要先实例化完整的 8×8 ModRM 空间。EA base/index 单独采用相同分类及 NoReg。
+隐式栈操作直接绑定 CacheEsp；AL/AH/AX 归 EAX，8 位高寄存器编码先规范化到父 GPR。
+部分写正确合并高位，并保留故障前后目的寄存器的精确语义。
+
+每个 family/融合 constituent 提供：
+  canonical_op_id, cached_read_mask, cached_write_mask, heap_write_mask,
+  may_call_observer, may_fault, partial_register_lane。
+显式维护 cache SSA 值，cached_write_mask=0 时不读回内存寄存器堆。
+普通已知不写 GPR 的内存快路径无需刷新；opaque 回调可能改任意寄存器时，
+返回后在后续语义执行前刷新。不能只在 handler 最末端刷新。
+
+原融合匹配保持 canonical identity；融合成功后才用 access classes 做最后 lowering。
+融合内部的第一个 cached 写结果直接传给下一 constituent，无额外 flush/reload。
+保留 canonical OpId 与原融合 family，使反射、profile 训练和调试输出识别同一语义。
+
+未覆盖代码不能付出每条指令两次刷新。建议保留两种 entry contract：
+  canonical：内存权威，两个额外参数允许无效，所有此类 handler 都忽略它们；
+  cached：内存仍权威且两个参数与内存一致，使用静态槽位。
+两类可以有相同的 C++ musttail 类型，但契约不同。cached→canonical 可直接丢弃参数；
+canonical→cached 必须有 bridge，从内存初始化两个值。链接器不能绕过 bridge。
+先做 engine/module 内固定 bank 和固定策略，避免动态重新分配槽位；
+code cache key、block link、native build fingerprint 需包含 bank/order/activation/ABI version。
+
+原型的 256 exact-shape clone 是验证性能的部分求值工具。正式实现应迁移为受控的
+operand-class 模板族及写集合，而不是不断增加 profile 中每个 exact shape 的克隆。
+当前未实现 canonical/cached 桥接，所以保留默认 OFF；SHA256 -14.05% 是必须解决的回归。
+完成写集合、冷热桥接后，用 GCC/Zig CoreMark 与 GNU holdout 同时验收；
+保留 ABI-only 对照和同 operand specialization、无 cache 的对照，以免混淆收益来源。
+
+本轮原型为 write-through read cache，未消除 architectural stores。
+将来若改 dirty write-back，需要单独设计精确提交/异常及 observer barriers，再另做实验；
+不能把此次通过的测试当作 write-back 正确性的证明。

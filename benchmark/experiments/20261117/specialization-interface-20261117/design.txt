@@ -1,0 +1,171 @@
+指令特化声明接口对齐方案
+2026-11-17；基于 c86246815f8db436c9e5fb3ad57e1621b96d1eb7
+状态：设计提案，未修改运行时实现。
+
+目标
+把各族特化的描述、handler 实例化、注册条件和语义元数据对齐。
+保留指令族各自的语义实现；生成的执行热路径仍是编译期特化和原有 musttail ABI。
+此次整理本身保持变体数量、匹配域和融合能力，不顺便扩大实例化矩阵或启用寄存器缓存。
+
+当前具体问题
+1. specialization.h 的 Specialized 同时装寄存器、地址模式、立即数和位宽。
+   它们不能自然组合，也不能阻止把一种类别放进另一种参数位置。
+2. ALU 用 <bool UpdateFlags, OpsizeSpec, AddrModeSpec>。
+   Group1 用 <T, bool, uint8_t FixedSubOp, bool IsImm8, Specialized>。
+   Rotate 用 <T, bool Right, bool UpdateFlags>；Shift 又用另一套参数。
+3. MOV 的 EvGv_Reg_Internal 模板顺序是 SrcSpec,DstSpec，GvEv_Reg_Internal
+   是 DstSpec,SrcSpec；内存 MOV 又附加三个 EA 参数。
+4. CMP/TEST 的 Specialized::ModReg 同时隐含 Opsize32，地址形式和位宽耦合。
+5. wrapper、SpecCriteria 和融合族字典重复描述同一变体，可能产生漂移。
+   之前 mod_mask 填原始 ModRM 位掩码，而 Matches 对已提取字段匹配，是具体风险实例。
+6. 注册有直接 g_Handlers 写入、Register、RegisterNF、RegisterSpecialized、
+   RegisterSseOp 和直接 RegisterSpecializedHandler 等入口。
+7. Program.SuperopcodeSequences.cs 维护手写 specializationFamilies；工具链也依赖
+   op::OpXXX 符号正则，不能直接理解任意模板或新 cache clone。
+
+建议的数据分层
+
+A. Encoding / FamilyTraits：每一种编码一次定义
+  EncodingId：opcode map、opcode、group extension、mandatory prefix、别名。
+  FamilyId：该编码的执行语义族，例如 Add_EvGv、Group1_Add_EvIb、Mov_GvEv。
+  SemanticOpId：Add/Mov/Cmp 等语义分类，不单独作为可互换/可融合证明。
+  OperandLayout：Dst/Src/Count/EA base/index/implicit operand 从何处读取。
+  WidthRule：ScalarEv、Fixed8、Extend8ToEv、FixedVector 等。
+  FlagsReadMask/FlagsWriteMask，以及 family 支持哪些特化轴。
+  保留现有 Retry/Restart/Blocking、故障提交和原子性语义；注册描述不能擅自改它们。
+
+  例：Add_EvGv 的 Dst=ModRM.rm、Src=ModRM.reg；
+      Group1_Add_EvIb 的 Dst=ModRM.rm、reg 字段=/0、Src=signext imm8；
+      Mov_GvEv 的 Dst=ModRM.reg、Src=ModRM.rm。
+  opcode/group extension/立即数扩展规则来自 FamilyTraits，不要求每个变体重新写。
+
+B. Spec：统一的编译期“已知事实”描述
+  采用 C++23 structural value + constexpr builder，传给 template<Spec S>。
+  builder 返回新值、不改变原对象；不依赖字符串解析，不在执行期创建 policy 对象。
+  轴彼此独立：
+    OperandWidth：Dynamic / W8 / W16 / W32 / family 支持的其它宽度
+    AddressWidth：Dynamic / A16 / A32
+    RmForm：Dynamic / Register / Memory
+    Dst/Src/Count：按语义角色命名，Dynamic 或 typed Gpr/ByteLane/固定 count 类别
+    EA：Base、Index、Scale、Segment，各自 Dynamic 或固定值
+    Flags：Live / Dead / Any
+    Condition：仅适用的族，例如 CMOV/Jcc 的固定条件
+
+  Dynamic 表示未特化；Absent 表示已知没有 base/index；不能把二者都叫 None。
+  Segment::Default 表示无 override，仍按架构使用 DS/SS 的实际段基址，绝不表示基址为 0。
+  W16/W32 通过族的 WidthRule 转换成约束，不全局等价于 OPSIZE 前缀的有无。
+  SSE 的 66/F2/F3 作为 mandatory prefix / EncodingId 处理；与整数位宽分开。
+  byte operand 先规范化成父 GPR + lane，AL/AH 都归 EAX；不能把编码 4 永远解释为 ESP。
+
+  Flags 三态定义：
+    Live：匹配 no_flags=false，按原语义更新标志。
+    Dead：匹配 no_flags=true，只可省略输出标志计算；ADC/SBB 等仍读取输入 CF。
+    Any：两种 liveness 都可匹配，handler 必须在两种情况下都有效。
+         对写标志的族默认仍更新，对 flag-neutral 族保持不变。
+  迁移时旧 no_flags=false 显式映射 Live，不把它悄悄扩成 Any。
+
+  编译期 Validate<Family,S> 检查不适用/矛盾参数：
+    固定 r/m GPR 推出 Register 形式；显式 Memory 与它冲突时报错。
+    不允许给无 ModRM 的族传 ModRM 约束；不允许把 group extension 当 Src GPR。
+    固定 GPR、lane、scale 和 width 均须在合法范围。
+    family 不支持的轴必须拒绝，不能静默忽略。
+
+C. Variant：把同一 Spec 同时绑定到执行与选择
+  Variant<Family,S> 提供：
+    Logic：调用该族 template<Spec S> 的内联执行实现；
+    Handler：DispatchWrapper<Logic>，使用唯一的 HandlerFunc ABI；
+    Match：由 FamilyTraits + S 派生的解码约束；
+    Metadata：FamilyId、EncodingId、SemanticOpId、Spec、稳定 VariantKey、访问集合等。
+  声明侧不再单独传 Target 和手写 SpecCriteria；否则仍会重复声明且可能不一致。
+
+  推荐调用形状（示意接口，不是当前可用 API）：
+
+    constexpr auto add_eax_dead = Spec{}
+        .width(Width::W32)
+        .regForm()
+        .dst(Gpr::Eax)
+        .flags(Flags::Dead);
+
+    RegisterVariant<family::Add_EvGv, add_eax_dead>();
+
+    RegisterVariants<family::Group1_Add_EvIb,
+        Spec{}.width(W32).regForm().dst(Eax),
+        FlagChoices<Flags::Live, Flags::Dead>>();
+
+    RegisterVariant<family::Mov_GvEv,
+        Spec{}.width(W32).memoryForm().dst(Eax)
+              .base(Esp).index(Absent).segment(Default).flags(Flags::Any)>();
+
+    RegisterVariant<family::Ror_EvIb,
+        Spec{}.width(W16).regForm().flags(Flags::Dead)>();
+
+  RegisterVariants 的列表扩展只能实例化显式请求的组合；选择列表使用模板参数类型包，
+  不能把运行时函数参数当作模板实参。上例 W32/Eax/Absent 等为命名空间内短名。
+  最简首版可只支持单项 RegisterVariant，以及显式的类型包辅助，不先实现复杂 DSL。
+
+  普通 fallback 也有明确入口 RegisterFallback<Family>()，不能把 Any 特化与 fallback 混淆。
+  两种入口共享 Variant 的类型、ABI 校验和元数据出口；选择逻辑仍明确区分 fallback。
+  重复族/寄存器列表可用轻量类型包/for_each_constant 或局部 X-macro 扩展，
+  不需要引入一个依靠 Python/C# 重新解析 C++ 的新语言。
+
+族实现如何变简单
+每个族只接受 template<Spec S>，内部读取命名字段，如 S.width、S.dst、S.ea.base。
+共用 ReadOperand<Role,S> / WriteOperand<Role,S> / ComputeEA<S> 负责动态或固定访问，
+实现里保留 ALU 运算及该指令的故障、提交、重试逻辑。
+不把整个 ISA 合成一个巨型 Execute switch；SSE/x87 的专用语义实现可以保留。
+首轮可用 AdaptLegacy<Family,S> 转发旧模板，逐族替换 accessor，降低重写风险。
+已有 OpXXX 符号先保留作兼容 wrapper，避免一次性破坏 baker、测试和历史 profile。
+
+选择与优先级
+首轮由新描述生成与旧 SpecCriteria 完全相同的字段和 no_flags 条件，并保留旧 score。
+同时对实际旧规则做交集/冲突审计；当前按 score 的 std::sort 没有等分显式 tie-break。
+应先识别等分且同时命中的现状，不把某次不稳定顺序当作设计契约。
+最终使用规范化谓词检查：
+  严格更窄的约束优先；互不重叠的变体顺序无关。
+  重叠但彼此不包含的规则必须有显式 rank/优先关系，或证明执行等价。
+  同域不同实现必须显式选择一个；同实现同域可合并。
+  不能用 VariantKey 排序来静默掩盖语义歧义。
+  排序/验证发生在注册完成时，执行热路径不加条件。
+
+与寄存器驻留方案衔接
+Spec 描述“哪个 guest 寄存器”，BackendPolicy 描述“放在哪里”，分开建模。
+后续使用 LoweredVariant<Family,S,BackendPolicy>，BackendPolicy 可以是 MemoryRegs
+或 Arm64EaxEsp；统一 accessor 在编译期映射到尾调用参数/内存。
+不让每个族重新声明 Cache0/Cache1，也不在 GetReg 内增加动态归属分支。
+访问集合包含父 GPR/lane、隐式 ESP/ECX、EA base/index；无法精确推导时使用 unknown，
+不能将未知写集合当作空集合。observer/fault/retry 的边界仍由族语义明确处理。
+本次接口迁移不改尾调用签名、不启用缓存；两项工作分别验收。
+
+融合、反射和工具链：同一份元数据
+原生 Variant 注册同时产生描述记录，PerfTools 通过 native 元数据接口导出 JSON；
+host 本地 profiling 已经加载 native 库，导出不需要新的 C++ 源码解析器。
+跨编译产物使用 host 元数据快照时，必须验证语义 catalog/schema hash 和 feature set；
+目标 ABI/bank/compiler 另行 fingerprint，不能直接加载其它平台库或重用函数地址。
+canonical/fallback 版本的 registry 足以引导 baker，不依赖先生成融合库，避免构建循环。
+记录稳定 Family/VariantKey 和 codegen reference；handler id/函数地址仍是 build-local。
+已有 nm 反射继续负责地址和符号解析，语义不再从名字猜；若链接器合并函数地址，
+一个地址允许关联多个 variant 元数据项，不能据此认定语义身份唯一。
+
+baker 使用同族/合法约束的已声明变体扩展候选，然后仍生成 exact handler 匹配和具体逻辑。
+SemanticOpId 相同不等于可替换；位宽、操作数方向、flags、count 和 fault 行为都需保留。
+不退回 generic handler，不绕过特化；继续执行原特化语义。
+只烘焙原有和 profile 选中的有限组合，保留现有融合，禁止无预算的全族笛卡尔积。
+这样可删除手写 specializationFamilies，避免新加特化后融合匹配遗漏。
+
+命名和兼容
+新 VariantKey 从 Family + 规范化 Spec + schema version 生成，与符号地址及注册顺序无关。
+profile 使用稳定 key；显示名统一维度顺序，如 Add_EvGv.W32.Reg.DstEax.DeadFlags。
+代码生成引用稳定 alias/traits，避免依赖编译器 demangler 的模板格式。
+旧 OpXXX 名保留映射表供历史数据和现有断言使用；等工具完全迁移后再删除兼容 wrapper。
+
+落地次序与验收
+1. 加 Spec/FamilyTraits/Variant adapter，迁移 CMP/TEST 和 Group1 少量代表变体。
+   输出 old/new 匹配域差异；有限字段枚举加 mask 交集审计；非法 Spec 编译期报错。
+2. 迁移 ALU、Shift/Rotate、MOV 与 EA accessor，再迁移 SIMD 前缀注册；维持相同实例化集合。
+   每阶段比较选择结果、现有 CPU 测试、部分寄存器/非平坦段/异常重试及 musttail 编译。
+3. 导出 metadata，迁移 PerfTools，验证原有融合和新特化组合，删除手写族字典。
+4. 去掉兼容层后独立评估 BackendPolicy 与 EAX/ESP 方案。
+
+性能验收应比较同 handler 集合、同融合配置的旧/新实现：
+CoreMark GCC/Zig、GNU gzip/sha256，代码 __text、常见 handler 反汇编和栈访问。
+此次为声明与类型组织整理，不应把新增特化带来的收益算作接口统一的效果。

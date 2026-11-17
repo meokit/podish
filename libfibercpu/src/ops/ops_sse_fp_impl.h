@@ -8,7 +8,6 @@
 #include "../exec_utils.h"
 #include "../ops.h"
 #include "../state.h"
-#include "ops_sse_fp.h"
 
 namespace fiberish {
 

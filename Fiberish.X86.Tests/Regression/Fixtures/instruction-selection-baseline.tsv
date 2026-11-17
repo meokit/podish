@@ -1,0 +1,916 @@
+# Selection declarations captured before the interface migration at 413652d1.
+# 32 exact duplicate MOV registrations are removed; template rotate names use stable aliases.
+F	0	op::OpAdd_EbGb
+F	1	op::OpAdd_EvGv
+F	2	op::OpAdd_GbEb
+F	3	op::OpAdd_GvEv
+F	4	op::OpAdd_AlImm
+F	5	op::OpAdd_EaxImm
+F	8	op::OpOr_EbGb
+F	9	op::OpOr_EvGv
+F	10	op::OpOr_GbEb
+F	11	op::OpOr_GvEv
+F	12	op::OpOr_AlImm
+F	13	op::OpOr_EaxImm
+F	16	op::OpAdc_EbGb
+F	17	op::OpAdc_EvGv
+F	18	op::OpAdc_GbEb
+F	19	op::OpAdc_GvEv
+F	20	op::OpAdc_AlImm
+F	21	op::OpAdc_EaxImm
+F	24	op::OpSbb_EbGb
+F	25	op::OpSbb_EvGv
+F	26	op::OpSbb_GbEb
+F	27	op::OpSbb_GvEv
+F	28	op::OpSbb_AlImm
+F	29	op::OpSbb_EaxImm
+F	32	op::OpAnd_EbGb
+F	33	op::OpAnd_EvGv
+F	34	op::OpAnd_GbEb
+F	35	op::OpAnd_GvEv
+F	36	op::OpAnd_AlImm
+F	37	op::OpAnd_EaxImm
+F	39	op::OpDaa
+F	40	op::OpSub_EbGb
+F	41	op::OpSub_EvGv
+F	42	op::OpSub_GbEb
+F	43	op::OpSub_GvEv
+F	44	op::OpSub_AlImm
+F	45	op::OpSub_EaxImm
+F	47	op::OpDas
+F	48	op::OpXor_EbGb
+F	49	op::OpXor_EvGv
+F	50	op::OpXor_GbEb
+F	51	op::OpXor_GvEv
+F	52	op::OpXor_AlImm
+F	53	op::OpXor_EaxImm
+F	55	op::OpAaa
+F	56	op::OpCmp_EbGb
+F	57	op::OpCmp_EvGv
+F	58	op::OpCmp_GbEb
+F	59	op::OpCmp_GvEv
+F	60	op::OpCmp_AlImm
+F	61	op::OpCmp_EaxImm
+F	63	op::OpAas
+F	64	op::OpInc_Reg
+F	65	op::OpInc_Reg
+F	66	op::OpInc_Reg
+F	67	op::OpInc_Reg
+F	68	op::OpInc_Reg
+F	69	op::OpInc_Reg
+F	70	op::OpInc_Reg
+F	71	op::OpInc_Reg
+F	72	op::OpDec_Reg
+F	73	op::OpDec_Reg
+F	74	op::OpDec_Reg
+F	75	op::OpDec_Reg
+F	76	op::OpDec_Reg
+F	77	op::OpDec_Reg
+F	78	op::OpDec_Reg
+F	79	op::OpDec_Reg
+F	80	op::OpPush_Reg32_Eax
+F	81	op::OpPush_Reg32_Ecx
+F	82	op::OpPush_Reg32_Edx
+F	83	op::OpPush_Reg32_Ebx
+F	84	op::OpPush_Reg32_Esp
+F	85	op::OpPush_Reg32_Ebp
+F	86	op::OpPush_Reg32_Esi
+F	87	op::OpPush_Reg32_Edi
+F	88	op::OpPop_Reg32_Eax
+F	89	op::OpPop_Reg32_Ecx
+F	90	op::OpPop_Reg32_Edx
+F	91	op::OpPop_Reg32_Ebx
+F	92	op::OpPop_Reg32_Esp
+F	93	op::OpPop_Reg32_Ebp
+F	94	op::OpPop_Reg32_Esi
+F	95	op::OpPop_Reg32_Edi
+F	96	op::OpPusha
+F	97	op::OpPopa
+F	98	op::OpBound
+F	99	op::OpArpl
+F	104	op::OpPush_Imm32
+F	105	op::OpImul_GvEvIz
+F	106	op::OpPush_Imm8
+F	107	op::OpImul_GvEvIb
+F	112	op::OpJcc_O_Rel8
+F	113	op::OpJcc_NO_Rel8
+F	114	op::OpJcc_B_Rel8
+F	115	op::OpJcc_AE_Rel8
+F	116	op::OpJcc_E_Rel8
+F	117	op::OpJcc_NE_Rel8
+F	118	op::OpJcc_BE_Rel8
+F	119	op::OpJcc_A_Rel8
+F	120	op::OpJcc_S_Rel8
+F	121	op::OpJcc_NS_Rel8
+F	122	op::OpJcc_P_Rel8
+F	123	op::OpJcc_NP_Rel8
+F	124	op::OpJcc_L_Rel8
+F	125	op::OpJcc_GE_Rel8
+F	126	op::OpJcc_LE_Rel8
+F	127	op::OpJcc_G_Rel8
+F	128	op::OpGroup1_EbIb_Generic
+F	129	op::OpGroup1_EvIz_Generic
+F	130	op::OpGroup1_EbIb_Generic
+F	131	op::OpGroup1_EvIb_Generic
+F	132	op::OpTest_EbGb
+F	133	op::OpTest_EvGv
+F	134	op::OpXchg_EbGb
+F	135	op::OpXchg_EvGv
+F	136	op::OpMov_EbGb
+F	137	op::OpMov_EvGv
+F	138	op::OpMov_GbEb
+F	139	op::OpMov_GvEv
+F	140	op::OpMov_Rm_Sreg
+F	141	op::OpLea
+F	142	op::OpMov_Sreg_Rm
+F	143	op::OpPop_Ev
+F	144	op::OpNop
+F	145	op::OpXchg_Reg
+F	146	op::OpXchg_Reg
+F	147	op::OpXchg_Reg
+F	148	op::OpXchg_Reg
+F	149	op::OpXchg_Reg
+F	150	op::OpXchg_Reg
+F	151	op::OpXchg_Reg
+F	152	op::OpCwde
+F	153	op::OpCdq
+F	155	op::OpWait
+F	156	op::OpPushf32
+F	157	op::OpPopf32
+F	158	op::OpSahf
+F	159	op::OpLahf
+F	160	op::OpMov_Moffs_Load_Byte
+F	161	op::OpMov_Moffs_Load_Word
+F	162	op::OpMov_Moffs_Store_Byte
+F	163	op::OpMov_Moffs_Store_Word
+F	164	op::OpMovs_Byte
+F	165	op::OpMovs_Word
+F	166	op::OpCmps_Byte
+F	167	op::OpCmps_Word
+F	168	op::OpTest_AlImm
+F	169	op::OpTest_EaxImm
+F	170	op::OpStos_Byte
+F	171	op::OpStos_Word
+F	172	op::OpLods_Byte
+F	173	op::OpLods_Word
+F	174	op::OpScas_Byte
+F	175	op::OpScas_Word
+F	176	op::OpMov_RegImm8
+F	177	op::OpMov_RegImm8
+F	178	op::OpMov_RegImm8
+F	179	op::OpMov_RegImm8
+F	180	op::OpMov_RegImm8
+F	181	op::OpMov_RegImm8
+F	182	op::OpMov_RegImm8
+F	183	op::OpMov_RegImm8
+F	184	op::OpMov_RegImm
+F	185	op::OpMov_RegImm
+F	186	op::OpMov_RegImm
+F	187	op::OpMov_RegImm
+F	188	op::OpMov_RegImm
+F	189	op::OpMov_RegImm
+F	190	op::OpMov_RegImm
+F	191	op::OpMov_RegImm
+F	192	op::OpGroup2_EbIb
+F	193	op::OpGroup2_EvIb
+F	194	op::OpRet_Imm16
+F	195	op::OpRet
+F	198	op::OpMov_EbIb
+F	199	op::OpMov_EvIz
+F	200	op::OpEnter
+F	201	op::OpLeave
+F	204	op::OpInt3
+F	205	op::OpInt
+F	206	op::OpInto
+F	208	op::OpGroup2_Eb1
+F	209	op::OpGroup2_Ev1
+F	210	op::OpGroup2_EbCl
+F	211	op::OpGroup2_EvCl
+F	212	op::OpAam
+F	213	op::OpAad
+F	214	op::OpSalc
+F	215	op::OpXlat
+F	216	op::OpFpu_D8
+F	217	op::OpFpu_D9
+F	218	op::OpFpu_DA
+F	219	op::OpFpu_DB
+F	220	op::OpFpu_DC
+F	221	op::OpFpu_DD
+F	222	op::OpFpu_DE
+F	223	op::OpFpu_DF
+F	224	op::OpLoopne
+F	225	op::OpLoope
+F	226	op::OpLoop
+F	227	op::OpJecxz
+F	232	op::OpCall_Rel
+F	233	op::OpJmp_Rel32
+F	235	op::OpJmp_Rel8
+F	244	op::OpHlt
+F	245	op::OpCmc
+F	246	op::OpGroup3_Eb_Generic
+F	247	op::OpGroup3_Ev_Generic
+F	248	op::OpClc
+F	249	op::OpStc
+F	250	op::OpCli
+F	251	op::OpSti
+F	252	op::OpCld
+F	253	op::OpStd
+F	254	op::OpGroup4_Eb_Generic
+F	255	op::OpGroup5_Ev_Generic
+F	267	op::OpUd2_Groups
+F	272	op::OpMov_Sse_Load
+F	273	op::OpMov_Sse_Store
+F	274	op::OpGroup_Mov12
+F	275	op::OpGroup_Mov13
+F	276	op::OpUnpckl_Unified
+F	277	op::OpUnpckh_Unified
+F	278	op::OpGroup_Mov16
+F	279	op::OpGroup_Mov17
+F	280	op::OpPrefetch
+F	286	op::OpNop
+F	287	op::OpNop
+F	296	op::OpMovAp_Load
+F	297	op::OpMovAp_Store
+F	298	op::OpCvt_2A
+F	299	op::OpMovnt_Sse
+F	300	op::OpCvt_2C
+F	301	op::OpCvt_2D
+F	302	op::OpUcomis_Unified
+F	303	op::OpComis_Unified
+F	305	op::OpRdtsc
+F	320	op::OpCmov_O
+F	321	op::OpCmov_NO
+F	322	op::OpCmov_B
+F	323	op::OpCmov_AE
+F	324	op::OpCmov_E
+F	325	op::OpCmov_NE
+F	326	op::OpCmov_BE
+F	327	op::OpCmov_A
+F	328	op::OpCmov_S
+F	329	op::OpCmov_NS
+F	330	op::OpCmov_P
+F	331	op::OpCmov_NP
+F	332	op::OpCmov_L
+F	333	op::OpCmov_GE
+F	334	op::OpCmov_LE
+F	335	op::OpCmov_G
+F	336	op::OpMovmsk_Unified
+F	337	op::OpSqrt_Sse
+F	338	op::OpRsqrt_Sse
+F	339	op::OpRcp_Sse
+F	340	op::OpAnd_Sse
+F	341	op::OpAndn_Sse
+F	342	op::OpOr_Sse
+F	343	op::OpXor_Sse
+F	344	op::OpAdd_Sse
+F	345	op::OpMul_Sse
+F	346	op::OpCvt_5A
+F	347	op::OpCvt_5B
+F	348	op::OpSub_Sse
+F	349	op::OpMin_Sse
+F	350	op::OpDiv_Sse
+F	351	op::OpMax_Sse
+F	352	op::OpPunpcklbw_Mmx
+F	353	op::OpPunpcklwd_Mmx
+F	354	op::OpPunpckldq_Mmx
+F	355	op::OpPacksswb_Mmx
+F	356	op::OpPcmpgtb_Mmx
+F	357	op::OpPcmpgtw_Mmx
+F	358	op::OpPcmpgtd_Mmx
+F	359	op::OpPackuswb_Mmx
+F	360	op::OpPunpckhbw_Mmx
+F	361	op::OpPunpckhwd_Mmx
+F	362	op::OpPunpckhdq_Mmx
+F	363	op::OpPackssdw_Mmx
+F	366	op::OpMovd_ToMmx
+F	367	op::OpMovq_ToMmx
+F	368	op::OpPshufw_Mmx
+F	369	op::OpGroup_Mmx_Shift_Imm_W
+F	370	op::OpGroup_Mmx_Shift_Imm_D
+F	371	op::OpGroup_Mmx_Shift_Imm_Q
+F	372	op::OpPcmpeqb_Mmx
+F	373	op::OpPcmpeqw_Mmx
+F	374	op::OpPcmpeqd_Mmx
+F	375	op::OpEmms
+F	382	op::OpMovd_FromMmx
+F	383	op::OpMovq_FromMmx
+F	384	op::OpJcc_O_Rel32
+F	385	op::OpJcc_NO_Rel32
+F	386	op::OpJcc_B_Rel32
+F	387	op::OpJcc_AE_Rel32
+F	388	op::OpJcc_E_Rel32
+F	389	op::OpJcc_NE_Rel32
+F	390	op::OpJcc_BE_Rel32
+F	391	op::OpJcc_A_Rel32
+F	392	op::OpJcc_S_Rel32
+F	393	op::OpJcc_NS_Rel32
+F	394	op::OpJcc_P_Rel32
+F	395	op::OpJcc_NP_Rel32
+F	396	op::OpJcc_L_Rel32
+F	397	op::OpJcc_GE_Rel32
+F	398	op::OpJcc_LE_Rel32
+F	399	op::OpJcc_G_Rel32
+F	400	op::OpSetcc_0
+F	401	op::OpSetcc_1
+F	402	op::OpSetcc_2
+F	403	op::OpSetcc_3
+F	404	op::OpSetcc_4
+F	405	op::OpSetcc_5
+F	406	op::OpSetcc_6
+F	407	op::OpSetcc_7
+F	408	op::OpSetcc_8
+F	409	op::OpSetcc_9
+F	410	op::OpSetcc_10
+F	411	op::OpSetcc_11
+F	412	op::OpSetcc_12
+F	413	op::OpSetcc_13
+F	414	op::OpSetcc_14
+F	415	op::OpSetcc_15
+F	418	op::OpCpuid
+F	419	op::OpBt_Reg
+F	420	op::OpShld_EvGvIb
+F	421	op::OpShld_EvGvCl
+F	427	op::OpBts_Reg
+F	428	op::OpShrd_EvGvIb
+F	429	op::OpShrd_EvGvCl
+F	430	op::OpGroup_0FAE
+F	431	op::OpImul_GvEv
+F	432	op::OpCmpxchg_Byte
+F	433	op::OpCmpxchg_EvGv
+F	435	op::OpBtr_Reg
+F	438	op::OpMovzx_Byte
+F	439	op::OpMovzx_Word
+F	442	op::OpGroup8_EvIb
+F	443	op::OpBtc_Reg
+F	444	op::OpBsf_Tzcnt_GvEv
+F	445	op::OpBsr_GvEv
+F	446	op::OpMovsx_Byte
+F	447	op::OpMovsx_Word
+F	448	op::OpXadd_Byte
+F	449	op::OpXadd_Word
+F	450	op::OpCmp_Sse
+F	451	op::OpMovnti
+F	452	op::OpPinsrw_Mmx
+F	453	op::OpPextrw_Mmx
+F	454	op::OpShuf_Unified
+F	455	op::OpGroup9
+F	456	op::OpBswap_Reg
+F	457	op::OpBswap_Reg
+F	458	op::OpBswap_Reg
+F	459	op::OpBswap_Reg
+F	460	op::OpBswap_Reg
+F	461	op::OpBswap_Reg
+F	462	op::OpBswap_Reg
+F	463	op::OpBswap_Reg
+F	465	op::OpPsrlw_Mmx
+F	466	op::OpPsrld_Mmx
+F	467	op::OpPsrlq_Mmx
+F	468	op::OpPaddq_Mmx
+F	469	op::OpPmullw_Mmx
+F	471	op::OpPmovmskb_Mmx
+F	472	op::OpPsubusb_Mmx
+F	473	op::OpPsubusw_Mmx
+F	474	op::OpPminub_Mmx
+F	475	op::OpPand_Mmx
+F	476	op::OpPaddusb_Mmx
+F	477	op::OpPaddusw_Mmx
+F	478	op::OpPmaxub_Mmx
+F	479	op::OpPandn_Mmx
+F	480	op::OpPavgb_Mmx
+F	481	op::OpPsraw_Mmx
+F	482	op::OpPsrad_Mmx
+F	483	op::OpPavgw_Mmx
+F	484	op::OpPmulhuw_Mmx
+F	485	op::OpPmulhw_Mmx
+F	486	op::OpCvt_E6
+F	487	op::OpMovntq_Mmx
+F	488	op::OpPsubsb_Mmx
+F	489	op::OpPsubsw_Mmx
+F	490	op::OpPminsw_Mmx
+F	491	op::OpPor_Mmx
+F	492	op::OpPaddsb_Mmx
+F	493	op::OpPaddsw_Mmx
+F	494	op::OpPmaxsw_Mmx
+F	495	op::OpPxor_Mmx
+F	497	op::OpPsllw_Mmx
+F	498	op::OpPslld_Mmx
+F	499	op::OpPsllq_Mmx
+F	500	op::OpPmuludq_Mmx
+F	501	op::OpPmaddwd_Mmx
+F	502	op::OpPsadbw_Mmx
+F	503	op::OpMaskmovq_Mmx
+F	504	op::OpPsubb_Mmx
+F	505	op::OpPsubw_Mmx
+F	506	op::OpPsubd_Mmx
+F	507	op::OpPsubq_Mmx
+F	508	op::OpPaddb_Mmx
+F	509	op::OpPaddw_Mmx
+F	510	op::OpPaddd_Mmx
+F	512	op::OpMov_EvGv_Reg
+F	513	op::OpMov_EvGv_Mem
+F	514	op::OpMov_GvEv_Reg
+F	515	op::OpMov_GvEv_Mem
+F	700	op::OpBsf_Tzcnt_GvEv
+V	0	op::OpAdd_EbGb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	1	op::OpAdd_EvGv_Eax	3	3	0	0	7	0	0	0	0	0	0	0	0	0	0	0	0
+V	1	op::OpAdd_EvGv_NF_32_ModReg	3	3	0	0	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	1	op::OpAdd_EvGv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	2	op::OpAdd_GbEb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	3	op::OpAdd_GvEv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	4	op::OpAdd_AlImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	5	op::OpAdd_EaxImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	8	op::OpOr_EbGb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	9	op::OpOr_EvGv_NF_32_ModReg	3	3	0	0	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	9	op::OpOr_EvGv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	10	op::OpOr_GbEb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	11	op::OpOr_GvEv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	12	op::OpOr_AlImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	13	op::OpOr_EaxImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	16	op::OpAdc_EbGb_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	16	op::OpAdc_EbGb_NF_ModReg	3	3	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	16	op::OpAdc_EbGb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	17	op::OpAdc_EvGv_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	17	op::OpAdc_EvGv_NF_ModReg	3	3	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	17	op::OpAdc_EvGv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	18	op::OpAdc_GbEb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	19	op::OpAdc_GvEv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	20	op::OpAdc_AlImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	21	op::OpAdc_EaxImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	24	op::OpSbb_EbGb_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	24	op::OpSbb_EbGb_NF_ModReg	3	3	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	24	op::OpSbb_EbGb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	25	op::OpSbb_EvGv_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	25	op::OpSbb_EvGv_NF_ModReg	3	3	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	25	op::OpSbb_EvGv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	26	op::OpSbb_GbEb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	27	op::OpSbb_GvEv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	28	op::OpSbb_AlImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	29	op::OpSbb_EaxImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	32	op::OpAnd_EbGb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	33	op::OpAnd_EvGv_NF_32_ModReg	3	3	0	0	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	33	op::OpAnd_EvGv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	34	op::OpAnd_GbEb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	35	op::OpAnd_GvEv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	36	op::OpAnd_AlImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	37	op::OpAnd_EaxImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	40	op::OpSub_EbGb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	41	op::OpSub_EvGv_NF_32_ModReg	3	3	0	0	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	41	op::OpSub_EvGv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	42	op::OpSub_GbEb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	43	op::OpSub_GvEv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	44	op::OpSub_AlImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	45	op::OpSub_EaxImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	48	op::OpXor_EbGb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	49	op::OpXor_EvGv_NF_32_ModReg	3	3	0	0	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	49	op::OpXor_EvGv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	50	op::OpXor_GbEb_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	51	op::OpXor_GvEv_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	52	op::OpXor_AlImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	53	op::OpXor_EaxImm_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	57	op::OpCmp_EvGv_32_ModReg_Eax	3	3	7	0	7	0	64	0	0	0	0	0	0	0	0	0	0
+V	57	op::OpCmp_EvGv_32_ModReg_Ecx	3	3	7	1	7	1	64	0	0	0	0	0	0	0	0	0	0
+V	57	op::OpCmp_EvGv_32_ModReg_Edx	3	3	7	2	7	2	64	0	0	0	0	0	0	0	0	0	0
+V	57	op::OpCmp_EvGv_32_ModReg	3	3	0	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	57	op::OpCmp_EvGv_16	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	57	op::OpCmp_EvGv_32	0	0	0	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	59	op::OpCmp_GvEv_16	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	59	op::OpCmp_GvEv_32	0	0	0	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	64	op::OpInc_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	65	op::OpInc_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	66	op::OpInc_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	67	op::OpInc_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	68	op::OpInc_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	69	op::OpInc_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	70	op::OpInc_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	71	op::OpInc_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	72	op::OpDec_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	73	op::OpDec_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	74	op::OpDec_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	75	op::OpDec_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	76	op::OpDec_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	77	op::OpDec_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	78	op::OpDec_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	79	op::OpDec_Reg_NF	0	0	0	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	80	op::OpPush_Reg16_Eax	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	81	op::OpPush_Reg16_Ecx	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	82	op::OpPush_Reg16_Edx	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	83	op::OpPush_Reg16_Ebx	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	84	op::OpPush_Reg16_Esp	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	85	op::OpPush_Reg16_Ebp	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	86	op::OpPush_Reg16_Esi	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	87	op::OpPush_Reg16_Edi	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	88	op::OpPop_Reg16_Eax	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	89	op::OpPop_Reg16_Ecx	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	90	op::OpPop_Reg16_Edx	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	91	op::OpPop_Reg16_Ebx	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	92	op::OpPop_Reg16_Esp	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	93	op::OpPop_Reg16_Ebp	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	94	op::OpPop_Reg16_Esi	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	95	op::OpPop_Reg16_Edi	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Cmp_ModReg_Reg0_Flags	3	3	7	7	7	0	0	0	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags	3	3	7	7	7	1	0	0	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags	3	3	7	7	7	2	0	0	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags	3	3	7	7	7	3	0	0	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Cmp_ModReg_Flags	3	3	7	7	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Add_Flags	0	0	7	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Add_NoFlags	0	0	7	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Or_Flags	0	0	7	1	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Or_NoFlags	0	0	7	1	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Adc_Flags	0	0	7	2	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Adc_NoFlags	0	0	7	2	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Sbb_Flags	0	0	7	3	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Sbb_NoFlags	0	0	7	3	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_And_Flags	0	0	7	4	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_And_NoFlags	0	0	7	4	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Sub_Flags	0	0	7	5	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Sub_NoFlags	0	0	7	5	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Xor_Flags	0	0	7	6	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Xor_NoFlags	0	0	7	6	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Cmp_Flags	0	0	7	7	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	128	op::OpGroup1_EbIb_Cmp_NoFlags	0	0	7	7	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Cmp_32_Flags_Edx	3	3	7	7	7	2	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Add_32_Flags_Eax	3	3	7	0	7	0	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Add_32_NoFlags_Eax	3	3	7	0	7	0	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sub_32_Flags_Eax	3	3	7	5	7	0	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sub_32_NoFlags_Eax	3	3	7	5	7	0	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Cmp_32_Flags_Eax	3	3	7	7	7	0	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Add_32_Flags_Ecx	3	3	7	0	7	1	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Add_32_NoFlags_Ecx	3	3	7	0	7	1	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sub_32_Flags_Ecx	3	3	7	5	7	1	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sub_32_NoFlags_Ecx	3	3	7	5	7	1	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Cmp_32_Flags_Ecx	3	3	7	7	7	1	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Add_32_Flags_Edx	3	3	7	0	7	2	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Add_32_NoFlags_Edx	3	3	7	0	7	2	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sub_32_Flags_Edx	3	3	7	5	7	2	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sub_32_NoFlags_Edx	3	3	7	5	7	2	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_And_32_Flags	0	0	7	4	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Add_32_Flags	0	0	7	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Add_16_NoFlags	0	0	7	0	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Or_32_Flags	0	0	7	1	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Or_32_NoFlags	0	0	7	1	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Or_16_Flags	0	0	7	1	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Or_16_NoFlags	0	0	7	1	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Adc_32_Flags	0	0	7	2	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Adc_32_NoFlags	0	0	7	2	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Xor_32_Flags	0	0	7	6	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Xor_32_NoFlags	0	0	7	6	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Xor_16_Flags	0	0	7	6	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Xor_16_NoFlags	0	0	7	6	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Cmp_32_Flags	0	0	7	7	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Cmp_32_NoFlags	0	0	7	7	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Cmp_16_Flags	0	0	7	7	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Cmp_16_NoFlags	0	0	7	7	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Add_16_Flags	0	0	7	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_And_32_NoFlags	0	0	7	4	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Add_32_NoFlags	0	0	7	0	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_And_16_Flags	0	0	7	4	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sbb_16_NoFlags	0	0	7	3	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_And_16_NoFlags	0	0	7	4	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sbb_16_Flags	0	0	7	3	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sub_32_Flags	0	0	7	5	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sbb_32_NoFlags	0	0	7	3	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sub_32_NoFlags	0	0	7	5	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sbb_32_Flags	0	0	7	3	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sub_16_Flags	0	0	7	5	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Adc_16_NoFlags	0	0	7	2	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Sub_16_NoFlags	0	0	7	5	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	129	op::OpGroup1_EvIz_Adc_16_Flags	0	0	7	2	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	130	op::OpGroup1_EbIb_Cmp_ModReg_Reg0_Flags	3	3	7	7	7	0	0	0	0	0	0	0	0	0	0	0	0
+V	130	op::OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags	3	3	7	7	7	1	0	0	0	0	0	0	0	0	0	0	0
+V	130	op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags	3	3	7	7	7	2	0	0	0	0	0	0	0	0	0	0	0
+V	130	op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags	3	3	7	7	7	3	0	0	0	0	0	0	0	0	0	0	0
+V	130	op::OpGroup1_EbIb_Cmp_ModReg_Flags	3	3	7	7	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Cmp_32_Flags_Edx	3	3	7	7	7	2	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Add_32_Flags_Eax	3	3	7	0	7	0	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Add_32_NoFlags_Eax	3	3	7	0	7	0	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sub_32_Flags_Eax	3	3	7	5	7	0	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sub_32_NoFlags_Eax	3	3	7	5	7	0	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Cmp_32_Flags_Eax	3	3	7	7	7	0	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Add_32_Flags_Ecx	3	3	7	0	7	1	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Add_32_NoFlags_Ecx	3	3	7	0	7	1	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sub_32_Flags_Ecx	3	3	7	5	7	1	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sub_32_NoFlags_Ecx	3	3	7	5	7	1	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Cmp_32_Flags_Ecx	3	3	7	7	7	1	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Add_32_Flags_Edx	3	3	7	0	7	2	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Add_32_NoFlags_Edx	3	3	7	0	7	2	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sub_32_Flags_Edx	3	3	7	5	7	2	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sub_32_NoFlags_Edx	3	3	7	5	7	2	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_And_32_NoFlags_ModReg	3	3	7	4	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Add_32_Flags_ModReg	3	3	7	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Add_32_NoFlags_ModReg	3	3	7	0	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_And_32_NoFlags	0	0	7	4	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Xor_32_NoFlags	0	0	7	6	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Or_32_NoFlags	0	0	7	1	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Or_16_Flags	0	0	7	1	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Or_16_NoFlags	0	0	7	1	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Adc_32_Flags	0	0	7	2	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Adc_32_NoFlags	0	0	7	2	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Add_32_NoFlags	0	0	7	0	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Xor_16_Flags	0	0	7	6	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Xor_16_NoFlags	0	0	7	6	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Cmp_32_Flags	0	0	7	7	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Cmp_32_NoFlags	0	0	7	7	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Cmp_16_Flags	0	0	7	7	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Cmp_16_NoFlags	0	0	7	7	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Add_16_Flags	0	0	7	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_And_32_Flags	0	0	7	4	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Add_16_NoFlags	0	0	7	0	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_And_16_Flags	0	0	7	4	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Add_32_Flags	0	0	7	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_And_16_NoFlags	0	0	7	4	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sbb_16_NoFlags	0	0	7	3	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sub_32_Flags	0	0	7	5	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sbb_16_Flags	0	0	7	3	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sub_32_NoFlags	0	0	7	5	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sbb_32_NoFlags	0	0	7	3	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sub_16_Flags	0	0	7	5	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sbb_32_Flags	0	0	7	3	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Sub_16_NoFlags	0	0	7	5	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Adc_16_NoFlags	0	0	7	2	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Xor_32_Flags	0	0	7	6	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Adc_16_Flags	0	0	7	2	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	131	op::OpGroup1_EvIb_Or_32_Flags	0	0	7	1	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	133	op::OpTest_EvGv_32_ModReg_Eax	3	3	7	0	7	0	64	0	0	0	0	0	0	0	0	0	0
+V	133	op::OpTest_EvGv_32_ModReg_Ecx	3	3	7	1	7	1	64	0	0	0	0	0	0	0	0	0	0
+V	133	op::OpTest_EvGv_32_ModReg_Edx	3	3	7	2	7	2	64	0	0	0	0	0	0	0	0	0	0
+V	133	op::OpTest_EvGv_32_ModReg	3	3	0	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	133	op::OpTest_EvGv_16	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	133	op::OpTest_EvGv_32	0	0	0	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	141	op::OpLea_32_Eax	0	0	7	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	141	op::OpLea_32_Ecx	0	0	7	1	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	141	op::OpLea_32_Edx	0	0	7	2	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	141	op::OpLea_16	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	141	op::OpLea_32	0	0	0	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	156	op::OpPushf16	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	157	op::OpPopf16	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	193	op::OpRol_RegImm16_Live	3	3	7	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	193	op::OpRol_RegImm16_Dead	3	3	7	0	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	193	op::OpRor_RegImm16_Live	3	3	7	1	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	193	op::OpRor_RegImm16_Dead	3	3	7	1	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	193	op::OpRol_RegImm32_Live	3	3	7	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	193	op::OpRol_RegImm32_Dead	3	3	7	0	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	193	op::OpRor_RegImm32_Live	3	3	7	1	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	193	op::OpRor_RegImm32_Dead	3	3	7	1	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	193	op::OpGroup2_EvIb_Shl_ModReg	3	3	7	4	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	193	op::OpGroup2_EvIb_Shr_ModReg	3	3	7	5	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	193	op::OpGroup2_EvIb_Sar_ModReg	3	3	7	7	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	193	op::OpGroup2_EvIb_Shl	0	0	7	4	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	193	op::OpGroup2_EvIb_Shr	0	0	7	5	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	193	op::OpGroup2_EvIb_Sar	0	0	7	7	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	199	op::OpMov_EvIz_EspBaseNoIndexNoSegment	0	0	0	0	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	199	op::OpMov_EvIz_EaxBaseNoIndexNoSegment	0	0	0	0	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	199	op::OpMov_EvIz_EsiBaseNoIndexNoSegment	0	0	0	0	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	209	op::OpGroup2_Ev1_Shl_ModReg	3	3	7	4	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	209	op::OpGroup2_Ev1_Shr_ModReg	3	3	7	5	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	209	op::OpGroup2_Ev1_Sar_ModReg	3	3	7	7	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	209	op::OpGroup2_Ev1_Shl	0	0	7	4	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	209	op::OpGroup2_Ev1_Shr	0	0	7	5	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	209	op::OpGroup2_Ev1_Sar	0	0	7	7	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	211	op::OpGroup2_EvCl_Shl_ModReg	3	3	7	4	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	211	op::OpGroup2_EvCl_Shr_ModReg	3	3	7	5	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	211	op::OpGroup2_EvCl_Sar_ModReg	3	3	7	7	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	211	op::OpGroup2_EvCl_Shl	0	0	7	4	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	211	op::OpGroup2_EvCl_Shr	0	0	7	5	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	211	op::OpGroup2_EvCl_Sar	0	0	7	7	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	246	op::OpGroup3_Eb_Not_Flags	0	0	7	2	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	246	op::OpGroup3_Eb_Not_NoFlags	0	0	7	2	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	246	op::OpGroup3_Eb_Neg_Flags	0	0	7	3	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	246	op::OpGroup3_Eb_Neg_NoFlags	0	0	7	3	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	246	op::OpGroup3_Eb_Mul_Flags	0	0	7	4	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	246	op::OpGroup3_Eb_Mul_NoFlags	0	0	7	4	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	246	op::OpGroup3_Eb_Imul_Flags	0	0	7	5	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	246	op::OpGroup3_Eb_Imul_NoFlags	0	0	7	5	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Not_32_Flags	0	0	7	2	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Not_32_NoFlags	0	0	7	2	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Not_16_Flags	0	0	7	2	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Not_16_NoFlags	0	0	7	2	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Neg_32_Flags	0	0	7	3	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Neg_32_NoFlags	0	0	7	3	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Neg_16_Flags	0	0	7	3	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Neg_16_NoFlags	0	0	7	3	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Mul_32_Flags	0	0	7	4	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Mul_32_NoFlags	0	0	7	4	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Mul_16_Flags	0	0	7	4	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Mul_16_NoFlags	0	0	7	4	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Imul_32_Flags	0	0	7	5	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Imul_32_NoFlags	0	0	7	5	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Imul_16_Flags	0	0	7	5	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Imul_16_NoFlags	0	0	7	5	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Div_32_Flags	0	0	7	6	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Div_32_NoFlags	0	0	7	6	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Div_16_Flags	0	0	7	6	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Div_16_NoFlags	0	0	7	6	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Idiv_32_Flags	0	0	7	7	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Idiv_32_NoFlags	0	0	7	7	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Idiv_16_Flags	0	0	7	7	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	247	op::OpGroup3_Ev_Idiv_16_NoFlags	0	0	7	7	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	254	op::OpGroup4_Eb_Inc_Flags	0	0	7	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	254	op::OpGroup4_Eb_Inc_NoFlags	0	0	7	0	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	254	op::OpGroup4_Eb_Dec_Flags	0	0	7	1	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	254	op::OpGroup4_Eb_Dec_NoFlags	0	0	7	1	0	0	0	0	1	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Inc_32_Flags	0	0	7	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Inc_32_NoFlags	0	0	7	0	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Inc_16_Flags	0	0	7	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Inc_16_NoFlags	0	0	7	0	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Dec_32_Flags	0	0	7	1	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Dec_32_NoFlags	0	0	7	1	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Dec_16_Flags	0	0	7	1	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Dec_16_NoFlags	0	0	7	1	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Call_32_Flags	0	0	7	2	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Call_32_NoFlags	0	0	7	2	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Call_16_Flags	0	0	7	2	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Call_16_NoFlags	0	0	7	2	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Jmp_32_Flags	0	0	7	4	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Jmp_32_NoFlags	0	0	7	4	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Jmp_16_Flags	0	0	7	4	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Jmp_16_NoFlags	0	0	7	4	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Push_32_Flags	0	0	7	6	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Push_32_NoFlags	0	0	7	6	0	0	64	0	1	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Push_16_Flags	0	0	7	6	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	255	op::OpGroup5_Ev_Push_16_NoFlags	0	0	7	6	0	0	64	64	1	0	0	0	0	0	0	0	0
+V	320	op::OpCmov_O_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	321	op::OpCmov_NO_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	322	op::OpCmov_B_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	323	op::OpCmov_AE_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	324	op::OpCmov_E_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	325	op::OpCmov_NE_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	326	op::OpCmov_BE_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	327	op::OpCmov_A_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	328	op::OpCmov_S_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	329	op::OpCmov_NS_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	330	op::OpCmov_P_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	331	op::OpCmov_NP_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	332	op::OpCmov_L_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	333	op::OpCmov_GE_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	334	op::OpCmov_LE_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	335	op::OpCmov_G_ModReg	3	3	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	352	op::OpPunpcklbw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	353	op::OpPunpcklwd_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	354	op::OpPunpckldq_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	355	op::OpPacksswb_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	356	op::OpPcmpgtb_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	357	op::OpPcmpgtw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	358	op::OpPcmpgtd_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	359	op::OpPackuswb_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	360	op::OpPunpckhbw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	361	op::OpPunpckhwd_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	362	op::OpPunpckhdq_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	363	op::OpPackssdw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	364	op::OpPunpcklqdq_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	365	op::OpPunpckhqdq_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	366	op::OpMovd_Load	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	367	op::OpMovdqa_Load	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	367	op::OpMovdqu_Load	0	0	0	0	0	0	2	2	0	0	0	0	0	0	0	0	0
+V	368	op::OpGroup_Pshuf	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	368	op::OpGroup_Pshuf	0	0	0	0	0	0	4	4	0	0	0	0	0	0	0	0	0
+V	368	op::OpGroup_Pshuf	0	0	0	0	0	0	2	2	0	0	0	0	0	0	0	0	0
+V	369	op::OpGroup_Sse_Shift_Imm_W	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	370	op::OpGroup_Sse_Shift_Imm_D	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	371	op::OpGroup_Sse_Shift_Imm_Q	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	372	op::OpPcmpeqb_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	373	op::OpPcmpeqw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	374	op::OpPcmpeqd_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	382	op::OpMovd_Store	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	382	op::OpMovd_Store	0	0	0	0	0	0	2	2	0	0	0	0	0	0	0	0	0
+V	383	op::OpMovdqa_Store	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	383	op::OpMovdqu_Store	0	0	0	0	0	0	2	2	0	0	0	0	0	0	0	0	0
+V	433	op::OpCmpxchg_EvGv_16	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	433	op::OpCmpxchg_EvGv_32	0	0	0	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	438	op::OpMovzx_Byte_32_Eax	0	0	7	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	438	op::OpMovzx_Byte_32_Ecx	0	0	7	1	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	438	op::OpMovzx_Byte_32_Edx	0	0	7	2	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	446	op::OpMovsx_Byte_32_Eax	0	0	7	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	446	op::OpMovsx_Byte_32_Ecx	0	0	7	1	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	446	op::OpMovsx_Byte_32_Edx	0	0	7	2	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	447	op::OpMovsx_Word_32_Eax	0	0	7	0	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	447	op::OpMovsx_Word_32_Ecx	0	0	7	1	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	447	op::OpMovsx_Word_32_Edx	0	0	7	2	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	447	op::OpMovsx_Word_32_Ebx	0	0	7	3	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	447	op::OpMovsx_Word_32_Ebp	0	0	7	5	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	447	op::OpMovsx_Word_32_Edi	0	0	7	7	0	0	64	0	0	0	0	0	0	0	0	0	0
+V	452	op::OpPinsrw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	453	op::OpPextrw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	465	op::OpPsrlw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	466	op::OpPsrld_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	467	op::OpPsrlq_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	468	op::OpPaddq_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	469	op::OpPmullw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	470	op::OpMovq_Store	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	470	op::OpMovq2dq	0	0	0	0	0	0	2	2	0	0	0	0	0	0	0	0	0
+V	470	op::OpMovdq2q	0	0	0	0	0	0	4	4	0	0	0	0	0	0	0	0	0
+V	471	op::OpPmovmskb_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	472	op::OpPsubusb_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	473	op::OpPsubusw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	474	op::OpPminub_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	475	op::OpPand_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	476	op::OpPaddusb_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	477	op::OpPaddusw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	478	op::OpPmaxub_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	479	op::OpPandn_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	480	op::OpPavgb_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	481	op::OpPsraw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	482	op::OpPsrad_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	483	op::OpPavgw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	484	op::OpPmulhuw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	485	op::OpPmulhw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	487	op::OpMovntdq	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	488	op::OpPsubsb_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	489	op::OpPsubsw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	490	op::OpPminsw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	491	op::OpPor_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	492	op::OpPaddsb_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	493	op::OpPaddsw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	494	op::OpPmaxsw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	495	op::OpPxor_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	497	op::OpPsllw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	498	op::OpPslld_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	499	op::OpPsllq_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	500	op::OpPmuludq_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	501	op::OpPmaddwd_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	502	op::OpPsadbw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	503	op::OpMaskmovdqu	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	504	op::OpPsubb_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	505	op::OpPsubw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	506	op::OpPsubd_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	507	op::OpPsubq_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	508	op::OpPaddb_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	509	op::OpPaddw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	510	op::OpPaddd_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0
+V	512	op::OpMov_EvGv_Eax	3	3	7	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	512	op::OpMov_EvGv_Ecx	3	3	7	1	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	512	op::OpMov_EvGv_Edx	3	3	7	2	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	512	op::OpMov_EvGv_Ebx	3	3	7	3	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	512	op::OpMov_EvGv_Esp	3	3	7	4	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	512	op::OpMov_EvGv_Ebp	3	3	7	5	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	512	op::OpMov_EvGv_Esi	3	3	7	6	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	512	op::OpMov_EvGv_Edi	3	3	7	7	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	513	op::OpMov_Store_Eax_EspBaseNoIndexNoSegment	0	0	7	0	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	513	op::OpMov_Store_Ecx_EspBaseNoIndexNoSegment	0	0	7	1	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	513	op::OpMov_Store_Edx_EspBaseNoIndexNoSegment	0	0	7	2	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	513	op::OpMov_Store_Ebx_EspBaseNoIndexNoSegment	0	0	7	3	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	513	op::OpMov_Store_Esp_EspBaseNoIndexNoSegment	0	0	7	4	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	513	op::OpMov_Store_Ebp_EspBaseNoIndexNoSegment	0	0	7	5	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	513	op::OpMov_Store_Esi_EspBaseNoIndexNoSegment	0	0	7	6	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	513	op::OpMov_Store_Edi_EspBaseNoIndexNoSegment	0	0	7	7	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	513	op::OpMov_Store_Edi_EsiBaseNoIndexNoSegment	0	0	7	7	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	513	op::OpMov_Store_Ecx_EaxBaseNoIndexNoSegment	0	0	7	1	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	513	op::OpMov_Store_Edx_EaxBaseNoIndexNoSegment	0	0	7	2	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	513	op::OpMov_Store_Ebx_EaxBaseNoIndexNoSegment	0	0	7	3	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	513	op::OpMov_Store_Eax_EaxBaseNoIndexNoSegment	0	0	7	0	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	513	op::OpMov_Store_Esp_EaxBaseNoIndexNoSegment	0	0	7	4	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	513	op::OpMov_Store_Ebp_EaxBaseNoIndexNoSegment	0	0	7	5	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	513	op::OpMov_Store_Esi_EaxBaseNoIndexNoSegment	0	0	7	6	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	513	op::OpMov_Store_Edi_EaxBaseNoIndexNoSegment	0	0	7	7	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	513	op::OpMov_Store_Eax_EsiBaseNoIndexNoSegment	0	0	7	0	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	513	op::OpMov_Store_Ecx_EsiBaseNoIndexNoSegment	0	0	7	1	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	513	op::OpMov_Store_Edx_EsiBaseNoIndexNoSegment	0	0	7	2	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	513	op::OpMov_Store_Ebx_EsiBaseNoIndexNoSegment	0	0	7	3	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	513	op::OpMov_Store_Esp_EsiBaseNoIndexNoSegment	0	0	7	4	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	513	op::OpMov_Store_Ebp_EsiBaseNoIndexNoSegment	0	0	7	5	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	513	op::OpMov_Store_Esi_EsiBaseNoIndexNoSegment	0	0	7	6	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	513	op::OpMov_Store_Edx	0	0	7	2	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	513	op::OpMov_Store_Ebp	0	0	7	5	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	513	op::OpMov_Store_Esi	0	0	7	6	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	513	op::OpMov_Store_Edi	0	0	7	7	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	513	op::OpMov_Store_Eax	0	0	7	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	513	op::OpMov_Store_Ebx	0	0	7	3	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	513	op::OpMov_Store_Esp	0	0	7	4	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	513	op::OpMov_Store_Ecx	0	0	7	1	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	514	op::OpMov_Ebp_Esp	3	3	7	5	7	4	0	0	0	0	0	0	0	0	0	0	0
+V	514	op::OpMov_Ecx_Eax	3	3	7	1	7	0	0	0	0	0	0	0	0	0	0	0	0
+V	514	op::OpMov_Edx_Eax	3	3	7	2	7	0	0	0	0	0	0	0	0	0	0	0	0
+V	514	op::OpMov_Eax_Eax	3	3	7	0	7	0	0	0	0	0	0	0	0	0	0	0	0
+V	514	op::OpMov_Esi_Eax	3	3	7	6	7	0	0	0	0	0	0	0	0	0	0	0	0
+V	514	op::OpMov_Edi_Eax	3	3	7	7	7	0	0	0	0	0	0	0	0	0	0	0	0
+V	515	op::OpMov_Load_Eax_EspBaseNoIndexNoSegment	0	0	7	0	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	515	op::OpMov_Load_Ecx_EspBaseNoIndexNoSegment	0	0	7	1	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	515	op::OpMov_Load_Edx_EspBaseNoIndexNoSegment	0	0	7	2	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	515	op::OpMov_Load_Ebx_EspBaseNoIndexNoSegment	0	0	7	3	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	515	op::OpMov_Load_Esp_EspBaseNoIndexNoSegment	0	0	7	4	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	515	op::OpMov_Load_Ebp_EspBaseNoIndexNoSegment	0	0	7	5	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	515	op::OpMov_Load_Esi_EspBaseNoIndexNoSegment	0	0	7	6	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	515	op::OpMov_Load_Edi_EspBaseNoIndexNoSegment	0	0	7	7	7	4	0	0	0	63	16	63	32	0	0	7	0
+V	515	op::OpMov_Load_Edi_EsiBaseNoIndexNoSegment	0	0	7	7	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	515	op::OpMov_Load_Ecx_EaxBaseNoIndexNoSegment	0	0	7	1	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	515	op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment	0	0	7	2	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	515	op::OpMov_Load_Ebx_EaxBaseNoIndexNoSegment	0	0	7	3	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	515	op::OpMov_Load_Eax_EaxBaseNoIndexNoSegment	0	0	7	0	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	515	op::OpMov_Load_Esp_EaxBaseNoIndexNoSegment	0	0	7	4	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	515	op::OpMov_Load_Ebp_EaxBaseNoIndexNoSegment	0	0	7	5	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	515	op::OpMov_Load_Esi_EaxBaseNoIndexNoSegment	0	0	7	6	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	515	op::OpMov_Load_Edi_EaxBaseNoIndexNoSegment	0	0	7	7	0	0	0	0	0	63	0	63	32	0	0	7	0
+V	515	op::OpMov_Load_Eax_EsiBaseNoIndexNoSegment	0	0	7	0	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	515	op::OpMov_Load_Ecx_EsiBaseNoIndexNoSegment	0	0	7	1	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	515	op::OpMov_Load_Edx_EsiBaseNoIndexNoSegment	0	0	7	2	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	515	op::OpMov_Load_Ebx_EsiBaseNoIndexNoSegment	0	0	7	3	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	515	op::OpMov_Load_Esp_EsiBaseNoIndexNoSegment	0	0	7	4	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	515	op::OpMov_Load_Ebp_EsiBaseNoIndexNoSegment	0	0	7	5	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	515	op::OpMov_Load_Esi_EsiBaseNoIndexNoSegment	0	0	7	6	0	0	0	0	0	63	24	63	32	0	0	7	0
+V	515	op::OpMov_Load_Edx	0	0	7	2	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	515	op::OpMov_Load_Ebp	0	0	7	5	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	515	op::OpMov_Load_Esi	0	0	7	6	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	515	op::OpMov_Load_Edi	0	0	7	7	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	515	op::OpMov_Load_Eax	0	0	7	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	515	op::OpMov_Load_Ebx	0	0	7	3	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	515	op::OpMov_Load_Esp	0	0	7	4	0	0	0	0	0	0	0	0	0	0	0	0	0
+V	515	op::OpMov_Load_Ecx	0	0	7	1	0	0	0	0	0	0	0	0	0	0	0	0	0

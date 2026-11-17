@@ -1,0 +1,108 @@
+{
+  "tag": "bank-confirm",
+  "commit": "c86246815f8db436c9e5fb3ad57e1621b96d1eb7",
+  "method": "Rotating variant order, same host/guest/rootfs/managed CLI, fixed 120000 iterations; every timed sample >=10s, one process at a time, no concurrent build/profile; CRC checked. CoreMark GCC15.2 -O2 i386, 2K, one context.",
+  "guest_iterations_argument": "120000",
+  "samples": [
+    {
+      "round": 1,
+      "variant": "plain256",
+      "score": 5049.229992,
+      "timed_seconds": 23.766,
+      "iterations": 120000,
+      "wall_seconds": 24.005170541116968,
+      "validated": true,
+      "log": "bank-confirm-1-plain256.log"
+    },
+    {
+      "round": 1,
+      "variant": "cache2x256",
+      "score": 5125.795566,
+      "timed_seconds": 23.411,
+      "iterations": 120000,
+      "wall_seconds": 23.65688666701317,
+      "validated": true,
+      "log": "bank-confirm-1-cache2x256.log"
+    },
+    {
+      "round": 1,
+      "variant": "cache_asp",
+      "score": 5243.151134,
+      "timed_seconds": 22.887,
+      "iterations": 120000,
+      "wall_seconds": 23.133671916089952,
+      "validated": true,
+      "log": "bank-confirm-1-cache_asp.log"
+    },
+    {
+      "round": 2,
+      "variant": "cache2x256",
+      "score": 5105.513955,
+      "timed_seconds": 23.504,
+      "iterations": 120000,
+      "wall_seconds": 23.74718958302401,
+      "validated": true,
+      "log": "bank-confirm-2-cache2x256.log"
+    },
+    {
+      "round": 2,
+      "variant": "cache_asp",
+      "score": 5191.209552,
+      "timed_seconds": 23.116,
+      "iterations": 120000,
+      "wall_seconds": 23.35959716583602,
+      "validated": true,
+      "log": "bank-confirm-2-cache_asp.log"
+    },
+    {
+      "round": 2,
+      "variant": "plain256",
+      "score": 4932.385219,
+      "timed_seconds": 24.329,
+      "iterations": 120000,
+      "wall_seconds": 24.579165334114805,
+      "validated": true,
+      "log": "bank-confirm-2-plain256.log"
+    },
+    {
+      "round": 3,
+      "variant": "cache_asp",
+      "score": 5208.559399,
+      "timed_seconds": 23.039,
+      "iterations": 120000,
+      "wall_seconds": 23.292502583004534,
+      "validated": true,
+      "log": "bank-confirm-3-cache_asp.log"
+    },
+    {
+      "round": 3,
+      "variant": "plain256",
+      "score": 4953.764861,
+      "timed_seconds": 24.224,
+      "iterations": 120000,
+      "wall_seconds": 24.47730329190381,
+      "validated": true,
+      "log": "bank-confirm-3-plain256.log"
+    },
+    {
+      "round": 3,
+      "variant": "cache2x256",
+      "score": 5079.365079,
+      "timed_seconds": 23.625,
+      "iterations": 120000,
+      "wall_seconds": 23.876348790945485,
+      "validated": true,
+      "log": "bank-confirm-3-cache2x256.log"
+    }
+  ],
+  "library_sha256": {
+    "plain256": "883b157f9351875210d9331b378acbb0e16856da873d1d575379a707d501471e",
+    "cache2x256": "b608bc0ba42a0680cf040184853b05e2ae45059f9722d777245d2a3b117c18a7",
+    "cache_asp": "2a2669cad864133e23646af2c385410257016a16c9f136ab3d4c79baeb2a93f2"
+  },
+  "median_scores": {
+    "plain256": 4953.764861,
+    "cache2x256": 5105.513955,
+    "cache_asp": 5208.559399
+  }
+}

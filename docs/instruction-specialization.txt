@@ -1,0 +1,138 @@
+Instruction specialization declarations
+======================================
+
+The declaration interface is shared across scalar ALU/group operations, moves,
+comparisons, shifts/rotations, stack/control operations and SIMD prefix variants.
+Execution logic stays in ops/*_impl.h; existing inline kernels are private
+compatibility implementations behind LegacyBinding. Handler symbols and the
+preserve_none/musttail calling convention are retained.
+
+Files
+-----
+instruction_families.h: encoding traits (handler index, operand roles, group
+extension and width rule). Handler indices include the decoder's four split
+32-bit MOV forms, not just hardware opcode bytes.
+instruction_spec.h: structural C++23 Spec values and checked lowering into
+SpecCriteria. All values are compile-time facts; there is no runtime policy
+object or register-cache selection branch in an execution handler.
+instruction_variants.inc: the selected variants, each declared once.
+instruction_fallbacks.inc: decoder fallback entries.
+instruction_variants.cpp: compatibility bindings, static descriptor tables,
+unified registration and immutable tool metadata.
+
+Declaring a variant
+-------------------
+For example:
+
+  INSTRUCTION_VARIANT(OpGroup1_EvIb_Add_32_NoFlags_Eax,
+      Group1_EvIb_Add,
+      Spec{}.width(Width::W32).regForm().dst(Gpr::Eax).flags(Flags::Dead),
+      2)
+
+The family supplies handler index 0x83, extension /0, r/m destination and the
+scalar width rule. The Spec supplies only the facts specialized by this entry.
+DeclareVariant<Family, Spec>() derives the matcher and wrapper pointer through
+the compatibility binding. The last number is the explicit legacy precedence
+among equal-specificity rules; lower numbers win. Scores still determine
+specificity. Strict Live/Dead and memory-only predicates outrank their wildcard
+forms. All migrated entries have strict liveness, so their relative scores and
+selection order are preserved. Overlapping new rules
+must give a deliberate precedence, rather than rely on std::sort's tie ordering.
+
+INSTRUCTION_FUSION_VARIANT has one additional parent-logic argument. It declares
+an approved, bounded exact-fusion expansion. Normal variants are not silently
+multiplied into all fusion sequences. Both forms share the same Spec and
+registration machinery. Selected bodies continue to execute their specialized
+logic; fusion does not normalize them back to generic implementations.
+
+Typed facts
+-----------
+- Width and r/m form are independent. Register form does not imply 32 bits.
+- dst/src are semantic operands. Family layout maps them onto ModRM.reg or
+  ModRM.rm; an opcode extension is not a GPR operand.
+- Vector operands require a bank-specific policy; SIMD prefix families do not
+  accept a GPR identity as a vector-register label.
+- Fixed byte encodings accept EAX..EBX plus ByteLane::Low/High. For example,
+  dst8(Gpr::Eax, ByteLane::High) denotes AH, not ESP.
+- Dynamic base/index means unresolved; Absent means known to be missing.
+- Segment::Default means no segment override. It still uses the architectural
+  DS/SS base, including non-flat segment bases.
+- Fixed-width encodings, scalar operand-size prefixes and SIMD mandatory
+  prefixes have separate width rules. mandatory(P66/F2/F3) does not stand for
+  an integer operand width.
+- Flags::Live/Dead retain the original strict liveness matching. Flags::Any
+  explicitly permits both and requires a body valid in both situations.
+  Dead flags never remove ADC/SBB's input CF dependency.
+- Inconsistent or unsupported facts fail compile-time validation. The existing
+  selected set remains unchanged except for removing 32 identical MOV entries.
+
+The legacy internal templates still have their existing parameter layouts;
+new declaration code uses Spec. Moving a kernel to a common operand accessor
+can be done behind LegacyBinding without changing registration or tooling.
+The EAX/ESP tail-register prototype is archived separately and is not enabled
+by this interface refactor. Register residency belongs in a backend policy,
+separate from guest operand identity.
+
+Tool metadata and fusion snapshot
+---------------------------------
+X86_GetInstructionVariantCount/GetInstructionVariant expose immutable, build-local
+handler pointers together with names, families, normalized constraints, priorities,
+fusion parents and stable variant keys. The key includes opcode, logic reference
+and normalized constraints; addresses and registration order are not identities.
+The C ABI and managed bindings expose schema_version=1. Function pointers are
+only meaningful in the process/library that returned them.
+
+PerfTools reads generated/instruction_fusion_families.json for cross-platform
+baking. This small checked-in snapshot is exported from the native declarations;
+the baker no longer maintains a separate specializationFamilies dictionary.
+The source fingerprint is embedded at CMake configuration and checked on export
+and load. Hashing normalizes CRLF, so checkout line endings do not alter identity.
+No target library needs to be loaded while cross-compiling or generating source.
+
+After editing declaration inputs:
+  1. Build the native library against the existing checked-in fusion source.
+     For an already configured macOS tree:
+       cmake --build Fiberish.X86/build_native/host -j 3
+  2. Build PerfTools, then export the snapshot:
+       dotnet build Podish.PerfTools/Podish.PerfTools.csproj -c Release
+       dotnet Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll export-instruction-catalog --library Fiberish.X86/build_native/host/libfibercpu.dylib
+  3. Regenerate the selected fusion source using the normal gen-superopcodes
+     command if the approved expansion set changed. Review both generated files.
+  4. Run CPU tests with fusion ON/OFF and PerfTools tests.
+
+Use the corresponding .so/.dll path on other hosts. Export requires a native
+library built from the current catalog; stale libraries/snapshots are rejected.
+Initial native bootstrap uses the existing fusion source without running the
+baker. Custom SuperOpcodeManifest builds can generate again after the export.
+
+Migration evidence (Apple M5 Max, macOS ARM64)
+--------------------------------------------
+The pre-refactor registry was captured before conversion. Every one of its 503
+unique selected variants and 411 final fallbacks retains its exact normalized
+constraints and legacy precedence. The regression fixture records this baseline.
+32 duplicate MOV rows selected the same logic under identical constraints and
+were merged. Reflection retains 943 handler entries with the default 71 fused
+sequences, and 872 when generated fusion is disabled.
+
+Final CPU suite: 3145 passed with fusion ON and 3145 passed with fusion OFF,
+including 32 exhaustive cases and four new catalog regression tests.
+PerfTools: 29 passed, including byte-for-byte regeneration of the checked-in
+fusion source, metadata-driven expansion and stale-snapshot rejection.
+Python reflection tooling: 5 passed. Compile-time contract checks also run in
+all native builds.
+
+Serial rotating GCC CoreMark comparison, fixed 60000 iterations, three rounds:
+  old registry median 3265.306122
+  unified registry   3284.971257  (+0.602%)
+All six CRC/timing validations passed. Same managed CLI, rootfs, guest binary,
+compiler and fusion table; only the native library changes. No concurrent build
+or profile ran during measurement.
+Two-round independent throughput comparison (all 12 output checks passed):
+  GNU gzip       -0.285%
+  GNU SHA256     +1.144%
+  Zig CoreMark   +0.038%
+These are short comparisons, not statistical confidence bounds or new speedups.
+Executable __text: 688372 -> 651212 bytes (-5.398%). Metadata adds read-only
+storage; total library size is not a substitute for executable-code size.
+Raw logs, library hashes and isolated binaries remain in
+artifacts/specialization-refactor-20261117/.

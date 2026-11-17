@@ -1,0 +1,120 @@
+artifacts/arm64-regcache-20261117/base-cli/libfibercpu.dylib  :
+section              size      addr
+__text             761708      5016
+__stubs               432    766724
+__init_offsets          4    767156
+__const              8208    767168
+__cstring          310925    775376
+__unwind_info         752   1086304
+__eh_frame           3824   1087056
+__got                6840   1097728
+__const             22368   1104576
+__data                 24   1130496
+__thread_vars         120   1130520
+__thread_data           2   1130640
+__thread_bss            3   1130642
+__common            32768   1130648
+__bss                  56   1163416
+Total             1148034
+
+
+artifacts/arm64-regcache-20261117/plain-cli/libfibercpu.dylib  :
+section              size      addr
+__text             779732      5016
+__stubs               432    784748
+__init_offsets          4    785180
+__const              8208    785216
+__cstring          324220    793424
+__unwind_info         752   1117644
+__eh_frame           3824   1118400
+__got                6840   1130496
+__const             26976   1137344
+__data                 24   1179648
+__thread_vars         120   1179672
+__thread_data           2   1179792
+__thread_bss            3   1179794
+__common            32768   1179800
+__bss                  56   1212568
+Total             1183961
+
+
+artifacts/arm64-regcache-20261117/plain256-cli/libfibercpu.dylib  :
+section              size      addr
+__text             811240      5016
+__stubs               432    816256
+__init_offsets          4    816688
+__const              8208    816704
+__cstring          360046    824912
+__unwind_info         752   1184960
+__eh_frame           3824   1185712
+__got                6840   1196032
+__const             40800   1202880
+__data                 24   1245184
+__thread_vars         120   1245208
+__thread_data           2   1245328
+__thread_bss            3   1245330
+__common            32768   1245336
+__bss                  56   1278104
+Total             1265119
+
+
+artifacts/arm64-regcache-20261117/cache2x256-cli/libfibercpu.dylib  :
+section              size      addr
+__text             818048      5016
+__stubs               432    823064
+__init_offsets          4    823496
+__const              8192    823552
+__cstring          396306    831744
+__unwind_info         752   1228052
+__eh_frame           3824   1228808
+__got                6840   1245184
+__const             40800   1252032
+__data                 24   1294336
+__thread_vars         120   1294360
+__thread_data           2   1294480
+__thread_bss            3   1294482
+__common            32768   1294488
+__bss                  56   1327256
+Total             1308171
+
+
+artifacts/arm64-regcache-20261117/cache4x256-cli/libfibercpu.dylib  :
+section              size      addr
+__text             817820      5016
+__stubs               432    822836
+__init_offsets          4    823268
+__const              8144    823296
+__cstring          432566    831440
+__unwind_info         752   1264008
+__eh_frame           3824   1264760
+__got                6840   1277952
+__const             40800   1284800
+__data                 24   1327104
+__thread_vars         120   1327128
+__thread_data           2   1327248
+__thread_bss            3   1327250
+__common            32768   1327256
+__bss                  56   1360024
+Total             1344155
+
+
+artifacts/arm64-regcache-20261117/cache_asp-cli/libfibercpu.dylib  :
+section              size      addr
+__text             817776      5016
+__stubs               432    822792
+__init_offsets          4    823224
+__const              8208    823232
+__cstring          396306    831440
+__unwind_info         752   1227748
+__eh_frame           3824   1228504
+__got                6840   1245184
+__const             40800   1252032
+__data                 24   1294336
+__thread_vars         120   1294360
+__thread_data           2   1294480
+__thread_bss            3   1294482
+__common            32768   1294488
+__bss                  56   1327256
+Total             1307915
+
+

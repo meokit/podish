@@ -67,6 +67,8 @@ struct SpecCriteria {
 
     // Flags Constraints
     bool no_flags = false;
+    bool any_flags = false;
+    bool memory_only = false;
 
     // Decoded memory shape constraints.
     // Set mask to 0 to ignore.
@@ -103,12 +105,13 @@ struct SpecCriteria {
         } else if (mod_mask || reg_mask || rm_mask) {
             return false;
         }
-        return no_flags == op->meta.flags.no_flags && MatchesIndexedRemainder(op);
+        return (any_flags || no_flags == op->meta.flags.no_flags) && MatchesIndexedRemainder(op);
     }
 
-    // ModRM and no_flags are already selected by the immutable index.
+    // ModRM and flag liveness are already selected by the immutable index.
     bool MatchesIndexedRemainder(const DecodedOp* op) const {
         if (prefix_mask && (op->prefixes.all & prefix_mask) != prefix_val) return false;
+        if (memory_only && !op->meta.flags.has_mem) return false;
 
         if (RequiresMemShape()) {
             if (!op->meta.flags.has_mem) return false;
@@ -135,8 +138,9 @@ struct SpecCriteria {
         return true;
     }
 
-    int GetScore() const {
-        int score = 0;
+    constexpr int GetScore() const {
+        // Strict liveness and memory-only predicates outrank their wildcard forms.
+        int score = (any_flags ? 0 : 1) + (memory_only ? 1 : 0);
         if (mod_mask) score += 2;  // Rough weight
         if (reg_mask) score += 3;
         if (rm_mask) score += 3;
@@ -160,10 +164,11 @@ struct SpecializedEntry {
     uint16_t opcode;
     SpecCriteria criteria;
     HandlerFunc handler;  // Wrapper pointer
+    int priority = 0;
 };
 
 // Registration is only supported during HandlerInit, before the index is built.
-void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler);
+void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler, int priority);
 
 // Lookup
 HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op);
