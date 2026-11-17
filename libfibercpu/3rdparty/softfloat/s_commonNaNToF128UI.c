@@ -43,10 +43,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 | Converts the common NaN pointed to by `aPtr' into a 128-bit floating-point
 | NaN, and returns the bit pattern of this value as an unsigned integer.
 *----------------------------------------------------------------------------*/
-struct uint128 softfloat_commonNaNToF128UI(const struct commonNaN* aPtr) {
+struct uint128 softfloat_commonNaNToF128UI( const struct commonNaN *aPtr )
+{
     struct uint128 uiZ;
 
-    uiZ = softfloat_shortShiftRight128(aPtr->v64, aPtr->v0, 16);
-    uiZ.v64 |= (uint_fast64_t)aPtr->sign << 63 | UINT64_C(0x7FFF800000000000);
+    uiZ = softfloat_shortShiftRight128( aPtr->v64, aPtr->v0, 16 );
+    uiZ.v64 |= (uint_fast64_t) aPtr->sign<<63 | UINT64_C( 0x7FFF800000000000 );
     return uiZ;
+
 }
+

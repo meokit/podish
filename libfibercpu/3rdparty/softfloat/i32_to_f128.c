@@ -35,11 +35,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 =============================================================================*/
 
 #include <stdint.h>
-#include "internals.h"
 #include "platform.h"
+#include "internals.h"
 #include "softfloat.h"
 
-float128_t i32_to_f128(int32_t a) {
+float128_t i32_to_f128( int32_t a )
+{
     uint_fast64_t uiZ64;
     bool sign;
     uint_fast32_t absA;
@@ -47,13 +48,17 @@ float128_t i32_to_f128(int32_t a) {
     union ui128_f128 uZ;
 
     uiZ64 = 0;
-    if (a) {
+    if ( a ) {
         sign = (a < 0);
-        absA = sign ? -(uint_fast32_t)a : (uint_fast32_t)a;
-        shiftDist = softfloat_countLeadingZeros32(absA) + 17;
-        uiZ64 = packToF128UI64(sign, 0x402E - shiftDist, (uint_fast64_t)absA << shiftDist);
+        absA = sign ? -(uint_fast32_t) a : (uint_fast32_t) a;
+        shiftDist = softfloat_countLeadingZeros32( absA ) + 17;
+        uiZ64 =
+            packToF128UI64(
+                sign, 0x402E - shiftDist, (uint_fast64_t) absA<<shiftDist );
     }
     uZ.ui.v64 = uiZ64;
-    uZ.ui.v0 = 0;
+    uZ.ui.v0  = 0;
     return uZ.f;
+
 }
+

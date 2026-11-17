@@ -17,9 +17,12 @@
 #define SOFTFLOAT_FAST_INT64
 #endif
 
-#include "3rdparty/softfloat/internals.h"
+// clang-format off
+// platform.h defines endianness before internals.h chooses its word layout.
 #include "3rdparty/softfloat/platform.h"
 #include "3rdparty/softfloat/softfloat.h"
+#include "3rdparty/softfloat/internals.h"
+// clang-format on
 
 #undef float16_t
 #undef bfloat16_t
