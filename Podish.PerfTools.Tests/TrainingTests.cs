@@ -6,6 +6,22 @@ namespace Podish.PerfTools.Tests;
 public sealed class TrainingTests
 {
     [Fact]
+    public void DefaultTableReproducesTheReviewedLong4x32Manifest()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Podish.slnx"))) root = root.Parent;
+        Assert.NotNull(root);
+        var manifest = Path.Combine(root.FullName, "benchmark", "superopcode", "manifests", "gnu-long4x32-v1.json");
+        using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifest));
+        var patterns = document.RootElement.GetProperty("candidates").EnumerateArray().ToArray();
+        Assert.Equal(64, patterns.Length);
+        Assert.Equal(32, patterns.Count(pattern => pattern.GetProperty("pair").GetArrayLength() == 2));
+        Assert.Equal(32, patterns.Count(pattern => pattern.GetProperty("pair").GetArrayLength() == 4));
+        Assert.Equal(Tool.GenerateSuperopcodes(manifest, 64),
+            File.ReadAllText(Path.Combine(root.FullName, "libfibercpu", "src", "generated", "superopcodes.generated.cpp")));
+    }
+
+    [Fact]
     public void LongSequencePolicyAllowsOnlyOrdinaryPrefixesAndOptionalFinalBranch()
     {
         Assert.True(Tool.TrainingSequenceAllowed(["op::OpMov_Load_Eax", "op::OpCmp_EaxImm", "op::OpJcc_NE_Rel32"]));

@@ -4,6 +4,9 @@ This extends the initial [training experiment](RESULTS.md). Its old holdout has
 already been inspected and is **not** treated as a fresh test set for tuning.
 `search-v1.json` fixes separate training, development and final-validation inputs,
 with distinct dataset IDs and seeds. No result promotes a table automatically.
+The later maintainer-authorized [default promotion](PROMOTION.md) is separate from
+the frozen historical selection experiments below. Their "pinned" control means
+the original 256-pair table, not the subsequently promoted default.
 Measurements and rejected strategies are retained in [SEARCH_RESULTS.md](SEARCH_RESULTS.md).
 
 ## Reproduce the staged search

@@ -1,7 +1,10 @@
 # GNU superopcode training and performance report
 
 Date: 2026-11-16. Branch: `perf/superopcode-training`, based on `de6eef2`.
-The pinned source table is unchanged; generation does not promote a candidate.
+The pinned source table was unchanged during this initial experiment; generation
+does not promote a candidate. Later selection results and explicit default
+promotion are recorded in [SEARCH_RESULTS.md](SEARCH_RESULTS.md) and
+[PROMOTION.md](PROMOTION.md); the measurements below remain historical evidence.
 
 **Outcome:** the workflow is implemented and exercised end to end. The final
 candidate's observed geometric speedup is **1.0100× versus pinned**, but the first

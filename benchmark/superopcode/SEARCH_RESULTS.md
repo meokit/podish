@@ -2,14 +2,15 @@
 
 Date: 2026-11-16. Same Windows x64 host/toolchain as [RESULTS.md](RESULTS.md).
 Protocol and predeclared gates: [SEARCH.md](SEARCH.md). The original pinned table
-remains unchanged. Earlier performance runs are development evidence now, not
+was unchanged throughout selection and validation. Earlier runs are development evidence now, not
 fresh holdouts.
 
 **Outcome:** the fourth batch's frozen **long4x32** table passed development
 confirmation and independent final validation. Final paired speed ratio / pinned:
 **1.0168**, conditional bootstrap 95% **[1.0076, 1.0271]**. A byte-identical,
-opt-in [manifest](manifests/gnu-long4x32-v1.json) and [build instructions](manifests/README.md)
-are available; the default pinned table is unchanged. This is evidence for this
+reviewed [manifest](manifests/gnu-long4x32-v1.json) and [build instructions](manifests/README.md)
+are available. The maintainer subsequently requested [default promotion](PROMOTION.md)
+on 2026-11-17. This is evidence for this
 GNU suite on one Windows x64 host, not a universal performance claim.
 
 ## Batch 1: multi-corpus and payload-differential rules
@@ -395,11 +396,14 @@ feature bits are exactly 1, and the original pinned file hash is unchanged.
 `reusable-manifest-audit.json` records this rebuild separately from the archived
 performance DLL (a different build path can produce a different DLL byte hash).
 
-**Recommendation:** retain this as an opt-in, evaluated GNU-workload strategy.
-Do not replace the original default 256-pair table yet. Measurements are confined
+**Initial recommendation (2026-11-16):** retain this as an opt-in, evaluated
+GNU-workload strategy rather than automatically replacing the default table.
+The subsequent explicit promotion is documented separately in [PROMOTION.md](PROMOTION.md).
+Measurements are confined
 to this AMD Ryzen AI MAX PRO 390 Windows x64 host, .NET 11 and clang-cl 22.1.3,
 Release/LTO ON/PGO OFF. They include command-loop exec/decode, I/O and in-interval
 JIT, not merely dispatch throughput; other platforms and external real-world
 corpora remain untested. Existing six x87 failures are unchanged, not fixed or
 skipped. This validation set is now consumed and must not be reused as an unseen
-holdout in later tuning. No commit, merge or push is performed by this experiment.
+holdout in later tuning. The experiment itself did not commit, merge or push;
+the later maintainer-requested integration is a separate operation.

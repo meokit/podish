@@ -4,11 +4,13 @@ The workflow builds an **unfused, instrumented** native CPU, runs verified GNU
 i386 command-line workloads, measures actual within-block Continue edges, derives
 a lightweight suite from measured heavy/light profile similarity, emits selected
 pairs and C++, and builds/verifies an **uninstrumented** candidate. Ordinary
-builds still use the checked-in pinned table; no training silently overwrites it.
+builds use the checked-in **long4x32** table (32 pairs plus 32 four-op patterns);
+no training silently overwrites it. The [default promotion](PROMOTION.md) was an
+explicit maintainer decision after independent validation.
 
 Measured results and limitations: [RESULTS.md](RESULTS.md).
 Iterative multi-corpus selection, confirmation and reserved validation: [SEARCH.md](SEARCH.md).
-Evaluated opt-in 32-pair + 32-four-op table and build instructions: [manifests/README.md](manifests/README.md).
+Reviewed default manifest and isolated-build instructions: [manifests/README.md](manifests/README.md).
 
 ## Requirements and explicit asset preparation
 
