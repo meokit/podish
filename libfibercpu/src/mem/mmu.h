@@ -360,6 +360,20 @@ struct CodeCacheState {
         return it == block_cache.end() ? nullptr : block_entries[it->second].block;
     }
 
+    void EnsureBlockHostPagesRegistered(const BlockCacheKey& cache_key, const HostPageSet& host_page_bases,
+                                        HostPageSet* affected_host_pages = nullptr) {
+        auto it = block_cache.find(cache_key);
+        if (it == block_cache.end()) return;
+        auto& entry = block_entries[it->second];
+        if (!entry.host_pages.empty()) return;
+        RegisterBlockHostPages(it->second, host_page_bases);
+        if (affected_host_pages) {
+            for (uintptr_t host_page_base : host_page_bases) {
+                affected_host_pages->push_unique(host_page_base);
+            }
+        }
+    }
+
     void RegisterBlockHostPages(uint32_t block_index, const HostPageSet& host_page_bases) {
         auto& entry = block_entries[block_index];
         entry.host_pages.resize(host_page_bases.size());
@@ -1416,6 +1430,17 @@ public:
         auto host_page_bases = collect_host_page_bases_for_guest_range(cache_eip, last_guest_addr - cache_eip + 1);
         HostPageSet affected_host_pages;
         block = code_cache().CacheDecodedBlock(*cache_key, host_page_bases, block, &affected_host_pages);
+        // InvalidateHostPage unregisters a block's pages but leaves its pointer
+        // in the cache entry. A later decode can revalidate that same block and
+        // then publish a different replacement block; the replacement path
+        // returns the existing block without touching registrations. Restore
+        // them from the returned block's own range, or later writes to its code
+        // pages would never invalidate it again. Cold decode path only.
+        if (block != nullptr) {
+            const uint32_t block_last = block->end_eip > cache_eip ? block->end_eip - 1 : cache_eip;
+            auto block_pages = collect_host_page_bases_for_guest_range(cache_eip, block_last - cache_eip + 1);
+            code_cache().EnsureBlockHostPagesRegistered(*cache_key, block_pages, &affected_host_pages);
+        }
         remember_block_lookup_cache(cache_key->host_page_base, cache_key->guest_eip, block);
         refresh_smc_armed_for_host_pages(affected_host_pages);
         return block;
