@@ -1429,14 +1429,16 @@ public:
             block && block->end_eip > cache_eip ? static_cast<uint32_t>(block->end_eip - 1) : cache_eip;
         auto host_page_bases = collect_host_page_bases_for_guest_range(cache_eip, last_guest_addr - cache_eip + 1);
         HostPageSet affected_host_pages;
+        BasicBlock* const candidate = block;
         block = code_cache().CacheDecodedBlock(*cache_key, host_page_bases, block, &affected_host_pages);
         // InvalidateHostPage unregisters a block's pages but leaves its pointer
         // in the cache entry. A later decode can revalidate that same block and
         // then publish a different replacement block; the replacement path
         // returns the existing block without touching registrations. Restore
         // them from the returned block's own range, or later writes to its code
-        // pages would never invalidate it again. Cold decode path only.
-        if (block != nullptr) {
+        // pages would never invalidate it again. Cold decode path only, and
+        // not taken when the new candidate was published normally.
+        if (block != nullptr && block != candidate) {
             const uint32_t block_last = block->end_eip > cache_eip ? block->end_eip - 1 : cache_eip;
             auto block_pages = collect_host_page_bases_for_guest_range(cache_eip, block_last - cache_eip + 1);
             code_cache().EnsureBlockHostPagesRegistered(*cache_key, block_pages, &affected_host_pages);
