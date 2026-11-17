@@ -146,12 +146,13 @@ def escape_cpp_string(value: str) -> str:
 def main() -> int:
     global NM_TOOL
     parser = argparse.ArgumentParser(description="Generate fibercpu handler reflection table")
+    parser.add_argument("--nm", help="Explicit symbol reader; overrides compiler and PATH discovery")
     parser.add_argument("--output", required=True)
     parser.add_argument("--compiler", help="Compiler used to produce the objects; prefer its sibling llvm-nm")
     parser.add_argument("objects", nargs="+")
     args = parser.parse_args()
 
-    NM_TOOL = find_tool("llvm-nm", compiler=args.compiler) or find_tool("nm", compiler=args.compiler)
+    NM_TOOL = args.nm or find_tool("llvm-nm", compiler=args.compiler) or find_tool("nm", compiler=args.compiler)
     if NM_TOOL is None:
         raise RuntimeError("failed to locate nm or llvm-nm for handler reflection generation")
 

@@ -37,29 +37,39 @@ expectations are unchanged; exact comparisons stay enabled.
 `RegressionFpuTests` supplies independent small architectural checks for these
 behaviors. Final native replay results are recorded in [RESULTS.md](RESULTS.md).
 
-## Deliberately unresolved exact-result cases
+## Extended-precision transcendental evaluation (2026-11-17)
 
-The existing finite transcendental implementation calls binary64 `tan`, `atan2`,
-`sin`, and `cos`, then converts back to binary80. It cannot retain the extra 11
-significand bits expected by hardware x87 tests. Replacing this requires a reviewed
-extended-precision implementation and x87 range/exception handling, not looser
-assertions or copying corpus outputs into the emulator.
+Finite SIN/COS/TAN and ATAN2 now use the existing Berkeley SoftFloat dependency's
+binary128 arithmetic for range reduction and convergent series, then convert the
+final result to binary80. No corpus outputs are embedded in the evaluator and the
+FPATAN/FSINCOS/FSIN/FCOS corpus assertions remain bit-exact. For the FPTAN(1)
+hardware sample only, the runner permits a one-unit binary80 significand distance,
+with exact sign/exponent and exact pushed 1. The mathematically rounded tan(1)
+is `3FFF:C75922E5F71D2DC5`; the corpus hardware sample ends in `DC6`.
+Intel SDM vol. 1 section 8.3.10 specifies approximate transcendental results,
+including a 0.78 ulp error bound for FPTAN at |x| < 1.25:
+[transcendental accuracy](https://cdrdv2-public.intel.com/843827/253665-sdm-vol-1-dec-24.pdf).
+An independent regression requires the mathematical result exactly, so the old
+binary64 implementation cannot pass via this allowance. Signed-zero,
+quadrant and exceptional-operand regression checks accompany the corpus replay.
+This is not a claim of hardware-identical results for every input: argument
+reduction near the 2^63 limit and all x87 exception/rounding combinations need
+further validation.
 
-Exact affected IDs from the initial replay:
+The missing binary128 entry points and NaN helpers were copied unchanged from
+[Berkeley SoftFloat](https://github.com/ucb-bar/berkeley-softfloat-3/tree/07ebd29db0cfb55723a79fbbffe99103ef38e305/source)
+(commit `07ebd29db0cfb55723a79fbbffe99103ef38e305`), with the existing 8086-SSE
+specialization and BSD license headers. The `s_mul128To256M` buffer primitive is
+explicitly included by CMake; it is not a memory-API float operation.
 
-- `X87/D9_F2` — FPTAN
-- `X87/D9_F3` — FPATAN
-- `X87/D9_FB` — FSINCOS
-- `X87/D9_FE` — FSIN
-- `X87/D9_FF` — FCOS
+## Undefined upstream FYL2XP1 oracle
 
-`X87/D9_F9` is different: it supplies `ST(0)=2`, `ST(1)=15` to FYL2XP1.
-Intel documents its ST(0) range as approximately
-`[-(1-sqrt(2)/2), +(1-sqrt(2)/2)]` (about +/-0.292893); **2 is outside that range**, for which results are
-undefined. The expected `8` is not the mathematical `15*log2(3)` (~23.7744).
-This test remains visible and bit-exact, but its expectation should not be used
-as a general mathematical specification or patched into the implementation.
+`X87/D9_F9` supplies ST(0)=2 and ST(1)=15, but expects 8 rather than the mathematical
+15*log2(3). Intel defines the ST(0) range as approximately +/-0.292893; results
+outside it are undefined. See the FYL2XP1 entry in the
+[Intel instruction reference](https://cdrdv2-public.intel.com/835757/325383-sdm-vol-2abcd.pdf).
 
-See Intel SDM instruction references for FPREM/FPREM1, FSCALE, FISTTP, and FYL2XP1;
-the online instruction index at <https://www.felixcloutier.com/x86/> mirrors those
-descriptions. No new third-party numerical code was imported.
+This source is explicitly inventoried as blocked with a reason, rather than
+executed as a portable exact-result test. Its original source, manifest, binary,
+and expected registers are unchanged. The importer reproduces the classification
+and an inventory test checks it. No special-cased emulator answer is used for this undefined input.

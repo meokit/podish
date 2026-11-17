@@ -1,7 +1,7 @@
 # Pinned CPU instruction corpus
 
-The C# xUnit project `Fiberish.X86.Tests` executes **205 upstream FEX tests**, including
-**all 138 x87 tests** and **14 FEX regression tests**. No network access, assembler,
+The C# xUnit project `Fiberish.X86.Tests` executes **204 upstream FEX tests**, including
+**137 x87 tests with defined portable results** and **14 FEX regression tests**. No network access, assembler,
 Linux process, or upstream FEX installation is needed to discover or execute tests.
 The import tool is a separate, optional C# console application.
 
@@ -50,14 +50,16 @@ trackable despite the repository-wide .NET `bin/` ignore.
 | SecondaryModRM | 2 | 0 | 2 |
 | TwoByte | 2 | 0 | 2 |
 | VEX | 32 | 0 | 32 |
-| X87 | 138 | 138 | 0 |
+| X87 | 138 | 137 | 1 |
 | FEX_bugs | 18 | 14 | 4 |
 | root | 2 | 2 | 0 |
-| **Total** | **260** | **205** | **55** |
+| **Total** | **260** | **204** | **56** |
 
 Blocked tests are inventory entries, **not skipped xUnit placeholders**. Reasons
 are stored per test in `assets/fex/catalog.json`:
 
+- One FYL2XP1 source supplies ST(0)=2, outside its defined range; its expected
+  result is not a portable oracle (see [X87-NOTES.md](X87-NOTES.md)).
 - 32 declare AVX, which requires an unavailable 256-bit vector execution contract.
 - One additional regression, `VEXW_Bug`, uses AVX/FMA without declaring that feature.
 - 12 explicitly manipulate segment selectors (including IRET's implicit CS load); their meaning depends on Linux/FEX
@@ -73,7 +75,7 @@ are stored per test in `assets/fex/catalog.json`:
 An unsupported instruction in a **runnable** test fails normally. Numeric output
 mismatches, faults, instruction limits, malformed/unknown CONFIG fields, and missing
 or corrupted assets are failures, never implicit passes or automatic exclusions.
-The inventory test pins the runnable count and all 138 x87 cases so coverage cannot
+The inventory test pins the runnable count and the 137 defined-result x87 cases so coverage cannot
 silently shrink. Enabling a blocked test requires implementing its contract,
 regenerating its disposition, and updating that reviewed inventory assertion.
 
@@ -119,8 +121,11 @@ apart from sandbox ESP and the retained assembled EAX prelude.
 GPR and XMM expectations are exact. `MMn` with two values means a **physical**
 x87 80-bit slot: significand plus sign/exponent. Since `ReadFpu` reads logical ST,
 the runner uses `logical = (physical - FSW.TOP + 8) & 7`. A one-value `MMn`
-expectation checks the physical MMX low 64 bits. No floating-point tolerances,
-rounding-to-double, or register-name reinterpretation is applied.
+expectation checks the physical MMX low 64 bits. Comparisons are exact except the
+FPTAN(1) hardware sample, which allows one binary80 significand unit, with exact
+sign/exponent; an independent test pins correctly rounded tan(1). See
+[X87-NOTES.md](X87-NOTES.md) for the Intel accuracy contract. No rounding-to-double
+or register-name reinterpretation is applied.
 
 For termination, the importer obtains HLT addresses from NASM **instruction listing
 records**, not byte searches. At runtime Iced decodes the instruction at the actual

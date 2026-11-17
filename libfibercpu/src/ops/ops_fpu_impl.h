@@ -78,7 +78,7 @@ struct FpuEnvironment {
 };
 
 inline std::optional<FpuEnvironment> ReadFpuEnvironment(EmuState* state, uint32_t addr, bool operand16,
-                                                       mem::MicroTLB* utlb, DecodedOp* op) {
+                                                        mem::MicroTLB* utlb, DecodedOp* op) {
     uint16_t words[14]{};
     const int count = operand16 ? 7 : 14;
     for (int i = 0; i < count; ++i) {
@@ -87,7 +87,12 @@ inline std::optional<FpuEnvironment> ReadFpuEnvironment(EmuState* state, uint32_
         words[i] = *word;
     }
     if (operand16) return FpuEnvironment{words[0], words[1], words[2], 0, words[4], words[6], words[3], words[5]};
-    return FpuEnvironment{words[0], words[2], words[4], (uint16_t)(words[9] & 0x7FF), words[8], words[12],
+    return FpuEnvironment{words[0],
+                          words[2],
+                          words[4],
+                          (uint16_t)(words[9] & 0x7FF),
+                          words[8],
+                          words[12],
                           (uint32_t)words[6] | ((uint32_t)words[7] << 16),
                           (uint32_t)words[10] | ((uint32_t)words[11] << 16)};
 }
@@ -111,28 +116,32 @@ inline bool WriteFpuEnvironment(EmuState* state, uint32_t addr, bool operand16, 
     uint16_t words[14];
     int count;
     if (operand16) {
-        uint16_t small[7] = {state->ctx.fpu_cw, state->ctx.fpu_sw, state->ctx.fpu_tw, (uint16_t)state->ctx.fpu_ip,
-                             state->ctx.fpu_cs, (uint16_t)state->ctx.fpu_dp, state->ctx.fpu_ds};
+        uint16_t small[7] = {
+            state->ctx.fpu_cw, state->ctx.fpu_sw,           state->ctx.fpu_tw, (uint16_t)state->ctx.fpu_ip,
+            state->ctx.fpu_cs, (uint16_t)state->ctx.fpu_dp, state->ctx.fpu_ds};
         std::memcpy(words, small, sizeof(small));
         count = 7;
     } else {
-        uint16_t large[14] = {state->ctx.fpu_cw, 0xFFFF, state->ctx.fpu_sw, 0xFFFF, state->ctx.fpu_tw, 0xFFFF,
-                              (uint16_t)state->ctx.fpu_ip, (uint16_t)(state->ctx.fpu_ip >> 16), state->ctx.fpu_cs,
-                              (uint16_t)(state->ctx.fpu_opcode & 0x7FF), (uint16_t)state->ctx.fpu_dp,
-                              (uint16_t)(state->ctx.fpu_dp >> 16), state->ctx.fpu_ds, 0xFFFF};
+        uint16_t large[14] = {state->ctx.fpu_cw,           0xFFFF,
+                              state->ctx.fpu_sw,           0xFFFF,
+                              state->ctx.fpu_tw,           0xFFFF,
+                              (uint16_t)state->ctx.fpu_ip, (uint16_t)(state->ctx.fpu_ip >> 16),
+                              state->ctx.fpu_cs,           (uint16_t)(state->ctx.fpu_opcode & 0x7FF),
+                              (uint16_t)state->ctx.fpu_dp, (uint16_t)(state->ctx.fpu_dp >> 16),
+                              state->ctx.fpu_ds,           0xFFFF};
         std::memcpy(words, large, sizeof(large));
         count = 14;
     }
     for (int i = 0; i < count; ++i)
-        if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr + (uint32_t)(2 * i), words[i], utlb, op)) return false;
+        if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr + (uint32_t)(2 * i), words[i], utlb, op))
+            return false;
     return true;
 }
 
 inline bool FpuTrigInRange(EmuState* state, float80 value) {
     // Trigonometric range reduction is only defined for finite |x| < 2^63.
     // An out-of-range finite operand leaves the stack unchanged (no TAN/COS push).
-    if (f80_is_supported(value) && !f80_isnan(value) && !f80_isinf(value) &&
-        (value.signExp & 0x7FFF) >= 16383 + 63) {
+    if (f80_is_supported(value) && !f80_isnan(value) && !f80_isinf(value) && (value.signExp & 0x7FFF) >= 16383 + 63) {
         state->ctx.fpu_sw |= 0x0400;
         return false;
     }
@@ -153,8 +162,10 @@ inline float80 FpuScale(float80 value, float80 exponent) {
     // FSCALE always truncates ST(1), independently of RC. Clamp very large
     // exponents before integer conversion, avoiding indefinite/overflow casts.
     int scale;
-    if ((exponent.signExp & 0x7FFF) >= 16383 + 16) scale = (exponent.signExp & 0x8000) ? -65536 : 65536;
-    else scale = (int)f80_trunc_to_int(exponent);
+    if ((exponent.signExp & 0x7FFF) >= 16383 + 16)
+        scale = (exponent.signExp & 0x8000) ? -65536 : 65536;
+    else
+        scale = (int)f80_trunc_to_int(exponent);
     return f80_scale(value, scale);
 }
 
@@ -481,9 +492,9 @@ FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
                 FpuPush(state, &t);
             }
         } else if (op_byte == 0xF3) {  // FPATAN
-            double y = f80_to_double(FpuTop(state, 1));
-            double x = f80_to_double(FpuPop(state));
-            FpuTop(state, 0) = f80_from_double(std::atan2(y, x));
+            float80 y = FpuTop(state, 1);
+            float80 x = FpuPop(state);
+            FpuTop(state, 0) = f80_atan2(y, x);
         } else if (op_byte == 0xF4) {  // FXTRACT
             double v = f80_to_double(FpuTop(state, 0));
             int exp;
@@ -499,7 +510,7 @@ FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
             float80& st0 = FpuTop(state, 0);
             float80 st1 = FpuTop(state, 1);
             st0 = f80_rem(st0, st1);
-        } else if (op_byte == 0xF6) {  // FDECSTP
+        } else if (op_byte == 0xF6) {      // FDECSTP
             state->ctx.fpu_sw &= ~0x0200;  // C1 is cleared; tags and physical registers are unchanged.
             state->ctx.fpu_top = (state->ctx.fpu_top - 1) & 7;
             UpdateFSW(state);
@@ -588,7 +599,8 @@ FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
             }
             case 6:  // FNSTENV m14/28byte
             {
-                if (!WriteFpuEnvironment(state, addr, op->prefixes.flags.opsize, utlb, op)) return LogicFlow::ExitOnCurrentEIP;
+                if (!WriteFpuEnvironment(state, addr, op->prefixes.flags.opsize, utlb, op))
+                    return LogicFlow::ExitOnCurrentEIP;
                 state->ctx.fpu_cw |= 0x003F;  // FNSTENV masks all exceptions after saving the original CW.
                 UpdateFpuRoundingMode(state);
                 break;

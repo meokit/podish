@@ -40,6 +40,19 @@ class SymbolToolSelectionTests(unittest.TestCase):
         with mock.patch.object(reflection.shutil, "which", return_value="path-nm"):
             self.assertEqual("path-nm", reflection.find_tool("llvm-nm"))
 
+    def test_explicit_nm_overrides_compiler_and_path_discovery(self):
+        argv = ["gen_handler_reflection.py", "--nm", "xcode/nm", "--compiler", "other/clang",
+                "--output", "unused.cpp", "host.o"]
+        # Stop at the first scan: this regression checks actual CLI precedence
+        # without requiring a platform-specific object file or symbol reader.
+        with mock.patch.object(reflection.sys, "argv", argv), \
+             mock.patch.object(reflection, "find_tool") as discover, \
+             mock.patch.object(reflection, "run_nm", side_effect=RuntimeError("scan reached")):
+            with self.assertRaisesRegex(RuntimeError, "scan reached"):
+                reflection.main()
+            self.assertEqual("xcode/nm", reflection.NM_TOOL)
+            discover.assert_not_called()
+
     def test_symbol_tool_failure_includes_llvm_diagnostic(self):
         failure = subprocess.CompletedProcess(["llvm-nm", "module.obj"], 1, "", "Unknown attribute kind in bitcode\n")
         with mock.patch.object(reflection.subprocess, "run", return_value=failure):
