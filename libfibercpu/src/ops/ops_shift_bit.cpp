@@ -1,6 +1,20 @@
 #include "ops_shift_bit_impl.h"
 
 namespace fiberish {
+template <typename T, bool Right>
+static void RegisterRotateRegImmediate() {
+    SpecCriteria c;
+    c.mod_mask = 3;
+    c.mod_val = 3;
+    c.reg_mask = 7;
+    c.reg_val = Right ? 1 : 0;
+    c.prefix_mask = prefix::OPSIZE;
+    c.prefix_val = sizeof(T) == 2 ? prefix::OPSIZE : 0;
+    DispatchRegistrar<op::OpRotateRegImmediate<T, Right, true>>::RegisterSpecialized(0xC1, c);
+    c.no_flags = true;
+    DispatchRegistrar<op::OpRotateRegImmediate<T, Right, false>>::RegisterSpecialized(0xC1, c);
+}
+
 void RegisterShiftBitOps() {
     using namespace op;
 
@@ -10,6 +24,11 @@ void RegisterShiftBitOps() {
     g_Handlers[0xD1] = DispatchWrapper<OpGroup2_Ev1>;
     g_Handlers[0xD2] = DispatchWrapper<OpGroup2_EbCl>;
     g_Handlers[0xD3] = DispatchWrapper<OpGroup2_EvCl>;
+
+    RegisterRotateRegImmediate<uint16_t, false>();
+    RegisterRotateRegImmediate<uint16_t, true>();
+    RegisterRotateRegImmediate<uint32_t, false>();
+    RegisterRotateRegImmediate<uint32_t, true>();
 
     // Specializations
     // Explicit registration for common cases to ensure they are generated
@@ -23,8 +42,8 @@ void RegisterShiftBitOps() {
         DispatchRegistrar<OpGroup2_Ev1_Shl>::RegisterSpecialized(0xD1, c);
         DispatchRegistrar<OpGroup2_EvCl_Shl>::RegisterSpecialized(0xD3, c);
 
-        c.mod_mask = 0xC0;
-        c.mod_val = 0xC0;
+        c.mod_mask = 0x03;
+        c.mod_val = 0x03;
         DispatchRegistrar<OpGroup2_EvIb_Shl_ModReg>::RegisterSpecialized(0xC1, c);
         DispatchRegistrar<OpGroup2_Ev1_Shl_ModReg>::RegisterSpecialized(0xD1, c);
         DispatchRegistrar<OpGroup2_EvCl_Shl_ModReg>::RegisterSpecialized(0xD3, c);
@@ -38,8 +57,8 @@ void RegisterShiftBitOps() {
         DispatchRegistrar<OpGroup2_Ev1_Shr>::RegisterSpecialized(0xD1, c);
         DispatchRegistrar<OpGroup2_EvCl_Shr>::RegisterSpecialized(0xD3, c);
 
-        c.mod_mask = 0xC0;
-        c.mod_val = 0xC0;
+        c.mod_mask = 0x03;
+        c.mod_val = 0x03;
         DispatchRegistrar<OpGroup2_EvIb_Shr_ModReg>::RegisterSpecialized(0xC1, c);
         DispatchRegistrar<OpGroup2_Ev1_Shr_ModReg>::RegisterSpecialized(0xD1, c);
         DispatchRegistrar<OpGroup2_EvCl_Shr_ModReg>::RegisterSpecialized(0xD3, c);
@@ -53,8 +72,8 @@ void RegisterShiftBitOps() {
         DispatchRegistrar<OpGroup2_Ev1_Sar>::RegisterSpecialized(0xD1, c);
         DispatchRegistrar<OpGroup2_EvCl_Sar>::RegisterSpecialized(0xD3, c);
 
-        c.mod_mask = 0xC0;
-        c.mod_val = 0xC0;
+        c.mod_mask = 0x03;
+        c.mod_val = 0x03;
         DispatchRegistrar<OpGroup2_EvIb_Sar_ModReg>::RegisterSpecialized(0xC1, c);
         DispatchRegistrar<OpGroup2_Ev1_Sar_ModReg>::RegisterSpecialized(0xD1, c);
         DispatchRegistrar<OpGroup2_EvCl_Sar_ModReg>::RegisterSpecialized(0xD3, c);

@@ -36,8 +36,8 @@ void RegisterAluOps() {
     // Specialization: ADD EAX, r32 (Mod=3, RM=0)
     // OpAdd_EvGv_Eax
     SpecCriteria criteria;
-    criteria.mod_mask = 0xC0;
-    criteria.mod_val = 0xC0;  // Mod=3 (Reg)
+    criteria.mod_mask = 0x03;
+    criteria.mod_val = 0x03;  // Mod=3 (Reg)
     criteria.rm_mask = 0x07;
     criteria.rm_val = 0x00;  // RM=0 (EAX)
     DispatchRegistrar<OpAdd_EvGv_Eax>::RegisterSpecialized(0x01, criteria);

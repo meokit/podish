@@ -22,6 +22,49 @@ public sealed class TrainingTests
     }
 
     [Fact]
+    public void BakingExpandsSpecializationsWithoutReplacingGenericLogic()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "specialization-baking-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "selected.json");
+            File.WriteAllText(path, """
+                {"candidates":[
+                  {"pair":["op::OpGroup2_EvIb_Shr","op::OpAdd_EvGv","op::OpInc_Reg"]}
+                ]}
+                """);
+            var generated = Tool.GenerateSuperopcodes(path, 1);
+            Assert.Equal(generated, Tool.GenerateSuperopcodes(path, 1));
+            Assert.Contains("// selected_pattern_count=1\n", generated);
+            Assert.Contains("// specialization_expansion_count=3\n", generated);
+            Assert.Contains("// generated_pattern_count=4\n", generated);
+            Assert.Contains("SuperOpcode_3_000_OpGroup2_EvIb_Shr__OpAdd_EvGv__OpInc_Reg", generated);
+            Assert.Contains("SuperOpcode_3_003_OpGroup2_EvIb_Shr_ModReg__OpAdd_EvGv_Eax__OpInc_Reg", generated);
+            Assert.Contains("RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shr_ModReg,", generated);
+            Assert.Contains("RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_Eax,", generated);
+            Assert.Contains("DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>", generated);
+            Assert.Contains("DispatchWrapper<op::OpAdd_EvGv_Eax>", generated);
+
+            // A preselected specialized pattern must retain its original ID and
+            // must not be generated a second time by its generic family.
+            File.WriteAllText(path, """
+                {"candidates":[
+                  {"pair":["op::OpGroup2_EvIb_Shr","op::OpInc_Reg","op::OpInc_Reg"]},
+                  {"pair":["op::OpGroup2_EvIb_Shr_ModReg","op::OpInc_Reg","op::OpInc_Reg"]},
+                  {"pair":["op::OpAdc_EvGv","op::OpInc_Reg","op::OpInc_Reg"]}
+                ]}
+                """);
+            generated = Tool.GenerateSuperopcodes(path, 3);
+            Assert.Contains("// specialization_expansion_count=0\n", generated);
+            Assert.Contains("// generated_pattern_count=3\n", generated);
+            Assert.Contains("SuperOpcode_3_001_OpGroup2_EvIb_Shr_ModReg__OpInc_Reg__OpInc_Reg", generated);
+            Assert.DoesNotContain("OpAdc_EvGv_Eax", generated);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
     public void LongSequencePolicyAllowsOnlyOrdinaryPrefixesAndOptionalFinalBranch()
     {
         Assert.True(Tool.TrainingSequenceAllowed(["op::OpMov_Load_Eax", "op::OpCmp_EaxImm", "op::OpJcc_NE_Rel32"]));

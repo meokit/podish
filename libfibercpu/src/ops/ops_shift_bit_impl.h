@@ -251,6 +251,35 @@ FORCE_INLINE LogicFlow OpGroup2_EvCl_Internal(LogicFuncParams) {
 
 namespace op {
 
+// Register-only immediate rotations: decoder-selected width and flag liveness.
+// The 5-bit masked count (not its modulo-width value) controls CF/OF updates.
+template <typename T, bool Right, bool UpdateFlags>
+FORCE_INLINE LogicFlow OpRotateRegImmediate(LogicFuncParams) {
+    const uint8_t rm = op->modrm & 7;
+    const uint32_t original = GetReg(state, rm);
+    const T value = static_cast<T>(original);
+    const uint8_t count = imm & 31;
+    const T result = Right ? std::rotr(value, count) : std::rotl(value, count);
+    if constexpr (UpdateFlags) {
+        if (count != 0) {
+            constexpr unsigned width = sizeof(T) * 8;
+            const bool cf = Right ? (result >> (width - 1)) & 1 : result & 1;
+            AssignCF(flags_cache, cf);
+            if (count == 1) {
+                const bool msb = (result >> (width - 1)) & 1;
+                const bool other = Right ? (result >> (width - 2)) & 1 : cf;
+                AssignOF(flags_cache, msb != other);
+            }
+        }
+    }
+    if constexpr (sizeof(T) == 2)
+        SetReg(state, rm, (original & 0xFFFF0000u) | result);
+    else
+        SetReg(state, rm, result);
+    return LogicFlow::Continue;
+}
+
+
 FORCE_INLINE LogicFlow OpGroup2_EbIb(LogicFuncParams) { return OpGroup2_EvIb_Internal<true>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpGroup2_EvIb(LogicFuncParams) { return OpGroup2_EvIb_Internal<false>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpGroup2_Eb1(LogicFuncParams) { return OpGroup2_Ev1_Internal<true>(LogicPassParams); }
