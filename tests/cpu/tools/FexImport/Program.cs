@@ -114,7 +114,9 @@ async Task Regenerate(string nasm)
         var configMatch = Regex.Match(text, @"(?s)%ifdef CONFIG\s*(.*?)%endif");
         Require(configMatch.Success, $"Missing CONFIG: {relative}");
         using var configDocument = JsonDocument.Parse(configMatch.Groups[1].Value);
-        string? reason = null;
+        string? reason = id == "X87/D9_F9"
+            ? "FYL2XP1 input ST(0)=2 is outside its architecturally defined range; the upstream expected result is not a portable oracle. See tests/cpu/X87-NOTES.md."
+            : null;
         try
         {
             FexConfig.Parse(configDocument.RootElement).RequireRunnable();

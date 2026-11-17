@@ -26,6 +26,14 @@ FORCE_INLINE void DecodeShuffleControl(uint8_t imm8, uint8_t selectors[4]) {
 
 FORCE_INLINE simde__m128i MakeShiftCount128(uint8_t imm8) { return simde_mm_cvtsi32_si128(static_cast<int32_t>(imm8)); }
 
+// NEON variable shifts use signed counts; clamp the unsigned x86 low qword
+// before SIMDe can negate/narrow it (notably for bit 63 set).
+FORCE_INLINE simde__m128i ClampShiftCount128(simde__m128i count) {
+    uint64_t low;
+    std::memcpy(&low, &count, sizeof(low));
+    return simde_mm_cvtsi32_si128(static_cast<int32_t>(low > 64 ? 64 : low));
+}
+
 // Shifts
 template <bool IsGroup>
 FORCE_INLINE LogicFlow OpPsllw_Sse_Internal(LogicFuncParams) {
@@ -34,7 +42,7 @@ FORCE_INLINE LogicFlow OpPsllw_Sse_Internal(LogicFuncParams) {
         simde__m128i count;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
-        count = simde_mm_castps_si128(*src_res);
+        count = ClampShiftCount128(simde_mm_castps_si128(*src_res));
         simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[reg]);
         state->ctx.xmm[reg] = simde_mm_castsi128_ps(simde_mm_sll_epi16(dst, count));
         return LogicFlow::Continue;
@@ -65,7 +73,7 @@ FORCE_INLINE LogicFlow OpPslld_Sse_Internal(LogicFuncParams) {
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
-        count = simde_mm_castps_si128(*src_res);
+        count = ClampShiftCount128(simde_mm_castps_si128(*src_res));
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_sll_epi32(dst, count));
@@ -83,7 +91,7 @@ FORCE_INLINE LogicFlow OpPsllq_Sse_Internal(LogicFuncParams) {
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
-        count = simde_mm_castps_si128(*src_res);
+        count = ClampShiftCount128(simde_mm_castps_si128(*src_res));
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_sll_epi64(dst, count));
@@ -101,7 +109,7 @@ FORCE_INLINE LogicFlow OpPsraw_Sse_Internal(LogicFuncParams) {
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
-        count = simde_mm_castps_si128(*src_res);
+        count = ClampShiftCount128(simde_mm_castps_si128(*src_res));
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_sra_epi16(dst, count));
@@ -119,7 +127,7 @@ FORCE_INLINE LogicFlow OpPsrad_Sse_Internal(LogicFuncParams) {
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
-        count = simde_mm_castps_si128(*src_res);
+        count = ClampShiftCount128(simde_mm_castps_si128(*src_res));
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_sra_epi32(dst, count));
@@ -137,7 +145,7 @@ FORCE_INLINE LogicFlow OpPsrlw_Sse_Internal(LogicFuncParams) {
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
-        count = simde_mm_castps_si128(*src_res);
+        count = ClampShiftCount128(simde_mm_castps_si128(*src_res));
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_srl_epi16(dst, count));
@@ -155,7 +163,7 @@ FORCE_INLINE LogicFlow OpPsrld_Sse_Internal(LogicFuncParams) {
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
-        count = simde_mm_castps_si128(*src_res);
+        count = ClampShiftCount128(simde_mm_castps_si128(*src_res));
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_srl_epi32(dst, count));
@@ -173,7 +181,7 @@ FORCE_INLINE LogicFlow OpPsrlq_Sse_Internal(LogicFuncParams) {
         dst_idx = (op->modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
-        count = simde_mm_castps_si128(*src_res);
+        count = ClampShiftCount128(simde_mm_castps_si128(*src_res));
     }
     simde__m128i dst = simde_mm_castps_si128(state->ctx.xmm[dst_idx]);
     state->ctx.xmm[dst_idx] = simde_mm_castsi128_ps(simde_mm_srl_epi64(dst, count));

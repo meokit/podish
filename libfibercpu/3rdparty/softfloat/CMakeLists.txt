@@ -1,6 +1,10 @@
 file(GLOB SOURCES "*.c")
 list(FILTER SOURCES EXCLUDE REGEX ".*M(\\.c|To.*\\.c)")
 
+# This primitive's M suffix describes its 256-bit output buffer, not the
+# slow-memory floating-point API excluded above. binary128 multiplication needs it.
+list(APPEND SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/s_mul128To256M.c")
+
 # Build as OBJECT + STATIC:
 # - OBJECT lets parent targets embed softfloat objects directly into another static archive.
 # - STATIC keeps standalone usage for non-embedded configurations.

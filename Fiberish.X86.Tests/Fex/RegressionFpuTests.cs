@@ -104,6 +104,18 @@ public sealed class RegressionFpuTests
         for (var i = 0; i < 8; i++) Assert.Equal(Ext(0x8000000000000000UL + (ulong)i, 0x3FFF), cpu.ReadFpu(i));
     }
 
+    [Fact]
+    public void FptanOneRoundsTheMathematicalResultToBinary80()
+    {
+        using var cpu = new CpuSandbox();
+        cpu.Ftw = 0xFFFC;
+        cpu.WriteFpu(0, Ext(0x8000000000000000, 0x3FFF));
+        Step(cpu, 0xD9, 0xF2);
+        Assert.Equal(Ext(0x8000000000000000, 0x3FFF), cpu.ReadFpu(0));
+        // tan(1) = 1.557407724654902230506974807458..., rounded to 64 bits.
+        Assert.Equal(Ext(0xC75922E5F71D2DC5, 0x3FFF), cpu.ReadFpu(1));
+    }
+
     [Theory]
     [InlineData(0xF2)] // FPTAN
     [InlineData(0xFB)] // FSINCOS
@@ -196,6 +208,34 @@ public sealed class RegressionFpuTests
         Assert.Equal(CpuSandbox.CodeAddress, BinaryPrimitives.ReadUInt32LittleEndian(env.AsSpan(12)));
         Assert.Equal(0x0100, BinaryPrimitives.ReadUInt16LittleEndian(env.AsSpan(18)));
         Assert.Equal(CpuSandbox.DataAddress, BinaryPrimitives.ReadUInt32LittleEndian(env.AsSpan(20)));
+    }
+
+    [Theory]
+    [InlineData(0xF2)] // tan(-0) followed by a push of 1
+    [InlineData(0xFE)] // sin(-0)
+    public void TrigonometricOddFunctionsPreserveNegativeZero(int opcode)
+    {
+        using var cpu = new CpuSandbox();
+        cpu.Ftw = 0xFFFE;
+        cpu.WriteFpu(0, Ext(0, 0x8000));
+        Step(cpu, 0xD9, (byte)opcode);
+        Assert.Equal(Ext(0, 0x8000), cpu.ReadFpu(opcode == 0xF2 ? 1 : 0));
+    }
+
+    [Theory]
+    [InlineData(false, false, 0x3FFE)] // +1,+1 -> pi/4
+    [InlineData(true, false, 0xBFFE)] // -1,+1 -> -pi/4
+    [InlineData(false, true, 0x4000)] // +1,-1 -> 3pi/4
+    [InlineData(true, true, 0xC000)] // -1,-1 -> -3pi/4
+    public void FpatanPreservesExtendedPrecisionAcrossQuadrants(bool negativeY, bool negativeX, int exponent)
+    {
+        using var cpu = new CpuSandbox();
+        cpu.Ftw = 0xFFF0;
+        cpu.WriteFpu(0, Ext(0x8000000000000000, (ushort)(negativeX ? 0xBFFF : 0x3FFF)));
+        cpu.WriteFpu(1, Ext(0x8000000000000000, (ushort)(negativeY ? 0xBFFF : 0x3FFF)));
+        Step(cpu, 0xD9, 0xF3);
+        // Correctly rounded binary80 pi/4 and 3pi/4, independent of the FEX corpus.
+        Assert.Equal(Ext(negativeX ? 0x96CBE3F9990E91A8 : 0xC90FDAA22168C235, (ushort)exponent), cpu.ReadFpu(0));
     }
 
     private static byte[] Ext(ulong significand, ushort signExponent)

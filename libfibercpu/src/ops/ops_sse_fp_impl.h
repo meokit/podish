@@ -148,7 +148,10 @@ FORCE_INLINE LogicFlow OpMaxMin_Sse_Impl(LogicFuncParams) {
         if (!val_res) return LogicFlow::RestartMemoryOp;
         simde__m128d a = simde_mm_castps_pd(state->ctx.xmm[reg_idx]);
         simde__m128d b = simde_mm_castps_pd(*val_res);
-        simde__m128d res = IsMin ? simde_mm_min_pd(a, b) : simde_mm_max_pd(a, b);
+        // Select b on equality (including signed zero) and unordered inputs,
+        // independently of the host SIMD min/max tie-breaking rules.
+        simde__m128d mask = IsMin ? simde_mm_cmplt_pd(a, b) : simde_mm_cmpgt_pd(a, b);
+        simde__m128d res = simde_mm_or_pd(simde_mm_and_pd(mask, a), simde_mm_andnot_pd(mask, b));
         state->ctx.xmm[reg_idx] = simde_mm_castpd_ps(res);
 
     } else {  // None: Packed Single
