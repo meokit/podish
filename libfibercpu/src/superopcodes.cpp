@@ -163,6 +163,7 @@ DEFINE_HANDWRITTEN_SUPEROPCODE_4(HandWrittenSuperOpcode_PopEdx_PopEbx_PopEsi_Ret
 #undef DEFINE_HANDWRITTEN_SUPEROPCODE_3
 #undef DEFINE_HANDWRITTEN_SUPEROPCODE_4
 
+#if !FIBERCPU_GENERATED_WITH_HANDWRITTEN || defined(FIBERCPU_VALIDATE_SPECIALIZATION_INDEX)
 HandlerFunc FindHandWrittenSuperOpcode(const DecodedOp* ops) {
     // Keep this first-handler set in sync with the handwritten patterns below;
     // false positives are harmless, but omitting a handler prevents a match.
@@ -259,13 +260,15 @@ HandlerFunc FindHandWrittenSuperOpcode(const DecodedOp* ops) {
     return nullptr;
 }
 
+#endif
+
 #ifdef FIBERCPU_VALIDATE_SPECIALIZATION_INDEX
 bool ValidateHandwrittenSuperOpcodes() {
     auto check = [](HandlerFunc expected, std::initializer_list<HandlerFunc> handlers) {
         DecodedOp ops[4]{};
         size_t i = 0;
         for (auto handler : handlers) ops[i++].handler = handler;
-        if (FindHandWrittenSuperOpcode(ops) != expected) return false;
+        if (FindHandWrittenSuperOpcode(ops) != expected || FindSuperOpcode(ops) != expected) return false;
         ops[i - 1].handler = nullptr;
         return FindHandWrittenSuperOpcode(ops) != expected;
     };
@@ -344,10 +347,74 @@ bool ValidateHandwrittenSuperOpcodes() {
 
 }  // namespace handwritten_superopcodes
 
+// Register in reverse legacy order: the generated table prepends each entry,
+// preserving handwritten precedence and order within each prefix bucket.
+// Keep this list synchronized with the legacy matcher and its validation.
+void RegisterHandwrittenSuperOpcodes(void* context, RegisterHandwrittenCallback callback) {
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Edi>,
+             (HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Esi>, (HandlerFunc)DispatchWrapper<op::OpRet>, nullptr,
+             handwritten_superopcodes::HandWrittenSuperOpcode_PopEdi_PopEsi_Ret, 3);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIb_Sub_32_Flags>,
+             (HandlerFunc)DispatchWrapper<op::OpPush_Reg32_Edi>, (HandlerFunc)DispatchWrapper<op::OpCall_Rel>, nullptr,
+             handwritten_superopcodes::HandWrittenSuperOpcode_Group1Sub_PushEdi_CallRel, 3);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpPush_Reg32_Ebp>,
+             (HandlerFunc)DispatchWrapper<op::OpPush_Reg32_Edi>, (HandlerFunc)DispatchWrapper<op::OpCall_Rel>, nullptr,
+             handwritten_superopcodes::HandWrittenSuperOpcode_PushEbp_PushEdi_CallRel, 3);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpGroup5_Ev_Push_32_Flags>,
+             (HandlerFunc)DispatchWrapper<op::OpMov_Load_Ebx_EspBaseNoIndexNoSegment>,
+             (HandlerFunc)DispatchWrapper<op::OpCall_Rel>, nullptr,
+             handwritten_superopcodes::HandWrittenSuperOpcode_Group5Push_MovLoadEbxEsp_CallRel, 3);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIb_Sub_32_Flags>,
+             (HandlerFunc)DispatchWrapper<op::OpGroup5_Ev_Push_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpCall_Rel>,
+             nullptr, handwritten_superopcodes::HandWrittenSuperOpcode_Group1Sub_Group5Push_CallRel, 3);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Edx>,
+             (HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Ebx>, (HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Esi>,
+             (HandlerFunc)DispatchWrapper<op::OpRet>,
+             handwritten_superopcodes::HandWrittenSuperOpcode_PopEdx_PopEbx_PopEsi_Ret, 4);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Ebx>,
+             (HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Esi>, (HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Edi>,
+             (HandlerFunc)DispatchWrapper<op::OpRet>,
+             handwritten_superopcodes::HandWrittenSuperOpcode_PopEbx_PopEsi_PopEdi_Ret, 4);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpPush_Reg32_Esi>,
+             (HandlerFunc)DispatchWrapper<op::OpPush_Reg32_Ebx>,
+             (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIb_Sub_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpCall_Rel>,
+             handwritten_superopcodes::HandWrittenSuperOpcode_PushEsi_PushEbx_Group1Sub_CallRel, 4);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpPush_Reg32_Ebp>,
+             (HandlerFunc)DispatchWrapper<op::OpPush_Reg32_Edi>, (HandlerFunc)DispatchWrapper<op::OpPush_Reg32_Esi>,
+             (HandlerFunc)DispatchWrapper<op::OpCall_Rel>,
+             handwritten_superopcodes::HandWrittenSuperOpcode_PushEbp_PushEdi_PushEsi_CallRel, 4);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpPush_Reg32_Edi>,
+             (HandlerFunc)DispatchWrapper<op::OpPush_Reg32_Esi>, (HandlerFunc)DispatchWrapper<op::OpPush_Reg32_Ebx>,
+             (HandlerFunc)DispatchWrapper<op::OpCall_Rel>,
+             handwritten_superopcodes::HandWrittenSuperOpcode_PushEdi_PushEsi_PushEbx_CallRel, 4);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIb_Sub_32_Flags>,
+             (HandlerFunc)DispatchWrapper<op::OpGroup5_Ev_Push_32_Flags>,
+             (HandlerFunc)DispatchWrapper<op::OpMov_Load_Ebx_EspBaseNoIndexNoSegment>,
+             (HandlerFunc)DispatchWrapper<op::OpCall_Rel>,
+             handwritten_superopcodes::HandWrittenSuperOpcode_Group1Sub_Group5Push_MovLoadEbxEsp_CallRel, 4);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Eax_EspBaseNoIndexNoSegment>,
+             (HandlerFunc)DispatchWrapper<op::OpRet>, nullptr, nullptr,
+             handwritten_superopcodes::HandWrittenSuperOpcode_MovLoadEaxEsp_Ret, 2);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Esi_EspBaseNoIndexNoSegment>,
+             (HandlerFunc)DispatchWrapper<op::OpRet>, nullptr, nullptr,
+             handwritten_superopcodes::HandWrittenSuperOpcode_MovLoadEsiEsp_Ret, 2);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Edi_EspBaseNoIndexNoSegment>,
+             (HandlerFunc)DispatchWrapper<op::OpRet>, nullptr, nullptr,
+             handwritten_superopcodes::HandWrittenSuperOpcode_MovLoadEdiEsp_Ret, 2);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Ebx_EspBaseNoIndexNoSegment>,
+             (HandlerFunc)DispatchWrapper<op::OpRet>, nullptr, nullptr,
+             handwritten_superopcodes::HandWrittenSuperOpcode_MovLoadEbxEsp_Ret, 2);
+    callback(context, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Edx_EspBaseNoIndexNoSegment>,
+             (HandlerFunc)DispatchWrapper<op::OpRet>, nullptr, nullptr,
+             handwritten_superopcodes::HandWrittenSuperOpcode_MovLoadEdxEsp_Ret, 2);
+}
+
 HandlerFunc FindSuperOpcode(const DecodedOp* ops) {
+#if !FIBERCPU_GENERATED_WITH_HANDWRITTEN
     if (HandlerFunc handwritten = handwritten_superopcodes::FindHandWrittenSuperOpcode(ops)) {
         return handwritten;
     }
+#endif
 
 #if FIBERCPU_HAVE_GENERATED_SUPEROPCODES
     return GeneratedFindSuperOpcode(ops);

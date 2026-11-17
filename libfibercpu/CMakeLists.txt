@@ -81,6 +81,15 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     endif()
 endif()
 
+# Older pair-only generated files do not include handwritten registrations.
+set(FIBERCPU_GENERATED_WITH_HANDWRITTEN OFF)
+if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
+    file(READ "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}" FIBERCPU_GENERATED_HEADER LIMIT 1024)
+    if(FIBERCPU_GENERATED_HEADER MATCHES "includes_handwritten_superopcodes")
+        set(FIBERCPU_GENERATED_WITH_HANDWRITTEN ON)
+    endif()
+endif()
+
 # Source files
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp" "src/*.c" "src/*.h")
 list(FILTER SOURCES EXCLUDE REGEX "main.cpp")
@@ -221,6 +230,7 @@ set(FIBERCPU_FINAL_SOURCES
 add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${FIBERCPU_FINAL_SOURCES})
 target_compile_definitions(fibercpu PRIVATE FIBERCPU_SUPEROPCODE_SET_SHA256="${FIBERCPU_SUPEROPCODE_SET_SHA256}")
 target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_SUPEROPCODE_SET_SHA256="${FIBERCPU_SUPEROPCODE_SET_SHA256}")
+target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_GENERATED_WITH_HANDWRITTEN=$<BOOL:${FIBERCPU_GENERATED_WITH_HANDWRITTEN}>)
 target_include_directories(fibercpu_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 set_target_properties(fibercpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(WIN32 AND NOT FIBERCPU_BUILD_STATIC)

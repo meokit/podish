@@ -5,6 +5,9 @@
 
 namespace fiberish {
 
+using RegisterHandwrittenCallback = void (*)(void*, HandlerFunc, HandlerFunc, HandlerFunc, HandlerFunc, HandlerFunc,
+                                             unsigned);
+void RegisterHandwrittenSuperOpcodes(void* context, RegisterHandwrittenCallback callback);
 HandlerFunc FindSuperOpcode(const DecodedOp* ops);
 #if FIBERCPU_HAVE_GENERATED_SUPEROPCODES
 HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops);
