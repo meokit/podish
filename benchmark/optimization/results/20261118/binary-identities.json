@@ -1,0 +1,58 @@
+{
+  "base": {
+    "native_sha256": "b65e487705d2927e3ed5ad23e8da3502c6c9021582f2be94ed054052d6570a33",
+    "native_bytes": 1510496,
+    "features": 1,
+    "fusion_hash": "be4a725f79f10d32516eb9462a9a1e5c808b0ed0ba6ac7e696d7b28b4cfe1ce4",
+    "managed_sha256": "cf316490138c0f831d1ff507bfde552ad539862d309c30b8457e2c802a5a620c",
+    "config": "pre-config-export binary; see CMakeCache.txt"
+  },
+  "off": {
+    "native_sha256": "b9713040d2405b1c89d72a31d5ebccb6a8e31bf3cc54dc5d16f9b9f53ed1d11a",
+    "native_bytes": 1610176,
+    "features": 1,
+    "fusion_hash": "098232ad190900fbfc78f44e897b2ed6d3d27e52a0dea06f41b0c861a00b50e5",
+    "managed_sha256": "cf316490138c0f831d1ff507bfde552ad539862d309c30b8457e2c802a5a620c",
+    "config": "pre-config-export binary; see CMakeCache.txt"
+  },
+  "extended": {
+    "native_sha256": "9a0c40f0f5dca3f822fa74eea883b127c438f5d941f69cd9ca6b4ce033f59cd8",
+    "native_bytes": 1737776,
+    "features": 1,
+    "fusion_hash": "2d0b463f2f1642dc0a9d039c2e5ac75de4f0ae9da3728dab4c8cdf6eb4ff5c4f",
+    "managed_sha256": "cf316490138c0f831d1ff507bfde552ad539862d309c30b8457e2c802a5a620c",
+    "config": "pre-config-export binary; see CMakeCache.txt"
+  },
+  "shapes": {
+    "native_sha256": "6edb5dc0aa124133b4c5f1b6b6f95e67f5799f46614526d95f76cd0f5465509e",
+    "native_bytes": 1990272,
+    "features": 17,
+    "fusion_hash": "2d0b463f2f1642dc0a9d039c2e5ac75de4f0ae9da3728dab4c8cdf6eb4ff5c4f",
+    "managed_sha256": "cf316490138c0f831d1ff507bfde552ad539862d309c30b8457e2c802a5a620c",
+    "config": "fusion=EXTENDED;enabled=ON;operand=PROFILE;budget=256;pin=OFF;plan=b51277b2cf456ef150f2c256d251db03b361aba0d3e9585670f00ba722a6e283"
+  },
+  "hybrid": {
+    "native_sha256": "5e0f03b3329ca26a1c19a913381549e21f76bf64826bcb61f8c5e1dcdce59c83",
+    "native_bytes": 3636144,
+    "features": 49,
+    "fusion_hash": "2d0b463f2f1642dc0a9d039c2e5ac75de4f0ae9da3728dab4c8cdf6eb4ff5c4f",
+    "managed_sha256": "cf316490138c0f831d1ff507bfde552ad539862d309c30b8457e2c802a5a620c",
+    "config": "fusion=EXTENDED;enabled=ON;operand=HYBRID;budget=256;pin=OFF;plan=b51277b2cf456ef150f2c256d251db03b361aba0d3e9585670f00ba722a6e283"
+  },
+  "pinreload": {
+    "native_sha256": "06b0a7f3aaf23d3bf966eb29b385c370636f93c39ff3a4c54ebc4dd5154df77f",
+    "native_bytes": 3732832,
+    "features": 1,
+    "fusion_hash": "2d0b463f2f1642dc0a9d039c2e5ac75de4f0ae9da3728dab4c8cdf6eb4ff5c4f",
+    "managed_sha256": "cf316490138c0f831d1ff507bfde552ad539862d309c30b8457e2c802a5a620c",
+    "config": "pre-config-export binary; see CMakeCache.txt"
+  },
+  "pinstatic": {
+    "native_sha256": "d4e9672cdc20c5aa62ad97aaced2912fc6075b7fc7f9773221c5574f95a85237",
+    "native_bytes": 3732896,
+    "features": 817,
+    "fusion_hash": "2d0b463f2f1642dc0a9d039c2e5ac75de4f0ae9da3728dab4c8cdf6eb4ff5c4f",
+    "managed_sha256": "cf316490138c0f831d1ff507bfde552ad539862d309c30b8457e2c802a5a620c",
+    "config": "fusion=EXTENDED;enabled=ON;operand=HYBRID;budget=256;pin=EAX_ESP;plan=b51277b2cf456ef150f2c256d251db03b361aba0d3e9585670f00ba722a6e283"
+  }
+}

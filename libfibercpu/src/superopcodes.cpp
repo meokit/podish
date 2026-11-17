@@ -1,4 +1,5 @@
 #include "superopcodes.h"
+#include "operand_specialization.h"
 
 #include <array>
 #include <initializer_list>
@@ -34,7 +35,8 @@ FORCE_INLINE bool Match4(const DecodedOp* ops) {
 #define DEFINE_HANDWRITTEN_SUPEROPCODE_2(Name, Op0, Op1)                                                               \
     ATTR_PRESERVE_NONE int64_t Name(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,             \
                                     mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend, uint32_t branch, \
-                                    uint64_t flags_cache) {                                                            \
+                                    uint64_t flags_cache FIBERCPU_PIN_PARAMS) {                                        \
+        FIBERCPU_PIN_ASSUME;                                                                                           \
         mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);                                           \
         RUN_SUPEROPCODE_OP(Op0, state, op, instr_limit, utlb, branch, flags_cache);                                    \
                                                                                                                        \
@@ -44,7 +46,7 @@ FORCE_INLINE bool Match4(const DecodedOp* ops) {
         if (auto* next_op = NextOp(second_op)) {                                                                       \
             mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                                      \
             ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,         \
-                                                  flags_cache);                                                        \
+                                                  flags_cache FIBERCPU_PIN_RELOAD);                                    \
         }                                                                                                              \
         __builtin_unreachable();                                                                                       \
     }
@@ -62,7 +64,8 @@ FORCE_INLINE bool Match4(const DecodedOp* ops) {
 #define DEFINE_HANDWRITTEN_SUPEROPCODE_3(Name, Op0, Op1, Op2)                                                          \
     ATTR_PRESERVE_NONE int64_t Name(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,             \
                                     mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend, uint32_t branch, \
-                                    uint64_t flags_cache) {                                                            \
+                                    uint64_t flags_cache FIBERCPU_PIN_PARAMS) {                                        \
+        FIBERCPU_PIN_ASSUME;                                                                                           \
         mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);                                           \
         LogicFlow exit_flow = LogicFlow::Continue;                                                                     \
         DecodedOp* exit_op = op;                                                                                       \
@@ -75,7 +78,7 @@ FORCE_INLINE bool Match4(const DecodedOp* ops) {
         if (auto* next_op = NextOp(third_op)) {                                                                        \
             mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                                      \
             ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,         \
-                                                  flags_cache);                                                        \
+                                                  flags_cache FIBERCPU_PIN_RELOAD);                                    \
         }                                                                                                              \
         __builtin_unreachable();                                                                                       \
     superopcode_exit:                                                                                                  \
@@ -86,7 +89,8 @@ FORCE_INLINE bool Match4(const DecodedOp* ops) {
 #define DEFINE_HANDWRITTEN_SUPEROPCODE_4(Name, Op0, Op1, Op2, Op3)                                                     \
     ATTR_PRESERVE_NONE int64_t Name(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,             \
                                     mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend, uint32_t branch, \
-                                    uint64_t flags_cache) {                                                            \
+                                    uint64_t flags_cache FIBERCPU_PIN_PARAMS) {                                        \
+        FIBERCPU_PIN_ASSUME;                                                                                           \
         mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);                                           \
         LogicFlow exit_flow = LogicFlow::Continue;                                                                     \
         DecodedOp* exit_op = op;                                                                                       \
@@ -101,7 +105,7 @@ FORCE_INLINE bool Match4(const DecodedOp* ops) {
         if (auto* next_op = NextOp(fourth_op)) {                                                                       \
             mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                                      \
             ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,         \
-                                                  flags_cache);                                                        \
+                                                  flags_cache FIBERCPU_PIN_RELOAD);                                    \
         }                                                                                                              \
         __builtin_unreachable();                                                                                       \
     superopcode_exit:                                                                                                  \
@@ -424,19 +428,26 @@ HandlerFunc FindSuperOpcode(const DecodedOp* ops) {
 #endif
 }
 
-void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count) {
-#if !FIBERCPU_ENABLE_SUPEROPCODES
-    (void)ops;
-    (void)op_count;
-    return;
-#else
-    if (!ops || op_count < 2) return;
+void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previously_lowered) {
+#if FIBERCPU_LOWER_OPERANDS && !FIBERCPU_OPERAND_FUSIONS_ONLY
+    if (!ops) return;
+    if (previously_lowered)
+        for (uint32_t i = 0; i < op_count; ++i)
+            if (ops[i].len) ops[i].handler = CanonicalOperandHandler(ops[i].handler);
+#endif
+#if FIBERCPU_ENABLE_SUPEROPCODES
+    if (!ops) return;
 
     for (uint32_t i = 0; i + 1 < op_count; ++i) {
         if (HandlerFunc superopcode = FindSuperOpcode(&ops[i])) {
             ops[i].handler = superopcode;
         }
     }
+#endif
+#if FIBERCPU_LOWER_OPERANDS && !FIBERCPU_OPERAND_FUSIONS_ONLY
+    for (uint32_t i = 0; i < op_count; ++i)
+        if (ops[i].len)
+            if (auto handler = LowerOperandHandler(&ops[i])) ops[i].handler = handler;
 #endif
 }
 

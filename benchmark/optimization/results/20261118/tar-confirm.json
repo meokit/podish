@@ -1,0 +1,102 @@
+[
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "tar-confirm-0",
+    "iterations": 492,
+    "wall_seconds": 8.605224000057206,
+    "log": "tar-confirm-0-base-tar.log",
+    "seconds": 8.351085999980569,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "guarded",
+    "round": "tar-confirm-0",
+    "iterations": 492,
+    "wall_seconds": 8.765784708084539,
+    "log": "tar-confirm-0-guarded-tar.log",
+    "seconds": 8.508593417005613,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "guarded",
+    "round": "tar-confirm-1",
+    "iterations": 492,
+    "wall_seconds": 8.763106417143717,
+    "log": "tar-confirm-1-guarded-tar.log",
+    "seconds": 8.503464124863967,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "tar-confirm-1",
+    "iterations": 492,
+    "wall_seconds": 8.563480874989182,
+    "log": "tar-confirm-1-base-tar.log",
+    "seconds": 8.304230208043009,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "tar-confirm-2",
+    "iterations": 492,
+    "wall_seconds": 8.657635334180668,
+    "log": "tar-confirm-2-base-tar.log",
+    "seconds": 8.400767125189304,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "guarded",
+    "round": "tar-confirm-2",
+    "iterations": 492,
+    "wall_seconds": 8.875656666001305,
+    "log": "tar-confirm-2-guarded-tar.log",
+    "seconds": 8.618347416166216,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "guarded",
+    "round": "tar-confirm-3",
+    "iterations": 492,
+    "wall_seconds": 8.881120958831161,
+    "log": "tar-confirm-3-guarded-tar.log",
+    "seconds": 8.623853291850537,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "tar-confirm-3",
+    "iterations": 492,
+    "wall_seconds": 8.72184845781885,
+    "log": "tar-confirm-3-base-tar.log",
+    "seconds": 8.46242570807226,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "tar-confirm-4",
+    "iterations": 492,
+    "wall_seconds": 8.583872125018388,
+    "log": "tar-confirm-4-base-tar.log",
+    "seconds": 8.32560341595672,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "guarded",
+    "round": "tar-confirm-4",
+    "iterations": 492,
+    "wall_seconds": 8.969458624953404,
+    "log": "tar-confirm-4-guarded-tar.log",
+    "seconds": 8.71346583403647,
+    "validated": true
+  }
+]

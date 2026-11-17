@@ -1,0 +1,162 @@
+[
+  {
+    "case": "gzip",
+    "variant": "base",
+    "round": "independent-0",
+    "iterations": 7,
+    "wall_seconds": 8.706967749865726,
+    "log": "independent-0-base-gzip.log",
+    "seconds": 7.933889375068247,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "fused",
+    "round": "independent-0",
+    "iterations": 7,
+    "wall_seconds": 8.682495624991134,
+    "log": "independent-0-fused-gzip.log",
+    "seconds": 7.925425583962351,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "base",
+    "round": "independent-0",
+    "iterations": 33,
+    "wall_seconds": 6.591933957999572,
+    "log": "independent-0-base-gunzip.log",
+    "seconds": 6.336339165922254,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "fused",
+    "round": "independent-0",
+    "iterations": 33,
+    "wall_seconds": 6.574931875104085,
+    "log": "independent-0-fused-gunzip.log",
+    "seconds": 6.321272667031735,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "base",
+    "round": "independent-0",
+    "iterations": 7,
+    "wall_seconds": 9.564181666821241,
+    "log": "independent-0-base-sed.log",
+    "seconds": 9.30455324985087,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "fused",
+    "round": "independent-0",
+    "iterations": 7,
+    "wall_seconds": 9.594601416960359,
+    "log": "independent-0-fused-sed.log",
+    "seconds": 9.341355999931693,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "base",
+    "round": "independent-0",
+    "iterations": 79,
+    "wall_seconds": 2.799775250023231,
+    "log": "independent-0-base-grep_fixed.log",
+    "seconds": 2.547051959205419,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "fused",
+    "round": "independent-0",
+    "iterations": 79,
+    "wall_seconds": 2.760614041937515,
+    "log": "independent-0-fused-grep_fixed.log",
+    "seconds": 2.5067165829241276,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "base",
+    "round": "independent-0",
+    "iterations": 51,
+    "wall_seconds": 4.957578208995983,
+    "log": "independent-0-base-grep_regex.log",
+    "seconds": 4.704905042191967,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "fused",
+    "round": "independent-0",
+    "iterations": 51,
+    "wall_seconds": 4.993932583136484,
+    "log": "independent-0-fused-grep_regex.log",
+    "seconds": 4.742605665931478,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "base",
+    "round": "independent-0",
+    "iterations": 19,
+    "wall_seconds": 7.551077458076179,
+    "log": "independent-0-base-sort.log",
+    "seconds": 7.298326791962609,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "fused",
+    "round": "independent-0",
+    "iterations": 19,
+    "wall_seconds": 7.507666541961953,
+    "log": "independent-0-fused-sort.log",
+    "seconds": 7.253959582885727,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "base",
+    "round": "independent-0",
+    "iterations": 36,
+    "wall_seconds": 4.756603166926652,
+    "log": "independent-0-base-sha256.log",
+    "seconds": 4.503809166839346,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "fused",
+    "round": "independent-0",
+    "iterations": 36,
+    "wall_seconds": 4.748037833953276,
+    "log": "independent-0-fused-sha256.log",
+    "seconds": 4.498231792123988,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "independent-0",
+    "iterations": 82,
+    "wall_seconds": 2.702397792134434,
+    "log": "independent-0-base-tar.log",
+    "seconds": 2.4507426249329,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "fused",
+    "round": "independent-0",
+    "iterations": 82,
+    "wall_seconds": 2.728815667098388,
+    "log": "independent-0-fused-tar.log",
+    "seconds": 2.4766122500877827,
+    "validated": true
+  }
+]

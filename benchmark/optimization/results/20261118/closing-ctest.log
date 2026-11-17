@@ -1,0 +1,10 @@
+Internal ctest changing into directory: /Users/jiangyiheng/repos/x86emu/artifacts/fusion-specialization-pin-20261118/verify-build
+Test project /Users/jiangyiheng/repos/x86emu/artifacts/fusion-specialization-pin-20261118/verify-build
+    Start 1: specialization_index
+1/2 Test #1: specialization_index .............   Passed    2.67 sec
+    Start 2: decode_storage
+2/2 Test #2: decode_storage ...................   Passed    0.42 sec
+
+100% tests passed, 0 tests failed out of 2
+
+Total Test time (real) =   3.10 sec

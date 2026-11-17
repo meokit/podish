@@ -1,0 +1,548 @@
+[
+  {
+    "case": "coremark_gcc",
+    "variant": "base",
+    "round": "protected-confirm-0",
+    "iterations": 60000,
+    "wall_seconds": 18.19517079181969,
+    "log": "protected-confirm-0-base-coremark_gcc.log",
+    "seconds": 17.937,
+    "score": 3345.040977,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "fused",
+    "round": "protected-confirm-0",
+    "iterations": 60000,
+    "wall_seconds": 13.847245041979477,
+    "log": "protected-confirm-0-fused-coremark_gcc.log",
+    "seconds": 13.576,
+    "score": 4419.563936,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "base",
+    "round": "protected-confirm-0",
+    "iterations": 14,
+    "wall_seconds": 8.28563362499699,
+    "log": "protected-confirm-0-base-gzip.log",
+    "seconds": 8.034359459066764,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "fused",
+    "round": "protected-confirm-0",
+    "iterations": 14,
+    "wall_seconds": 8.223152999999002,
+    "log": "protected-confirm-0-fused-gzip.log",
+    "seconds": 7.972731665940955,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "base",
+    "round": "protected-confirm-0",
+    "iterations": 66,
+    "wall_seconds": 6.701695709023625,
+    "log": "protected-confirm-0-base-gunzip.log",
+    "seconds": 6.450182333122939,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "fused",
+    "round": "protected-confirm-0",
+    "iterations": 66,
+    "wall_seconds": 6.768619625130668,
+    "log": "protected-confirm-0-fused-gunzip.log",
+    "seconds": 6.515097792027518,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "base",
+    "round": "protected-confirm-0",
+    "iterations": 14,
+    "wall_seconds": 9.645181749947369,
+    "log": "protected-confirm-0-base-sed.log",
+    "seconds": 9.391882000025362,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "fused",
+    "round": "protected-confirm-0",
+    "iterations": 14,
+    "wall_seconds": 9.752905874978751,
+    "log": "protected-confirm-0-fused-sed.log",
+    "seconds": 9.497652709018439,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "base",
+    "round": "protected-confirm-0",
+    "iterations": 158,
+    "wall_seconds": 3.101040625013411,
+    "log": "protected-confirm-0-base-grep_fixed.log",
+    "seconds": 2.849056832958013,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "fused",
+    "round": "protected-confirm-0",
+    "iterations": 158,
+    "wall_seconds": 3.1139262500219047,
+    "log": "protected-confirm-0-fused-grep_fixed.log",
+    "seconds": 2.862630374962464,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "base",
+    "round": "protected-confirm-0",
+    "iterations": 102,
+    "wall_seconds": 5.258718957891688,
+    "log": "protected-confirm-0-base-grep_regex.log",
+    "seconds": 5.004634165903553,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "fused",
+    "round": "protected-confirm-0",
+    "iterations": 102,
+    "wall_seconds": 5.191640416858718,
+    "log": "protected-confirm-0-fused-grep_regex.log",
+    "seconds": 4.936131917173043,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "base",
+    "round": "protected-confirm-0",
+    "iterations": 38,
+    "wall_seconds": 7.690309167141095,
+    "log": "protected-confirm-0-base-sort.log",
+    "seconds": 7.436079625040293,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "fused",
+    "round": "protected-confirm-0",
+    "iterations": 38,
+    "wall_seconds": 7.6795762500260025,
+    "log": "protected-confirm-0-fused-sort.log",
+    "seconds": 7.416403792100027,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "base",
+    "round": "protected-confirm-0",
+    "iterations": 72,
+    "wall_seconds": 5.003382874885574,
+    "log": "protected-confirm-0-base-sha256.log",
+    "seconds": 4.752380167134106,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "fused",
+    "round": "protected-confirm-0",
+    "iterations": 72,
+    "wall_seconds": 4.991350790951401,
+    "log": "protected-confirm-0-fused-sha256.log",
+    "seconds": 4.734142249915749,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "protected-confirm-0",
+    "iterations": 164,
+    "wall_seconds": 3.1533585828728974,
+    "log": "protected-confirm-0-base-tar.log",
+    "seconds": 2.8995043749455363,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "fused",
+    "round": "protected-confirm-0",
+    "iterations": 164,
+    "wall_seconds": 3.1658973328303546,
+    "log": "protected-confirm-0-fused-tar.log",
+    "seconds": 2.9062353749759495,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "fused",
+    "round": "protected-confirm-1",
+    "iterations": 60000,
+    "wall_seconds": 13.919122667051852,
+    "log": "protected-confirm-1-fused-coremark_gcc.log",
+    "seconds": 13.673,
+    "score": 4388.210342,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "base",
+    "round": "protected-confirm-1",
+    "iterations": 60000,
+    "wall_seconds": 18.12480541691184,
+    "log": "protected-confirm-1-base-coremark_gcc.log",
+    "seconds": 17.877,
+    "score": 3356.26783,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "fused",
+    "round": "protected-confirm-1",
+    "iterations": 14,
+    "wall_seconds": 8.216907666996121,
+    "log": "protected-confirm-1-fused-gzip.log",
+    "seconds": 7.962494625011459,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "base",
+    "round": "protected-confirm-1",
+    "iterations": 14,
+    "wall_seconds": 8.265367457875982,
+    "log": "protected-confirm-1-base-gzip.log",
+    "seconds": 8.0117680830881,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "fused",
+    "round": "protected-confirm-1",
+    "iterations": 66,
+    "wall_seconds": 6.706980040995404,
+    "log": "protected-confirm-1-fused-gunzip.log",
+    "seconds": 6.454815374920145,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "base",
+    "round": "protected-confirm-1",
+    "iterations": 66,
+    "wall_seconds": 6.725618249969557,
+    "log": "protected-confirm-1-base-gunzip.log",
+    "seconds": 6.468813291983679,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "fused",
+    "round": "protected-confirm-1",
+    "iterations": 14,
+    "wall_seconds": 9.539922791998833,
+    "log": "protected-confirm-1-fused-sed.log",
+    "seconds": 9.283475833944976,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "base",
+    "round": "protected-confirm-1",
+    "iterations": 14,
+    "wall_seconds": 9.634599291952327,
+    "log": "protected-confirm-1-base-sed.log",
+    "seconds": 9.37885458394885,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "fused",
+    "round": "protected-confirm-1",
+    "iterations": 158,
+    "wall_seconds": 3.1192644590046257,
+    "log": "protected-confirm-1-fused-grep_fixed.log",
+    "seconds": 2.8621438750997186,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "base",
+    "round": "protected-confirm-1",
+    "iterations": 158,
+    "wall_seconds": 3.1105636660940945,
+    "log": "protected-confirm-1-base-grep_fixed.log",
+    "seconds": 2.857366875046864,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "fused",
+    "round": "protected-confirm-1",
+    "iterations": 102,
+    "wall_seconds": 5.302573458990082,
+    "log": "protected-confirm-1-fused-grep_regex.log",
+    "seconds": 5.047553333919495,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "base",
+    "round": "protected-confirm-1",
+    "iterations": 102,
+    "wall_seconds": 5.229299541795626,
+    "log": "protected-confirm-1-base-grep_regex.log",
+    "seconds": 4.973612958099693,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "fused",
+    "round": "protected-confirm-1",
+    "iterations": 38,
+    "wall_seconds": 7.717253749957308,
+    "log": "protected-confirm-1-fused-sort.log",
+    "seconds": 7.46346200001426,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "base",
+    "round": "protected-confirm-1",
+    "iterations": 38,
+    "wall_seconds": 7.753434666898102,
+    "log": "protected-confirm-1-base-sort.log",
+    "seconds": 7.497471125097945,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "fused",
+    "round": "protected-confirm-1",
+    "iterations": 72,
+    "wall_seconds": 5.014710916904733,
+    "log": "protected-confirm-1-fused-sha256.log",
+    "seconds": 4.759632166009396,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "base",
+    "round": "protected-confirm-1",
+    "iterations": 72,
+    "wall_seconds": 4.992907792096958,
+    "log": "protected-confirm-1-base-sha256.log",
+    "seconds": 4.735660000005737,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "fused",
+    "round": "protected-confirm-1",
+    "iterations": 164,
+    "wall_seconds": 3.1603581248782575,
+    "log": "protected-confirm-1-fused-tar.log",
+    "seconds": 2.9043429158627987,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "protected-confirm-1",
+    "iterations": 164,
+    "wall_seconds": 3.164984832983464,
+    "log": "protected-confirm-1-base-tar.log",
+    "seconds": 2.9078132088761777,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "base",
+    "round": "protected-confirm-2",
+    "iterations": 60000,
+    "wall_seconds": 18.28731149993837,
+    "log": "protected-confirm-2-base-coremark_gcc.log",
+    "seconds": 18.04,
+    "score": 3325.94235,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "fused",
+    "round": "protected-confirm-2",
+    "iterations": 60000,
+    "wall_seconds": 13.922693000175059,
+    "log": "protected-confirm-2-fused-coremark_gcc.log",
+    "seconds": 13.672,
+    "score": 4388.531305,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "base",
+    "round": "protected-confirm-2",
+    "iterations": 14,
+    "wall_seconds": 8.274810750037432,
+    "log": "protected-confirm-2-base-gzip.log",
+    "seconds": 8.018379457993433,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "fused",
+    "round": "protected-confirm-2",
+    "iterations": 14,
+    "wall_seconds": 8.339665625011548,
+    "log": "protected-confirm-2-fused-gzip.log",
+    "seconds": 8.083527166163549,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "base",
+    "round": "protected-confirm-2",
+    "iterations": 66,
+    "wall_seconds": 6.736812500050291,
+    "log": "protected-confirm-2-base-gunzip.log",
+    "seconds": 6.482857958879322,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "fused",
+    "round": "protected-confirm-2",
+    "iterations": 66,
+    "wall_seconds": 6.800147207919508,
+    "log": "protected-confirm-2-fused-gunzip.log",
+    "seconds": 6.545726291835308,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "base",
+    "round": "protected-confirm-2",
+    "iterations": 14,
+    "wall_seconds": 9.638552417047322,
+    "log": "protected-confirm-2-base-sed.log",
+    "seconds": 9.382671250030398,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "fused",
+    "round": "protected-confirm-2",
+    "iterations": 14,
+    "wall_seconds": 9.581670040963218,
+    "log": "protected-confirm-2-fused-sed.log",
+    "seconds": 9.327457749983296,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "base",
+    "round": "protected-confirm-2",
+    "iterations": 158,
+    "wall_seconds": 3.146722750039771,
+    "log": "protected-confirm-2-base-grep_fixed.log",
+    "seconds": 2.887606249889359,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "fused",
+    "round": "protected-confirm-2",
+    "iterations": 158,
+    "wall_seconds": 3.1332763340324163,
+    "log": "protected-confirm-2-fused-grep_fixed.log",
+    "seconds": 2.8781172919552773,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "base",
+    "round": "protected-confirm-2",
+    "iterations": 102,
+    "wall_seconds": 5.315658124862239,
+    "log": "protected-confirm-2-base-grep_regex.log",
+    "seconds": 5.060007374966517,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "fused",
+    "round": "protected-confirm-2",
+    "iterations": 102,
+    "wall_seconds": 5.257041250122711,
+    "log": "protected-confirm-2-fused-grep_regex.log",
+    "seconds": 5.000588458031416,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "base",
+    "round": "protected-confirm-2",
+    "iterations": 38,
+    "wall_seconds": 7.684007333824411,
+    "log": "protected-confirm-2-base-sort.log",
+    "seconds": 7.4267793339677155,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "fused",
+    "round": "protected-confirm-2",
+    "iterations": 38,
+    "wall_seconds": 7.716478749876842,
+    "log": "protected-confirm-2-fused-sort.log",
+    "seconds": 7.46164954197593,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "base",
+    "round": "protected-confirm-2",
+    "iterations": 72,
+    "wall_seconds": 5.055741583928466,
+    "log": "protected-confirm-2-base-sha256.log",
+    "seconds": 4.801825291942805,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "fused",
+    "round": "protected-confirm-2",
+    "iterations": 72,
+    "wall_seconds": 5.002641417086124,
+    "log": "protected-confirm-2-fused-sha256.log",
+    "seconds": 4.74936316604726,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "protected-confirm-2",
+    "iterations": 164,
+    "wall_seconds": 3.2776798750273883,
+    "log": "protected-confirm-2-base-tar.log",
+    "seconds": 3.0200236670207232,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "fused",
+    "round": "protected-confirm-2",
+    "iterations": 164,
+    "wall_seconds": 3.1447171659674495,
+    "log": "protected-confirm-2-fused-tar.log",
+    "seconds": 2.886880708858371,
+    "validated": true
+  }
+]

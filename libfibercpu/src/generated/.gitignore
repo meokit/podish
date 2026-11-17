@@ -2,3 +2,4 @@
 !.gitignore
 !superopcodes.generated.cpp
 !instruction_fusion_families.json
+!superopcodes.extended.generated.cpp

@@ -1,0 +1,1385 @@
+{
+  "metadata": {
+    "extended_lookup": true,
+    "purpose": "Current GNU base + current GCC CoreMark 64 observed pairs and 32 four-op sequences",
+    "training_iterations": 5000
+  },
+  "candidates": [
+    {
+      "pair": [
+        "op::OpGroup1_EvIz_And_32_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 14613400,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 104635433,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIz_Cmp_32_Flags_Ecx",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 390582,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 52928971,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_B_Rel32"
+      ],
+      "weighted_exec_count": 10977855,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIz_Cmp_32_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 2458215,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32",
+        "op::OpJcc_AE_Rel32"
+      ],
+      "weighted_exec_count": 45498897,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 12507814,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EbIb_Cmp_Flags",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 14332667,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EvGv_32_ModReg_Edx",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 12972276,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EbGb",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 6977265,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Cmp_32_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 12841564,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EbIb_Cmp_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 26272729,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_L_Rel32"
+      ],
+      "weighted_exec_count": 26945206,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EbGb",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 54649852,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EvGv_32_ModReg_Eax",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 12138308,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EvGv_32_ModReg",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 10875366,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Cmp_32_Flags",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 21383533,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EbGb",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 22810795,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EvGv_32_ModReg_Ecx",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 7418761,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_AE_Rel32"
+      ],
+      "weighted_exec_count": 9840743,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_AlImm",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 5749745,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpSub_GvEv",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 5879361,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_GvEv_32",
+        "op::OpJcc_AE_Rel32"
+      ],
+      "weighted_exec_count": 9821366,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EvGv_32_ModReg_Eax",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 2145589,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EbGb",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 4332301,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_LE_Rel32"
+      ],
+      "weighted_exec_count": 7373018,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32",
+        "op::OpJcc_LE_Rel32"
+      ],
+      "weighted_exec_count": 9246020,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup5_Ev_Dec_32_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 30597267,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIz_And_32_Flags",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 6848999,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32",
+        "op::OpJcc_B_Rel32"
+      ],
+      "weighted_exec_count": 1596141,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Cmp_32_Flags",
+        "op::OpJcc_BE_Rel32"
+      ],
+      "weighted_exec_count": 4239154,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup3_Ev_Not_32_Flags",
+        "op::OpAnd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_And_32_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 14612156,
+      "score": 0.047234386722153326,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpLea_32_Ecx",
+        "op::OpGroup3_Ev_Not_32_Flags",
+        "op::OpAnd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_And_32_Flags"
+      ],
+      "weighted_exec_count": 12668802,
+      "score": 0.04175698355807829,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment",
+        "op::OpLea_32_Ecx",
+        "op::OpGroup3_Ev_Not_32_Flags",
+        "op::OpAnd_EvGv_NF_32_ModReg"
+      ],
+      "weighted_exec_count": 12653199,
+      "score": 0.041710651711573836,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Ecx",
+        "op::OpXor_GvEv_NF",
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 50332298,
+      "score": 0.029207676631501076,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte",
+        "op::OpMov_Load_Ecx",
+        "op::OpXor_GvEv_NF",
+        "op::OpCmp_EvGv_32_ModReg"
+      ],
+      "weighted_exec_count": 50332298,
+      "score": 0.029207676631501076,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpGroup2_EvIb_Shr",
+        "op::OpMov_EvGv_Esi",
+        "op::OpMovzx_Byte",
+        "op::OpMov_Load_Ecx"
+      ],
+      "weighted_exec_count": 50332300,
+      "score": 0.02920767593444219,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpInc_Reg_NF",
+        "op::OpXor_EvGv_NF_32_ModReg",
+        "op::OpGroup2_EvIb_Shr",
+        "op::OpMov_EvGv_Esi"
+      ],
+      "weighted_exec_count": 50332300,
+      "score": 0.02920767593444219,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Esi",
+        "op::OpMovzx_Byte",
+        "op::OpMov_Load_Ecx",
+        "op::OpXor_GvEv_NF"
+      ],
+      "weighted_exec_count": 50332300,
+      "score": 0.02920767593444219,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte",
+        "op::OpInc_Reg_NF",
+        "op::OpXor_EvGv_NF_32_ModReg",
+        "op::OpGroup2_EvIb_Shr"
+      ],
+      "weighted_exec_count": 50332300,
+      "score": 0.02920767593444219,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpXor_EvGv_NF_32_ModReg",
+        "op::OpGroup2_EvIb_Shr",
+        "op::OpMov_EvGv_Esi",
+        "op::OpMovzx_Byte"
+      ],
+      "weighted_exec_count": 50332300,
+      "score": 0.02920767593444219,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpGroup5_Ev_Inc_32_Flags",
+        "op::OpMovzx_Byte",
+        "op::OpCmp_EvGv_32",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 29710009,
+      "score": 0.012577838546047156,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edx",
+        "op::OpMov_Load_Eax",
+        "op::OpGroup5_Ev_Inc_32_Flags",
+        "op::OpMovzx_Byte"
+      ],
+      "weighted_exec_count": 29710082,
+      "score": 0.012576672253618111,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Eax",
+        "op::OpGroup5_Ev_Inc_32_Flags",
+        "op::OpMovzx_Byte",
+        "op::OpCmp_EvGv_32"
+      ],
+      "weighted_exec_count": 29710013,
+      "score": 0.012576620521232445,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpPop_Reg32_Ebx",
+        "op::OpPop_Reg32_Esi",
+        "op::OpPop_Reg32_Edi",
+        "op::OpPop_Reg32_Ebp"
+      ],
+      "weighted_exec_count": 22042766,
+      "score": 0.0123400234653181,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIz_Add_16_NoFlags",
+        "op::OpMov_EvGv",
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 50135040,
+      "score": 0.00972831295403136,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpLea_32",
+        "op::OpGroup3_Ev_Not_32_Flags",
+        "op::OpAnd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_And_32_Flags"
+      ],
+      "weighted_exec_count": 8791504,
+      "score": 0.009551998495896444,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpXor_EvGv_NF_32_ModReg",
+        "op::OpLea_32",
+        "op::OpGroup3_Ev_Not_32_Flags",
+        "op::OpAnd_EvGv_NF_32_ModReg"
+      ],
+      "weighted_exec_count": 8791504,
+      "score": 0.009551998495896444,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpInc_Reg_NF",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_Cmp_32_Flags_Ecx",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 347136,
+      "score": 0.00948876216411094,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte",
+        "op::OpInc_Reg_NF",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_Cmp_32_Flags_Ecx"
+      ],
+      "weighted_exec_count": 347136,
+      "score": 0.00948876216411094,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpAdd_EvGv",
+        "op::OpMovsx_Byte",
+        "op::OpInc_Reg_NF",
+        "op::OpAdd_EvGv_NF_32_ModReg"
+      ],
+      "weighted_exec_count": 350208,
+      "score": 0.008450147672878253,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpInc_Reg_NF",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_Cmp_32_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 350208,
+      "score": 0.008450147672878253,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovsx_Byte",
+        "op::OpInc_Reg_NF",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_Cmp_32_Flags"
+      ],
+      "weighted_exec_count": 350208,
+      "score": 0.008450147672878253,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte",
+        "op::OpAdd_EvGv",
+        "op::OpMovsx_Byte",
+        "op::OpInc_Reg_NF"
+      ],
+      "weighted_exec_count": 350208,
+      "score": 0.008450147672878253,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte_32_Eax",
+        "op::OpMovzx_Byte_32_Eax",
+        "op::OpAdd_EvGv",
+        "op::OpMovzx_Byte_32_Eax"
+      ],
+      "weighted_exec_count": 1942370,
+      "score": 0.00704304581079964,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edi",
+        "op::OpMov_EvGv_Eax",
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_L_Rel32"
+      ],
+      "weighted_exec_count": 24809388,
+      "score": 0.006598668351408579,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte",
+        "op::OpInc_Reg_NF",
+        "op::OpGroup1_EbIb_Cmp_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 24527198,
+      "score": 0.006536617575416525,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edi",
+        "op::OpMovzx_Byte",
+        "op::OpInc_Reg_NF",
+        "op::OpGroup1_EbIb_Cmp_Flags"
+      ],
+      "weighted_exec_count": 24527196,
+      "score": 0.006536616559306998,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Esi",
+        "op::OpMov_Load_Edi",
+        "op::OpMovzx_Byte",
+        "op::OpInc_Reg_NF"
+      ],
+      "weighted_exec_count": 24527196,
+      "score": 0.006536616559306998,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_RegImm8",
+        "op::OpMov_Load_Edi",
+        "op::OpMov_EvGv_Eax",
+        "op::OpCmp_EvGv_32_ModReg"
+      ],
+      "weighted_exec_count": 24052937,
+      "score": 0.006420545820724553,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Sub_32_Flags_Eax",
+        "op::OpMovzx_Byte_32_Ecx",
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 1760847,
+      "score": 0.006243867937471764,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Eax",
+        "op::OpGroup1_EvIb_Sub_32_Flags_Eax",
+        "op::OpMovzx_Byte_32_Ecx",
+        "op::OpCmp_EvGv_32_ModReg"
+      ],
+      "weighted_exec_count": 1760847,
+      "score": 0.006243867937471764,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment",
+        "op::OpXor_EvGv_NF_32_ModReg",
+        "op::OpLea_32",
+        "op::OpGroup3_Ev_Not_32_Flags"
+      ],
+      "weighted_exec_count": 1958957,
+      "score": 0.005523735010579485,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpCmp_EvGv_32_ModReg"
+      ],
+      "training_count": 35060034
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_NE_Rel8"
+      ],
+      "training_count": 31926034
+    },
+    {
+      "pair": [
+        "op::OpTest_EvGv_32_ModReg_Edx",
+        "op::OpJcc_NE_Rel8"
+      ],
+      "training_count": 30600129
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Esi",
+        "op::OpTest_EvGv_32_ModReg_Edx"
+      ],
+      "training_count": 30600006
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edx_EsiBaseNoIndexNoSegment",
+        "op::OpMov_Store_Ecx_EsiBaseNoIndexNoSegment"
+      ],
+      "training_count": 30600000
+    },
+    {
+      "pair": [
+        "op::OpMov_Store_Ecx_EsiBaseNoIndexNoSegment",
+        "op::OpMov_EvGv_Esi"
+      ],
+      "training_count": 30600000
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Edx",
+        "op::OpMov_Load_Edx_EsiBaseNoIndexNoSegment"
+      ],
+      "training_count": 29580000
+    },
+    {
+      "pair": [
+        "op::OpImul_GvEv",
+        "op::OpAdd_EvGv_NF_32_ModReg"
+      ],
+      "training_count": 29340000
+    },
+    {
+      "pair": [
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpImul_GvEv"
+      ],
+      "training_count": 29160000
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_16",
+        "op::OpJcc_NE_Rel8"
+      ],
+      "training_count": 28575000
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Eax_EaxBaseNoIndexNoSegment",
+        "op::OpTest_EvGv_32_ModReg_Eax"
+      ],
+      "training_count": 28325006
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg"
+      ],
+      "training_count": 20420124
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags",
+        "op::OpJcc_E_Rel32"
+      ],
+      "training_count": 16400003
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Eax",
+        "op::OpAnd_EaxImm_NF"
+      ],
+      "training_count": 16060044
+    },
+    {
+      "pair": [
+        "op::OpGroup2_EvIb_Sar_ModReg",
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg"
+      ],
+      "training_count": 15600089
+    },
+    {
+      "pair": [
+        "op::OpTest_EvGv_32_ModReg_Eax",
+        "op::OpJcc_E_Rel8"
+      ],
+      "training_count": 15502831
+    },
+    {
+      "pair": [
+        "op::OpGroup2_EvIb_Shl_ModReg",
+        "op::OpOr_EvGv_NF_32_ModReg"
+      ],
+      "training_count": 15420044
+    },
+    {
+      "pair": [
+        "op::OpMovsx_Word_32_Edx",
+        "op::OpMovsx_Word_32_Eax"
+      ],
+      "training_count": 15135294
+    },
+    {
+      "pair": [
+        "op::OpAnd_EaxImm_NF",
+        "op::OpGroup1_EvIz_And_16_NoFlags"
+      ],
+      "training_count": 14920040
+    },
+    {
+      "pair": [
+        "op::OpOr_EvGv_NF_32_ModReg",
+        "op::OpMov_EvGv_Eax"
+      ],
+      "training_count": 14600040
+    },
+    {
+      "pair": [
+        "op::OpImul_GvEv",
+        "op::OpMov_EvGv_Eax"
+      ],
+      "training_count": 14580081
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Eax",
+        "op::OpGroup2_EvIb_Sar_ModReg"
+      ],
+      "training_count": 14580081
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Eax",
+        "op::OpAdd_EvGv_NF_32_ModReg"
+      ],
+      "training_count": 14580006
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
+        "op::OpAdd_EvGv_NF_32_ModReg"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
+        "op::OpImul_GvEv"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpGroup2_EvIb_Sar_ModReg",
+        "op::OpGroup2_EvIb_Sar_ModReg"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpMovsx_Word",
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Eax"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpMovsx_Word_32_Eax",
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpMovsx_Word_32_Edx",
+        "op::OpMovsx_Word"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Word",
+        "op::OpCmp_EvGv_16"
+      ],
+      "training_count": 14475003
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Ecx_EaxBaseNoIndexNoSegment",
+        "op::OpMovzx_Word"
+      ],
+      "training_count": 14475000
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
+        "op::OpTest_EbGb"
+      ],
+      "training_count": 14440000
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte_32_Edx",
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx"
+      ],
+      "training_count": 14440000
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Ecx_EaxBaseNoIndexNoSegment",
+        "op::OpMovzx_Byte"
+      ],
+      "training_count": 13955000
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte",
+        "op::OpCmp_EvGv_16"
+      ],
+      "training_count": 13955000
+    },
+    {
+      "pair": [
+        "op::OpGroup2_EvIb_Shr_ModReg",
+        "op::OpGroup2_EvIb_Shl_ModReg"
+      ],
+      "training_count": 12060032
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIz_And_16_NoFlags",
+        "op::OpGroup2_EvIb_Shr_ModReg"
+      ],
+      "training_count": 11680032
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Sub_32_NoFlags_Edx",
+        "op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags"
+      ],
+      "training_count": 11640000
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags",
+        "op::OpJcc_E_Rel32"
+      ],
+      "training_count": 10720000
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Edx",
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg"
+      ],
+      "training_count": 9680010
+    },
+    {
+      "pair": [
+        "op::OpPop_Reg32_Ebx",
+        "op::OpPop_Reg32_Esi"
+      ],
+      "training_count": 7836048
+    },
+    {
+      "pair": [
+        "op::OpPush_Reg32_Esi",
+        "op::OpPush_Reg32_Ebx"
+      ],
+      "training_count": 7835946
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "training_count": 7400036
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
+        "op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags"
+      ],
+      "training_count": 7400001
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags",
+        "op::OpJcc_E_Rel8"
+      ],
+      "training_count": 7060009
+    },
+    {
+      "pair": [
+        "op::OpPop_Reg32_Esi",
+        "op::OpPop_Reg32_Edi"
+      ],
+      "training_count": 6676028
+    },
+    {
+      "pair": [
+        "op::OpPush_Reg32_Edi",
+        "op::OpPush_Reg32_Esi"
+      ],
+      "training_count": 6675803
+    },
+    {
+      "pair": [
+        "op::OpTest_EbGb",
+        "op::OpJcc_NE_Rel8"
+      ],
+      "training_count": 6521319
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Ebx",
+        "op::OpCmp_EvGv_32_ModReg"
+      ],
+      "training_count": 6480012
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags",
+        "op::OpJcc_BE_Rel32"
+      ],
+      "training_count": 6440000
+    },
+    {
+      "pair": [
+        "op::OpPop_Reg32_Edi",
+        "op::OpPop_Reg32_Ebp"
+      ],
+      "training_count": 6356008
+    },
+    {
+      "pair": [
+        "op::OpPush_Reg32_Ebp",
+        "op::OpPush_Reg32_Edi"
+      ],
+      "training_count": 6335923
+    },
+    {
+      "pair": [
+        "op::OpLea_32",
+        "op::OpLea_32"
+      ],
+      "training_count": 5495042
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags",
+        "op::OpJcc_BE_Rel8"
+      ],
+      "training_count": 5200000
+    },
+    {
+      "pair": [
+        "op::OpPush_Reg32_Esi",
+        "op::OpPush_Reg32_Edi"
+      ],
+      "training_count": 5120125
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EbIb_Cmp_Flags",
+        "op::OpJcc_NE_Rel8"
+      ],
+      "training_count": 5120114
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte_32_Ecx",
+        "op::OpTest_EbGb"
+      ],
+      "training_count": 5120011
+    },
+    {
+      "pair": [
+        "op::OpPush_Reg32_Ebx",
+        "op::OpMov_Load_Edi_EspBaseNoIndexNoSegment"
+      ],
+      "training_count": 5120002
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Eax_EspBaseNoIndexNoSegment",
+        "op::OpGroup1_EbIb_Cmp_Flags"
+      ],
+      "training_count": 5120001
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Eax_EspBaseNoIndexNoSegment",
+        "op::OpMov_Load_Edx"
+      ],
+      "training_count": 5120000
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edi_EspBaseNoIndexNoSegment",
+        "op::OpMov_Load_Eax_EspBaseNoIndexNoSegment"
+      ],
+      "training_count": 5120000
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edx",
+        "op::OpMovzx_Byte_32_Ecx"
+      ],
+      "training_count": 5120000
+    },
+    {
+      "pair": [
+        "op::OpMov_Store_Edx_EsiBaseNoIndexNoSegment",
+        "op::OpPop_Reg32_Ebx"
+      ],
+      "training_count": 5120000
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Ecx",
+        "op::OpMov_Load_Ecx_EaxBaseNoIndexNoSegment"
+      ],
+      "training_count": 4860000
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edx_EsiBaseNoIndexNoSegment",
+        "op::OpMov_Store_Ecx_EsiBaseNoIndexNoSegment",
+        "op::OpMov_EvGv_Esi",
+        "op::OpTest_EvGv_32_ModReg_Edx"
+      ],
+      "training_count": 30600000
+    },
+    {
+      "pair": [
+        "op::OpMov_Store_Ecx_EsiBaseNoIndexNoSegment",
+        "op::OpMov_EvGv_Esi",
+        "op::OpTest_EvGv_32_ModReg_Edx",
+        "op::OpJcc_NE_Rel8"
+      ],
+      "training_count": 30600000
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Edx",
+        "op::OpMov_Load_Edx_EsiBaseNoIndexNoSegment",
+        "op::OpMov_Store_Ecx_EsiBaseNoIndexNoSegment",
+        "op::OpMov_EvGv_Esi"
+      ],
+      "training_count": 29580000
+    },
+    {
+      "pair": [
+        "op::OpImul_GvEv",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_NE_Rel8"
+      ],
+      "training_count": 29160000
+    },
+    {
+      "pair": [
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpImul_GvEv",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpCmp_EvGv_32_ModReg"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpImul_GvEv",
+        "op::OpMov_EvGv_Eax",
+        "op::OpGroup2_EvIb_Sar_ModReg"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Eax",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpImul_GvEv",
+        "op::OpAdd_EvGv_NF_32_ModReg"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpImul_GvEv",
+        "op::OpMov_EvGv_Eax"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
+        "op::OpImul_GvEv",
+        "op::OpAdd_EvGv_NF_32_ModReg"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
+        "op::OpImul_GvEv",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpCmp_EvGv_32_ModReg"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpGroup2_EvIb_Sar_ModReg",
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
+        "op::OpImul_GvEv"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpGroup2_EvIb_Sar_ModReg",
+        "op::OpGroup2_EvIb_Sar_ModReg",
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpImul_GvEv",
+        "op::OpMov_EvGv_Eax",
+        "op::OpGroup2_EvIb_Sar_ModReg",
+        "op::OpGroup2_EvIb_Sar_ModReg"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Eax",
+        "op::OpGroup2_EvIb_Sar_ModReg",
+        "op::OpGroup2_EvIb_Sar_ModReg",
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpMovsx_Word",
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Eax",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpImul_GvEv"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpMovsx_Word_32_Eax",
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpImul_GvEv"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpMovsx_Word_32_Edx",
+        "op::OpMovsx_Word",
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Eax",
+        "op::OpAdd_EvGv_NF_32_ModReg"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpMovsx_Word_32_Edx",
+        "op::OpMovsx_Word_32_Eax",
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
+        "op::OpAdd_EvGv_NF_32_ModReg"
+      ],
+      "training_count": 14580000
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Ecx_EaxBaseNoIndexNoSegment",
+        "op::OpMovzx_Word",
+        "op::OpCmp_EvGv_16",
+        "op::OpJcc_NE_Rel8"
+      ],
+      "training_count": 14475000
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Ecx_EaxBaseNoIndexNoSegment",
+        "op::OpMovzx_Byte",
+        "op::OpCmp_EvGv_16",
+        "op::OpJcc_NE_Rel8"
+      ],
+      "training_count": 13955000
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIz_And_16_NoFlags",
+        "op::OpGroup2_EvIb_Shr_ModReg",
+        "op::OpGroup2_EvIb_Shl_ModReg",
+        "op::OpOr_EvGv_NF_32_ModReg"
+      ],
+      "training_count": 11680032
+    },
+    {
+      "pair": [
+        "op::OpGroup2_EvIb_Shr_ModReg",
+        "op::OpGroup2_EvIb_Shl_ModReg",
+        "op::OpOr_EvGv_NF_32_ModReg",
+        "op::OpMov_EvGv_Eax"
+      ],
+      "training_count": 11680032
+    },
+    {
+      "pair": [
+        "op::OpAnd_EaxImm_NF",
+        "op::OpGroup1_EvIz_And_16_NoFlags",
+        "op::OpGroup2_EvIb_Shr_ModReg",
+        "op::OpGroup2_EvIb_Shl_ModReg"
+      ],
+      "training_count": 10540028
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Eax",
+        "op::OpAnd_EaxImm_NF",
+        "op::OpGroup1_EvIz_And_16_NoFlags",
+        "op::OpGroup2_EvIb_Shr_ModReg"
+      ],
+      "training_count": 10540028
+    },
+    {
+      "pair": [
+        "op::OpGroup2_EvIb_Shl_ModReg",
+        "op::OpOr_EvGv_NF_32_ModReg",
+        "op::OpMov_EvGv_Eax",
+        "op::OpAnd_EaxImm_NF"
+      ],
+      "training_count": 10220028
+    },
+    {
+      "pair": [
+        "op::OpOr_EvGv_NF_32_ModReg",
+        "op::OpMov_EvGv_Eax",
+        "op::OpAnd_EaxImm_NF",
+        "op::OpGroup1_EvIz_And_16_NoFlags"
+      ],
+      "training_count": 10220028
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte_32_Edx",
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
+        "op::OpTest_EbGb",
+        "op::OpJcc_E_Rel32"
+      ],
+      "training_count": 7920000
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Edx",
+        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
+        "op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "training_count": 7400000
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte_32_Edx",
+        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
+        "op::OpTest_EbGb",
+        "op::OpJcc_NE_Rel8"
+      ],
+      "training_count": 6520000
+    },
+    {
+      "pair": [
+        "op::OpPush_Reg32_Ebp",
+        "op::OpPush_Reg32_Edi",
+        "op::OpPush_Reg32_Esi",
+        "op::OpPush_Reg32_Ebx"
+      ],
+      "training_count": 6335755
+    },
+    {
+      "pair": [
+        "op::OpPush_Reg32_Edi",
+        "op::OpPush_Reg32_Esi",
+        "op::OpPush_Reg32_Ebx",
+        "op::OpMov_Load_Edi_EspBaseNoIndexNoSegment"
+      ],
+      "training_count": 5120002
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Eax_EspBaseNoIndexNoSegment",
+        "op::OpMov_Load_Edx",
+        "op::OpMovzx_Byte_32_Ecx",
+        "op::OpTest_EbGb"
+      ],
+      "training_count": 5120000
+    }
+  ]
+}

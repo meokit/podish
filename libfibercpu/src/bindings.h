@@ -208,8 +208,10 @@ size_t X86_GetHandlerProfileStats(EmuState* state, X86_HandlerProfileEntry* buff
 
 // Build identity flags: 1=superopcodes, 2=exact Continue-edge training,
 // 4=block profiling, 8=approximate handler profiling.
+// Bits 4..5=operand mode (off/profile/register/hybrid), 8..9=pin mode, 10=added-fusions-only.
 uint32_t X86_GetBuildFeatures(void);
 const char* X86_GetSuperOpcodeSetHash(void);
+const char* X86_GetOptimizationConfig(void);
 typedef struct {
     void* first;
     void* second;

@@ -30,6 +30,11 @@ public unsafe partial class X86Native
 
     public static string GetSuperOpcodeSetHash() => Marshal.PtrToStringUTF8(GetSuperOpcodeSetHashPointer())!;
 
+    [LibraryImport(LibName, EntryPoint = "X86_GetOptimizationConfig")]
+    private static partial IntPtr GetOptimizationConfigPointer();
+
+    public static string GetOptimizationConfig() => Marshal.PtrToStringUTF8(GetOptimizationConfigPointer())!;
+
     [LibraryImport(LibName, EntryPoint = "X86_GetSequenceProfile")]
     public static partial nuint GetSequenceProfile(IntPtr state, SequenceProfileEntry* entries, nuint capacity);
 

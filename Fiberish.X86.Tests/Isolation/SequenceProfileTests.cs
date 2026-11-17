@@ -10,7 +10,11 @@ public sealed class SequenceProfileTests
     public void BuildIdentitySeparatesTrainingFromOptimization()
     {
         var features = X86Native.GetBuildFeatures();
-        Assert.Equal(0u, features & ~15u);
+        Assert.Equal(0u, features & ~0x73fu);
+        Assert.InRange((features >> 4) & 3u, 0u, 3u);
+        Assert.InRange((features >> 8) & 3u, 0u, 3u);
+        Assert.Contains("pin=", X86Native.GetOptimizationConfig());
+        Assert.Contains("operand=", X86Native.GetOptimizationConfig());
         Assert.NotEqual(3u, features & 3u);
         var hash = X86Native.GetSuperOpcodeSetHash();
         if ((features & 1) == 0) Assert.Equal("none", hash);

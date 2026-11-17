@@ -1,0 +1,2 @@
+# Keep reviewed validation evidence despite the repository-wide log ignore.
+!*.log

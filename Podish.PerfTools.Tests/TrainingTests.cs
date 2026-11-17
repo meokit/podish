@@ -91,7 +91,8 @@ public sealed class TrainingTests
             var generated = Tool.GenerateSuperopcodes(path, 3);
             Assert.Equal(generated, Tool.GenerateSuperopcodes(path, 3));
             Assert.DoesNotContain('\r', generated);
-            Assert.Contains("third->len == 0", generated); Assert.Contains("fourth->len != 0", generated);
+            Assert.Contains("third->len == 0", generated); Assert.Contains("fourth->len == 0", generated);
+            Assert.Contains("AcceptFusionOperandShape(ops, match.fused)", generated);
             Assert.Contains("constituent3", generated);
             var bucket = generated[generated.IndexOf("std::vector<GeneratedSequenceMatch>{", StringComparison.Ordinal)..];
             Assert.True(bucket.IndexOf("SuperOpcode_4_", StringComparison.Ordinal) < bucket.IndexOf("SuperOpcode_3_", StringComparison.Ordinal));

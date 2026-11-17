@@ -1,0 +1,86 @@
+[
+  {
+    "case": "coremark_gcc",
+    "variant": "base",
+    "round": "fused-screen-0",
+    "iterations": 60000,
+    "wall_seconds": 18.178916750010103,
+    "log": "fused-screen-0-base-coremark_gcc.log",
+    "seconds": 17.901,
+    "score": 3351.768058,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "fused",
+    "round": "fused-screen-0",
+    "iterations": 60000,
+    "wall_seconds": 14.273546458920464,
+    "log": "fused-screen-0-fused-coremark_gcc.log",
+    "seconds": 13.656,
+    "score": 4393.673111,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "fused-screen-0",
+    "iterations": 492,
+    "wall_seconds": 8.432689124951139,
+    "log": "fused-screen-0-base-tar.log",
+    "seconds": 8.17644750000909,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "fused",
+    "round": "fused-screen-0",
+    "iterations": 492,
+    "wall_seconds": 8.427071249810979,
+    "log": "fused-screen-0-fused-tar.log",
+    "seconds": 8.172074459027499,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "fused",
+    "round": "fused-screen-1",
+    "iterations": 60000,
+    "wall_seconds": 13.936699250014499,
+    "log": "fused-screen-1-fused-coremark_gcc.log",
+    "seconds": 13.686,
+    "score": 4384.042087,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "base",
+    "round": "fused-screen-1",
+    "iterations": 60000,
+    "wall_seconds": 18.27278449991718,
+    "log": "fused-screen-1-base-coremark_gcc.log",
+    "seconds": 18.023,
+    "score": 3329.07951,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "fused",
+    "round": "fused-screen-1",
+    "iterations": 492,
+    "wall_seconds": 8.50590950017795,
+    "log": "fused-screen-1-fused-tar.log",
+    "seconds": 8.246345499996096,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "fused-screen-1",
+    "iterations": 492,
+    "wall_seconds": 8.395556959090754,
+    "log": "fused-screen-1-base-tar.log",
+    "seconds": 8.143109750002623,
+    "validated": true
+  }
+]

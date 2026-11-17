@@ -12,6 +12,11 @@
         <NativeBuildDir Condition="'$(IsBrowserWasm)' == 'true'">build_native/browser-wasm</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' != ''">build_native/$(RuntimeIdentifier)</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' == ''">build_native/host</NativeBuildDir>
+        <FusionStrategy Condition="'$(FusionStrategy)' == ''">AUTO</FusionStrategy>
+        <OperandSpecialization Condition="'$(OperandSpecialization)' == ''">AUTO</OperandSpecialization>
+        <OperandScope Condition="'$(OperandScope)' == ''">AUTO</OperandScope>
+        <OperandBudget Condition="'$(OperandBudget)' == ''">256</OperandBudget>
+        <GprPin Condition="'$(GprPin)' == ''">OFF</GprPin>
         <SuperOpcodeTop Condition="'$(SuperOpcodeTop)' == ''">128</SuperOpcodeTop>
         <!-- Keep generated inputs outside the CMake tree: changing toolchains may recreate that tree. -->
         <SuperOpcodeGenerationDir>$([System.IO.Path]::Combine('$(MSBuildThisFileDirectory)', '$(BaseIntermediateOutputPath)', 'superopcode'))</SuperOpcodeGenerationDir>
@@ -35,6 +40,10 @@
     <!-- Define inputs for incremental build tracking -->
     <ItemGroup Condition="'$(LibFibercpuSourceExists)' == 'true'">
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/CMakeLists.txt" />
+        <NativeBuildInput Include="$(MSBuildProjectFullPath)" />
+        <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_operand_specializations.py" />
+        <NativeBuildInput Include="$(MSBuildThisFileDirectory)../benchmark/optimization/manifests/*" />
+        <NativeBuildInput Include="$(SuperOpcodeGenerationDir)/native-options.txt" />
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/src/**/*" />
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/3rdparty/**/*" />
         <NativeBuildInput Include="$(SuperOpcodeSource)" Condition="'$(SuperOpcodeSource)' != ''" />
@@ -58,6 +67,14 @@
             Outputs="$(SuperOpcodeSource)">
         <Exec WorkingDirectory="$(MSBuildThisFileDirectory).."
               Command="dotnet &quot;$(SuperOpcodeGeneratorDll)&quot; gen-superopcodes --input &quot;$(SuperOpcodeManifest)&quot; --output &quot;$(SuperOpcodeSource)&quot; --top $(SuperOpcodeTop)" />
+    </Target>
+
+    <Target Name="PrepareNativeOptions" BeforeTargets="BuildNativeLib"
+            Condition="'$(DesignTimeBuild)' != 'true' And '$(FiberishSkipNativeBuild)' != 'true'">
+        <MakeDir Directories="$(SuperOpcodeGenerationDir)" />
+        <WriteLinesToFile File="$(SuperOpcodeGenerationDir)/native-options.txt"
+            Lines="fusion=$(FusionStrategy);operand=$(OperandSpecialization);budget=$(OperandBudget);scope=$(OperandScope);pin=$(GprPin);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile)"
+            Overwrite="true" WriteOnlyWhenDifferent="true" />
     </Target>
 
     <Target Name="BuildNativeLib" BeforeTargets="BeforeBuild" 
@@ -94,7 +111,7 @@
             <CMakeSequenceProfile Condition="'$(EnableSequenceProfile)' == 'true'">ON</CMakeSequenceProfile>
             <CMakeSequenceProfile Condition="'$(CMakeSequenceProfile)' == ''">OFF</CMakeSequenceProfile>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_SEQUENCE_PROFILE=$(CMakeSequenceProfile)</CMakeArgs>
-            <SuperOpcodeSource Condition="'$(SuperOpcodeSource)' == ''">$(LibFibercpuSourceDir)/src/generated/superopcodes.generated.cpp</SuperOpcodeSource>
+            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_FUSION_STRATEGY=$(FusionStrategy) -DFIBERCPU_OPERAND_SPECIALIZATION=$(OperandSpecialization) -DFIBERCPU_OPERAND_BUDGET=$(OperandBudget) -DFIBERCPU_OPERAND_SCOPE=$(OperandScope) -DFIBERCPU_GPR_PIN=$(GprPin)</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_GENERATED_SUPEROPCODES_FILE=&quot;$(SuperOpcodeSource)&quot;</CMakeArgs>
             <CMakeGeneratorArgs Condition="'$(IsBrowserWasm)' == 'true'">-G Ninja</CMakeGeneratorArgs>
             <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_TOOLCHAIN_FILE=&quot;$(EmscriptenToolchainFile)&quot; -DCMAKE_CROSSCOMPILING_EMULATOR=&quot;$(BrowserWasmNodeExecutable)&quot;</CMakeArgs>

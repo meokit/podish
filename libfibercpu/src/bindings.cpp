@@ -1,4 +1,5 @@
 #include "bindings.h"
+#include "optimization_config.h"
 #if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
 #include <execinfo.h>
 #include <unistd.h>
@@ -294,7 +295,7 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
     DecodedOp* dst = concat->FirstOp();
     std::copy_n(staged_ops.data(), concat_slot_count, dst);
 
-    ApplySuperOpcodesToBlockOps(dst, concat_inst_count);
+    ApplySuperOpcodesToBlockOps(dst, concat_inst_count, true);
     concat->entry = concat->FirstOp()->handler;
     return concat;
 }
@@ -340,7 +341,7 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
     DecodedOp* dst = concat->FirstOp();
     std::copy_n(staged_ops.data(), concat_slot_count, dst);
 
-    ApplySuperOpcodesToBlockOps(dst, concat_inst_count);
+    ApplySuperOpcodesToBlockOps(dst, concat_inst_count, true);
     concat->entry = concat->FirstOp()->handler;
     return concat;
 }
@@ -599,9 +600,7 @@ void X86_SetMXCSR(EmuState* state, uint32_t val) { state->ctx.mxcsr = val; }
 // ----------------------------------------------------------------------------
 
 uint16_t X86_GetFCW(EmuState* state) { return state->ctx.fpu_cw; }
-void X86_SetFCW(EmuState* state, uint16_t val) {
-    state->ctx.fpu_cw = val;
-}
+void X86_SetFCW(EmuState* state, uint16_t val) { state->ctx.fpu_cw = val; }
 uint16_t X86_GetFSW(EmuState* state) { return state->ctx.fpu_sw; }
 void X86_SetFSW(EmuState* state, uint16_t val) {
     state->ctx.fpu_sw = val;
@@ -848,7 +847,8 @@ static bool ExecuteSingleInstructionOnStack(EmuState* state) {
         uint64_t utlb_tags = mem::InvalidMicroTlbAbiTags();
         uint64_t utlb_addend = 0;
         uint64_t flags_cache = GetStateFlagsCache(state);
-        head->handler(state, head, 0, utlb_tags, utlb_addend, std::numeric_limits<uint32_t>::max(), flags_cache);
+        head->handler(state, head, 0, utlb_tags, utlb_addend, std::numeric_limits<uint32_t>::max(),
+                      flags_cache FIBERCPU_PIN_INIT);
     } else if (!state->hooks.on_invalid_opcode(state)) {
         state->status = EmuStatus::Fault;
         state->fault_vector = 6;
@@ -942,8 +942,9 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                 uint64_t utlb_tags = mem::InvalidMicroTlbAbiTags();
                 uint64_t utlb_addend = 0;
                 uint64_t flags_cache = GetStateFlagsCache(state);
-                int64_t remaining = block_ptr->entry(state, head, batch_limit, utlb_tags, utlb_addend,
-                                                     std::numeric_limits<uint32_t>::max(), flags_cache);
+                int64_t remaining =
+                    block_ptr->entry(state, head, batch_limit, utlb_tags, utlb_addend,
+                                     std::numeric_limits<uint32_t>::max(), flags_cache FIBERCPU_PIN_INIT);
                 state->intercept_exec_write_for_smc = false;
                 total_run_insts += (initial_batch_limit - remaining);
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
@@ -996,8 +997,8 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                 state->allow_write_exec_page = false;
                 if (executed) ++total_run_insts;
                 if (state->status == EmuStatus::Running) {
-                    state->status = end_eip != 0 && state->ctx.eip == end_eip ? EmuStatus::Stopped
-                                                                                 : EmuStatus::CachePressure;
+                    state->status =
+                        end_eip != 0 && state->ctx.eip == end_eip ? EmuStatus::Stopped : EmuStatus::CachePressure;
                 }
             }
             break;
@@ -1122,8 +1123,14 @@ uint32_t X86_GetBuildFeatures(void) {
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     features |= 8u;
 #endif
+    features |= (FIBERCPU_OPERAND_MODE << 4) | (FIBERCPU_GPR_PIN_MODE << 8);
+#if FIBERCPU_OPERAND_FUSIONS_ONLY
+    features |= 1u << 10;
+#endif
     return features;
 }
+
+const char* X86_GetOptimizationConfig(void) { return FIBERCPU_OPTIMIZATION_CONFIG; }
 
 const char* X86_GetSuperOpcodeSetHash(void) { return FIBERCPU_SUPEROPCODE_SET_SHA256; }
 
@@ -1137,7 +1144,9 @@ size_t X86_GetSequenceProfile(EmuState* state, X86_SequenceProfileEntry* buffer,
     }
     return state->sequence_counts.size();
 #else
-    (void)state; (void)buffer; (void)capacity;
+    (void)state;
+    (void)buffer;
+    (void)capacity;
     return 0;
 #endif
 }
@@ -1166,7 +1175,9 @@ size_t X86_GetNGramProfile(EmuState* state, X86_NGramProfileEntry* buffer, size_
     }
     return state->ngram_counts.size();
 #else
-    (void)state; (void)buffer; (void)capacity;
+    (void)state;
+    (void)buffer;
+    (void)capacity;
     return 0;
 #endif
 }

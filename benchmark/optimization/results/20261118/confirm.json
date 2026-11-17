@@ -1,0 +1,1094 @@
+[
+  {
+    "case": "coremark_gcc",
+    "variant": "base",
+    "round": "confirm-0",
+    "iterations": 60000,
+    "wall_seconds": 18.348437833832577,
+    "log": "confirm-0-base-coremark_gcc.log",
+    "seconds": 18.047,
+    "score": 3324.652297,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "shapes",
+    "round": "confirm-0",
+    "iterations": 60000,
+    "wall_seconds": 12.18587570800446,
+    "log": "confirm-0-shapes-coremark_gcc.log",
+    "seconds": 11.911,
+    "score": 5037.360423,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "hybrid",
+    "round": "confirm-0",
+    "iterations": 60000,
+    "wall_seconds": 12.284887041896582,
+    "log": "confirm-0-hybrid-coremark_gcc.log",
+    "seconds": 12.004,
+    "score": 4998.333889,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "pinstatic",
+    "round": "confirm-0",
+    "iterations": 60000,
+    "wall_seconds": 11.781237958930433,
+    "log": "confirm-0-pinstatic-coremark_gcc.log",
+    "seconds": 11.49,
+    "score": 5221.932115,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "base",
+    "round": "confirm-0",
+    "iterations": 10,
+    "wall_seconds": 6.036510291974992,
+    "log": "confirm-0-base-gzip.log",
+    "seconds": 5.781763958046213,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "shapes",
+    "round": "confirm-0",
+    "iterations": 10,
+    "wall_seconds": 5.996091417036951,
+    "log": "confirm-0-shapes-gzip.log",
+    "seconds": 5.731774917105213,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "hybrid",
+    "round": "confirm-0",
+    "iterations": 10,
+    "wall_seconds": 5.995601083850488,
+    "log": "confirm-0-hybrid-gzip.log",
+    "seconds": 5.731519625056535,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "pinstatic",
+    "round": "confirm-0",
+    "iterations": 10,
+    "wall_seconds": 6.019192042062059,
+    "log": "confirm-0-pinstatic-gzip.log",
+    "seconds": 5.76000566710718,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "base",
+    "round": "confirm-0",
+    "iterations": 50,
+    "wall_seconds": 5.218509665923193,
+    "log": "confirm-0-base-gunzip.log",
+    "seconds": 4.965310540981591,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "shapes",
+    "round": "confirm-0",
+    "iterations": 50,
+    "wall_seconds": 5.17156770802103,
+    "log": "confirm-0-shapes-gunzip.log",
+    "seconds": 4.912914041895419,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "hybrid",
+    "round": "confirm-0",
+    "iterations": 50,
+    "wall_seconds": 5.141709374962375,
+    "log": "confirm-0-hybrid-gunzip.log",
+    "seconds": 4.882450040895492,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "pinstatic",
+    "round": "confirm-0",
+    "iterations": 50,
+    "wall_seconds": 5.298409125069156,
+    "log": "confirm-0-pinstatic-gunzip.log",
+    "seconds": 5.0379724581725895,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "base",
+    "round": "confirm-0",
+    "iterations": 10,
+    "wall_seconds": 7.013663000194356,
+    "log": "confirm-0-base-sed.log",
+    "seconds": 6.755418749991804,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "shapes",
+    "round": "confirm-0",
+    "iterations": 10,
+    "wall_seconds": 6.786676916060969,
+    "log": "confirm-0-shapes-sed.log",
+    "seconds": 6.528589625144377,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "hybrid",
+    "round": "confirm-0",
+    "iterations": 10,
+    "wall_seconds": 6.726734834024683,
+    "log": "confirm-0-hybrid-sed.log",
+    "seconds": 6.467356292065233,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "pinstatic",
+    "round": "confirm-0",
+    "iterations": 10,
+    "wall_seconds": 6.884860624792054,
+    "log": "confirm-0-pinstatic-sed.log",
+    "seconds": 6.629113666946068,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "base",
+    "round": "confirm-0",
+    "iterations": 118,
+    "wall_seconds": 2.4308252499904484,
+    "log": "confirm-0-base-grep_fixed.log",
+    "seconds": 2.1750204998534173,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "shapes",
+    "round": "confirm-0",
+    "iterations": 118,
+    "wall_seconds": 2.412284249905497,
+    "log": "confirm-0-shapes-grep_fixed.log",
+    "seconds": 2.1569121670909226,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "hybrid",
+    "round": "confirm-0",
+    "iterations": 118,
+    "wall_seconds": 2.4451990840025246,
+    "log": "confirm-0-hybrid-grep_fixed.log",
+    "seconds": 2.186212334083393,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "pinstatic",
+    "round": "confirm-0",
+    "iterations": 118,
+    "wall_seconds": 2.4674311669077724,
+    "log": "confirm-0-pinstatic-grep_fixed.log",
+    "seconds": 2.210293709067628,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "base",
+    "round": "confirm-0",
+    "iterations": 76,
+    "wall_seconds": 4.022705375216901,
+    "log": "confirm-0-base-grep_regex.log",
+    "seconds": 3.7635650420561433,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "shapes",
+    "round": "confirm-0",
+    "iterations": 76,
+    "wall_seconds": 4.078825583914295,
+    "log": "confirm-0-shapes-grep_regex.log",
+    "seconds": 3.809650541981682,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "hybrid",
+    "round": "confirm-0",
+    "iterations": 76,
+    "wall_seconds": 4.0590055419597775,
+    "log": "confirm-0-hybrid-grep_regex.log",
+    "seconds": 3.7980026670265943,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "pinstatic",
+    "round": "confirm-0",
+    "iterations": 76,
+    "wall_seconds": 4.08317979099229,
+    "log": "confirm-0-pinstatic-grep_regex.log",
+    "seconds": 3.8213045839220285,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "base",
+    "round": "confirm-0",
+    "iterations": 28,
+    "wall_seconds": 5.785989374853671,
+    "log": "confirm-0-base-sort.log",
+    "seconds": 5.529302875045687,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "shapes",
+    "round": "confirm-0",
+    "iterations": 28,
+    "wall_seconds": 5.74341195798479,
+    "log": "confirm-0-shapes-sort.log",
+    "seconds": 5.483666583895683,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "hybrid",
+    "round": "confirm-0",
+    "iterations": 28,
+    "wall_seconds": 5.759570291964337,
+    "log": "confirm-0-hybrid-sort.log",
+    "seconds": 5.498783792136237,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "pinstatic",
+    "round": "confirm-0",
+    "iterations": 28,
+    "wall_seconds": 5.809324208879843,
+    "log": "confirm-0-pinstatic-sort.log",
+    "seconds": 5.548854833934456,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "base",
+    "round": "confirm-0",
+    "iterations": 54,
+    "wall_seconds": 3.8588216667994857,
+    "log": "confirm-0-base-sha256.log",
+    "seconds": 3.602255458943546,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "shapes",
+    "round": "confirm-0",
+    "iterations": 54,
+    "wall_seconds": 3.8188882919494063,
+    "log": "confirm-0-shapes-sha256.log",
+    "seconds": 3.5605727089568973,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "hybrid",
+    "round": "confirm-0",
+    "iterations": 54,
+    "wall_seconds": 3.849376207916066,
+    "log": "confirm-0-hybrid-sha256.log",
+    "seconds": 3.59115208289586,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "pinstatic",
+    "round": "confirm-0",
+    "iterations": 54,
+    "wall_seconds": 3.8448443750385195,
+    "log": "confirm-0-pinstatic-sha256.log",
+    "seconds": 3.58572879107669,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "confirm-0",
+    "iterations": 123,
+    "wall_seconds": 2.5204161249566823,
+    "log": "confirm-0-base-tar.log",
+    "seconds": 2.261870374903083,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "shapes",
+    "round": "confirm-0",
+    "iterations": 123,
+    "wall_seconds": 2.555699417134747,
+    "log": "confirm-0-shapes-tar.log",
+    "seconds": 2.2967920410446823,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "hybrid",
+    "round": "confirm-0",
+    "iterations": 123,
+    "wall_seconds": 2.5924727090168744,
+    "log": "confirm-0-hybrid-tar.log",
+    "seconds": 2.3349982909858227,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "pinstatic",
+    "round": "confirm-0",
+    "iterations": 123,
+    "wall_seconds": 2.6238145001698285,
+    "log": "confirm-0-pinstatic-tar.log",
+    "seconds": 2.364150166977197,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "shapes",
+    "round": "confirm-1",
+    "iterations": 60000,
+    "wall_seconds": 12.183045415906236,
+    "log": "confirm-1-shapes-coremark_gcc.log",
+    "seconds": 11.929,
+    "score": 5029.75941,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "hybrid",
+    "round": "confirm-1",
+    "iterations": 60000,
+    "wall_seconds": 12.281391416909173,
+    "log": "confirm-1-hybrid-coremark_gcc.log",
+    "seconds": 12.014,
+    "score": 4994.173464,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "pinstatic",
+    "round": "confirm-1",
+    "iterations": 60000,
+    "wall_seconds": 11.647592041175812,
+    "log": "confirm-1-pinstatic-coremark_gcc.log",
+    "seconds": 11.394,
+    "score": 5265.929437,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "base",
+    "round": "confirm-1",
+    "iterations": 60000,
+    "wall_seconds": 18.528426917036995,
+    "log": "confirm-1-base-coremark_gcc.log",
+    "seconds": 18.277,
+    "score": 3282.814466,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "shapes",
+    "round": "confirm-1",
+    "iterations": 10,
+    "wall_seconds": 5.93593162484467,
+    "log": "confirm-1-shapes-gzip.log",
+    "seconds": 5.678413833025843,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "hybrid",
+    "round": "confirm-1",
+    "iterations": 10,
+    "wall_seconds": 5.9691422081086785,
+    "log": "confirm-1-hybrid-gzip.log",
+    "seconds": 5.6939257921185344,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "pinstatic",
+    "round": "confirm-1",
+    "iterations": 10,
+    "wall_seconds": 6.0298279998824,
+    "log": "confirm-1-pinstatic-gzip.log",
+    "seconds": 5.771309416973963,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "base",
+    "round": "confirm-1",
+    "iterations": 10,
+    "wall_seconds": 6.020967124961317,
+    "log": "confirm-1-base-gzip.log",
+    "seconds": 5.763876375043765,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "shapes",
+    "round": "confirm-1",
+    "iterations": 50,
+    "wall_seconds": 5.173953959019855,
+    "log": "confirm-1-shapes-gunzip.log",
+    "seconds": 4.916675832821056,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "hybrid",
+    "round": "confirm-1",
+    "iterations": 50,
+    "wall_seconds": 5.134686874924228,
+    "log": "confirm-1-hybrid-gunzip.log",
+    "seconds": 4.873039375059307,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "pinstatic",
+    "round": "confirm-1",
+    "iterations": 50,
+    "wall_seconds": 5.278893624898046,
+    "log": "confirm-1-pinstatic-gunzip.log",
+    "seconds": 5.020498832920566,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "base",
+    "round": "confirm-1",
+    "iterations": 50,
+    "wall_seconds": 5.235065291868523,
+    "log": "confirm-1-base-gunzip.log",
+    "seconds": 4.977899125078693,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "shapes",
+    "round": "confirm-1",
+    "iterations": 10,
+    "wall_seconds": 6.889622083865106,
+    "log": "confirm-1-shapes-sed.log",
+    "seconds": 6.63170687505044,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "hybrid",
+    "round": "confirm-1",
+    "iterations": 10,
+    "wall_seconds": 6.8265748750418425,
+    "log": "confirm-1-hybrid-sed.log",
+    "seconds": 6.565764791099355,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "pinstatic",
+    "round": "confirm-1",
+    "iterations": 10,
+    "wall_seconds": 7.103730541886762,
+    "log": "confirm-1-pinstatic-sed.log",
+    "seconds": 6.842537624994293,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "base",
+    "round": "confirm-1",
+    "iterations": 10,
+    "wall_seconds": 7.001922833034769,
+    "log": "confirm-1-base-sed.log",
+    "seconds": 6.740632625063881,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "shapes",
+    "round": "confirm-1",
+    "iterations": 118,
+    "wall_seconds": 2.435695583000779,
+    "log": "confirm-1-shapes-grep_fixed.log",
+    "seconds": 2.1761692089494318,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "hybrid",
+    "round": "confirm-1",
+    "iterations": 118,
+    "wall_seconds": 2.463492332957685,
+    "log": "confirm-1-hybrid-grep_fixed.log",
+    "seconds": 2.2034605420194566,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "pinstatic",
+    "round": "confirm-1",
+    "iterations": 118,
+    "wall_seconds": 2.465183624997735,
+    "log": "confirm-1-pinstatic-grep_fixed.log",
+    "seconds": 2.20503745903261,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "base",
+    "round": "confirm-1",
+    "iterations": 118,
+    "wall_seconds": 2.4390109579544514,
+    "log": "confirm-1-base-grep_fixed.log",
+    "seconds": 2.1795178330503404,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "shapes",
+    "round": "confirm-1",
+    "iterations": 76,
+    "wall_seconds": 4.024613041896373,
+    "log": "confirm-1-shapes-grep_regex.log",
+    "seconds": 3.7662382090929896,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "hybrid",
+    "round": "confirm-1",
+    "iterations": 76,
+    "wall_seconds": 4.019920791033655,
+    "log": "confirm-1-hybrid-grep_regex.log",
+    "seconds": 3.7581884590908885,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "pinstatic",
+    "round": "confirm-1",
+    "iterations": 76,
+    "wall_seconds": 4.075914375018328,
+    "log": "confirm-1-pinstatic-grep_regex.log",
+    "seconds": 3.815706916851923,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "base",
+    "round": "confirm-1",
+    "iterations": 76,
+    "wall_seconds": 4.016308000078425,
+    "log": "confirm-1-base-grep_regex.log",
+    "seconds": 3.7582499589771032,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "shapes",
+    "round": "confirm-1",
+    "iterations": 28,
+    "wall_seconds": 5.750327999936417,
+    "log": "confirm-1-shapes-sort.log",
+    "seconds": 5.491596583044156,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "hybrid",
+    "round": "confirm-1",
+    "iterations": 28,
+    "wall_seconds": 5.754473374923691,
+    "log": "confirm-1-hybrid-sort.log",
+    "seconds": 5.493578291963786,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "pinstatic",
+    "round": "confirm-1",
+    "iterations": 28,
+    "wall_seconds": 5.711707083042711,
+    "log": "confirm-1-pinstatic-sort.log",
+    "seconds": 5.450116333086044,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "base",
+    "round": "confirm-1",
+    "iterations": 28,
+    "wall_seconds": 5.78758104192093,
+    "log": "confirm-1-base-sort.log",
+    "seconds": 5.531259875046089,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "shapes",
+    "round": "confirm-1",
+    "iterations": 54,
+    "wall_seconds": 3.9618025419767946,
+    "log": "confirm-1-shapes-sha256.log",
+    "seconds": 3.7020930419676006,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "hybrid",
+    "round": "confirm-1",
+    "iterations": 54,
+    "wall_seconds": 3.8662167091388255,
+    "log": "confirm-1-hybrid-sha256.log",
+    "seconds": 3.60567112499848,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "pinstatic",
+    "round": "confirm-1",
+    "iterations": 54,
+    "wall_seconds": 3.819452041061595,
+    "log": "confirm-1-pinstatic-sha256.log",
+    "seconds": 3.56176345795393,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "base",
+    "round": "confirm-1",
+    "iterations": 54,
+    "wall_seconds": 3.883634875062853,
+    "log": "confirm-1-base-sha256.log",
+    "seconds": 3.627699416130781,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "shapes",
+    "round": "confirm-1",
+    "iterations": 123,
+    "wall_seconds": 2.533491916023195,
+    "log": "confirm-1-shapes-tar.log",
+    "seconds": 2.273475958034396,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "hybrid",
+    "round": "confirm-1",
+    "iterations": 123,
+    "wall_seconds": 2.583964749937877,
+    "log": "confirm-1-hybrid-tar.log",
+    "seconds": 2.3226913339458406,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "pinstatic",
+    "round": "confirm-1",
+    "iterations": 123,
+    "wall_seconds": 2.6014239171054214,
+    "log": "confirm-1-pinstatic-tar.log",
+    "seconds": 2.341405834071338,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "confirm-1",
+    "iterations": 123,
+    "wall_seconds": 2.5158271670807153,
+    "log": "confirm-1-base-tar.log",
+    "seconds": 2.2574571250006557,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "hybrid",
+    "round": "confirm-2",
+    "iterations": 60000,
+    "wall_seconds": 12.309453499969095,
+    "log": "confirm-2-hybrid-coremark_gcc.log",
+    "seconds": 12.055,
+    "score": 4977.187889,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "pinstatic",
+    "round": "confirm-2",
+    "iterations": 60000,
+    "wall_seconds": 11.763606667052954,
+    "log": "confirm-2-pinstatic-coremark_gcc.log",
+    "seconds": 11.51,
+    "score": 5212.858384,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "base",
+    "round": "confirm-2",
+    "iterations": 60000,
+    "wall_seconds": 18.26743666594848,
+    "log": "confirm-2-base-coremark_gcc.log",
+    "seconds": 18.016,
+    "score": 3330.373002,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "shapes",
+    "round": "confirm-2",
+    "iterations": 60000,
+    "wall_seconds": 12.18048800015822,
+    "log": "confirm-2-shapes-coremark_gcc.log",
+    "seconds": 11.927,
+    "score": 5030.602834,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "hybrid",
+    "round": "confirm-2",
+    "iterations": 10,
+    "wall_seconds": 5.9734628750011325,
+    "log": "confirm-2-hybrid-gzip.log",
+    "seconds": 5.710619374876842,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "pinstatic",
+    "round": "confirm-2",
+    "iterations": 10,
+    "wall_seconds": 6.118971290998161,
+    "log": "confirm-2-pinstatic-gzip.log",
+    "seconds": 5.857948208926246,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "base",
+    "round": "confirm-2",
+    "iterations": 10,
+    "wall_seconds": 6.063041957793757,
+    "log": "confirm-2-base-gzip.log",
+    "seconds": 5.805565000046045,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "shapes",
+    "round": "confirm-2",
+    "iterations": 10,
+    "wall_seconds": 5.943943167105317,
+    "log": "confirm-2-shapes-gzip.log",
+    "seconds": 5.686093542026356,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "hybrid",
+    "round": "confirm-2",
+    "iterations": 50,
+    "wall_seconds": 5.154980832943693,
+    "log": "confirm-2-hybrid-gunzip.log",
+    "seconds": 4.893329249927774,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "pinstatic",
+    "round": "confirm-2",
+    "iterations": 50,
+    "wall_seconds": 5.395857958123088,
+    "log": "confirm-2-pinstatic-gunzip.log",
+    "seconds": 5.134445333853364,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "base",
+    "round": "confirm-2",
+    "iterations": 50,
+    "wall_seconds": 5.246200291905552,
+    "log": "confirm-2-base-gunzip.log",
+    "seconds": 4.989160874858499,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "shapes",
+    "round": "confirm-2",
+    "iterations": 50,
+    "wall_seconds": 5.18534379103221,
+    "log": "confirm-2-shapes-gunzip.log",
+    "seconds": 4.925118291052058,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "hybrid",
+    "round": "confirm-2",
+    "iterations": 10,
+    "wall_seconds": 6.881713124923408,
+    "log": "confirm-2-hybrid-sed.log",
+    "seconds": 6.620057292049751,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "pinstatic",
+    "round": "confirm-2",
+    "iterations": 10,
+    "wall_seconds": 6.93600737513043,
+    "log": "confirm-2-pinstatic-sed.log",
+    "seconds": 6.674499541986734,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "base",
+    "round": "confirm-2",
+    "iterations": 10,
+    "wall_seconds": 7.153188040945679,
+    "log": "confirm-2-base-sed.log",
+    "seconds": 6.897036042064428,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "shapes",
+    "round": "confirm-2",
+    "iterations": 10,
+    "wall_seconds": 6.844823833089322,
+    "log": "confirm-2-shapes-sed.log",
+    "seconds": 6.585447249934077,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "hybrid",
+    "round": "confirm-2",
+    "iterations": 118,
+    "wall_seconds": 2.4546829578466713,
+    "log": "confirm-2-hybrid-grep_fixed.log",
+    "seconds": 2.19366441690363,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "pinstatic",
+    "round": "confirm-2",
+    "iterations": 118,
+    "wall_seconds": 2.4631005411501974,
+    "log": "confirm-2-pinstatic-grep_fixed.log",
+    "seconds": 2.199582166969776,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "base",
+    "round": "confirm-2",
+    "iterations": 118,
+    "wall_seconds": 2.4807214580941945,
+    "log": "confirm-2-base-grep_fixed.log",
+    "seconds": 2.2185299589764327,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "shapes",
+    "round": "confirm-2",
+    "iterations": 118,
+    "wall_seconds": 2.440762458136305,
+    "log": "confirm-2-shapes-grep_fixed.log",
+    "seconds": 2.1784550410229713,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "hybrid",
+    "round": "confirm-2",
+    "iterations": 76,
+    "wall_seconds": 4.040185125079006,
+    "log": "confirm-2-hybrid-grep_regex.log",
+    "seconds": 3.7773050838150084,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "pinstatic",
+    "round": "confirm-2",
+    "iterations": 76,
+    "wall_seconds": 4.102006958099082,
+    "log": "confirm-2-pinstatic-grep_regex.log",
+    "seconds": 3.838293624809012,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "base",
+    "round": "confirm-2",
+    "iterations": 76,
+    "wall_seconds": 4.020071999868378,
+    "log": "confirm-2-base-grep_regex.log",
+    "seconds": 3.7601968748494983,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "shapes",
+    "round": "confirm-2",
+    "iterations": 76,
+    "wall_seconds": 4.08575545810163,
+    "log": "confirm-2-shapes-grep_regex.log",
+    "seconds": 3.8262155409902334,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "hybrid",
+    "round": "confirm-2",
+    "iterations": 28,
+    "wall_seconds": 5.827050124993548,
+    "log": "confirm-2-hybrid-sort.log",
+    "seconds": 5.560839832993224,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "pinstatic",
+    "round": "confirm-2",
+    "iterations": 28,
+    "wall_seconds": 5.741486959159374,
+    "log": "confirm-2-pinstatic-sort.log",
+    "seconds": 5.476069959113374,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "base",
+    "round": "confirm-2",
+    "iterations": 28,
+    "wall_seconds": 5.846532332943752,
+    "log": "confirm-2-base-sort.log",
+    "seconds": 5.586712124990299,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "shapes",
+    "round": "confirm-2",
+    "iterations": 28,
+    "wall_seconds": 5.784958167001605,
+    "log": "confirm-2-shapes-sort.log",
+    "seconds": 5.525779708987102,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "hybrid",
+    "round": "confirm-2",
+    "iterations": 54,
+    "wall_seconds": 3.815703541971743,
+    "log": "confirm-2-hybrid-sha256.log",
+    "seconds": 3.5521696670912206,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "pinstatic",
+    "round": "confirm-2",
+    "iterations": 54,
+    "wall_seconds": 3.8947284161113203,
+    "log": "confirm-2-pinstatic-sha256.log",
+    "seconds": 3.6312357920687646,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "base",
+    "round": "confirm-2",
+    "iterations": 54,
+    "wall_seconds": 3.965603084070608,
+    "log": "confirm-2-base-sha256.log",
+    "seconds": 3.7039312080014497,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "shapes",
+    "round": "confirm-2",
+    "iterations": 54,
+    "wall_seconds": 3.927123958012089,
+    "log": "confirm-2-shapes-sha256.log",
+    "seconds": 3.670187250012532,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "hybrid",
+    "round": "confirm-2",
+    "iterations": 123,
+    "wall_seconds": 2.590980959124863,
+    "log": "confirm-2-hybrid-tar.log",
+    "seconds": 2.3294392090756446,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "pinstatic",
+    "round": "confirm-2",
+    "iterations": 123,
+    "wall_seconds": 2.60628916695714,
+    "log": "confirm-2-pinstatic-tar.log",
+    "seconds": 2.344274708069861,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "confirm-2",
+    "iterations": 123,
+    "wall_seconds": 2.6268218751065433,
+    "log": "confirm-2-base-tar.log",
+    "seconds": 2.366098207887262,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "shapes",
+    "round": "confirm-2",
+    "iterations": 123,
+    "wall_seconds": 2.6425631251186132,
+    "log": "confirm-2-shapes-tar.log",
+    "seconds": 2.382074333028868,
+    "validated": true
+  }
+]

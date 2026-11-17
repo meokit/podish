@@ -1,0 +1,17 @@
+{
+  "note": "Identities captured after timing, before rebuilding baked baseline membership.",
+  "binaries": {
+    "base": {
+      "Podish.Cli.dll": "cf316490138c0f831d1ff507bfde552ad539862d309c30b8457e2c802a5a620c",
+      "libfibercpu.dylib": "b65e487705d2927e3ed5ad23e8da3502c6c9021582f2be94ed054052d6570a33"
+    },
+    "guarded": {
+      "Podish.Cli.dll": "cf316490138c0f831d1ff507bfde552ad539862d309c30b8457e2c802a5a620c",
+      "libfibercpu.dylib": "4472beaf1a4ffbb45d09c0ce369e183e38a522bbfb24b0f0811069a40ad920de"
+    },
+    "guardedpin": {
+      "Podish.Cli.dll": "cf316490138c0f831d1ff507bfde552ad539862d309c30b8457e2c802a5a620c",
+      "libfibercpu.dylib": "01ffceeaa7f47170c28dd40990a71b2a99cc49fb74b120d6b111997942862a13"
+    }
+  }
+}

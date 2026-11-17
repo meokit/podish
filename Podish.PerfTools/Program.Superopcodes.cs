@@ -78,6 +78,7 @@ internal static partial class Program
         AppendMetadataComment(sb, data, "top_limit", "candidate_top_limit");
         sb.AppendLine($"// generated_superopcode_top={top}");
         sb.AppendLine($"// generated_candidate_count={candidates.Count}");
+        sb.AppendLine("// clang-format off");
         sb.AppendLine("#include <ankerl/unordered_dense.h>");
         sb.AppendLine("#include <atomic>");
         sb.AppendLine("#include <cstdint>");
@@ -130,7 +131,8 @@ internal static partial class Program
                           "(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,");
             sb.AppendLine(
                 "                                          mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,");
-            sb.AppendLine("                                          uint32_t branch, uint64_t flags_cache) {");
+            sb.AppendLine("                                          uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {");
+            sb.AppendLine("    FIBERCPU_PIN_ASSUME;");
             sb.AppendLine("    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);");
             sb.AppendLine($"    RUN_SUPEROPCODE_OP({c.Op0}, state, op, instr_limit, utlb, branch, flags_cache);");
             sb.AppendLine();
@@ -142,7 +144,7 @@ internal static partial class Program
             sb.AppendLine(
                 "        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);");
             sb.AppendLine(
-                "        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);");
+                "        ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);");
             sb.AppendLine("    }");
             sb.AppendLine("    __builtin_unreachable();");
             sb.AppendLine("}");
@@ -187,6 +189,7 @@ internal static partial class Program
         sb.AppendLine();
         sb.AppendLine("}  // namespace fiberish");
 
+        sb.AppendLine("// clang-format on");
         return sb.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 

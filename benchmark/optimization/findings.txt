@@ -1,0 +1,109 @@
+ARM64 融合、操作数特化、EAX/ESP pin，2026-11-18
+
+结论
+采用保守的 SHAPED + PROFILE/256 + ADDED_FUSIONS，pin OFF。
+macOS ARM64 Clang 共享库的 AUTO 默认启用此配置；其他目标、静态/AOT、
+sequence training、显式指定生成表的构建保留 BASE/OFF/ALL。
+操作数预算 256 中实际只生成 64 个融合形状，不启用额外的普通指令形状克隆。
+已有 ISA 单指令特化始终保留；改变的是新增融合准入与额外克隆的范围。
+
+GCC CoreMark，固定 60000 次，三轮轮换 A/B
+原 main 3345.040977 -> 默认候选 4388.531305，+31.195%。
+同一个既有 GCC 15.2 -O2 i386 ELF，未构建或运行 Zig CC CoreMark。
+ELF SHA256 48c3ecf2c2e2bbbebc8249f3f2ab30933a1e85e8eeaa1b6c0806bed90a5085db。
+参数 0x0 0x0 0x66 60000 7 1 2000，2K，单 context。
+所有运行 CRC 正确且 >=10 秒；同一 managed CLI、rootfs、环境变量。
+Apple M5 Max，macOS ARM64，Apple Clang 17，Release/ThinLTO，preserve_none。
+先完成编译和测试，再串行计时，计时期间不编译、不采样。
+
+GNU 开发集，seed 987654，2 MiB，每项三轮。下列为吞吐量中位数变化：
+  gzip         +0.573%
+  gunzip       -0.710%
+  sed          +0.592%
+  grep_fixed   -0.184%
+  grep_regex   +0.081%
+  sort         -0.343%
+  sha256       +0.064%
+  tar          +0.119%
+每项配对样本均有正负波动，未重现早期候选稳定的 3–5% tar 回退。
+不能把这些有限样本解读为所有程序、输入和 ARM64 芯片均有零回退的证明。
+
+独立输入验证，seed 314159265，4 MiB，未用于规则选择，单轮：
+  gzip         +0.107%
+  gunzip       +0.238%
+  sed          -0.394%
+  grep_fixed   +1.609%
+  grep_regex   -0.795%
+  sort         +0.612%
+  sha256       +0.124%
+  tar          -1.045%
+全部输出逐次校验：gzip 解压字节、gunzip 内容、sed/sort 哈希、grep 计数、
+SHA256 以及 tar 的每个成员。独立输入单轮只作验证，不替代三轮确认。
+
+为什么不把最高分配置作为默认
+旧 ALL/256 + 通用寄存器类特化 + EAX/ESP pin 三轮约 5222 分，
+相对同一融合/类特化且不 pin 的约 4994 分，pin 边际收益约 4.56%。
+但该阶段 gunzip/regex grep/tar 分别有约 1.2%/1.6%/3.5% 回退。
+修订融合覆盖规则后的最新全局 pin 配置，仅做单轮筛选：
+  coremark_gcc 3343.549735 -> 5289.605924 (+58.203%)
+  gunzip       10.127851 -> 10.103850 (-0.237%)
+  grep_regex   20.176158 -> 19.987503 (-0.935%)
+  tar          56.599361 -> 55.981600 (-1.091%)
+该配置尚未达到全路径无回退的默认启用门槛。保留显式编译选项；功能测试通过。
+pin 是 write-through read cache：内存寄存器堆一直是权威状态，没有 dirty write-back。
+解码阶段按 EAX/ESP/其他目的寄存器分类，GetReg 内没有动态 cache/heap 分支。
+AL/AH/AX 归 EAX；SP/ESP 归 ESP。未知写、opaque 回调、fault/retry、API 重入保守刷新。
+普通动态 ROR 的两个额外缓存回读可由静态写分类消除：代表函数 136 -> 116 字节，
+两者均无 SP 引用。附有反汇编；这不代表所有复杂 handler 都不会发生 spill。
+
+最终规则
+1. BASE 是 GNU 64 个 pattern + 7 个语义特化展开；EXTENDED 共 167 项。
+2. SHAPED 保留基础规则；新增规则必须完整匹配冻结的操作数形状。
+3. 新增融合不可截断从内部开始、尾部超出其窗口的基础融合。
+   MOV+CMP 不可拆开后面的 CMP+Jcc；四指令融合可以完整包含 CMP+Jcc。
+4. 基础规则成员身份直接烘焙在 match width 的 0x40 位，手写规则使用 0x80。
+5. ADDED_FUSIONS 在融合匹配成功时直接返回特化入口，无额外普通指令遍历。
+   ALL 保留全部实验能力，并在块拼接前恢复 canonical identity，再融合、再降低。
+6. 普通形状查询使用 handler + 第一条形状的索引；该优化仍不足以消除 ALL 冷路径成本。
+
+定位证据
+ALL/256 对每条普通指令做额外查询；tar 独立 sample 中，旧线性查询占约 9% 的
+可见 native 栈顶样本（仅统计 >=5 的 native 项，不是全进程 CPU 比例）。
+缩短集合查找、改直接索引都没有独自解决回退，因此默认取消普通指令的额外查询。
+保护基础融合的回归探针，在旧库上明确失败，在最终库上通过。
+
+代码体积
+基线 __text 652060 B；最终默认 __text 749756 B，约 +14.98%。
+所有形状加寄存器类的实验约 1.3 MB __text；默认没有推广这一规模。
+最终默认库的执行 __text 与三轮计时候选逐字节相同；最后改动仅补全验证夹具 sentinel，
+导致源集合哈希字符串更新。原始 DLL/文本哈希、配置、flags 见 results/20261118/identities.json。
+
+验证
+3153 项 CPU tests；29 项工具 tests；5 项 Python checks；2 项 native CTest。
+测试矩阵覆盖旧 BASE/OFF、默认、融合关闭加 pin、保守 pin、ABI-only、全局 EAX/ESP。
+新增检查覆盖全部 GPR/字节别名、16 位写、API 写后重入、回调观察/修改寄存器、fault 恢复、
+形状准入、基础融合覆盖；原始 ISA 选择 golden 未修改。
+
+复现与开关
+CMake 默认（macOS ARM64 shared）：
+  cmake -S libfibercpu -B build -DCMAKE_BUILD_TYPE=Release
+  cmake --build build -j 8
+恢复旧行为：
+  -DFIBERCPU_FUSION_STRATEGY=BASE -DFIBERCPU_OPERAND_SPECIALIZATION=OFF
+  -DFIBERCPU_OPERAND_SCOPE=ALL -DFIBERCPU_GPR_PIN=OFF
+激进研究配置：
+  -DFIBERCPU_FUSION_STRATEGY=SHAPED -DFIBERCPU_OPERAND_SPECIALIZATION=HYBRID
+  -DFIBERCPU_OPERAND_SCOPE=ALL -DFIBERCPU_GPR_PIN=EAX_ESP
+融合总开关：FIBERCPU_ENABLE_SUPEROPCODES=ON/OFF。
+其余枚举、预算、MSBuild 属性见 design.txt。显式旧缓存的生成表路径仍优先；
+传 -DFIBERCPU_GENERATED_SUPEROPCODES_FILE= 可恢复跟随 strategy。
+本机默认 python3 静默不执行脚本，实验强制 -DPython3_EXECUTABLE=/opt/homebrew/bin/python3。
+
+跑已有 fixture：
+  python3 benchmark/optimization/run_matrix.py --out <artifact-dir> --variants base fused --rounds 3
+汇总：
+  python3 benchmark/optimization/summarize.py <artifact-dir>/results.json
+先准备 rootfs/相同 managed CLI 与对应 native 库；脚本不会编译 guest。
+逐项原始样本、二进制身份、CRC 日志、采样摘要与测试日志在 results/20261118/。
+不同阶段重用过 variant 名称，归因以各 tag 的 metadata 哈希为准；identities.json
+是归档时本地各 artifact 的快照。探索阶段不能混入最终三轮的中位数。

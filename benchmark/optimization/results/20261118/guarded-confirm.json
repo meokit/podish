@@ -1,0 +1,821 @@
+[
+  {
+    "case": "coremark_gcc",
+    "variant": "base",
+    "round": "guarded-confirm-0",
+    "iterations": 60000,
+    "wall_seconds": 18.242757834028453,
+    "log": "guarded-confirm-0-base-coremark_gcc.log",
+    "seconds": 17.979,
+    "score": 3337.226765,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "guarded",
+    "round": "guarded-confirm-0",
+    "iterations": 60000,
+    "wall_seconds": 12.21699629095383,
+    "log": "guarded-confirm-0-guarded-coremark_gcc.log",
+    "seconds": 11.951,
+    "score": 5020.500377,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-0",
+    "iterations": 60000,
+    "wall_seconds": 11.783755542011932,
+    "log": "guarded-confirm-0-guardedpin-coremark_gcc.log",
+    "seconds": 11.498,
+    "score": 5218.298835,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "base",
+    "round": "guarded-confirm-0",
+    "iterations": 14,
+    "wall_seconds": 8.356148458085954,
+    "log": "guarded-confirm-0-base-gzip.log",
+    "seconds": 8.104520708089694,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "guarded",
+    "round": "guarded-confirm-0",
+    "iterations": 14,
+    "wall_seconds": 8.24434629199095,
+    "log": "guarded-confirm-0-guarded-gzip.log",
+    "seconds": 7.991927249822766,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-0",
+    "iterations": 14,
+    "wall_seconds": 8.323340457864106,
+    "log": "guarded-confirm-0-guardedpin-gzip.log",
+    "seconds": 8.0589439580217,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "base",
+    "round": "guarded-confirm-0",
+    "iterations": 66,
+    "wall_seconds": 6.676685416838154,
+    "log": "guarded-confirm-0-base-gunzip.log",
+    "seconds": 6.422520959051326,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "guarded",
+    "round": "guarded-confirm-0",
+    "iterations": 66,
+    "wall_seconds": 6.697981875156984,
+    "log": "guarded-confirm-0-guarded-gunzip.log",
+    "seconds": 6.441590584116057,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-0",
+    "iterations": 66,
+    "wall_seconds": 6.9467536250595,
+    "log": "guarded-confirm-0-guardedpin-gunzip.log",
+    "seconds": 6.6868866248987615,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "base",
+    "round": "guarded-confirm-0",
+    "iterations": 14,
+    "wall_seconds": 9.788881207816303,
+    "log": "guarded-confirm-0-base-sed.log",
+    "seconds": 9.533223750069737,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "guarded",
+    "round": "guarded-confirm-0",
+    "iterations": 14,
+    "wall_seconds": 9.413446166086942,
+    "log": "guarded-confirm-0-guarded-sed.log",
+    "seconds": 9.15683083399199,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-0",
+    "iterations": 14,
+    "wall_seconds": 9.544696083990857,
+    "log": "guarded-confirm-0-guardedpin-sed.log",
+    "seconds": 9.289434791076928,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "base",
+    "round": "guarded-confirm-0",
+    "iterations": 158,
+    "wall_seconds": 3.155577667057514,
+    "log": "guarded-confirm-0-base-grep_fixed.log",
+    "seconds": 2.898128957953304,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "guarded",
+    "round": "guarded-confirm-0",
+    "iterations": 158,
+    "wall_seconds": 3.1400054581463337,
+    "log": "guarded-confirm-0-guarded-grep_fixed.log",
+    "seconds": 2.87874566600658,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-0",
+    "iterations": 158,
+    "wall_seconds": 3.154232749948278,
+    "log": "guarded-confirm-0-guardedpin-grep_fixed.log",
+    "seconds": 2.8964772920589894,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "base",
+    "round": "guarded-confirm-0",
+    "iterations": 102,
+    "wall_seconds": 5.254103375133127,
+    "log": "guarded-confirm-0-base-grep_regex.log",
+    "seconds": 5.000631750095636,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "guarded",
+    "round": "guarded-confirm-0",
+    "iterations": 102,
+    "wall_seconds": 5.2455708750057966,
+    "log": "guarded-confirm-0-guarded-grep_regex.log",
+    "seconds": 4.989580292021856,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-0",
+    "iterations": 102,
+    "wall_seconds": 5.422455207910389,
+    "log": "guarded-confirm-0-guardedpin-grep_regex.log",
+    "seconds": 5.1607749161776155,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "base",
+    "round": "guarded-confirm-0",
+    "iterations": 38,
+    "wall_seconds": 7.740096417022869,
+    "log": "guarded-confirm-0-base-sort.log",
+    "seconds": 7.48603616701439,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "guarded",
+    "round": "guarded-confirm-0",
+    "iterations": 38,
+    "wall_seconds": 7.732237749965861,
+    "log": "guarded-confirm-0-guarded-sort.log",
+    "seconds": 7.474171375157312,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-0",
+    "iterations": 38,
+    "wall_seconds": 7.676538833184168,
+    "log": "guarded-confirm-0-guardedpin-sort.log",
+    "seconds": 7.417255708947778,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "base",
+    "round": "guarded-confirm-0",
+    "iterations": 72,
+    "wall_seconds": 5.033725332934409,
+    "log": "guarded-confirm-0-base-sha256.log",
+    "seconds": 4.767888417001814,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "guarded",
+    "round": "guarded-confirm-0",
+    "iterations": 72,
+    "wall_seconds": 5.124861957971007,
+    "log": "guarded-confirm-0-guarded-sha256.log",
+    "seconds": 4.849954291945323,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-0",
+    "iterations": 72,
+    "wall_seconds": 5.091468583093956,
+    "log": "guarded-confirm-0-guardedpin-sha256.log",
+    "seconds": 4.832229791907594,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "guarded-confirm-0",
+    "iterations": 164,
+    "wall_seconds": 3.3708759997971356,
+    "log": "guarded-confirm-0-base-tar.log",
+    "seconds": 3.113396125147119,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "guarded",
+    "round": "guarded-confirm-0",
+    "iterations": 164,
+    "wall_seconds": 3.3216061668936163,
+    "log": "guarded-confirm-0-guarded-tar.log",
+    "seconds": 3.062418834073469,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-0",
+    "iterations": 164,
+    "wall_seconds": 3.2705024590250105,
+    "log": "guarded-confirm-0-guardedpin-tar.log",
+    "seconds": 3.009983916999772,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "guarded",
+    "round": "guarded-confirm-1",
+    "iterations": 60000,
+    "wall_seconds": 12.299614458112046,
+    "log": "guarded-confirm-1-guarded-coremark_gcc.log",
+    "seconds": 12.048,
+    "score": 4980.079681,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-1",
+    "iterations": 60000,
+    "wall_seconds": 11.771234708139673,
+    "log": "guarded-confirm-1-guardedpin-coremark_gcc.log",
+    "seconds": 11.516,
+    "score": 5210.142411,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "base",
+    "round": "guarded-confirm-1",
+    "iterations": 60000,
+    "wall_seconds": 18.271832916885614,
+    "log": "guarded-confirm-1-base-coremark_gcc.log",
+    "seconds": 18.023,
+    "score": 3329.07951,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "guarded",
+    "round": "guarded-confirm-1",
+    "iterations": 14,
+    "wall_seconds": 8.285948207834736,
+    "log": "guarded-confirm-1-guarded-gzip.log",
+    "seconds": 8.01737533416599,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-1",
+    "iterations": 14,
+    "wall_seconds": 8.390550708165392,
+    "log": "guarded-confirm-1-guardedpin-gzip.log",
+    "seconds": 8.130623334087431,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "base",
+    "round": "guarded-confirm-1",
+    "iterations": 14,
+    "wall_seconds": 8.291446916991845,
+    "log": "guarded-confirm-1-base-gzip.log",
+    "seconds": 8.031383624998853,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "guarded",
+    "round": "guarded-confirm-1",
+    "iterations": 66,
+    "wall_seconds": 6.736755750142038,
+    "log": "guarded-confirm-1-guarded-gunzip.log",
+    "seconds": 6.479827125091106,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-1",
+    "iterations": 66,
+    "wall_seconds": 6.866202834062278,
+    "log": "guarded-confirm-1-guardedpin-gunzip.log",
+    "seconds": 6.606849166098982,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "base",
+    "round": "guarded-confirm-1",
+    "iterations": 66,
+    "wall_seconds": 6.772596166934818,
+    "log": "guarded-confirm-1-base-gunzip.log",
+    "seconds": 6.516604000004008,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "guarded",
+    "round": "guarded-confirm-1",
+    "iterations": 14,
+    "wall_seconds": 9.495621416950598,
+    "log": "guarded-confirm-1-guarded-sed.log",
+    "seconds": 9.23842841712758,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-1",
+    "iterations": 14,
+    "wall_seconds": 9.461453167023137,
+    "log": "guarded-confirm-1-guardedpin-sed.log",
+    "seconds": 9.199503500014544,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "base",
+    "round": "guarded-confirm-1",
+    "iterations": 14,
+    "wall_seconds": 9.854828250128776,
+    "log": "guarded-confirm-1-base-sed.log",
+    "seconds": 9.601461707847193,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "guarded",
+    "round": "guarded-confirm-1",
+    "iterations": 158,
+    "wall_seconds": 3.1506010841112584,
+    "log": "guarded-confirm-1-guarded-grep_fixed.log",
+    "seconds": 2.8920834159944206,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-1",
+    "iterations": 158,
+    "wall_seconds": 3.1744574999902397,
+    "log": "guarded-confirm-1-guardedpin-grep_fixed.log",
+    "seconds": 2.91486595897004,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "base",
+    "round": "guarded-confirm-1",
+    "iterations": 158,
+    "wall_seconds": 3.146045125089586,
+    "log": "guarded-confirm-1-base-grep_fixed.log",
+    "seconds": 2.8868580001872033,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "guarded",
+    "round": "guarded-confirm-1",
+    "iterations": 102,
+    "wall_seconds": 5.313596834195778,
+    "log": "guarded-confirm-1-guarded-grep_regex.log",
+    "seconds": 5.0547153749503195,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-1",
+    "iterations": 102,
+    "wall_seconds": 5.351483249804005,
+    "log": "guarded-confirm-1-guardedpin-grep_regex.log",
+    "seconds": 5.090855999849737,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "base",
+    "round": "guarded-confirm-1",
+    "iterations": 102,
+    "wall_seconds": 5.238767375005409,
+    "log": "guarded-confirm-1-base-grep_regex.log",
+    "seconds": 4.981108499923721,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "guarded",
+    "round": "guarded-confirm-1",
+    "iterations": 38,
+    "wall_seconds": 7.667432624846697,
+    "log": "guarded-confirm-1-guarded-sort.log",
+    "seconds": 7.410031625069678,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-1",
+    "iterations": 38,
+    "wall_seconds": 7.72354174987413,
+    "log": "guarded-confirm-1-guardedpin-sort.log",
+    "seconds": 7.459401249885559,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "base",
+    "round": "guarded-confirm-1",
+    "iterations": 38,
+    "wall_seconds": 7.808364083990455,
+    "log": "guarded-confirm-1-base-sort.log",
+    "seconds": 7.553439166862518,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "guarded",
+    "round": "guarded-confirm-1",
+    "iterations": 72,
+    "wall_seconds": 5.031076540937647,
+    "log": "guarded-confirm-1-guarded-sha256.log",
+    "seconds": 4.7755452080164105,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-1",
+    "iterations": 72,
+    "wall_seconds": 5.060484749963507,
+    "log": "guarded-confirm-1-guardedpin-sha256.log",
+    "seconds": 4.800057083833963,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "base",
+    "round": "guarded-confirm-1",
+    "iterations": 72,
+    "wall_seconds": 5.037552916910499,
+    "log": "guarded-confirm-1-base-sha256.log",
+    "seconds": 4.781314500141889,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "guarded",
+    "round": "guarded-confirm-1",
+    "iterations": 164,
+    "wall_seconds": 3.256419959012419,
+    "log": "guarded-confirm-1-guarded-tar.log",
+    "seconds": 2.9959632500540465,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-1",
+    "iterations": 164,
+    "wall_seconds": 3.257376166060567,
+    "log": "guarded-confirm-1-guardedpin-tar.log",
+    "seconds": 2.9965071249753237,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "guarded-confirm-1",
+    "iterations": 164,
+    "wall_seconds": 3.2036093750502914,
+    "log": "guarded-confirm-1-base-tar.log",
+    "seconds": 2.9481558750849217,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-2",
+    "iterations": 60000,
+    "wall_seconds": 11.828216375084594,
+    "log": "guarded-confirm-2-guardedpin-coremark_gcc.log",
+    "seconds": 11.573,
+    "score": 5184.48112,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "base",
+    "round": "guarded-confirm-2",
+    "iterations": 60000,
+    "wall_seconds": 18.44722995790653,
+    "log": "guarded-confirm-2-base-coremark_gcc.log",
+    "seconds": 18.197,
+    "score": 3297.246799,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "guarded",
+    "round": "guarded-confirm-2",
+    "iterations": 60000,
+    "wall_seconds": 12.307606416055933,
+    "log": "guarded-confirm-2-guarded-coremark_gcc.log",
+    "seconds": 12.047,
+    "score": 4980.493069,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-2",
+    "iterations": 14,
+    "wall_seconds": 8.345323166111484,
+    "log": "guarded-confirm-2-guardedpin-gzip.log",
+    "seconds": 8.085319999838248,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "base",
+    "round": "guarded-confirm-2",
+    "iterations": 14,
+    "wall_seconds": 8.327631624881178,
+    "log": "guarded-confirm-2-base-gzip.log",
+    "seconds": 8.07108754105866,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "guarded",
+    "round": "guarded-confirm-2",
+    "iterations": 14,
+    "wall_seconds": 8.217711000004783,
+    "log": "guarded-confirm-2-guarded-gzip.log",
+    "seconds": 7.960528249852359,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-2",
+    "iterations": 66,
+    "wall_seconds": 6.895107709104195,
+    "log": "guarded-confirm-2-guardedpin-gunzip.log",
+    "seconds": 6.635361082851887,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "base",
+    "round": "guarded-confirm-2",
+    "iterations": 66,
+    "wall_seconds": 6.767070291098207,
+    "log": "guarded-confirm-2-base-gunzip.log",
+    "seconds": 6.50930970790796,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "guarded",
+    "round": "guarded-confirm-2",
+    "iterations": 66,
+    "wall_seconds": 6.649366291007027,
+    "log": "guarded-confirm-2-guarded-gunzip.log",
+    "seconds": 6.390226165996864,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-2",
+    "iterations": 14,
+    "wall_seconds": 9.556296625174582,
+    "log": "guarded-confirm-2-guardedpin-sed.log",
+    "seconds": 9.295288749970496,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "base",
+    "round": "guarded-confirm-2",
+    "iterations": 14,
+    "wall_seconds": 9.778239875100553,
+    "log": "guarded-confirm-2-base-sed.log",
+    "seconds": 9.520965333096683,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "guarded",
+    "round": "guarded-confirm-2",
+    "iterations": 14,
+    "wall_seconds": 9.303042832994834,
+    "log": "guarded-confirm-2-guarded-sed.log",
+    "seconds": 9.044550040969625,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-2",
+    "iterations": 158,
+    "wall_seconds": 3.145501167047769,
+    "log": "guarded-confirm-2-guardedpin-grep_fixed.log",
+    "seconds": 2.887501416960731,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "base",
+    "round": "guarded-confirm-2",
+    "iterations": 158,
+    "wall_seconds": 3.147599749965593,
+    "log": "guarded-confirm-2-base-grep_fixed.log",
+    "seconds": 2.888667708961293,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "guarded",
+    "round": "guarded-confirm-2",
+    "iterations": 158,
+    "wall_seconds": 3.1542031669523567,
+    "log": "guarded-confirm-2-guarded-grep_fixed.log",
+    "seconds": 2.8949194999877363,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-2",
+    "iterations": 102,
+    "wall_seconds": 5.509395166998729,
+    "log": "guarded-confirm-2-guardedpin-grep_regex.log",
+    "seconds": 5.247930499957874,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "base",
+    "round": "guarded-confirm-2",
+    "iterations": 102,
+    "wall_seconds": 5.2840436671394855,
+    "log": "guarded-confirm-2-base-grep_regex.log",
+    "seconds": 5.0268153748475015,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "guarded",
+    "round": "guarded-confirm-2",
+    "iterations": 102,
+    "wall_seconds": 5.277123166946694,
+    "log": "guarded-confirm-2-guarded-grep_regex.log",
+    "seconds": 5.021976666990668,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-2",
+    "iterations": 38,
+    "wall_seconds": 7.682017207844183,
+    "log": "guarded-confirm-2-guardedpin-sort.log",
+    "seconds": 7.420269791036844,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "base",
+    "round": "guarded-confirm-2",
+    "iterations": 38,
+    "wall_seconds": 7.767150416970253,
+    "log": "guarded-confirm-2-base-sort.log",
+    "seconds": 7.509741042042151,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "guarded",
+    "round": "guarded-confirm-2",
+    "iterations": 38,
+    "wall_seconds": 7.782404999947175,
+    "log": "guarded-confirm-2-guarded-sort.log",
+    "seconds": 7.523524041986093,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-2",
+    "iterations": 72,
+    "wall_seconds": 5.008528999984264,
+    "log": "guarded-confirm-2-guardedpin-sha256.log",
+    "seconds": 4.748742625117302,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "base",
+    "round": "guarded-confirm-2",
+    "iterations": 72,
+    "wall_seconds": 5.020538582932204,
+    "log": "guarded-confirm-2-base-sha256.log",
+    "seconds": 4.765754958149046,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "guarded",
+    "round": "guarded-confirm-2",
+    "iterations": 72,
+    "wall_seconds": 5.027647417038679,
+    "log": "guarded-confirm-2-guarded-sha256.log",
+    "seconds": 4.771490833023563,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "guardedpin",
+    "round": "guarded-confirm-2",
+    "iterations": 164,
+    "wall_seconds": 3.2390888328664005,
+    "log": "guarded-confirm-2-guardedpin-tar.log",
+    "seconds": 2.9798353749793023,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "base",
+    "round": "guarded-confirm-2",
+    "iterations": 164,
+    "wall_seconds": 3.178385291947052,
+    "log": "guarded-confirm-2-base-tar.log",
+    "seconds": 2.922032125061378,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "guarded",
+    "round": "guarded-confirm-2",
+    "iterations": 164,
+    "wall_seconds": 3.23565133404918,
+    "log": "guarded-confirm-2-guarded-tar.log",
+    "seconds": 2.97535308287479,
+    "validated": true
+  }
+]

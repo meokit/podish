@@ -24,7 +24,7 @@ internal static partial class Program
         // the new variants; do not normalize back to generic logic at runtime.
         var selectedPatternCount = patterns.Count;
         var specializationFamilies = LoadInstructionFusionFamilies();
-        foreach (var pattern in patterns.Take(selectedPatternCount).ToArray())
+        IEnumerable<string[]> Expand(string[] pattern)
         {
             var variants = new List<string[]> { Array.Empty<string>() };
             foreach (var op in pattern)
@@ -33,9 +33,18 @@ internal static partial class Program
                     ? new[] { op }.Concat(family).ToArray() : new[] { op };
                 variants = variants.SelectMany(prefix => choices.Select(choice => prefix.Append(choice).ToArray())).ToList();
             }
-            foreach (var variant in variants)
-                if (seen.Add(string.Join('\t', variant))) patterns.Add(variant);
+            return variants;
         }
+        foreach (var pattern in patterns.Take(selectedPatternCount).ToArray())
+            foreach (var variant in Expand(pattern))
+                if (seen.Add(string.Join('\t', variant))) patterns.Add(variant);
+        // Bake preservation into the match record; no runtime baseline-set search.
+        using var baselineDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(RepoRoot(),
+            "benchmark", "superopcode", "manifests", "gnu-long4x32-v1.json")));
+        var preserved = baselineDocument.RootElement.GetProperty("candidates").EnumerateArray()
+            .Select(candidate => candidate.GetProperty("pair").EnumerateArray()
+                .Select(element => CanonicalLogicName(element.GetString()!)).ToArray())
+            .SelectMany(Expand).Select(ops => string.Join('\t', ops)).ToHashSet(StringComparer.Ordinal);
         string Name(int index) => $"SuperOpcode_{patterns[index].Length}_{index:000}_" +
                                   string.Join("__", patterns[index].Select(op => SanitizeName(op[4..])));
         var builder = new StringBuilder();
@@ -45,8 +54,9 @@ internal static partial class Program
         builder.AppendLine("// selected_pattern_count=" + selectedPatternCount);
         builder.AppendLine("// specialization_expansion_count=" + (patterns.Count - selectedPatternCount));
         builder.AppendLine("// generated_pattern_count=" + patterns.Count);
+        builder.AppendLine("// clang-format off");
         builder.AppendLine("#include <ankerl/unordered_dense.h>\n#include <atomic>\n#include <array>\n#include <cstdint>\n#include <vector>");
-        builder.AppendLine("#include \"superopcodes.h\"\n#include \"ops.h\"");
+        builder.AppendLine("#include \"superopcodes.h\"\n#include \"ops.h\"\n#include \"operand_specialization.h\"");
         foreach (var file in Directory.EnumerateFiles(Path.Combine(RepoRoot(), "libfibercpu", "src", "ops"), "*_impl.h").Order(StringComparer.Ordinal))
             builder.AppendLine($"#include \"ops/{Path.GetFileName(file)}\"");
         builder.AppendLine("""
@@ -73,7 +83,8 @@ internal static partial class Program
         {
             builder.AppendLine($"ATTR_PRESERVE_NONE int64_t {Name(index)}(EmuState* RESTRICT state, DecodedOp* RESTRICT op,");
             builder.AppendLine("    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,");
-            builder.AppendLine("    uint32_t branch, uint64_t flags_cache) {");
+            builder.AppendLine("    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {");
+            builder.AppendLine("    FIBERCPU_PIN_ASSUME;");
             builder.AppendLine("    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);");
             for (var position = 0; position < patterns[index].Length; position++)
             {
@@ -83,7 +94,7 @@ internal static partial class Program
             }
             builder.AppendLine($"    if (auto* next = NextOp(constituent{patterns[index].Length - 1})) {{");
             builder.AppendLine("        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);");
-            builder.AppendLine("        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);");
+            builder.AppendLine("        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);");
             builder.AppendLine("    }\n    __builtin_unreachable();\n}");
         }
         builder.AppendLine("namespace {\nGeneratedSequenceTable* BuildGeneratedSequenceTable() {\n    auto* table = new GeneratedSequenceTable();");
@@ -99,7 +110,8 @@ internal static partial class Program
                 var ops = patterns[index];
                 var third = ops.Length >= 3 ? $"(HandlerFunc)DispatchWrapper<{ops[2]}>" : "nullptr";
                 var fourth = ops.Length == 4 ? $"(HandlerFunc)DispatchWrapper<{ops[3]}>" : "nullptr";
-                builder.AppendLine($"            GeneratedSequenceMatch{{{third}, {fourth}, {Name(index)}, {ops.Length}}},");
+                var width = ops.Length + (preserved.Contains(string.Join('\t', ops)) ? " | 0x40" : "");
+                builder.AppendLine($"            GeneratedSequenceMatch{{{third}, {fourth}, {Name(index)}, {width}}},");
             }
             builder.AppendLine("        });");
         }
@@ -112,6 +124,40 @@ internal static partial class Program
                 });
             """);
         builder.AppendLine("    for (const auto& entry : *table) {\n        auto hash = GeneratedSequenceHash{}(entry.first);\n        table->bits[(hash >> 6) & 15] |= uint64_t{1} << (hash & 63);\n    }\n    return table;\n}\n} // namespace");
+        builder.AppendLine("""
+            #if FIBERCPU_FUSION_SHAPES
+            namespace {
+            unsigned PreservedFusionWidth(const GeneratedSequenceTable* table, const DecodedOp* ops) {
+                const auto* second = NextOp(ops);
+                GeneratedSequenceKey key{ops->handler, second->handler};
+                const auto hash = GeneratedSequenceHash{}(key);
+                if (!(table->bits[(hash >> 6) & 15] & (uint64_t{1} << (hash & 63)))) return 0;
+                const auto entry = table->find(key);
+                if (entry == table->end()) return 0;
+                for (const auto& match : entry->second) {
+                    if (!(match.width & 0xc0)) continue;
+                    const bool handwritten = (match.width & 0x80) != 0;
+                    const unsigned width = match.width & 0x3f;
+                    if (width >= 3) {
+                        const auto* third = NextOp(second);
+                        if ((!handwritten && third->len == 0) || third->handler != match.third) continue;
+                        if (width == 4) {
+                            const auto* fourth = NextOp(third);
+                            if ((!handwritten && fourth->len == 0) || fourth->handler != match.fourth) continue;
+                        }
+                    }
+                    return width;
+                }
+                return 0;
+            }
+            bool PreservesBaseCoverage(const GeneratedSequenceTable* table, const DecodedOp* ops, unsigned width) {
+                for (unsigned offset = 1; offset < width; ++offset)
+                    if (PreservedFusionWidth(table, ops + offset) > width - offset) return false;
+                return true;
+            }
+            } // namespace
+            #endif
+            """);
         builder.AppendLine("""
             __attribute__((used)) HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops) {
                 if (!ops) return nullptr;
@@ -133,13 +179,31 @@ internal static partial class Program
                 if (entry == table->end()) return nullptr;
                 for (const auto& match : entry->second) {
                     const bool handwritten = (match.width & 0x80) != 0;
-                    const unsigned width = match.width & 0x7f;
-                    if (width == 2) return match.fused;
-                    const auto* third = NextOp(second);
-                    if ((!handwritten && third->len == 0) || third->handler != match.third) continue;
-                    if (width == 3) return match.fused;
-                    const auto* fourth = NextOp(third);
-                    if ((handwritten || fourth->len != 0) && fourth->handler == match.fourth) return match.fused;
+                    const unsigned width = match.width & 0x3f;
+                    if (width >= 3) {
+                        const auto* third = NextOp(second);
+                        if ((!handwritten && third->len == 0) || third->handler != match.third) continue;
+                        if (width == 4) {
+                            const auto* fourth = NextOp(third);
+                            if ((!handwritten && fourth->len == 0) || fourth->handler != match.fourth) continue;
+                        }
+                    }
+            #if FIBERCPU_FUSION_SHAPES
+                    if (!(match.width & 0xc0)) {
+            #if FIBERCPU_OPERAND_FUSIONS_ONLY
+                        // Lower only an added, fully matched fusion. Ordinary
+                        // instructions and reviewed base fusions keep their path.
+                        if (auto lowered = LowerFusionOperandHandler(ops, match.fused)) {
+                            if (PreservesBaseCoverage(table, ops, width)) return lowered;
+                        }
+                        continue;
+            #else
+                        if (!AcceptFusionOperandShape(ops, match.fused) ||
+                            !PreservesBaseCoverage(table, ops, width)) continue;
+            #endif
+                    }
+            #endif
+                    return match.fused;
                 }
                 return nullptr;
             }
@@ -152,10 +216,22 @@ internal static partial class Program
                     if (it != table->end()) {
                         for (const auto& match : it->second) {
                             const bool handwritten = (match.width & 0x80) != 0;
-                            const unsigned width = match.width & 0x7f;
+                            const unsigned width = match.width & 0x3f;
                             if (width == 2 ||
                                 ((handwritten || ops[2].len) && ops[2].handler == match.third &&
                                  (width == 3 || ((handwritten || ops[3].len) && ops[3].handler == match.fourth)))) {
+            #if FIBERCPU_FUSION_SHAPES
+                                if (!(match.width & 0xc0)) {
+            #if FIBERCPU_OPERAND_FUSIONS_ONLY
+                                    expected = LowerFusionOperandHandler(ops, match.fused);
+                                    if (!expected || !PreservesBaseCoverage(table, ops, width)) continue;
+                                    break;
+            #else
+                                    if (!AcceptFusionOperandShape(ops, match.fused) ||
+                                        !PreservesBaseCoverage(table, ops, width)) continue;
+            #endif
+                                }
+            #endif
                                 expected = match.fused;
                                 break;
                             }
@@ -165,7 +241,7 @@ internal static partial class Program
                 };
                 bool ok = true;
                 for (const auto& entry : *table) {
-                    DecodedOp ops[4]{};
+                    DecodedOp ops[5]{}; // Include the sentinel used by overlap lookahead.
                     ops[0].handler = entry.first.first;
                     ops[1].handler = entry.first.second;
                     for (const auto& match : entry.second) {
@@ -189,6 +265,7 @@ internal static partial class Program
             #endif
             } // namespace fiberish
             """);
+        builder.AppendLine("// clang-format on");
         return builder.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 }

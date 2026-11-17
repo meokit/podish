@@ -4,6 +4,7 @@
 // selected_pattern_count=64
 // specialization_expansion_count=7
 // generated_pattern_count=71
+// clang-format off
 #include <ankerl/unordered_dense.h>
 #include <atomic>
 #include <array>
@@ -11,6 +12,7 @@
 #include <vector>
 #include "superopcodes.h"
 #include "ops.h"
+#include "operand_specialization.h"
 #include "ops/ops_alu_impl.h"
 #include "ops/ops_carry_rmw_impl.h"
 #include "ops/ops_compare_impl.h"
@@ -46,7 +48,8 @@ struct GeneratedSequenceTable : GeneratedSequenceMap { std::array<uint64_t, 16> 
 } // namespace
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_000_OpGroup1_EvIz_And_32_Flags__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_And_32_Flags, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -54,13 +57,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_000_OpGroup1_EvIz_And_32_Flags__OpJcc_N
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_001_OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -68,13 +72,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_001_OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel3
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_002_OpGroup1_EvIz_Cmp_32_Flags_Ecx__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_Cmp_32_Flags_Ecx, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -82,13 +87,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_002_OpGroup1_EvIz_Cmp_32_Flags_Ecx__OpJ
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_003_OpCmp_EvGv_32__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -96,13 +102,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_003_OpCmp_EvGv_32__OpJcc_NE_Rel32(EmuSt
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_004_OpCmp_EvGv_32_ModReg__OpJcc_B_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -110,13 +117,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_004_OpCmp_EvGv_32_ModReg__OpJcc_B_Rel32
     RUN_SUPEROPCODE_OP(op::OpJcc_B_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_005_OpGroup1_EvIz_Cmp_32_Flags__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_Cmp_32_Flags, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -124,13 +132,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_005_OpGroup1_EvIz_Cmp_32_Flags__OpJcc_N
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_006_OpCmp_EvGv_32__OpJcc_AE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -138,13 +147,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_006_OpCmp_EvGv_32__OpJcc_AE_Rel32(EmuSt
     RUN_SUPEROPCODE_OP(op::OpJcc_AE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_007_OpCmp_EvGv_32_ModReg__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -152,13 +162,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_007_OpCmp_EvGv_32_ModReg__OpJcc_E_Rel32
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_008_OpGroup1_EbIb_Cmp_Flags__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_Flags, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -166,13 +177,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_008_OpGroup1_EbIb_Cmp_Flags__OpJcc_E_Re
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_009_OpTest_EvGv_32_ModReg_Edx__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Edx, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -180,13 +192,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_009_OpTest_EvGv_32_ModReg_Edx__OpJcc_E_
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_010_OpTest_EbGb__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpTest_EbGb, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -194,13 +207,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_010_OpTest_EbGb__OpJcc_E_Rel32(EmuState
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_011_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -208,13 +222,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_011_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_N
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_012_OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_Flags, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -222,13 +237,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_012_OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_R
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_013_OpCmp_EvGv_32_ModReg__OpJcc_L_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -236,13 +252,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_013_OpCmp_EvGv_32_ModReg__OpJcc_L_Rel32
     RUN_SUPEROPCODE_OP(op::OpJcc_L_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_014_OpCmp_EbGb__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpCmp_EbGb, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -250,13 +267,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_014_OpCmp_EbGb__OpJcc_NE_Rel32(EmuState
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_015_OpTest_EvGv_32_ModReg_Eax__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Eax, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -264,13 +282,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_015_OpTest_EvGv_32_ModReg_Eax__OpJcc_E_
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_016_OpTest_EvGv_32_ModReg__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -278,13 +297,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_016_OpTest_EvGv_32_ModReg__OpJcc_E_Rel3
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_017_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -292,13 +312,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_017_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_018_OpCmp_EbGb__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpCmp_EbGb, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -306,13 +327,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_018_OpCmp_EbGb__OpJcc_E_Rel32(EmuState*
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_019_OpTest_EvGv_32_ModReg_Ecx__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Ecx, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -320,13 +342,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_019_OpTest_EvGv_32_ModReg_Ecx__OpJcc_E_
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_020_OpCmp_EvGv_32_ModReg__OpJcc_AE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -334,13 +357,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_020_OpCmp_EvGv_32_ModReg__OpJcc_AE_Rel3
     RUN_SUPEROPCODE_OP(op::OpJcc_AE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_021_OpTest_AlImm__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpTest_AlImm, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -348,13 +372,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_021_OpTest_AlImm__OpJcc_E_Rel32(EmuStat
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_022_OpSub_GvEv__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpSub_GvEv, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -362,13 +387,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_022_OpSub_GvEv__OpJcc_E_Rel32(EmuState*
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_023_OpCmp_GvEv_32__OpJcc_AE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpCmp_GvEv_32, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -376,13 +402,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_023_OpCmp_GvEv_32__OpJcc_AE_Rel32(EmuSt
     RUN_SUPEROPCODE_OP(op::OpJcc_AE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_024_OpTest_EvGv_32_ModReg_Eax__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpTest_EvGv_32_ModReg_Eax, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -390,13 +417,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_024_OpTest_EvGv_32_ModReg_Eax__OpJcc_NE
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_025_OpTest_EbGb__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpTest_EbGb, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -404,13 +432,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_025_OpTest_EbGb__OpJcc_NE_Rel32(EmuStat
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_026_OpCmp_EvGv_32_ModReg__OpJcc_LE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -418,13 +447,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_026_OpCmp_EvGv_32_ModReg__OpJcc_LE_Rel3
     RUN_SUPEROPCODE_OP(op::OpJcc_LE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_027_OpCmp_EvGv_32__OpJcc_LE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -432,13 +462,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_027_OpCmp_EvGv_32__OpJcc_LE_Rel32(EmuSt
     RUN_SUPEROPCODE_OP(op::OpJcc_LE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_028_OpGroup5_Ev_Dec_32_Flags__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Dec_32_Flags, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -446,13 +477,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_028_OpGroup5_Ev_Dec_32_Flags__OpJcc_NE_
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_029_OpGroup1_EvIz_And_32_Flags__OpJcc_E_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_And_32_Flags, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -460,13 +492,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_029_OpGroup1_EvIz_And_32_Flags__OpJcc_E
     RUN_SUPEROPCODE_OP(op::OpJcc_E_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_030_OpCmp_EvGv_32__OpJcc_B_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -474,13 +507,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_030_OpCmp_EvGv_32__OpJcc_B_Rel32(EmuSta
     RUN_SUPEROPCODE_OP(op::OpJcc_B_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_2_031_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_BE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Cmp_32_Flags, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -488,13 +522,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_2_031_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_B
     RUN_SUPEROPCODE_OP(op::OpJcc_BE_Rel32, state, constituent1, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent1)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_032_OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg__OpGroup1_EvIz_And_32_Flags__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup3_Ev_Not_32_Flags, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -506,13 +541,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_032_OpGroup3_Ev_Not_32_Flags__OpAnd_EvG
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_033_OpLea_32_Ecx__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg__OpGroup1_EvIz_And_32_Flags(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpLea_32_Ecx, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -524,13 +560,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_033_OpLea_32_Ecx__OpGroup3_Ev_Not_32_Fl
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_And_32_Flags, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_034_OpMov_Load_Edx_EaxBaseNoIndexNoSegment__OpLea_32_Ecx__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -542,13 +579,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_034_OpMov_Load_Edx_EaxBaseNoIndexNoSegm
     RUN_SUPEROPCODE_OP(op::OpAnd_EvGv_NF_32_ModReg, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_035_OpMov_Load_Ecx__OpXor_GvEv_NF__OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Ecx, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -560,13 +598,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_035_OpMov_Load_Ecx__OpXor_GvEv_NF__OpCm
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_036_OpMovzx_Byte__OpMov_Load_Ecx__OpXor_GvEv_NF__OpCmp_EvGv_32_ModReg(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -578,13 +617,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_036_OpMovzx_Byte__OpMov_Load_Ecx__OpXor
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_037_OpGroup2_EvIb_Shr__OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shr, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -596,13 +636,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_037_OpGroup2_EvIb_Shr__OpMov_EvGv_Esi__
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Ecx, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_038_OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr__OpMov_EvGv_Esi(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpInc_Reg_NF, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -614,13 +655,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_038_OpInc_Reg_NF__OpXor_EvGv_NF_32_ModR
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Esi, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_039_OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx__OpXor_GvEv_NF(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Esi, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -632,13 +674,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_039_OpMov_EvGv_Esi__OpMovzx_Byte__OpMov
     RUN_SUPEROPCODE_OP(op::OpXor_GvEv_NF, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_040_OpMovzx_Byte__OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -650,13 +693,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_040_OpMovzx_Byte__OpInc_Reg_NF__OpXor_E
     RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shr, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_041_OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr__OpMov_EvGv_Esi__OpMovzx_Byte(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpXor_EvGv_NF_32_ModReg, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -668,13 +712,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_041_OpXor_EvGv_NF_32_ModReg__OpGroup2_E
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_042_OpGroup5_Ev_Inc_32_Flags__OpMovzx_Byte__OpCmp_EvGv_32__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup5_Ev_Inc_32_Flags, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -686,13 +731,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_042_OpGroup5_Ev_Inc_32_Flags__OpMovzx_B
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_043_OpMov_Load_Edx__OpMov_Load_Eax__OpGroup5_Ev_Inc_32_Flags__OpMovzx_Byte(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Edx, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -704,13 +750,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_043_OpMov_Load_Edx__OpMov_Load_Eax__OpG
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_044_OpMov_Load_Eax__OpGroup5_Ev_Inc_32_Flags__OpMovzx_Byte__OpCmp_EvGv_32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Eax, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -722,13 +769,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_044_OpMov_Load_Eax__OpGroup5_Ev_Inc_32_
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_045_OpPop_Reg32_Ebx__OpPop_Reg32_Esi__OpPop_Reg32_Edi__OpPop_Reg32_Ebp(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Ebx, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -740,13 +788,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_045_OpPop_Reg32_Ebx__OpPop_Reg32_Esi__O
     RUN_SUPEROPCODE_OP(op::OpPop_Reg32_Ebp, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_046_OpGroup1_EvIz_Add_16_NoFlags__OpMov_EvGv__OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_Add_16_NoFlags, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -758,13 +807,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_046_OpGroup1_EvIz_Add_16_NoFlags__OpMov
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_047_OpLea_32__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg__OpGroup1_EvIz_And_32_Flags(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpLea_32, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -776,13 +826,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_047_OpLea_32__OpGroup3_Ev_Not_32_Flags_
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_And_32_Flags, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_048_OpXor_EvGv_NF_32_ModReg__OpLea_32__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpXor_EvGv_NF_32_ModReg, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -794,13 +845,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_048_OpXor_EvGv_NF_32_ModReg__OpLea_32__
     RUN_SUPEROPCODE_OP(op::OpAnd_EvGv_NF_32_ModReg, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_049_OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags_Ecx__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpInc_Reg_NF, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -812,13 +864,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_049_OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModR
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_050_OpMovzx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags_Ecx(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -830,13 +883,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_050_OpMovzx_Byte__OpInc_Reg_NF__OpAdd_E
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_Cmp_32_Flags_Ecx, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_051_OpAdd_EvGv__OpMovsx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpAdd_EvGv, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -848,13 +902,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_051_OpAdd_EvGv__OpMovsx_Byte__OpInc_Reg
     RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_NF_32_ModReg, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_052_OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpInc_Reg_NF, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -866,13 +921,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_052_OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModR
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_053_OpMovsx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMovsx_Byte, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -884,13 +940,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_053_OpMovsx_Byte__OpInc_Reg_NF__OpAdd_E
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIz_Cmp_32_Flags, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_054_OpMovzx_Byte__OpAdd_EvGv__OpMovsx_Byte__OpInc_Reg_NF(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -902,13 +959,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_054_OpMovzx_Byte__OpAdd_EvGv__OpMovsx_B
     RUN_SUPEROPCODE_OP(op::OpInc_Reg_NF, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_055_OpMovzx_Byte_32_Eax__OpMovzx_Byte_32_Eax__OpAdd_EvGv__OpMovzx_Byte_32_Eax(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte_32_Eax, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -920,13 +978,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_055_OpMovzx_Byte_32_Eax__OpMovzx_Byte_3
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte_32_Eax, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_056_OpMov_Load_Edi__OpMov_EvGv_Eax__OpCmp_EvGv_32_ModReg__OpJcc_L_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Edi, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -938,13 +997,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_056_OpMov_Load_Edi__OpMov_EvGv_Eax__OpC
     RUN_SUPEROPCODE_OP(op::OpJcc_L_Rel32, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_057_OpMovzx_Byte__OpInc_Reg_NF__OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -956,13 +1016,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_057_OpMovzx_Byte__OpInc_Reg_NF__OpGroup
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_058_OpMov_Load_Edi__OpMovzx_Byte__OpInc_Reg_NF__OpGroup1_EbIb_Cmp_Flags(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Edi, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -974,13 +1035,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_058_OpMov_Load_Edi__OpMovzx_Byte__OpInc
     RUN_SUPEROPCODE_OP(op::OpGroup1_EbIb_Cmp_Flags, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_059_OpMov_Load_Esi__OpMov_Load_Edi__OpMovzx_Byte__OpInc_Reg_NF(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Esi, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -992,13 +1054,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_059_OpMov_Load_Esi__OpMov_Load_Edi__OpM
     RUN_SUPEROPCODE_OP(op::OpInc_Reg_NF, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_060_OpMov_RegImm8__OpMov_Load_Edi__OpMov_EvGv_Eax__OpCmp_EvGv_32_ModReg(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMov_RegImm8, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -1010,13 +1073,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_060_OpMov_RegImm8__OpMov_Load_Edi__OpMo
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_061_OpGroup1_EvIb_Sub_32_Flags_Eax__OpMovzx_Byte_32_Ecx__OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel32(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup1_EvIb_Sub_32_Flags_Eax, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -1028,13 +1092,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_061_OpGroup1_EvIb_Sub_32_Flags_Eax__OpM
     RUN_SUPEROPCODE_OP(op::OpJcc_NE_Rel32, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_062_OpMov_EvGv_Eax__OpGroup1_EvIb_Sub_32_Flags_Eax__OpMovzx_Byte_32_Ecx__OpCmp_EvGv_32_ModReg(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Eax, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -1046,13 +1111,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_062_OpMov_EvGv_Eax__OpGroup1_EvIb_Sub_3
     RUN_SUPEROPCODE_OP(op::OpCmp_EvGv_32_ModReg, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_063_OpMov_Load_Edx_EaxBaseNoIndexNoSegment__OpXor_EvGv_NF_32_ModReg__OpLea_32__OpGroup3_Ev_Not_32_Flags(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -1064,13 +1130,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_063_OpMov_Load_Edx_EaxBaseNoIndexNoSegm
     RUN_SUPEROPCODE_OP(op::OpGroup3_Ev_Not_32_Flags, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_064_OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shr_ModReg, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -1082,13 +1149,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_064_OpGroup2_EvIb_Shr_ModReg__OpMov_EvG
     RUN_SUPEROPCODE_OP(op::OpMov_Load_Ecx, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_065_OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpInc_Reg_NF, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -1100,13 +1168,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_065_OpInc_Reg_NF__OpXor_EvGv_NF_32_ModR
     RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Esi, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_066_OpMovzx_Byte__OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -1118,13 +1187,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_066_OpMovzx_Byte__OpInc_Reg_NF__OpXor_E
     RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shr_ModReg, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_067_OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi__OpMovzx_Byte(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpXor_EvGv_NF_32_ModReg, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -1136,13 +1206,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_067_OpXor_EvGv_NF_32_ModReg__OpGroup2_E
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_068_OpAdd_EvGv_Eax__OpMovsx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_Eax, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -1154,13 +1225,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_068_OpAdd_EvGv_Eax__OpMovsx_Byte__OpInc
     RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_NF_32_ModReg, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_069_OpMovzx_Byte__OpAdd_EvGv_Eax__OpMovsx_Byte__OpInc_Reg_NF(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -1172,13 +1244,14 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_069_OpMovzx_Byte__OpAdd_EvGv_Eax__OpMov
     RUN_SUPEROPCODE_OP(op::OpInc_Reg_NF, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
 ATTR_PRESERVE_NONE int64_t SuperOpcode_4_070_OpMovzx_Byte_32_Eax__OpMovzx_Byte_32_Eax__OpAdd_EvGv_Eax__OpMovzx_Byte_32_Eax(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-    uint32_t branch, uint64_t flags_cache) {
+    uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     DecodedOp* constituent0 = op;
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte_32_Eax, state, constituent0, instr_limit, utlb, branch, flags_cache);
@@ -1190,7 +1263,7 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_070_OpMovzx_Byte_32_Eax__OpMovzx_Byte_3
     RUN_SUPEROPCODE_OP(op::OpMovzx_Byte_32_Eax, state, constituent3, instr_limit, utlb, branch, flags_cache);
     if (auto* next = NextOp(constituent3)) {
         mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
+        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
     }
     __builtin_unreachable();
 }
@@ -1200,269 +1273,269 @@ GeneratedSequenceTable* BuildGeneratedSequenceTable() {
     table->reserve(65);
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_And_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_000_OpGroup1_EvIz_And_32_Flags__OpJcc_NE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_000_OpGroup1_EvIz_And_32_Flags__OpJcc_NE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_001_OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_001_OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_Cmp_32_Flags_Ecx>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_002_OpGroup1_EvIz_Cmp_32_Flags_Ecx__OpJcc_NE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_002_OpGroup1_EvIz_Cmp_32_Flags_Ecx__OpJcc_NE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_003_OpCmp_EvGv_32__OpJcc_NE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_003_OpCmp_EvGv_32__OpJcc_NE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_B_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_004_OpCmp_EvGv_32_ModReg__OpJcc_B_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_004_OpCmp_EvGv_32_ModReg__OpJcc_B_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_Cmp_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_005_OpGroup1_EvIz_Cmp_32_Flags__OpJcc_NE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_005_OpGroup1_EvIz_Cmp_32_Flags__OpJcc_NE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32>, (HandlerFunc)DispatchWrapper<op::OpJcc_AE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_006_OpCmp_EvGv_32__OpJcc_AE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_006_OpCmp_EvGv_32__OpJcc_AE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_E_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_007_OpCmp_EvGv_32_ModReg__OpJcc_E_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_007_OpCmp_EvGv_32_ModReg__OpJcc_E_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup1_EbIb_Cmp_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_E_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_008_OpGroup1_EbIb_Cmp_Flags__OpJcc_E_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_008_OpGroup1_EbIb_Cmp_Flags__OpJcc_E_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpTest_EvGv_32_ModReg_Edx>, (HandlerFunc)DispatchWrapper<op::OpJcc_E_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_009_OpTest_EvGv_32_ModReg_Edx__OpJcc_E_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_009_OpTest_EvGv_32_ModReg_Edx__OpJcc_E_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpTest_EbGb>, (HandlerFunc)DispatchWrapper<op::OpJcc_E_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_010_OpTest_EbGb__OpJcc_E_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_010_OpTest_EbGb__OpJcc_E_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIb_Cmp_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_011_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_NE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_011_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_NE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup1_EbIb_Cmp_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_012_OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_012_OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_L_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_013_OpCmp_EvGv_32_ModReg__OpJcc_L_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_013_OpCmp_EvGv_32_ModReg__OpJcc_L_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpCmp_EbGb>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_014_OpCmp_EbGb__OpJcc_NE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_014_OpCmp_EbGb__OpJcc_NE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpTest_EvGv_32_ModReg_Eax>, (HandlerFunc)DispatchWrapper<op::OpJcc_E_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_015_OpTest_EvGv_32_ModReg_Eax__OpJcc_E_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_015_OpTest_EvGv_32_ModReg_Eax__OpJcc_E_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpTest_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_E_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_016_OpTest_EvGv_32_ModReg__OpJcc_E_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_016_OpTest_EvGv_32_ModReg__OpJcc_E_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIb_Cmp_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_E_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_017_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_017_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpCmp_EbGb>, (HandlerFunc)DispatchWrapper<op::OpJcc_E_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_018_OpCmp_EbGb__OpJcc_E_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_018_OpCmp_EbGb__OpJcc_E_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpTest_EvGv_32_ModReg_Ecx>, (HandlerFunc)DispatchWrapper<op::OpJcc_E_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_019_OpTest_EvGv_32_ModReg_Ecx__OpJcc_E_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_019_OpTest_EvGv_32_ModReg_Ecx__OpJcc_E_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_AE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_020_OpCmp_EvGv_32_ModReg__OpJcc_AE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_020_OpCmp_EvGv_32_ModReg__OpJcc_AE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpTest_AlImm>, (HandlerFunc)DispatchWrapper<op::OpJcc_E_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_021_OpTest_AlImm__OpJcc_E_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_021_OpTest_AlImm__OpJcc_E_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpSub_GvEv>, (HandlerFunc)DispatchWrapper<op::OpJcc_E_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_022_OpSub_GvEv__OpJcc_E_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_022_OpSub_GvEv__OpJcc_E_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpCmp_GvEv_32>, (HandlerFunc)DispatchWrapper<op::OpJcc_AE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_023_OpCmp_GvEv_32__OpJcc_AE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_023_OpCmp_GvEv_32__OpJcc_AE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpTest_EvGv_32_ModReg_Eax>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_024_OpTest_EvGv_32_ModReg_Eax__OpJcc_NE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_024_OpTest_EvGv_32_ModReg_Eax__OpJcc_NE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpTest_EbGb>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_025_OpTest_EbGb__OpJcc_NE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_025_OpTest_EbGb__OpJcc_NE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_LE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_026_OpCmp_EvGv_32_ModReg__OpJcc_LE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_026_OpCmp_EvGv_32_ModReg__OpJcc_LE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32>, (HandlerFunc)DispatchWrapper<op::OpJcc_LE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_027_OpCmp_EvGv_32__OpJcc_LE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_027_OpCmp_EvGv_32__OpJcc_LE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup5_Ev_Dec_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_028_OpGroup5_Ev_Dec_32_Flags__OpJcc_NE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_028_OpGroup5_Ev_Dec_32_Flags__OpJcc_NE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_And_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_E_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_029_OpGroup1_EvIz_And_32_Flags__OpJcc_E_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_029_OpGroup1_EvIz_And_32_Flags__OpJcc_E_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32>, (HandlerFunc)DispatchWrapper<op::OpJcc_B_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_030_OpCmp_EvGv_32__OpJcc_B_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_030_OpCmp_EvGv_32__OpJcc_B_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIb_Cmp_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_BE_Rel32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_031_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_BE_Rel32, 2},
+            GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_031_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_BE_Rel32, 2 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup3_Ev_Not_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpAnd_EvGv_NF_32_ModReg>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_And_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_032_OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg__OpGroup1_EvIz_And_32_Flags__OpJcc_NE_Rel32, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_And_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_032_OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg__OpGroup1_EvIz_And_32_Flags__OpJcc_NE_Rel32, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpLea_32_Ecx>, (HandlerFunc)DispatchWrapper<op::OpGroup3_Ev_Not_32_Flags>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAnd_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_And_32_Flags>, SuperOpcode_4_033_OpLea_32_Ecx__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg__OpGroup1_EvIz_And_32_Flags, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAnd_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_And_32_Flags>, SuperOpcode_4_033_OpLea_32_Ecx__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg__OpGroup1_EvIz_And_32_Flags, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment>, (HandlerFunc)DispatchWrapper<op::OpLea_32_Ecx>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup3_Ev_Not_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpAnd_EvGv_NF_32_ModReg>, SuperOpcode_4_034_OpMov_Load_Edx_EaxBaseNoIndexNoSegment__OpLea_32_Ecx__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup3_Ev_Not_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpAnd_EvGv_NF_32_ModReg>, SuperOpcode_4_034_OpMov_Load_Edx_EaxBaseNoIndexNoSegment__OpLea_32_Ecx__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMov_Load_Ecx>, (HandlerFunc)DispatchWrapper<op::OpXor_GvEv_NF>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_035_OpMov_Load_Ecx__OpXor_GvEv_NF__OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel32, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_035_OpMov_Load_Ecx__OpXor_GvEv_NF__OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel32, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Ecx>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpXor_GvEv_NF>, (HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, SuperOpcode_4_036_OpMovzx_Byte__OpMov_Load_Ecx__OpXor_GvEv_NF__OpCmp_EvGv_32_ModReg, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpXor_GvEv_NF>, (HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, SuperOpcode_4_036_OpMovzx_Byte__OpMov_Load_Ecx__OpXor_GvEv_NF__OpCmp_EvGv_32_ModReg, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr>, (HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Ecx>, SuperOpcode_4_037_OpGroup2_EvIb_Shr__OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Ecx>, SuperOpcode_4_037_OpGroup2_EvIb_Shr__OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, (HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr>, (HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>, SuperOpcode_4_038_OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr__OpMov_EvGv_Esi, 4},
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>, (HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>, SuperOpcode_4_065_OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr>, (HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>, SuperOpcode_4_038_OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr__OpMov_EvGv_Esi, 4 | 0x40},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>, (HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>, SuperOpcode_4_065_OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMov_Load_Ecx>, (HandlerFunc)DispatchWrapper<op::OpXor_GvEv_NF>, SuperOpcode_4_039_OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx__OpXor_GvEv_NF, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMov_Load_Ecx>, (HandlerFunc)DispatchWrapper<op::OpXor_GvEv_NF>, SuperOpcode_4_039_OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx__OpXor_GvEv_NF, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr>, SuperOpcode_4_040_OpMovzx_Byte__OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr, 4},
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_Cmp_32_Flags_Ecx>, SuperOpcode_4_050_OpMovzx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags_Ecx, 4},
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup1_EbIb_Cmp_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_057_OpMovzx_Byte__OpInc_Reg_NF__OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_Rel32, 4},
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>, SuperOpcode_4_066_OpMovzx_Byte__OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr>, SuperOpcode_4_040_OpMovzx_Byte__OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr, 4 | 0x40},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_Cmp_32_Flags_Ecx>, SuperOpcode_4_050_OpMovzx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags_Ecx, 4 | 0x40},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup1_EbIb_Cmp_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_057_OpMovzx_Byte__OpInc_Reg_NF__OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_Rel32, 4 | 0x40},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>, SuperOpcode_4_066_OpMovzx_Byte__OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, SuperOpcode_4_041_OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr__OpMov_EvGv_Esi__OpMovzx_Byte, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, SuperOpcode_4_041_OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr__OpMov_EvGv_Esi__OpMovzx_Byte, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup5_Ev_Inc_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_042_OpGroup5_Ev_Inc_32_Flags__OpMovzx_Byte__OpCmp_EvGv_32__OpJcc_NE_Rel32, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_042_OpGroup5_Ev_Inc_32_Flags__OpMovzx_Byte__OpCmp_EvGv_32__OpJcc_NE_Rel32, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMov_Load_Edx>, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Eax>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup5_Ev_Inc_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, SuperOpcode_4_043_OpMov_Load_Edx__OpMov_Load_Eax__OpGroup5_Ev_Inc_32_Flags__OpMovzx_Byte, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup5_Ev_Inc_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, SuperOpcode_4_043_OpMov_Load_Edx__OpMov_Load_Eax__OpGroup5_Ev_Inc_32_Flags__OpMovzx_Byte, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMov_Load_Eax>, (HandlerFunc)DispatchWrapper<op::OpGroup5_Ev_Inc_32_Flags>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32>, SuperOpcode_4_044_OpMov_Load_Eax__OpGroup5_Ev_Inc_32_Flags__OpMovzx_Byte__OpCmp_EvGv_32, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32>, SuperOpcode_4_044_OpMov_Load_Eax__OpGroup5_Ev_Inc_32_Flags__OpMovzx_Byte__OpCmp_EvGv_32, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Ebx>, (HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Esi>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Edi>, (HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Ebp>, SuperOpcode_4_045_OpPop_Reg32_Ebx__OpPop_Reg32_Esi__OpPop_Reg32_Edi__OpPop_Reg32_Ebp, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Edi>, (HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Ebp>, SuperOpcode_4_045_OpPop_Reg32_Ebx__OpPop_Reg32_Esi__OpPop_Reg32_Edi__OpPop_Reg32_Ebp, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_Add_16_NoFlags>, (HandlerFunc)DispatchWrapper<op::OpMov_EvGv>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_046_OpGroup1_EvIz_Add_16_NoFlags__OpMov_EvGv__OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel32, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_046_OpGroup1_EvIz_Add_16_NoFlags__OpMov_EvGv__OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel32, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpLea_32>, (HandlerFunc)DispatchWrapper<op::OpGroup3_Ev_Not_32_Flags>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAnd_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_And_32_Flags>, SuperOpcode_4_047_OpLea_32__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg__OpGroup1_EvIz_And_32_Flags, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAnd_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_And_32_Flags>, SuperOpcode_4_047_OpLea_32__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg__OpGroup1_EvIz_And_32_Flags, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpLea_32>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup3_Ev_Not_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpAnd_EvGv_NF_32_ModReg>, SuperOpcode_4_048_OpXor_EvGv_NF_32_ModReg__OpLea_32__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup3_Ev_Not_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpAnd_EvGv_NF_32_ModReg>, SuperOpcode_4_048_OpXor_EvGv_NF_32_ModReg__OpLea_32__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, (HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_Cmp_32_Flags_Ecx>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_049_OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags_Ecx__OpJcc_NE_Rel32, 4},
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_Cmp_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_052_OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags__OpJcc_NE_Rel32, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_Cmp_32_Flags_Ecx>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_049_OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags_Ecx__OpJcc_NE_Rel32, 4 | 0x40},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_Cmp_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_052_OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags__OpJcc_NE_Rel32, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv>, (HandlerFunc)DispatchWrapper<op::OpMovsx_Byte>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, (HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>, SuperOpcode_4_051_OpAdd_EvGv__OpMovsx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, (HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>, SuperOpcode_4_051_OpAdd_EvGv__OpMovsx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMovsx_Byte>, (HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_Cmp_32_Flags>, SuperOpcode_4_053_OpMovsx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_Cmp_32_Flags>, SuperOpcode_4_053_OpMovsx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpAdd_EvGv>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovsx_Byte>, (HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, SuperOpcode_4_054_OpMovzx_Byte__OpAdd_EvGv__OpMovsx_Byte__OpInc_Reg_NF, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovsx_Byte>, (HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, SuperOpcode_4_054_OpMovzx_Byte__OpAdd_EvGv__OpMovsx_Byte__OpInc_Reg_NF, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte_32_Eax>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte_32_Eax>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte_32_Eax>, SuperOpcode_4_055_OpMovzx_Byte_32_Eax__OpMovzx_Byte_32_Eax__OpAdd_EvGv__OpMovzx_Byte_32_Eax, 4},
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_Eax>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte_32_Eax>, SuperOpcode_4_070_OpMovzx_Byte_32_Eax__OpMovzx_Byte_32_Eax__OpAdd_EvGv_Eax__OpMovzx_Byte_32_Eax, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte_32_Eax>, SuperOpcode_4_055_OpMovzx_Byte_32_Eax__OpMovzx_Byte_32_Eax__OpAdd_EvGv__OpMovzx_Byte_32_Eax, 4 | 0x40},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_Eax>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte_32_Eax>, SuperOpcode_4_070_OpMovzx_Byte_32_Eax__OpMovzx_Byte_32_Eax__OpAdd_EvGv_Eax__OpMovzx_Byte_32_Eax, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMov_Load_Edi>, (HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Eax>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_L_Rel32>, SuperOpcode_4_056_OpMov_Load_Edi__OpMov_EvGv_Eax__OpCmp_EvGv_32_ModReg__OpJcc_L_Rel32, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_L_Rel32>, SuperOpcode_4_056_OpMov_Load_Edi__OpMov_EvGv_Eax__OpCmp_EvGv_32_ModReg__OpJcc_L_Rel32, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMov_Load_Edi>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, (HandlerFunc)DispatchWrapper<op::OpGroup1_EbIb_Cmp_Flags>, SuperOpcode_4_058_OpMov_Load_Edi__OpMovzx_Byte__OpInc_Reg_NF__OpGroup1_EbIb_Cmp_Flags, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, (HandlerFunc)DispatchWrapper<op::OpGroup1_EbIb_Cmp_Flags>, SuperOpcode_4_058_OpMov_Load_Edi__OpMovzx_Byte__OpInc_Reg_NF__OpGroup1_EbIb_Cmp_Flags, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMov_Load_Esi>, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Edi>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, SuperOpcode_4_059_OpMov_Load_Esi__OpMov_Load_Edi__OpMovzx_Byte__OpInc_Reg_NF, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, SuperOpcode_4_059_OpMov_Load_Esi__OpMov_Load_Edi__OpMovzx_Byte__OpInc_Reg_NF, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMov_RegImm8>, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Edi>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Eax>, (HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, SuperOpcode_4_060_OpMov_RegImm8__OpMov_Load_Edi__OpMov_EvGv_Eax__OpCmp_EvGv_32_ModReg, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Eax>, (HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, SuperOpcode_4_060_OpMov_RegImm8__OpMov_Load_Edi__OpMov_EvGv_Eax__OpCmp_EvGv_32_ModReg, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIb_Sub_32_Flags_Eax>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte_32_Ecx>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_061_OpGroup1_EvIb_Sub_32_Flags_Eax__OpMovzx_Byte_32_Ecx__OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel32, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_061_OpGroup1_EvIb_Sub_32_Flags_Eax__OpMovzx_Byte_32_Ecx__OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel32, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Eax>, (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIb_Sub_32_Flags_Eax>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte_32_Ecx>, (HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, SuperOpcode_4_062_OpMov_EvGv_Eax__OpGroup1_EvIb_Sub_32_Flags_Eax__OpMovzx_Byte_32_Ecx__OpCmp_EvGv_32_ModReg, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte_32_Ecx>, (HandlerFunc)DispatchWrapper<op::OpCmp_EvGv_32_ModReg>, SuperOpcode_4_062_OpMov_EvGv_Eax__OpGroup1_EvIb_Sub_32_Flags_Eax__OpMovzx_Byte_32_Ecx__OpCmp_EvGv_32_ModReg, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment>, (HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpLea_32>, (HandlerFunc)DispatchWrapper<op::OpGroup3_Ev_Not_32_Flags>, SuperOpcode_4_063_OpMov_Load_Edx_EaxBaseNoIndexNoSegment__OpXor_EvGv_NF_32_ModReg__OpLea_32__OpGroup3_Ev_Not_32_Flags, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpLea_32>, (HandlerFunc)DispatchWrapper<op::OpGroup3_Ev_Not_32_Flags>, SuperOpcode_4_063_OpMov_Load_Edx_EaxBaseNoIndexNoSegment__OpXor_EvGv_NF_32_ModReg__OpLea_32__OpGroup3_Ev_Not_32_Flags, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>, (HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Ecx>, SuperOpcode_4_064_OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Ecx>, SuperOpcode_4_064_OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, SuperOpcode_4_067_OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi__OpMovzx_Byte, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, SuperOpcode_4_067_OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi__OpMovzx_Byte, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_Eax>, (HandlerFunc)DispatchWrapper<op::OpMovsx_Byte>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, (HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>, SuperOpcode_4_068_OpAdd_EvGv_Eax__OpMovsx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, (HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>, SuperOpcode_4_068_OpAdd_EvGv_Eax__OpMovsx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg, 4 | 0x40},
         });
     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_Eax>},
         std::vector<GeneratedSequenceMatch>{
-            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovsx_Byte>, (HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, SuperOpcode_4_069_OpMovzx_Byte__OpAdd_EvGv_Eax__OpMovsx_Byte__OpInc_Reg_NF, 4},
+            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovsx_Byte>, (HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, SuperOpcode_4_069_OpMovzx_Byte__OpAdd_EvGv_Eax__OpMovsx_Byte__OpInc_Reg_NF, 4 | 0x40},
         });
     RegisterHandwrittenSuperOpcodes(table, [](void* context, HandlerFunc first, HandlerFunc second,
                                                 HandlerFunc third, HandlerFunc fourth, HandlerFunc fused, unsigned width) {
@@ -1477,6 +1550,38 @@ GeneratedSequenceTable* BuildGeneratedSequenceTable() {
     return table;
 }
 } // namespace
+#if FIBERCPU_FUSION_SHAPES
+namespace {
+unsigned PreservedFusionWidth(const GeneratedSequenceTable* table, const DecodedOp* ops) {
+    const auto* second = NextOp(ops);
+    GeneratedSequenceKey key{ops->handler, second->handler};
+    const auto hash = GeneratedSequenceHash{}(key);
+    if (!(table->bits[(hash >> 6) & 15] & (uint64_t{1} << (hash & 63)))) return 0;
+    const auto entry = table->find(key);
+    if (entry == table->end()) return 0;
+    for (const auto& match : entry->second) {
+        if (!(match.width & 0xc0)) continue;
+        const bool handwritten = (match.width & 0x80) != 0;
+        const unsigned width = match.width & 0x3f;
+        if (width >= 3) {
+            const auto* third = NextOp(second);
+            if ((!handwritten && third->len == 0) || third->handler != match.third) continue;
+            if (width == 4) {
+                const auto* fourth = NextOp(third);
+                if ((!handwritten && fourth->len == 0) || fourth->handler != match.fourth) continue;
+            }
+        }
+        return width;
+    }
+    return 0;
+}
+bool PreservesBaseCoverage(const GeneratedSequenceTable* table, const DecodedOp* ops, unsigned width) {
+    for (unsigned offset = 1; offset < width; ++offset)
+        if (PreservedFusionWidth(table, ops + offset) > width - offset) return false;
+    return true;
+}
+} // namespace
+#endif
 __attribute__((used)) HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops) {
     if (!ops) return nullptr;
     static std::atomic<GeneratedSequenceTable*> table_ptr{nullptr};
@@ -1497,13 +1602,31 @@ __attribute__((used)) HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops)
     if (entry == table->end()) return nullptr;
     for (const auto& match : entry->second) {
         const bool handwritten = (match.width & 0x80) != 0;
-        const unsigned width = match.width & 0x7f;
-        if (width == 2) return match.fused;
-        const auto* third = NextOp(second);
-        if ((!handwritten && third->len == 0) || third->handler != match.third) continue;
-        if (width == 3) return match.fused;
-        const auto* fourth = NextOp(third);
-        if ((handwritten || fourth->len != 0) && fourth->handler == match.fourth) return match.fused;
+        const unsigned width = match.width & 0x3f;
+        if (width >= 3) {
+            const auto* third = NextOp(second);
+            if ((!handwritten && third->len == 0) || third->handler != match.third) continue;
+            if (width == 4) {
+                const auto* fourth = NextOp(third);
+                if ((!handwritten && fourth->len == 0) || fourth->handler != match.fourth) continue;
+            }
+        }
+#if FIBERCPU_FUSION_SHAPES
+        if (!(match.width & 0xc0)) {
+#if FIBERCPU_OPERAND_FUSIONS_ONLY
+            // Lower only an added, fully matched fusion. Ordinary
+            // instructions and reviewed base fusions keep their path.
+            if (auto lowered = LowerFusionOperandHandler(ops, match.fused)) {
+                if (PreservesBaseCoverage(table, ops, width)) return lowered;
+            }
+            continue;
+#else
+            if (!AcceptFusionOperandShape(ops, match.fused) ||
+                !PreservesBaseCoverage(table, ops, width)) continue;
+#endif
+        }
+#endif
+        return match.fused;
     }
     return nullptr;
 }
@@ -1516,10 +1639,22 @@ bool ValidateGeneratedSequenceLookup() {
         if (it != table->end()) {
             for (const auto& match : it->second) {
                 const bool handwritten = (match.width & 0x80) != 0;
-                const unsigned width = match.width & 0x7f;
+                const unsigned width = match.width & 0x3f;
                 if (width == 2 ||
                     ((handwritten || ops[2].len) && ops[2].handler == match.third &&
                      (width == 3 || ((handwritten || ops[3].len) && ops[3].handler == match.fourth)))) {
+#if FIBERCPU_FUSION_SHAPES
+                    if (!(match.width & 0xc0)) {
+#if FIBERCPU_OPERAND_FUSIONS_ONLY
+                        expected = LowerFusionOperandHandler(ops, match.fused);
+                        if (!expected || !PreservesBaseCoverage(table, ops, width)) continue;
+                        break;
+#else
+                        if (!AcceptFusionOperandShape(ops, match.fused) ||
+                            !PreservesBaseCoverage(table, ops, width)) continue;
+#endif
+                    }
+#endif
                     expected = match.fused;
                     break;
                 }
@@ -1529,7 +1664,7 @@ bool ValidateGeneratedSequenceLookup() {
     };
     bool ok = true;
     for (const auto& entry : *table) {
-        DecodedOp ops[4]{};
+        DecodedOp ops[5]{}; // Include the sentinel used by overlap lookahead.
         ops[0].handler = entry.first.first;
         ops[1].handler = entry.first.second;
         for (const auto& match : entry.second) {
@@ -1552,3 +1687,4 @@ bool ValidateGeneratedSequenceLookup() {
 }
 #endif
 } // namespace fiberish
+// clang-format on

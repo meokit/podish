@@ -16,7 +16,7 @@ HANDLER_PROTO = (
     'fiberish::mem::MicroTlbAbiWord utlb_tags, '
     'fiberish::mem::MicroTlbAbiWord utlb_addend, '
     'uint32_t branch, '
-    'uint64_t flags_cache'
+    'uint64_t flags_cache FIBERCPU_PIN_PARAMS'
 )
 
 

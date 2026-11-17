@@ -1,0 +1,88 @@
+Bounded fusion / operand lowering / ARM64 EAX-ESP pin
+
+Build switches (CMake cache; independent at compile time)
+  FIBERCPU_ENABLE_SUPEROPCODES=ON/OFF
+  FIBERCPU_FUSION_STRATEGY=AUTO/BASE/EXTENDED/SHAPED
+  FIBERCPU_OPERAND_SPECIALIZATION=AUTO/OFF/PROFILE/REGISTER/HYBRID
+  FIBERCPU_OPERAND_BUDGET=256
+  FIBERCPU_GPR_PIN=OFF/ABI_ONLY/CONSERVATIVE/EAX_ESP
+MSBuild forwards FusionStrategy, OperandSpecialization, OperandBudget, OperandScope, GprPin.
+  FIBERCPU_OPERAND_SCOPE=AUTO/ALL/ADDED_FUSIONS
+AUTO chooses SHAPED + PROFILE/256 + ADDED_FUSIONS, pin OFF, only for
+macOS ARM64 Clang shared builds. Other targets, universal builds, static/AOT,
+sequence-training and explicitly supplied fusion tables retain BASE/OFF/ALL.
+Explicit choices override AUTO. Selecting BASE with operand/scope AUTO restores
+the old base behavior. Existing nonempty cached source overrides still win;
+use -DFIBERCPU_GENERATED_SUPEROPCODES_FILE= to follow the selected strategy.
+An explicitly supplied FIBERCPU_GENERATED_SUPEROPCODES_FILE overrides strategy.
+An empty source follows the strategy, including when reconfiguring an existing tree.
+
+BASE is the reviewed GNU 64 patterns plus 7 semantic expansions. EXTENDED
+adds 64 observed GCC CoreMark pairs and 32 four-op sequences (167 total).
+Preserved BASE membership is baked into bit 0x40 of the match width;
+handwritten rules use bit 0x80 and the low six bits hold the actual width.
+SHAPED retains all BASE rules, but admits an added fusion only when an exact
+operand clone covers its whole sequence. A miss continues matching shorter or
+baseline rules. An added fusion cannot consume the head of a preserved fusion
+whose tail extends beyond its own window. This prevents an added MOV/CMP pair
+from splitting an existing CMP/Jcc pair; a four-op fusion may still subsume an
+entire two-op comparison/branch. This limits the impact on operand paths outside the training
+coverage; it never reverts a canonical instruction specialization.
+Frozen manifests are checked in. Ordinary builds never execute a training guest.
+PROFILE partially evaluates at most the first budget entries in the frozen
+256-shape coverage plan. Only ModRM, prefix and effective-address descriptors
+are specialized. Guest addresses, immediates, memory contents and validation
+results remain runtime inputs. Each clone still uses the ordinary instruction
+logic, precise fault/restart flow and constituent boundaries.
+ADDED_FUSIONS instantiates only the fused shapes in that budget (64 of the
+256 candidates). The fusion matcher returns their lowered entry directly. It
+performs no separate per-instruction lowering pass or reverse normalization:
+ordinary instructions retain canonical identity, and fused entries cannot be
+constituents of these ordinary-logic-only patterns. This keeps cold decoder
+paths out of the generic shape lookup and preserves existing ISA specialization.
+ALL also lowers single instructions and maintains reverse identity on concat.
+REGISTER lowers register-only forms to three destination classes: EAX, ESP,
+other. Byte forms classify their parent register, so AH belongs to EAX; the
+encoding for AH never refers to ESP. Read-only CMP/TEST has its own policy.
+HYBRID first tries a bounded exact shape, then the general register class.
+
+Order: decode -> liveness and canonical specialization -> canonical fusion ->
+operand lowering. Only before concatenation, lowerings map back to their original
+handler identity; then fusion and lowering run again. This preserves matching
+without reverting an instruction specialization. The source generator remains
+the authority for semantic specialization expansion.
+
+Pin appends two uint32 arguments to the preserve_none handler signature. One
+native library has exactly one signature, shared by ordinary/fused handlers,
+sentinels, branch links, restart/retry, Step/Run and reflection declarations.
+ABI_ONLY isolates the signature cost. CONSERVATIVE caches reads and reloads
+both values at ordinary tails. EAX_ESP uses decoded static write classes to
+forward unchanged values. No runtime register-cache choice occurs in GetReg.
+
+The register file remains canonical at every instruction boundary: all writes
+are write-through. PIN_ASSUME expresses equality on entry, allowing LLVM to
+substitute register reads. Static policy guarantees which values can be kept;
+unknown/implicit writes and memory/opaque paths reload canonical state. Calls
+that can observe or modify registers, faults/retries, branch resolution and API
+reentry are conservative boundaries. This is a read cache, not dirty write-back.
+A future dirty bank would require a separate precise-state/observer design.
+
+GPR pin is restricted to ARM64 Clang with preserve_none support. It must be
+remeasured after a compiler upgrade: preserve_none is an unstable compiler ABI.
+The public C ABI is unchanged. BuildFeatures bits 4..5 identify operand mode,
+bits 8..9 identify pin mode; bit 10 identifies ADDED_FUSIONS scope. X86_GetOptimizationConfig returns strategy, enabled
+state, operand mode/budget, pin mode and the frozen shape-plan hash. The existing
+superopcode set hash identifies the selected generated fusion source.
+
+Validation methodology
+Use the existing GCC 15.2 -O2 i386 CoreMark ELF only, SHA256
+48c3ecf2c2e2bbbebc8249f3f2ab30933a1e85e8eeaa1b6c0806bed90a5085db.
+Keep rootfs, managed CLI and arguments identical. Fixed 60000 iterations,
+0x0 0x0 0x66 60000 7 1 2000; require CRC and >=10 seconds.
+GNU holdout: gzip, gunzip, sed, fixed/regex grep, sort, SHA256, tar, using a
+fresh deterministic seed 987654 fixture. Validate every output, including
+archive members/decompressed bytes. Build all variants and finish tests before
+serial timing. Rotate variant order between rounds. Record individual changes;
+a geomean cannot establish the absence of regressions.
+A finite corpus cannot prove non-regression for all possible guests. Promotion
+requires no repeatable regression on the measured paths, with explicit bounds.

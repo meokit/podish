@@ -5,6 +5,7 @@
 #include <type_traits>
 #include <vector>
 #include "common.h"
+#include "handler_abi.h"
 #include "mem/tlb.h"
 
 #if __has_cpp_attribute(clang::musttail)
@@ -57,7 +58,7 @@ struct DecodedOp;
 // Handler Function (Preserve None ABI, functionality + dispatch)
 using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                  mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-                                                 uint32_t branch, uint64_t flags_cache);
+                                                 uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS);
 
 enum class LogicFlow : uint8_t {
     Continue = 0,

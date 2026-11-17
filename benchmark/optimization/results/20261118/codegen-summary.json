@@ -1,0 +1,73 @@
+{
+  "base": {},
+  "shapes": {
+    "ror-dynamic": {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op20OpRotateRegImmediateIjLb1ELb1EEENS_9LogicFlowEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_20DynamicOperandPolicyEEExS5_S7_xyyjy",
+      "address": "0x647ac",
+      "bytes": 120,
+      "sp_references": 0,
+      "pin_loads": []
+    },
+    "fused-shape-001": {
+      "symbol": "__ZN8fiberish12_GLOBAL__N_1146OperandClone_001_SuperOpcode_4_130_OpMov_EvGv_Edx__OpMov_Load_Edx_EsiBaseNoIndexNoSegment__OpMov_Store_Ecx_EsiBaseNoIndexNoSegment__OpMov_EvGv_EsiEPNS_8EmuStateEPNS_9DecodedOpExyyjy",
+      "address": "0xb2b14",
+      "bytes": 460,
+      "sp_references": 0,
+      "pin_loads": []
+    }
+  },
+  "hybrid": {
+    "ror-dynamic": {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op20OpRotateRegImmediateIjLb1ELb1EEENS_9LogicFlowEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_20DynamicOperandPolicyEEExS5_S7_xyyjy",
+      "address": "0x66160",
+      "bytes": 120,
+      "sp_references": 0,
+      "pin_loads": []
+    },
+    "fused-shape-001": {
+      "symbol": "__ZN8fiberish12_GLOBAL__N_1146OperandClone_001_SuperOpcode_4_130_OpMov_EvGv_Edx__OpMov_Load_Edx_EsiBaseNoIndexNoSegment__OpMov_Store_Ecx_EsiBaseNoIndexNoSegment__OpMov_EvGv_EsiEPNS_8EmuStateEPNS_9DecodedOpExyyjy",
+      "address": "0xb46d8",
+      "bytes": 460,
+      "sp_references": 0,
+      "pin_loads": []
+    },
+    "ror-other": {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op20OpRotateRegImmediateIjLb1ELb1EEENS_9LogicFlowEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_21RegisterOperandPolicyILNS_12PinWriteRoleE1ELNS_13PinWriteClassEn1ELb0EEEEExS5_S7_xyyjy",
+      "address": "0x131468",
+      "bytes": 116,
+      "sp_references": 0,
+      "pin_loads": []
+    }
+  },
+  "pinstatic": {
+    "ror-dynamic": {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op20OpRotateRegImmediateIjLb1ELb1EEENS_9LogicFlowEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_20DynamicOperandPolicyEEExS5_S7_xyyjyjj",
+      "address": "0x66c1c",
+      "bytes": 136,
+      "sp_references": 0,
+      "pin_loads": [
+        "   66c3c:      \tldr\tw27, [x20]",
+        "   66c40:      \tldr\tw28, [x20, #0x10]",
+        "   66c98:      \tldr\tw27, [x20]",
+        "   66c9c:      \tldr\tw28, [x20, #0x10]"
+      ]
+    },
+    "fused-shape-001": {
+      "symbol": "__ZN8fiberish12_GLOBAL__N_1146OperandClone_001_SuperOpcode_4_130_OpMov_EvGv_Edx__OpMov_Load_Edx_EsiBaseNoIndexNoSegment__OpMov_Store_Ecx_EsiBaseNoIndexNoSegment__OpMov_EvGv_EsiEPNS_8EmuStateEPNS_9DecodedOpExyyjyjj",
+      "address": "0xb6120",
+      "bytes": 468,
+      "sp_references": 0,
+      "pin_loads": [
+        "   b61ac:      \tldr\tw27, [x20]",
+        "   b61b0:      \tldr\tw28, [x20, #0x10]"
+      ]
+    },
+    "ror-other": {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op20OpRotateRegImmediateIjLb1ELb1EEENS_9LogicFlowEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_21RegisterOperandPolicyILNS_12PinWriteRoleE1ELNS_13PinWriteClassEn1ELb0EEEEExS5_S7_xyyjyjj",
+      "address": "0x1349a0",
+      "bytes": 116,
+      "sp_references": 0,
+      "pin_loads": []
+    }
+  }
+}

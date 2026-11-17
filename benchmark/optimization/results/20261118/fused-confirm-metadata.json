@@ -1,0 +1,38 @@
+{
+  "utc": "2026-11-17T19:33:01.637236+00:00",
+  "host": "macOS-26.3.2-arm64-arm-64bit-Mach-O",
+  "gcc_sha256": "48c3ecf2c2e2bbbebc8249f3f2ab30933a1e85e8eeaa1b6c0806bed90a5085db",
+  "variants": {
+    "base": {
+      "Podish.Cli.dll": "cf316490138c0f831d1ff507bfde552ad539862d309c30b8457e2c802a5a620c",
+      "libfibercpu.dylib": "b65e487705d2927e3ed5ad23e8da3502c6c9021582f2be94ed054052d6570a33"
+    },
+    "fused": {
+      "Podish.Cli.dll": "cf316490138c0f831d1ff507bfde552ad539862d309c30b8457e2c802a5a620c",
+      "libfibercpu.dylib": "58f779a78e70ce9d9ce25e5094b3de50b4278e7307748fd83ad50bcbaeae8f93"
+    }
+  },
+  "cases": [
+    "coremark_gcc",
+    "gzip",
+    "gunzip",
+    "sed",
+    "grep_fixed",
+    "grep_regex",
+    "sort",
+    "sha256",
+    "tar"
+  ],
+  "rounds": 3,
+  "scale": 2.0,
+  "core_iterations": 60000,
+  "fixture": {
+    "seed": 987654,
+    "bytes": 2097204,
+    "input_sha256": "07443ecb7d0fdc5c367dc97aa23ca054545bc334725d3f5408e10e226b5c1e6c",
+    "sed": "cbd35973c9ab0bfb9a914feba2413341c8af4f07c0653ecc8e56fdc382a0515f",
+    "sort": "07443ecb7d0fdc5c367dc97aa23ca054545bc334725d3f5408e10e226b5c1e6c",
+    "grep_fixed": "4844\n",
+    "grep_regex": "1050\n"
+  }
+}
