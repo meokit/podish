@@ -76,6 +76,8 @@
 
     <ItemGroup Condition="'$(BuildNetstackStatic)' == 'true' And $([MSBuild]::IsOsPlatform('Windows'))">
         <NativeLibrary Include="$(NetstackStaticLibPath)"/>
+        <!-- Rust std uses WaitOnAddress/WakeByAddress* for its Windows mutexes. -->
+        <NativeLibrary Include="synchronization.lib"/>
     </ItemGroup>
 
     <ItemGroup Condition="'$(BuildNetstackStatic)' != 'true' And '$(NetstackLibName)' != '' And '$(IsBrowserWasm)' != 'true'">

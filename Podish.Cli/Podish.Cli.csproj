@@ -79,6 +79,8 @@
 
     <ItemGroup Condition="'$(PublishAot)' == 'true' and $(RuntimeIdentifier.StartsWith('win'))">
         <NativeLibrary Include="userenv.lib"/>
+        <!-- Rust std's WaitOnAddress/WakeByAddress* imports are not in kernel32.lib. -->
+        <NativeLibrary Include="synchronization.lib"/>
     </ItemGroup>
 
 </Project>
