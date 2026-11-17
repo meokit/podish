@@ -182,6 +182,7 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
             --output ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
+            --compiler ${CMAKE_CXX_COMPILER}
             $<TARGET_OBJECTS:fibercpu_core>
     # The object-library target supplies ordering, not file-level invalidation.
     # Re-scan after any handler object changes (including a different selected set).
