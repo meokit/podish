@@ -26,6 +26,33 @@ int main() {
     // Invalid 15-byte prefix sequence at the last available decoded-op slot.
     std::memset(page + 63, 0x66, 15);
     ok = check(0, 0, 64, address + 64) && ok;
+    // A one-byte instruction at the end of a page must not fetch the next page.
+    page[4095] = std::byte{0x40};
+    uint8_t buffer[15]{};
+    DecodedInstTmp decoded{};
+    uint16_t handler = 0, raw = 0;
+    auto result = FetchAndDecodeInstruction(state, address + 4095, buffer, &decoded, &handler, &raw);
+    ok = ok && result == InstructionDecodeResult::Success && raw == 0x40 && decoded.head.GetLength() == 1;
+
+    // An instruction split across pages uses the buffered retry path, including
+    // the original opcode before specialized MOV handler remapping.
+    auto* next = state->mmu.allocate_page(address + 4096, static_cast<uint8_t>(mem::Property::RX));
+    if (!next) {
+        X86_Destroy(state);
+        return 1;
+    }
+    page[4095] = std::byte{0x66};
+    next[0] = std::byte{0x8b};
+    next[1] = std::byte{0xc0};
+    result = FetchAndDecodeInstruction(state, address + 4095, buffer, &decoded, &handler, &raw);
+    ok = ok && result == InstructionDecodeResult::Success && raw == 0x8b && decoded.head.GetLength() == 3;
+    // Unprefixed MOV uses a specialized handler index; raw opcode is unchanged.
+    page[0] = std::byte{0x8b};
+    page[1] = std::byte{0xc0};
+    result = FetchAndDecodeInstruction(state, address, buffer, &decoded, &handler, &raw);
+    ok = ok && result == InstructionDecodeResult::Success && raw == 0x8b && handler != raw;
+    if (!ok)
+        std::fprintf(stderr, "Decode storage or fetch boundary check failed\n");
     X86_Destroy(state);
     return ok ? 0 : 1;
 }

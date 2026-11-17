@@ -369,11 +369,14 @@ static_assert(offsetof(BasicBlock, slots) == 48, "BasicBlock: slots must start a
 enum class InstructionDecodeResult : uint8_t { Success, NeedMoreBytes, Invalid, FetchFault };
 // Never reads beyond available bytes or the architectural 15-byte limit.
 InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t available, DecodedInstTmp* inst,
-                                                 uint16_t* handler_index);
+                                                 uint16_t* handler_index, uint16_t* raw_opcode = nullptr);
 bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index);
-// buffer must have room for 15 bytes. Fetches another page only when decoding requires it.
+// buffer must have room for 15 bytes; its contents are scratch except on invalid
+// decoding, where they hold the fetched bytes for diagnostics. Fetches another
+// page only when decoding requires it. raw_opcode, when requested, is the
+// architectural opcode before any handler-specific remapping.
 InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip, uint8_t* buffer, DecodedInstTmp* inst,
-                                                  uint16_t* handler_index);
+                                                  uint16_t* handler_index, uint16_t* raw_opcode = nullptr);
 // Shared Step/block preparation, without dead-flags analysis.
 void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedOp* op);
 

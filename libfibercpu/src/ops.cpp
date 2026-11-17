@@ -276,7 +276,7 @@ void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerF
 
 // Registration is complete before this is called. Buckets retain the exact
 // sorted order, including ties; remaining prefix and memory constraints are
-// checked by Matches. The extra ModRM value represents an absent ModRM.
+// checked after lookup. The extra ModRM value represents an absent ModRM.
 static void BuildSpecializationIndex() {
     for (size_t opcode = 0; opcode < 1024; ++opcode) {
         const auto& list = g_OpSpecializations[opcode];
@@ -304,7 +304,7 @@ HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
     const unsigned encoded = op->meta.flags.has_modrm ? unsigned(op->modrm) + 1 : 0;
     const auto& bucket = (*g_SpecializationIndex[handler_index])[encoded * 2 + op->meta.flags.no_flags];
     for (const auto* entry : bucket) {
-        if (entry->criteria.Matches(op)) return entry->handler;
+        if (entry->criteria.MatchesIndexedRemainder(op)) return entry->handler;
     }
     return nullptr;
 }

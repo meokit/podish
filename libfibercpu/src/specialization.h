@@ -86,8 +86,6 @@ struct SpecCriteria {
 
     bool Matches(const DecodedOp* op) const {
         const uint8_t modrm = op->modrm;
-        const uint8_t prefixes = op->prefixes.all;
-        const bool op_no_flags = op->meta.flags.no_flags;
 
         if (op->meta.flags.has_modrm) {
             if (mod_mask) {
@@ -105,10 +103,12 @@ struct SpecCriteria {
         } else if (mod_mask || reg_mask || rm_mask) {
             return false;
         }
-        if (prefix_mask) {
-            if ((prefixes & prefix_mask) != prefix_val) return false;
-        }
-        if (no_flags != op_no_flags) return false;
+        return no_flags == op->meta.flags.no_flags && MatchesIndexedRemainder(op);
+    }
+
+    // ModRM and no_flags are already selected by the immutable index.
+    bool MatchesIndexedRemainder(const DecodedOp* op) const {
+        if (prefix_mask && (op->prefixes.all & prefix_mask) != prefix_val) return false;
 
         if (RequiresMemShape()) {
             if (!op->meta.flags.has_mem) return false;

@@ -1,7 +1,7 @@
 # Block decode benchmark
 
 This measures repeated 32-bit x86 machine-code to `BasicBlock` decoding via
-`DecodeBlock`. The fixed 23-byte, nine-instruction block includes register,
+`DecodeBlock`. The default 23-byte, nine-instruction block includes register,
 stack, memory-addressing, arithmetic and conditional-branch instructions. Each
 call creates a new block; it does not look up a cached block or execute guest
 code. The measurement includes instruction fetch, block optimization and pool
@@ -12,13 +12,15 @@ result checks the decoded instruction count and end address on every call.
 ```sh
 cmake -S libfibercpu -B build/decode -DCMAKE_BUILD_TYPE=Release -DFIBERCPU_BUILD_DECODE_BENCHMARK=ON
 cmake --build build/decode --target decode_benchmark -j
-./build/decode/decode_benchmark 100
+./build/decode/decode_benchmark 100 mixed
+./build/decode/decode_benchmark 100 memory
 ```
 
-The optional argument is the number of measured batches (1,000 blocks each;
-default 100). Output reports time per block, decoded instructions/s and input
-bytes/s. This single hot block is a microbenchmark, not a representative
-workload; compare results on the same machine and build configuration. CMake
+The first optional argument is the number of measured batches (1,000 blocks each;
+default 100). The second selects `mixed` (default), `register`, `memory`, or
+`prefix`. The latter three decode 32 repeated instructions to exercise different
+paths; they remain synthetic hot blocks. Output reports time per block, decoded instructions/s and input
+bytes/s. These microbenchmarks are not representative workloads; compare results on the same machine and build configuration. CMake
 may need network access to fetch its normal dependencies on the first build.
 
 To check the specialization index against the original ordered linear lookup:

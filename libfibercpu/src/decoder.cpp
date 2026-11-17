@@ -130,7 +130,7 @@ static bool IsValidLockModRM(uint16_t opcode, uint8_t modrm) {
 // Decoder Logic
 // Distinguishes an invalid encoding from a valid but incomplete byte sequence.
 InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t available, DecodedInstTmp* inst,
-                                                 uint16_t* handler_index) {
+                                                 uint16_t* handler_index, uint16_t* raw_opcode) {
     *inst = {};
 
     DecodedOp* op = &inst->head;
@@ -212,6 +212,7 @@ InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t ava
 
     // Set Handler Index (Map 0 or 1) - Local, not stored in op
     *handler_index = (map << 8) | opcode;
+    if (raw_opcode) *raw_opcode = *handler_index;
     if (op->prefixes.flags.lock && !IsLockableOpcode(*handler_index)) return InstructionDecodeResult::Invalid;
     if (UsesControlFlowCacheStorage(*handler_index)) {
         SetExtKind(op, ExtKind::ControlFlow);
@@ -393,7 +394,7 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
 }
 
 InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip, uint8_t* buffer, DecodedInstTmp* inst,
-                                                  uint16_t* handler_index) {
+                                                  uint16_t* handler_index, uint16_t* raw_opcode) {
     // A mapping is page-granular: copying bytes within the first page is safe,
     // but even probing the next mapping must wait until we know it is needed.
     size_t available = std::min<size_t>(15, 0x1000u - (eip & 0xFFFu));
@@ -406,10 +407,12 @@ InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip,
         }
         return InstructionDecodeResult::FetchFault;
     }
+    auto result =
+        DecodeInstructionBounded(reinterpret_cast<const uint8_t*>(code), available, inst, handler_index, raw_opcode);
+    if (result == InstructionDecodeResult::Success) return result;
     std::memcpy(buffer, code, available);
+    if (result != InstructionDecodeResult::NeedMoreBytes) return result;
     for (;;) {
-        auto result = DecodeInstructionBounded(buffer, available, inst, handler_index);
-        if (result != InstructionDecodeResult::NeedMoreBytes) return result;
         // Bounded decoding returns Invalid rather than requesting a 16th byte.
         const uint32_t address = eip + static_cast<uint32_t>(available);
         code = state->mmu.translate_exec(state, address);
@@ -422,6 +425,8 @@ InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip,
             return InstructionDecodeResult::FetchFault;
         }
         buffer[available++] = static_cast<uint8_t>(*code);
+        result = DecodeInstructionBounded(buffer, available, inst, handler_index, raw_opcode);
+        if (result != InstructionDecodeResult::NeedMoreBytes) return result;
     }
 }
 
@@ -594,7 +599,9 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         uint8_t buf[15] = {};
         DecodedInstTmp inst{};
         uint16_t handler_index = 0;
-        const auto decode_result = FetchAndDecodeInstruction(state, current_eip, buf, &inst, &handler_index);
+        uint16_t raw_opcode = 0;
+        const auto decode_result =
+            FetchAndDecodeInstruction(state, current_eip, buf, &inst, &handler_index, &raw_opcode);
         if (decode_result == InstructionDecodeResult::FetchFault) {
             success = false;
             stop_reason = BlockStopReason::FetchFault;
@@ -636,26 +643,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
         FinalizeDecodedInstruction(state, current_eip, handler_index, &inst.head);
 
-        // Recover index logic (to keep op_indices in sync)
-        uint8_t map = 0;
-        uint8_t opcode = buf[0];
-        const uint8_t* ptr = buf;
-        while (true) {
-            uint8_t b = *ptr;
-            if (b == 0xF0 || b == 0xF2 || b == 0xF3 || b == 0x2E || b == 0x36 || b == 0x3E || b == 0x26 || b == 0x64 ||
-                b == 0x65 || b == 0x66 || b == 0x67) {
-                ptr++;
-                continue;
-            }
-            break;
-        }
-        opcode = *ptr;
-        if (opcode == 0x0F) {
-            map = 1;
-            ptr++;
-            opcode = *ptr;
-        }
-        index_storage[index_count++] = (map << 8) | opcode;
+        index_storage[index_count++] = raw_opcode;
 
         // Optimization: Skip NOPs by absorbing them into the previous instruction
         // unless it's the first instruction of the block
