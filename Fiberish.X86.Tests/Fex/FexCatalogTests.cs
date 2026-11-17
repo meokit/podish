@@ -16,8 +16,8 @@ public sealed class FexCatalogTests
         };
         foreach (var group in catalog.Tests.GroupBy(test => test.Id.Contains('/') ? test.Id.Split('/')[0] : "root"))
             Assert.Equal(expected[group.Key], group.Count());
-        Assert.Equal(205, catalog.Tests.Count(test => test.Status == "ready"));
-        Assert.Equal(138, catalog.Tests.Count(test => test.Status == "ready" && test.Id.StartsWith("X87/", StringComparison.Ordinal)));
+        Assert.Equal(204, catalog.Tests.Count(test => test.Status == "ready"));
+        Assert.Equal(137, catalog.Tests.Count(test => test.Status == "ready" && test.Id.StartsWith("X87/", StringComparison.Ordinal)));
 
         foreach (var entry in catalog.Tests)
         {
@@ -27,8 +27,18 @@ public sealed class FexCatalogTests
             else Assert.False(string.IsNullOrWhiteSpace(entry.Reason));
         }
         var rows = Enumerable.Range(0, 8).SelectMany(FexAssets.Cases).Select(row => (string)row[0]).ToArray();
-        Assert.Equal(205, rows.Length);
+        Assert.Equal(204, rows.Length);
         Assert.Equal(rows.Length, rows.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void UndefinedFyl2xp1InputIsExplicitlyInventoried()
+    {
+        var entry = Assert.Single(FexAssets.ReadCatalog().Tests, test => test.Id == "X87/D9_F9");
+        Assert.Equal("blocked", entry.Status);
+        Assert.Contains("outside its architecturally defined range", entry.Reason);
+        // Keep the original upstream binary and expected data available for audit.
+        Assert.NotEmpty(FexAssets.ReadBinary(FexAssets.ReadManifest(entry)));
     }
 
     [Theory]

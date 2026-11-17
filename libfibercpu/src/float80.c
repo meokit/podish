@@ -17,9 +17,9 @@
 #define SOFTFLOAT_FAST_INT64
 #endif
 
+#include "3rdparty/softfloat/internals.h"
 #include "3rdparty/softfloat/platform.h"
 #include "3rdparty/softfloat/softfloat.h"
-#include "3rdparty/softfloat/internals.h"
 
 #undef float16_t
 #undef bfloat16_t
@@ -403,8 +403,7 @@ void f80_xtract(float80 f, int* exp, float80* signif) {
     signif->signExp = (f.signExp & 0x8000) | 16383;
 }
 
-// Finite transcendental evaluation still uses double, but exceptional operands
-// must have x87/SoftFloat invalid-operation and NaN propagation semantics.
+// Exceptional operands retain x87/SoftFloat invalid-operation and NaN semantics.
 static bool trig_special(float80 x, float80* result) {
     if (!f80_is_supported(x) || f80_isinf(x)) {
         *result = f80_mul(F80_INF, F80_ZERO);
@@ -417,19 +416,121 @@ static bool trig_special(float80 x, float80* result) {
     return false;
 }
 
+#ifdef X86EMU_USE_SOFTFLOAT
+// Evaluate series in binary128 and round only the final result to binary80.
+// The extra 49 significand bits avoid the old binary64 truncation. Constants
+// are mathematical pi, not values copied from instruction-test expectations.
+static const float128_t quad_pi = {{UINT64_C(0x8469898CC51701B8), UINT64_C(0x4000921FB54442D1)}};
+static float128_t quad_neg(float128_t x) {
+    x.v[1] ^= UINT64_C(0x8000000000000000);
+    return x;
+}
+static float128_t quad_abs(float128_t x) {
+    x.v[1] &= UINT64_C(0x7FFFFFFFFFFFFFFF);
+    return x;
+}
+static float128_t quad_half(float128_t x) { return f128_div(x, i32_to_f128(2)); }
+
+static void quad_sincos(float128_t x, float128_t* sine, float128_t* cosine) {
+    x = f128_rem(x, f128_add(quad_pi, quad_pi));
+    const float128_t half_pi = quad_half(quad_pi);
+    bool flip_cos = false;
+    if (f128_lt(half_pi, quad_abs(x))) {
+        x = f128_sub((x.v[1] >> 63) ? quad_neg(quad_pi) : quad_pi, x);
+        flip_cos = true;
+    }
+    float128_t minus_square = quad_neg(f128_mul(x, x));
+    float128_t st = x, ct = i32_to_f128(1);
+    *sine = st;
+    *cosine = ct;
+    // |x| <= pi/2; 40 terms put truncation error below binary128 precision.
+    for (int k = 1; k <= 40; ++k) {
+        st = f128_div(f128_mul(st, minus_square), i32_to_f128((2 * k) * (2 * k + 1)));
+        ct = f128_div(f128_mul(ct, minus_square), i32_to_f128((2 * k - 1) * (2 * k)));
+        *sine = f128_add(*sine, st);
+        *cosine = f128_add(*cosine, ct);
+    }
+    if (flip_cos) *cosine = quad_neg(*cosine);
+}
+
+static float128_t quad_atan_positive(float128_t x) {
+    const float128_t one = i32_to_f128(1);
+    bool reciprocal = f128_lt(one, x);
+    if (reciprocal) x = f128_div(one, x);
+    // Two half-angle reductions give |x| <= tan(pi/16).
+    for (int k = 0; k < 2; ++k) x = f128_div(x, f128_add(one, f128_sqrt(f128_add(one, f128_mul(x, x)))));
+    float128_t term = x, sum = x, square = quad_neg(f128_mul(x, x));
+    for (int k = 1; k <= 40; ++k) {
+        term = f128_mul(term, square);
+        sum = f128_add(sum, f128_div(term, i32_to_f128(2 * k + 1)));
+    }
+    sum = f128_mul(sum, i32_to_f128(4));
+    return reciprocal ? f128_sub(quad_half(quad_pi), sum) : sum;
+}
+#endif
+
 float80 f80_sin(float80 x) {
     float80 result;
-    return trig_special(x, &result) ? result : f80_from_double(sin(f80_to_double(x)));
+    if (trig_special(x, &result)) return result;
+#ifdef X86EMU_USE_SOFTFLOAT
+    if (f80_iszero(x)) return x;
+    float128_t s, c;
+    quad_sincos(extF80_to_f128(to_soft(x)), &s, &c);
+    return from_soft(f128_to_extF80(s));
+#else
+    return f80_from_double(sin(f80_to_double(x)));
+#endif
 }
 
 float80 f80_cos(float80 x) {
     float80 result;
-    return trig_special(x, &result) ? result : f80_from_double(cos(f80_to_double(x)));
+    if (trig_special(x, &result)) return result;
+#ifdef X86EMU_USE_SOFTFLOAT
+    float128_t s, c;
+    quad_sincos(extF80_to_f128(to_soft(x)), &s, &c);
+    return from_soft(f128_to_extF80(c));
+#else
+    return f80_from_double(cos(f80_to_double(x)));
+#endif
 }
 
 float80 f80_tan(float80 x) {
     float80 result;
-    return trig_special(x, &result) ? result : f80_from_double(tan(f80_to_double(x)));
+    if (trig_special(x, &result)) return result;
+#ifdef X86EMU_USE_SOFTFLOAT
+    if (f80_iszero(x)) return x;
+    float128_t s, c;
+    quad_sincos(extF80_to_f128(to_soft(x)), &s, &c);
+    return from_soft(f128_to_extF80(f128_div(s, c)));
+#else
+    return f80_from_double(tan(f80_to_double(x)));
+#endif
+}
+
+float80 f80_atan2(float80 y, float80 x) {
+#ifdef X86EMU_USE_SOFTFLOAT
+    if (f80_isnan(x) || f80_isnan(y) || !f80_is_supported(x) || !f80_is_supported(y)) return f80_add(x, y);
+    bool negative_y = (y.signExp & 0x8000) != 0;
+    bool negative_x = (x.signExp & 0x8000) != 0;
+    float128_t angle;
+    if (f80_iszero(y)) {
+        if (!negative_x) return y;
+        angle = quad_pi;
+    } else if (f80_iszero(x)) {
+        angle = quad_half(quad_pi);
+    } else {
+        float128_t ratio;
+        if (f80_isinf(x) && f80_isinf(y))
+            ratio = i32_to_f128(1);
+        else
+            ratio = f128_div(extF80_to_f128(to_soft(f80_abs(y))), extF80_to_f128(to_soft(f80_abs(x))));
+        angle = quad_atan_positive(ratio);
+        if (negative_x) angle = f128_sub(quad_pi, angle);
+    }
+    return from_soft(f128_to_extF80(negative_y ? quad_neg(angle) : angle));
+#else
+    return f80_from_double(atan2(f80_to_double(y), f80_to_double(x)));
+#endif
 }
 
 float80 f80_log2(float80 x) { return f80_from_double(log2(f80_to_double(x))); }

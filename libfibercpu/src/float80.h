@@ -83,6 +83,7 @@ float80 f80_sin(float80 f);
 float80 f80_cos(float80 f);
 float80 f80_tan(float80 f);
 float80 f80_log2(float80 x);
+float80 f80_atan2(float80 y, float80 x);
 float80 f80_scale(float80 x, int scale);
 float80 f80_round(float80 f);
 

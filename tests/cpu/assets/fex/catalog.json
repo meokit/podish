@@ -1461,8 +1461,8 @@
       "sourceSha256": "7ff288a00ce2d06b7298cc4d308524d5b48c90cc3a7fbbfe246bdf06a5994008",
       "manifest": "manifests/X87/D9_F9.json",
       "manifestSha256": "0a36f3fc07f6fe2f8bf26447099837fed82cbc72ddd1592a57a75d44a55783d9",
-      "status": "ready",
-      "reason": null
+      "status": "blocked",
+      "reason": "FYL2XP1 input ST(0)=2 is outside its architecturally defined range; the upstream expected result is not a portable oracle. See tests/cpu/X87-NOTES.md."
     },
     {
       "id": "X87/D9_FA",
