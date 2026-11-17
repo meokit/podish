@@ -19,9 +19,9 @@
 // Probe the GNU spelling used below. Clang also recognizes the namespaced
 // C++ attribute clang::preserve_none, but the unqualified C++ attribute probe
 // silently selected the platform ABI and its nonvolatile register saves.
-// Limit the new probe to the x64 target verified here; other targets retain
-// their existing attribute/fallback selection.
-#if defined(__clang__) && (defined(__x86_64__) || defined(_M_X64))
+// Use the GNU probe on x64 and ARM64: Apple Clang supports preserve_none on
+// AArch64 but reports 0 for the unqualified C++ attribute probe.
+#if defined(__clang__) && (defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__) || defined(_M_ARM64))
 #if __has_attribute(preserve_none)
 #define ATTR_PRESERVE_NONE __attribute__((preserve_none))
 #else
@@ -369,11 +369,11 @@ static_assert(offsetof(BasicBlock, slots) == 48, "BasicBlock: slots must start a
 enum class InstructionDecodeResult : uint8_t { Success, NeedMoreBytes, Invalid, FetchFault };
 // Never reads beyond available bytes or the architectural 15-byte limit.
 InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t available, DecodedInstTmp* inst,
-                                                  uint16_t* handler_index);
+                                                 uint16_t* handler_index);
 bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index);
 // buffer must have room for 15 bytes. Fetches another page only when decoding requires it.
-InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip, uint8_t* buffer,
-                                                   DecodedInstTmp* inst, uint16_t* handler_index);
+InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip, uint8_t* buffer, DecodedInstTmp* inst,
+                                                  uint16_t* handler_index);
 // Shared Step/block preparation, without dead-flags analysis.
 void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedOp* op);
 
