@@ -20,7 +20,18 @@ HANDLER_PROTO = (
 )
 
 
-def find_tool(*names: str) -> str | None:
+def find_tool(*names: str, compiler: str | None = None) -> str | None:
+    # ThinLTO objects must be read by tools from the compiler's LLVM version.
+    # Hosted Windows runners also put a separate, older LLVM on PATH.
+    if compiler:
+        compiler_path = Path(shutil.which(compiler) or compiler).resolve()
+        for name in names:
+            candidate = compiler_path.with_name(name)
+            if os.name == "nt" and candidate.suffix.lower() != ".exe":
+                candidate = candidate.with_suffix(".exe")
+            if candidate.is_file():
+                return str(candidate)
+
     for name in names:
         resolved = shutil.which(name)
         if resolved:
@@ -47,8 +58,7 @@ def find_tool(*names: str) -> str | None:
     return None
 
 
-LLVM_NM = find_tool("llvm-nm")
-NM_TOOL = LLVM_NM or find_tool("nm")
+NM_TOOL: str | None = None
 
 
 def run_tool(command: list[str]) -> list[str]:
@@ -59,7 +69,10 @@ def run_tool(command: list[str]) -> list[str]:
         check=False,
     )
     if proc.returncode:
-        raise RuntimeError(f"{command[0]} failed for {command[-1]}:\n{proc.stderr}")
+        raise RuntimeError(
+            f"symbol tool failed ({proc.returncode}): {subprocess.list2cmdline(command)}\n"
+            f"{proc.stderr}{proc.stdout}"
+        )
     return [line.rstrip("\r") for line in proc.stdout.splitlines() if line.strip()]
 
 
@@ -133,11 +146,13 @@ def escape_cpp_string(value: str) -> str:
 def main() -> int:
     global NM_TOOL
     parser = argparse.ArgumentParser(description="Generate fibercpu handler reflection table")
-    parser.add_argument("--nm", default=NM_TOOL, help="Symbol reader from the target compiler toolchain")
+    parser.add_argument("--nm", help="Explicit symbol reader; overrides compiler and PATH discovery")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--compiler", help="Compiler used to produce the objects; prefer its sibling llvm-nm")
     parser.add_argument("objects", nargs="+")
     args = parser.parse_args()
-    NM_TOOL = args.nm
+
+    NM_TOOL = args.nm or find_tool("llvm-nm", compiler=args.compiler) or find_tool("nm", compiler=args.compiler)
     if NM_TOOL is None:
         raise RuntimeError("failed to locate nm or llvm-nm for handler reflection generation")
 

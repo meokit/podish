@@ -11,6 +11,20 @@ permissions:
   contents: read
 
 jobs:
+  native-tooling:
+    name: Native tooling (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s scripts/tests -v
+
   build-linux:
     name: Build Linux core
     runs-on: ubuntu-latest
@@ -60,8 +74,10 @@ jobs:
 
       - name: Build Windows-compatible projects
         run: |
-          dotnet build Podish.Cli/Podish.Cli.csproj -c Debug -r win-x64
-          dotnet build Fiberish.X86/Fiberish.X86.csproj -c Debug -r win-x64
+          # Project graph instances can share a native CMake tree. Do not run
+          # their configure/cache-replacement steps concurrently on a clean runner.
+          dotnet build Podish.Cli/Podish.Cli.csproj -c Debug -r win-x64 -m:1
+          dotnet build Fiberish.X86/Fiberish.X86.csproj -c Debug -r win-x64 -m:1
         shell: pwsh
 
   publish-windows:
