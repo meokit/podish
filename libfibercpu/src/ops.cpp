@@ -55,6 +55,13 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
                                            uint32_t branch, uint64_t flags_cache) {
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
+    // An architectural alignment fault has already completed fault setup and
+    // must not restart the same instruction or consume an older pending read.
+    if (state->status != EmuStatus::Running) {
+        CommitFlagsCache(state, flags_cache);
+        state->clear_pending_mem_op();
+        return instr_limit;
+    }
     if (state->mem_op_type == PendingMemOp::Read) {
         auto& mem_op = state->mem_op.read;
         const bool fault = PerformMemOp(state, op, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), false);

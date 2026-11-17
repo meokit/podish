@@ -1009,180 +1009,83 @@ FORCE_INLINE LogicFlow OpPop_Ev(LogicFuncParams) {
 // Stack Operations (Complex) - Use Blocking (fail_on_tlb_miss=false)
 // ------------------------------------------------------------------------------------------------
 
-FORCE_INLINE LogicFlow OpPusha(LogicFuncParams) {
-    // 60: PUSHA/PUSHAD
-    // Failures (faults) will set status to Fault.
-    // Return ExitOnCurrentEIP if fatal error, though status check loop should handle it.
-    // Atomiciy: Do not update ESP until all memory writes succeed.
-    if (op->prefixes.flags.opsize) {
-        uint32_t esp = GetReg(state, ESP);
-        uint16_t temp = (uint16_t)esp;
-        // Pushes are: AX, CX, DX, BX, SP(temp), BP, SI, DI
-        // Stack grows down: ESP-2, ESP-4, ...
-        // We use mmu.write<T, false> directly to avoid updating ESP incrementally.
-
-        if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp - 2, (uint16_t)GetReg(state, EAX), utlb, op))
+template <typename T>
+FORCE_INLINE LogicFlow PushaWithWidth(LogicFuncParams) {
+    const uint32_t sp = GetReg(state, ESP);
+    const uint32_t ss = state->ctx.seg_base[3];
+    const uint32_t values[] = {GetReg(state, EAX), GetReg(state, ECX), GetReg(state, EDX), GetReg(state, EBX),
+                               sp, GetReg(state, EBP), GetReg(state, ESI), GetReg(state, EDI)};
+    for (uint32_t i = 0; i < 8; ++i) {
+        if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, ss + sp - (i + 1) * sizeof(T), static_cast<T>(values[i]),
+                                               utlb, op))
             return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp - 4, (uint16_t)GetReg(state, ECX), utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp - 6, (uint16_t)GetReg(state, EDX), utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp - 8, (uint16_t)GetReg(state, EBX), utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp - 10, temp, utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp - 12, (uint16_t)GetReg(state, EBP), utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp - 14, (uint16_t)GetReg(state, ESI), utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp - 16, (uint16_t)GetReg(state, EDI), utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-
-        SetReg(state, ESP, esp - 16);
-    } else {
-        uint32_t esp = GetReg(state, ESP);
-        uint32_t temp = esp;
-        // Pushes: EAX, ECX, EDX, EBX, ESP(temp), EBP, ESI, EDI
-        // Stack: ESP-4, ESP-8, ...
-
-        if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp - 4, GetReg(state, EAX), utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp - 8, GetReg(state, ECX), utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp - 12, GetReg(state, EDX), utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp - 16, GetReg(state, EBX), utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp - 20, temp, utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp - 24, GetReg(state, EBP), utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp - 28, GetReg(state, ESI), utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp - 32, GetReg(state, EDI), utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-
-        SetReg(state, ESP, esp - 32);
     }
+    SetReg(state, ESP, sp - 8 * sizeof(T));
+    return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpPusha(LogicFuncParams) {
+    return op->prefixes.flags.opsize ? PushaWithWidth<uint16_t>(LogicPassParams)
+                                    : PushaWithWidth<uint32_t>(LogicPassParams);
+}
+
+template <typename T>
+FORCE_INLINE LogicFlow PopaWithWidth(LogicFuncParams) {
+    const uint32_t sp = GetReg(state, ESP);
+    const uint32_t ss = state->ctx.seg_base[3];
+    constexpr uint8_t regs[] = {EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX};
+    T values[8]{};
+    for (uint32_t i = 0; i < 8; ++i) {
+        if (i == 3) continue; // The saved SP slot is not read or restored.
+        auto value = ReadMem<T, OpOnTLBMiss::Blocking>(state, ss + sp + i * sizeof(T), utlb, op);
+        if (!value) return LogicFlow::ExitOnCurrentEIP;
+        values[i] = *value;
+    }
+    for (uint32_t i = 0; i < 8; ++i) {
+        if (i != 3) WriteRegGeneric<T>(state, regs[i], values[i]);
+    }
+    SetReg(state, ESP, sp + 8 * sizeof(T));
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpPopa(LogicFuncParams) {
-    // 61: POPA/POPAD
-    // Pops: DI, SI, BP, SP(skip), BX, DX, CX, AX
-    // Atomic update implies we shouldn't change registers if memory access fails,
-    // AND we shouldn't update ESP if it fails.
+    return op->prefixes.flags.opsize ? PopaWithWidth<uint16_t>(LogicPassParams)
+                                    : PopaWithWidth<uint32_t>(LogicPassParams);
+}
 
-    if (op->prefixes.flags.opsize) {
-        // POPA (16-bit)
-        uint32_t esp = GetReg(state, ESP);
-
-        auto di = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp, utlb, op);
-        if (!di) return LogicFlow::ExitOnCurrentEIP;
-        auto si = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp + 2, utlb, op);
-        if (!si) return LogicFlow::ExitOnCurrentEIP;
-        auto bp = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp + 4, utlb, op);
-        if (!bp) return LogicFlow::ExitOnCurrentEIP;
-        // sp (esp+6) is skipped
-        auto bx = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp + 8, utlb, op);
-        if (!bx) return LogicFlow::ExitOnCurrentEIP;
-        auto dx = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp + 10, utlb, op);
-        if (!dx) return LogicFlow::ExitOnCurrentEIP;
-        auto cx = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp + 12, utlb, op);
-        if (!cx) return LogicFlow::ExitOnCurrentEIP;
-        auto ax = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp + 14, utlb, op);
-        if (!ax) return LogicFlow::ExitOnCurrentEIP;
-
-        SetReg(state, EDI, (GetReg(state, EDI) & 0xFFFF0000) | *di);
-        SetReg(state, ESI, (GetReg(state, ESI) & 0xFFFF0000) | *si);
-        SetReg(state, EBP, (GetReg(state, EBP) & 0xFFFF0000) | *bp);
-        SetReg(state, EBX, (GetReg(state, EBX) & 0xFFFF0000) | *bx);
-        SetReg(state, EDX, (GetReg(state, EDX) & 0xFFFF0000) | *dx);
-        SetReg(state, ECX, (GetReg(state, ECX) & 0xFFFF0000) | *cx);
-        SetReg(state, EAX, (GetReg(state, EAX) & 0xFFFF0000) | *ax);
-
-        SetReg(state, ESP, esp + 16);
-    } else {
-        // POPAD (32-bit)
-        uint32_t esp = GetReg(state, ESP);
-
-        auto di = ReadMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp, utlb, op);
-        if (!di) return LogicFlow::ExitOnCurrentEIP;
-        auto si = ReadMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp + 4, utlb, op);
-        if (!si) return LogicFlow::ExitOnCurrentEIP;
-        auto bp = ReadMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp + 8, utlb, op);
-        if (!bp) return LogicFlow::ExitOnCurrentEIP;
-        // sp (esp+12) is skipped
-        auto bx = ReadMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp + 16, utlb, op);
-        if (!bx) return LogicFlow::ExitOnCurrentEIP;
-        auto dx = ReadMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp + 20, utlb, op);
-        if (!dx) return LogicFlow::ExitOnCurrentEIP;
-        auto cx = ReadMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp + 24, utlb, op);
-        if (!cx) return LogicFlow::ExitOnCurrentEIP;
-        auto ax = ReadMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp + 28, utlb, op);
-        if (!ax) return LogicFlow::ExitOnCurrentEIP;
-
-        SetReg(state, EDI, *di);
-        SetReg(state, ESI, *si);
-        SetReg(state, EBP, *bp);
-        SetReg(state, EBX, *bx);
-        SetReg(state, EDX, *dx);
-        SetReg(state, ECX, *cx);
-        SetReg(state, EAX, *ax);
-
-        SetReg(state, ESP, esp + 32);
+template <typename T>
+FORCE_INLINE LogicFlow EnterWithWidth(LogicFuncParams) {
+    const uint16_t size = static_cast<uint16_t>(imm);
+    const uint8_t level = (imm >> 16) & 31;
+    const uint32_t ss = state->ctx.seg_base[3];
+    const uint32_t sp = GetReg(state, ESP);
+    const uint32_t bp = GetReg(state, EBP);
+    uint32_t cursor = sp - sizeof(T);
+    if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, ss + cursor, static_cast<T>(bp), utlb, op))
+        return LogicFlow::ExitOnCurrentEIP;
+    const uint32_t frame = cursor;
+    uint32_t previous = static_cast<T>(bp);
+    if (level != 0) {
+        for (uint8_t i = 1; i < level; ++i) {
+            previous = static_cast<T>(previous - sizeof(T));
+            auto value = ReadMem<T, OpOnTLBMiss::Blocking>(state, ss + previous, utlb, op);
+            if (!value) return LogicFlow::ExitOnCurrentEIP;
+            cursor -= sizeof(T);
+            if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, ss + cursor, *value, utlb, op))
+                return LogicFlow::ExitOnCurrentEIP;
+        }
+        cursor -= sizeof(T);
+        if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, ss + cursor, static_cast<T>(frame), utlb, op))
+            return LogicFlow::ExitOnCurrentEIP;
     }
+    WriteRegGeneric<T>(state, EBP, static_cast<T>(frame));
+    SetReg(state, ESP, cursor - size);
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpEnter(LogicFuncParams) {
-    // C8 iw ib: ENTER imm16, imm8
-    // imm16 is alloc size, imm8 is nesting level
-    uint16_t size = (uint16_t)imm;
-    uint8_t level = (uint8_t)(imm >> 16);
-
-    // We need to be careful with atomicity.
-    uint32_t esp = GetReg(state, ESP);
-    uint32_t ebp = GetReg(state, EBP);
-
-    // 1. Push EBP
-    if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp - 4, ebp, utlb, op)) return LogicFlow::ExitOnCurrentEIP;
-
-    uint32_t frame_temp = esp - 4;   // Point to pushed EBP
-    uint32_t current_esp = esp - 4;  // Track ESP virtually
-
-    if (level > 0) {
-        // level implies we push (level-1) pointers from previous frame
-        // AND then push frame_temp.
-
-        // Caution: logic loop copies from previous frame.
-        // If we fail mid-way, ESP shouldn't be updated?
-        // But we already wrote EBP. If we restart, we will write EBP again.
-        // It's idempotent-ish if we haven't updated ESP yet.
-
-        uint32_t iter_ebp = ebp;
-        for (int i = 1; i < level; ++i) {
-            iter_ebp -= 4;
-            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Blocking>(state, iter_ebp, utlb, op);
-            if (!val_res) return LogicFlow::ExitOnCurrentEIP;
-
-            if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, current_esp - 4, *val_res, utlb, op))
-                return LogicFlow::ExitOnCurrentEIP;
-            current_esp -= 4;
-        }
-        // Push FrameTemp
-        if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, current_esp - 4, frame_temp, utlb, op))
-            return LogicFlow::ExitOnCurrentEIP;
-        current_esp -= 4;
-    }
-
-    // 3. MOV EBP, FrameTemp
-    SetReg(state, EBP, frame_temp);
-
-    // 4. SUB ESP, Size
-    // Final ESP = current_esp - size
-    SetReg(state, ESP, current_esp - size);
-    return LogicFlow::Continue;
+    return op->prefixes.flags.opsize ? EnterWithWidth<uint16_t>(LogicPassParams)
+                                    : EnterWithWidth<uint32_t>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpLeave(LogicFuncParams) {
@@ -1192,7 +1095,15 @@ FORCE_INLINE LogicFlow OpLeave(LogicFuncParams) {
 
     uint32_t ebp = GetReg(state, EBP);
     // Read old EBP from stack at EBP
-    auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Blocking>(state, ebp, utlb, op);
+    const uint32_t addr = state->ctx.seg_base[3] + ebp;
+    if (op->prefixes.flags.opsize) {
+        auto value = ReadMem<uint16_t, OpOnTLBMiss::Blocking>(state, addr, utlb, op);
+        if (!value) return LogicFlow::ExitOnCurrentEIP;
+        SetReg(state, ESP, ebp + 2);
+        WriteRegGeneric<uint16_t>(state, EBP, *value);
+        return LogicFlow::Continue;
+    }
+    auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Blocking>(state, addr, utlb, op);
     if (!val_res) return LogicFlow::ExitOnCurrentEIP;
 
     SetReg(state, ESP, ebp + 4);

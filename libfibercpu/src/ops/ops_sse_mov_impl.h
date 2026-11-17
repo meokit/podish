@@ -405,7 +405,7 @@ FORCE_INLINE LogicFlow OpMovnt_Sse(LogicFuncParams) {
     // 0F 2B: MOVNTPS / MOVNTPD (66)
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 src = state->ctx.xmm[reg];
-    if (!WriteModRM<simde__m128, OpOnTLBMiss::Retry>(state, op, src, utlb)) return LogicFlow::RetryMemoryOp;
+    if (!WriteModRM<simde__m128, OpOnTLBMiss::Retry, 16>(state, op, src, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -413,7 +413,7 @@ FORCE_INLINE LogicFlow OpMovntdq(LogicFuncParams) {
     // 66 0F E7: MOVNTDQ
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 val = state->ctx.xmm[reg];
-    if (!WriteModRM<simde__m128, OpOnTLBMiss::Retry>(state, op, val, utlb)) return LogicFlow::RetryMemoryOp;
+    if (!WriteModRM<simde__m128, OpOnTLBMiss::Retry, 16>(state, op, val, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 

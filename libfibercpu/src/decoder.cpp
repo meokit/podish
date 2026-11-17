@@ -739,9 +739,21 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                 }
                 break;
             }
-            case DFE_TYPE_GROUP2:
-                writes = DFE_ALL_FLAGS;
+            case DFE_TYPE_GROUP2: {
+                const uint16_t opcode_idx = flat_idx;
+                const uint8_t subop = (op.modrm >> 3) & 7;
+                const bool carry_rotate = subop == 2 || subop == 3;
+                reads = carry_rotate ? DFE_CF_MASK : 0;
+                // CL can be zero at runtime, so none of the incoming flags can
+                // be killed unconditionally. This only affects decode-time DFE.
+                if (opcode_idx == 0xD2 || opcode_idx == 0xD3) break;
+                const uint32_t count = (opcode_idx == 0xD0 || opcode_idx == 0xD1) ? 1 : GetImm(&op) & 31;
+                const uint32_t width = (opcode_idx == 0xC0 || opcode_idx == 0xD0) ? 8 :
+                                       op.prefixes.flags.opsize ? 16 : 32;
+                if (count == 0 || (carry_rotate && count % (width + 1) == 0)) break;
+                writes = subop < 4 ? CF_MASK | OF_MASK : DFE_ALL_FLAGS;
                 break;
+            }
             case DFE_TYPE_GROUP3: {
                 uint8_t reg = (op.modrm >> 3) & 7;
                 if (reg == 0 || reg == 1) {  // TEST

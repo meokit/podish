@@ -38,7 +38,23 @@ FORCE_INLINE LogicFlow OpJcc_Rel_Internal(LogicFuncParams) {
 template <uint8_t Cond, Specialized S = Specialized::None>
 FORCE_INLINE LogicFlow OpCmov_Internal(LogicFuncParams) {
     // 0F 4x: CMOVcc r16, r/m16 OR CMOVcc r32, r/m32
-    // If condition is FALSE, NOP (no memory read).
+    // A memory source is fetched unconditionally, even when the condition is
+    // false. Keep the register-only specialization free of memory machinery.
+
+    if constexpr (S != Specialized::ModReg) {
+        const uint8_t reg = (op->modrm >> 3) & 7;
+        if (op->prefixes.flags.opsize) {
+            auto value = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!value) return LogicFlow::RestartMemoryOp;
+            if (CheckConditionFixed<Cond>(flags_cache))
+                SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | *value);
+        } else {
+            auto value = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            if (!value) return LogicFlow::RestartMemoryOp;
+            if (CheckConditionFixed<Cond>(flags_cache)) SetReg(state, reg, *value);
+        }
+        return LogicFlow::Continue;
+    }
 
     if (CheckConditionFixed<Cond>(flags_cache)) {
         uint8_t reg = (op->modrm >> 3) & 7;

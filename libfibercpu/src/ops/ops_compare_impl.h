@@ -147,10 +147,12 @@ FORCE_INLINE LogicFlow OpCmpxchg_Internal(LogicFuncParams) {
         uint8_t dest = *dest_res;
         uint8_t al = state->ctx.regs[EAX] & 0xFF;
         uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
+        // CMPXCHG performs a write cycle even on an unequal comparison. Do not
+        // commit flags/accumulator until that cycle succeeds (including SMC).
+        if (!WriteModRM<uint8_t, OpOnTLBMiss::Blocking>(state, op, al == dest ? src : dest, utlb))
+            return LogicFlow::ExitOnCurrentEIP;
         AluCmp<uint8_t>(state, flags_cache, al, dest);
-        if (al == dest) {
-            if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, src, utlb)) return LogicFlow::RetryMemoryOp;
-        } else {
+        if (al != dest) {
             state->ctx.regs[EAX] = (state->ctx.regs[EAX] & 0xFFFFFF00) | dest;
         }
     } else {
@@ -169,10 +171,10 @@ FORCE_INLINE LogicFlow OpCmpxchg_Internal(LogicFuncParams) {
             uint16_t dest = *dest_res;
             uint16_t ax = state->ctx.regs[EAX] & 0xFFFF;
             uint16_t src = (uint16_t)GetReg(state, (op->modrm >> 3) & 7);
+            if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, ax == dest ? src : dest, utlb))
+                return LogicFlow::ExitOnCurrentEIP;
             AluCmp<uint16_t>(state, flags_cache, ax, dest);
-            if (ax == dest) {
-                if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, src, utlb)) return LogicFlow::RetryMemoryOp;
-            } else {
+            if (ax != dest) {
                 state->ctx.regs[EAX] = (state->ctx.regs[EAX] & 0xFFFF0000) | dest;
             }
         } else {
@@ -181,10 +183,10 @@ FORCE_INLINE LogicFlow OpCmpxchg_Internal(LogicFuncParams) {
             uint32_t dest = *dest_res;
             uint32_t eax = state->ctx.regs[EAX];
             uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
+            if (!WriteModRM<uint32_t, OpOnTLBMiss::Blocking>(state, op, eax == dest ? src : dest, utlb))
+                return LogicFlow::ExitOnCurrentEIP;
             AluCmp<uint32_t>(state, flags_cache, eax, dest);
-            if (eax == dest) {
-                if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, src, utlb)) return LogicFlow::RetryMemoryOp;
-            } else {
+            if (eax != dest) {
                 state->ctx.regs[EAX] = dest;
             }
         }

@@ -355,7 +355,7 @@ enum class OpOnTLBMiss {
  * Reads a value from a Register or Memory based on the ModRM byte.
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
-template <typename T, OpOnTLBMiss Strategy>
+template <typename T, OpOnTLBMiss Strategy, uint32_t Alignment = 1>
 FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
@@ -366,6 +366,15 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, DecodedOp* op, mem::MicroTL
     } else {
         // Memory Operand
         uint32_t addr = ComputeLinearAddress(state, op);
+
+        if constexpr (Alignment > 1) {
+            if (addr & (Alignment - 1)) [[unlikely]] {
+                state->sync_eip_to_op_start(op);
+                state->status = EmuStatus::Fault;
+                state->fault_vector = 13;
+                return std::unexpected(FaultCode::GeneralProtection);
+            }
+        }
 
         if constexpr (Strategy == OpOnTLBMiss::Blocking) {
             return state->mmu.read<T, false>(addr, utlb, op);
@@ -387,7 +396,7 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, DecodedOp* op, mem::MicroTL
  * Writes a value to a Register or Memory based on the ModRM byte.
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
-template <typename T, OpOnTLBMiss Strategy>
+template <typename T, OpOnTLBMiss Strategy, uint32_t Alignment = 1>
 FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
@@ -399,6 +408,15 @@ FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, DecodedOp* op, T val, m
     } else {
         // Memory Operand
         uint32_t addr = ComputeLinearAddress(state, op);
+
+        if constexpr (Alignment > 1) {
+            if (addr & (Alignment - 1)) [[unlikely]] {
+                state->sync_eip_to_op_start(op);
+                state->status = EmuStatus::Fault;
+                state->fault_vector = 13;
+                return std::unexpected(FaultCode::GeneralProtection);
+            }
+        }
 
         if constexpr (Strategy == OpOnTLBMiss::Blocking) {
             return state->mmu.write<T, false>(addr, val, utlb, op);
