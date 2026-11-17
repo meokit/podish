@@ -16,6 +16,31 @@ namespace fiberish {
 
 struct EmuState;
 
+#ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+struct HandlerPairKey {
+    uintptr_t first, second;
+    bool operator==(const HandlerPairKey&) const = default;
+};
+struct HandlerPairHash {
+    uint64_t operator()(const HandlerPairKey& pair) const {
+        return ankerl::unordered_dense::hash<uint64_t>{}(pair.first) ^
+               (ankerl::unordered_dense::hash<uint64_t>{}(pair.second) << 1);
+    }
+};
+struct HandlerNGramKey {
+    std::array<uintptr_t, 4> handlers;
+    bool operator==(const HandlerNGramKey&) const = default;
+};
+struct HandlerNGramHash {
+    uint64_t operator()(const HandlerNGramKey& key) const {
+        uint64_t hash = 0;
+        for (auto handler : key.handlers)
+            hash = (hash << 7) ^ ankerl::unordered_dense::hash<uint64_t>{}(handler);
+        return hash;
+    }
+};
+#endif
+
 // Callback signatures for internal storage and C bindings
 using FaultHandler = int (*)(EmuState* state, uint32_t addr, int is_write, void* userdata);
 using MemHook = void (*)(EmuState* state, uint32_t addr, uint32_t size, int is_write, uint64_t val, void* userdata);
@@ -117,6 +142,14 @@ struct EmuState {
     // SMC rerun path.
     bool intercept_exec_write_for_smc = false;
     BlockStats block_stats;
+#ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+    // Cumulative over Run calls, independent of code-cache lifetime. No shared/TLS counters.
+    ankerl::unordered_dense::map<HandlerPairKey, uint64_t, HandlerPairHash> sequence_counts;
+    ankerl::unordered_dense::map<HandlerNGramKey, uint64_t, HandlerNGramHash> ngram_counts;
+    DecodedOp* sequence_expected_op = nullptr;
+    std::array<uintptr_t, 2> sequence_history{};
+    uint8_t sequence_history_length = 0;
+#endif
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     ankerl::unordered_dense::map<uintptr_t, uint64_t> handler_exec_counts;
     DecodedOp* current_block_head = nullptr;

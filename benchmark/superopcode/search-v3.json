@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "id": "gnu-selection-search-v3",
+  "trainingSuites": [
+    {
+      "schemaVersion": 1, "id": "train-records", "seed": 12345, "bytes": 8388608, "iterations": 1,
+      "cases": ["tar-create", "tar-extract", "gzip-compress", "gzip-decompress", "sed-transform", "grep-fixed", "grep-regex"],
+      "lightSizes": [524288], "topPairs": 128, "minimumHotMass": 0.95, "minimumTopOverlap": 0.8,
+      "maximumJensenShannon": 0.12, "timeoutSeconds": 1800, "corpus": "records-v1", "tarFileBytes": 65536, "purpose": "training"
+    },
+    {
+      "schemaVersion": 1, "id": "train-logs", "seed": 20261116, "bytes": 8388608, "iterations": 1,
+      "cases": ["tar-create", "tar-extract", "gzip-compress", "gzip-decompress", "sed-transform", "grep-fixed", "grep-regex"],
+      "lightSizes": [524288], "topPairs": 128, "minimumHotMass": 0.95, "minimumTopOverlap": 0.8,
+      "maximumJensenShannon": 0.12, "timeoutSeconds": 1800, "corpus": "logs-v2", "tarFileBytes": 16384, "purpose": "training"
+    },
+    {
+      "schemaVersion": 1, "id": "train-source", "seed": 303030, "bytes": 8388608, "iterations": 1,
+      "cases": ["tar-create", "tar-extract", "gzip-compress", "gzip-decompress", "sed-transform", "grep-fixed", "grep-regex"],
+      "lightSizes": [524288], "topPairs": 128, "minimumHotMass": 0.95, "minimumTopOverlap": 0.8,
+      "maximumJensenShannon": 0.12, "timeoutSeconds": 1800, "corpus": "source-v2", "tarFileBytes": 262144, "purpose": "training"
+    }
+  ],
+  "developmentSuites": [
+    {
+      "schemaVersion": 1, "id": "dev-bulk-records", "seed": 272723, "bytes": 8388608, "iterations": 1,
+      "cases": ["tar-create", "tar-extract", "gzip-compress", "gzip-decompress", "sed-transform", "grep-fixed", "grep-regex"],
+      "lightSizes": [], "topPairs": 128, "minimumHotMass": 0.95, "minimumTopOverlap": 0.8,
+      "maximumJensenShannon": 0.12, "timeoutSeconds": 1800, "corpus": "records-v1", "tarFileBytes": 65536, "purpose": "development"
+    },
+    {
+      "schemaVersion": 1, "id": "dev-bulk-logs", "seed": 919191, "bytes": 8388608, "iterations": 1,
+      "cases": ["tar-create", "tar-extract", "gzip-compress", "gzip-decompress", "sed-transform", "grep-fixed", "grep-regex"],
+      "lightSizes": [], "topPairs": 128, "minimumHotMass": 0.95, "minimumTopOverlap": 0.8,
+      "maximumJensenShannon": 0.12, "timeoutSeconds": 1800, "corpus": "logs-v2", "tarFileBytes": 16384, "purpose": "development"
+    }
+  ],
+  "validationSuites": [
+    {
+      "schemaVersion": 1, "id": "valid3-records", "seed": 771236, "bytes": 4194304, "iterations": 3,
+      "cases": ["tar-create", "tar-extract", "gzip-compress", "gzip-decompress", "sed-transform", "grep-fixed", "grep-regex"],
+      "lightSizes": [], "topPairs": 128, "minimumHotMass": 0.95, "minimumTopOverlap": 0.8,
+      "maximumJensenShannon": 0.12, "timeoutSeconds": 1800, "corpus": "records-v1", "tarFileBytes": 65536, "purpose": "validation"
+    },
+    {
+      "schemaVersion": 1, "id": "valid3-logs", "seed": 881238, "bytes": 4194304, "iterations": 3,
+      "cases": ["tar-create", "tar-extract", "gzip-compress", "gzip-decompress", "sed-transform", "grep-fixed", "grep-regex"],
+      "lightSizes": [], "topPairs": 128, "minimumHotMass": 0.95, "minimumTopOverlap": 0.8,
+      "maximumJensenShannon": 0.12, "timeoutSeconds": 1800, "corpus": "logs-v2", "tarFileBytes": 16384, "purpose": "validation"
+    },
+    {
+      "schemaVersion": 1, "id": "valid3-source", "seed": 991240, "bytes": 4194304, "iterations": 3,
+      "cases": ["tar-create", "tar-extract", "gzip-compress", "gzip-decompress", "sed-transform", "grep-fixed", "grep-regex"],
+      "lightSizes": [], "topPairs": 128, "minimumHotMass": 0.95, "minimumTopOverlap": 0.8,
+      "maximumJensenShannon": 0.12, "timeoutSeconds": 1800, "corpus": "source-v2", "tarFileBytes": 262144, "purpose": "validation"
+    },
+    {
+      "schemaVersion": 1, "id": "valid3-entropy", "seed": 111245, "bytes": 4194304, "iterations": 3,
+      "cases": ["tar-create", "tar-extract", "gzip-compress", "gzip-decompress", "sed-transform", "grep-fixed", "grep-regex"],
+      "lightSizes": [], "topPairs": 128, "minimumHotMass": 0.95, "minimumTopOverlap": 0.8,
+      "maximumJensenShannon": 0.12, "timeoutSeconds": 1800, "corpus": "entropy-v2", "tarFileBytes": 1048576, "purpose": "validation"
+    },
+    {
+      "schemaVersion": 1, "id": "valid3-small", "seed": 424242, "bytes": 524288, "iterations": 1,
+      "cases": ["tar-create", "tar-extract", "gzip-compress", "gzip-decompress", "sed-transform", "grep-fixed", "grep-regex"],
+      "lightSizes": [], "topPairs": 128, "minimumHotMass": 0.95, "minimumTopOverlap": 0.8,
+      "maximumJensenShannon": 0.12, "timeoutSeconds": 1800, "corpus": "records-v1", "tarFileBytes": 65536, "purpose": "validation"
+    }
+  ],
+  "strategies": [
+    { "id": "legacy", "mode": "reference", "budget": 128 },
+    { "id": "branch32r", "mode": "reference", "budget": 32, "source": "artifacts/superopcode/search-v4/candidates/branch32/superopcodes.generated.cpp" },
+    { "id": "density64", "mode": "density", "budget": 64 },
+    { "id": "density128", "mode": "density", "budget": 128 },
+    { "id": "densitybranch32", "mode": "density-branch", "budget": 32 },
+    { "id": "densityoverlap128", "mode": "density-overlap", "budget": 128 }
+  ],
+  "referenceGenerated": "artifacts/superopcode/experiment-v2/superopcodes.generated.cpp",
+  "screenRepeats": 3,
+  "confirmationRepeats": 7,
+  "validationRepeats": 7,
+  "minimumSpeedup": 1.015,
+  "minimumFamilyRatio": 0.97,
+  "minimumCaseRatio": 0.95,
+  "pairwise": true,
+  "developmentAffinityMask": 16,
+  "validationAffinityMask": 0
+}

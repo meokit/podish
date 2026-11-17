@@ -811,6 +811,10 @@ size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86
 // caller's status, counters, and SMC policy intact (X86_Step resets those at
 // its public API boundary, so it cannot be called from inside X86_Run).
 static bool ExecuteSingleInstructionOnStack(EmuState* state) {
+#ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+    state->sequence_expected_op = nullptr;
+    state->sequence_history_length = 0;
+#endif
     uint8_t buf[15] = {};
     DecodedInstTmp inst{};
     uint16_t handler_index = 0;
@@ -859,6 +863,10 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     if (!state || g_native_execution_active || state->native_execution_active) return 0;
     state->mmu.flush_pending_code_cache_before_run();
     ScopedNativeExecution execution(state);
+#ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+    state->sequence_expected_op = nullptr;
+    state->sequence_history_length = 0;
+#endif
     ScopedFloatEnvironment float_environment(state);
     state->status = EmuStatus::Running;
     state->fault_vector = 0xFF;
@@ -898,6 +906,10 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             break;
         }
         auto execute_block = [&](BasicBlock* block_ptr) {
+#ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+            state->sequence_expected_op = nullptr;
+            state->sequence_history_length = 0;
+#endif
 #if defined(FIBERCPU_ENABLE_BLOCK_PROFILE) || defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
             block_ptr->exec_count++;
 #endif
@@ -1099,6 +1111,66 @@ size_t X86_DebugHostPageSetUniqueCount(const void* const* host_pages, size_t cou
     return unique_pages.size();
 }
 
+uint32_t X86_GetBuildFeatures(void) {
+    uint32_t features = FIBERCPU_ENABLE_SUPEROPCODES ? 1u : 0u;
+#ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+    features |= 2u;
+#endif
+#ifdef FIBERCPU_ENABLE_BLOCK_PROFILE
+    features |= 4u;
+#endif
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+    features |= 8u;
+#endif
+    return features;
+}
+
+const char* X86_GetSuperOpcodeSetHash(void) { return FIBERCPU_SUPEROPCODE_SET_SHA256; }
+
+size_t X86_GetSequenceProfile(EmuState* state, X86_SequenceProfileEntry* buffer, size_t capacity) {
+#ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+    if (!state) return 0;
+    size_t i = 0;
+    for (const auto& [pair, count] : state->sequence_counts) {
+        if (!buffer || i == capacity) break;
+        buffer[i++] = {reinterpret_cast<void*>(pair.first), reinterpret_cast<void*>(pair.second), count};
+    }
+    return state->sequence_counts.size();
+#else
+    (void)state; (void)buffer; (void)capacity;
+    return 0;
+#endif
+}
+
+void X86_ResetSequenceProfile(EmuState* state) {
+#ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+    if (state) {
+        state->sequence_counts.clear();
+        state->ngram_counts.clear();
+        state->sequence_expected_op = nullptr;
+        state->sequence_history_length = 0;
+    }
+#else
+    (void)state;
+#endif
+}
+
+size_t X86_GetNGramProfile(EmuState* state, X86_NGramProfileEntry* buffer, size_t capacity) {
+#ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+    if (!state) return 0;
+    size_t i = 0;
+    for (const auto& [key, count] : state->ngram_counts) {
+        if (!buffer || i == capacity) break;
+        buffer[i++] = {reinterpret_cast<void*>(key.handlers[0]), reinterpret_cast<void*>(key.handlers[1]),
+                       reinterpret_cast<void*>(key.handlers[2]), reinterpret_cast<void*>(key.handlers[3]), count};
+    }
+    return state->ngram_counts.size();
+#else
+    (void)state; (void)buffer; (void)capacity;
+    return 0;
+#endif
+}
+
 void X86_EmuStop(EmuState* state) {
     if (state) state->status = EmuStatus::Stopped;
 }
@@ -1114,6 +1186,10 @@ void X86_EmuYield(EmuState* state) {
 int X86_Step(EmuState* state) {
     ScopedNativeExecution execution(state);
     if (!execution) return -1;
+#ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+    state->sequence_expected_op = nullptr;
+    state->sequence_history_length = 0;
+#endif
     ScopedFloatEnvironment float_environment(state);
     state->status = EmuStatus::Running;
     state->fault_vector = 0xFF;

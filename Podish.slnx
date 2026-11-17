@@ -13,6 +13,7 @@
   <Project Path="Podish.Display/Podish.Display.csproj" />
   <Project Path="Podish.PjdFs/Podish.PjdFs.csproj" />
   <Project Path="Podish.PerfTools/Podish.PerfTools.csproj" />
+  <Project Path="Podish.PerfTools.Tests/Podish.PerfTools.Tests.csproj" />
   <Project Path="Podish.Pulse/Podish.Pulse.csproj" />
   <Project Path="Podish.Pulse.Tests/Podish.Pulse.Tests.csproj" />
   <Project Path="Podish.Wayland/Podish.Wayland.csproj" />

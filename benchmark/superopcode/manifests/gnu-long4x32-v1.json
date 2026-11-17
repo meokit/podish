@@ -1,0 +1,654 @@
+{
+  "schemaVersion": 2,
+  "metadata": {
+    "id": "long4x32",
+    "mode": "sequence",
+    "width": 4,
+    "extended_lookup": true,
+    "baseManifestHash": "474d9aa41c36ae9e1be5e4453ad8961dfcfae72062f86e1491e6048616b04111",
+    "counter": "consecutive-within-block-dispatch-entries-v1",
+    "ranking": "positive heavy-light ngram slope, normalized by heavy Continue edges, times width-minus-one; not additive realized savings"
+  },
+  "candidates": [
+    {
+      "pair": [
+        "op::OpGroup1_EvIz_And_32_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 14613400,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 104635433,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIz_Cmp_32_Flags_Ecx",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 390582,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 52928971,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_B_Rel32"
+      ],
+      "weighted_exec_count": 10977855,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIz_Cmp_32_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 2458215,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32",
+        "op::OpJcc_AE_Rel32"
+      ],
+      "weighted_exec_count": 45498897,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 12507814,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EbIb_Cmp_Flags",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 14332667,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EvGv_32_ModReg_Edx",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 12972276,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EbGb",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 6977265,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Cmp_32_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 12841564,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EbIb_Cmp_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 26272729,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_L_Rel32"
+      ],
+      "weighted_exec_count": 26945206,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EbGb",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 54649852,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EvGv_32_ModReg_Eax",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 12138308,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EvGv_32_ModReg",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 10875366,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Cmp_32_Flags",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 21383533,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EbGb",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 22810795,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EvGv_32_ModReg_Ecx",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 7418761,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_AE_Rel32"
+      ],
+      "weighted_exec_count": 9840743,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_AlImm",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 5749745,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpSub_GvEv",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 5879361,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_GvEv_32",
+        "op::OpJcc_AE_Rel32"
+      ],
+      "weighted_exec_count": 9821366,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EvGv_32_ModReg_Eax",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 2145589,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpTest_EbGb",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 4332301,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_LE_Rel32"
+      ],
+      "weighted_exec_count": 7373018,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32",
+        "op::OpJcc_LE_Rel32"
+      ],
+      "weighted_exec_count": 9246020,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup5_Ev_Dec_32_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 30597267,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIz_And_32_Flags",
+        "op::OpJcc_E_Rel32"
+      ],
+      "weighted_exec_count": 6848999,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpCmp_EvGv_32",
+        "op::OpJcc_B_Rel32"
+      ],
+      "weighted_exec_count": 1596141,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Cmp_32_Flags",
+        "op::OpJcc_BE_Rel32"
+      ],
+      "weighted_exec_count": 4239154,
+      "score": 0,
+      "relation_kind": "reviewed-base-pair"
+    },
+    {
+      "pair": [
+        "op::OpGroup3_Ev_Not_32_Flags",
+        "op::OpAnd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_And_32_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 14612156,
+      "score": 0.047234386722153326,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpLea_32_Ecx",
+        "op::OpGroup3_Ev_Not_32_Flags",
+        "op::OpAnd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_And_32_Flags"
+      ],
+      "weighted_exec_count": 12668802,
+      "score": 0.04175698355807829,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment",
+        "op::OpLea_32_Ecx",
+        "op::OpGroup3_Ev_Not_32_Flags",
+        "op::OpAnd_EvGv_NF_32_ModReg"
+      ],
+      "weighted_exec_count": 12653199,
+      "score": 0.041710651711573836,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Ecx",
+        "op::OpXor_GvEv_NF",
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 50332298,
+      "score": 0.029207676631501076,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte",
+        "op::OpMov_Load_Ecx",
+        "op::OpXor_GvEv_NF",
+        "op::OpCmp_EvGv_32_ModReg"
+      ],
+      "weighted_exec_count": 50332298,
+      "score": 0.029207676631501076,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpGroup2_EvIb_Shr",
+        "op::OpMov_EvGv_Esi",
+        "op::OpMovzx_Byte",
+        "op::OpMov_Load_Ecx"
+      ],
+      "weighted_exec_count": 50332300,
+      "score": 0.02920767593444219,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpInc_Reg_NF",
+        "op::OpXor_EvGv_NF_32_ModReg",
+        "op::OpGroup2_EvIb_Shr",
+        "op::OpMov_EvGv_Esi"
+      ],
+      "weighted_exec_count": 50332300,
+      "score": 0.02920767593444219,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Esi",
+        "op::OpMovzx_Byte",
+        "op::OpMov_Load_Ecx",
+        "op::OpXor_GvEv_NF"
+      ],
+      "weighted_exec_count": 50332300,
+      "score": 0.02920767593444219,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte",
+        "op::OpInc_Reg_NF",
+        "op::OpXor_EvGv_NF_32_ModReg",
+        "op::OpGroup2_EvIb_Shr"
+      ],
+      "weighted_exec_count": 50332300,
+      "score": 0.02920767593444219,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpXor_EvGv_NF_32_ModReg",
+        "op::OpGroup2_EvIb_Shr",
+        "op::OpMov_EvGv_Esi",
+        "op::OpMovzx_Byte"
+      ],
+      "weighted_exec_count": 50332300,
+      "score": 0.02920767593444219,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpGroup5_Ev_Inc_32_Flags",
+        "op::OpMovzx_Byte",
+        "op::OpCmp_EvGv_32",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 29710009,
+      "score": 0.012577838546047156,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edx",
+        "op::OpMov_Load_Eax",
+        "op::OpGroup5_Ev_Inc_32_Flags",
+        "op::OpMovzx_Byte"
+      ],
+      "weighted_exec_count": 29710082,
+      "score": 0.012576672253618111,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Eax",
+        "op::OpGroup5_Ev_Inc_32_Flags",
+        "op::OpMovzx_Byte",
+        "op::OpCmp_EvGv_32"
+      ],
+      "weighted_exec_count": 29710013,
+      "score": 0.012576620521232445,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpPop_Reg32_Ebx",
+        "op::OpPop_Reg32_Esi",
+        "op::OpPop_Reg32_Edi",
+        "op::OpPop_Reg32_Ebp"
+      ],
+      "weighted_exec_count": 22042766,
+      "score": 0.0123400234653181,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIz_Add_16_NoFlags",
+        "op::OpMov_EvGv",
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 50135040,
+      "score": 0.00972831295403136,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpLea_32",
+        "op::OpGroup3_Ev_Not_32_Flags",
+        "op::OpAnd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_And_32_Flags"
+      ],
+      "weighted_exec_count": 8791504,
+      "score": 0.009551998495896444,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpXor_EvGv_NF_32_ModReg",
+        "op::OpLea_32",
+        "op::OpGroup3_Ev_Not_32_Flags",
+        "op::OpAnd_EvGv_NF_32_ModReg"
+      ],
+      "weighted_exec_count": 8791504,
+      "score": 0.009551998495896444,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpInc_Reg_NF",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_Cmp_32_Flags_Ecx",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 347136,
+      "score": 0.00948876216411094,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte",
+        "op::OpInc_Reg_NF",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_Cmp_32_Flags_Ecx"
+      ],
+      "weighted_exec_count": 347136,
+      "score": 0.00948876216411094,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpAdd_EvGv",
+        "op::OpMovsx_Byte",
+        "op::OpInc_Reg_NF",
+        "op::OpAdd_EvGv_NF_32_ModReg"
+      ],
+      "weighted_exec_count": 350208,
+      "score": 0.008450147672878253,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpInc_Reg_NF",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_Cmp_32_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 350208,
+      "score": 0.008450147672878253,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovsx_Byte",
+        "op::OpInc_Reg_NF",
+        "op::OpAdd_EvGv_NF_32_ModReg",
+        "op::OpGroup1_EvIz_Cmp_32_Flags"
+      ],
+      "weighted_exec_count": 350208,
+      "score": 0.008450147672878253,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte",
+        "op::OpAdd_EvGv",
+        "op::OpMovsx_Byte",
+        "op::OpInc_Reg_NF"
+      ],
+      "weighted_exec_count": 350208,
+      "score": 0.008450147672878253,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte_32_Eax",
+        "op::OpMovzx_Byte_32_Eax",
+        "op::OpAdd_EvGv",
+        "op::OpMovzx_Byte_32_Eax"
+      ],
+      "weighted_exec_count": 1942370,
+      "score": 0.00704304581079964,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edi",
+        "op::OpMov_EvGv_Eax",
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_L_Rel32"
+      ],
+      "weighted_exec_count": 24809388,
+      "score": 0.006598668351408579,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMovzx_Byte",
+        "op::OpInc_Reg_NF",
+        "op::OpGroup1_EbIb_Cmp_Flags",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 24527198,
+      "score": 0.006536617575416525,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edi",
+        "op::OpMovzx_Byte",
+        "op::OpInc_Reg_NF",
+        "op::OpGroup1_EbIb_Cmp_Flags"
+      ],
+      "weighted_exec_count": 24527196,
+      "score": 0.006536616559306998,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Esi",
+        "op::OpMov_Load_Edi",
+        "op::OpMovzx_Byte",
+        "op::OpInc_Reg_NF"
+      ],
+      "weighted_exec_count": 24527196,
+      "score": 0.006536616559306998,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_RegImm8",
+        "op::OpMov_Load_Edi",
+        "op::OpMov_EvGv_Eax",
+        "op::OpCmp_EvGv_32_ModReg"
+      ],
+      "weighted_exec_count": 24052937,
+      "score": 0.006420545820724553,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpGroup1_EvIb_Sub_32_Flags_Eax",
+        "op::OpMovzx_Byte_32_Ecx",
+        "op::OpCmp_EvGv_32_ModReg",
+        "op::OpJcc_NE_Rel32"
+      ],
+      "weighted_exec_count": 1760847,
+      "score": 0.006243867937471764,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_EvGv_Eax",
+        "op::OpGroup1_EvIb_Sub_32_Flags_Eax",
+        "op::OpMovzx_Byte_32_Ecx",
+        "op::OpCmp_EvGv_32_ModReg"
+      ],
+      "weighted_exec_count": 1760847,
+      "score": 0.006243867937471764,
+      "relation_kind": "observed-exact-ngram"
+    },
+    {
+      "pair": [
+        "op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment",
+        "op::OpXor_EvGv_NF_32_ModReg",
+        "op::OpLea_32",
+        "op::OpGroup3_Ev_Not_32_Flags"
+      ],
+      "weighted_exec_count": 1958957,
+      "score": 0.005523735010579485,
+      "relation_kind": "observed-exact-ngram"
+    }
+  ]
+}

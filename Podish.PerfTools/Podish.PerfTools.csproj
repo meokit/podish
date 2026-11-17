@@ -5,11 +5,13 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <RollForward>Major</RollForward>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     </PropertyGroup>
 
     <ItemGroup>
+        <InternalsVisibleTo Include="Podish.PerfTools.Tests" />
         <PackageReference Include="LibObjectFile" Version="2.1.0"/>
         <Compile Include="Program.cs"/>
         <Compile Include="Program.Analysis.cs"/>
@@ -21,7 +23,11 @@
         <Compile Include="Program.Profile.cs"/>
         <Compile Include="Program.Semantics.cs"/>
         <Compile Include="Program.Superopcodes.cs"/>
+        <Compile Include="Program.SuperopcodeSequences.cs"/>
         <Compile Include="BenchmarkRunner.cs"/>
+        <Compile Include="Program.Training.cs"/>
+        <Compile Include="Program.TrainingFixtures.cs"/>
+        <Compile Include="Program.Selection.cs"/>
     </ItemGroup>
 
 </Project>

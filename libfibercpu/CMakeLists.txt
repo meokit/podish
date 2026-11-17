@@ -39,17 +39,27 @@ option(FIBERCPU_ENABLE_LTO "Enable interprocedural optimization (LTO/IPO)" ON)
 option(FIBERCPU_ENABLE_BLOCK_PROFILE "Enable lightweight per-block execution counting" OFF)
 option(FIBERCPU_ENABLE_HANDLER_PROFILE "Enable approximate per-handler execution profiling" OFF)
 option(FIBERCPU_ENABLE_SUPEROPCODES "Enable generated SuperOpcode matching and handlers" ON)
+option(FIBERCPU_ENABLE_SEQUENCE_PROFILE "Count actual unfused within-block Continue edges (training only)" OFF)
+if(FIBERCPU_ENABLE_SEQUENCE_PROFILE AND FIBERCPU_ENABLE_SUPEROPCODES)
+    message(FATAL_ERROR "Sequence training requires FIBERCPU_ENABLE_SUPEROPCODES=OFF")
+endif()
 
 if(MSVC AND FIBERCPU_BUILD_STATIC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "MSVC runtime library" FORCE)
 endif()
 
 set(FIBERCPU_GENERATED_SUPEROPCODES_FILE
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/generated/superopcodes.generated.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/generated/superopcodes.generated.cpp" CACHE FILEPATH "Selected generated superopcode source")
 
 set(FIBERCPU_HAVE_GENERATED_SUPEROPCODES OFF)
 if(FIBERCPU_ENABLE_SUPEROPCODES AND EXISTS "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}")
     set(FIBERCPU_HAVE_GENERATED_SUPEROPCODES ON)
+    file(SHA256 "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}" FIBERCPU_SUPEROPCODE_SET_SHA256)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}")
+elseif(FIBERCPU_ENABLE_SUPEROPCODES)
+    message(FATAL_ERROR "Selected superopcode source does not exist: ${FIBERCPU_GENERATED_SUPEROPCODES_FILE}")
+else()
+    set(FIBERCPU_SUPEROPCODE_SET_SHA256 "none")
 endif()
 
 set(PGO_MODE "OFF" CACHE STRING "PGO build mode (OFF, GENERATE, USE)")
@@ -76,8 +86,9 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp" "src/*.c" "src/*.h")
 list(FILTER SOURCES EXCLUDE REGEX "main.cpp")
 list(FILTER SOURCES EXCLUDE REGEX "build/.*")
 list(FILTER SOURCES EXCLUDE REGEX "3rdparty/softfloat/.*")
-if(NOT FIBERCPU_ENABLE_SUPEROPCODES)
-    list(FILTER SOURCES EXCLUDE REGEX "generated/superopcodes\\.generated\\.cpp$")
+list(FILTER SOURCES EXCLUDE REGEX "generated/superopcodes\\.generated\\.cpp$")
+if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
+    list(APPEND SOURCES "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}")
 endif()
 list(FILTER SOURCES EXCLUDE REGEX "handler_reflection_exports\\.cpp$")
 list(FILTER SOURCES EXCLUDE REGEX "jit/.*")
@@ -172,7 +183,10 @@ add_custom_command(
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
             --output ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
             $<TARGET_OBJECTS:fibercpu_core>
-    DEPENDS fibercpu_core ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
+    # The object-library target supplies ordering, not file-level invalidation.
+    # Re-scan after any handler object changes (including a different selected set).
+    DEPENDS fibercpu_core $<TARGET_OBJECTS:fibercpu_core>
+            ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
     COMMENT "Generating handler reflection table from fibercpu_core objects"
     COMMAND_EXPAND_LISTS
     VERBATIM
@@ -191,6 +205,9 @@ set(FIBERCPU_FINAL_SOURCES
 )
 
 add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${FIBERCPU_FINAL_SOURCES})
+target_compile_definitions(fibercpu PRIVATE FIBERCPU_SUPEROPCODE_SET_SHA256="${FIBERCPU_SUPEROPCODE_SET_SHA256}")
+target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_SUPEROPCODE_SET_SHA256="${FIBERCPU_SUPEROPCODE_SET_SHA256}")
+target_include_directories(fibercpu_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 set_target_properties(fibercpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(WIN32 AND NOT FIBERCPU_BUILD_STATIC)
     # The managed runtime loads fibercpu.dll via P/Invoke and expects the X86_* symbols
@@ -300,6 +317,10 @@ endif()
 if(FIBERCPU_ENABLE_HANDLER_PROFILE)
     target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_ENABLE_HANDLER_PROFILE=1)
     target_compile_definitions(fibercpu PRIVATE FIBERCPU_ENABLE_HANDLER_PROFILE=1)
+endif()
+if(FIBERCPU_ENABLE_SEQUENCE_PROFILE)
+    target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_ENABLE_SEQUENCE_PROFILE=1)
+    target_compile_definitions(fibercpu PRIVATE FIBERCPU_ENABLE_SEQUENCE_PROFILE=1)
 endif()
 if(FIBERCPU_ENABLE_BLOCK_PROFILE)
     target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_ENABLE_BLOCK_PROFILE=1)

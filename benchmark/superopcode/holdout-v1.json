@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "gnu-holdout-v1",
+  "seed": 987654,
+  "bytes": 4194304,
+  "iterations": 2,
+  "cases": ["tar-create", "tar-extract", "gzip-compress", "gzip-decompress", "sed-transform", "grep-fixed", "grep-regex"],
+  "lightSizes": [],
+  "topPairs": 128,
+  "minimumHotMass": 0.95,
+  "minimumTopOverlap": 0.80,
+  "maximumJensenShannon": 0.12,
+  "timeoutSeconds": 1800
+}

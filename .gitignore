@@ -1,4 +1,7 @@
 build/
+!/build/
+/build/*
+!/build/SuperOpcodes.proj
 build_native/
 .build/
 .bench/
@@ -49,3 +52,4 @@ tests/pjdfstest/upstream/
 xcuserdata/
 Fiberish.Tests/TestResults/
 Fiberish.X86.Tests/TestResults/
+Podish.PerfTools.Tests/TestResults/

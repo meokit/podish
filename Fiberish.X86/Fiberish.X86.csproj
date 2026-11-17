@@ -12,6 +12,11 @@
         <NativeBuildDir Condition="'$(IsBrowserWasm)' == 'true'">build_native/browser-wasm</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' != ''">build_native/$(RuntimeIdentifier)</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' == ''">build_native/host</NativeBuildDir>
+        <SuperOpcodeTop Condition="'$(SuperOpcodeTop)' == ''">128</SuperOpcodeTop>
+        <!-- Keep generated inputs outside the CMake tree: changing toolchains may recreate that tree. -->
+        <SuperOpcodeGenerationDir>$([System.IO.Path]::Combine('$(MSBuildThisFileDirectory)', '$(BaseIntermediateOutputPath)', 'superopcode'))</SuperOpcodeGenerationDir>
+        <SuperOpcodeSource Condition="'$(SuperOpcodeManifest)' != '' And '$(SuperOpcodeSource)' == ''">$(SuperOpcodeGenerationDir)/superopcodes.generated.cpp</SuperOpcodeSource>
+        <SuperOpcodeGeneratorDll>$(MSBuildThisFileDirectory)../Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll</SuperOpcodeGeneratorDll>
         <EmscriptenToolchainFile Condition="'$(EmscriptenToolchainFile)' == '' and Exists('/opt/homebrew/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake')">/opt/homebrew/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake</EmscriptenToolchainFile>
         <EmscriptenToolchainFile Condition="'$(EmscriptenToolchainFile)' == '' and Exists('/usr/local/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake')">/usr/local/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake</EmscriptenToolchainFile>
         <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/opt/homebrew/opt/node/bin/node')">/opt/homebrew/opt/node/bin/node</BrowserWasmNodeExecutable>
@@ -32,7 +37,28 @@
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/CMakeLists.txt" />
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/src/**/*" />
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/3rdparty/**/*" />
+        <NativeBuildInput Include="$(SuperOpcodeSource)" Condition="'$(SuperOpcodeSource)' != ''" />
     </ItemGroup>
+
+    <!-- Opt-in deterministic generation from reviewed data. No guest execution or
+         network asset preparation occurs inside an ordinary native build. -->
+    <Target Name="PrepareSuperOpcodeGenerator" BeforeTargets="GenerateSelectedSuperOpcodes"
+            Condition="'$(SuperOpcodeManifest)' != '' And '$(DesignTimeBuild)' != 'true' And '$(FiberishSkipNativeBuild)' != 'true'">
+        <Error Condition="'$(EnableSuperOpcodes)' == 'false'" Text="SuperOpcodeManifest cannot be used with EnableSuperOpcodes=false." />
+        <Error Condition="!$([System.IO.Path]::IsPathRooted('$(SuperOpcodeManifest)'))" Text="SuperOpcodeManifest must be an absolute path." />
+        <Error Condition="!Exists('$(SuperOpcodeManifest)')" Text="Missing locked SuperOpcodeManifest: $(SuperOpcodeManifest)" />
+        <Exec Command="dotnet build &quot;$(MSBuildThisFileDirectory)../Podish.PerfTools/Podish.PerfTools.csproj&quot; -c Release --nologo" />
+        <MakeDir Directories="$(SuperOpcodeGenerationDir)" />
+        <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(SuperOpcodeSource)'))" />
+        <WriteLinesToFile File="$(SuperOpcodeGenerationDir)/superopcode-options.txt" Lines="top=$(SuperOpcodeTop)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    </Target>
+    <Target Name="GenerateSelectedSuperOpcodes" BeforeTargets="BuildNativeLib"
+            Condition="'$(SuperOpcodeManifest)' != '' And '$(DesignTimeBuild)' != 'true' And '$(FiberishSkipNativeBuild)' != 'true'"
+            Inputs="$(SuperOpcodeManifest);$(SuperOpcodeGeneratorDll);$(MSBuildProjectFullPath);$(SuperOpcodeGenerationDir)/superopcode-options.txt"
+            Outputs="$(SuperOpcodeSource)">
+        <Exec WorkingDirectory="$(MSBuildThisFileDirectory).."
+              Command="dotnet &quot;$(SuperOpcodeGeneratorDll)&quot; gen-superopcodes --input &quot;$(SuperOpcodeManifest)&quot; --output &quot;$(SuperOpcodeSource)&quot; --top $(SuperOpcodeTop)" />
+    </Target>
 
     <Target Name="BuildNativeLib" BeforeTargets="BeforeBuild" 
             Condition="'$(DesignTimeBuild)' != 'true' And '$(FiberishSkipNativeBuild)' != 'true' And '$(LibFibercpuSourceExists)' == 'true'"
@@ -65,6 +91,11 @@
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_HANDLER_PROFILE=$(CMakeHandlerProfile)</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_BLOCK_PROFILE=$(CMakeBlockProfile)</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_SUPEROPCODES=$(CMakeSuperOpcodes)</CMakeArgs>
+            <CMakeSequenceProfile Condition="'$(EnableSequenceProfile)' == 'true'">ON</CMakeSequenceProfile>
+            <CMakeSequenceProfile Condition="'$(CMakeSequenceProfile)' == ''">OFF</CMakeSequenceProfile>
+            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_SEQUENCE_PROFILE=$(CMakeSequenceProfile)</CMakeArgs>
+            <SuperOpcodeSource Condition="'$(SuperOpcodeSource)' == ''">$(LibFibercpuSourceDir)/src/generated/superopcodes.generated.cpp</SuperOpcodeSource>
+            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_GENERATED_SUPEROPCODES_FILE=&quot;$(SuperOpcodeSource)&quot;</CMakeArgs>
             <CMakeGeneratorArgs Condition="'$(IsBrowserWasm)' == 'true'">-G Ninja</CMakeGeneratorArgs>
             <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_TOOLCHAIN_FILE=&quot;$(EmscriptenToolchainFile)&quot; -DCMAKE_CROSSCOMPILING_EMULATOR=&quot;$(BrowserWasmNodeExecutable)&quot;</CMakeArgs>
         </PropertyGroup>

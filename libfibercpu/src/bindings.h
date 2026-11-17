@@ -206,6 +206,26 @@ typedef struct {
 size_t X86_GetHandlerProfileCount(EmuState* state);
 size_t X86_GetHandlerProfileStats(EmuState* state, X86_HandlerProfileEntry* buffer, size_t max_count);
 
+// Build identity flags: 1=superopcodes, 2=exact Continue-edge training,
+// 4=block profiling, 8=approximate handler profiling.
+uint32_t X86_GetBuildFeatures(void);
+const char* X86_GetSuperOpcodeSetHash(void);
+typedef struct {
+    void* first;
+    void* second;
+    uint64_t count;
+} X86_SequenceProfileEntry;
+size_t X86_GetSequenceProfile(EmuState* state, X86_SequenceProfileEntry* buffer, size_t capacity);
+void X86_ResetSequenceProfile(EmuState* state);
+typedef struct {
+    void* first;
+    void* second;
+    void* third;
+    void* fourth; // NULL for width 3
+    uint64_t count;
+} X86_NGramProfileEntry;
+size_t X86_GetNGramProfile(EmuState* state, X86_NGramProfileEntry* buffer, size_t capacity);
+
 // Test-only helper for directly exercising HostPageSet spill/dedup behavior.
 size_t X86_DebugHostPageSetUniqueCount(const void* const* host_pages, size_t count);
 

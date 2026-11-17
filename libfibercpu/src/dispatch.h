@@ -105,7 +105,13 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
 template <LogicFunc Target>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-                                           uint32_t branch, uint64_t flags_cache) {
+                                            uint32_t branch, uint64_t flags_cache) {
+#ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+    const auto history_length = state->sequence_expected_op == op ? state->sequence_history_length : 0;
+    const auto history = state->sequence_history;
+    state->sequence_expected_op = nullptr;
+    state->sequence_history_length = 0;
+#endif
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     // Execute Logic
     auto flow = Target(state, op, &utlb, GetImm(op), &branch, flags_cache);
@@ -117,6 +123,19 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             // Note: We don't check for 0 here for speed, assuming well-formed blocks
             // (sentinel always valid)
             if (auto* next_op = NextOp(op)) {
+#ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+                if (next_op->len != 0) {
+                    state->sequence_counts[{reinterpret_cast<uintptr_t>(op->handler),
+                                            reinterpret_cast<uintptr_t>(next_op->handler)}]++;
+                    const auto current = reinterpret_cast<uintptr_t>(op->handler);
+                    const auto next = reinterpret_cast<uintptr_t>(next_op->handler);
+                    if (history_length >= 1) state->ngram_counts[{{history[1], current, next, 0}}]++;
+                    if (history_length >= 2) state->ngram_counts[{{history[0], history[1], current, next}}]++;
+                    state->sequence_history = {history[1], current};
+                    state->sequence_history_length = static_cast<uint8_t>(std::min<int>(2, history_length + 1));
+                    state->sequence_expected_op = next_op;
+                }
+#endif
                 ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
                                                       flags_cache);
             }

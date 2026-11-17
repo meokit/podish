@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "gnu-heavy-v1",
+  "seed": 12345,
+  "bytes": 8388608,
+  "iterations": 1,
+  "cases": ["tar-create", "tar-extract", "gzip-compress", "gzip-decompress", "sed-transform", "grep-fixed", "grep-regex"],
+  "lightSizes": [131072, 524288, 1048576],
+  "topPairs": 128,
+  "minimumHotMass": 0.95,
+  "minimumTopOverlap": 0.80,
+  "maximumJensenShannon": 0.12,
+  "timeoutSeconds": 1800
+}

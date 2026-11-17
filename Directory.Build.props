@@ -1,0 +1,9 @@
+<Project>
+  <!-- Opt-in isolation for the training orchestrator, not a global output-policy change. -->
+  <PropertyGroup Condition="'$(SuperOpcodeFlavor)' != ''">
+    <SuperOpcodeArtifactsRoot Condition="'$(SuperOpcodeArtifactsRoot)' == ''">$(MSBuildThisFileDirectory)artifacts/superopcode/builds</SuperOpcodeArtifactsRoot>
+    <BaseOutputPath>$(SuperOpcodeArtifactsRoot)/$(SuperOpcodeFlavor)/managed/$(MSBuildProjectName)/bin/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(SuperOpcodeArtifactsRoot)/$(SuperOpcodeFlavor)/managed/$(MSBuildProjectName)/obj/</BaseIntermediateOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);**/bin/**;**/obj/**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

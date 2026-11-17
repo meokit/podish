@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "metadata": { "extended_lookup": true, "purpose": "correctness probes, not a trained or recommended table" },
+  "candidates": [
+    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg_NF"] },
+    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg"] },
+    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpInc_Reg"] },
+    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpInc_Reg"] },
+    { "pair": ["op::OpInc_Reg_NF", "op::OpMov_Load_Ecx", "op::OpInc_Reg"] },
+    { "pair": ["op::OpInc_Reg_NF", "op::OpMov_Load_Ecx", "op::OpInc_Reg_NF", "op::OpInc_Reg"] },
+    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpMov_Load_Ecx", "op::OpInc_Reg"] },
+    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpMov_Load_Ecx"] },
+    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpInc_Reg", "op::OpJcc_NE_Rel8"] }
+  ]
+}

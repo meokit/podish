@@ -1,0 +1,68 @@
+name: Superopcode training
+
+on:
+  pull_request:
+    paths:
+      - 'Podish.PerfTools/**'
+      - 'Podish.PerfTools.Tests/**'
+      - 'benchmark/superopcode/**'
+      - 'build/SuperOpcodes.proj'
+      - 'Fiberish.X86/**'
+      - 'Fiberish.X86.Tests/**'
+      - 'Fiberish.Core/Core/KernelRuntime.cs'
+      - 'Podish.Core/ContainerRuntimeService.cs'
+      - 'Directory.Build.props'
+      - 'libfibercpu/**'
+      - '.github/workflows/superopcode-training.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '41 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  tooling:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet test Podish.PerfTools.Tests/Podish.PerfTools.Tests.csproj -c Release --logger "trx;LogFileName=tooling.trx"
+
+  training:
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Explicit pinned GNU asset preparation
+        run: dotnet msbuild build/SuperOpcodes.proj -t:PrepareAssets
+      - name: Verify instrumented pair and exact ngram accounting
+        run: dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release -p:SuperOpcodeFlavor=training -p:NativeBuildDir=build_native/training -p:EnableSuperOpcodes=false -p:EnableSequenceProfile=true --filter FullyQualifiedName~SequenceProfileTests --logger "trx;LogFileName=sequence-profile.trx" --results-directory artifacts/superopcode/standard-training/counter-tests
+      - name: Verify actual long-sequence matches and fault recovery
+        shell: pwsh
+        run: |
+          dotnet run --project Podish.PerfTools -c Release -- gen-superopcodes --input benchmark/superopcode/sequence-probes.json --output artifacts/superopcode/standard-training/sequence-probes.generated.cpp --top 32
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $source = (Resolve-Path artifacts/superopcode/standard-training/sequence-probes.generated.cpp).Path
+          dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release -p:SuperOpcodeFlavor=sequence-probes -p:NativeBuildDir=build_native/sequence-probes -p:EnableSuperOpcodes=true -p:EnableSequenceProfile=false -p:EnableExtendedSuperOpcodeProbes=true "-p:SuperOpcodeSource=$source" --filter FullyQualifiedName~LongSequenceFusionTests --logger "trx;LogFileName=long-sequence.trx" --results-directory artifacts/superopcode/standard-training/sequence-probes
+      - name: Train unfused, distill, build and verify candidate
+        run: dotnet msbuild build/SuperOpcodes.proj -t:TrainAndVerify
+      - name: Measure three uninstrumented variants on independent holdout
+        run: dotnet msbuild build/SuperOpcodes.proj -t:Benchmark
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: superopcode-training-evidence
+          path: |
+            artifacts/superopcode/standard-training/**
+            Podish.PerfTools.Tests/TestResults/**

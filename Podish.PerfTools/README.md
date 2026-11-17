@@ -12,6 +12,11 @@ It currently handles two main workflows:
 
 This README focuses on the complete, usable workflow rather than just listing commands.
 
+For exact-edge GNU training, measured heavy-to-light distillation and OFF/pinned/candidate
+validation, use the [standard superopcode workflow](../benchmark/superopcode/README.md).
+Its entry point is `dotnet msbuild build/SuperOpcodes.proj -t:TrainAndVerify`; it writes
+artifacts only and does not replace the pinned table.
+
 ## Feature Overview
 
 Currently supported commands:
@@ -22,6 +27,7 @@ Currently supported commands:
 - `pipeline`
 - `runner`
 - `profile`
+- `superopcode build|collect|distill|train|verify|benchmark|search`
 
 Where:
 

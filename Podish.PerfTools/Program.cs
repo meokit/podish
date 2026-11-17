@@ -67,6 +67,7 @@ internal static partial class Program
                 "analyze-superopcode-candidates" => RunAnalyzeSuperopcodeCandidates(rest),
                 "gen-superopcodes" => RunGenerateSuperopcodes(rest),
                 "pipeline" => RunPipeline(rest),
+                "superopcode" => RunTrainingCommand(rest),
                 "runner" => BenchmarkRunner.Run(rest),
                 "profile" => RunProfile(rest),
                 "help" or "--help" or "-h" => PrintUsage(),
@@ -91,11 +92,13 @@ internal static partial class Program
                             analyze-superopcode-candidates Aggregate candidate pairs from analysis files
                             gen-superopcodes               Generate libfibercpu/src/generated/superopcodes.generated.cpp
                             pipeline                       Run the full benchmark + analysis pipeline
+                            superopcode                    Standard GNU collect/distill/train/verify/benchmark/search workflow
                             runner                         Run the benchmark harness and optional block analysis
                             profile                        Record/analyze CPU or native-memory runtime profiles with auto-selected backend
 
                           Examples:
                             dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- pipeline --candidate-top 256 --superopcode-top 256 --reuse-rootfs
+                            dotnet msbuild build/SuperOpcodes.proj -t:TrainAndVerify
                             dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- runner --jit-handler-profile-block-dump --aggregate-superopcode-candidates --candidate-top 256
                             dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- profile record-and-analyze --backend auto --mode cpu
                             dotnet run --project Podish.PerfTools/Podish.PerfTools.csproj -- profile record-and-analyze --backend auto --mode cpu --bench-case grep_10m --iterations 40 --warmup-seconds 0.5
@@ -145,7 +148,10 @@ internal static partial class Program
         var generated = GenerateSuperopcodes(input, top, workload, generationParams);
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
         File.WriteAllText(output, generated, Utf8NoBom);
-        Console.WriteLine($"Wrote {top} superopcodes to {Path.GetFullPath(output)}");
+        var countLine = generated.Split('\n').Single(line => line.StartsWith("// generated_candidate_count=", StringComparison.Ordinal) ||
+            line.StartsWith("// generated_pattern_count=", StringComparison.Ordinal));
+        var actualCount = countLine[(countLine.IndexOf('=') + 1)..].Trim();
+        Console.WriteLine($"Wrote {actualCount} superopcodes to {Path.GetFullPath(output)}");
         return 0;
     }
 

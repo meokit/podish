@@ -1,0 +1,45 @@
+<Project DefaultTargets="Help">
+  <PropertyGroup>
+    <RepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..'))</RepositoryRoot>
+    <TrainingSuite Condition="'$(TrainingSuite)' == ''">$(RepositoryRoot)/benchmark/superopcode/heavy-v1.json</TrainingSuite>
+    <TrainingRootfs Condition="'$(TrainingRootfs)' == ''">$(RepositoryRoot)/artifacts/superopcode/gnu-rootfs</TrainingRootfs>
+    <TrainingOutput Condition="'$(TrainingOutput)' == ''">$(RepositoryRoot)/artifacts/superopcode/standard-training</TrainingOutput>
+    <GeneratedSource Condition="'$(GeneratedSource)' == ''">$(TrainingOutput)/superopcodes.generated.cpp</GeneratedSource>
+    <BenchmarkSuite Condition="'$(BenchmarkSuite)' == ''">$(RepositoryRoot)/benchmark/superopcode/holdout-v1.json</BenchmarkSuite>
+    <BenchmarkRepeat Condition="'$(BenchmarkRepeat)' == ''">7</BenchmarkRepeat>
+    <SearchPlan Condition="'$(SearchPlan)' == ''">$(RepositoryRoot)/benchmark/superopcode/search-v1.json</SearchPlan>
+    <SearchStage Condition="'$(SearchStage)' == ''">screen</SearchStage>
+    <PerfTool>$(RepositoryRoot)/Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll</PerfTool>
+  </PropertyGroup>
+  <Target Name="BuildTools">
+    <Exec Command="dotnet build &quot;$(RepositoryRoot)/Podish.PerfTools/Podish.PerfTools.csproj&quot; -c Release --nologo" />
+  </Target>
+  <Target Name="PrepareAssets">
+    <Exec Command="python &quot;$(RepositoryRoot)/benchmark/superopcode/prepare_gnu.py&quot; --output &quot;$(TrainingRootfs)&quot;" />
+  </Target>
+  <Target Name="CollectHeavy" DependsOnTargets="BuildTools">
+    <Exec WorkingDirectory="$(RepositoryRoot)" Command="dotnet &quot;$(PerfTool)&quot; superopcode collect --suite &quot;$(TrainingSuite)&quot; --rootfs &quot;$(TrainingRootfs)&quot; --output &quot;$(TrainingOutput)/heavy&quot;" />
+  </Target>
+  <Target Name="Distill" DependsOnTargets="BuildTools">
+    <Exec WorkingDirectory="$(RepositoryRoot)" Command="dotnet &quot;$(PerfTool)&quot; superopcode distill --suite &quot;$(TrainingSuite)&quot; --rootfs &quot;$(TrainingRootfs)&quot; --output &quot;$(TrainingOutput)&quot;" />
+  </Target>
+  <Target Name="TrainAndVerify" DependsOnTargets="BuildTools">
+    <Exec WorkingDirectory="$(RepositoryRoot)" Command="dotnet &quot;$(PerfTool)&quot; superopcode train --suite &quot;$(TrainingSuite)&quot; --rootfs &quot;$(TrainingRootfs)&quot; --output &quot;$(TrainingOutput)&quot;" />
+  </Target>
+  <Target Name="Verify" DependsOnTargets="BuildTools">
+    <Exec WorkingDirectory="$(RepositoryRoot)" Command="dotnet &quot;$(PerfTool)&quot; superopcode verify --generated &quot;$(GeneratedSource)&quot; --output &quot;$(TrainingOutput)/verification&quot;" />
+  </Target>
+  <Target Name="Benchmark" DependsOnTargets="BuildTools">
+    <Exec WorkingDirectory="$(RepositoryRoot)" Command="dotnet &quot;$(PerfTool)&quot; superopcode benchmark --suite &quot;$(BenchmarkSuite)&quot; --rootfs &quot;$(TrainingRootfs)&quot; --generated &quot;$(GeneratedSource)&quot; --repeat $(BenchmarkRepeat) --output &quot;$(TrainingOutput)/benchmark&quot;" />
+  </Target>
+  <Target Name="GenerateFromPinnedProfile" DependsOnTargets="BuildTools">
+    <Error Condition="'$(CandidateManifest)' == ''" Text="Set CandidateManifest to a reviewed selected.json; this target does not run guests or download." />
+    <Exec WorkingDirectory="$(RepositoryRoot)" Command="dotnet &quot;$(PerfTool)&quot; gen-superopcodes --input &quot;$(CandidateManifest)&quot; --output &quot;$(GeneratedSource)&quot; --top 128" />
+  </Target>
+  <Target Name="Search" DependsOnTargets="BuildTools">
+    <Exec WorkingDirectory="$(RepositoryRoot)" Command="dotnet &quot;$(PerfTool)&quot; superopcode search --plan &quot;$(SearchPlan)&quot; --stage $(SearchStage) --rootfs &quot;$(TrainingRootfs)&quot; --output &quot;$(TrainingOutput)&quot;" />
+  </Target>
+  <Target Name="Help">
+    <Message Importance="high" Text="Explicit targets: PrepareAssets (online), CollectHeavy, Distill, TrainAndVerify, Verify, Benchmark, GenerateFromPinnedProfile. Ordinary builds remain pinned/offline. See benchmark/superopcode/README.md." />
+  </Target>
+</Project>

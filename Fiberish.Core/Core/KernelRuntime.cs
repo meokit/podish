@@ -41,6 +41,85 @@ public sealed class KernelRuntime : IDisposable
         MemoryContext.Dispose();
     }
 
+    /// <summary>Export quiescent engines' cumulative Continue edges, without ASLR addresses.</summary>
+    public unsafe void DumpSequenceProfile(Stream output)
+    {
+        var pairs = new Dictionary<(string First, string Second), ulong>();
+        var ngrams = new Dictionary<(string First, string Second, string Third, string? Fourth), ulong>();
+        var symbols = new Dictionary<IntPtr, string>();
+        string Symbol(IntPtr handler)
+        {
+            if (!symbols.TryGetValue(handler, out var symbol))
+            {
+                var id = X86Native.GetHandlerId(handler);
+                symbol = id < 0 ? "" : X86Native.GetHandlerSymbolById(id) ?? "";
+                if (symbol.Length == 0) throw new InvalidDataException("Unresolved training handler");
+                var names = System.Text.RegularExpressions.Regex.Matches(symbol, @"(?:fiberish::)?op::(Op[A-Za-z0-9_]+)");
+                if (names.Count != 1) throw new InvalidDataException("Ambiguous training handler: " + symbol);
+                symbol = "op::" + names[0].Groups[1].Value;
+                symbols.Add(handler, symbol);
+            }
+            return symbol;
+        }
+        foreach (var engine in new[] { Engine }.Concat(RetiredEngines).DistinctBy(engine => engine.State))
+        {
+            var count = checked((int)X86Native.GetSequenceProfile(engine.State, null, 0));
+            var entries = new X86Native.SequenceProfileEntry[count];
+            fixed (X86Native.SequenceProfileEntry* pointer = entries)
+                if (X86Native.GetSequenceProfile(engine.State, pointer, (nuint)count) != (nuint)count)
+                    throw new InvalidOperationException("Profile changed during quiescent export");
+            foreach (var entry in entries)
+            {
+                var key = (Symbol(entry.First), Symbol(entry.Second));
+                pairs[key] = checked(pairs.GetValueOrDefault(key) + entry.Count);
+            }
+            var ngramCount = checked((int)X86Native.GetNGramProfile(engine.State, null, 0));
+            var ngramEntries = new X86Native.NGramProfileEntry[ngramCount];
+            fixed (X86Native.NGramProfileEntry* pointer = ngramEntries)
+                if (X86Native.GetNGramProfile(engine.State, pointer, (nuint)ngramCount) != (nuint)ngramCount)
+                    throw new InvalidOperationException("NGram profile changed during quiescent export");
+            foreach (var entry in ngramEntries)
+            {
+                var key = (Symbol(entry.First), Symbol(entry.Second), Symbol(entry.Third),
+                    entry.Fourth == IntPtr.Zero ? null : Symbol(entry.Fourth));
+                ngrams[key] = checked(ngrams.GetValueOrDefault(key) + entry.Count);
+            }
+        }
+        using var writer = new System.Text.Json.Utf8JsonWriter(output, new() { Indented = true });
+        writer.WriteStartObject();
+        writer.WriteNumber("schemaVersion", 2);
+        writer.WriteString("counterSemantics", "within-block-continue-edges-v1");
+        writer.WriteNumber("buildFeatures", X86Native.GetBuildFeatures());
+        writer.WriteString("superOpcodeSetHash", X86Native.GetSuperOpcodeSetHash());
+        writer.WriteStartArray("pairs");
+        foreach (var (pair, count) in pairs.OrderBy(entry => entry.Key.First, StringComparer.Ordinal)
+                     .ThenBy(entry => entry.Key.Second, StringComparer.Ordinal))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("first", pair.First);
+            writer.WriteString("second", pair.Second);
+            writer.WriteNumber("count", count);
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+        writer.WriteString("ngramSemantics", "consecutive-within-block-dispatch-entries-v1");
+        writer.WriteStartArray("ngrams");
+        foreach (var (sequence, count) in ngrams.OrderBy(entry => entry.Key.First, StringComparer.Ordinal)
+                     .ThenBy(entry => entry.Key.Second, StringComparer.Ordinal).ThenBy(entry => entry.Key.Third, StringComparer.Ordinal)
+                     .ThenBy(entry => entry.Key.Fourth, StringComparer.Ordinal))
+        {
+            writer.WriteStartObject();
+            writer.WriteStartArray("ops");
+            writer.WriteStringValue(sequence.First); writer.WriteStringValue(sequence.Second); writer.WriteStringValue(sequence.Third);
+            if (sequence.Fourth is not null) writer.WriteStringValue(sequence.Fourth);
+            writer.WriteEndArray();
+            writer.WriteNumber("count", count);
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
     public unsafe void DumpAllBlocks(Stream output)
     {
         ArgumentNullException.ThrowIfNull(output);

@@ -7,6 +7,7 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <RollForward>Major</RollForward>
+    <DefineConstants Condition="'$(EnableExtendedSuperOpcodeProbes)' == 'true'">$(DefineConstants);FIBERISH_EXTENDED_SUPEROPCODE_PROBES</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />

@@ -1262,6 +1262,8 @@ public sealed class ContainerRuntimeService
         {
             var exportDir = Path.GetFullPath(request.GuestStatsExportDir);
             Directory.CreateDirectory(exportDir);
+            using (var sequenceStream = File.Create(Path.Combine(exportDir, "sequence_profile.json")))
+                runtime.DumpSequenceProfile(sequenceStream);
 
             var blocksPath = Path.Combine(exportDir, "blocks.bin");
             var skipBlocksDump = Environment.GetEnvironmentVariable("PODISH_SKIP_BLOCKS_EXPORT") is
