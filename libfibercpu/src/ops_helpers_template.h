@@ -6,6 +6,7 @@
 #include "decoder.h"
 #include "exec_utils.h"
 #include "state.h"
+#include "ops/ops_carry_rmw_impl.h"
 
 namespace fiberish {
 
@@ -30,11 +31,11 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, DecodedOp* op, uint64_t& f
             res = AluOr<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
         case 2:
-            res = AluAdc<T, UpdateFlags>(state, flags_cache, dest, src);
-            break;
+            return ExecuteCarryRmw<CarryRmwKind::Adc, T, UpdateFlags, S == Specialized::ModReg>(
+                state, op, dest, src, utlb, flags_cache);
         case 3:
-            res = AluSbb<T, UpdateFlags>(state, flags_cache, dest, src);
-            break;
+            return ExecuteCarryRmw<CarryRmwKind::Sbb, T, UpdateFlags, S == Specialized::ModReg>(
+                state, op, dest, src, utlb, flags_cache);
         case 4:
             res = AluAnd<T, UpdateFlags>(state, flags_cache, dest, src);
             break;

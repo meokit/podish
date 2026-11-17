@@ -1,6 +1,16 @@
 #include "ops_alu_impl.h"
 
 namespace fiberish {
+template <LogicFunc Flags, LogicFunc NoFlags>
+static void RegisterCarryModReg(uint16_t opcode) {
+    SpecCriteria c;
+    c.mod_mask = 3;
+    c.mod_val = 3;
+    DispatchRegistrar<Flags>::RegisterSpecialized(opcode, c);
+    c.no_flags = true;
+    DispatchRegistrar<NoFlags>::RegisterSpecialized(opcode, c);
+}
+
 void RegisterAluOps() {
     using namespace op;
 
@@ -87,6 +97,11 @@ void RegisterAluOps() {
 
     g_Handlers[0x19] = DispatchWrapper<OpSbb_EvGv>;
     DispatchRegistrar<OpSbb_EvGv_NF>::RegisterNF(0x19);
+
+    RegisterCarryModReg<OpAdc_EbGb_ModReg, OpAdc_EbGb_NF_ModReg>(0x10);
+    RegisterCarryModReg<OpAdc_EvGv_ModReg, OpAdc_EvGv_NF_ModReg>(0x11);
+    RegisterCarryModReg<OpSbb_EbGb_ModReg, OpSbb_EbGb_NF_ModReg>(0x18);
+    RegisterCarryModReg<OpSbb_EvGv_ModReg, OpSbb_EvGv_NF_ModReg>(0x19);
 
     g_Handlers[0x1A] = DispatchWrapper<OpSbb_GbEb>;
     DispatchRegistrar<OpSbb_GbEb_NF>::RegisterNF(0x1A);

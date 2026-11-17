@@ -7,12 +7,11 @@
 
 namespace fiberish::mem {
 
-static FORCE_INLINE bool ShouldInterceptExecWriteForSmc(EmuState* state, GuestAddr addr) {
-    if (!state->intercept_exec_write_for_smc || state->allow_write_exec_page) return false;
-
-    const uint32_t current_page = state->ctx.eip >> 12;
-    const uint32_t target_page = addr >> 12;
-    return target_page == current_page || target_page == (current_page + 1);
+static FORCE_INLINE bool ShouldInterceptExecWriteForSmc(EmuState* state) {
+    // Only called for ForceWriteSlow pages. That bit is armed by backing-page
+    // identity, including distant writable aliases of executable mappings.
+    // Invalidation alone cannot stop the already executing decoded-op chain.
+    return state->intercept_exec_write_for_smc && !state->allow_write_exec_page;
 }
 
 inline EmuState* Mmu::get_state() {
@@ -271,8 +270,8 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
     return std::unexpected(FaultCode::PageFault);
 }
 
-template <typename T>
-MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
+template <typename T, bool Store>
+MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAddr addr, T val, MicroTLB* utlb) {
     const GuestAddr end_addr = addr + sizeof(T) - 1;
     const uint32_t target_tag = addr & ~PAGE_MASK;
     const uint32_t cross_page_mask = (addr ^ end_addr) & ~PAGE_MASK;
@@ -282,8 +281,12 @@ MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
         stats.l1_write_hits++;
         stats.total_writes++;
 #endif
-        std::memcpy((void*)(utlb->addend + addr), &val, sizeof(T));
-        return {};
+        if constexpr (Store) {
+            std::memcpy((void*)(utlb->addend + addr), &val, sizeof(T));
+            return {};
+        } else {
+            return reinterpret_cast<HostAddr>(utlb->addend + addr);
+        }
     }
 
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
@@ -294,13 +297,18 @@ MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
         stats.l2_write_hits++;
         stats.total_writes++;
 #endif
-        std::memcpy((void*)(entry.addend + addr), &val, sizeof(T));
+        // Preserve the original ordinary-store ordering/code generation. The
+        // RMW specialization only obtains the target; Store is compile-time.
+        if constexpr (Store) std::memcpy((void*)(entry.addend + addr), &val, sizeof(T));
 
         utlb->tag_w = target_tag;
         utlb->addend = entry.addend;
         utlb->tag_r =
             has_property(entry.perm, Property::Read) ? target_tag : std::numeric_limits<decltype(utlb->tag_r)>::max();
-        return {};
+        if constexpr (Store)
+            return {};
+        else
+            return reinterpret_cast<HostAddr>(entry.addend + addr);
     }
 
     // A write miss can be followed by a slow-path COW remap on this page.
@@ -314,6 +322,16 @@ MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
 #endif
 
     return std::unexpected(FaultCode::PageFault);
+}
+
+template <typename T>
+MemResult<HostAddr> Mmu::try_write_target_tlb(GuestAddr addr, MicroTLB* utlb) {
+    return write_tlb_impl<T, false>(addr, T{}, utlb);
+}
+
+template <typename T>
+MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
+    return write_tlb_impl<T, true>(addr, val, utlb);
 }
 
 // Read
@@ -373,7 +391,7 @@ template <typename T>
         Property p = get_property(addr);
         if (has_property(p, Property::ForceWriteSlow)) {
             EmuState* state = get_state();
-            if (ShouldInterceptExecWriteForSmc(state, addr)) {
+            if (ShouldInterceptExecWriteForSmc(state)) {
                 state->smc_write_to_exec = true;
                 return std::unexpected(FaultCode::PageFault);
             }
@@ -453,8 +471,7 @@ template <typename T>
             has_property(prop1, Property::ForceWriteSlow) || has_property(prop2, Property::ForceWriteSlow);
         if (touches_exec) {
             EmuState* state = get_state();
-            if ((has_property(prop1, Property::ForceWriteSlow) && ShouldInterceptExecWriteForSmc(state, addr)) ||
-                (has_property(prop2, Property::ForceWriteSlow) && ShouldInterceptExecWriteForSmc(state, addr2))) {
+            if (ShouldInterceptExecWriteForSmc(state)) {
                 state->smc_write_to_exec = true;
                 return std::unexpected(FaultCode::PageFault);
             }

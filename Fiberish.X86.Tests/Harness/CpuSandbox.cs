@@ -144,6 +144,23 @@ public sealed unsafe class CpuSandbox : IDisposable
         _pages[address] = permissions;
     }
 
+    /// <summary>Maps another guest address to an existing external backing page.</summary>
+    public void MapExternalAlias(uint address, uint sourceAddress, byte permissions = 3)
+    {
+        CheckedEnd(address, PageSize);
+        if (((address | sourceAddress) & (PageSize - 1)) != 0)
+            throw new ArgumentException("External aliases must be page aligned.");
+        if (_pages.ContainsKey(address))
+            throw new InvalidOperationException($"Guest page {address:X8} is already mapped.");
+        var source = X86Native.ResolvePtrForRead(State, sourceAddress);
+        if (source == null || !_externalPages.Contains((IntPtr)source))
+            throw new InvalidOperationException("The source must be an external page owned by this sandbox.");
+        if (X86Native.MapManagedPage(State, address, source, permissions) == 0)
+            throw new InvalidOperationException($"Could not map external alias {address:X8}.");
+        // The original allocation remains the sole owner; do not add it twice.
+        _pages.Add(address, permissions);
+    }
+
     public void ProtectMemory(uint address, uint size, byte permissions)
     {
         var end = CheckedEnd(address, size);

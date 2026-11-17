@@ -9,6 +9,7 @@
 #include "../ops.h"
 #include "../state.h"
 #include "ops_shift_bit.h"
+#include "ops_carry_rmw_impl.h"
 
 namespace fiberish {
 
@@ -51,20 +52,22 @@ FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, DecodedOp* op, ui
             break;
         case 2:  // RCL
             if (is_byte)
-                res = AluRcl<uint8_t>(state, flags_cache, (uint8_t)dest, count);
+                return ExecuteCarryRmw<CarryRmwKind::Rcl, uint8_t>(state, op, static_cast<uint8_t>(dest), count,
+                                                                  utlb, flags_cache);
             else if (is_opsize)
-                res = AluRcl<uint16_t>(state, flags_cache, (uint16_t)dest, count);
+                return ExecuteCarryRmw<CarryRmwKind::Rcl, uint16_t>(state, op, static_cast<uint16_t>(dest), count,
+                                                                   utlb, flags_cache);
             else
-                res = AluRcl<uint32_t>(state, flags_cache, dest, count);
-            break;
+                return ExecuteCarryRmw<CarryRmwKind::Rcl, uint32_t>(state, op, dest, count, utlb, flags_cache);
         case 3:  // RCR
             if (is_byte)
-                res = AluRcr<uint8_t>(state, flags_cache, (uint8_t)dest, count);
+                return ExecuteCarryRmw<CarryRmwKind::Rcr, uint8_t>(state, op, static_cast<uint8_t>(dest), count,
+                                                                  utlb, flags_cache);
             else if (is_opsize)
-                res = AluRcr<uint16_t>(state, flags_cache, (uint16_t)dest, count);
+                return ExecuteCarryRmw<CarryRmwKind::Rcr, uint16_t>(state, op, static_cast<uint16_t>(dest), count,
+                                                                   utlb, flags_cache);
             else
-                res = AluRcr<uint32_t>(state, flags_cache, dest, count);
-            break;
+                return ExecuteCarryRmw<CarryRmwKind::Rcr, uint32_t>(state, op, dest, count, utlb, flags_cache);
         case 4:  // SHL/SAL
         case 6:  // SAL alias
             if (is_byte)

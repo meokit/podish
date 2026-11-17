@@ -1755,6 +1755,13 @@ public:
     [[nodiscard]] FORCE_INLINE MemResult<T> read_tlb_only(GuestAddr addr, MicroTLB* utlb);
 
     template <typename T>
+    [[nodiscard]] FORCE_INLINE MemResult<HostAddr> try_write_target_tlb(GuestAddr addr, MicroTLB* utlb);
+
+    template <typename T, bool Store>
+    [[nodiscard]] FORCE_INLINE MemResult<std::conditional_t<Store, void, HostAddr>> write_tlb_impl(
+        GuestAddr addr, T val, MicroTLB* utlb);
+
+    template <typename T>
     [[nodiscard]] FORCE_INLINE MemResult<void> write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb);
 
     template <typename T, bool fail_on_tlb_miss = false>

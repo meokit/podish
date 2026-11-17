@@ -9,6 +9,7 @@
 #include "../ops.h"
 #include "../state.h"
 #include "ops_alu.h"
+#include "ops_carry_rmw_impl.h"
 
 namespace fiberish {
 
@@ -140,10 +141,7 @@ FORCE_INLINE LogicFlow OpAdc_EbGb_Internal(LogicFuncParams) {
     uint8_t dest = *dest_res;
 
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
-    uint8_t res = AluAdc<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
-
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
-    return LogicFlow::Continue;
+    return ExecuteCarryRmw<CarryRmwKind::Adc, uint8_t, UpdateFlags>(state, op, dest, src, utlb, flags_cache);
 }
 
 template <bool UpdateFlags>
@@ -156,20 +154,15 @@ FORCE_INLINE LogicFlow OpAdc_EvGv_Internal(LogicFuncParams) {
         uint16_t dest = *dest_res;
 
         uint16_t src = GetReg(state, reg) & 0xFFFF;
-        uint16_t res = AluAdc<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        return ExecuteCarryRmw<CarryRmwKind::Adc, uint16_t, UpdateFlags>(state, op, dest, src, utlb, flags_cache);
     } else {
         auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
         if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
 
         uint32_t src = GetReg(state, reg);
-        uint32_t res = AluAdc<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        return ExecuteCarryRmw<CarryRmwKind::Adc, uint32_t, UpdateFlags>(state, op, dest, src, utlb, flags_cache);
     }
-    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
@@ -681,10 +674,7 @@ FORCE_INLINE LogicFlow OpSbb_EbGb_Internal(LogicFuncParams) {
     uint8_t dest = *dest_res;
 
     uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
-    uint8_t res = AluSbb<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
-
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
-    return LogicFlow::Continue;
+    return ExecuteCarryRmw<CarryRmwKind::Sbb, uint8_t, UpdateFlags>(state, op, dest, src, utlb, flags_cache);
 }
 
 template <bool UpdateFlags>
@@ -697,20 +687,15 @@ FORCE_INLINE LogicFlow OpSbb_EvGv_Internal(LogicFuncParams) {
         uint16_t dest = *dest_res;
 
         uint16_t src = GetReg(state, reg) & 0xFFFF;
-        uint16_t res = AluSbb<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        return ExecuteCarryRmw<CarryRmwKind::Sbb, uint16_t, UpdateFlags>(state, op, dest, src, utlb, flags_cache);
     } else {
         auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
         if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
 
         uint32_t src = GetReg(state, reg);
-        uint32_t res = AluSbb<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+        return ExecuteCarryRmw<CarryRmwKind::Sbb, uint32_t, UpdateFlags>(state, op, dest, src, utlb, flags_cache);
     }
-    return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
@@ -1043,6 +1028,50 @@ FORCE_INLINE LogicFlow OpOr_EaxImm(LogicFuncParams) { return OpOr_EaxImm_Interna
 FORCE_INLINE LogicFlow OpOr_EaxImm_NF(LogicFuncParams) { return OpOr_EaxImm_Internal<false>(LogicPassParams); }
 
 // Wrappers for Adc
+// Keep register-only ADC/SBB independent of memory slow-path calls and their
+// register-allocation/stack-frame requirements. Selected once during decoding.
+template <CarryRmwKind Kind, bool IsByte, bool UpdateFlags>
+FORCE_INLINE LogicFlow OpCarryRmw_ModReg_Internal(LogicFuncParams) {
+    const uint8_t rm = op->modrm & 7;
+    const uint8_t reg = (op->modrm >> 3) & 7;
+    if constexpr (IsByte) {
+        return ExecuteCarryRmw<Kind, uint8_t, UpdateFlags, true>(
+            state, op, GetReg8(state, rm), GetReg8(state, reg), utlb, flags_cache);
+    } else if (op->prefixes.flags.opsize) {
+        return ExecuteCarryRmw<Kind, uint16_t, UpdateFlags, true>(
+            state, op, static_cast<uint16_t>(GetReg(state, rm)), static_cast<uint16_t>(GetReg(state, reg)), utlb,
+            flags_cache);
+    } else {
+        return ExecuteCarryRmw<Kind, uint32_t, UpdateFlags, true>(state, op, GetReg(state, rm), GetReg(state, reg),
+                                                                utlb, flags_cache);
+    }
+}
+
+FORCE_INLINE LogicFlow OpAdc_EbGb_ModReg(LogicFuncParams) {
+    return OpCarryRmw_ModReg_Internal<CarryRmwKind::Adc, true, true>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpAdc_EbGb_NF_ModReg(LogicFuncParams) {
+    return OpCarryRmw_ModReg_Internal<CarryRmwKind::Adc, true, false>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpAdc_EvGv_ModReg(LogicFuncParams) {
+    return OpCarryRmw_ModReg_Internal<CarryRmwKind::Adc, false, true>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpAdc_EvGv_NF_ModReg(LogicFuncParams) {
+    return OpCarryRmw_ModReg_Internal<CarryRmwKind::Adc, false, false>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpSbb_EbGb_ModReg(LogicFuncParams) {
+    return OpCarryRmw_ModReg_Internal<CarryRmwKind::Sbb, true, true>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpSbb_EbGb_NF_ModReg(LogicFuncParams) {
+    return OpCarryRmw_ModReg_Internal<CarryRmwKind::Sbb, true, false>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpSbb_EvGv_ModReg(LogicFuncParams) {
+    return OpCarryRmw_ModReg_Internal<CarryRmwKind::Sbb, false, true>(LogicPassParams);
+}
+FORCE_INLINE LogicFlow OpSbb_EvGv_NF_ModReg(LogicFuncParams) {
+    return OpCarryRmw_ModReg_Internal<CarryRmwKind::Sbb, false, false>(LogicPassParams);
+}
+
 FORCE_INLINE LogicFlow OpAdc_EbGb(LogicFuncParams) { return OpAdc_EbGb_Internal<true>(LogicPassParams); }
 FORCE_INLINE LogicFlow OpAdc_EbGb_NF(LogicFuncParams) { return OpAdc_EbGb_Internal<false>(LogicPassParams); }
 
