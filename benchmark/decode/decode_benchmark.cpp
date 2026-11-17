@@ -1,0 +1,59 @@
+#include "bindings.h"
+#include "state.h"
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+using namespace fiberish;
+
+int main(int argc, char** argv) {
+    const int batches = argc > 1 ? std::atoi(argv[1]) : 100;
+    if (batches <= 0) {
+        std::fprintf(stderr, "Usage: decode_benchmark [positive batch count]\n");
+        return 1;
+    }
+    // 32-bit x86: prologue, arithmetic, memory addressing, compare and branch.
+    const unsigned char code[] = {0x55, 0x89, 0xe5, 0x83, 0xec, 0x10, 0x8b, 0x45, 0x08, 0x8b, 0x4d, 0x0c,
+                                  0x01, 0xc8, 0x8d, 0x54, 0x80, 0x04, 0x83, 0xfa, 0x20, 0x75, 0x02};
+    constexpr uint32_t address = 0x1000;
+    constexpr int per_batch = 1000;
+    auto* state = X86_Create();
+    state->status = EmuStatus::Running;
+
+    auto* page = state->mmu.allocate_page(address, static_cast<uint8_t>(mem::Property::RX));
+    if (!page)
+        return 1;
+    std::memcpy(page, code, sizeof(code));
+    uint64_t instructions = 0, bytes = 0;
+    double seconds = 0;
+    for (int batch = -1; batch < batches; ++batch) {
+        state->mmu.reset_code_cache(); // Outside timing; bound block-pool memory.
+        uint64_t batch_instructions = 0, batch_bytes = 0;
+        auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < per_batch; ++i) {
+            auto* block = DecodeBlock(state, address, address + sizeof(code), 0);
+            if (!block || block->end_eip != address + sizeof(code) || block->inst_count() != 9) {
+                std::fprintf(stderr, "Unexpected decoded block: end=%x count=%u\n", block ? block->end_eip : 0,
+                             block ? block->inst_count() : 0);
+                std::fprintf(stderr, "iteration=%d batch=%d pending=%d\n", i, batch,
+                             state->mmu.code_cache_flush_pending());
+                X86_Destroy(state);
+                return 1;
+            }
+            batch_instructions += block->inst_count();
+            batch_bytes += block->end_eip - address;
+        }
+        auto end = std::chrono::steady_clock::now();
+        if (batch >= 0) {
+            seconds += std::chrono::duration<double>(end - start).count();
+            instructions += batch_instructions;
+            bytes += batch_bytes;
+        }
+    }
+    const double blocks = static_cast<double>(batches) * per_batch;
+    std::printf("blocks=%.0f instructions=%llu bytes=%llu seconds=%.6f ns/block=%.2f M inst/s=%.2f MiB/s=%.2f\n",
+                blocks, (unsigned long long)instructions, (unsigned long long)bytes, seconds, seconds * 1e9 / blocks,
+                instructions / seconds / 1e6, bytes / seconds / (1024 * 1024));
+    X86_Destroy(state);
+}

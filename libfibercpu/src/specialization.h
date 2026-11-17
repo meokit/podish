@@ -162,7 +162,7 @@ struct SpecializedEntry {
     HandlerFunc handler;  // Wrapper pointer
 };
 
-// Global Registration
+// Registration is only supported during HandlerInit, before the index is built.
 void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler);
 
 // Lookup

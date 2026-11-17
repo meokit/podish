@@ -1,9 +1,11 @@
 #include "decoder.h"
+#include <array>
 #include <cassert>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <span>
 #include "decoder_lut.h"
 #include "dfe_lut.h"
 #include "dispatch.h"
@@ -76,15 +78,25 @@ static bool IsLockableOpcode(uint16_t opcode) {
     // Arithmetic forms with r/m as destination, not source.
     if (opcode <= 0x31 && (opcode & 7) <= 1) return true;
     switch (opcode) {
-        case 0x80: case 0x81: case 0x82: case 0x83:  // Group 1, except CMP
-        case 0x86: case 0x87:                       // XCHG
-        case 0xF6: case 0xF7:                       // NOT / NEG
-        case 0xFE: case 0xFF:                       // INC / DEC
-        case 0x1AB: case 0x1B3: case 0x1BB:          // BTS / BTR / BTC
-        case 0x1BA:                                // Immediate BTS / BTR / BTC
-        case 0x1B0: case 0x1B1:                     // CMPXCHG
-        case 0x1C0: case 0x1C1:                     // XADD
-        case 0x1C7:                                // CMPXCHG8B
+        case 0x80:
+        case 0x81:
+        case 0x82:
+        case 0x83:  // Group 1, except CMP
+        case 0x86:
+        case 0x87:  // XCHG
+        case 0xF6:
+        case 0xF7:  // NOT / NEG
+        case 0xFE:
+        case 0xFF:  // INC / DEC
+        case 0x1AB:
+        case 0x1B3:
+        case 0x1BB:  // BTS / BTR / BTC
+        case 0x1BA:  // Immediate BTS / BTR / BTC
+        case 0x1B0:
+        case 0x1B1:  // CMPXCHG
+        case 0x1C0:
+        case 0x1C1:  // XADD
+        case 0x1C7:  // CMPXCHG8B
             return true;
         default:
             return false;
@@ -95,11 +107,16 @@ static bool IsValidLockModRM(uint16_t opcode, uint8_t modrm) {
     if ((modrm & 0xC0) == 0xC0) return false;
     const uint8_t subop = (modrm >> 3) & 7;
     switch (opcode) {
-        case 0x80: case 0x81: case 0x82: case 0x83:
+        case 0x80:
+        case 0x81:
+        case 0x82:
+        case 0x83:
             return subop != 7;
-        case 0xF6: case 0xF7:
+        case 0xF6:
+        case 0xF7:
             return subop == 2 || subop == 3;
-        case 0xFE: case 0xFF:
+        case 0xFE:
+        case 0xFF:
             return subop <= 1;
         case 0x1BA:
             return subop >= 5;
@@ -113,7 +130,7 @@ static bool IsValidLockModRM(uint16_t opcode, uint8_t modrm) {
 // Decoder Logic
 // Distinguishes an invalid encoding from a valid but incomplete byte sequence.
 InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t available, DecodedInstTmp* inst,
-                                                  uint16_t* handler_index) {
+                                                 uint16_t* handler_index) {
     *inst = {};
 
     DecodedOp* op = &inst->head;
@@ -252,8 +269,8 @@ InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t ava
                 } else if (disp_size == 2) {
                     uint16_t d16;
                     std::memcpy(&d16, ptr, 2);
-                    inst->head.ext.data.disp = mod == 0
-                        ? d16 : static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(d16)));
+                    inst->head.ext.data.disp =
+                        mod == 0 ? d16 : static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(d16)));
                     ptr += 2;
                 } else {
                     std::memcpy(&inst->head.ext.data.disp, ptr, 4);
@@ -375,8 +392,8 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
     return DecodeInstructionBounded(code, 15, inst, handler_index) == InstructionDecodeResult::Success;
 }
 
-InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip, uint8_t* buffer,
-                                                   DecodedInstTmp* inst, uint16_t* handler_index) {
+InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip, uint8_t* buffer, DecodedInstTmp* inst,
+                                                  uint16_t* handler_index) {
     // A mapping is page-granular: copying bytes within the first page is safe,
     // but even probing the next mapping must wait until we know it is needed.
     size_t available = std::min<size_t>(15, 0x1000u - (eip & 0xFFFu));
@@ -508,7 +525,7 @@ static bool DecodedOpSemanticallyEquals(const DecodedOp& decoded, const DecodedO
 static bool BasicBlockMatchesDecodedCandidate(const BasicBlock* candidate, uint32_t start_eip, uint32_t end_eip,
                                               uint32_t inst_count, uint32_t slot_count, BlockTerminalKind terminal_kind,
                                               uint32_t branch_target_eip, uint32_t fallthrough_eip, HandlerFunc entry,
-                                              const std::vector<DecodedInstTmp>& temp_ops) {
+                                              std::span<const DecodedInstTmp> temp_ops) {
     if (!candidate || candidate->is_valid()) return false;
     if (candidate->canonical_start_eip() != start_eip || candidate->end_eip != end_eip ||
         candidate->inst_count() != inst_count || candidate->slot_count != slot_count ||
@@ -529,37 +546,34 @@ static bool BasicBlockMatchesDecodedCandidate(const BasicBlock* candidate, uint3
 }
 
 BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts,
-                         BasicBlock* invalidated_candidate, bool* use_single_step) {
+                        BasicBlock* invalidated_candidate, bool* use_single_step) {
     if (use_single_step) *use_single_step = false;
     const uint64_t reset_request_epoch = state->mmu.code_cache().reset_request_epoch;
     if (state->mmu.code_cache_flush_pending()) {
         if (use_single_step) *use_single_step = true;
         return nullptr;
     }
-    // 1. Decode into temporary storage
-    // Use a small buffer on stack to avoid heap allocation for common small blocks?
-    // Or just std::vector. std::vector is safer for now.
-    std::vector<DecodedInstTmp> temp_ops;
-    constexpr uint64_t MAX_INSTS = 64;
-    temp_ops.reserve(MAX_INSTS + 2);  // + Sentinel + potential Fault
+    // At most 64 decoded ops, followed by a sentinel. A fault can append a
+    // synthetic op and sentinel while the loop still has room for an op.
+    constexpr size_t MAX_INSTS = 64;
+    std::array<DecodedInstTmp, MAX_INSTS + 1> op_storage;
+    size_t op_count = 0;
+    std::array<uint16_t, MAX_INSTS> index_storage;
+    size_t index_count = 0;
 
     uint32_t current_eip = start_eip;
     uint32_t inst_count = 0;
 
-    uint64_t effective_limit = std::min(MAX_INSTS, max_insts == 0 ? MAX_INSTS : max_insts);
+    uint64_t effective_limit = std::min<uint64_t>(MAX_INSTS, max_insts == 0 ? MAX_INSTS : max_insts);
 
     // DFE Live Flags - declared here to avoid goto skip error
     uint32_t live_flags = DFE_ALL_FLAGS;
-
-    // Temporary storage for indices to support DFE
-    std::vector<uint16_t> op_indices;
-    op_indices.reserve(effective_limit);
 
     uint32_t end_eip = start_eip;
     bool success = true;
     BlockStopReason stop_reason = BlockStopReason::Unknown;
 
-    while (temp_ops.size() < effective_limit) {
+    while (op_count < effective_limit) {
         // 0. Check Limit
         if (limit_eip != 0 && current_eip >= limit_eip) {
             stop_reason = BlockStopReason::LimitEip;
@@ -569,7 +583,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         // backing page), but decoding must not raise a later fetch fault before
         // earlier instructions have committed. Defer potentially missing pages
         // to a fresh block without invoking a guest fault resolver speculatively.
-        if (!temp_ops.empty()) {
+        if (op_count != 0) {
             const uint32_t remaining = 0x1000u - (current_eip & 0xFFFu);
             if (!state->mmu.probe_exec(current_eip) ||
                 (remaining < 15 && !state->mmu.probe_exec(current_eip + remaining))) {
@@ -600,7 +614,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             inst.head.handler = ud2;
 
             inst.head.next_eip = current_eip;
-            temp_ops.push_back(inst);
+            op_storage[op_count++] = inst;
             inst_count++;  // The synthetic #UD op must be executable, not an empty block.
 
             // Append Sentinel for dispatch safety
@@ -613,7 +627,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             SetNextBlock(&sentinel.head, state->mmu.invalid_code_block());
             sentinel.head.next_eip = current_eip;
 
-            temp_ops.push_back(sentinel);
+            op_storage[op_count++] = sentinel;
 
             end_eip = current_eip + 1;
             stop_reason = BlockStopReason::DecodeFault;
@@ -641,26 +655,26 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             ptr++;
             opcode = *ptr;
         }
-        op_indices.push_back((map << 8) | opcode);
+        index_storage[index_count++] = (map << 8) | opcode;
 
         // Optimization: Skip NOPs by absorbing them into the previous instruction
         // unless it's the first instruction of the block
         bool is_nop = (handler_index == 0x90 || handler_index == 0x11F);
-        if (is_nop && !temp_ops.empty() && !IsControlFlow(temp_ops.back())) {
+        if (is_nop && op_count != 0 && !IsControlFlow(op_storage[op_count - 1])) {
             // "Absorb" NOP into the previous instruction
-            DecodedInstTmp& prev = temp_ops.back();
+            DecodedInstTmp& prev = op_storage[op_count - 1];
             uint32_t new_len = (uint32_t)prev.head.GetLength() + inst.head.GetLength();
             if (new_len <= 255) {
                 prev.head.next_eip += inst.head.GetLength();
                 prev.head.SetLength((uint8_t)new_len);
-                op_indices.pop_back();
+                --index_count;
                 // Advance EIP and continue
                 current_eip += inst.head.GetLength();
                 continue;
             }
         }
 
-        temp_ops.push_back(inst);
+        op_storage[op_count++] = inst;
         inst_count++;
         uint32_t inst_len = inst.head.GetLength();
 
@@ -675,7 +689,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         current_eip += inst_len;
 
         // Stop if Control Flow (checked again on last op? redundancy from original code)
-        if (IsControlFlow(temp_ops.back())) {
+        if (IsControlFlow(op_storage[op_count - 1])) {
             stop_reason = BlockStopReason::ControlFlow;
             break;
         }
@@ -684,11 +698,11 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         // before decoding so a missing mapping cannot fault this block early.
     }
 
-    if (stop_reason == BlockStopReason::Unknown && temp_ops.size() >= effective_limit) {
+    if (stop_reason == BlockStopReason::Unknown && op_count >= effective_limit) {
         stop_reason = BlockStopReason::MaxInsts;
     }
 
-    if (!success || temp_ops.empty()) return nullptr;
+    if (!success || op_count == 0) return nullptr;
 
     // Append Sentinel Op
     {
@@ -698,25 +712,26 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         k ^= k >> 12;
         k ^= k >> 4;
         const bool branch_carrying_sentinel =
-            !op_indices.empty() && UsesBranchCarryingSentinel(op_indices.back(), temp_ops[temp_ops.size() - 1].head);
+            index_count != 0 &&
+            UsesBranchCarryingSentinel(index_storage[index_count - 1], op_storage[op_count - 1].head);
         uint8_t exit_idx = k % kExitHandlerReplicaCount;
         HandlerFunc exit_h =
             branch_carrying_sentinel ? g_ExitHandlersBranch[exit_idx] : g_ExitHandlersFallthrough[exit_idx];
         sentinel.head.handler = exit_h;
-        sentinel.head.next_eip = temp_ops.back().head.next_eip;  // Copy next_eip from last op
+        sentinel.head.next_eip = op_storage[op_count - 1].head.next_eip;  // Copy next_eip from last op
         SetNextBlock(&sentinel.head, state->mmu.invalid_code_block());
-        temp_ops.push_back(sentinel);
+        op_storage[op_count++] = sentinel;
     }
     end_eip = current_eip;
 
 #if 1
     // DFE Optimization (Backward Pass)
     live_flags = DFE_ALL_FLAGS;
-    for (int i = (int)temp_ops.size() - 2; i >= 0; --i) {
-        DecodedOp& op = temp_ops[i].head;
-        if (i >= (int)op_indices.size()) break;
+    for (int i = (int)op_count - 2; i >= 0; --i) {
+        DecodedOp& op = op_storage[i].head;
+        if (i >= (int)index_count) break;
 
-        uint16_t h_idx = op_indices[i];
+        uint16_t h_idx = index_storage[i];
         uint32_t reads = 0;
         uint32_t writes = 0;
         uint16_t flat_idx = h_idx & 0x1FF;
@@ -748,8 +763,9 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                 // be killed unconditionally. This only affects decode-time DFE.
                 if (opcode_idx == 0xD2 || opcode_idx == 0xD3) break;
                 const uint32_t count = (opcode_idx == 0xD0 || opcode_idx == 0xD1) ? 1 : GetImm(&op) & 31;
-                const uint32_t width = (opcode_idx == 0xC0 || opcode_idx == 0xD0) ? 8 :
-                                       op.prefixes.flags.opsize ? 16 : 32;
+                const uint32_t width = (opcode_idx == 0xC0 || opcode_idx == 0xD0) ? 8
+                                       : op.prefixes.flags.opsize                 ? 16
+                                                                                  : 32;
                 if (count == 0 || (carry_rotate && count % (width + 1) == 0)) break;
                 writes = subop < 4 ? CF_MASK | OF_MASK : DFE_ALL_FLAGS;
                 break;
@@ -803,30 +819,29 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 #endif
 
 finalize:
-    if (!success || temp_ops.empty()) return nullptr;
+    if (!success || op_count == 0) return nullptr;
 
     // An executable-fetch callback may have invalidated the candidate (or the
     // source block held by a concatenation builder). The pool is still alive,
     // but neither the candidate nor the decoded bytes may now be published.
-    if (state->mmu.code_cache_flush_pending() ||
-        state->mmu.code_cache().reset_request_epoch != reset_request_epoch) {
+    if (state->mmu.code_cache_flush_pending() || state->mmu.code_cache().reset_request_epoch != reset_request_epoch) {
         if (use_single_step) *use_single_step = true;
         return nullptr;
     }
 
     state->block_stats.Record(inst_count, stop_reason);
 
-    const uint32_t slot_count = static_cast<uint32_t>(temp_ops.size());
+    const uint32_t slot_count = static_cast<uint32_t>(op_count);
     const uint32_t decoded_inst_count = slot_count == 0 ? 0 : slot_count - 1;
-    ApplySuperOpcodesToBlockOps(reinterpret_cast<DecodedOp*>(temp_ops.data()), decoded_inst_count);
+    ApplySuperOpcodesToBlockOps(reinterpret_cast<DecodedOp*>(op_storage.data()), decoded_inst_count);
 
     BlockTerminalKind terminal_kind = BlockTerminalKind::None;
     uint32_t branch_target_eip = 0;
     uint32_t fallthrough_eip = end_eip;
-    HandlerFunc entry = temp_ops.front().head.handler;
-    if (decoded_inst_count != 0 && !op_indices.empty()) {
-        const uint16_t last_handler_index = op_indices.back();
-        const DecodedOp& last_op = temp_ops[decoded_inst_count - 1].head;
+    HandlerFunc entry = op_storage[0].head.handler;
+    if (decoded_inst_count != 0 && index_count != 0) {
+        const uint16_t last_handler_index = index_storage[index_count - 1];
+        const DecodedOp& last_op = op_storage[decoded_inst_count - 1].head;
         if (IsDirectRelativeJmpHandlerIndex(last_handler_index)) {
             terminal_kind = BlockTerminalKind::DirectJmpRel;
             branch_target_eip = GetControlTargetEip(&last_op);
@@ -839,7 +854,8 @@ finalize:
     }
 
     if (BasicBlockMatchesDecodedCandidate(invalidated_candidate, start_eip, end_eip, inst_count, slot_count,
-                                          terminal_kind, branch_target_eip, fallthrough_eip, entry, temp_ops)) {
+                                          terminal_kind, branch_target_eip, fallthrough_eip, entry,
+                                          std::span(op_storage.data(), op_count))) {
         invalidated_candidate->Revalidate();
         return invalidated_candidate;
     }
@@ -867,7 +883,7 @@ finalize:
 
     DecodedOp* dst = block->FirstOp();
     for (uint32_t i = 0; i < slot_count; ++i) {
-        dst[i] = temp_ops[i].head;
+        dst[i] = op_storage[i].head;
     }
 
     return block;

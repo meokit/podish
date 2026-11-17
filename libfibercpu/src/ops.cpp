@@ -119,9 +119,10 @@ ATTR_PRESERVE_NONE int64_t MemoryOpRetry(EmuState* RESTRICT state, DecodedOp* RE
     ATTR_MUSTTAIL return MemoryOpGeneric<false>(state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
 }
 
-static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                              mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-                                              uint32_t branch, uint64_t flags_cache) {
+static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                                 int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                                 mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                                 uint64_t flags_cache) {
     (void)op;
     (void)branch;
     BasicBlock* next_block = state->last_block;
@@ -182,8 +183,8 @@ ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowControlFlow(EmuState* RESTRICT
 ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
                                                uint32_t branch, uint64_t flags_cache) {
-    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb_tags,
-                                                                         utlb_addend, branch, flags_cache);
+    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb_tags, utlb_addend,
+                                                                         branch, flags_cache);
 }
 
 // Sentinel Handlers
@@ -221,6 +222,8 @@ std::array<HandlerFunc, kExitHandlerReplicaCount> g_ExitHandlersBranch =
 HandlerFunc g_Handlers[1024] = {nullptr};
 
 // Static initialization of dispatch table
+static void BuildSpecializationIndex();
+
 struct HandlerInit {
     HandlerInit() {
         // 1. Clear All
@@ -243,6 +246,7 @@ struct HandlerInit {
         RegisterSseFpOps();
         RegisterSseIntOps();
         RegisterSseMovOps();
+        BuildSpecializationIndex();
     }
 };
 
@@ -252,6 +256,8 @@ static std::vector<SpecializedEntry> g_OpSpecializations[1024];
 
 // Construct the registry before registration populates it. Both dispatch and
 // specialization tables are immutable after library initialization.
+using SpecializationBuckets = std::array<std::vector<const SpecializedEntry*>, 514>;
+static std::unique_ptr<SpecializationBuckets> g_SpecializationIndex[1024];
 static HandlerInit _init;
 
 void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler) {
@@ -268,24 +274,49 @@ void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerF
     });
 }
 
-HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
-    if (handler_index >= 1024) return nullptr;
-
-    // Deliberately uncached: decoded blocks already retain the selected handler,
-    // and a process/thread cache would retain guest-derived data across engines.
-    const auto& list = g_OpSpecializations[handler_index];
-    HandlerFunc found = nullptr;
-
-    for (const auto& entry : list) {
-        // Opcode check implicit by array index
-        if (!entry.criteria.Matches(op)) continue;
-
-        found = entry.handler;
-        break;  // Found the most specific match due to sorting
+// Registration is complete before this is called. Buckets retain the exact
+// sorted order, including ties; remaining prefix and memory constraints are
+// checked by Matches. The extra ModRM value represents an absent ModRM.
+static void BuildSpecializationIndex() {
+    for (size_t opcode = 0; opcode < 1024; ++opcode) {
+        const auto& list = g_OpSpecializations[opcode];
+        if (list.empty()) continue;
+        auto buckets = std::make_unique<SpecializationBuckets>();
+        for (const auto& entry : list) {
+            const auto& c = entry.criteria;
+            for (unsigned encoded = 0; encoded <= 256; ++encoded) {
+                const bool has_modrm = encoded != 0;
+                const unsigned modrm = has_modrm ? encoded - 1 : 0;
+                if (!has_modrm && (c.mod_mask || c.reg_mask || c.rm_mask)) continue;
+                if (has_modrm && ((c.mod_mask && (((modrm >> 6) & 3) & c.mod_mask) != c.mod_val) ||
+                                  (c.reg_mask && (((modrm >> 3) & 7) & c.reg_mask) != c.reg_val) ||
+                                  (c.rm_mask && ((modrm & 7) & c.rm_mask) != c.rm_val)))
+                    continue;
+                (*buckets)[encoded * 2 + c.no_flags].push_back(&entry);
+            }
+        }
+        g_SpecializationIndex[opcode] = std::move(buckets);
     }
-
-    return found;
 }
+
+HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
+    if (handler_index >= 1024 || !g_SpecializationIndex[handler_index]) return nullptr;
+    const unsigned encoded = op->meta.flags.has_modrm ? unsigned(op->modrm) + 1 : 0;
+    const auto& bucket = (*g_SpecializationIndex[handler_index])[encoded * 2 + op->meta.flags.no_flags];
+    for (const auto* entry : bucket) {
+        if (entry->criteria.Matches(op)) return entry->handler;
+    }
+    return nullptr;
+}
+
+#ifdef FIBERCPU_VALIDATE_SPECIALIZATION_INDEX
+HandlerFunc FindSpecializedHandlerReference(uint16_t opcode, DecodedOp* op) {
+    if (opcode >= 1024) return nullptr;
+    for (const auto& entry : g_OpSpecializations[opcode])
+        if (entry.criteria.Matches(op)) return entry.handler;
+    return nullptr;
+}
+#endif
 
 int FindOpcodeIndexForHandler(HandlerFunc handler) {
     if (!handler) return -1;
