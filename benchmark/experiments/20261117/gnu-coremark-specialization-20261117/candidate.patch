@@ -1,0 +1,569 @@
+diff --git a/Podish.PerfTools.Tests/TrainingTests.cs b/Podish.PerfTools.Tests/TrainingTests.cs
+index 2992403f..93bbe40c 100644
+--- a/Podish.PerfTools.Tests/TrainingTests.cs
++++ b/Podish.PerfTools.Tests/TrainingTests.cs
+@@ -21,6 +21,49 @@ public sealed class TrainingTests
+             File.ReadAllText(Path.Combine(root.FullName, "libfibercpu", "src", "generated", "superopcodes.generated.cpp")));
+     }
+ 
++    [Fact]
++    public void BakingExpandsSpecializationsWithoutReplacingGenericLogic()
++    {
++        var directory = Path.Combine(Path.GetTempPath(), "specialization-baking-" + Guid.NewGuid().ToString("N"));
++        Directory.CreateDirectory(directory);
++        try
++        {
++            var path = Path.Combine(directory, "selected.json");
++            File.WriteAllText(path, """
++                {"candidates":[
++                  {"pair":["op::OpGroup2_EvIb_Shr","op::OpAdd_EvGv","op::OpInc_Reg"]}
++                ]}
++                """);
++            var generated = Tool.GenerateSuperopcodes(path, 1);
++            Assert.Equal(generated, Tool.GenerateSuperopcodes(path, 1));
++            Assert.Contains("// selected_pattern_count=1\n", generated);
++            Assert.Contains("// specialization_expansion_count=3\n", generated);
++            Assert.Contains("// generated_pattern_count=4\n", generated);
++            Assert.Contains("SuperOpcode_3_000_OpGroup2_EvIb_Shr__OpAdd_EvGv__OpInc_Reg", generated);
++            Assert.Contains("SuperOpcode_3_003_OpGroup2_EvIb_Shr_ModReg__OpAdd_EvGv_Eax__OpInc_Reg", generated);
++            Assert.Contains("RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shr_ModReg,", generated);
++            Assert.Contains("RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_Eax,", generated);
++            Assert.Contains("DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>", generated);
++            Assert.Contains("DispatchWrapper<op::OpAdd_EvGv_Eax>", generated);
++
++            // A preselected specialized pattern must retain its original ID and
++            // must not be generated a second time by its generic family.
++            File.WriteAllText(path, """
++                {"candidates":[
++                  {"pair":["op::OpGroup2_EvIb_Shr","op::OpInc_Reg","op::OpInc_Reg"]},
++                  {"pair":["op::OpGroup2_EvIb_Shr_ModReg","op::OpInc_Reg","op::OpInc_Reg"]},
++                  {"pair":["op::OpAdc_EvGv","op::OpInc_Reg","op::OpInc_Reg"]}
++                ]}
++                """);
++            generated = Tool.GenerateSuperopcodes(path, 3);
++            Assert.Contains("// specialization_expansion_count=0\n", generated);
++            Assert.Contains("// generated_pattern_count=3\n", generated);
++            Assert.Contains("SuperOpcode_3_001_OpGroup2_EvIb_Shr_ModReg__OpInc_Reg__OpInc_Reg", generated);
++            Assert.DoesNotContain("OpAdc_EvGv_Eax", generated);
++        }
++        finally { Directory.Delete(directory, true); }
++    }
++
+     [Fact]
+     public void LongSequencePolicyAllowsOnlyOrdinaryPrefixesAndOptionalFinalBranch()
+     {
+diff --git a/Podish.PerfTools/Program.SuperopcodeSequences.cs b/Podish.PerfTools/Program.SuperopcodeSequences.cs
+index db1942cf..90a5f56c 100644
+--- a/Podish.PerfTools/Program.SuperopcodeSequences.cs
++++ b/Podish.PerfTools/Program.SuperopcodeSequences.cs
+@@ -19,11 +19,42 @@ internal static partial class Program
+             if (patterns.Count == top) break;
+         }
+         if (patterns.Count == 0) throw new InvalidDataException("Cannot generate empty sequence table");
++        // Bake semantic specializations as separate exact-match sequences.
++        // Keep original handlers for memory forms and execute specialized logic in
++        // the new variants; do not normalize back to generic logic at runtime.
++        var selectedPatternCount = patterns.Count;
++        var specializationFamilies = new Dictionary<string, string[]>(StringComparer.Ordinal)
++        {
++            ["op::OpAdd_EvGv"] = ["op::OpAdd_EvGv_Eax"],
++            ["op::OpGroup2_EvIb_Shl"] = ["op::OpGroup2_EvIb_Shl_ModReg"],
++            ["op::OpGroup2_Ev1_Shl"] = ["op::OpGroup2_Ev1_Shl_ModReg"],
++            ["op::OpGroup2_EvCl_Shl"] = ["op::OpGroup2_EvCl_Shl_ModReg"],
++            ["op::OpGroup2_EvIb_Shr"] = ["op::OpGroup2_EvIb_Shr_ModReg"],
++            ["op::OpGroup2_Ev1_Shr"] = ["op::OpGroup2_Ev1_Shr_ModReg"],
++            ["op::OpGroup2_EvCl_Shr"] = ["op::OpGroup2_EvCl_Shr_ModReg"],
++            ["op::OpGroup2_EvIb_Sar"] = ["op::OpGroup2_EvIb_Sar_ModReg"],
++            ["op::OpGroup2_Ev1_Sar"] = ["op::OpGroup2_Ev1_Sar_ModReg"],
++            ["op::OpGroup2_EvCl_Sar"] = ["op::OpGroup2_EvCl_Sar_ModReg"]
++        };
++        foreach (var pattern in patterns.Take(selectedPatternCount).ToArray())
++        {
++            var variants = new List<string[]> { Array.Empty<string>() };
++            foreach (var op in pattern)
++            {
++                var choices = specializationFamilies.TryGetValue(op, out var family)
++                    ? new[] { op }.Concat(family).ToArray() : new[] { op };
++                variants = variants.SelectMany(prefix => choices.Select(choice => prefix.Append(choice).ToArray())).ToList();
++            }
++            foreach (var variant in variants)
++                if (seen.Add(string.Join('\t', variant))) patterns.Add(variant);
++        }
+         string Name(int index) => $"SuperOpcode_{patterns[index].Length}_{index:000}_" +
+                                   string.Join("__", patterns[index].Select(op => SanitizeName(op[4..])));
+         var builder = new StringBuilder();
+         builder.AppendLine("// Generated by Podish.PerfTools; exact 2..4-op matching, longest first.");
+         builder.AppendLine("// source_sha256=" + TrainingHash(input));
++        builder.AppendLine("// selected_pattern_count=" + selectedPatternCount);
++        builder.AppendLine("// specialization_expansion_count=" + (patterns.Count - selectedPatternCount));
+         builder.AppendLine("// generated_pattern_count=" + patterns.Count);
+         builder.AppendLine("#include <ankerl/unordered_dense.h>\n#include <atomic>\n#include <cstdint>\n#include <vector>");
+         builder.AppendLine("#include \"superopcodes.h\"\n#include \"ops.h\"");
+diff --git a/libfibercpu/src/generated/superopcodes.generated.cpp b/libfibercpu/src/generated/superopcodes.generated.cpp
+index 17981b57..dac3fc7c 100644
+--- a/libfibercpu/src/generated/superopcodes.generated.cpp
++++ b/libfibercpu/src/generated/superopcodes.generated.cpp
+@@ -1,6 +1,8 @@
+ // Generated by Podish.PerfTools; exact 2..4-op matching, longest first.
+ // source_sha256=a838808972316d72d6a34154a3ee5ce0c5de166651c74524b1c3899d53536e64
+-// generated_pattern_count=64
++// selected_pattern_count=64
++// specialization_expansion_count=7
++// generated_pattern_count=71
+ #include <ankerl/unordered_dense.h>
+ #include <atomic>
+ #include <cstdint>
+@@ -1071,10 +1073,136 @@ ATTR_PRESERVE_NONE int64_t SuperOpcode_4_063_OpMov_Load_Edx_EaxBaseNoIndexNoSegm
+     }
+     __builtin_unreachable();
+ }
++ATTR_PRESERVE_NONE int64_t SuperOpcode_4_064_OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
++    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
++    uint32_t branch, uint64_t flags_cache) {
++    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
++    DecodedOp* constituent0 = op;
++    RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shr_ModReg, state, constituent0, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent1 = NextOp(constituent0);
++    RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Esi, state, constituent1, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent2 = NextOp(constituent1);
++    RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent2, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent3 = NextOp(constituent2);
++    RUN_SUPEROPCODE_OP(op::OpMov_Load_Ecx, state, constituent3, instr_limit, utlb, branch, flags_cache);
++    if (auto* next = NextOp(constituent3)) {
++        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
++        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++    }
++    __builtin_unreachable();
++}
++ATTR_PRESERVE_NONE int64_t SuperOpcode_4_065_OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
++    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
++    uint32_t branch, uint64_t flags_cache) {
++    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
++    DecodedOp* constituent0 = op;
++    RUN_SUPEROPCODE_OP(op::OpInc_Reg_NF, state, constituent0, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent1 = NextOp(constituent0);
++    RUN_SUPEROPCODE_OP(op::OpXor_EvGv_NF_32_ModReg, state, constituent1, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent2 = NextOp(constituent1);
++    RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shr_ModReg, state, constituent2, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent3 = NextOp(constituent2);
++    RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Esi, state, constituent3, instr_limit, utlb, branch, flags_cache);
++    if (auto* next = NextOp(constituent3)) {
++        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
++        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++    }
++    __builtin_unreachable();
++}
++ATTR_PRESERVE_NONE int64_t SuperOpcode_4_066_OpMovzx_Byte__OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
++    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
++    uint32_t branch, uint64_t flags_cache) {
++    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
++    DecodedOp* constituent0 = op;
++    RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent0, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent1 = NextOp(constituent0);
++    RUN_SUPEROPCODE_OP(op::OpInc_Reg_NF, state, constituent1, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent2 = NextOp(constituent1);
++    RUN_SUPEROPCODE_OP(op::OpXor_EvGv_NF_32_ModReg, state, constituent2, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent3 = NextOp(constituent2);
++    RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shr_ModReg, state, constituent3, instr_limit, utlb, branch, flags_cache);
++    if (auto* next = NextOp(constituent3)) {
++        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
++        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++    }
++    __builtin_unreachable();
++}
++ATTR_PRESERVE_NONE int64_t SuperOpcode_4_067_OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi__OpMovzx_Byte(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
++    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
++    uint32_t branch, uint64_t flags_cache) {
++    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
++    DecodedOp* constituent0 = op;
++    RUN_SUPEROPCODE_OP(op::OpXor_EvGv_NF_32_ModReg, state, constituent0, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent1 = NextOp(constituent0);
++    RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shr_ModReg, state, constituent1, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent2 = NextOp(constituent1);
++    RUN_SUPEROPCODE_OP(op::OpMov_EvGv_Esi, state, constituent2, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent3 = NextOp(constituent2);
++    RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent3, instr_limit, utlb, branch, flags_cache);
++    if (auto* next = NextOp(constituent3)) {
++        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
++        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++    }
++    __builtin_unreachable();
++}
++ATTR_PRESERVE_NONE int64_t SuperOpcode_4_068_OpAdd_EvGv_Eax__OpMovsx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
++    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
++    uint32_t branch, uint64_t flags_cache) {
++    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
++    DecodedOp* constituent0 = op;
++    RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_Eax, state, constituent0, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent1 = NextOp(constituent0);
++    RUN_SUPEROPCODE_OP(op::OpMovsx_Byte, state, constituent1, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent2 = NextOp(constituent1);
++    RUN_SUPEROPCODE_OP(op::OpInc_Reg_NF, state, constituent2, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent3 = NextOp(constituent2);
++    RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_NF_32_ModReg, state, constituent3, instr_limit, utlb, branch, flags_cache);
++    if (auto* next = NextOp(constituent3)) {
++        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
++        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++    }
++    __builtin_unreachable();
++}
++ATTR_PRESERVE_NONE int64_t SuperOpcode_4_069_OpMovzx_Byte__OpAdd_EvGv_Eax__OpMovsx_Byte__OpInc_Reg_NF(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
++    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
++    uint32_t branch, uint64_t flags_cache) {
++    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
++    DecodedOp* constituent0 = op;
++    RUN_SUPEROPCODE_OP(op::OpMovzx_Byte, state, constituent0, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent1 = NextOp(constituent0);
++    RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_Eax, state, constituent1, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent2 = NextOp(constituent1);
++    RUN_SUPEROPCODE_OP(op::OpMovsx_Byte, state, constituent2, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent3 = NextOp(constituent2);
++    RUN_SUPEROPCODE_OP(op::OpInc_Reg_NF, state, constituent3, instr_limit, utlb, branch, flags_cache);
++    if (auto* next = NextOp(constituent3)) {
++        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
++        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++    }
++    __builtin_unreachable();
++}
++ATTR_PRESERVE_NONE int64_t SuperOpcode_4_070_OpMovzx_Byte_32_Eax__OpMovzx_Byte_32_Eax__OpAdd_EvGv_Eax__OpMovzx_Byte_32_Eax(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
++    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
++    uint32_t branch, uint64_t flags_cache) {
++    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
++    DecodedOp* constituent0 = op;
++    RUN_SUPEROPCODE_OP(op::OpMovzx_Byte_32_Eax, state, constituent0, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent1 = NextOp(constituent0);
++    RUN_SUPEROPCODE_OP(op::OpMovzx_Byte_32_Eax, state, constituent1, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent2 = NextOp(constituent1);
++    RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_Eax, state, constituent2, instr_limit, utlb, branch, flags_cache);
++    DecodedOp* constituent3 = NextOp(constituent2);
++    RUN_SUPEROPCODE_OP(op::OpMovzx_Byte_32_Eax, state, constituent3, instr_limit, utlb, branch, flags_cache);
++    if (auto* next = NextOp(constituent3)) {
++        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
++        ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch, flags_cache);
++    }
++    __builtin_unreachable();
++}
+ namespace {
+ GeneratedSequenceTable* BuildGeneratedSequenceTable() {
+     auto* table = new GeneratedSequenceTable();
+-    table->reserve(61);
++    table->reserve(65);
+     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_And_32_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>},
+         std::vector<GeneratedSequenceMatch>{
+             GeneratedSequenceMatch{nullptr, nullptr, SuperOpcode_2_000_OpGroup1_EvIz_And_32_Flags__OpJcc_NE_Rel32, 2},
+@@ -1230,6 +1358,7 @@ GeneratedSequenceTable* BuildGeneratedSequenceTable() {
+     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, (HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>},
+         std::vector<GeneratedSequenceMatch>{
+             GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr>, (HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>, SuperOpcode_4_038_OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr__OpMov_EvGv_Esi, 4},
++            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>, (HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>, SuperOpcode_4_065_OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi, 4},
+         });
+     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>},
+         std::vector<GeneratedSequenceMatch>{
+@@ -1240,6 +1369,7 @@ GeneratedSequenceTable* BuildGeneratedSequenceTable() {
+             GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr>, SuperOpcode_4_040_OpMovzx_Byte__OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr, 4},
+             GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup1_EvIz_Cmp_32_Flags_Ecx>, SuperOpcode_4_050_OpMovzx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags_Ecx, 4},
+             GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpGroup1_EbIb_Cmp_Flags>, (HandlerFunc)DispatchWrapper<op::OpJcc_NE_Rel32>, SuperOpcode_4_057_OpMovzx_Byte__OpInc_Reg_NF__OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_Rel32, 4},
++            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>, SuperOpcode_4_066_OpMovzx_Byte__OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg, 4},
+         });
+     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr>},
+         std::vector<GeneratedSequenceMatch>{
+@@ -1293,6 +1423,7 @@ GeneratedSequenceTable* BuildGeneratedSequenceTable() {
+     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte_32_Eax>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte_32_Eax>},
+         std::vector<GeneratedSequenceMatch>{
+             GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte_32_Eax>, SuperOpcode_4_055_OpMovzx_Byte_32_Eax__OpMovzx_Byte_32_Eax__OpAdd_EvGv__OpMovzx_Byte_32_Eax, 4},
++            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_Eax>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte_32_Eax>, SuperOpcode_4_070_OpMovzx_Byte_32_Eax__OpMovzx_Byte_32_Eax__OpAdd_EvGv_Eax__OpMovzx_Byte_32_Eax, 4},
+         });
+     table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMov_Load_Edi>, (HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Eax>},
+         std::vector<GeneratedSequenceMatch>{
+@@ -1322,6 +1453,22 @@ GeneratedSequenceTable* BuildGeneratedSequenceTable() {
+         std::vector<GeneratedSequenceMatch>{
+             GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpLea_32>, (HandlerFunc)DispatchWrapper<op::OpGroup3_Ev_Not_32_Flags>, SuperOpcode_4_063_OpMov_Load_Edx_EaxBaseNoIndexNoSegment__OpXor_EvGv_NF_32_ModReg__OpLea_32__OpGroup3_Ev_Not_32_Flags, 4},
+         });
++    table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>, (HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>},
++        std::vector<GeneratedSequenceMatch>{
++            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpMov_Load_Ecx>, SuperOpcode_4_064_OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx, 4},
++        });
++    table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>, (HandlerFunc)DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>},
++        std::vector<GeneratedSequenceMatch>{
++            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMov_EvGv_Esi>, (HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, SuperOpcode_4_067_OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg__OpMov_EvGv_Esi__OpMovzx_Byte, 4},
++        });
++    table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_Eax>, (HandlerFunc)DispatchWrapper<op::OpMovsx_Byte>},
++        std::vector<GeneratedSequenceMatch>{
++            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, (HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>, SuperOpcode_4_068_OpAdd_EvGv_Eax__OpMovsx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg, 4},
++        });
++    table->emplace(GeneratedSequenceKey{(HandlerFunc)DispatchWrapper<op::OpMovzx_Byte>, (HandlerFunc)DispatchWrapper<op::OpAdd_EvGv_Eax>},
++        std::vector<GeneratedSequenceMatch>{
++            GeneratedSequenceMatch{(HandlerFunc)DispatchWrapper<op::OpMovsx_Byte>, (HandlerFunc)DispatchWrapper<op::OpInc_Reg_NF>, SuperOpcode_4_069_OpMovzx_Byte__OpAdd_EvGv_Eax__OpMovsx_Byte__OpInc_Reg_NF, 4},
++        });
+     return table;
+ }
+ } // namespace
+diff --git a/libfibercpu/src/ops/ops_alu.cpp b/libfibercpu/src/ops/ops_alu.cpp
+index 486dff0a..df991d1d 100644
+--- a/libfibercpu/src/ops/ops_alu.cpp
++++ b/libfibercpu/src/ops/ops_alu.cpp
+@@ -36,8 +36,8 @@ void RegisterAluOps() {
+     // Specialization: ADD EAX, r32 (Mod=3, RM=0)
+     // OpAdd_EvGv_Eax
+     SpecCriteria criteria;
+-    criteria.mod_mask = 0xC0;
+-    criteria.mod_val = 0xC0;  // Mod=3 (Reg)
++    criteria.mod_mask = 0x03;
++    criteria.mod_val = 0x03;  // Mod=3 (Reg)
+     criteria.rm_mask = 0x07;
+     criteria.rm_val = 0x00;  // RM=0 (EAX)
+     DispatchRegistrar<OpAdd_EvGv_Eax>::RegisterSpecialized(0x01, criteria);
+diff --git a/libfibercpu/src/ops/ops_shift_bit.cpp b/libfibercpu/src/ops/ops_shift_bit.cpp
+index ed6a5bc0..39433b93 100644
+--- a/libfibercpu/src/ops/ops_shift_bit.cpp
++++ b/libfibercpu/src/ops/ops_shift_bit.cpp
+@@ -1,6 +1,20 @@
+ #include "ops_shift_bit_impl.h"
+ 
+ namespace fiberish {
++template <typename T, bool Right>
++static void RegisterRotateRegImmediate() {
++    SpecCriteria c;
++    c.mod_mask = 3;
++    c.mod_val = 3;
++    c.reg_mask = 7;
++    c.reg_val = Right ? 1 : 0;
++    c.prefix_mask = prefix::OPSIZE;
++    c.prefix_val = sizeof(T) == 2 ? prefix::OPSIZE : 0;
++    DispatchRegistrar<op::OpRotateRegImmediate<T, Right, true>>::RegisterSpecialized(0xC1, c);
++    c.no_flags = true;
++    DispatchRegistrar<op::OpRotateRegImmediate<T, Right, false>>::RegisterSpecialized(0xC1, c);
++}
++
+ void RegisterShiftBitOps() {
+     using namespace op;
+ 
+@@ -11,6 +25,11 @@ void RegisterShiftBitOps() {
+     g_Handlers[0xD2] = DispatchWrapper<OpGroup2_EbCl>;
+     g_Handlers[0xD3] = DispatchWrapper<OpGroup2_EvCl>;
+ 
++    RegisterRotateRegImmediate<uint16_t, false>();
++    RegisterRotateRegImmediate<uint16_t, true>();
++    RegisterRotateRegImmediate<uint32_t, false>();
++    RegisterRotateRegImmediate<uint32_t, true>();
++
+     // Specializations
+     // Explicit registration for common cases to ensure they are generated
+ 
+@@ -23,8 +42,8 @@ void RegisterShiftBitOps() {
+         DispatchRegistrar<OpGroup2_Ev1_Shl>::RegisterSpecialized(0xD1, c);
+         DispatchRegistrar<OpGroup2_EvCl_Shl>::RegisterSpecialized(0xD3, c);
+ 
+-        c.mod_mask = 0xC0;
+-        c.mod_val = 0xC0;
++        c.mod_mask = 0x03;
++        c.mod_val = 0x03;
+         DispatchRegistrar<OpGroup2_EvIb_Shl_ModReg>::RegisterSpecialized(0xC1, c);
+         DispatchRegistrar<OpGroup2_Ev1_Shl_ModReg>::RegisterSpecialized(0xD1, c);
+         DispatchRegistrar<OpGroup2_EvCl_Shl_ModReg>::RegisterSpecialized(0xD3, c);
+@@ -38,8 +57,8 @@ void RegisterShiftBitOps() {
+         DispatchRegistrar<OpGroup2_Ev1_Shr>::RegisterSpecialized(0xD1, c);
+         DispatchRegistrar<OpGroup2_EvCl_Shr>::RegisterSpecialized(0xD3, c);
+ 
+-        c.mod_mask = 0xC0;
+-        c.mod_val = 0xC0;
++        c.mod_mask = 0x03;
++        c.mod_val = 0x03;
+         DispatchRegistrar<OpGroup2_EvIb_Shr_ModReg>::RegisterSpecialized(0xC1, c);
+         DispatchRegistrar<OpGroup2_Ev1_Shr_ModReg>::RegisterSpecialized(0xD1, c);
+         DispatchRegistrar<OpGroup2_EvCl_Shr_ModReg>::RegisterSpecialized(0xD3, c);
+@@ -53,8 +72,8 @@ void RegisterShiftBitOps() {
+         DispatchRegistrar<OpGroup2_Ev1_Sar>::RegisterSpecialized(0xD1, c);
+         DispatchRegistrar<OpGroup2_EvCl_Sar>::RegisterSpecialized(0xD3, c);
+ 
+-        c.mod_mask = 0xC0;
+-        c.mod_val = 0xC0;
++        c.mod_mask = 0x03;
++        c.mod_val = 0x03;
+         DispatchRegistrar<OpGroup2_EvIb_Sar_ModReg>::RegisterSpecialized(0xC1, c);
+         DispatchRegistrar<OpGroup2_Ev1_Sar_ModReg>::RegisterSpecialized(0xD1, c);
+         DispatchRegistrar<OpGroup2_EvCl_Sar_ModReg>::RegisterSpecialized(0xD3, c);
+diff --git a/libfibercpu/src/ops/ops_shift_bit_impl.h b/libfibercpu/src/ops/ops_shift_bit_impl.h
+index 5b4b4ae2..58d539c8 100644
+--- a/libfibercpu/src/ops/ops_shift_bit_impl.h
++++ b/libfibercpu/src/ops/ops_shift_bit_impl.h
+@@ -251,6 +251,35 @@ FORCE_INLINE LogicFlow OpGroup2_EvCl_Internal(LogicFuncParams) {
+ 
+ namespace op {
+ 
++// Register-only immediate rotations: decoder-selected width and flag liveness.
++// The 5-bit masked count (not its modulo-width value) controls CF/OF updates.
++template <typename T, bool Right, bool UpdateFlags>
++FORCE_INLINE LogicFlow OpRotateRegImmediate(LogicFuncParams) {
++    const uint8_t rm = op->modrm & 7;
++    const uint32_t original = GetReg(state, rm);
++    const T value = static_cast<T>(original);
++    const uint8_t count = imm & 31;
++    const T result = Right ? std::rotr(value, count) : std::rotl(value, count);
++    if constexpr (UpdateFlags) {
++        if (count != 0) {
++            constexpr unsigned width = sizeof(T) * 8;
++            const bool cf = Right ? (result >> (width - 1)) & 1 : result & 1;
++            AssignCF(flags_cache, cf);
++            if (count == 1) {
++                const bool msb = (result >> (width - 1)) & 1;
++                const bool other = Right ? (result >> (width - 2)) & 1 : cf;
++                AssignOF(flags_cache, msb != other);
++            }
++        }
++    }
++    if constexpr (sizeof(T) == 2)
++        SetReg(state, rm, (original & 0xFFFF0000u) | result);
++    else
++        SetReg(state, rm, result);
++    return LogicFlow::Continue;
++}
++
++
+ FORCE_INLINE LogicFlow OpGroup2_EbIb(LogicFuncParams) { return OpGroup2_EvIb_Internal<true>(LogicPassParams); }
+ FORCE_INLINE LogicFlow OpGroup2_EvIb(LogicFuncParams) { return OpGroup2_EvIb_Internal<false>(LogicPassParams); }
+ FORCE_INLINE LogicFlow OpGroup2_Eb1(LogicFuncParams) { return OpGroup2_Ev1_Internal<true>(LogicPassParams); }
+diff --git a/Fiberish.X86.Tests/Integer/RegisterImmediateRotateTests.cs b/Fiberish.X86.Tests/Integer/RegisterImmediateRotateTests.cs
+new file mode 100644
+index 00000000..cbd223ac
+--- /dev/null
++++ b/Fiberish.X86.Tests/Integer/RegisterImmediateRotateTests.cs
+@@ -0,0 +1,50 @@
++using Fiberish.X86.Native;
++using Fiberish.X86.Tests.Harness;
++using Xunit;
++
++namespace Fiberish.X86.Tests.Integer;
++
++public sealed class RegisterImmediateRotateTests
++{
++    [Theory]
++    [InlineData(16, false, false)]
++    [InlineData(16, false, true)]
++    [InlineData(16, true, false)]
++    [InlineData(16, true, true)]
++    [InlineData(32, false, false)]
++    [InlineData(32, false, true)]
++    [InlineData(32, true, false)]
++    [InlineData(32, true, true)]
++    public void AllRegistersCountsFlagsAndDeadFlagForms(int width, bool right, bool flagsDead)
++    {
++        for (int register = 0; register < 8; register++)
++        {
++            using var cpu = new CpuSandbox();
++            foreach (int count in new[] { 0, 1, 2, 7, 8, 15, 16, 17, 31, 32, 33, 255 })
++            foreach (uint input in new[] { 0u, 1u, IntegerOracle.Sign(width), IntegerOracle.Mask(width), 0x95A53C69u })
++            foreach (bool set in new[] { false, true })
++            {
++                uint flags = IntegerOracle.InitialFlags(set);
++                uint[] expected = IntegerTestSupport.Initialize(cpu, flags);
++                var lane = width == 16 ? OperandLane.Ax : OperandLane.Eax;
++                expected[register] = IntegerOracle.PutLane(expected[register], lane, input);
++                cpu[(Reg)register] = expected[register];
++                var result = IntegerOracle.Shift(right ? ShiftOperation.Ror : ShiftOperation.Rol, width, input, (byte)count, flags);
++                expected[register] = IntegerOracle.PutLane(expected[register], lane, result.Value);
++                var code = new List<byte>();
++                if (width == 16) code.Add(0x66);
++                code.AddRange(new byte[] { 0xC1, (byte)(0xC0 | (right ? 8 : 0) | register), (byte)count });
++                if (flagsDead)
++                {
++                    int other = (register + 1) % 8;
++                    code.AddRange(new byte[] { 0x31, (byte)(0xC0 | (other << 3) | other) });
++                    expected[other] = 0;
++                }
++                string context = $"width={width} right={right} reg={register} count={count} input={input:X8} initial={flags:X8} dead={flagsDead}";
++                IntegerTestSupport.Execute(cpu, code.ToArray(), ExecutionMode.Run, context);
++                IntegerTestSupport.AssertRegisters(cpu, expected, context);
++                if (!flagsDead) IntegerTestSupport.AssertFlags(cpu, result.Flags, result.FlagMask, context);
++            }
++        }
++    }
++}
+diff --git a/Fiberish.X86.Tests/Regression/SpecializedFusionBakingTests.cs b/Fiberish.X86.Tests/Regression/SpecializedFusionBakingTests.cs
+new file mode 100644
+index 00000000..df309070
+--- /dev/null
++++ b/Fiberish.X86.Tests/Regression/SpecializedFusionBakingTests.cs
+@@ -0,0 +1,82 @@
++using Fiberish.X86.Native;
++using Fiberish.X86.Tests.Harness;
++using Xunit;
++
++namespace Fiberish.X86.Tests.Regression;
++
++public sealed class SpecializedFusionBakingTests
++{
++    // SHR EAX/[EAX],3; MOV EDX,ESI; MOVZX EBX,byte[EDI+ESI*2]; MOV ECX,[EDI+ESI*2].
++    private static byte[] Code(bool memory) => [0xC1, memory ? (byte)0x28 : (byte)0xE8, 3,
++        0x89, 0xF2, 0x0F, 0xB6, 0x1C, 0x77, 0x8B, 0x0C, 0x77];
++
++    [Theory]
++    [InlineData(false)]
++    [InlineData(true)]
++    public void SpecializedRegisterAndGenericMemorySequencesKeepExactFusion(bool memory)
++    {
++        using var cpu = new CpuSandbox();
++        cpu[Reg.EAX] = memory ? CpuSandbox.DataAddress + 8 : 0x80;
++        cpu[Reg.ESI] = 0;
++        cpu[Reg.EDI] = CpuSandbox.DataAddress;
++        cpu.WriteMemory(CpuSandbox.DataAddress, BitConverter.GetBytes(0x1234567au));
++        cpu.WriteMemory(CpuSandbox.DataAddress + 8, BitConverter.GetBytes(0x80u));
++        var code = Code(memory);
++        cpu.WriteCode(code);
++        cpu.Run(CpuSandbox.CodeAddress + (uint)code.Length);
++        Assert.Equal(EmuStatus.Stopped, cpu.Status);
++        Assert.Equal(memory ? CpuSandbox.DataAddress + 8 : 0x10u, cpu[Reg.EAX]);
++        Assert.Equal(memory ? 0x10u : 0x80u,
++            BitConverter.ToUInt32(cpu.ReadMemory(CpuSandbox.DataAddress + 8, 4)));
++        Assert.Equal(0u, cpu[Reg.EDX]);
++        Assert.Equal(0x7au, cpu[Reg.EBX]);
++        Assert.Equal(0x1234567au, cpu[Reg.ECX]);
++        AssertHead(cpu, memory);
++    }
++
++    [Fact]
++    public void FaultInsideSpecializedFusionRestartsAtTheFaultWithoutRepeatingShift()
++    {
++        using var cpu = new CpuSandbox();
++        const uint unmapped = 0x50000000;
++        cpu[Reg.EAX] = 0x80;
++        cpu[Reg.ESI] = 0;
++        cpu[Reg.EDI] = unmapped;
++        var code = Code(false);
++        cpu.WriteCode(code);
++        cpu.Run(CpuSandbox.CodeAddress + (uint)code.Length);
++        Assert.Equal(EmuStatus.Fault, cpu.Status);
++        Assert.Equal(14, cpu.FaultVector);
++        Assert.Equal(CpuSandbox.CodeAddress + 5u, cpu.Eip);
++        Assert.Equal(0x10u, cpu[Reg.EAX]);
++        AssertHead(cpu, false);
++        cpu.MapMemory(unmapped, CpuSandbox.PageSize);
++        cpu.WriteMemory(unmapped, BitConverter.GetBytes(0x1234567au));
++        cpu.Run(CpuSandbox.CodeAddress + (uint)code.Length);
++        Assert.Equal(EmuStatus.Stopped, cpu.Status);
++        Assert.Equal(0x10u, cpu[Reg.EAX]);
++        Assert.Equal(0x7au, cpu[Reg.EBX]);
++        Assert.Equal(0x1234567au, cpu[Reg.ECX]);
++    }
++
++    private static unsafe void AssertHead(CpuSandbox cpu, bool memory)
++    {
++        // The functional and fault checks also run in the CI configuration
++        // that disables superopcodes; only the handler assertion needs fusion.
++        if ((X86Native.GetBuildFeatures() & 1) == 0) return;
++        int count = X86Native.GetBlockCount(cpu.State);
++        var blocks = new IntPtr[count];
++        fixed (IntPtr* p = blocks) X86Native.GetBlockList(cpu.State, p, count);
++        foreach (IntPtr p in blocks)
++        {
++            var b = (X86Native.BasicBlock*)p;
++            if (b->start_eip != CpuSandbox.CodeAddress) continue;
++            string symbol = X86Native.GetHandlerSymbolById(X86Native.GetHandlerId(b->entry))!;
++            Assert.Contains("SuperOpcode_4_", symbol);
++            if (memory) Assert.DoesNotContain("Shr_ModReg", symbol);
++            else Assert.Contains("Shr_ModReg", symbol);
++            return;
++        }
++        Assert.Fail("Root block not retained");
++    }
++}

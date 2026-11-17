@@ -1,0 +1,85 @@
+{
+  "semantics": "All direct GPR fields in ops headers, GetReg/SetReg/GetRegPtr, and dynamic effective-address helpers instrumented. GetRegPtr is conservatively counted as read+write. First read before any write per real dispatch entry is separately counted; fused entries share one epoch. Handwritten fusion epochs are not separately instrumented. Fixed 5000 iterations; startup included; profiling only, not valid timing because <10s.",
+  "rows": [
+    {
+      "register": "EAX",
+      "reads": 444341371,
+      "writes": 235919331,
+      "read_write_percent": 22.525795937818526,
+      "handler_livein_reads": 262408516,
+      "handler_livein_percent": 21.32822860916085,
+      "distinct_handler_writes": 202704283,
+      "livein_per_distinct_write": 1.2945385865379075
+    },
+    {
+      "register": "ECX",
+      "reads": 284136490,
+      "writes": 177935628,
+      "read_write_percent": 15.300813655738125,
+      "handler_livein_reads": 182470406,
+      "handler_livein_percent": 14.830961254223912,
+      "distinct_handler_writes": 171453379,
+      "livein_per_distinct_write": 1.0642566921938588
+    },
+    {
+      "register": "EDX",
+      "reads": 396379959,
+      "writes": 236520253,
+      "read_write_percent": 20.957525523081127,
+      "handler_livein_reads": 255679455,
+      "handler_livein_percent": 20.781299136288904,
+      "distinct_handler_writes": 200415167,
+      "livein_per_distinct_write": 1.2757490305112487
+    },
+    {
+      "register": "EBX",
+      "reads": 212133306,
+      "writes": 154410512,
+      "read_write_percent": 12.137539655402428,
+      "handler_livein_reads": 132920547,
+      "handler_livein_percent": 10.803612079688408,
+      "distinct_handler_writes": 141670500,
+      "livein_per_distinct_write": 0.9382372971084312
+    },
+    {
+      "register": "ESP",
+      "reads": 224236969,
+      "writes": 124775503,
+      "read_write_percent": 11.557015863053048,
+      "handler_livein_reads": 162936317,
+      "handler_livein_percent": 13.243255480743244,
+      "distinct_handler_writes": 85878834,
+      "livein_per_distinct_write": 1.8972814302532333
+    },
+    {
+      "register": "EBP",
+      "reads": 63000974,
+      "writes": 13992371,
+      "read_write_percent": 2.5495172261767083,
+      "handler_livein_reads": 59783037,
+      "handler_livein_percent": 4.859088796058439,
+      "distinct_handler_writes": 13992371,
+      "livein_per_distinct_write": 4.272545160502105
+    },
+    {
+      "register": "ESI",
+      "reads": 209265848,
+      "writes": 116947825,
+      "read_write_percent": 10.802068396013652,
+      "handler_livein_reads": 105100415,
+      "handler_livein_percent": 8.542427327464013,
+      "distinct_handler_writes": 113892684,
+      "livein_per_distinct_write": 0.9228021617262089
+    },
+    {
+      "register": "EDI",
+      "reads": 83453299,
+      "writes": 42468964,
+      "read_write_percent": 4.1697237427163865,
+      "handler_livein_reads": 69035625,
+      "handler_livein_percent": 5.611127316372232,
+      "distinct_handler_writes": 42466706,
+      "livein_per_distinct_write": 1.6256411552146286
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+import pathlib,subprocess,sys,shutil,os
+out=pathlib.Path(__file__).resolve().parent;repo=out.parents[1];name,n,active,clones=sys.argv[1:];build=out/(name+'-build')
+args=['cmake','-S',str(out/'source/libfibercpu'),'-B',str(build),'-DCMAKE_BUILD_TYPE=Release','-DCMAKE_C_COMPILER=/usr/bin/cc','-DCMAKE_CXX_COMPILER=/usr/bin/c++',f'-DCMAKE_CXX_FLAGS=-DREGCACHE_COUNT={n} -DREGCACHE_ACTIVE={active} -DREGCACHE_CLONES={clones} '+os.environ.get('REGCACHE_EXTRA_FLAGS',''),'-DFIBERCPU_ENABLE_LTO=ON','-DFIBERCPU_ENABLE_SUPEROPCODES=ON','-DFIBERCPU_GENERATED_SUPEROPCODES_FILE='+str(out/os.environ.get('REGCACHE_OUTPUT','regcache.generated.cpp')),'-DFETCHCONTENT_SOURCE_DIR_SIMDE='+str(repo/'Fiberish.X86/build_native/host/_deps/simde-src'),'-DFETCHCONTENT_SOURCE_DIR_UNORDERED_DENSE='+str(repo/'Fiberish.X86/build_native/host/_deps/unordered_dense-src')]
+subprocess.run(args,check=True);subprocess.run(['cmake','--build',str(build),'-j3'],check=True)
+shutil.copytree(repo/'artifacts/coremark-3800-20261117/observed-cli',out/(name+'-cli'),dirs_exist_ok=True);shutil.copyfile(build/'libfibercpu.dylib',out/(name+'-cli/libfibercpu.dylib'))

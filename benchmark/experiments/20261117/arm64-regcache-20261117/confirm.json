@@ -1,0 +1,219 @@
+{
+  "tag": "confirm",
+  "commit": "c86246815f8db436c9e5fb3ad57e1621b96d1eb7",
+  "method": "Rotating variant order, same host/guest/rootfs/managed CLI, auto-calibrated >=10s, one process at a time, no concurrent build/profile; CRC checked. CoreMark GCC15.2 -O2 i386, 2K, one context.",
+  "samples": [
+    {
+      "round": 1,
+      "variant": "plain256",
+      "score": 4991.378528,
+      "timed_seconds": 22.038,
+      "iterations": 110000,
+      "wall_seconds": 24.51461754180491,
+      "validated": true,
+      "log": "confirm-1-plain256.log"
+    },
+    {
+      "round": 1,
+      "variant": "abi2x256",
+      "score": 4954.954955,
+      "timed_seconds": 22.2,
+      "iterations": 110000,
+      "wall_seconds": 25.137628457974643,
+      "validated": true,
+      "log": "confirm-1-abi2x256.log"
+    },
+    {
+      "round": 1,
+      "variant": "cache2x256",
+      "score": 5074.737036,
+      "timed_seconds": 21.676,
+      "iterations": 110000,
+      "wall_seconds": 24.111816209042445,
+      "validated": true,
+      "log": "confirm-1-cache2x256.log"
+    },
+    {
+      "round": 1,
+      "variant": "cache4x256",
+      "score": 5058.168943,
+      "timed_seconds": 21.747,
+      "iterations": 110000,
+      "wall_seconds": 24.602426958968863,
+      "validated": true,
+      "log": "confirm-1-cache4x256.log"
+    },
+    {
+      "round": 2,
+      "variant": "abi2x256",
+      "score": 4925.703965,
+      "timed_seconds": 12.181,
+      "iterations": 60000,
+      "wall_seconds": 14.699762916890904,
+      "validated": true,
+      "log": "confirm-2-abi2x256.log"
+    },
+    {
+      "round": 2,
+      "variant": "cache2x256",
+      "score": 5007.511267,
+      "timed_seconds": 11.982,
+      "iterations": 60000,
+      "wall_seconds": 14.47052895813249,
+      "validated": true,
+      "log": "confirm-2-cache2x256.log"
+    },
+    {
+      "round": 2,
+      "variant": "cache4x256",
+      "score": 5052.592899,
+      "timed_seconds": 21.771,
+      "iterations": 110000,
+      "wall_seconds": 24.22335962485522,
+      "validated": true,
+      "log": "confirm-2-cache4x256.log"
+    },
+    {
+      "round": 2,
+      "variant": "plain256",
+      "score": 4917.629702,
+      "timed_seconds": 12.201,
+      "iterations": 60000,
+      "wall_seconds": 14.70096420799382,
+      "validated": true,
+      "log": "confirm-2-plain256.log"
+    },
+    {
+      "round": 3,
+      "variant": "cache2x256",
+      "score": 5003.411417,
+      "timed_seconds": 21.985,
+      "iterations": 110000,
+      "wall_seconds": 24.456384791992605,
+      "validated": true,
+      "log": "confirm-3-cache2x256.log"
+    },
+    {
+      "round": 3,
+      "variant": "cache4x256",
+      "score": 5041.939772,
+      "timed_seconds": 21.817,
+      "iterations": 110000,
+      "wall_seconds": 24.27004645904526,
+      "validated": true,
+      "log": "confirm-3-cache4x256.log"
+    },
+    {
+      "round": 3,
+      "variant": "plain256",
+      "score": 4958.677686,
+      "timed_seconds": 12.1,
+      "iterations": 60000,
+      "wall_seconds": 14.629043959081173,
+      "validated": true,
+      "log": "confirm-3-plain256.log"
+    },
+    {
+      "round": 3,
+      "variant": "abi2x256",
+      "score": 4913.200131,
+      "timed_seconds": 12.212,
+      "iterations": 60000,
+      "wall_seconds": 14.734459875151515,
+      "validated": true,
+      "log": "confirm-3-abi2x256.log"
+    },
+    {
+      "round": 4,
+      "variant": "cache4x256",
+      "score": 5065.156329,
+      "timed_seconds": 21.717,
+      "iterations": 110000,
+      "wall_seconds": 24.17680766712874,
+      "validated": true,
+      "log": "confirm-4-cache4x256.log"
+    },
+    {
+      "round": 4,
+      "variant": "plain256",
+      "score": 4943.561012,
+      "timed_seconds": 12.137,
+      "iterations": 60000,
+      "wall_seconds": 14.645983667112887,
+      "validated": true,
+      "log": "confirm-4-plain256.log"
+    },
+    {
+      "round": 4,
+      "variant": "abi2x256",
+      "score": 4938.678081,
+      "timed_seconds": 12.149,
+      "iterations": 60000,
+      "wall_seconds": 14.647983125178143,
+      "validated": true,
+      "log": "confirm-4-abi2x256.log"
+    },
+    {
+      "round": 4,
+      "variant": "cache2x256",
+      "score": 5012.302925,
+      "timed_seconds": 21.946,
+      "iterations": 110000,
+      "wall_seconds": 24.41141579207033,
+      "validated": true,
+      "log": "confirm-4-cache2x256.log"
+    },
+    {
+      "round": 5,
+      "variant": "plain256",
+      "score": 4949.678271,
+      "timed_seconds": 12.122,
+      "iterations": 60000,
+      "wall_seconds": 14.635119500104338,
+      "validated": true,
+      "log": "confirm-5-plain256.log"
+    },
+    {
+      "round": 5,
+      "variant": "abi2x256",
+      "score": 4937.05258,
+      "timed_seconds": 12.153,
+      "iterations": 60000,
+      "wall_seconds": 14.664124541915953,
+      "validated": true,
+      "log": "confirm-5-abi2x256.log"
+    },
+    {
+      "round": 5,
+      "variant": "cache2x256",
+      "score": 5084.354056,
+      "timed_seconds": 21.635,
+      "iterations": 110000,
+      "wall_seconds": 24.082982999971136,
+      "validated": true,
+      "log": "confirm-5-cache2x256.log"
+    },
+    {
+      "round": 5,
+      "variant": "cache4x256",
+      "score": 4993.757803,
+      "timed_seconds": 12.015,
+      "iterations": 60000,
+      "wall_seconds": 14.525508207967505,
+      "validated": true,
+      "log": "confirm-5-cache4x256.log"
+    }
+  ],
+  "library_sha256": {
+    "plain256": "883b157f9351875210d9331b378acbb0e16856da873d1d575379a707d501471e",
+    "abi2x256": "3a3fe9cc03a930fc05ad7bdee1752adca1ab2ac60810f03ea1bb25e1859c96be",
+    "cache2x256": "b608bc0ba42a0680cf040184853b05e2ae45059f9722d777245d2a3b117c18a7",
+    "cache4x256": "1807ecfea0452608be835ef3101e486533aec3a71b7a43da24e155783b049cbd"
+  },
+  "median_scores": {
+    "plain256": 4949.678271,
+    "abi2x256": 4937.05258,
+    "cache2x256": 5012.302925,
+    "cache4x256": 5052.592899
+  }
+}

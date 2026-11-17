@@ -1,0 +1,66 @@
+CoreMark assembly profile findings (2026-11-17)
+
+Current engine: 44723127f8e65db67c834182aaa7fd66511b50d9; source tree unchanged.
+Host: Apple M5 Max. Time Profiler; warmup excluded 4s.
+Current guest: official CoreMark 1f483d5, Zig 0.15.2 -O3, static i686 musl.
+
+Measured steady-state hotspots:
+- 27,560 kept samples, 27,531 native engine samples (99.895%).
+- Ordinary DispatchWrapper handlers: 96.03% of native samples.
+- Conditional jumps: 16.407%; CMOV: 5.260%.
+- SuperOpcode handlers: 0.948% of native samples (time share, NOT fusion hit-rate).
+- PC at dispatch next-handler fetch ldr x7, [x1, #0x20]!: 26.192%.
+- Stack/frame memory PCs: 2.128%; x87/SoftFloat helpers: no self samples.
+- Main hot symbol: OpJcc_NE_Rel8 6.603%, then OpCmov_E_ModReg 4.820%,
+  OpMovzx_Word 3.251%, OpGroup2_EvIb_Shr 2.869%.
+- Almost all native samples ran on P cores. No evidence of E-core placement as the cause.
+
+Assembly example: CMOV's normal hot path has no stack prologue.
+  tbz w6, #6, ...              ; test emulated ZF
+  ldrb w9, [x1, #0xd]         ; guest ModRM / metadata
+  ... register selection, width merge and state load/store ...
+  ldr x7, [x1, #0x20]!        ; next DecodedOp and target handler
+  br x7
+Raw annotated PCs: annotated-hotspots.txt.
+
+Independent controlled experiments, three rounds each (iterations/s medians):
+1) Same Zig static guest, only fusion source changed:
+   current64 2583.646 -> old256 2742.732 (+6.157%).
+2) Same GCC guest, only fusion source changed:
+   current64 3375.148 -> old256 3777.862 (+11.932%).
+   Current table is 10.660% below old table on this guest.
+3) Same current engine, different guest binaries:
+   Zig static 2542.104 -> old GCC dynamic 3416.467 (+34.395%).
+   Source files match; old binary reports GCC15.2.0 -O2.
+   Zig crcu8: unfolded TEST/CMOV bitwise CRC; GCC: bit reverse + indexed CRC table.
+   GCC 15 documents -foptimize-crc at -O2+, with a table fallback:
+   https://gcc.gnu.org/onlinedocs/gcc-15.2.0/gcc/Optimize-Options.html#index-foptimize-crc
+   This does NOT isolate compiler from linkage/layout/target-default differences,
+   nor prove the whole 34.4% comes from CRC alone.
+4) Same Zig guest/current fusion, only ARM64 preserve_none probe enabled in a copy:
+   current 2542.104 -> preserve_none 2603.828 (+2.428%).
+   Candidate passes all 3098 CPU quick tests. CMOV keeps the same short sequence,
+   with ABI argument registers changed (w6/x1 -> w26/x21); no large spill removal
+   appears in that already leaf-only hot path.
+
+All 21 timing samples pass correctness validation and have >=10s measured time.
+Samples are sequential, alternating/rotating order. Profiling and native builds
+were not run concurrently with performance samples. CoreMark time excludes launch
+and auto-calibration. Results include raw per-run output and exact library hashes.
+
+Interpretation:
+- The low absolute score is substantially affected by which CoreMark machine code
+  is used. Current engine still runs the older binary around 3.4K on this host.
+- There is also a real fusion-table regression: the old 256-pair table, originally
+  trained on compile/run CoreMark, beats the newer GNU-oriented 32-pair + 32-long
+  table on both guests. Its documented GNU holdout wins do not cover this case.
+- The assembly-level cost is per-op metadata loads, indirect-dispatch dependence,
+  partial-register operations and guest flag construction/consumption. Host CLR,
+  x87 arithmetic and stack saves are not the dominant observed costs.
+- Sampled PC shares cannot establish memory-cache miss or branch-misprediction
+  rates; hardware-counter capture would be needed for that decomposition.
+
+Recommended next implementation:
+Add CoreMark/CRC holdouts to selection gates; recover hot TEST/CMP+Jcc/CMOV and
+16-bit/partial-register patterns while rechecking GNU holdouts. Treat ARM ABI as
+secondary. No tracked source was edited or changes pushed by this investigation.

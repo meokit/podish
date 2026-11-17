@@ -1,0 +1,59 @@
+{
+  "tag": "coverage-screen",
+  "commit": "c86246815f8db436c9e5fb3ad57e1621b96d1eb7",
+  "method": "Rotating variant order, same host/guest/rootfs/managed CLI, auto-calibrated >=10s, one process at a time, no concurrent build/profile; CRC checked. CoreMark GCC15.2 -O2 i386, 2K, one context.",
+  "samples": [
+    {
+      "round": 1,
+      "variant": "plain",
+      "score": 4570.732079,
+      "timed_seconds": 13.127,
+      "iterations": 60000,
+      "wall_seconds": 15.79990162490867,
+      "validated": true,
+      "log": "coverage-screen-1-plain.log"
+    },
+    {
+      "round": 1,
+      "variant": "plain256",
+      "score": 4981.32005,
+      "timed_seconds": 12.045,
+      "iterations": 60000,
+      "wall_seconds": 17.678790708072484,
+      "validated": true,
+      "log": "coverage-screen-1-plain256.log"
+    },
+    {
+      "round": 1,
+      "variant": "cache1x256",
+      "score": 5070.993915,
+      "timed_seconds": 21.692,
+      "iterations": 110000,
+      "wall_seconds": 24.264037375105545,
+      "validated": true,
+      "log": "coverage-screen-1-cache1x256.log"
+    },
+    {
+      "round": 1,
+      "variant": "cache2x256",
+      "score": 5113.900511,
+      "timed_seconds": 21.51,
+      "iterations": 110000,
+      "wall_seconds": 24.877128208987415,
+      "validated": true,
+      "log": "coverage-screen-1-cache2x256.log"
+    }
+  ],
+  "library_sha256": {
+    "plain": "264ac194027fc09a8be392fabe72219a47911d4b076060039b27552c0be5ebb7",
+    "plain256": "883b157f9351875210d9331b378acbb0e16856da873d1d575379a707d501471e",
+    "cache1x256": "85609a0460ca88ab0b00bc514105ac14f21ba692c37ef979b6cc85dd69c8a7c9",
+    "cache2x256": "b608bc0ba42a0680cf040184853b05e2ae45059f9722d777245d2a3b117c18a7"
+  },
+  "median_scores": {
+    "plain": 4570.732079,
+    "plain256": 4981.32005,
+    "cache1x256": 5070.993915,
+    "cache2x256": 5113.900511
+  }
+}

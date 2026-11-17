@@ -1,0 +1,260 @@
+[
+  {
+    "arguments": 7,
+    "argument_store_order_registers": [
+      "x20",
+      "x21",
+      "x22",
+      "x23",
+      "x24",
+      "x25",
+      "x26"
+    ],
+    "incoming_stack_loads": []
+  },
+  {
+    "arguments": 9,
+    "argument_store_order_registers": [
+      "x20",
+      "x21",
+      "x22",
+      "x23",
+      "x24",
+      "x25",
+      "x26",
+      "x27",
+      "x28"
+    ],
+    "incoming_stack_loads": []
+  },
+  {
+    "arguments": 11,
+    "argument_store_order_registers": [
+      "x20",
+      "x21",
+      "x22",
+      "x23",
+      "x24",
+      "x25",
+      "x26",
+      "x27",
+      "x28",
+      "x0",
+      "x1"
+    ],
+    "incoming_stack_loads": []
+  },
+  {
+    "arguments": 13,
+    "argument_store_order_registers": [
+      "x20",
+      "x21",
+      "x22",
+      "x23",
+      "x24",
+      "x25",
+      "x26",
+      "x27",
+      "x28",
+      "x0",
+      "x1",
+      "x2",
+      "x3"
+    ],
+    "incoming_stack_loads": []
+  },
+  {
+    "arguments": 15,
+    "argument_store_order_registers": [
+      "x20",
+      "x21",
+      "x22",
+      "x23",
+      "x24",
+      "x25",
+      "x26",
+      "x27",
+      "x28",
+      "x0",
+      "x1",
+      "x2",
+      "x3",
+      "x4",
+      "x5"
+    ],
+    "incoming_stack_loads": []
+  },
+  {
+    "arguments": 17,
+    "argument_store_order_registers": [
+      "x20",
+      "x21",
+      "x22",
+      "x23",
+      "x24",
+      "x25",
+      "x26",
+      "x27",
+      "x28",
+      "x0",
+      "x1",
+      "x2",
+      "x3",
+      "x4",
+      "x5",
+      "x6",
+      "x7"
+    ],
+    "incoming_stack_loads": []
+  },
+  {
+    "arguments": 19,
+    "argument_store_order_registers": [
+      "x20",
+      "x21",
+      "x22",
+      "x23",
+      "x24",
+      "x25",
+      "x26",
+      "x27",
+      "x28",
+      "x0",
+      "x1",
+      "x2",
+      "x3",
+      "x4",
+      "x5",
+      "x6",
+      "x7",
+      "x10",
+      "x11"
+    ],
+    "incoming_stack_loads": []
+  },
+  {
+    "arguments": 21,
+    "argument_store_order_registers": [
+      "x20",
+      "x21",
+      "x22",
+      "x23",
+      "x24",
+      "x25",
+      "x26",
+      "x27",
+      "x28",
+      "x0",
+      "x1",
+      "x2",
+      "x3",
+      "x4",
+      "x5",
+      "x6",
+      "x7",
+      "x10",
+      "x11",
+      "x12",
+      "x13"
+    ],
+    "incoming_stack_loads": []
+  },
+  {
+    "arguments": 23,
+    "argument_store_order_registers": [
+      "x20",
+      "x21",
+      "x22",
+      "x23",
+      "x24",
+      "x25",
+      "x26",
+      "x27",
+      "x28",
+      "x0",
+      "x1",
+      "x2",
+      "x3",
+      "x4",
+      "x5",
+      "x6",
+      "x7",
+      "x10",
+      "x11",
+      "x12",
+      "x13",
+      "x14",
+      "x9"
+    ],
+    "incoming_stack_loads": []
+  },
+  {
+    "arguments": 25,
+    "argument_store_order_registers": [
+      "x20",
+      "x21",
+      "x22",
+      "x23",
+      "x24",
+      "x25",
+      "x26",
+      "x27",
+      "x28",
+      "x0",
+      "x1",
+      "x2",
+      "x3",
+      "x4",
+      "x5",
+      "x6",
+      "x7",
+      "x10",
+      "x11",
+      "x12",
+      "x13",
+      "x14",
+      "x9",
+      "x15",
+      "x8"
+    ],
+    "incoming_stack_loads": [
+      "ldr\tx8, [sp]"
+    ]
+  },
+  {
+    "arguments": 27,
+    "argument_store_order_registers": [
+      "x20",
+      "x21",
+      "x22",
+      "x23",
+      "x24",
+      "x25",
+      "x26",
+      "x27",
+      "x28",
+      "x0",
+      "x1",
+      "x2",
+      "x3",
+      "x4",
+      "x5",
+      "x6",
+      "x7",
+      "x10",
+      "x11",
+      "x12",
+      "x13",
+      "x14",
+      "x9",
+      "x15",
+      "x17",
+      "x16",
+      "x8"
+    ],
+    "incoming_stack_loads": [
+      "ldp\tx16, x8, [sp, #8]",
+      "ldr\tx17, [sp]"
+    ]
+  }
+]

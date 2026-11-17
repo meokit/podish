@@ -1,0 +1,79 @@
+GNU tools + CoreMark: ARM64 manual specialization and fusion baking, 2026-11-17
+
+结论：保留特化，通过生成时展开安全的语义特化家族修复精确融合匹配。
+SHA256 吞吐 +24.55%，10 例等权几何平均 +2.65%；CoreMark 与其余 GNU 工具主要是小幅波动。
+当前代码已整理到工作区，未自动提交或推送。
+
+环境与方法
+Apple M5 Max / macOS ARM64；宿主 Apple Clang 17 Release + ThinLTO。preserve_none ON，运行时计数型 profile OFF。
+基线提交：2efc85b6f83fb0e58a20917e5fa81fcf68c208f1
+GNU tar 1.35、gzip 1.13、sed 4.9、grep 3.11、coreutils 9.5，musl i386，来自 prepare_gnu.py 的固定锁定软件包。
+CoreMark 上游 1f483d5b8316753a742cbf5590caf5bd0a4e4777；GCC 15.2.0 -O2 和 Zig 0.15.2 / Clang 20.1.8 -O3 i686 静态版本。
+两种 CoreMark 都在相同完整 rootfs 中执行，自动校准 >= 10 秒。所有 90 次运行均校验输出/CRC。
+8 个 GNU 工作负载 + 2 种 CoreMark；3 轮，每轮轮换工作负载/版本顺序；单进程串行计时。
+GNU 时间取宿主 BEGIN/END 标记，含 bash 循环和命令 fork/exec，排除 CLI 启动。每例约 4 秒。
+单独采样，不与计时或编译重叠；xctrace Time Profiler，按相位分组并排除每相位前 150ms。
+符号占比为 libfibercpu 内样本占比，不能当成完整进程时间；两次 profile 的总时间/次数不用于计算加速比。
+取样 PC 按 dylib 装载地址归一并对齐 ARM64 的 4 字节指令。原始 trace/XML/反汇编保留在本目录。
+输入：{   "seed": 12345,   "bytes": 2097204,   "lines": 33904,   "sha256": "7bc5cf38f4e9a57f31d9ac4f36c672f082d6647b8843e43a9ccece83a18e3573" }
+输入由 seed=12345 的确定性文本组成（2 MiB），此轮没有额外独立语料 holdout。
+
+手工热点分析与实现
+1. SHA256 基线 OpGroup2_EvIb 占 native 样本 34.58%，包含 subop/宽度/内存通路及标志计算。
+   为 C1 寄存器立即数 ROL/ROR 增加 16/32 位、flags-live/dead 模板特化。NF 32-bit ROR 的反汇编主体为寄存器读取、ror、写回、尾跳。
+   count 按 5 bit 屏蔽，16 位整圈旋转仍处理 CF；OF 只在 masked count=1 时定义；16 位高半寄存器与不受影响标志保留。
+   新 profile 中 32-bit ROR NF 占 native 样本 12.43%。百分比的分母随优化变化，计时收益见下表。
+2. SpecCriteria::Matches 已把 ModRM.mod 提取为 0..3；现有 SHL/SHR/SAR ModReg 和 ADD EAX 的注册仍用 0xC0/0xC0，无法匹配。修成 3/3，让现有特化真正启用。
+3. 仅启用上述特化会改变 handler 指针，破坏旧精确融合模式。保留特化，在 2..4-op 序列生成器中对白名单语义家族做笛卡尔展开、全局去重。
+   保留原先选中的 64 项及编号，追加 7 项，生成表共 71 项；新增融合体直接执行 ModReg/EAX 逻辑，原通用模式仍供内存等形式匹配。
+   此轮修改的是当前默认扩展序列烘焙路径，未改旧的 pair-only legacy 生成路径。新增 ROTATE 模板目前没有对应入选融合模式。
+   单测检查实际块入口：寄存器序列命中新四指令融合，内存序列仍命中原四指令融合；第三条指令 fault 后从故障指令恢复，不重复执行 SHR。
+   gunzip 复采实际命中 SuperOpcode_4_066_...Shr_ModReg，约占 native 样本 4.71%。
+
+三轮中位数（GNU 秒，越低越好；CoreMark iterations/s，越高越好）
+case                  base         specialized       baked       baked/base throughput
+gzip                   4.075040     4.089064     4.062212   1.003158x
+gunzip                 4.350774     4.409920     4.322706   1.006493x
+sed                    4.092731     4.052625     4.074625   1.004444x
+grep_fixed             4.322696     4.279255     4.271371   1.012016x
+grep_regex             4.304468     4.234539     4.282324   1.005171x
+sort                   4.289144     4.276765     4.233285   1.013195x
+sha256                 4.295045     3.434670     3.448564   1.245459x
+tar                    4.630716     4.618291     4.652254   0.995370x
+coremark_gcc        3269.576590  3295.164346  3288.121661   1.005672x
+coremark_zig        2523.128680  2514.932411  2514.616207   0.996626x
+
+10例等权几何平均：{"base": 1.0, "specialized": 1.025627731800151, "baked": 1.0264856762930399}
+SHA256 4.295045 -> 3.448564 秒，即吞吐 +24.55%，耗时 -19.71%。
+gunzip 仅特化 4.409920 秒，新烘焙 4.322706 秒，基线 4.350774 秒；融合恢复有结构和采样证据，但小幅计时差不宜过度解读。
+其他项目约 +/-1.3%，仅 3 轮，不宣称稳定提升。没有使用旧轮次的 ~3466 GCC 分数作为基线，比较均来自同轮次环境。
+
+后续有依据但未实现/未宣称收益的空间
+- CoreMark：GCC 的 SHL/SAR/SHR 仍合计约 8% native；可进一步分离 opsize 和 flag liveness，保留 count=0 的标志语义，并同步展开融合家族。
+- CoreMark Zig：Cmov_E_ModReg 约 4.72%，Movzx_Word 约 3.46%；可针对宽度/目的寄存器消除运行时分支，需独立 A/B。
+- sort：Cmp_EbGb 约 10.20% 与 Jcc_E_Rel8 约 10.60%；检查寄存器/内存形式和短分支配对融合比单独扩展更多 MOV handler 更值得优先验证。
+- grep regex：已有四指令融合占约 19.32%，通用 Cmp_EvGv_32 约 9.46%；先检查寻址/宽度变体的融合覆盖，避免扩大表却只迁移热点。
+- tar：native 只有约 243ms，managed/I/O/进程开销显著；热项是解码与 SpecCriteria 匹配，不能用单指令优化推算整体加速。
+
+验证
+- 最终工作区 ON 构建：3109 CPU tests passed；OFF 构建：3109 CPU tests passed。
+- 生成器：27 tests passed，含默认表逐字重现、特化家族展开、去重与不扩展无关家族。
+- 新旋转用例覆盖所有 8 个寄存器、16/32 bit、ROL/ROR、flags live/dead、12 种 count、5 种边界输入及两套初始 flags。
+- 90/90 计时输出和两次 profile 的 GNU/CoreMark 输出验证通过。
+
+精确测量二进制 SHA256
+base: dedb258ebb1cde48a9cc98a147fe4149d32e241b45c8448fd4789262a7b324fe
+specialized: 31a387be12230500f9d9b9184b401bc35963dc4567c2d5c3d41d148b54bc52aa
+baked: fd58327fd2412b3f6bf010f12e983cf22b2e712b1725791724e5d7242bedf393
+最终实际构建的 dylib 与计时/复采 baked dylib 的 SHA256 完全一致。
+generated C++ SHA256: deb47d2beaf32f9bd882a32e1122dfaf640260657a2f82c035ddd086aafcb7c3
+
+可复核材料
+- benchmark.json：90 个原始样本、顺序、计数、结果校验和 3 版本中位数；bench-*.log：完整输出。
+- harness.py / benchmark.py / profile-script.sh：运行命令与验证逻辑；benchmark-counts.json：循环次数。
+- mixed-baseline.trace / baseline.asm / profile-by-workload.json：基线；baked-profile/：候选的相同材料。
+- asm-hotspots.txt：精确测量的 generic group2 与 ROR NF 处理器反汇编。
+- base-cli / specialized-cli / baked-cli：相同 managed CLI + 不同 native 库。
+- masks.patch / rotate.patch / baked.generated.cpp / baking-tool/：独立候选实现。
+- podish-*-tests.log：测试输出。
+- 执行计时前须确认 fixture 和三个隔离 CLI 目录保持完整；python3 本目录/benchmark.py（将覆盖 benchmark.json）。

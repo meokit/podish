@@ -1,0 +1,71 @@
+{
+  "tag": "screen",
+  "commit": "c86246815f8db436c9e5fb3ad57e1621b96d1eb7",
+  "method": "Rotating variant order, same host/guest/rootfs/managed CLI, auto-calibrated >=10s, one process at a time, no concurrent build/profile; CRC checked. CoreMark GCC15.2 -O2 i386, 2K, one context.",
+  "samples": [
+    {
+      "round": 1,
+      "variant": "base",
+      "score": 3877.722484,
+      "timed_seconds": 15.473,
+      "iterations": 60000,
+      "wall_seconds": 19.034909874899313,
+      "validated": true,
+      "log": "screen-1-base.log"
+    },
+    {
+      "round": 1,
+      "variant": "plain",
+      "score": 4512.296007,
+      "timed_seconds": 13.297,
+      "iterations": 60000,
+      "wall_seconds": 16.42964804195799,
+      "validated": true,
+      "log": "screen-1-plain.log"
+    },
+    {
+      "round": 1,
+      "variant": "abi2",
+      "score": 4529.327395,
+      "timed_seconds": 13.247,
+      "iterations": 60000,
+      "wall_seconds": 16.50451095798053,
+      "validated": true,
+      "log": "screen-1-abi2.log"
+    },
+    {
+      "round": 1,
+      "variant": "cache2",
+      "score": 4368.401893,
+      "timed_seconds": 13.735,
+      "iterations": 60000,
+      "wall_seconds": 16.957604042021558,
+      "validated": true,
+      "log": "screen-1-cache2.log"
+    },
+    {
+      "round": 1,
+      "variant": "cache4",
+      "score": 4195.217452,
+      "timed_seconds": 14.302,
+      "iterations": 60000,
+      "wall_seconds": 17.685914000030607,
+      "validated": true,
+      "log": "screen-1-cache4.log"
+    }
+  ],
+  "library_sha256": {
+    "base": "ef9c4f29745ee7aa5d5df911f24c454683d6d0973d779f02a59166bbbc90963c",
+    "plain": "264ac194027fc09a8be392fabe72219a47911d4b076060039b27552c0be5ebb7",
+    "abi2": "8abec717e595302ef16e3e7b12494be41bab0630bc57b156e4fa42834ffae2a6",
+    "cache2": "1c8c3d64f87ebd7e856599b31754720389ba857d1d61fbbd372fdab3bbe62744",
+    "cache4": "5c893fe8c38b624530a79081f7553fc40771f57a78c7966401e6e60b8ca26a96"
+  },
+  "median_scores": {
+    "base": 3877.722484,
+    "plain": 4512.296007,
+    "abi2": 4529.327395,
+    "cache2": 4368.401893,
+    "cache4": 4195.217452
+  }
+}

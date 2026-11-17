@@ -1,0 +1,435 @@
+{
+  "fixture_seed": 987654,
+  "method": "Two rotating paired rounds with independent text seed, one process at a time; includes separate Zig CoreMark compiler holdout. All outputs/CRCs checked.",
+  "samples": [
+    {
+      "case": "gzip",
+      "variant": "base",
+      "seconds": 4.020229666959494,
+      "wall_seconds": 4.284851667005569,
+      "iterations": 7,
+      "validated": true,
+      "log": "holdout-1-gzip-base.log",
+      "round": 1
+    },
+    {
+      "case": "gzip",
+      "variant": "observed",
+      "seconds": 4.064950375119224,
+      "wall_seconds": 4.324670457979664,
+      "iterations": 7,
+      "validated": true,
+      "log": "holdout-1-gzip-observed.log",
+      "round": 1
+    },
+    {
+      "case": "gunzip",
+      "variant": "observed",
+      "seconds": 4.354983582859859,
+      "wall_seconds": 4.6085768330376595,
+      "iterations": 43,
+      "validated": true,
+      "log": "holdout-1-gunzip-observed.log",
+      "round": 1
+    },
+    {
+      "case": "gunzip",
+      "variant": "base",
+      "seconds": 4.331694875145331,
+      "wall_seconds": 4.594624874880537,
+      "iterations": 43,
+      "validated": true,
+      "log": "holdout-1-gunzip-base.log",
+      "round": 1
+    },
+    {
+      "case": "sed",
+      "variant": "base",
+      "seconds": 4.178355540847406,
+      "wall_seconds": 4.4415637908969074,
+      "iterations": 6,
+      "validated": true,
+      "log": "holdout-1-sed-base.log",
+      "round": 1
+    },
+    {
+      "case": "sed",
+      "variant": "observed",
+      "seconds": 3.988760208012536,
+      "wall_seconds": 4.239466416882351,
+      "iterations": 6,
+      "validated": true,
+      "log": "holdout-1-sed-observed.log",
+      "round": 1
+    },
+    {
+      "case": "grep_fixed",
+      "variant": "observed",
+      "seconds": 4.239825832890347,
+      "wall_seconds": 4.505096375010908,
+      "iterations": 233,
+      "validated": true,
+      "log": "holdout-1-grep_fixed-observed.log",
+      "round": 1
+    },
+    {
+      "case": "grep_fixed",
+      "variant": "base",
+      "seconds": 4.290082583902404,
+      "wall_seconds": 4.541470791911706,
+      "iterations": 233,
+      "validated": true,
+      "log": "holdout-1-grep_fixed-base.log",
+      "round": 1
+    },
+    {
+      "case": "grep_regex",
+      "variant": "base",
+      "seconds": 4.29799075005576,
+      "wall_seconds": 4.551153374835849,
+      "iterations": 85,
+      "validated": true,
+      "log": "holdout-1-grep_regex-base.log",
+      "round": 1
+    },
+    {
+      "case": "grep_regex",
+      "variant": "observed",
+      "seconds": 4.348867499968037,
+      "wall_seconds": 4.611466208007187,
+      "iterations": 85,
+      "validated": true,
+      "log": "holdout-1-grep_regex-observed.log",
+      "round": 1
+    },
+    {
+      "case": "sort",
+      "variant": "observed",
+      "seconds": 4.219524624990299,
+      "wall_seconds": 4.476269291015342,
+      "iterations": 22,
+      "validated": true,
+      "log": "holdout-1-sort-observed.log",
+      "round": 1
+    },
+    {
+      "case": "sort",
+      "variant": "base",
+      "seconds": 4.278089042054489,
+      "wall_seconds": 4.528865040978417,
+      "iterations": 22,
+      "validated": true,
+      "log": "holdout-1-sort-base.log",
+      "round": 1
+    },
+    {
+      "case": "sha256",
+      "variant": "base",
+      "seconds": 3.425710625015199,
+      "wall_seconds": 3.675664833979681,
+      "iterations": 51,
+      "validated": true,
+      "log": "holdout-1-sha256-base.log",
+      "round": 1
+    },
+    {
+      "case": "sha256",
+      "variant": "observed",
+      "seconds": 3.5120493329595774,
+      "wall_seconds": 3.764166041975841,
+      "iterations": 51,
+      "validated": true,
+      "log": "holdout-1-sha256-observed.log",
+      "round": 1
+    },
+    {
+      "case": "tar",
+      "variant": "observed",
+      "seconds": 4.771103583043441,
+      "wall_seconds": 5.023780917050317,
+      "iterations": 269,
+      "validated": true,
+      "log": "holdout-1-tar-observed.log",
+      "round": 1
+    },
+    {
+      "case": "tar",
+      "variant": "base",
+      "seconds": 4.615130249876529,
+      "wall_seconds": 4.869647416984662,
+      "iterations": 269,
+      "validated": true,
+      "log": "holdout-1-tar-base.log",
+      "round": 1
+    },
+    {
+      "case": "coremark_zig",
+      "variant": "base",
+      "seconds": 15.851,
+      "score": 2523.500095,
+      "wall_seconds": 20.49701604200527,
+      "iterations": 40000,
+      "validated": true,
+      "log": "holdout-1-coremark_zig-base.log",
+      "round": 1
+    },
+    {
+      "case": "coremark_zig",
+      "variant": "observed",
+      "seconds": 15.797,
+      "score": 2532.126353,
+      "wall_seconds": 20.420039874967188,
+      "iterations": 40000,
+      "validated": true,
+      "log": "holdout-1-coremark_zig-observed.log",
+      "round": 1
+    },
+    {
+      "case": "gunzip",
+      "variant": "observed",
+      "seconds": 4.385280292015523,
+      "wall_seconds": 4.638638415839523,
+      "iterations": 43,
+      "validated": true,
+      "log": "holdout-2-gunzip-observed.log",
+      "round": 2
+    },
+    {
+      "case": "gunzip",
+      "variant": "base",
+      "seconds": 4.352761999936774,
+      "wall_seconds": 4.605984542053193,
+      "iterations": 43,
+      "validated": true,
+      "log": "holdout-2-gunzip-base.log",
+      "round": 2
+    },
+    {
+      "case": "sed",
+      "variant": "base",
+      "seconds": 4.0891745002008975,
+      "wall_seconds": 4.341931292088702,
+      "iterations": 6,
+      "validated": true,
+      "log": "holdout-2-sed-base.log",
+      "round": 2
+    },
+    {
+      "case": "sed",
+      "variant": "observed",
+      "seconds": 3.988596666138619,
+      "wall_seconds": 4.2406043340452015,
+      "iterations": 6,
+      "validated": true,
+      "log": "holdout-2-sed-observed.log",
+      "round": 2
+    },
+    {
+      "case": "grep_fixed",
+      "variant": "observed",
+      "seconds": 4.244015665957704,
+      "wall_seconds": 4.497222708072513,
+      "iterations": 233,
+      "validated": true,
+      "log": "holdout-2-grep_fixed-observed.log",
+      "round": 2
+    },
+    {
+      "case": "grep_fixed",
+      "variant": "base",
+      "seconds": 4.291188540868461,
+      "wall_seconds": 4.5537525420077145,
+      "iterations": 233,
+      "validated": true,
+      "log": "holdout-2-grep_fixed-base.log",
+      "round": 2
+    },
+    {
+      "case": "grep_regex",
+      "variant": "base",
+      "seconds": 4.277501042000949,
+      "wall_seconds": 4.530592874856666,
+      "iterations": 85,
+      "validated": true,
+      "log": "holdout-2-grep_regex-base.log",
+      "round": 2
+    },
+    {
+      "case": "grep_regex",
+      "variant": "observed",
+      "seconds": 4.25113045796752,
+      "wall_seconds": 4.505609874846414,
+      "iterations": 85,
+      "validated": true,
+      "log": "holdout-2-grep_regex-observed.log",
+      "round": 2
+    },
+    {
+      "case": "sort",
+      "variant": "observed",
+      "seconds": 4.26464245794341,
+      "wall_seconds": 4.516359500121325,
+      "iterations": 22,
+      "validated": true,
+      "log": "holdout-2-sort-observed.log",
+      "round": 2
+    },
+    {
+      "case": "sort",
+      "variant": "base",
+      "seconds": 4.314775290898979,
+      "wall_seconds": 4.566665125079453,
+      "iterations": 22,
+      "validated": true,
+      "log": "holdout-2-sort-base.log",
+      "round": 2
+    },
+    {
+      "case": "sha256",
+      "variant": "base",
+      "seconds": 3.4501889999955893,
+      "wall_seconds": 3.7051472919993103,
+      "iterations": 51,
+      "validated": true,
+      "log": "holdout-2-sha256-base.log",
+      "round": 2
+    },
+    {
+      "case": "sha256",
+      "variant": "observed",
+      "seconds": 3.4681853749789298,
+      "wall_seconds": 3.7206607919652015,
+      "iterations": 51,
+      "validated": true,
+      "log": "holdout-2-sha256-observed.log",
+      "round": 2
+    },
+    {
+      "case": "tar",
+      "variant": "observed",
+      "seconds": 4.621486000018194,
+      "wall_seconds": 4.874504166888073,
+      "iterations": 269,
+      "validated": true,
+      "log": "holdout-2-tar-observed.log",
+      "round": 2
+    },
+    {
+      "case": "tar",
+      "variant": "base",
+      "seconds": 4.569359709043056,
+      "wall_seconds": 4.822393999900669,
+      "iterations": 269,
+      "validated": true,
+      "log": "holdout-2-tar-base.log",
+      "round": 2
+    },
+    {
+      "case": "coremark_zig",
+      "variant": "base",
+      "seconds": 15.79,
+      "score": 2533.248892,
+      "wall_seconds": 20.43158508394845,
+      "iterations": 40000,
+      "validated": true,
+      "log": "holdout-2-coremark_zig-base.log",
+      "round": 2
+    },
+    {
+      "case": "coremark_zig",
+      "variant": "observed",
+      "seconds": 15.646,
+      "score": 2556.563978,
+      "wall_seconds": 20.22952404199168,
+      "iterations": 40000,
+      "validated": true,
+      "log": "holdout-2-coremark_zig-observed.log",
+      "round": 2
+    },
+    {
+      "case": "gzip",
+      "variant": "observed",
+      "seconds": 4.022883374942467,
+      "wall_seconds": 4.276509457966313,
+      "iterations": 7,
+      "validated": true,
+      "log": "holdout-2-gzip-observed.log",
+      "round": 2
+    },
+    {
+      "case": "gzip",
+      "variant": "base",
+      "seconds": 4.075692082988098,
+      "wall_seconds": 4.3277714578434825,
+      "iterations": 7,
+      "validated": true,
+      "log": "holdout-2-gzip-base.log",
+      "round": 2
+    }
+  ],
+  "summary": {
+    "gzip": {
+      "medians": {
+        "base": 4.047960874973796,
+        "observed": 4.043916875030845
+      },
+      "speedup": 1.0010000205414509
+    },
+    "gunzip": {
+      "medians": {
+        "base": 4.342228437541053,
+        "observed": 4.370131937437691
+      },
+      "speedup": 0.9936149525240653
+    },
+    "sed": {
+      "medians": {
+        "base": 4.133765020524152,
+        "observed": 3.9886784370755777
+      },
+      "speedup": 1.0363746001933785
+    },
+    "grep_fixed": {
+      "medians": {
+        "base": 4.290635562385432,
+        "observed": 4.241920749424025
+      },
+      "speedup": 1.0114841402843326
+    },
+    "grep_regex": {
+      "medians": {
+        "base": 4.287745896028355,
+        "observed": 4.299998978967778
+      },
+      "speedup": 0.997150445151416
+    },
+    "sort": {
+      "medians": {
+        "base": 4.296432166476734,
+        "observed": 4.2420835414668545
+      },
+      "speedup": 1.0128117762129425
+    },
+    "sha256": {
+      "medians": {
+        "base": 3.437949812505394,
+        "observed": 3.4901173539692536
+      },
+      "speedup": 0.9850527829946664
+    },
+    "tar": {
+      "medians": {
+        "base": 4.592244979459792,
+        "observed": 4.696294791530818
+      },
+      "speedup": 0.9778442758195959
+    },
+    "coremark_zig": {
+      "medians": {
+        "base": 2528.3744935,
+        "observed": 2544.3451655
+      },
+      "speedup": 1.0063165769315652
+    }
+  }
+}

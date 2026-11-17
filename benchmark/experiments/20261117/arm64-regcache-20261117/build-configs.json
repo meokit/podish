@@ -1,0 +1,86 @@
+{
+  "abi2-build": [
+    "CMAKE_BUILD_TYPE:STRING=Release",
+    "CMAKE_CXX_COMPILER:STRING=/usr/bin/c++",
+    "CMAKE_CXX_FLAGS:STRING=-DREGCACHE_COUNT=2 -DREGCACHE_ACTIVE=0 -DREGCACHE_CLONES=1",
+    "FIBERCPU_ENABLE_LTO:BOOL=ON",
+    "FIBERCPU_GENERATED_SUPEROPCODES_FILE:FILEPATH=/Users/jiangyiheng/.paseo/worktrees/379gbvgn/quiet-bird/artifacts/arm64-regcache-20261117/regcache.generated.cpp"
+  ],
+  "abi2x256-build": [
+    "CMAKE_BUILD_TYPE:STRING=Release",
+    "CMAKE_CXX_COMPILER:STRING=/usr/bin/c++",
+    "CMAKE_CXX_FLAGS:STRING=-DREGCACHE_COUNT=2 -DREGCACHE_ACTIVE=0 -DREGCACHE_CLONES=1",
+    "FIBERCPU_ENABLE_LTO:BOOL=ON",
+    "FIBERCPU_GENERATED_SUPEROPCODES_FILE:FILEPATH=/Users/jiangyiheng/.paseo/worktrees/379gbvgn/quiet-bird/artifacts/arm64-regcache-20261117/regcache-256.generated.cpp"
+  ],
+  "cache1x256-build": [
+    "CMAKE_BUILD_TYPE:STRING=Release",
+    "CMAKE_CXX_COMPILER:STRING=/usr/bin/c++",
+    "CMAKE_CXX_FLAGS:STRING=-DREGCACHE_COUNT=1 -DREGCACHE_ACTIVE=1 -DREGCACHE_CLONES=1",
+    "FIBERCPU_ENABLE_LTO:BOOL=ON",
+    "FIBERCPU_GENERATED_SUPEROPCODES_FILE:FILEPATH=/Users/jiangyiheng/.paseo/worktrees/379gbvgn/quiet-bird/artifacts/arm64-regcache-20261117/regcache-256.generated.cpp"
+  ],
+  "cache2-build": [
+    "CMAKE_BUILD_TYPE:STRING=Release",
+    "CMAKE_CXX_COMPILER:STRING=/usr/bin/c++",
+    "CMAKE_CXX_FLAGS:STRING=-DREGCACHE_COUNT=2 -DREGCACHE_ACTIVE=1 -DREGCACHE_CLONES=1",
+    "FIBERCPU_ENABLE_LTO:BOOL=ON",
+    "FIBERCPU_GENERATED_SUPEROPCODES_FILE:FILEPATH=/Users/jiangyiheng/.paseo/worktrees/379gbvgn/quiet-bird/artifacts/arm64-regcache-20261117/regcache.generated.cpp"
+  ],
+  "cache2x256-build": [
+    "CMAKE_BUILD_TYPE:STRING=Release",
+    "CMAKE_CXX_COMPILER:STRING=/usr/bin/c++",
+    "CMAKE_CXX_FLAGS:STRING=-DREGCACHE_COUNT=2 -DREGCACHE_ACTIVE=1 -DREGCACHE_CLONES=1",
+    "FIBERCPU_ENABLE_LTO:BOOL=ON",
+    "FIBERCPU_GENERATED_SUPEROPCODES_FILE:FILEPATH=/Users/jiangyiheng/.paseo/worktrees/379gbvgn/quiet-bird/artifacts/arm64-regcache-20261117/regcache-256.generated.cpp"
+  ],
+  "cache4-build": [
+    "CMAKE_BUILD_TYPE:STRING=Release",
+    "CMAKE_CXX_COMPILER:STRING=/usr/bin/c++",
+    "CMAKE_CXX_FLAGS:STRING=-DREGCACHE_COUNT=4 -DREGCACHE_ACTIVE=1 -DREGCACHE_CLONES=1",
+    "FIBERCPU_ENABLE_LTO:BOOL=ON",
+    "FIBERCPU_GENERATED_SUPEROPCODES_FILE:FILEPATH=/Users/jiangyiheng/.paseo/worktrees/379gbvgn/quiet-bird/artifacts/arm64-regcache-20261117/regcache.generated.cpp"
+  ],
+  "cache4x256-build": [
+    "CMAKE_BUILD_TYPE:STRING=Release",
+    "CMAKE_CXX_COMPILER:STRING=/usr/bin/c++",
+    "CMAKE_CXX_FLAGS:STRING=-DREGCACHE_COUNT=4 -DREGCACHE_ACTIVE=1 -DREGCACHE_CLONES=1",
+    "FIBERCPU_ENABLE_LTO:BOOL=ON",
+    "FIBERCPU_GENERATED_SUPEROPCODES_FILE:FILEPATH=/Users/jiangyiheng/.paseo/worktrees/379gbvgn/quiet-bird/artifacts/arm64-regcache-20261117/regcache-256.generated.cpp"
+  ],
+  "cache_ac-build": [
+    "CMAKE_BUILD_TYPE:STRING=Release",
+    "CMAKE_CXX_COMPILER:STRING=/usr/bin/c++",
+    "CMAKE_CXX_FLAGS:STRING=-DREGCACHE_COUNT=2 -DREGCACHE_ACTIVE=1 -DREGCACHE_CLONES=1 -DREGCACHE_SECOND=1",
+    "FIBERCPU_ENABLE_LTO:BOOL=ON",
+    "FIBERCPU_GENERATED_SUPEROPCODES_FILE:FILEPATH=/Users/jiangyiheng/.paseo/worktrees/379gbvgn/quiet-bird/artifacts/arm64-regcache-20261117/regcache-256.generated.cpp"
+  ],
+  "cache_asp-build": [
+    "CMAKE_BUILD_TYPE:STRING=Release",
+    "CMAKE_CXX_COMPILER:STRING=/usr/bin/c++",
+    "CMAKE_CXX_FLAGS:STRING=-DREGCACHE_COUNT=2 -DREGCACHE_ACTIVE=1 -DREGCACHE_CLONES=1 -DREGCACHE_SECOND=4",
+    "FIBERCPU_ENABLE_LTO:BOOL=ON",
+    "FIBERCPU_GENERATED_SUPEROPCODES_FILE:FILEPATH=/Users/jiangyiheng/.paseo/worktrees/379gbvgn/quiet-bird/artifacts/arm64-regcache-20261117/regcache-256.generated.cpp"
+  ],
+  "plain-build": [
+    "CMAKE_BUILD_TYPE:STRING=Release",
+    "CMAKE_CXX_COMPILER:STRING=/usr/bin/c++",
+    "CMAKE_CXX_FLAGS:STRING=-DREGCACHE_COUNT=0 -DREGCACHE_ACTIVE=0 -DREGCACHE_CLONES=1",
+    "FIBERCPU_ENABLE_LTO:BOOL=ON",
+    "FIBERCPU_GENERATED_SUPEROPCODES_FILE:FILEPATH=/Users/jiangyiheng/.paseo/worktrees/379gbvgn/quiet-bird/artifacts/arm64-regcache-20261117/regcache.generated.cpp"
+  ],
+  "plain256-build": [
+    "CMAKE_BUILD_TYPE:STRING=Release",
+    "CMAKE_CXX_COMPILER:STRING=/usr/bin/c++",
+    "CMAKE_CXX_FLAGS:STRING=-DREGCACHE_COUNT=0 -DREGCACHE_ACTIVE=0 -DREGCACHE_CLONES=1",
+    "FIBERCPU_ENABLE_LTO:BOOL=ON",
+    "FIBERCPU_GENERATED_SUPEROPCODES_FILE:FILEPATH=/Users/jiangyiheng/.paseo/worktrees/379gbvgn/quiet-bird/artifacts/arm64-regcache-20261117/regcache-256.generated.cpp"
+  ],
+  "profile-build": [
+    "CMAKE_BUILD_TYPE:STRING=Release",
+    "CMAKE_CXX_COMPILER:STRING=/usr/bin/c++",
+    "CMAKE_CXX_FLAGS:STRING=",
+    "FIBERCPU_ENABLE_LTO:BOOL=ON",
+    "FIBERCPU_GENERATED_SUPEROPCODES_FILE:FILEPATH=/Users/jiangyiheng/.paseo/worktrees/379gbvgn/quiet-bird/artifacts/arm64-regcache-20261117/profile.generated.cpp"
+  ]
+}

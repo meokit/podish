@@ -1,0 +1,41 @@
+{
+  "baseline_commit": "c86246815f8db436c9e5fb3ad57e1621b96d1eb7",
+  "candidate_bank": [
+    "EAX",
+    "ESP"
+  ],
+  "formal_fixed_work": {
+    "iterations": 120000,
+    "rounds": 3,
+    "median_scores": {
+      "plain256": 4953.764861,
+      "cache2x256": 5105.513955,
+      "cache_asp": 5208.559399
+    },
+    "gain_percent": {
+      "plain256": 0.0,
+      "cache2x256": 3.063308377728835,
+      "cache_asp": 5.143452407399196
+    },
+    "validated_samples": 9
+  },
+  "holdout_speedup": {
+    "gzip": 0.9784066359352307,
+    "sha256": 0.8595028382908108,
+    "coremark_zig": 0.9800038352217345
+  },
+  "shape_entry_coverage_percent": {
+    "64": 54.00689658282017,
+    "256": 83.91913349998666
+  },
+  "whole_handler_has_stack_ref_entry_weight_percent": {
+    "plain256": 1.17260859414554,
+    "cache2x256": 1.17260859414554,
+    "cache4x256": 1.17260859414554,
+    "cache_asp": 1.17260859414554
+  },
+  "hardware_whole_worker_ldst_change_percent": -2.4902111898449153,
+  "hardware_whole_worker_instruction_change_percent": -0.5945577032000715,
+  "production_default": "OFF; generic-path regression unresolved",
+  "tracked_source_changed": false
+}

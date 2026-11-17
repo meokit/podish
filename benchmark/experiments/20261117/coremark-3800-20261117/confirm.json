@@ -1,0 +1,155 @@
+{
+  "tag": "confirm",
+  "commit": "c86246815f8db436c9e5fb3ad57e1621b96d1eb7",
+  "method": "Rotating variant order, same host/guest/rootfs/managed CLI, auto-calibrated >=10s, one process at a time, no concurrent build/profile; CRC checked. CoreMark GCC15.2 -O2 i386, 2K, one context.",
+  "samples": [
+    {
+      "round": 1,
+      "variant": "base",
+      "score": 3311.532412,
+      "timed_seconds": 12.079,
+      "iterations": 40000,
+      "wall_seconds": 15.67562966607511,
+      "validated": true,
+      "log": "confirm-1-base.log"
+    },
+    {
+      "round": 1,
+      "variant": "observed",
+      "score": 3895.850919,
+      "timed_seconds": 15.401,
+      "iterations": 60000,
+      "wall_seconds": 18.50127908308059,
+      "validated": true,
+      "log": "confirm-1-observed.log"
+    },
+    {
+      "round": 2,
+      "variant": "observed",
+      "score": 3828.239648,
+      "timed_seconds": 15.673,
+      "iterations": 60000,
+      "wall_seconds": 18.830582208931446,
+      "validated": true,
+      "log": "confirm-2-observed.log"
+    },
+    {
+      "round": 2,
+      "variant": "base",
+      "score": 3300.330033,
+      "timed_seconds": 12.12,
+      "iterations": 40000,
+      "wall_seconds": 15.734581915894523,
+      "validated": true,
+      "log": "confirm-2-base.log"
+    },
+    {
+      "round": 3,
+      "variant": "base",
+      "score": 3279.494958,
+      "timed_seconds": 12.197,
+      "iterations": 40000,
+      "wall_seconds": 15.81734145921655,
+      "validated": true,
+      "log": "confirm-3-base.log"
+    },
+    {
+      "round": 3,
+      "variant": "observed",
+      "score": 3905.995703,
+      "timed_seconds": 15.361,
+      "iterations": 60000,
+      "wall_seconds": 18.45488499989733,
+      "validated": true,
+      "log": "confirm-3-observed.log"
+    },
+    {
+      "round": 4,
+      "variant": "observed",
+      "score": 3882.238758,
+      "timed_seconds": 15.455,
+      "iterations": 60000,
+      "wall_seconds": 18.55993983289227,
+      "validated": true,
+      "log": "confirm-4-observed.log"
+    },
+    {
+      "round": 4,
+      "variant": "base",
+      "score": 3284.611595,
+      "timed_seconds": 12.178,
+      "iterations": 40000,
+      "wall_seconds": 15.809516416862607,
+      "validated": true,
+      "log": "confirm-4-base.log"
+    },
+    {
+      "round": 5,
+      "variant": "base",
+      "score": 3296.250515,
+      "timed_seconds": 12.135,
+      "iterations": 40000,
+      "wall_seconds": 15.742690709186718,
+      "validated": true,
+      "log": "confirm-5-base.log"
+    },
+    {
+      "round": 5,
+      "variant": "observed",
+      "score": 3877.973113,
+      "timed_seconds": 15.472,
+      "iterations": 60000,
+      "wall_seconds": 18.590501624858007,
+      "validated": true,
+      "log": "confirm-5-observed.log"
+    },
+    {
+      "round": 6,
+      "variant": "observed",
+      "score": 3889.28502,
+      "timed_seconds": 15.427,
+      "iterations": 60000,
+      "wall_seconds": 18.53374445787631,
+      "validated": true,
+      "log": "confirm-6-observed.log"
+    },
+    {
+      "round": 6,
+      "variant": "base",
+      "score": 3305.238804,
+      "timed_seconds": 12.102,
+      "iterations": 40000,
+      "wall_seconds": 15.740595208015293,
+      "validated": true,
+      "log": "confirm-6-base.log"
+    },
+    {
+      "round": 7,
+      "variant": "base",
+      "score": 3298.697015,
+      "timed_seconds": 12.126,
+      "iterations": 40000,
+      "wall_seconds": 15.742668166058138,
+      "validated": true,
+      "log": "confirm-7-base.log"
+    },
+    {
+      "round": 7,
+      "variant": "observed",
+      "score": 3897.116134,
+      "timed_seconds": 15.396,
+      "iterations": 60000,
+      "wall_seconds": 18.521391791990027,
+      "validated": true,
+      "log": "confirm-7-observed.log"
+    }
+  ],
+  "library_sha256": {
+    "base": "fd58327fd2412b3f6bf010f12e983cf22b2e712b1725791724e5d7242bedf393",
+    "observed": "ef9c4f29745ee7aa5d5df911f24c454683d6d0973d779f02a59166bbbc90963c"
+  },
+  "median_scores": {
+    "base": 3298.697015,
+    "observed": 3889.28502
+  }
+}
