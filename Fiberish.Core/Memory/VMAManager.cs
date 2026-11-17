@@ -954,13 +954,12 @@ public class VMAManager
         var vma = FindVmArea(pageAddr);
         if (vma == null) return false;
         if ((vma.Flags & MapFlags.Private) == 0) return false;
-        if (vma.File == null) return false;
-
         var privateObject = vma.VmAnonVma;
         if (privateObject == null) return true;
 
         var pageIndex = vma.GetPageIndex(pageAddr);
-        return privateObject.GetPage(pageIndex) == IntPtr.Zero;
+        var privatePage = privateObject.PeekVmPage(pageIndex);
+        return privatePage == null || privatePage.Value.HostPage.OwnerResidentCount > 1;
     }
 
     public void RebuildExternalMappingsFromNative(Engine engine, IEnumerable<VmArea> vmas)
@@ -2562,26 +2561,35 @@ public class VMAManager
     private bool TryAllocatePrivateCopyFromSource(
         Engine engine,
         uint pageStart,
-        IntPtr sourcePage,
+        HostPageRef sourceRef,
         string pressureSource,
-        out BackingPageHandle privatePage)
+        out BackingPageHandle privatePage,
+        AllocationSource allocationSource = AllocationSource.CowFirstPrivate)
     {
         privatePage = default;
-        if (!MemoryContext.BackingPagePool.TryAllocAnonPageMayFail(out privatePage, AllocationClass.Cow,
-                AllocationSource.CowFirstPrivate))
-            if (!TryRelieveFaultMemoryPressure(engine, pageStart, pressureSource) ||
-                !MemoryContext.BackingPagePool.TryAllocAnonPageMayFail(out privatePage, AllocationClass.Cow,
-                    AllocationSource.CowFirstPrivate))
-                return false;
-
-        var privatePagePtr = privatePage.Pointer;
-        unsafe
+        if (!sourceRef.TryPin()) return false;
+        try
         {
-            Buffer.MemoryCopy((void*)sourcePage, (void*)privatePagePtr,
-                LinuxConstants.PageSize, LinuxConstants.PageSize);
-        }
+            if (!MemoryContext.BackingPagePool.TryAllocAnonPageMayFail(out privatePage, AllocationClass.Cow,
+                    allocationSource))
+                if (!TryRelieveFaultMemoryPressure(engine, pageStart, pressureSource) ||
+                    !MemoryContext.BackingPagePool.TryAllocAnonPageMayFail(out privatePage, AllocationClass.Cow,
+                        allocationSource))
+                    return false;
 
-        return true;
+            var privatePagePtr = privatePage.Pointer;
+            unsafe
+            {
+                Buffer.MemoryCopy((void*)sourceRef.Ptr, (void*)privatePagePtr,
+                    LinuxConstants.PageSize, LinuxConstants.PageSize);
+            }
+
+            return true;
+        }
+        finally
+        {
+            sourceRef.Unpin();
+        }
     }
 
     private static int GetPageReadLength(VmArea vma, long vmaRelativeOffset)
@@ -3069,35 +3077,25 @@ public class VMAManager
         AnonVma privateObject,
         uint pageStart,
         uint pageIndex,
-        IntPtr existingPrivate,
         byte perms,
         Engine engine)
     {
-        var ownerResidentCount = MemoryContext.HostPages.GetRequired(existingPrivate).OwnerResidentCount;
+        var pageRecord = privateObject.PeekVmPage(pageIndex) ?? throw new InvalidOperationException("Page must exist.");
+        var ownerResidentCount = pageRecord.HostPage.OwnerResidentCount;
         if (ownerResidentCount <= 1)
         {
             privateObject.MarkDirty(pageIndex);
-            var pageRecord = privateObject.PeekVmPage(pageIndex) ?? throw new InvalidOperationException("Page must exist.");
             TbCoh.OnWriteFault(this, pageStart, pageRecord.Ptr);
             return EnsureExternalMapping(pageStart,
                 MappedPageBinding.FromAnonVmaPage(privateObject, pageIndex, pageRecord),
                 perms, engine);
         }
 
-        if (!MemoryContext.BackingPagePool.TryAllocAnonPageMayFail(out var replacementPage, AllocationClass.Cow,
-                AllocationSource.CowReplacePrivate))
-            if (!TryRelieveFaultMemoryPressure(engine, pageStart, "CowReplacePrivate") ||
-                !MemoryContext.BackingPagePool.TryAllocAnonPageMayFail(out replacementPage, AllocationClass.Cow,
-                    AllocationSource.CowReplacePrivate))
-                return FaultResult.Oom;
+        if (!TryAllocatePrivateCopyFromSource(engine, pageStart, pageRecord.HostPage, "CowReplacePrivate",
+                out var replacementPage, AllocationSource.CowReplacePrivate))
+            return FaultResult.Oom;
 
         Interlocked.Increment(ref _cowAllocReplaceCount);
-        var replacementPagePtr = replacementPage.Pointer;
-        unsafe
-        {
-            Buffer.MemoryCopy((void*)existingPrivate, (void*)replacementPagePtr,
-                LinuxConstants.PageSize, LinuxConstants.PageSize);
-        }
 
         return InstallPrivatePageAndMap(privateObject, pageStart, pageIndex, ref replacementPage, perms, engine,
             true);
@@ -3185,7 +3183,8 @@ public class VMAManager
                 if (syntheticSourceResult != FaultResult.Handled)
                     return syntheticSourceResult;
 
-                if (!TryAllocatePrivateCopyFromSource(engine, pageStart, syntheticSourcePage,
+                var syntheticSourceRef = CreateResolvedPageBinding(vma, pageIndex, syntheticSourcePage).Page!.Value.HostPage;
+                if (!TryAllocatePrivateCopyFromSource(engine, pageStart, syntheticSourceRef,
                         "ElfSyntheticZeroPrivateRead", out var syntheticPrivatePageHandle))
                     return FaultResult.Oom;
 
@@ -3204,7 +3203,7 @@ public class VMAManager
         }
 
         if (existingPrivate != IntPtr.Zero)
-            return EnsureWritableExistingPrivatePage(privateObject!, pageStart, pageIndex, existingPrivate,
+            return EnsureWritableExistingPrivatePage(privateObject!, pageStart, pageIndex,
                 (byte)vma.Perms, engine);
 
         var sharedSourceResult = ResolveSharedBackingPage(vma, pageIndex, vmaRelativeOffset, absoluteFileOffset,
@@ -3212,7 +3211,8 @@ public class VMAManager
         if (sharedSourceResult != FaultResult.Handled)
             return sharedSourceResult;
 
-        if (!TryAllocatePrivateCopyFromSource(engine, pageStart, sourcePage, "CowFirstPrivate",
+        var sourceRef = CreateResolvedPageBinding(vma, pageIndex, sourcePage).Page!.Value.HostPage;
+        if (!TryAllocatePrivateCopyFromSource(engine, pageStart, sourceRef, "CowFirstPrivate",
                 out var privatePageHandle))
             return FaultResult.Oom;
 
