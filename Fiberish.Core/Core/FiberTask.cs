@@ -592,6 +592,7 @@ public partial class FiberTask
             }
 
             var fatalSignal = faultResult == FaultResult.BusError ? Signal.SIGBUS : Signal.SIGSEGV;
+            var mapped = Process.Mem.FindVmArea(addr) != null;
             Logger.LogInformation("Page Fault at 0x{Addr:X} ({Mode}) could not be resolved. Posting {Signal}.",
                 addr, isWrite ? "Write" : "Read", fatalSignal);
             Logger.LogInformation("Segment bases: FS=0x{Fs:X} GS=0x{Gs:X}",
@@ -604,9 +605,12 @@ public partial class FiberTask
             PostSignalInfo(new SigInfo
             {
                 Signo = (int)fatalSignal,
-                Code = faultResult == FaultResult.BusError ? 2 : 1,
+                Code = faultResult == FaultResult.BusError ? 2 : mapped ? 2 : 1,
                 Addr = addr,
-                HasAddr = true
+                HasAddr = true,
+                TrapNumber = 14,
+                TrapError = 4u | (isWrite ? 2u : 0u) | (mapped ? 1u : 0u),
+                FaultCr2 = addr
             });
             _pendingMemoryFaultSignal = fatalSignal;
             _pendingFaultFromInterrupt = true;
@@ -1150,17 +1154,23 @@ public partial class FiberTask
             // SignalMask already updated in ProcessPendingSignals
 
             // Setup Stack based on SA_SIGINFO
+            bool frameWritten;
             if ((action.Flags & LinuxConstants.SA_SIGINFO) != 0)
             {
                 if ((action.Flags & LinuxConstants.SA_RESTORER) == 0 || action.Restorer == 0)
                     retAddr = Process.Syscalls.RtSigReturnAddr;
-                SetupSigContext(sp, ref frameEsp, sig, action, retAddr, oldMask, info);
+                frameWritten = SetupSigContext(sp, ref frameEsp, sig, action, retAddr, oldMask, info);
             }
             else
             {
                 if ((action.Flags & LinuxConstants.SA_RESTORER) == 0 || action.Restorer == 0)
                     retAddr = Process.Syscalls.SigReturnAddr;
-                SetupOldSigFrame(sp, ref frameEsp, sig, action, retAddr, oldMask);
+                frameWritten = SetupOldSigFrame(sp, ref frameEsp, sig, action, retAddr, oldMask, info);
+            }
+            if (!frameWritten)
+            {
+                FailSignalFrame();
+                return;
             }
 
             // RT frames saved the configuration in uc_stack. Legacy i386 frames
@@ -1373,7 +1383,10 @@ public partial class FiberTask
         CommonKernel.Schedule(this);
     }
 
-    private void SetupOldSigFrame(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask)
+    internal void FailSignalFrame() => TerminateBySignal((int)Signal.SIGSEGV, false);
+
+    private bool SetupOldSigFrame(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask,
+        SigInfo info)
     {
         // Traditional sigframe:
         // esp+0: retAddr
@@ -1385,18 +1398,21 @@ public partial class FiberTask
 
         esp = (esp - FpStateSize) & ~0xFu;
         var fpstateAddr = esp;
-        WriteFpState(fpstateAddr);
+        if (!WriteFpState(fpstateAddr)) return false;
 
-        esp = (esp - 736u) & ~0xFu;
+        esp = ((esp - 736u + 4) & ~0xFu) - 4;
         var sigcontextAddr = esp + 8;
 
         // Zero out the frame
-        CPU.CopyToUser(esp, new byte[736]);
+        if (!CPU.CopyToUser(esp, new byte[736])) return false;
 
-        WriteSigContext(sigcontextAddr, oldMask, fpstateAddr);
+        if (!WriteSigContext(sigcontextAddr, oldMask, fpstateAddr, info)) return false;
+        // Linux's old i386 sigframe keeps the high mask word in extramask,
+        // after the legacy 624-byte fpstate slot, not in sigcontext.cr2.
+        if (!CPU.CopyToUser(esp + 720, BitConverter.GetBytes((uint)(oldMask >> 32)))) return false;
 
-        if (!CPU.CopyToUser(esp + 4, BitConverter.GetBytes(sig))) return;
-        if (!CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr))) return;
+        if (!CPU.CopyToUser(esp + 4, BitConverter.GetBytes(sig))) return false;
+        return CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr));
     }
 
     private const int FpStateSize = 640;
@@ -1406,7 +1422,7 @@ public partial class FiberTask
     private const int FpStateFxsrStOffset = 144;    // _fxsr_st[8], 16 bytes each
     private const int FpStateXmmOffset = 272;       // _xmm[8], 16 bytes each
 
-    private unsafe void WriteFpState(uint addr)
+    private unsafe bool WriteFpState(uint addr)
     {
         var buf = new byte[FpStateSize];
         var s = buf.AsSpan();
@@ -1432,15 +1448,15 @@ public partial class FiberTask
             }
         }
 
-        CPU.CopyToUser(addr, buf);
+        return CPU.CopyToUser(addr, buf);
     }
 
-    private unsafe void ReadFpState(uint addr)
+    private unsafe bool ReadFpState(uint addr)
     {
         var buf = new byte[FpStateSize];
-        if (!CPU.CopyFromUser(addr, buf)) return;
+        if (!CPU.CopyFromUser(addr, buf)) return false;
         var s = buf.AsSpan();
-        if (BinaryPrimitives.ReadUInt16LittleEndian(s[FpStateMagicOffset..]) != 0xFFFF) return;
+        if (BinaryPrimitives.ReadUInt16LittleEndian(s[FpStateMagicOffset..]) != 0xFFFF) return true;
 
         X86Native.SetFCW(CPU.State, (ushort)BinaryPrimitives.ReadUInt32LittleEndian(s));
         X86Native.SetFSW(CPU.State, (ushort)BinaryPrimitives.ReadUInt32LittleEndian(s[4..]));
@@ -1458,6 +1474,7 @@ public partial class FiberTask
                 X86Native.WriteXMM(CPU.State, i, xmm);
             }
         }
+        return true;
     }
 
     /// <summary>
@@ -1492,57 +1509,48 @@ public partial class FiberTask
         BinaryPrimitives.WriteUInt64LittleEndian(siBuf.AsSpan(20, 8), info.Value);
     }
 
-    private void SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask,
+    private bool SetupSigContext(uint sp, ref uint esp, int sig, SigAction action, uint retAddr, ulong oldMask,
         SigInfo info)
     {
         // Reserve the floating-point state area first; sigcontext.fpstate points
         // at it and the guest signal handler is free to modify it.
         esp = (esp - FpStateSize) & ~0xFu;
         var fpstateAddr = esp;
-        WriteFpState(fpstateAddr);
+        if (!WriteFpState(fpstateAddr)) return false;
 
-        // ... (existing stack alignment)
-        esp = (esp - 512u) & ~0xFu;
-
-        var ucontextAddr = esp;
+        // Linux i386 rt_sigframe: ret/sig/pinfo/puc (16), siginfo (128),
+        // ucontext (116), retcode (8). Handler entry ESP is 12 mod 16.
+        esp = ((esp - 268u + 4) & ~0xFu) - 4;
+        if (!CPU.CopyToUser(esp, new byte[268])) return false;
+        var siginfoAddr = esp + 16;
+        var ucontextAddr = esp + 144;
         uint mcontextOffset = 4 + 4 + 12;
 
         var header = new byte[20]; // uc_flags, uc_link, uc_stack (i386 stack_t)
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(8), AltStackSp);
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(12), AltStackFlags);
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(16), AltStackSize);
-        if (!CPU.CopyToUser(ucontextAddr, header)) return;
+        if (!CPU.CopyToUser(ucontextAddr, header)) return false;
 
-        WriteSigContext(esp + mcontextOffset, oldMask, fpstateAddr);
-
-        esp = (esp - 128u) & ~0xFu;
-        var siginfoAddr = esp;
+        if (!WriteSigContext(ucontextAddr + mcontextOffset, oldMask, fpstateAddr, info)) return false;
 
         // Populate SigInfo (128 bytes)
         var siBuf = new byte[128];
         WriteSigInfo(siBuf, info);
-        if (!CPU.CopyToUser(siginfoAddr, siBuf)) return;
+        if (!CPU.CopyToUser(siginfoAddr, siBuf)) return false;
 
         // Populate UContext uc_sigmask (offset 108)
         var maskBuf = new byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(maskBuf, oldMask);
-        if (!CPU.CopyToUser(ucontextAddr + 108, maskBuf)) return;
+        if (!CPU.CopyToUser(ucontextAddr + 108, maskBuf)) return false;
 
-        // Align stack for arguments
-        esp = (esp - 4u) & ~0xFu;
-
-        // Push 3 args: sig, siginfo_ptr, ucontext_ptr
-        if (!CPU.CopyToUser(esp - 4, BitConverter.GetBytes(ucontextAddr))) return;
-        if (!CPU.CopyToUser(esp - 8, BitConverter.GetBytes(siginfoAddr))) return;
-        if (!CPU.CopyToUser(esp - 12, BitConverter.GetBytes(sig))) return;
-        esp -= 12u;
-
-        // Push Return Address
-        esp -= 4u;
-        if (!CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr))) return;
+        if (!CPU.CopyToUser(esp + 12, BitConverter.GetBytes(ucontextAddr))) return false;
+        if (!CPU.CopyToUser(esp + 8, BitConverter.GetBytes(siginfoAddr))) return false;
+        if (!CPU.CopyToUser(esp + 4, BitConverter.GetBytes(sig))) return false;
+        return CPU.CopyToUser(esp, BitConverter.GetBytes(retAddr));
     }
 
-    public void RestoreSigContext(uint addr)
+    public bool RestoreSigContext(uint addr)
     {
         /*
          * Reference: struct sigcontext_32 from Linux UAPI (arch/x86/include/uapi/asm/sigcontext.h)
@@ -1573,8 +1581,10 @@ public partial class FiberTask
          * };
          */
         var buf = new byte[88];
-        if (!CPU.CopyFromUser(addr, buf)) return;
+        if (!CPU.CopyFromUser(addr, buf)) return false;
         var s = new ReadOnlySpan<byte>(buf);
+        var fpstate = BinaryPrimitives.ReadUInt32LittleEndian(s[76..]);
+        if (fpstate != 0 && !ReadFpState(fpstate)) return false;
 
         // General Registers
         CPU.RegWrite(Reg.EDI, BinaryPrimitives.ReadUInt32LittleEndian(s[16..]));
@@ -1594,23 +1604,18 @@ public partial class FiberTask
         // Restore signal mask
         if (buf.Length >= 88)
         {
-            // Cheat: Restore full 64-bit mask from oldmask + cr2 area (80-87)
-            // This is a convenient hack for our emulator to handle RT signals correctly in sigreturn.
+            // The caller restores the high word from extramask (old frame) or
+            // uc_sigmask (RT frame). cr2 is a fault address, never mask storage.
             var oldSignalMask = SignalMask;
-            SignalMask = BinaryPrimitives.ReadUInt64LittleEndian(s[80..]);
+            SignalMask = BinaryPrimitives.ReadUInt32LittleEndian(s[80..]);
             Logger.LogDebug("[RestoreSigContext] Restored SignalMask {SignalMask}, before {OldSignalMask}", SignalMask,
                 oldSignalMask);
         }
 
-        // Restore x87/SIMD state saved by SetupSigContext.
-        var fpstate = BinaryPrimitives.ReadUInt32LittleEndian(s[76..]);
-        if (fpstate != 0)
-        {
-            ReadFpState(fpstate);
-        }
+        return true;
     }
 
-    private void WriteSigContext(uint addr, ulong oldMask, uint fpstateAddr)
+    private bool WriteSigContext(uint addr, ulong oldMask, uint fpstateAddr, SigInfo info)
     {
         /*
          * Reference: struct sigcontext_32 from Linux UAPI (arch/x86/include/uapi/asm/sigcontext.h)
@@ -1637,8 +1642,8 @@ public partial class FiberTask
             BinaryPrimitives.WriteUInt32LittleEndian(s[44..], CPU.RegRead(Reg.EAX));
             Logger.LogInformation("[WriteSigContext] addr=0x{Addr:x} EAX=0x{EAX:X}", addr, CPU.RegRead(Reg.EAX));
 
-            BinaryPrimitives.WriteUInt32LittleEndian(s[48..], 0); // trapno
-            BinaryPrimitives.WriteUInt32LittleEndian(s[52..], 0); // err
+            BinaryPrimitives.WriteUInt32LittleEndian(s[48..], info.TrapNumber);
+            BinaryPrimitives.WriteUInt32LittleEndian(s[52..], info.TrapError);
             BinaryPrimitives.WriteUInt32LittleEndian(s[56..], CPU.Eip);
             BinaryPrimitives.WriteUInt32LittleEndian(s[60..], 0x23); // CS (user code)
             BinaryPrimitives.WriteUInt32LittleEndian(s[64..], CPU.Eflags);
@@ -1646,15 +1651,14 @@ public partial class FiberTask
             BinaryPrimitives.WriteUInt32LittleEndian(s[72..], 0x2B); // SS
             BinaryPrimitives.WriteUInt32LittleEndian(s[76..], fpstateAddr); // fpstate
 
-            // Cheat: Store full 64-bit mask in oldmask + cr2 area (8 bytes starting at 80)
-            BinaryPrimitives.WriteUInt64LittleEndian(s[80..], oldMask);
+            BinaryPrimitives.WriteUInt32LittleEndian(s[80..], (uint)oldMask);
+            BinaryPrimitives.WriteUInt32LittleEndian(s[84..], info.FaultCr2);
 
-            if (!CPU.CopyToUser(addr, buf))
-            {
-            }
+            return CPU.CopyToUser(addr, buf);
         }
         catch
         {
+            return false;
         }
     }
 
@@ -1945,7 +1949,15 @@ public partial class FiberTask
         }
 
         // Deliver the signal!
-        PostSignal((int)sig);
+        PostSignalInfo(new SigInfo
+        {
+            Signo = (int)sig,
+            Code = vector switch { 0 => 1, 6 => 2, 13 => 128, _ => 2 },
+            HasAddr = true,
+            Addr = vector is 0 or 6 ? CPU.Eip : vector == 14 ? X86Native.GetFaultAddress(CPU.State) : 0,
+            TrapNumber = (uint)vector,
+            FaultCr2 = vector == 14 ? X86Native.GetFaultAddress(CPU.State) : 0
+        });
 
         // Re-schedule to allow signal processing (either handler or default action)
         Status = FiberTaskStatus.Ready;

@@ -305,7 +305,14 @@ public partial class SyscallManager
 
         // On i386 sigreturn, ESP points to the saved sigcontext
         // (after popl %eax which was done in __restore)
-        task.RestoreSigContext(sp);
+        var extraMask = new byte[4];
+        if (!engine.CopyFromUser(sp + 712, extraMask) || !task.RestoreSigContext(sp))
+        {
+            task.FailSignalFrame();
+            return 0;
+        }
+        task.SignalMask |= (ulong)BinaryPrimitives.ReadUInt32LittleEndian(extraMask) << 32;
+        task.SignalMask &= ~((1UL << 8) | (1UL << 18));
         task.RestoreDeferredSignalMaskIfAny();
 
         return (int)task.CPU.RegRead(Reg.EAX);
@@ -319,25 +326,21 @@ public partial class SyscallManager
 
         var sp = task.CPU.RegRead(Reg.ESP);
 
-        uint ucontextAddr;
-        // Standard i386 rt frame: [esp]=sig, [esp+4]=siginfo*, [esp+8]=ucontext*
-        var ptrBuf = new byte[4];
-        if (!task.CPU.CopyFromUser(sp + 8, ptrBuf)) return -(int)Errno.EFAULT;
-        ucontextAddr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
-
-        // Compatibility fallback for legacy handlers that accidentally shifted stack by one arg.
-        if (ucontextAddr < 0x1000)
-        {
-            if (!task.CPU.CopyFromUser(sp + 4, ptrBuf)) return -(int)Errno.EFAULT;
-            ucontextAddr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
-        }
+        // Linux derives uc from the frame itself, not the user-editable puc
+        // argument: restorer ESP = frame + 4; uc follows 16-byte args + siginfo.
+        uint ucontextAddr = sp + 140;
 
         // Restore
         // ucontext.mcontext is at offset 20
-        task.RestoreSigContext(ucontextAddr + 20);
-
         var stackBuf = new byte[12];
-        if (!engine.CopyFromUser(ucontextAddr + 8, stackBuf)) return -(int)Errno.EFAULT;
+        var maskBuf = new byte[8];
+        if (!engine.CopyFromUser(ucontextAddr + 8, stackBuf) ||
+            !engine.CopyFromUser(ucontextAddr + 108, maskBuf) ||
+            !task.RestoreSigContext(ucontextAddr + 20))
+        {
+            task.FailSignalFrame();
+            return 0;
+        }
         // Linux restores uc_stack after the saved SP. As with restore_altstack,
         // invalid configurations (including an active outer stack) are ignored.
         task.SetAltStack(BinaryPrimitives.ReadUInt32LittleEndian(stackBuf.AsSpan(0, 4)),
@@ -351,9 +354,7 @@ public partial class SyscallManager
         // uc_stack (12)
         // uc_mcontext (88)
         // uc_sigmask (128 bytes, but we only use 8) -> offset 108
-        var maskBuf = new byte[8];
-        if (task.CPU.CopyFromUser(ucontextAddr + 108, maskBuf))
-            task.SignalMask = BinaryPrimitives.ReadUInt64LittleEndian(maskBuf);
+        task.SignalMask = BinaryPrimitives.ReadUInt64LittleEndian(maskBuf) & ~((1UL << 8) | (1UL << 18));
         task.RestoreDeferredSignalMaskIfAny();
 
         return (int)task.CPU.RegRead(Reg.EAX);

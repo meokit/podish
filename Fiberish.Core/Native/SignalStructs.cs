@@ -11,6 +11,11 @@ public struct SigInfo
     internal int? QueueOwnerUid;
     internal bool PendingWithoutInfo;
     internal bool HasFdPayload;
+    // Machine exception metadata carried with a synchronous signal, not part
+    // of guest siginfo_t. Serialized into sigcontext instead.
+    internal uint TrapNumber;
+    internal uint TrapError;
+    internal uint FaultCr2;
 
     // Payload (Depends on the signal type)
     // POSIX says many of these are unionized. We'll flatten them for C# ease of use.
