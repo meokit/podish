@@ -49,8 +49,6 @@ def find_tool(*names: str) -> str | None:
 
 LLVM_NM = find_tool("llvm-nm")
 NM_TOOL = LLVM_NM or find_tool("nm")
-if NM_TOOL is None:
-    raise RuntimeError("failed to locate nm or llvm-nm for handler reflection generation")
 
 
 def run_tool(command: list[str]) -> list[str]:
@@ -58,8 +56,10 @@ def run_tool(command: list[str]) -> list[str]:
         command,
         text=True,
         capture_output=True,
-        check=True,
+        check=False,
     )
+    if proc.returncode:
+        raise RuntimeError(f"{command[0]} failed for {command[-1]}:\n{proc.stderr}")
     return [line.rstrip("\r") for line in proc.stdout.splitlines() if line.strip()]
 
 
@@ -131,10 +131,15 @@ def escape_cpp_string(value: str) -> str:
 
 
 def main() -> int:
+    global NM_TOOL
     parser = argparse.ArgumentParser(description="Generate fibercpu handler reflection table")
+    parser.add_argument("--nm", default=NM_TOOL, help="Symbol reader from the target compiler toolchain")
     parser.add_argument("--output", required=True)
     parser.add_argument("objects", nargs="+")
     args = parser.parse_args()
+    NM_TOOL = args.nm
+    if NM_TOOL is None:
+        raise RuntimeError("failed to locate nm or llvm-nm for handler reflection generation")
 
     object_paths = [Path(obj) for obj in args.objects]
     seen: set[str] = set()

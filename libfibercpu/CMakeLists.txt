@@ -177,10 +177,23 @@ endif()
 set(FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP
     "${CMAKE_CURRENT_BINARY_DIR}/generated/handler_reflection.generated.cpp")
 
+# The full macOS solution also puts the Emscripten LLVM tools on PATH.
+# Its llvm-nm may not understand the newer Apple Clang host LTO bitcode.
+# Select Xcode's matching symbol reader for host objects only.
+set(FIBERCPU_REFLECTION_TOOL_ARGS)
+if(APPLE AND NOT EMSCRIPTEN)
+    execute_process(COMMAND xcrun --find nm
+        OUTPUT_VARIABLE FIBERCPU_APPLE_NM
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        COMMAND_ERROR_IS_FATAL ANY)
+    list(APPEND FIBERCPU_REFLECTION_TOOL_ARGS --nm "${FIBERCPU_APPLE_NM}")
+endif()
+
 add_custom_command(
     OUTPUT ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
+            ${FIBERCPU_REFLECTION_TOOL_ARGS}
             --output ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
             $<TARGET_OBJECTS:fibercpu_core>
     # The object-library target supplies ordering, not file-level invalidation.
