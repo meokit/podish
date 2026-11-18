@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# != 3 || ! -d $1 ]]; then
-    echo "Usage: $0 IA32_GLIBC_ROOTFS {fbdev|wayland|kmsdrm} {doom|supertux}" >&2
+    echo "Usage: $0 IA32_GLIBC_ROOTFS {fbdev|wayland|kmsdrm} {doom|supertux|supertuxkart}" >&2
     exit 2
 fi
 
@@ -37,6 +37,7 @@ case $2 in
         ;;
 esac
 
+game_env=(-e LD_PRELOAD=/usr/local/lib/podish-gles-game-probe.so)
 case $3 in
     doom)
         game=(/usr/games/chocolate-doom -iwad /usr/share/games/doom/doom1.wad -warp 1 1 -nosound)
@@ -45,15 +46,38 @@ case $3 in
         game=(/usr/games/supertux2 --renderer sdl --disable-sound
               /usr/share/games/supertux2/levels/world1/journey_begins.stl)
         ;;
+    supertuxkart)
+        if [[ $2 != kmsdrm ]]; then
+            echo "The SuperTuxKart profile uses KMSDRM" >&2
+            exit 2
+        fi
+        game_log=$(mktemp)
+        trap 'rm -f "$engine_log" "$game_log"' EXIT
+        display+=(-m 2G)
+        game_env=(-e SDL_AUDIODRIVER=dummy)
+        game=(/usr/local/bin/supertuxkart-gles-sse2 --log=nocolor --no-sound --race-now
+              --track=lighthouse --kart=tux --numkarts=3 --ai=puffy,gavroche
+              --screensize=640x480 --seed=23 --profile-time=30)
+        ;;
     *)
         echo "Unknown game $3" >&2
         exit 2
         ;;
 esac
 
-dotnet "$cli" run --rm --gles --rootfs "$rootfs" "${display[@]}" \
+run=(dotnet "$cli" run --rm --gles --rootfs "$rootfs" "${display[@]}" \
     -e SDL_VIDEO_GL_DRIVER=libGLESv2.so.2 -e SDL_RENDER_DRIVER=opengles2 -e SDL_RENDER_VSYNC=0 \
-    -e ALSOFT_DRIVERS=null -e LD_PRELOAD=/usr/local/lib/podish-gles-game-probe.so -- "${game[@]}"
+    -e ALSOFT_DRIVERS=null "${game_env[@]}" -- "${game[@]}")
+
+if [[ $3 == supertuxkart ]]; then
+    "${run[@]}" 2>&1 | tee "$game_log"
+    if ! rg -q 'profile: Number of frames:' "$game_log"; then
+        echo "SuperTuxKart did not complete its 30-second race profile" >&2
+        exit 1
+    fi
+else
+    "${run[@]}"
+fi
 
 if [[ $2 == wayland ]]; then
     if ! rg -q 'Wayland shm to_frame.*format=Xrgb8888' "$engine_log"; then

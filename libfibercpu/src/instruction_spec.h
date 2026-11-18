@@ -15,7 +15,7 @@ enum class Base : int8_t { Dynamic = -2, Absent = -1, Eax, Ecx, Edx, Ebx, Esp, E
 enum class Index : int8_t { Dynamic = -2, Absent = -1, Eax, Ecx, Edx, Ebx, Esp, Ebp, Esi, Edi };
 // Default means no override, not a zero architectural segment base.
 enum class Segment : int8_t { Dynamic = -1, Default, Es, Cs, Ss, Ds, Fs, Gs };
-enum class MandatoryPrefix : uint8_t { Dynamic, P66, F2, F3 };
+enum class MandatoryPrefix : uint8_t { Dynamic, P66, F2, F3, F3Only };
 enum class Layout : uint8_t { None, RmReg, RegRm, RmOnly, OpcodeReg, Accumulator };
 
 // A structural C++23 value: all variant facts can be used as template arguments.
@@ -131,7 +131,7 @@ constexpr bool Valid(Spec s) {
         static_cast<int>(s.flag_mode) > static_cast<int>(Flags::Any) ||
         static_cast<int>(s.rm_form) > static_cast<int>(Form::Memory) || static_cast<int>(s.address_segment) < -1 ||
         static_cast<int>(s.address_segment) > 6 ||
-        static_cast<int>(s.mandatory_prefix) > static_cast<int>(MandatoryPrefix::F3))
+        static_cast<int>(s.mandatory_prefix) > static_cast<int>(MandatoryPrefix::F3Only))
         return false;
     if (s.operand_width != Width::Dynamic) {
         if (Family::width_rule == WidthRule::MandatoryPrefix) return false;
@@ -228,6 +228,7 @@ constexpr SpecCriteria Criteria(Spec s) {
                         : s.mandatory_prefix == MandatoryPrefix::F2 ? prefix::REPNE
                                                                     : prefix::REP;
         c.prefix_val = c.prefix_mask;
+        if (s.mandatory_prefix == MandatoryPrefix::F3Only) c.prefix_mask |= prefix::OPSIZE | prefix::REPNE;
     }
     if (s.address_width != AddressWidth::Dynamic) {
         c.prefix_mask |= prefix::ADDRSIZE;

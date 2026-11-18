@@ -354,9 +354,12 @@ InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t ava
 
     op->SetLength(ptr - start);
 
-    // Rule 1: REP/REPNE prefixes always terminate blocks as they can loop (modify
-    // EIP)
-    bool is_rep = op->prefixes.flags.rep || op->prefixes.flags.repne;
+    // For these scalar SSE encodings F3 selects the instruction, so it
+    // cannot repeat or change EIP. Keep the legacy repeat boundary otherwise.
+    const bool scalar_single = map == 1 &&
+                               (op->prefixes.all & (prefix::REP | prefix::REPNE | prefix::OPSIZE)) == prefix::REP &&
+                               (opcode == 0x10 || opcode == 0x11 || opcode == 0x58 || opcode == 0x59);
+    bool is_rep = (op->prefixes.flags.rep || op->prefixes.flags.repne) && !scalar_single;
 
     // Rule 2: Table-based lookup for branching opcodes
     // Access bitmap using map & 1 to ensure safe indexing.

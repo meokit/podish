@@ -3,10 +3,13 @@
 
 #include <array>
 #include <initializer_list>
+#include <iterator>
 
 #include "ops/ops_control_impl.h"
 #include "ops/ops_data_mov_impl.h"
 #include "ops/ops_groups_impl.h"
+#include "ops/ops_sse_fp_impl.h"
+#include "ops/ops_sse_mov_impl.h"
 
 namespace fiberish {
 
@@ -162,6 +165,49 @@ DEFINE_HANDWRITTEN_SUPEROPCODE_4(HandWrittenSuperOpcode_PopEbx_PopEsi_PopEdi_Ret
 DEFINE_HANDWRITTEN_SUPEROPCODE_4(HandWrittenSuperOpcode_PopEdx_PopEbx_PopEsi_Ret, op::OpPop_Reg32_Edx,
                                  op::OpPop_Reg32_Ebx, op::OpPop_Reg32_Esi, op::OpRet)
 
+// Scalar forms seen in long stretches of STK's skinned mesh loop. Each
+// member keeps its own arithmetic rounding and restartable memory access.
+// clang-format off
+#define SCALAR_SSE_SUPEROPCODES(pair, triple, quad)                                                                 \
+    quad(HandWrittenSuperOpcode_AddssMovssMulssRegAddss, op::OpAddss_Reg, op::OpMovss_LoadMemory, op::OpMulss_Reg,  \
+         op::OpAddss_Reg)                                                                                           \
+    quad(HandWrittenSuperOpcode_AddssMovssMulssMemAddss, op::OpAddss_Reg, op::OpMovss_LoadMemory, op::OpMulss_Mem,  \
+         op::OpAddss_Reg)                                                                                           \
+    quad(HandWrittenSuperOpcode_MovssMulssRegAddssMovss, op::OpMovss_LoadMemory, op::OpMulss_Reg, op::OpAddss_Reg,  \
+         op::OpMovss_LoadMemory)                                                                                    \
+    quad(HandWrittenSuperOpcode_MovssMulssMemAddssMovss, op::OpMovss_LoadMemory, op::OpMulss_Mem, op::OpAddss_Reg,  \
+         op::OpMovss_LoadMemory)                                                                                    \
+    triple(HandWrittenSuperOpcode_MovssMulssRegAddss, op::OpMovss_LoadMemory, op::OpMulss_Reg, op::OpAddss_Reg)     \
+    triple(HandWrittenSuperOpcode_MovssMulssMemAddss, op::OpMovss_LoadMemory, op::OpMulss_Mem, op::OpAddss_Reg)     \
+    triple(HandWrittenSuperOpcode_MulssAddssMovss, op::OpMulss_Reg, op::OpAddss_Reg, op::OpMovss_LoadMemory)        \
+    triple(HandWrittenSuperOpcode_LoadThreeMovss, op::OpMovss_LoadMemory, op::OpMovss_LoadMemory,                   \
+           op::OpMovss_LoadMemory)                                                                                  \
+    pair(HandWrittenSuperOpcode_LoadTwoMovss, op::OpMovss_LoadMemory, op::OpMovss_LoadMemory)                       \
+    pair(HandWrittenSuperOpcode_StoreTwoMovss, op::OpMovss_StoreMemory, op::OpMovss_StoreMemory)                    \
+    pair(HandWrittenSuperOpcode_MulssRegAddss, op::OpMulss_Reg, op::OpAddss_Reg)                                    \
+    pair(HandWrittenSuperOpcode_MulssMemAddss, op::OpMulss_Mem, op::OpAddss_Reg)
+// clang-format on
+
+SCALAR_SSE_SUPEROPCODES(DEFINE_HANDWRITTEN_SUPEROPCODE_2, DEFINE_HANDWRITTEN_SUPEROPCODE_3,
+                        DEFINE_HANDWRITTEN_SUPEROPCODE_4)
+
+struct ScalarSsePattern {
+    HandlerFunc first, second, third, fourth, fused;
+    uint8_t width;
+};
+
+#define SCALAR_SSE_PAIR(Name, Op0, Op1) {DispatchWrapper<Op0>, DispatchWrapper<Op1>, nullptr, nullptr, Name, 2},
+#define SCALAR_SSE_TRIPLE(Name, Op0, Op1, Op2) \
+    {DispatchWrapper<Op0>, DispatchWrapper<Op1>, DispatchWrapper<Op2>, nullptr, Name, 3},
+#define SCALAR_SSE_QUAD(Name, Op0, Op1, Op2, Op3) \
+    {DispatchWrapper<Op0>, DispatchWrapper<Op1>, DispatchWrapper<Op2>, DispatchWrapper<Op3>, Name, 4},
+constexpr ScalarSsePattern scalar_sse_patterns[] = {
+    SCALAR_SSE_SUPEROPCODES(SCALAR_SSE_PAIR, SCALAR_SSE_TRIPLE, SCALAR_SSE_QUAD)};
+#undef SCALAR_SSE_QUAD
+#undef SCALAR_SSE_TRIPLE
+#undef SCALAR_SSE_PAIR
+#undef SCALAR_SSE_SUPEROPCODES
+
 #undef RUN_HANDWRITTEN_SUPEROPCODE_OP_WITH_UNIFIED_EXIT
 #undef DEFINE_HANDWRITTEN_SUPEROPCODE_2
 #undef DEFINE_HANDWRITTEN_SUPEROPCODE_3
@@ -192,10 +238,20 @@ HandlerFunc FindHandWrittenSuperOpcode(const DecodedOp* ops) {
             auto key = reinterpret_cast<uintptr_t>(h) >> 2;
             bits[(key >> 6) & 15] |= uint64_t{1} << (key & 63);
         }
+        for (const auto& pattern : scalar_sse_patterns) {
+            auto key = reinterpret_cast<uintptr_t>(pattern.first) >> 2;
+            bits[(key >> 6) & 15] |= uint64_t{1} << (key & 63);
+        }
         return bits;
     }();
     const auto key = reinterpret_cast<uintptr_t>(ops->handler) >> 2;
     if (!(filter[(key >> 6) & 15] & (uint64_t{1} << (key & 63)))) return nullptr;
+    for (const auto& pattern : scalar_sse_patterns) {
+        if (ops[0].handler != pattern.first || ops[1].handler != pattern.second) continue;
+        if (pattern.width >= 3 && ops[2].handler != pattern.third) continue;
+        if (pattern.width == 4 && ops[3].handler != pattern.fourth) continue;
+        return pattern.fused;
+    }
     if (Match2<op::OpMov_Load_Edx_EspBaseNoIndexNoSegment, op::OpRet>(ops)) {
         return HandWrittenSuperOpcode_MovLoadEdxEsp_Ret;
     }
@@ -355,6 +411,13 @@ bool ValidateHandwrittenSuperOpcodes() {
 // preserving handwritten precedence and order within each prefix bucket.
 // Keep this list synchronized with the legacy matcher and its validation.
 void RegisterHandwrittenSuperOpcodes(void* context, RegisterHandwrittenCallback callback) {
+    const auto& patterns = handwritten_superopcodes::scalar_sse_patterns;
+    // The generated lookup prepends registrations sharing a two-op prefix.
+    // Register shorter patterns first so both matchers prefer the longest.
+    for (auto pattern = std::rbegin(patterns); pattern != std::rend(patterns); ++pattern) {
+        callback(context, pattern->first, pattern->second, pattern->third, pattern->fourth, pattern->fused,
+                 pattern->width);
+    }
     callback(context, (HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Edi>,
              (HandlerFunc)DispatchWrapper<op::OpPop_Reg32_Esi>, (HandlerFunc)DispatchWrapper<op::OpRet>, nullptr,
              handwritten_superopcodes::HandWrittenSuperOpcode_PopEdi_PopEsi_Ret, 3);
