@@ -812,13 +812,22 @@ public partial class SyscallManager
         if (parts.Length == 0) throw new ArgumentException("Cannot mount at root", nameof(guestPath));
 
         var current = Root;
-        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, FsName.FromString(parts[i]));
+        for (var i = 0; i < parts.Length - 1; i++)
+        {
+            var parent = PathWalkWithFlags(parts[i], current, LookupFlags.FollowSymlink);
+            if (parent.IsValid && parent.Dentry?.Inode?.Type != InodeType.Directory)
+                throw new IOException($"Bind mount parent is not a directory: {parts[i]}");
+            current = parent.IsValid ? parent : EnsureDirectory(current, FsName.FromString(parts[i]));
+        }
 
         var name = FsName.FromString(parts[^1]);
         if (srcLoc.Dentry.Inode.Type == InodeType.Directory)
             EnsureDirectory(current, name);
         else
             EnsureFileMountPoint(current, name);
+
+        if (!current.Dentry!.TryGetCachedChild(name, out var mountPoint))
+            throw new IOException($"Mount point not found after ensure: {name.ToDebugString()}");
 
         var bindMount = sourceMount.Clone(srcLoc.Dentry);
         bindMount.Source = string.IsNullOrWhiteSpace(relativePath)
@@ -831,13 +840,18 @@ public partial class SyscallManager
             bindMount.Flags |= LinuxConstants.MS_RDONLY;
         bindMount.Options = BuildMountOptions(bindMount.Flags);
 
-        if (!current.Dentry!.TryGetCachedChild(name, out var mountPoint))
-            throw new IOException($"Mount point not found after ensure: {name.ToDebugString()}");
-
-        var targetLoc = new PathLocation(mountPoint, current.Mount);
-        var attachRc = AttachDetachedMount(bindMount, targetLoc);
-        if (attachRc != 0)
-            throw new IOException($"Failed to attach bind mount for {relativePath} -> {guestPath}: rc={attachRc}");
+        bindMount.Get();
+        try
+        {
+            var targetLoc = new PathLocation(mountPoint, current.Mount);
+            var attachRc = AttachDetachedMount(bindMount, targetLoc);
+            if (attachRc != 0)
+                throw new IOException($"Failed to attach bind mount for {relativePath} -> {guestPath}: rc={attachRc}");
+        }
+        finally
+        {
+            bindMount.Put();
+        }
     }
 
     public void WriteGuestFile(string guestPath, ReadOnlySpan<byte> content, int mode = 0x1A4)

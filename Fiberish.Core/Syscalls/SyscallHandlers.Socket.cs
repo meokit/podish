@@ -230,7 +230,11 @@ public partial class SyscallManager
         if (file.TryGetSocketEndpointOps(out var ops))
             return ops.Bind(file, task, endpoint);
 
-        if (file.OpenedInode is NetlinkRouteSocketInode) return 0;
+        if (file.OpenedInode is NetlinkRouteSocketInode netlink && endpoint is NetlinkSocketAddress address)
+        {
+            netlink.Address = address with { PortId = address.PortId == 0 ? (uint)task.Process.TGID : address.PortId };
+            return 0;
+        }
 
         return -(int)Errno.ENOTSOCK;
     }
@@ -278,10 +282,10 @@ public partial class SyscallManager
             return WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, res);
         }
 
-        if (file.OpenedInode is NetlinkRouteSocketInode)
+        if (file.OpenedInode is NetlinkRouteSocketInode netlink)
         {
             if (addrPtr == 0 || addrLenPtr == 0) return -(int)Errno.EFAULT;
-            return WriteSockaddrNetlink(engine, addrPtr, addrLenPtr);
+            return WriteSockaddrNetlink(engine, addrPtr, addrLenPtr, netlink.Address);
         }
 
         return -(int)Errno.ENOTSOCK;
@@ -812,9 +816,17 @@ public partial class SyscallManager
     {
         if (addrPtr == 0) return (null, requireNonNull ? -(int)Errno.EFAULT : 0);
         if (addrLen < 0) return (null, -(int)Errno.EINVAL);
-        if ((file.TryGetSocketEndpointOps(out var ops) &&
-             ops.SocketAddressFamily == AddressFamily.Unix) ||
-            file.OpenedInode is NetlinkRouteSocketInode)
+        if (file.OpenedInode is NetlinkRouteSocketInode)
+        {
+            Span<byte> address = stackalloc byte[12];
+            if (addrLen < address.Length) return (null, -(int)Errno.EINVAL);
+            if (!engine.CopyFromUser(addrPtr, address)) return (null, -(int)Errno.EFAULT);
+            if (BinaryPrimitives.ReadUInt16LittleEndian(address) != LinuxConstants.AF_NETLINK)
+                return (null, -(int)Errno.EAFNOSUPPORT);
+            return (new NetlinkSocketAddress(BinaryPrimitives.ReadUInt32LittleEndian(address[4..]),
+                BinaryPrimitives.ReadUInt32LittleEndian(address[8..])), 0);
+        }
+        if (file.TryGetSocketEndpointOps(out var ops) && ops.SocketAddressFamily == AddressFamily.Unix)
         {
             var res = ReadUnixSockaddr(engine, addrPtr, addrLen);
             return (res.Address, res.Error);
@@ -1232,7 +1244,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static int WriteSockaddrNetlink(Engine engine, uint addrPtr, uint addrLenPtr)
+    private static int WriteSockaddrNetlink(Engine engine, uint addrPtr, uint addrLenPtr,
+        NetlinkSocketAddress? bound = null)
     {
         Span<byte> lenBuf = stackalloc byte[4];
         if (!engine.CopyFromUser(addrLenPtr, lenBuf)) return -(int)Errno.EFAULT;
@@ -1242,6 +1255,11 @@ public partial class SyscallManager
         Span<byte> addr = stackalloc byte[12];
         addr.Clear();
         BinaryPrimitives.WriteUInt16LittleEndian(addr.Slice(0, 2), LinuxConstants.AF_NETLINK);
+        if (bound != null)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(addr[4..], bound.PortId);
+            BinaryPrimitives.WriteUInt32LittleEndian(addr[8..], bound.Groups);
+        }
         var toCopy = Math.Min(maxLen, 12);
         if (toCopy > 0 && !engine.CopyToUser(addrPtr, addr.Slice(0, toCopy)))
             return -(int)Errno.EFAULT;

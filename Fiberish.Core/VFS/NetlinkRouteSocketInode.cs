@@ -8,6 +8,8 @@ using Fiberish.Syscalls;
 
 namespace Fiberish.VFS;
 
+internal sealed record NetlinkSocketAddress(uint PortId, uint Groups);
+
 public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource,
     IDispatcherEdgeWaitSource
 {
@@ -15,6 +17,7 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
     private readonly Queue<byte[]> _responses = new();
     private readonly KernelScheduler _scheduler;
     private readonly Func<NetDeviceSetSnapshot> _snapshotProvider;
+    internal NetlinkSocketAddress Address { get; set; } = new(0, 0);
 
     public NetlinkRouteSocketInode(ulong ino, SuperBlock sb, KernelScheduler scheduler,
         Func<NetDeviceSetSnapshot> snapshotProvider)

@@ -508,10 +508,12 @@ FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
             FpuTop(state, 0) = f80_from_double(exp);
             float80 t = f80_from_double(sig);
             FpuPush(state, &t);
-        } else if (op_byte == 0xF5) {  // FPREM1
+        } else if (op_byte == 0xF5 || op_byte == 0xF8) {  // FPREM1 / FPREM
             float80& st0 = FpuTop(state, 0);
             float80 st1 = FpuTop(state, 1);
-            st0 = f80_rem(st0, st1);
+            st0 = op_byte == 0xF5 ? f80_rem(st0, st1) : f80_mod(st0, st1);
+            // The remainder helpers complete the reduction in one step.
+            state->ctx.fpu_sw &= ~0x0400;
         } else if (op_byte == 0xF6) {      // FDECSTP
             state->ctx.fpu_sw &= ~0x0200;  // C1 is cleared; tags and physical registers are unchanged.
             state->ctx.fpu_top = (state->ctx.fpu_top - 1) & 7;
@@ -520,10 +522,6 @@ FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
             state->ctx.fpu_sw &= ~0x0200;
             state->ctx.fpu_top = (state->ctx.fpu_top + 1) & 7;
             UpdateFSW(state);
-        } else if (op_byte == 0xF8) {  // FPREM
-            float80& st0 = FpuTop(state, 0);
-            float80 st1 = FpuTop(state, 1);
-            st0 = f80_mod(st0, st1);
         } else if (op_byte == 0xF9) {  // FYL2XP1
             double y = f80_to_double(FpuTop(state, 1));
             double x = f80_to_double(FpuPop(state));
